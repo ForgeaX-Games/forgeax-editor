@@ -103,6 +103,7 @@ export function EditorApp() {
         <span className="ed-tool-div" />
         <button type="button" className="tbtn" data-testid="ed-save" onClick={onSave} title="Download the scene as JSON">⤓ Save</button>
         <button type="button" className="tbtn" data-testid="ed-load" onClick={() => fileRef.current?.click()} title="Load a scene JSON">⤒ Load</button>
+        <button type="button" className="tbtn" data-testid="ed-reset-layout" onClick={() => window.dispatchEvent(new CustomEvent('forgeax:editor:dock-reset'))} title="重置面板停靠布局">⟲ 布局</button>
         <input
           ref={fileRef}
           type="file"

@@ -127,9 +127,20 @@ export function DockManager() {
       commit(layout);
       forceDrag();
     }
+    function onReset(): void {
+      layoutRef.current = { ...DEFAULT_LAYOUT };
+      activeRef.current = {};
+      save(layoutRef.current, activeRef.current);
+      force();
+    }
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    window.addEventListener('forgeax:editor:dock-reset', onReset as EventListener);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('forgeax:editor:dock-reset', onReset as EventListener);
+    };
   }, []);
 
   function startResize(id: PanelId, e: RPointerEvent): void {
