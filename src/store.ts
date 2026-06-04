@@ -228,6 +228,65 @@ bus.subscribe(() => {
   }
 });
 
+// ── Disk persistence: the game's authored scene-asset ────────────────────────
+// Design (editor-feature-spec §15): the SceneDocument is the SSOT, serialized as
+// self-describing JSON. We persist it to the GAME's folder so it's git-trackable,
+// AI-readable, and the same file ▶ Play can instantiate. Path:
+//   .forgeax/games/<slug>/scene.json   (the active ?scene slug)
+// Reached via the server's /api/files (same-origin through the interface proxy).
+// localStorage stays as a fast offline mirror; disk is the durable source.
+function scenePath(): string | null {
+  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.json`;
+}
+
+/** Load the active game's scene.json from disk. Returns true if a valid doc was
+ *  loaded (→ caller skips localStorage + seed). */
+export async function loadDocFromDisk(): Promise<boolean> {
+  const p = scenePath();
+  if (!p) return false;
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    if (!r.ok) return false; // 404 = no authored scene yet → fall through
+    const j = (await r.json()) as { content?: string };
+    if (!j.content) return false;
+    const parsed = JSON.parse(j.content);
+    if (parsed && typeof parsed === 'object' && parsed.entities) {
+      bus.doc = parsed;
+      docVersion++;
+      for (const fn of docListeners) fn();
+      return true;
+    }
+  } catch {
+    /* server unreachable / parse error → fall through to localStorage/seed */
+  }
+  return false;
+}
+
+/** Write the active game's scene.json to disk (POST /api/files). */
+export async function saveDocToDisk(): Promise<boolean> {
+  const p = scenePath();
+  if (!p) return false;
+  try {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: p, content: JSON.stringify(bus.doc, null, 2) + '\n' }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Debounced disk autosave: every edit lands in localStorage immediately (above)
+// and is flushed to the game's scene.json ~1.5s after the last change, so the
+// authored scene persists per-game without a manual Save.
+let _diskSaveTimer: ReturnType<typeof setTimeout> | null = null;
+bus.subscribe(() => {
+  if (_diskSaveTimer) clearTimeout(_diskSaveTimer);
+  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); }, 1500);
+});
+
 /** Replace the entire authored document (scene load/import). Resets selection
  * and undo history since old inverses no longer apply to the new doc. */
 export function replaceDoc(doc: SceneDocument): void {

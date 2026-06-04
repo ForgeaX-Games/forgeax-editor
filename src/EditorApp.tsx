@@ -7,6 +7,7 @@ import {
   getSelectionList,
   replaceDoc,
   requestRename,
+  saveDocToDisk,
   useDocVersion,
 } from './store';
 import type { SceneDocument } from './core/types';
@@ -57,14 +58,21 @@ export function EditorApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Save = persist the scene to the game's scene.json on disk (the design's
+  // `saveDocument`). Edits already autosave (debounced) + mirror to localStorage;
+  // this is an explicit immediate flush. Falls back to a JSON download only when
+  // there's no game bound (the `default`/unbound scene has no disk target).
   function onSave() {
-    const blob = new Blob([JSON.stringify(bus.doc, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'scene.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    void saveDocToDisk().then((ok) => {
+      if (ok) return;
+      const blob = new Blob([JSON.stringify(bus.doc, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'scene.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
   }
 
   function onLoadFile(file: File) {

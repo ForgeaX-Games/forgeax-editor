@@ -17,7 +17,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
 import { createEngineSync } from './engine/sync';
-import { bus, loadDocFromStorage, setSceneId } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId } from './store';
 import './ui/theme.css';
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
@@ -68,7 +68,10 @@ function seed(): void {
     components: { Transform: { x: -1, y: 0, z: -1 }, Material: { albedo: '#6cc6ff' } },
   });
 }
-if (!loadDocFromStorage()) seed();
+// Load order: the game's on-disk authored scene → localStorage mirror → demo
+// seed. So opening a game shows ITS saved scene (if authored); a fresh game
+// starts from the seed and persists per-game from there.
+if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).

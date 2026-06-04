@@ -113,6 +113,12 @@ export default defineConfig({
     watch: { usePolling: true, interval: 300, ignored: ['**/node_modules/**'] },
     fs: { allow: [here, resolve(here, '../../..')], strict: false },
     hmr: { clientPort: Number(process.env.FORGEAX_INTERFACE_PORT ?? 18920) },
+    // Scene persistence (store.ts) reads/writes .forgeax/games/<slug>/scene.json
+    // through the server's /api/files. Iframed via the interface (:18920/editor)
+    // it's same-origin already; this proxy makes a DIRECT :15280 visit work too.
+    proxy: {
+      '/api': { target: `http://127.0.0.1:${process.env.FORGEAX_SERVER_PORT ?? 18900}`, changeOrigin: true },
+    },
   },
   build: { outDir: resolve(here, 'dist') },
 });
