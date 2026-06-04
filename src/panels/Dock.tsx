@@ -3,6 +3,8 @@ import type { CSSProperties, PointerEvent as RPointerEvent, ReactNode } from 're
 import { HierarchyPanel } from './Hierarchy';
 import { InspectorPanel } from './Inspector';
 import { AssetsPanel } from './Assets';
+import { HistoryPanel } from './History';
+import { CapabilitiesPanel } from './Capabilities';
 
 // DockManager — the editor's window/docking shell (design EDITOR-MODE §21 + the
 // §01/§02 mockup): panels are dock leaves you DRAG by their title; drop near a
@@ -12,7 +14,7 @@ import { AssetsPanel } from './Assets';
 // custom lightweight take (dockview isn't installable here); the recursive split
 // tree + OS-window pop-out (Tauri) remain future work.
 
-type PanelId = 'hierarchy' | 'assets' | 'inspector';
+type PanelId = 'hierarchy' | 'assets' | 'inspector' | 'history' | 'capabilities';
 type Region = 'left' | 'right' | 'bottom';
 type Zone = Region | 'float';
 type Placement =
@@ -20,19 +22,23 @@ type Placement =
   | { kind: 'float'; x: number; y: number; w: number; h: number };
 type Layout = Record<PanelId, Placement>;
 
-const TITLE: Record<PanelId, string> = { hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector' };
+const TITLE: Record<PanelId, string> = { hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector', history: 'History', capabilities: 'Capabilities' };
 const BODY: Record<PanelId, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
   assets: () => <AssetsPanel />,
   inspector: () => <InspectorPanel />,
+  history: () => <HistoryPanel />,
+  capabilities: () => <CapabilitiesPanel />,
 };
-const ALL: PanelId[] = ['hierarchy', 'assets', 'inspector'];
+const ALL: PanelId[] = ['hierarchy', 'assets', 'inspector', 'history', 'capabilities'];
 
-const LS_KEY = 'forgeax:editor:layout:v2';
+const LS_KEY = 'forgeax:editor:layout:v3';
 const DEFAULT_LAYOUT: Layout = {
   hierarchy: { kind: 'dock', region: 'left', order: 0 },
   assets: { kind: 'dock', region: 'left', order: 1 },
   inspector: { kind: 'dock', region: 'right', order: 0 },
+  history: { kind: 'dock', region: 'bottom', order: 0 },
+  capabilities: { kind: 'dock', region: 'bottom', order: 1 },
 };
 
 function loadLayout(): Layout {
@@ -40,13 +46,13 @@ function loadLayout(): Layout {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const o = JSON.parse(raw) as { v?: number; layout?: Layout };
-      if (o.v === 2 && o.layout && ALL.every((id) => o.layout![id])) return o.layout;
+      if (o.v === 3 && o.layout && ALL.every((id) => o.layout![id])) return o.layout;
     }
   } catch { /* corrupt → default */ }
   return { ...DEFAULT_LAYOUT };
 }
 function saveLayout(layout: Layout): void {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ v: 2, layout })); } catch { /* quota */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ v: 3, layout })); } catch { /* quota */ }
 }
 
 // Single mutable layout + a forceUpdate; drag uses refs to avoid stale closures.
