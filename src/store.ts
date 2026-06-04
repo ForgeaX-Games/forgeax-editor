@@ -182,13 +182,26 @@ export function dispatch(cmd: EditorCommand): void {
   bus.dispatch(cmd);
 }
 
-// ── Scene document persistence (autosave/restore) ─────────────────────────────
-const DOC_KEY = 'forgeax:editor:doc:v1';
+// ── Scene document persistence (autosave/restore), PER GAME/SCENE ─────────────
+// Keyed by the scene slug from `?scene=<slug>` (the active game). Previously a
+// single global key meant every game opened the SAME doc — so picking shoot-opt
+// showed whatever was last edited (or the demo). Now each game has its own
+// persisted editor scene; switching games loads that game's scene, and edits
+// save back to it. `setSceneId` must run at boot BEFORE loadDocFromStorage.
+const DOC_KEY_PREFIX = 'forgeax:editor:doc:v1';
+let currentSceneId = 'default';
+function docKey(id: string): string { return `${DOC_KEY_PREFIX}:${id}`; }
+
+export function setSceneId(id: string | null | undefined): void {
+  const v = (id ?? '').trim();
+  currentSceneId = v || 'default';
+}
+export function getSceneId(): string { return currentSceneId; }
 
 export function loadDocFromStorage(): boolean {
   if (typeof localStorage === 'undefined') return false;
   try {
-    const raw = localStorage.getItem(DOC_KEY);
+    const raw = localStorage.getItem(docKey(currentSceneId));
     if (!raw) return false;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.entities) {
@@ -204,11 +217,12 @@ export function loadDocFromStorage(): boolean {
 }
 
 // Save synchronously on every change so a reload/navigation right after an edit
-// never loses it (the doc is small; cost is negligible at this scale).
+// never loses it (the doc is small; cost is negligible at this scale). Saved
+// under the CURRENT scene's key so games stay isolated.
 bus.subscribe(() => {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(DOC_KEY, JSON.stringify(bus.doc));
+    localStorage.setItem(docKey(currentSceneId), JSON.stringify(bus.doc));
   } catch {
     /* quota / unavailable — non-fatal */
   }
@@ -226,7 +240,7 @@ export function replaceDoc(doc: SceneDocument): void {
 
 export function clearDocStorage(): void {
   try {
-    localStorage.removeItem(DOC_KEY);
+    localStorage.removeItem(docKey(currentSceneId));
   } catch {
     /* noop */
   }

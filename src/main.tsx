@@ -17,8 +17,14 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
 import { createEngineSync } from './engine/sync';
-import { bus, loadDocFromStorage } from './store';
+import { bus, loadDocFromStorage, setSceneId } from './store';
 import './ui/theme.css';
+
+// Bind persistence to the active game/scene (`?scene=<slug>` passed by the
+// interface EditMode iframe). Each game gets its OWN editor scene — without this
+// every game shared one global doc, so picking shoot-opt showed whatever was
+// last edited (or the demo). Must run before loadDocFromStorage below.
+setSceneId(new URLSearchParams(location.search).get('scene'));
 
 const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 const BASE_MATERIAL_GUID = 'eb5bf6e6-2e47-4d9a-99fd-81843228c9b3';
