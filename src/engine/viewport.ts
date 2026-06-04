@@ -317,7 +317,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   // (The #ui overlay sits over the canvas, so e.target is usually the overlay
   // div, not the canvas — filtering panels is more robust than matching canvas.)
   const overPanel = (t: EventTarget | null): boolean =>
-    !!(t as HTMLElement | null)?.closest?.('.ed-left, .ed-right, .ed-toolbar');
+    !!(t as HTMLElement | null)?.closest?.('.dockleaf, .floatwin, .ed-toolbar');
 
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
