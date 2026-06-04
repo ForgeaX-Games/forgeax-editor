@@ -111,7 +111,7 @@ export function EditorApp() {
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onLoadFile(f); e.currentTarget.value = ''; }}
         />
         <span className="ed-tool-sp" />
-        <span className="ed-tool-hint">edit · same engine as ▶ play</span>
+        <span className="ed-tool-hint">W/E/R 移动·旋转·缩放 · F 聚焦选中 · 拖面板标题→停靠/浮动</span>
       </div>
       <DockManager />
     </div>

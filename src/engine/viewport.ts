@@ -438,7 +438,19 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     if (!overPanel(e.target)) e.preventDefault();
   }
 
-  // W / E / R switch gizmo mode (move / rotate / scale) — skipped while typing.
+  /** Frame the current selection: center the orbit target on it + fit distance. */
+  function frameSelection(): void {
+    const sel = getSelection();
+    const t = sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined;
+    if (!t) return;
+    const { center, half } = entityBox(t);
+    target = center;
+    dist = Math.max(4, Math.max(half[0], half[1], half[2]) * 4);
+    applyCamera();
+  }
+
+  // W / E / R switch gizmo mode (move / rotate / scale); F frames the selection.
+  // Skipped while typing.
   function onKey(e: KeyboardEvent): void {
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
@@ -448,6 +460,15 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     if (k === 'w') setGizmoMode('translate');
     else if (k === 'e') setGizmoMode('rotate');
     else if (k === 'r') setGizmoMode('scale');
+    else if (k === 'f') frameSelection();
+  }
+
+  // double-click an entity → select + frame it.
+  function onDblClick(e: MouseEvent): void {
+    if (overPanel(e.target)) return;
+    const { origin, dir } = rayAt(e.clientX, e.clientY);
+    const hit = pick(origin, dir);
+    if (hit !== null) { setSelection(hit); frameSelection(); }
   }
 
   window.addEventListener('pointerdown', onDown);
@@ -456,6 +477,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   window.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('contextmenu', onContext);
   window.addEventListener('keydown', onKey);
+  window.addEventListener('dblclick', onDblClick);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes.
   const unsubSel = onSelectionChange(updateGizmo);
@@ -471,6 +493,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('contextmenu', onContext);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('dblclick', onDblClick);
       unsubSel();
       unsubMode();
       despawnHandles();
