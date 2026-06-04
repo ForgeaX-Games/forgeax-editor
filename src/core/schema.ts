@@ -1,0 +1,139 @@
+// Component schema registry — the one place that "knows" what fields a component
+// has and their constraints. The Inspector reflects it into widgets; the AI
+// bridge reflects the SAME data into `getComponentSchema`. Add a component here
+// → inspector + AI tool both cover it with zero bespoke UI.
+
+export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum';
+
+export interface FieldSchema {
+  key: string;
+  type: FieldType;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  tooltip?: string;
+  // Sensible authoring default used when a component is freshly added / reset.
+  // Falls back to a type-derived value (see defaultFieldValue) when omitted.
+  default?: unknown;
+  // Conditional visibility: only show this field when sibling `key` ∈ `in`.
+  showWhen?: { key: string; in: string[] };
+}
+
+export interface ComponentSchema {
+  name: string;
+  fields: FieldSchema[];
+}
+
+const REGISTRY: Record<string, ComponentSchema> = {
+  Transform: {
+    name: 'Transform',
+    fields: [
+      { key: 'x', type: 'number', step: 0.1 },
+      { key: 'y', type: 'number', step: 0.1 },
+      { key: 'z', type: 'number', step: 0.1 },
+    ],
+  },
+  Light: {
+    name: 'Light',
+    fields: [
+      { key: 'type', type: 'enum', options: ['point', 'spot', 'directional'], tooltip: 'light source kind' },
+      { key: 'intensity', type: 'number', min: 0, max: 10, step: 0.1, default: 1, tooltip: 'radiant intensity' },
+      { key: 'color', type: 'color', default: '#ffffff', tooltip: 'emitted light color' },
+      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 0, tooltip: 'falloff distance (0 = infinite)', showWhen: { key: 'type', in: ['point', 'spot'] } },
+      { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
+      { key: 'spotAngle', type: 'number', min: 1, max: 90, step: 1, default: 30, tooltip: 'spot cone half-angle (degrees)', showWhen: { key: 'type', in: ['spot'] } },
+    ],
+  },
+  Material: {
+    name: 'Material',
+    fields: [
+      { key: 'albedo', type: 'color', default: '#cccccc' },
+      { key: 'metallic', type: 'number', min: 0, max: 1, step: 0.01 },
+      { key: 'roughness', type: 'number', min: 0, max: 1, step: 0.01, default: 0.8 },
+      { key: 'albedoMap', type: 'asset' },
+      { key: 'normalMap', type: 'asset' },
+      { key: 'ormMap', type: 'asset' },
+    ],
+  },
+  Velocity: {
+    name: 'Velocity',
+    fields: [
+      { key: 'vx', type: 'number', step: 0.1, tooltip: 'units/tick along X' },
+      { key: 'vy', type: 'number', step: 0.1, tooltip: 'units/tick along Y' },
+      { key: 'vz', type: 'number', step: 0.1, tooltip: 'units/tick along Z' },
+    ],
+  },
+  Spin: {
+    name: 'Spin',
+    fields: [{ key: 'speed', type: 'number', min: -90, max: 90, step: 1, default: 30, tooltip: 'yaw degrees per tick (Play mode)' }],
+  },
+  Camera: {
+    name: 'Camera',
+    fields: [
+      { key: 'projection', type: 'enum', options: ['perspective', 'orthographic'], tooltip: 'camera projection model' },
+      { key: 'fov', type: 'number', min: 10, max: 120, step: 1, default: 60, tooltip: 'vertical field of view (degrees)' },
+      { key: 'near', type: 'number', min: 0.01, max: 100, step: 0.01, default: 0.1, tooltip: 'near clip plane' },
+      { key: 'far', type: 'number', min: 1, max: 10000, step: 1, default: 1000, tooltip: 'far clip plane' },
+    ],
+  },
+};
+
+export function getComponentSchema(name: string): ComponentSchema | undefined {
+  return REGISTRY[name];
+}
+
+export function fieldSchema(component: string, key: string): FieldSchema | undefined {
+  return REGISTRY[component]?.fields.find((f) => f.key === key);
+}
+
+export function listComponentSchemas(): ComponentSchema[] {
+  return Object.values(REGISTRY);
+}
+
+/** A schema-derived default value for a field (used when adding a component). */
+export function defaultFieldValue(fs: FieldSchema): unknown {
+  if (fs.default !== undefined) return fs.default;
+  switch (fs.type) {
+    case 'number':
+      return fs.min ?? 0;
+    case 'enum':
+      return fs.options?.[0] ?? '';
+    case 'bool':
+      return false;
+    case 'color':
+      return '#cccccc';
+    default:
+      return '';
+  }
+}
+
+/** Build a complete default component payload straight from its schema. */
+export function defaultComponentData(name: string): Record<string, unknown> {
+  const cs = REGISTRY[name];
+  if (!cs) return {};
+  const out: Record<string, unknown> = {};
+  for (const f of cs.fields) out[f.key] = defaultFieldValue(f);
+  return out;
+}
+
+/**
+ * Whether a field should show given the component's current data (showWhen rule).
+ * The controlling sibling may be absent on the instance (schema-completed UI), so
+ * we fall back to that sibling's default (first enum option) when missing.
+ */
+export function fieldVisible(component: string, fs: FieldSchema | undefined, data: Record<string, unknown>): boolean {
+  if (!fs?.showWhen) return true;
+  let cur = data[fs.showWhen.key];
+  if (cur === undefined || cur === null) cur = fieldSchema(component, fs.showWhen.key)?.options?.[0];
+  return fs.showWhen.in.includes(String(cur));
+}
+
+/** Clamp a number to a field's [min,max] when defined (no-op otherwise). */
+export function clampToField(fs: FieldSchema | undefined, n: number): number {
+  if (!fs) return n;
+  let v = n;
+  if (fs.min !== undefined) v = Math.max(fs.min, v);
+  if (fs.max !== undefined) v = Math.min(fs.max, v);
+  return v;
+}

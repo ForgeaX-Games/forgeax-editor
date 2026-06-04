@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 
@@ -77,6 +78,7 @@ export default defineConfig({
   cacheDir: resolve(here, '.vite'),
   publicDir: resolve(here, 'public'),
   plugins: [
+    react(),
     shaderBaseStrip() as never,
     packBaseStrip() as never,
     pluginPack({ roots: [], base: BASE }) as never,
@@ -93,6 +95,8 @@ export default defineConfig({
   },
   resolve: {
     dedupe: [
+      'react',
+      'react-dom',
       '@forgeax/engine-runtime',
       '@forgeax/engine-ecs',
       '@forgeax/engine-types',
