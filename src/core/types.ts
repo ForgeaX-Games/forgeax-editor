@@ -2,37 +2,17 @@
 // and the only legal way to mutate it (EditorCommand). Both human UI and AI
 // produce EditorCommands; the applier computes an inverse for free Undo.
 //
-// Ported verbatim from the unveil-studio prototype (apps/studio/src/core) — the
-// data model + command bus are engine-agnostic, so they carry over unchanged.
-// The forgeax engine sync layer (src/engine/sync.ts) projects this doc onto a
-// real forgeax world for WYSIWYG rendering.
-
-export type EntityId = number;
-
-/** Provenance for the three-state data model: which Workbench source produced
- * this instance. Enables "编辑源" round-trip back to the originating plugin. */
-export interface EntitySource {
-  plugin: string;
-  docId: string;
-}
-
-export interface EntityNode {
-  id: EntityId;
-  name: string;
-  parent: EntityId | null;
-  components: Record<string, unknown>;
-  source?: EntitySource;
-  /** editor-only: hidden entities are not drawn in the viewport (authoring aid). */
-  hidden?: boolean;
-}
-
-export interface SceneDocument {
-  version: string;
-  nextId: EntityId;
-  entities: Record<EntityId, EntityNode>;
-  /** root-level order + per-parent child order is derived from `parent`; kept simple here. */
-  order: EntityId[];
-}
+// The SceneDocument data model now lives in @forgeax/scene (the SSOT shared with
+// games + the engine host, so ▶ Play instantiates the very file ✎ Edit authors).
+// We re-export it here so existing editor imports (`../core/types`) keep working;
+// EditorCommand below stays editor-local (it's the authoring/undo surface).
+export type {
+  EntityId,
+  EntitySource,
+  EntityNode,
+  SceneDocument,
+} from '@forgeax/scene';
+import type { EntityId, EntitySource } from '@forgeax/scene';
 
 // ── Commands ────────────────────────────────────────────────────────────────
 // Each command is a plain JSON object → it doubles as an AI tool-call payload.

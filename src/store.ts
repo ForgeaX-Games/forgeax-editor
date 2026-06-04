@@ -59,6 +59,9 @@ function subscribeSelection(fn: () => void): () => void {
   return () => selectionListeners.delete(fn);
 }
 
+/** Non-React selection subscription (the viewport gizmo follows the selection). */
+export const onSelectionChange = subscribeSelection;
+
 export function useSelection(): EntityId | null {
   return useSyncExternalStore(subscribeSelection, getSelection, getSelection);
 }
@@ -158,6 +161,19 @@ export function requestRefEntity(id: EntityId): void {
   };
   try {
     window.parent?.postMessage({ type: 'VAG_EDITOR_REF', payload: handle }, '*');
+  } catch {
+    /* cross-origin — non-fatal */
+  }
+}
+
+/** Pin an ASSET (material/texture/mesh) into the ForgeaX chat as a deixis handle
+ * — same channel as requestRefEntity, payload.kind === 'asset'. */
+export function requestRefAsset(asset: { guid: string; kind: string; name: string; packPath?: string }): void {
+  try {
+    window.parent?.postMessage(
+      { type: 'VAG_EDITOR_REF', payload: { kind: 'asset', guid: asset.guid, assetKind: asset.kind, name: asset.name, packPath: asset.packPath } },
+      '*',
+    );
   } catch {
     /* cross-origin — non-fatal */
   }

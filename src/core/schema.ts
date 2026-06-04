@@ -32,15 +32,30 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'x', type: 'number', step: 0.1 },
       { key: 'y', type: 'number', step: 0.1 },
       { key: 'z', type: 'number', step: 0.1 },
+      { key: 'scaleX', type: 'number', step: 0.1, default: 1, tooltip: 'scale along X (box width)' },
+      { key: 'scaleY', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Y (box height)' },
+      { key: 'scaleZ', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Z (box depth)' },
+      { key: 'rotX', type: 'number', step: 1, default: 0, tooltip: 'rotation about X (degrees)' },
+      { key: 'rotY', type: 'number', step: 1, default: 0, tooltip: 'rotation about Y (degrees)' },
+      { key: 'rotZ', type: 'number', step: 1, default: 0, tooltip: 'rotation about Z (degrees)' },
+    ],
+  },
+  Mesh: {
+    name: 'Mesh',
+    fields: [
+      { key: 'kind', type: 'enum', options: ['cube', 'sphere', 'cylinder'], default: 'cube', tooltip: 'primitive geometry' },
     ],
   },
   Light: {
     name: 'Light',
     fields: [
       { key: 'type', type: 'enum', options: ['point', 'spot', 'directional'], tooltip: 'light source kind' },
-      { key: 'intensity', type: 'number', min: 0, max: 10, step: 0.1, default: 1, tooltip: 'radiant intensity' },
-      { key: 'color', type: 'color', default: '#ffffff', tooltip: 'emitted light color' },
+      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
+      { key: 'color', type: 'color', default: '#ffffff', tooltip: 'emitted light color (hue; magnitude in intensity)' },
       { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 0, tooltip: 'falloff distance (0 = infinite)', showWhen: { key: 'type', in: ['point', 'spot'] } },
+      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X', showWhen: { key: 'type', in: ['directional'] } },
+      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y', showWhen: { key: 'type', in: ['directional'] } },
+      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z', showWhen: { key: 'type', in: ['directional'] } },
       { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
       { key: 'spotAngle', type: 'number', min: 1, max: 90, step: 1, default: 30, tooltip: 'spot cone half-angle (degrees)', showWhen: { key: 'type', in: ['spot'] } },
     ],
@@ -48,12 +63,23 @@ const REGISTRY: Record<string, ComponentSchema> = {
   Material: {
     name: 'Material',
     fields: [
+      { key: 'materialAsset', type: 'asset', tooltip: '引用一个材质资产 (GUID);设置后覆盖下面的内联 PBR(留空则用内联)' },
       { key: 'albedo', type: 'color', default: '#cccccc' },
       { key: 'metallic', type: 'number', min: 0, max: 1, step: 0.01 },
       { key: 'roughness', type: 'number', min: 0, max: 1, step: 0.01, default: 0.8 },
+      { key: 'emissive', type: 'color', default: '#000000', tooltip: 'emissive color (hue; magnitude in emissiveIntensity)' },
+      { key: 'emissiveIntensity', type: 'number', min: 0, max: 8, step: 0.05, default: 1, tooltip: 'emissive HDR magnitude (glow strength)' },
+      { key: 'shading', type: 'enum', options: ['standard', 'unlit'], default: 'standard', tooltip: 'standard = PBR lit; unlit = flat self-color' },
       { key: 'albedoMap', type: 'asset' },
       { key: 'normalMap', type: 'asset' },
       { key: 'ormMap', type: 'asset' },
+    ],
+  },
+  Collider: {
+    name: 'Collider',
+    fields: [
+      { key: 'shape', type: 'enum', options: ['none', 'box', 'cylinder'], default: 'none', tooltip: 'collision primitive (box = from scale; cylinder = radius)' },
+      { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'cylinder radius', showWhen: { key: 'shape', in: ['cylinder'] } },
     ],
   },
   Velocity: {

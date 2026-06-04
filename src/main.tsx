@@ -13,11 +13,12 @@ import {
   Camera,
   perspective,
 } from '@forgeax/engine-runtime';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
 import { createEngineSync } from './engine/sync';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId } from './store';
+import { createViewport } from './engine/viewport';
+import { loadGameAssets, makeMaterialResolver } from './core/assets';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId } from './store';
 import './ui/theme.css';
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
@@ -27,7 +28,6 @@ import './ui/theme.css';
 setSceneId(new URLSearchParams(location.search).get('scene'));
 
 const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
-const BASE_MATERIAL_GUID = 'eb5bf6e6-2e47-4d9a-99fd-81843228c9b3';
 
 const appRoot = document.getElementById('app') ?? document.body;
 
@@ -52,20 +52,20 @@ function seed(): void {
     kind: 'spawnEntity',
     name: 'Sun',
     parent: level,
-    components: { Transform: { x: -2, y: 1.5, z: 0 }, Light: { type: 'directional', intensity: 1.2, color: '#fff8e0' }, Material: { albedo: '#ffe9a8' } },
+    components: { Light: { type: 'directional', intensity: 1.2, color: '#fff8e0', directionX: -0.4, directionY: -1, directionZ: -0.3 } },
   });
   bus.dispatch({
     kind: 'spawnEntity',
     name: 'Crate',
     parent: level,
-    components: { Transform: { x: 1, y: 0, z: 0 }, Material: { albedo: '#b87333', metallic: 0, roughness: 0.8 } },
+    components: { Transform: { x: 1, y: 0, z: 0 }, Mesh: { kind: 'cube' }, Material: { albedo: '#b87333', metallic: 0, roughness: 0.8 } },
     source: { plugin: 'lowpoly', docId: 'crate-01' },
   });
   bus.dispatch({
     kind: 'spawnEntity',
     name: 'Ball',
     parent: level,
-    components: { Transform: { x: -1, y: 0, z: -1 }, Material: { albedo: '#6cc6ff' } },
+    components: { Transform: { x: -1, y: 0, z: -1 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#6cc6ff', emissive: '#6cc6ff', emissiveIntensity: 0.6 } },
   });
 }
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
@@ -105,23 +105,30 @@ window.addEventListener('resize', () => {
   canvas.height = window.innerHeight * d;
 });
 
-// Fixed editor camera (not part of the authored doc — it's a viewport, not scene
-// content). Looks down -Z at the origin where the doc's cubes render.
+// Editor camera (not part of the authored doc — it's a viewport, not scene
+// content). createViewport drives its pose (orbit/pan/zoom); the spawn values are
+// placeholders it overwrites on first frame.
 const aspect = canvas.width / canvas.height || 1;
-world.spawn(
+const cameraEntity = world.spawn(
   { component: Transform, data: { posY: 1.5, posZ: 9 } },
   { component: Camera, data: perspective({ fov: Math.PI / 3, aspect }) },
-);
+).unwrap();
 
-// Wire the authored doc → forgeax world (rebuilds on every bus change).
-let baseMaterial: unknown = null;
-const guidRes = AssetGuid.parse(BASE_MATERIAL_GUID);
-if (guidRes.ok) {
-  const loadRes = await renderer.assets.loadByGuid(guidRes.value);
-  if (loadRes.ok) baseMaterial = loadRes.value;
-  else console.log('[editor] base material unavailable, using engine default:', loadRes.error.code);
-}
-createEngineSync(world as never, renderer as never, baseMaterial);
+// Load the open game's asset packs once, so a Material.materialAsset GUID
+// renders as the referenced asset material (registered from the pack payload —
+// the editor's pack-index is empty, so we can't loadByGuid). Sync lookup → the
+// instantiator stays synchronous.
+const packAssets = await loadGameAssets(getSceneId());
+const resolveMaterialAsset = makeMaterialResolver(renderer.assets as never, packAssets);
+
+// Wire the authored doc → forgeax world (rebuilds on every bus change). The
+// doc→world mapping is @forgeax/scene's instantiateScene — the same path ▶ Play
+// uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
+const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset);
+
+// Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
+const viewport = createViewport({ canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync });
+window.addEventListener('resize', () => viewport.refresh());
 
 app.value.start();
 installFpsReport();

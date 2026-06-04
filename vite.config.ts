@@ -91,6 +91,8 @@ export default defineConfig({
       '@forgeax/engine-ecs',
       '@forgeax/engine-types',
       '@forgeax/engine-shader',
+      // shares the engine subgraph's module identity (see engine-src vite.config).
+      '@forgeax/scene',
     ],
   },
   resolve: {
@@ -102,6 +104,7 @@ export default defineConfig({
       '@forgeax/engine-types',
       '@forgeax/engine-rhi',
       '@forgeax/engine-math',
+      '@forgeax/scene',
     ],
     preserveSymlinks: true,
   },

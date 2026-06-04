@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { HierarchyPanel } from './panels/Hierarchy';
 import { InspectorPanel } from './panels/Inspector';
+import { AssetsPanel } from './panels/Assets';
 import { deleteEntityCascade, deleteManyCascade } from './ops';
 import {
   bus,
@@ -106,7 +107,10 @@ export function EditorApp() {
         <span className="ed-tool-sp" />
         <span className="ed-tool-hint">edit · same engine as ▶ play</span>
       </div>
-      <div className="ed-left"><HierarchyPanel /></div>
+      <div className="ed-left">
+        <HierarchyPanel />
+        <AssetsPanel />
+      </div>
       <div className="ed-center" />
       <div className="ed-right"><InspectorPanel /></div>
     </div>

@@ -1,0 +1,111 @@
+// Asset loading for the editor — reads the OPEN game's `.pack.json` files (the
+// asset system: material / texture / mesh assets, keyed by GUID) so the Assets
+// panel can browse + preview them, and so a Material.materialAsset GUID can be
+// resolved to a real engine material handle WITHOUT relying on a configured
+// pack-index (the editor's is empty): we register the material straight from the
+// pack payload's paramValues. Reached through the server's /api/files{,/tree}
+// (same-origin via the interface proxy).
+import { Materials } from '@forgeax/engine-runtime';
+
+export interface PackAsset {
+  guid: string;
+  /** 'material' | 'texture' | 'mesh' | … (whatever the pack declares). */
+  kind: string;
+  name: string;
+  payload: Record<string, unknown>;
+  packPath: string;
+}
+
+interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
+
+async function packPaths(slug: string): Promise<string[]> {
+  const root = `.forgeax/games/${slug}/assets`;
+  try {
+    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    if (!r.ok) return [];
+    const j = (await r.json()) as { tree?: TreeNode };
+    const out: string[] = [];
+    const walk = (n?: TreeNode): void => {
+      if (!n) return;
+      if (n.type === 'file' && n.name.endsWith('.pack.json')) out.push(n.path);
+      n.children?.forEach(walk);
+    };
+    walk(j.tree);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Load + flatten every asset declared in the game's *.pack.json files. */
+export async function loadGameAssets(slug: string | null | undefined): Promise<PackAsset[]> {
+  if (!slug || slug === 'default') return [];
+  const paths = await packPaths(slug);
+  const out: PackAsset[] = [];
+  for (const p of paths) {
+    try {
+      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      if (!r.ok) continue;
+      const j = (await r.json()) as { content?: string };
+      if (!j.content) continue;
+      const pack = JSON.parse(j.content) as { assets?: { guid: string; kind: string; payload?: Record<string, unknown> }[] };
+      for (const a of pack.assets ?? []) {
+        if (!a.guid) continue;
+        out.push({ guid: a.guid, kind: a.kind, name: shortName(a), payload: a.payload ?? {}, packPath: p });
+      }
+    } catch {
+      /* skip unreadable/malformed pack */
+    }
+  }
+  return out;
+}
+
+/** A friendly label: a material's color hint, else the guid head. */
+function shortName(a: { guid: string; kind: string; payload?: Record<string, unknown> }): string {
+  return `${a.kind} ${a.guid.slice(0, 8)}`;
+}
+
+interface AssetsLike { register(desc: unknown): { unwrap(): unknown } }
+
+/** CSS color for a material asset's base color (for the panel swatch), or null. */
+export function materialSwatch(a: PackAsset): string | null {
+  if (a.kind !== 'material') return null;
+  const pv = a.payload.paramValues as Record<string, unknown> | undefined;
+  const c = pv?.baseColor;
+  if (!Array.isArray(c)) return null;
+  const u = (v: unknown) => Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 255);
+  return `rgb(${u(c[0])}, ${u(c[1])}, ${u(c[2])})`;
+}
+
+/** Register an engine material handle from a pack material payload. */
+function registerMaterial(assets: AssetsLike, payload: Record<string, unknown>): unknown {
+  const pv = (payload.paramValues as Record<string, unknown> | undefined) ?? {};
+  const base = Array.isArray(pv.baseColor) ? (pv.baseColor as number[]) : [0.8, 0.8, 0.8, 1];
+  const passes = payload.passes as { shader?: string }[] | undefined;
+  const shader = passes?.[0]?.shader ?? '';
+  const desc = /unlit/i.test(shader)
+    ? Materials.unlit(base as [number, number, number, number])
+    : Materials.standard({
+        baseColor: base as [number, number, number, number],
+        roughness: typeof pv.roughness === 'number' ? pv.roughness : 0.8,
+        metallic: typeof pv.metallic === 'number' ? pv.metallic : 0,
+        ...(Array.isArray(pv.emissive) ? { emissive: pv.emissive as number[], emissiveIntensity: typeof pv.emissiveIntensity === 'number' ? pv.emissiveIntensity : 1 } : {}),
+      });
+  return assets.register(desc).unwrap();
+}
+
+/** Build a sync GUID→material-handle resolver (for instantiateScene). Material
+ *  handles are registered on first use + cached. GUIDs absent from the loaded
+ *  packs return null → the instantiator falls back to the entity's inline PBR. */
+export function makeMaterialResolver(assets: AssetsLike, packAssets: PackAsset[]): (guid: string) => unknown | null {
+  const byGuid = new Map(packAssets.filter((a) => a.kind === 'material').map((a) => [a.guid, a]));
+  const cache = new Map<string, unknown>();
+  return (guid: string) => {
+    if (cache.has(guid)) return cache.get(guid)!;
+    const a = byGuid.get(guid);
+    if (!a) return null;
+    const h = registerMaterial(assets, a.payload);
+    cache.set(guid, h);
+    return h;
+  };
+}
