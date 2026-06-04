@@ -22,7 +22,7 @@ import {
   HANDLE_CUBE,
 } from '@forgeax/engine-runtime';
 import type { EntityId, SceneDocument } from '../core/types';
-import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setGizmoMode, setSelection } from '../store';
+import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '../store';
 import type { EngineSync } from './sync';
 
 const DEG2RAD = Math.PI / 180;
@@ -308,6 +308,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
     } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
     world.set(dragWorld, Transform, data);
+    // Mirror the changed fields into the Inspector live (no command) — the
+    // "预览" loop: numbers track the drag, the single commit lands on release.
+    if (dragId !== null) for (const k in patch) setFieldPreview(dragId, `Transform.${k}`, patch[k]!);
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
   const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
@@ -424,6 +427,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: { ...dragOrig, ...livePatch } });
     }
     mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {};
+    setFieldPreview(null); // stop the Inspector preview; it now reads the committed doc
     updateGizmo();
   }
 
