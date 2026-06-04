@@ -140,6 +140,16 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .dh-title { flex: 1 1 auto; }
 .dh-x { cursor: pointer; color: var(--fg3); padding: 0 2px; }
 .dh-x:hover { color: var(--fg); }
+/* TabGroup bar — a docked region shows its panels as draggable tabs. */
+.docktabs { display: flex; flex: 0 0 auto; background: var(--bg2); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.docktab {
+  display: flex; align-items: center; gap: 5px; padding: 3px 9px; cursor: grab; user-select: none;
+  font-family: var(--mono); font-size: 11px; color: var(--fg3); border-right: 1px solid var(--line);
+  white-space: nowrap; flex: 0 0 auto;
+}
+.docktab:hover { color: var(--fg2); }
+.docktab.on { background: var(--bg1); color: var(--fg); box-shadow: inset 0 -2px 0 var(--lime, #7ee04a); }
+.docktab:active { cursor: grabbing; }
 .dockbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .dockbody > .panel { height: 100%; }
 .dockbody .panel > h3 { display: none; } /* leaf head replaces the panel's own title */

@@ -7,12 +7,13 @@ import { HistoryPanel } from './History';
 import { CapabilitiesPanel } from './Capabilities';
 
 // DockManager — the editor's window/docking shell (design EDITOR-MODE §21 + the
-// §01/§02 mockup): panels are dock leaves you DRAG by their title; drop near a
-// dock edge (left/right/bottom) to dock there, drop over the center to FLOAT a
-// window (draggable / resizable / closeable, rounded). No float buttons — the
-// drop location decides. Layout persists to localStorage (versioned). This is a
-// custom lightweight take (dockview isn't installable here); the recursive split
-// tree + OS-window pop-out (Tauri) remain future work.
+// §01/§02 mockup): panels are dock leaves you DRAG by their tab; drop near a dock
+// edge (left/right/bottom) to dock there (joining that region as a TAB), drop over
+// the center to FLOAT a draggable/resizable/closeable window. No float buttons —
+// the drop location decides. A region is a TabGroup (one active panel + tab bar).
+// Layout + active tabs persist to localStorage (versioned). Custom lightweight
+// take (dockview isn't installable here); recursive split tree + OS-window
+// pop-out (Tauri) remain future work.
 
 type PanelId = 'hierarchy' | 'assets' | 'inspector' | 'history' | 'capabilities';
 type Region = 'left' | 'right' | 'bottom';
@@ -21,6 +22,7 @@ type Placement =
   | { kind: 'dock'; region: Region; order: number }
   | { kind: 'float'; x: number; y: number; w: number; h: number };
 type Layout = Record<PanelId, Placement>;
+type Active = Partial<Record<Region, PanelId>>;
 
 const TITLE: Record<PanelId, string> = { hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector', history: 'History', capabilities: 'Capabilities' };
 const BODY: Record<PanelId, () => ReactNode> = {
@@ -41,30 +43,33 @@ const DEFAULT_LAYOUT: Layout = {
   capabilities: { kind: 'dock', region: 'bottom', order: 1 },
 };
 
-function loadLayout(): Layout {
+interface Saved { v: number; layout: Layout; active?: Active }
+function loadSaved(): { layout: Layout; active: Active } {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
-      const o = JSON.parse(raw) as { v?: number; layout?: Layout };
-      if (o.v === 3 && o.layout && ALL.every((id) => o.layout![id])) return o.layout;
+      const o = JSON.parse(raw) as Saved;
+      if (o.v === 3 && o.layout && ALL.every((id) => o.layout[id])) return { layout: o.layout, active: o.active ?? {} };
     }
   } catch { /* corrupt → default */ }
-  return { ...DEFAULT_LAYOUT };
+  return { layout: { ...DEFAULT_LAYOUT }, active: {} };
 }
-function saveLayout(layout: Layout): void {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ v: 3, layout })); } catch { /* quota */ }
+function save(layout: Layout, active: Active): void {
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ v: 3, layout, active })); } catch { /* quota */ }
 }
 
-// Single mutable layout + a forceUpdate; drag uses refs to avoid stale closures.
 export function DockManager() {
-  const layoutRef = useRef<Layout>(loadLayout());
+  const init = loadSaved();
+  const layoutRef = useRef<Layout>(init.layout);
+  const activeRef = useRef<Active>(init.active);
   const [, force] = useReducer((n: number) => n + 1, 0);
   const dockRef = useRef<HTMLDivElement | null>(null);
-  // transient drag state (not React state — updated at pointer rate).
-  const drag = useRef<{ id: PanelId; grabX: number; grabY: number; px: number; py: number; zone: Zone } | null>(null);
+  // transient drag state (refs, updated at pointer rate — no stale closures).
+  const drag = useRef<{ id: PanelId; grabX: number; grabY: number; sx: number; sy: number; px: number; py: number; moved: boolean; zone: Zone } | null>(null);
   const [, forceDrag] = useReducer((n: number) => n + 1, 0);
 
-  const commit = (next: Layout): void => { layoutRef.current = next; saveLayout(next); force(); };
+  const commit = (next: Layout): void => { layoutRef.current = next; save(next, activeRef.current); force(); };
+  const setActive = (region: Region, id: PanelId): void => { activeRef.current = { ...activeRef.current, [region]: id }; save(layoutRef.current, activeRef.current); force(); };
 
   function zoneAt(px: number, py: number): Zone {
     const r = dockRef.current?.getBoundingClientRect();
@@ -73,22 +78,20 @@ export function DockManager() {
     if (fx < 0.16) return 'left';
     if (fx > 0.84) return 'right';
     if (fy > 0.80) return 'bottom';
-    return 'float'; // center
+    return 'float';
   }
-
   function nextOrder(layout: Layout, region: Region): number {
     let m = -1;
     for (const id of ALL) { const p = layout[id]; if (p.kind === 'dock' && p.region === region) m = Math.max(m, p.order); }
     return m + 1;
   }
 
-  // ── drag a panel by its title ──
   function startDrag(id: PanelId, e: RPointerEvent): void {
     e.preventDefault();
     const p = layoutRef.current[id];
-    const fx = p.kind === 'float' ? e.clientX - p.x : 12;
-    const fy = p.kind === 'float' ? e.clientY - p.y : 12;
-    drag.current = { id, grabX: fx, grabY: fy, px: e.clientX, py: e.clientY, zone: zoneAt(e.clientX, e.clientY) };
+    const grabX = p.kind === 'float' ? e.clientX - p.x : 12;
+    const grabY = p.kind === 'float' ? e.clientY - p.y : 12;
+    drag.current = { id, grabX, grabY, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, moved: false, zone: zoneAt(e.clientX, e.clientY) };
     forceDrag();
   }
 
@@ -97,9 +100,9 @@ export function DockManager() {
       const d = drag.current;
       if (!d) return;
       d.px = e.clientX; d.py = e.clientY;
-      // a floating window follows the cursor live; docked drag only shows the ghost.
+      if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 4) d.moved = true;
       const cur = layoutRef.current[d.id];
-      if (cur.kind === 'float') {
+      if (cur.kind === 'float' && d.moved) {
         layoutRef.current = { ...layoutRef.current, [d.id]: { ...cur, x: e.clientX - d.grabX, y: e.clientY - d.grabY } };
       }
       d.zone = zoneAt(e.clientX, e.clientY);
@@ -109,14 +112,17 @@ export function DockManager() {
       const d = drag.current;
       if (!d) return;
       drag.current = null;
+      if (!d.moved) { forceDrag(); return; } // a click (tab switch handled by onClick)
       const zone = zoneAt(e.clientX, e.clientY);
       const layout = { ...layoutRef.current };
       if (zone === 'float') {
         const prev = layout[d.id];
-        if (prev.kind === 'float') layout[d.id] = { ...prev, x: e.clientX - d.grabX, y: e.clientY - d.grabY };
-        else layout[d.id] = { kind: 'float', x: Math.max(8, e.clientX - 120), y: Math.max(40, e.clientY - 14), w: 260, h: 340 };
+        layout[d.id] = prev.kind === 'float'
+          ? { ...prev, x: e.clientX - d.grabX, y: e.clientY - d.grabY }
+          : { kind: 'float', x: Math.max(8, e.clientX - 120), y: Math.max(40, e.clientY - 14), w: 260, h: 340 };
       } else {
         layout[d.id] = { kind: 'dock', region: zone, order: nextOrder(layout, zone) };
+        activeRef.current = { ...activeRef.current, [zone]: d.id }; // show the just-docked panel
       }
       commit(layout);
       forceDrag();
@@ -126,7 +132,6 @@ export function DockManager() {
     return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
   }, []);
 
-  // ── resize a floating window (bottom-right handle) ──
   function startResize(id: PanelId, e: RPointerEvent): void {
     e.preventDefault(); e.stopPropagation();
     const p = layoutRef.current[id];
@@ -155,16 +160,35 @@ export function DockManager() {
   const left = inRegion('left'), right = inRegion('right'), bottom = inRegion('bottom');
   const floats = ALL.filter((id) => layout[id].kind === 'float');
 
-  const leaf = (id: PanelId, floating: boolean) => (
-    <div className={`dockleaf${floating ? ' floatwin' : ''}`} key={id} data-dock-pe="1"
-      style={floating ? floatStyle(layout[id] as Extract<Placement, { kind: 'float' }>) : undefined}>
-      <div className="dockhead" onPointerDown={(e) => startDrag(id, e)} title="拖动以浮动 / 停靠">
+  // A docked region = a TabGroup: a tab bar (drag a tab to move; click to switch)
+  // over the active panel's body.
+  const regionLeaf = (region: Region, ids: PanelId[]): ReactNode => {
+    if (!ids.length) return null;
+    const active = ids.includes(activeRef.current[region] as PanelId) ? (activeRef.current[region] as PanelId) : ids[0]!;
+    return (
+      <div className="dockleaf" data-dock-pe="1">
+        <div className="docktabs">
+          {ids.map((id) => (
+            <div key={id} className={`docktab${id === active ? ' on' : ''}`} title="拖动以浮动 / 停靠;单击切换"
+              onPointerDown={(e) => startDrag(id, e)} onClick={() => setActive(region, id)}>
+              <span className="dh-grip">⠿</span>{TITLE[id]}
+            </div>
+          ))}
+        </div>
+        <div className="dockbody">{BODY[active]()}</div>
+      </div>
+    );
+  };
+
+  const floatLeaf = (id: PanelId): ReactNode => (
+    <div className="dockleaf floatwin" key={id} data-dock-pe="1" style={floatStyle(layout[id] as Extract<Placement, { kind: 'float' }>)}>
+      <div className="dockhead" onPointerDown={(e) => startDrag(id, e)} title="拖动以停靠">
         <span className="dh-grip">⠿</span>
         <span className="dh-title">{TITLE[id]}</span>
-        {floating && <span className="dh-x" title="停靠回默认位置" onPointerDown={(e) => e.stopPropagation()} onClick={() => redock(id)}>×</span>}
+        <span className="dh-x" title="停靠回默认位置" onPointerDown={(e) => e.stopPropagation()} onClick={() => redock(id)}>×</span>
       </div>
       <div className="dockbody">{BODY[id]()}</div>
-      {floating && <span className="float-resize" onPointerDown={(e) => startResize(id, e)} />}
+      <span className="float-resize" onPointerDown={(e) => startResize(id, e)} />
     </div>
   );
 
@@ -174,13 +198,13 @@ export function DockManager() {
 
   return (
     <div className="dockspace" ref={dockRef} style={{ gridTemplateColumns: cols, gridTemplateRows: rows }}>
-      <div className="dock-col dock-left">{left.map((id) => leaf(id, false))}</div>
+      <div className="dock-col dock-left">{regionLeaf('left', left)}</div>
       <div className="dock-center" />
-      <div className="dock-col dock-right">{right.map((id) => leaf(id, false))}</div>
-      <div className="dock-row dock-bottom">{bottom.map((id) => leaf(id, false))}</div>
-      {floats.map((id) => leaf(id, true))}
+      <div className="dock-col dock-right">{regionLeaf('right', right)}</div>
+      <div className="dock-row dock-bottom">{regionLeaf('bottom', bottom)}</div>
+      {floats.map((id) => floatLeaf(id))}
 
-      {d && (
+      {d && d.moved && (
         <div className="dropover">
           <div className={`dz l${d.zone === 'left' ? ' on' : ''}`} />
           <div className={`dz r${d.zone === 'right' ? ' on' : ''}`} />
