@@ -62,6 +62,24 @@ function subscribeSelection(fn: () => void): () => void {
 /** Non-React selection subscription (the viewport gizmo follows the selection). */
 export const onSelectionChange = subscribeSelection;
 
+// ── gizmo mode (translate / rotate / scale) — shared by the toolbar + viewport ─
+export type GizmoMode = 'translate' | 'rotate' | 'scale';
+let gizmoMode: GizmoMode = 'translate';
+const gizmoListeners = new Set<() => void>();
+export function getGizmoMode(): GizmoMode { return gizmoMode; }
+export function setGizmoMode(m: GizmoMode): void {
+  if (m === gizmoMode) return;
+  gizmoMode = m;
+  for (const fn of gizmoListeners) fn();
+}
+export function onGizmoModeChange(fn: () => void): () => void {
+  gizmoListeners.add(fn);
+  return () => gizmoListeners.delete(fn);
+}
+export function useGizmoMode(): GizmoMode {
+  return useSyncExternalStore(onGizmoModeChange, getGizmoMode, getGizmoMode);
+}
+
 export function useSelection(): EntityId | null {
   return useSyncExternalStore(subscribeSelection, getSelection, getSelection);
 }

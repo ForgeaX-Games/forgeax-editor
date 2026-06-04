@@ -9,7 +9,9 @@ import {
   replaceDoc,
   requestRename,
   saveDocToDisk,
+  setGizmoMode,
   useDocVersion,
+  useGizmoMode,
 } from './store';
 import type { SceneDocument } from './core/types';
 
@@ -19,6 +21,7 @@ import type { SceneDocument } from './core/types';
 // uses — so human edits and AI tool-calls are symmetric.
 export function EditorApp() {
   useDocVersion(); // re-render toolbar enable/disable on every bus change
+  const gizmoMode = useGizmoMode();
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Global shortcuts: Undo/Redo/Delete/Rename. Skipped while typing in a field
@@ -95,6 +98,11 @@ export function EditorApp() {
         <span className="ed-brand">✎ forgeax editor</span>
         <button type="button" className="tbtn" data-testid="ed-undo" disabled={!bus.canUndo()} onClick={() => bus.undo()} title="Undo (⌘/Ctrl+Z)">↶ Undo</button>
         <button type="button" className="tbtn" data-testid="ed-redo" disabled={!bus.canRedo()} onClick={() => bus.redo()} title="Redo (⌘/Ctrl+Shift+Z)">↷ Redo</button>
+        <span className="ed-tool-div" />
+        <button type="button" className={`tbtn${gizmoMode === 'translate' ? ' on' : ''}`} data-testid="ed-gizmo-translate" onClick={() => setGizmoMode('translate')} title="移动 (W)">⤧ 移动</button>
+        <button type="button" className={`tbtn${gizmoMode === 'rotate' ? ' on' : ''}`} data-testid="ed-gizmo-rotate" onClick={() => setGizmoMode('rotate')} title="旋转 (E)">⟳ 旋转</button>
+        <button type="button" className={`tbtn${gizmoMode === 'scale' ? ' on' : ''}`} data-testid="ed-gizmo-scale" onClick={() => setGizmoMode('scale')} title="缩放 (R)">⤢ 缩放</button>
+        <span className="ed-tool-div" />
         <button type="button" className="tbtn" data-testid="ed-save" onClick={onSave} title="Download the scene as JSON">⤓ Save</button>
         <button type="button" className="tbtn" data-testid="ed-load" onClick={() => fileRef.current?.click()} title="Load a scene JSON">⤒ Load</button>
         <input

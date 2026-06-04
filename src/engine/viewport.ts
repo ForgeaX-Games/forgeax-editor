@@ -22,8 +22,10 @@ import {
   HANDLE_CUBE,
 } from '@forgeax/engine-runtime';
 import type { EntityId, SceneDocument } from '../core/types';
-import { bus, getSelection, onSelectionChange, setSelection } from '../store';
+import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setGizmoMode, setSelection } from '../store';
 import type { EngineSync } from './sync';
+
+const DEG2RAD = Math.PI / 180;
 
 export type Vec3 = [number, number, number];
 
@@ -86,6 +88,36 @@ export function closestAxisT(rayO: Vec3, rayD: Vec3, axisO: Vec3, axisU: Vec3): 
   const denom = a * c - b * b;
   if (Math.abs(denom) < 1e-9) return -e / (c || 1); // ray ∥ axis → project origin
   return (a * e - b * d) / denom;
+}
+
+const dot3 = (p: Vec3, q: Vec3): number => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+const cross3 = (p: Vec3, q: Vec3): Vec3 => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+
+/** Ray vs an arbitrary plane (point + normal). Returns the hit point or null. */
+export function rayPlane(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3): Vec3 | null {
+  const denom = dot3(dir, normal);
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = dot3([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]], normal) / denom;
+  if (t < 0) return null;
+  return [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+}
+
+/** Two orthonormal vectors spanning the plane ⊥ `axis` (for measuring rotation). */
+export function orthoBasis(axis: Vec3): [Vec3, Vec3] {
+  const a = norm(axis);
+  const ref: Vec3 = Math.abs(a[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
+  const u = norm(cross3(ref, a));
+  return [u, cross3(a, u)];
+}
+
+/** Signed angle (radians) of the cursor ray's hit on the plane ⊥ `axis` through
+ *  `center`, measured in that plane. null if the ray is parallel to the plane. */
+export function angleOnAxis(rayO: Vec3, rayD: Vec3, center: Vec3, axis: Vec3): number | null {
+  const hit = rayPlane(rayO, rayD, center, axis);
+  if (!hit) return null;
+  const [u, v] = orthoBasis(axis);
+  const d: Vec3 = [hit[0] - center[0], hit[1] - center[1], hit[2] - center[2]];
+  return Math.atan2(dot3(d, v), dot3(d, u));
 }
 
 const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -247,22 +279,39 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   let dragOrig: Record<string, number> = {};
   let grabOffset: Vec3 = [0, 0, 0];
   let dragY = 0;
-  // axis-constrained drag (gizmo handle): the axis + the entity's start pos + the
-  // axis parameter at grab time (so motion is relative, no jump-to-cursor).
+  // axis-constrained drag (gizmo handle): which axis + the entity center at grab,
+  // plus the axis parameter (translate/scale) or plane angle (rotate) at grab so
+  // motion is relative (no jump-to-cursor).
+  let axisIdx = 0;
   let axisVec: Vec3 = [1, 0, 0];
   let axisStart: Vec3 = [0, 0, 0];
   let axisT0 = 0;
-  // last live drag pose (committed as one command on release).
-  let liveX = 0, liveY = 0, liveZ = 0;
+  let angle0 = 0;
+  // the changed Transform fields, committed as ONE command on release.
+  let livePatch: Record<string, number> = {};
+  const qd = quat.create();
 
-  const liveSet = (x: number, y: number, z: number): void => {
-    liveX = x; liveY = y; liveZ = z;
+  /** Live-preview a Transform patch via world.set (no doc churn). Position +
+   *  scale + rotation(quat from euler) are all applied; on release the patch is
+   *  committed as one setComponent. */
+  const applyLive = (patch: Record<string, number>): void => {
+    livePatch = patch;
     if (dragWorld === undefined) return;
-    world.set(dragWorld, Transform, {
-      posX: x, posY: y, posZ: z,
-      scaleX: num(dragOrig.scaleX, 1), scaleY: num(dragOrig.scaleY, 1), scaleZ: num(dragOrig.scaleZ, 1),
-    });
+    const m = { ...dragOrig, ...patch };
+    const data: Record<string, number> = {
+      posX: num(m.x, 0), posY: num(m.y, 0), posZ: num(m.z, 0),
+      scaleX: num(m.scaleX, 1), scaleY: num(m.scaleY, 1), scaleZ: num(m.scaleZ, 1),
+    };
+    const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
+    if (rx || ry || rz) {
+      quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
+      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+    } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
+    world.set(dragWorld, Transform, data);
   };
+  const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
+  const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
+  const SCALE_KEYS = ['scaleX', 'scaleY', 'scaleZ'];
 
   // A click is "in the viewport" unless it landed on one of the docked panels.
   // (The #ui overlay sits over the canvas, so e.target is usually the overlay
@@ -283,9 +332,12 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       dragId = sel;
       dragWorld = sync.worldEntityFor(sel);
       dragOrig = { ...(bus.doc.entities[sel]!.components.Transform as Record<string, number>) };
+      axisIdx = ax;
       axisVec = AXES[ax]!.axis;
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
-      axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
+      if (getGizmoMode() === 'rotate') angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
+      else axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
+      livePatch = {};
       mode = 'axisDrag';
       return;
     }
@@ -320,33 +372,58 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       applyCamera();
     } else if (mode === 'axisDrag') {
       const { origin, dir } = rayAt(e.clientX, e.clientY);
-      const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
-      liveSet(axisStart[0] + axisVec[0] * delta, axisStart[1] + axisVec[1] * delta, axisStart[2] + axisVec[2] * delta);
+      const ctrl = e.ctrlKey || e.metaKey;
+      const gm = getGizmoMode();
+      if (gm === 'rotate') {
+        const a = angleOnAxis(origin, dir, axisStart, axisVec);
+        if (a !== null) {
+          const key = ROT_KEYS[axisIdx]!;
+          const deg = num(dragOrig[key], 0) + (a - angle0) / DEG2RAD;
+          applyLive({ [key]: snap(deg, 15, ctrl) });
+        }
+      } else if (gm === 'scale') {
+        const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
+        if (e.shiftKey) {
+          const patch: Record<string, number> = {};
+          for (const k of SCALE_KEYS) patch[k] = Math.max(0.01, snap(num(dragOrig[k], 1) + delta, 0.25, ctrl));
+          applyLive(patch);
+        } else {
+          const key = SCALE_KEYS[axisIdx]!;
+          applyLive({ [key]: Math.max(0.01, snap(num(dragOrig[key], 1) + delta, 0.25, ctrl)) });
+        }
+      } else {
+        const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
+        applyLive({
+          x: snap(axisStart[0] + axisVec[0] * delta, 0.5, ctrl),
+          y: snap(axisStart[1] + axisVec[1] * delta, 0.5, ctrl),
+          z: snap(axisStart[2] + axisVec[2] * delta, 0.5, ctrl),
+        });
+      }
       updateGizmo(); // handles follow the entity
     } else if (mode === 'pendDrag' || mode === 'drag') {
       if (mode === 'pendDrag' && Math.hypot(e.clientX - downX, e.clientY - downY) < 4) return;
       mode = 'drag';
       const { origin, dir } = rayAt(e.clientX, e.clientY);
+      const ctrl = e.ctrlKey || e.metaKey;
       if (e.shiftKey) {
         // vertical: screen dy → world Y (scaled by distance so it tracks roughly).
         dragY += -dy * dist * 0.0016 * Math.tan(FOV / 2) * 2;
-        liveSet(num(dragOrig.x, 0), dragY, num(dragOrig.z, 0));
+        applyLive({ x: num(dragOrig.x, 0), y: snap(dragY, 0.5, ctrl), z: num(dragOrig.z, 0) });
       } else {
         const g = rayPlaneY(origin, dir, dragY);
-        if (g) liveSet(g[0] + grabOffset[0], dragY, g[2] + grabOffset[2]);
+        if (g) applyLive({ x: snap(g[0] + grabOffset[0], 0.5, ctrl), y: dragY, z: snap(g[2] + grabOffset[2], 0.5, ctrl) });
       }
       updateGizmo();
     }
   }
 
   function onUp(): void {
-    if ((mode === 'drag' || mode === 'axisDrag') && dragId !== null) {
+    if ((mode === 'drag' || mode === 'axisDrag') && dragId !== null && Object.keys(livePatch).length > 0) {
       // commit the final pose as ONE undoable command, merged over the original
-      // Transform so scale/rotation survive. resync then re-places it from the doc.
-      const patch = { ...dragOrig, x: liveX, y: liveY, z: liveZ };
-      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch });
+      // Transform so untouched fields survive. resync then re-places it from the doc.
+      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: { ...dragOrig, ...livePatch } });
     }
-    mode = 'none'; dragId = null; dragWorld = undefined;
+    mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {};
     updateGizmo();
   }
 
@@ -361,13 +438,28 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     if (!overPanel(e.target)) e.preventDefault();
   }
 
+  // W / E / R switch gizmo mode (move / rotate / scale) — skipped while typing.
+  function onKey(e: KeyboardEvent): void {
+    const el = e.target as HTMLElement | null;
+    const tag = el?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'w') setGizmoMode('translate');
+    else if (k === 'e') setGizmoMode('rotate');
+    else if (k === 'r') setGizmoMode('scale');
+  }
+
   window.addEventListener('pointerdown', onDown);
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
   window.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('contextmenu', onContext);
-  // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …).
+  window.addEventListener('keydown', onKey);
+  // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
+  // re-tints when the mode changes.
   const unsubSel = onSelectionChange(updateGizmo);
+  const unsubMode = onGizmoModeChange(updateGizmo);
 
   applyCamera(); // also paints the gizmo if something is already selected
 
@@ -378,7 +470,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('contextmenu', onContext);
+      window.removeEventListener('keydown', onKey);
       unsubSel();
+      unsubMode();
       despawnHandles();
     },
     refresh: applyCamera,

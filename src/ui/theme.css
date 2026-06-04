@@ -20,6 +20,8 @@
 }
 .tbtn:hover { color: var(--fg); }
 .tbtn:disabled { opacity: 0.4; cursor: default; }
+.tbtn.on { background: var(--primary, #4a8cff); color: #fff; border-color: var(--primary, #4a8cff); }
+.ed-tool-div { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--line); }
 
 /* panels */
 .panel { height: 100%; overflow: auto; background: var(--bg1); color: var(--fg); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }

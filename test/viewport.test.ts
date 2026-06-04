@@ -4,6 +4,9 @@ import {
   rayDirection,
   rayAABB,
   rayPlaneY,
+  rayPlane,
+  orthoBasis,
+  angleOnAxis,
   closestAxisT,
   entityBox,
   type Vec3,
@@ -55,6 +58,36 @@ test('closestAxisT: parameter along an axis at the point nearest the ray', () =>
   expect(closestAxisT([-3, 10, 0], [0, -1, 0], [0, 0, 0], [1, 0, 0])).toBeCloseTo(-3, 6);
   // moving the axis origin shifts t by the same amount (relative motion).
   expect(closestAxisT([5, 10, 0], [0, -1, 0], [2, 0, 0], [1, 0, 0])).toBeCloseTo(3, 6);
+});
+
+test('rayPlane: hits an arbitrary plane; parallel → null', () => {
+  // plane through origin, normal +X; ray down the -X axis from x=5 → hits origin.
+  expect(rayPlane([5, 0, 0], [-1, 0, 0], [0, 0, 0], [1, 0, 0])).toEqual([0, 0, 0]);
+  // ray parallel to the plane → null
+  expect(rayPlane([5, 1, 0], [0, 0, -1], [0, 0, 0], [1, 0, 0])).toBeNull();
+});
+
+test('orthoBasis: returns two unit vectors orthogonal to the axis and each other', () => {
+  for (const axis of [[1, 0, 0], [0, 1, 0], [0, 0, 1]] as Vec3[]) {
+    const [u, v] = orthoBasis(axis);
+    const d = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    expect(d(u, axis)).toBeCloseTo(0, 6);
+    expect(d(v, axis)).toBeCloseTo(0, 6);
+    expect(d(u, v)).toBeCloseTo(0, 6);
+    expect(Math.hypot(u[0], u[1], u[2])).toBeCloseTo(1, 6);
+  }
+});
+
+test('angleOnAxis: rotation about Y advances the in-plane angle', () => {
+  const center: Vec3 = [0, 0, 0], axis: Vec3 = [0, 1, 0];
+  // two cursor rays hitting the y=0 plane at different points → different angles.
+  const a1 = angleOnAxis([3, 10, 0], [0, -1, 0], center, axis);
+  const a2 = angleOnAxis([0, 10, 3], [0, -1, 0], center, axis);
+  expect(a1).not.toBeNull();
+  expect(a2).not.toBeNull();
+  expect(Math.abs((a2 as number) - (a1 as number))).toBeGreaterThan(0.1); // moved around the ring
+  // ray parallel to the rotation plane → null (caller skips)
+  expect(angleOnAxis([3, 0, 0], [1, 0, 0], center, axis)).toBeNull();
 });
 
 test('entityBox: center from position, half from scale, thin slabs padded', () => {
