@@ -385,7 +385,12 @@ export function InspectorPanel() {
               </span>
             </span>
           </div>
-          {!collapsed.has(comp) && typeof value === 'object' && value !== null
+          {!collapsed.has(comp) && getComponentSchema(comp)?.bespoke ? (
+            <div className="bespoke-hint" data-testid={`insp-bespoke-${comp}`}>
+              <span className="bespoke-icon">⬡</span>
+              <span>{getComponentSchema(comp)!.bespoke!.hint}</span>
+            </div>
+          ) : !collapsed.has(comp) && typeof value === 'object' && value !== null
             ? (() => {
                 const data = value as Record<string, unknown>;
                 const keys = mergedFieldKeys(comp, data).filter((k) => fieldVisible(comp, fieldSchema(comp, k), data));

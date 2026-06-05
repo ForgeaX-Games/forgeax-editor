@@ -25,6 +25,8 @@ export const ENTITY_PRESETS: EntityPreset[] = [
   { label: 'Object', components: ['Transform', 'Material'] },
   { label: 'Spinner', components: ['Transform', 'Spin'] },
   { label: 'Mover', components: ['Transform', 'Velocity'] },
+  { label: 'Animated', components: ['Transform', 'Mesh', 'Material', 'Anim'] },
+  { label: 'MatGraph', components: ['Transform', 'Mesh', 'MatGraph', 'Material'] },
 ];
 
 /** Build a preset's components payload from schema defaults. Components without
