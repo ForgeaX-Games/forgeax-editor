@@ -22,7 +22,7 @@ import {
   HANDLE_CUBE,
 } from '@forgeax/engine-runtime';
 import type { EntityId, SceneDocument } from '../core/types';
-import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '../store';
+import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '../store';
 import type { EngineSync } from './sync';
 
 const DEG2RAD = Math.PI / 180;
@@ -192,60 +192,266 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     });
     world.set(camera, Camera, perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }));
     updateGizmo();
+    updateParamGizmo();
   }
 
-  // ── translate gizmo (3 axis handles on the selection) ──────────────────────
+  // ── gizmo (3 axis handles on the selection) ────────────────────────────────
+  // Shape follows the mode (design §3): translate/scale → axis BARS; rotate →
+  // axis RINGS (circles in each axis plane). Rings are built from a pool of small
+  // cube segments (a torus mesh isn't in the handle set), reused frame-to-frame so
+  // orbiting/dragging only world.set transforms — never respawns.
   const AXES: { axis: Vec3; color: [number, number, number] }[] = [
     { axis: [1, 0, 0], color: [1.0, 0.25, 0.2] },  // X red
     { axis: [0, 1, 0], color: [0.3, 1.0, 0.35] },  // Y green
     { axis: [0, 0, 1], color: [0.3, 0.55, 1.0] },  // Z blue
   ];
+  // Plane handles (translate only): drag two axes at once. ax/ay index into x/y/z;
+  // `normal` is the third axis (the plane's normal, for ray∩plane drag).
+  const PLANES: { ax: number; ay: number; normal: Vec3; mat: number }[] = [
+    { ax: 0, ay: 1, normal: [0, 0, 1], mat: 2 }, // XY plane (Z-normal, blue tint)
+    { ax: 1, ay: 2, normal: [1, 0, 0], mat: 0 }, // YZ plane (X-normal, red tint)
+    { ax: 0, ay: 2, normal: [0, 1, 0], mat: 1 }, // XZ plane (Y-normal, green tint)
+  ];
+  const RING_SEG = 24; // cube segments per ring
   let gizmoMats: unknown[] | null = null;
-  // per-axis handle: world entity + its world AABB (for hit-testing).
-  let handles: { ent: number; center: Vec3; half: Vec3 }[] = [];
+  type Shape = 'translate' | 'scale' | 'rings';
+  let shape: Shape | null = null;
+  // bars: per-axis entity + world AABB (hit-test). planes: per-plane quad entity +
+  // AABB (translate only). rings: pooled segment entities (3·RING_SEG) + the ring
+  // center/radius for analytic plane hit-test.
+  let barEnts: number[] = [];
+  let bars: { center: Vec3; half: Vec3 }[] = [];
+  let planeEnts: number[] = [];
+  let planes: { center: Vec3; half: Vec3 }[] = [];
+  let ringEnts: number[] = [];
+  let ringCenter: Vec3 = [0, 0, 0];
+  let ringRadius = 0;
 
   function ensureMats(): unknown[] {
     if (!gizmoMats) gizmoMats = AXES.map((a) => assets.register(Materials.unlit([a.color[0], a.color[1], a.color[2], 1])).unwrap());
     return gizmoMats;
   }
-  function despawnHandles(): void {
-    for (const h of handles) { try { world.despawn(h.ent); } catch { /* gone */ } }
-    handles = [];
+  function spawnHandleCube(material: unknown): number {
+    return world.spawn(
+      { component: Transform, data: {} },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { material } },
+    ).unwrap();
   }
-  /** Re-place the gizmo on the current selection (or hide it). Handles are sized
-   *  by camera distance so they stay grabbable at any zoom. */
+  function despawnHandles(): void {
+    for (const e of barEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    for (const e of planeEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    for (const e of ringEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    barEnts = []; bars = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
+  }
+  function buildShape(want: Shape): void {
+    const mats = ensureMats();
+    if (want === 'rings') {
+      ringEnts = [];
+      for (let i = 0; i < AXES.length; i++) for (let j = 0; j < RING_SEG; j++) ringEnts.push(spawnHandleCube(mats[i]));
+    } else {
+      barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]));
+      bars = AXES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
+      if (want === 'translate') {
+        planeEnts = PLANES.map((p) => spawnHandleCube(mats[p.mat]));
+        planes = PLANES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
+      }
+    }
+    shape = want;
+  }
+  function positionBars(center: Vec3, len: number, thick: number): void {
+    AXES.forEach((a, i) => {
+      const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
+      const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
+      world.set(barEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
+      bars[i]!.center = hc;
+      bars[i]!.half = [sx / 2, sy / 2, sz / 2];
+    });
+  }
+  function positionPlanes(center: Vec3, len: number, thick: number): void {
+    const off = len * 0.34, quad = len * 0.22;
+    PLANES.forEach((p, i) => {
+      const ax = AXES[p.ax]!.axis, ay = AXES[p.ay]!.axis;
+      const hc: Vec3 = [
+        center[0] + (ax[0] + ay[0]) * off, center[1] + (ax[1] + ay[1]) * off, center[2] + (ax[2] + ay[2]) * off,
+      ];
+      // flat quad: ~quad along the two in-plane axes, ~thick along the normal.
+      const s: Vec3 = [
+        p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
+      ];
+      world.set(planeEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: s[0], scaleY: s[1], scaleZ: s[2] });
+      planes[i]!.center = hc;
+      planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
+    });
+  }
+  function positionRings(center: Vec3, len: number, thick: number): void {
+    ringCenter = center; ringRadius = len;
+    const seg = thick * 1.3;
+    for (let i = 0; i < AXES.length; i++) {
+      const [u, v] = orthoBasis(AXES[i]!.axis);
+      for (let j = 0; j < RING_SEG; j++) {
+        const th = (j / RING_SEG) * Math.PI * 2;
+        const c = Math.cos(th) * len, s = Math.sin(th) * len;
+        const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
+        world.set(ringEnts[i * RING_SEG + j]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: seg, scaleY: seg, scaleZ: seg });
+      }
+    }
+  }
+  /** Re-place the gizmo on the current selection (or hide it). Sized by camera
+   *  distance so handles stay grabbable at any zoom; shape switches with the mode. */
   function updateGizmo(): void {
     const sel = getSelection();
     const t = sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined;
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.014;
-    if (handles.length !== AXES.length) {
-      despawnHandles();
-      const mats = ensureMats();
-      handles = AXES.map((_, i) => ({ ent: world.spawn(
-        { component: Transform, data: { posX: center[0], posY: center[1], posZ: center[2] } },
-        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { material: mats[i] } },
-      ).unwrap(), center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
-    }
-    AXES.forEach((a, i) => {
-      const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
-      const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      world.set(handles[i]!.ent, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
-      handles[i]!.center = hc;
-      handles[i]!.half = [sx / 2, sy / 2, sz / 2];
-    });
+    const gm = getGizmoMode();
+    const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';
+    if (shape !== want) { despawnHandles(); buildShape(want); }
+    if (want === 'rings') { positionRings(center, len, thick); return; }
+    positionBars(center, len, thick);
+    if (want === 'translate') positionPlanes(center, len, thick);
   }
-  /** Which gizmo axis (if any) the ray hits — checked before entity picking. */
+  /** Which gizmo handle (if any) the ray hits — checked before entity picking.
+   *  Returns 0-2 for an axis bar/ring; 3-5 (= 3 + plane index) for a plane handle.
+   *  Bars/planes: ray vs AABB. Rings: ray hits the axis plane near the ring radius. */
   function hitGizmo(origin: Vec3, dir: Vec3): number | null {
     let best: number | null = null, bestT = Infinity;
-    for (let i = 0; i < handles.length; i++) {
-      const h = handles[i]!;
+    if (shape === 'rings') {
+      const band = Math.max(ringRadius * 0.18, 1e-4);
+      for (let i = 0; i < AXES.length; i++) {
+        const hit = rayPlane(origin, dir, ringCenter, AXES[i]!.axis);
+        if (!hit) continue;
+        const r = Math.hypot(hit[0] - ringCenter[0], hit[1] - ringCenter[1], hit[2] - ringCenter[2]);
+        if (Math.abs(r - ringRadius) > band) continue;
+        const td = Math.hypot(hit[0] - origin[0], hit[1] - origin[1], hit[2] - origin[2]);
+        if (td < bestT) { bestT = td; best = i; }
+      }
+      return best;
+    }
+    // plane handles take priority over the bars they sit between (translate only).
+    for (let i = 0; i < planes.length; i++) {
+      const h = planes[i]!;
+      const t = rayAABB(origin, dir, h.center, h.half);
+      if (t !== null && t < bestT) { bestT = t; best = 3 + i; }
+    }
+    for (let i = 0; i < bars.length; i++) {
+      const h = bars[i]!;
       const t = rayAABB(origin, dir, h.center, h.half);
       if (t !== null && t < bestT) { bestT = t; best = i; }
     }
     return best;
+  }
+
+  // ── parameter gizmos (design §3): visualize a selected Light's range/spot cone
+  // and a Camera's frustum as dotted world-space wireframes (non-interactive).
+  // Built from a reused cube-dot pool; rebuilt cheaply via placeDots (only spawns
+  // when the dot count changes), so orbiting just re-sets transforms. ──
+  let paramEnts: number[] = [];
+  let paramMat: unknown | null = null;
+  function ensureParamMat(): unknown {
+    if (!paramMat) paramMat = assets.register(Materials.unlit([1.0, 0.82, 0.25, 1])).unwrap();
+    return paramMat;
+  }
+  function despawnParam(): void {
+    for (const e of paramEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    paramEnts = [];
+  }
+  function placeDots(points: Vec3[], size: number): void {
+    if (points.length === 0) { despawnParam(); return; }
+    const mat = ensureParamMat();
+    while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
+    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { world.despawn(e); } catch { /* gone */ } }
+    points.forEach((p, i) => world.set(paramEnts[i]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: size, scaleY: size, scaleZ: size }));
+  }
+  const addSeg = (out: Vec3[], a: Vec3, b: Vec3, n = 10): void => {
+    for (let i = 0; i <= n; i++) { const k = i / n; out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]); }
+  };
+  const circlePts = (center: Vec3, u: Vec3, v: Vec3, r: number, n = 40): Vec3[] => {
+    const o: Vec3[] = [];
+    for (let j = 0; j < n; j++) { const th = (j / n) * Math.PI * 2, c = Math.cos(th) * r, s = Math.sin(th) * r; o.push([center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s]); }
+    return o;
+  };
+  function forwardOf(t?: Record<string, number>): Vec3 {
+    const q = quat.create();
+    quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
+    const o = new Float32Array(3); quat.transformVec3(o, q, [0, 0, -1]);
+    return [o[0]!, o[1]!, o[2]!];
+  }
+  /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
+  function updateParamGizmo(): void {
+    const sel = getSelection();
+    const node = sel !== null ? bus.doc.entities[sel] : undefined;
+    if (!node) { despawnParam(); return; }
+    const t = node.components.Transform as Record<string, number> | undefined;
+    const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
+    const light = node.components.Light as Record<string, unknown> | undefined;
+    const cam = node.components.Camera as Record<string, unknown> | undefined;
+    const pts: Vec3[] = [];
+    if (light) {
+      const type = (light.type as string) ?? 'point';
+      if (type === 'directional') {
+        const dir = norm([num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+        const len = Math.max(2, dist * 0.18);
+        const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];
+        addSeg(pts, center, tip, 16);
+        const [u, v] = orthoBasis(dir);
+        const back = len * 0.18;
+        for (const s of [u, v, [-u[0], -u[1], -u[2]] as Vec3, [-v[0], -v[1], -v[2]] as Vec3]) {
+          addSeg(pts, tip, [tip[0] - dir[0] * back + s[0] * back, tip[1] - dir[1] * back + s[1] * back, tip[2] - dir[2] * back + s[2] * back], 5);
+        }
+      } else if (type === 'spot') {
+        const range = num(light.range as number, 0) || 6;
+        const half = num(light.spotAngle as number, 30) * DEG2RAD;
+        const fwd = forwardOf(t);
+        const [u, v] = orthoBasis(fwd);
+        const baseC: Vec3 = [center[0] + fwd[0] * range, center[1] + fwd[1] * range, center[2] + fwd[2] * range];
+        const br = Math.tan(half) * range;
+        pts.push(...circlePts(baseC, u, v, br, 36));
+        for (let j = 0; j < 4; j++) { const th = (j / 4) * Math.PI * 2, c = Math.cos(th) * br, s = Math.sin(th) * br; addSeg(pts, center, [baseC[0] + u[0] * c + v[0] * s, baseC[1] + u[1] * c + v[1] * s, baseC[2] + u[2] * c + v[2] * s], 10); }
+      } else { // point (or unknown) → range sphere = 3 axis rings
+        const range = num(light.range as number, 0) || 3;
+        for (const a of AXES) { const [u, v] = orthoBasis(a.axis); pts.push(...circlePts(center, u, v, range, 36)); }
+      }
+    }
+    if (cam) {
+      const fov = num(cam.fov as number, 60) * DEG2RAD;
+      const near = num(cam.near as number, 0.1);
+      const far = Math.min(num(cam.far as number, 1000), dist * 4 + 30); // clamp so it stays on-screen
+      const fwd = forwardOf(t);
+      const [right, up] = orthoBasis(fwd);
+      const rect = (depth: number): Vec3[] => {
+        const hh = Math.tan(fov / 2) * depth, hw = hh * (aspect() || 1);
+        const cC: Vec3 = [center[0] + fwd[0] * depth, center[1] + fwd[1] * depth, center[2] + fwd[2] * depth];
+        const corner = (sx: number, sy: number): Vec3 => [cC[0] + right[0] * hw * sx + up[0] * hh * sy, cC[1] + right[1] * hw * sx + up[1] * hh * sy, cC[2] + right[2] * hw * sx + up[2] * hh * sy];
+        return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+      };
+      const n4 = rect(near), f4 = rect(far);
+      for (let i = 0; i < 4; i++) { addSeg(pts, n4[i]!, n4[(i + 1) % 4]!, 6); addSeg(pts, f4[i]!, f4[(i + 1) % 4]!, 8); addSeg(pts, n4[i]!, f4[i]!, 10); }
+    }
+    placeDots(pts, Math.max(0.05, dist * 0.006));
+  }
+
+  // ── animation scrub preview (Timeline) ──────────────────────────────────────
+  // Apply a sampled clip's Transform channels to the previewed entity's world
+  // transform live (no doc churn). Clearing it resyncs the world from the doc.
+  function applyAnimPreview(): void {
+    const ap = getAnimPreview();
+    if (!ap) { sync.resync(); return; }
+    const wid = sync.worldEntityFor(ap.id);
+    if (wid === undefined) return;
+    const t = (bus.doc.entities[ap.id]?.components.Transform as Record<string, number> | undefined) ?? {};
+    const g = (k: string, d: number): number => { const v = ap.values[`Transform.${k}`]; return typeof v === 'number' ? v : num(t[k], d); };
+    const data: Record<string, number> = {
+      posX: g('x', 0), posY: g('y', 0), posZ: g('z', 0),
+      scaleX: g('scaleX', 1), scaleY: g('scaleY', 1), scaleZ: g('scaleZ', 1),
+    };
+    const rx = g('rotX', 0), ry = g('rotY', 0), rz = g('rotZ', 0);
+    if (rx || ry || rz) {
+      quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
+      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+    } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
+    world.set(wid, Transform, data);
   }
 
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
@@ -287,6 +493,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   let axisStart: Vec3 = [0, 0, 0];
   let axisT0 = 0;
   let angle0 = 0;
+  // plane-handle drag (translate only): which plane + the ray∩plane point at grab.
+  let dragPlane: { ax: number; ay: number; normal: Vec3; mat: number } | null = null;
+  let planeGrab: Vec3 = [0, 0, 0];
   // the changed Transform fields, committed as ONE command on release.
   let livePatch: Record<string, number> = {};
   const qd = quat.create();
@@ -330,17 +539,25 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     // gizmo handles take priority over entity/orbit picking.
     const sel = getSelection();
-    const ax = sel !== null ? hitGizmo(origin, dir) : null;
-    if (ax !== null && sel !== null) {
+    const h = sel !== null ? hitGizmo(origin, dir) : null;
+    if (h !== null && sel !== null) {
       dragId = sel;
       dragWorld = sync.worldEntityFor(sel);
       dragOrig = { ...(bus.doc.entities[sel]!.components.Transform as Record<string, number>) };
-      axisIdx = ax;
-      axisVec = AXES[ax]!.axis;
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
-      if (getGizmoMode() === 'rotate') angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
-      else axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
       livePatch = {};
+      if (h >= 3) {
+        // a plane handle: drag two axes on the plane ⊥ its normal.
+        dragPlane = PLANES[h - 3]!;
+        const g = rayPlane(origin, dir, axisStart, dragPlane.normal);
+        planeGrab = g ?? [...axisStart];
+      } else {
+        dragPlane = null;
+        axisIdx = h;
+        axisVec = AXES[h]!.axis;
+        if (getGizmoMode() === 'rotate') angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
+        else axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
+      }
       mode = 'axisDrag';
       return;
     }
@@ -377,7 +594,18 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       const { origin, dir } = rayAt(e.clientX, e.clientY);
       const ctrl = e.ctrlKey || e.metaKey;
       const gm = getGizmoMode();
-      if (gm === 'rotate') {
+      if (dragPlane) {
+        // move two axes at once across the plane (relative to the grab point).
+        const hit = rayPlane(origin, dir, axisStart, dragPlane.normal);
+        if (hit) {
+          const keys = ['x', 'y', 'z'] as const;
+          const patch: Record<string, number> = {};
+          for (const axi of [dragPlane.ax, dragPlane.ay]) {
+            patch[keys[axi]!] = snap(axisStart[axi]! + (hit[axi]! - planeGrab[axi]!), 0.5, ctrl);
+          }
+          applyLive(patch);
+        }
+      } else if (gm === 'rotate') {
         const a = angleOnAxis(origin, dir, axisStart, axisVec);
         if (a !== null) {
           const key = ROT_KEYS[axisIdx]!;
@@ -426,7 +654,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       // Transform so untouched fields survive. resync then re-places it from the doc.
       bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: { ...dragOrig, ...livePatch } });
     }
-    mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {};
+    mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
     setFieldPreview(null); // stop the Inspector preview; it now reads the committed doc
     updateGizmo();
   }
@@ -483,9 +711,13 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   window.addEventListener('keydown', onKey);
   window.addEventListener('dblclick', onDblClick);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
-  // re-tints when the mode changes.
-  const unsubSel = onSelectionChange(updateGizmo);
+  // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
+  // Inspector changing a light's range or a camera's fov).
+  const refreshGizmos = (): void => { updateGizmo(); updateParamGizmo(); };
+  const unsubSel = onSelectionChange(refreshGizmos);
   const unsubMode = onGizmoModeChange(updateGizmo);
+  const unsubDoc = bus.subscribe(() => refreshGizmos());
+  const unsubAnim = onAnimPreview(applyAnimPreview);
 
   applyCamera(); // also paints the gizmo if something is already selected
 
@@ -500,7 +732,10 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       window.removeEventListener('dblclick', onDblClick);
       unsubSel();
       unsubMode();
+      unsubDoc();
+      unsubAnim();
       despawnHandles();
+      despawnParam();
     },
     refresh: applyCamera,
   };

@@ -15,10 +15,12 @@ import {
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
+import { DetachedPanel } from './panels/DetachedPanel';
 import { createEngineSync } from './engine/sync';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from './core/assets';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync } from './store';
+import { getPopoutPanel } from './core/sync-channel';
 import './ui/theme.css';
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
@@ -26,6 +28,32 @@ import './ui/theme.css';
 // every game shared one global doc, so picking shoot-opt showed whatever was
 // last edited (or the demo). Must run before loadDocFromStorage below.
 setSceneId(new URLSearchParams(location.search).get('scene'));
+
+// ── Pop-out window entry (design §0.2.2) ──────────────────────────────────────
+// Launched with `?panel=<id>`, this OS window renders ONE panel that mirrors the
+// main window's bus over a BroadcastChannel — no engine boot, no toolbar. It
+// requests a snapshot on open (initSync → 'hello') and tracks every edit live.
+const popoutPanel = getPopoutPanel();
+if (popoutPanel) {
+  document.title = `forgeax · ${popoutPanel}`;
+  const root = document.getElementById('ui') ?? document.body;
+  // Seed the doc so the popped panel shows the scene IMMEDIATELY — a separate OS
+  // window (Tauri) can be its own process where BroadcastChannel won't reach the
+  // main window, so we must not depend on a live snapshot to have content. disk →
+  // localStorage mirror; initSync then keeps it live (channel + cross-process
+  // `storage` events).
+  await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => loadDocFromStorage());
+  initSync();
+  createRoot(root).render(
+    <StrictMode>
+      <DetachedPanel panel={popoutPanel} />
+    </StrictMode>,
+  );
+} else {
+  await bootEditor();
+}
+
+async function bootEditor(): Promise<void> {
 
 const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 
@@ -134,6 +162,10 @@ app.value.start();
 installFpsReport();
 installPreviewControls();
 
+// Cross-window sync: this is the MAIN window — broadcast snapshots to any
+// popped-out panel windows and apply their forwarded edits (design §0.2.2).
+initSync();
+
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
 function installFpsReport(): void {
   let frames = 0, accum = 0;
@@ -180,10 +212,14 @@ function installPreviewControls(): void {
 
 function paintDiagnosticMessage(err: unknown): void {
   const overlay = document.createElement('div');
+  // Sits in the CANVAS layer (#app), BEHIND the React panel layer (#ui), so the
+  // dock/panels stay visible + usable without a GPU — it shows through only the
+  // transparent Viewport leaf. (z-index:0 here, panels' .ed-overlay is z-index:5;
+  // appending to #app keeps it under #ui in DOM/stacking order.)
   overlay.style.cssText = [
     'position:fixed', 'inset:0', 'display:flex', 'align-items:center', 'justify-content:center',
     'background:#1a1a1f', 'color:#ff8a8a', 'font:14px/1.5 ui-monospace,monospace',
-    'padding:24px', 'box-sizing:border-box', 'z-index:1', 'white-space:pre-wrap', 'text-align:left',
+    'padding:24px', 'box-sizing:border-box', 'z-index:0', 'white-space:pre-wrap', 'text-align:left',
   ].join(';');
   overlay.textContent = [
     '⚠ forgeax editor: WebGPU not available',
@@ -198,5 +234,6 @@ function paintDiagnosticMessage(err: unknown): void {
     'The editor panels (Hierarchy / Inspector / command bus) still work —',
     'edits persist to the document; rendering resumes on a GPU-capable host.',
   ].join('\n');
-  document.body.appendChild(overlay);
+  appRoot.appendChild(overlay);
 }
+} // end bootEditor

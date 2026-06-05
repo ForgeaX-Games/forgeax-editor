@@ -23,6 +23,10 @@ export interface FieldSchema {
 export interface ComponentSchema {
   name: string;
   fields: FieldSchema[];
+  /** Marks a "bespoke" component that has its own dedicated panel. The Inspector
+   *  renders a minimal banner instead of raw field widgets; `editorId` names the
+   *  dock panel that edits it (same id as in DockManager's TITLE map). */
+  bespoke?: { editorId: string; hint?: string };
 }
 
 const REGISTRY: Record<string, ComponentSchema> = {
@@ -102,6 +106,24 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'near', type: 'number', min: 0.01, max: 100, step: 0.01, default: 0.1, tooltip: 'near clip plane' },
       { key: 'far', type: 'number', min: 1, max: 10000, step: 1, default: 1000, tooltip: 'far clip plane' },
     ],
+  },
+  // ── Bespoke components (design §17/§18 "编辑器扩展点") ─────────────────────
+  // These are authored through dedicated panels (Timeline / Material Graph), not
+  // the generic Inspector. The schema entry marks them as bespoke so:
+  //  • the Inspector renders a minimal banner + link instead of raw field widgets;
+  //  • `+ Component` / presets can still add the component by its default;
+  //  • Capabilities panel documents them alongside the schema-driven components.
+  Anim: {
+    name: 'Anim',
+    fields: [
+      { key: 'duration', type: 'number', min: 0.1, max: 600, step: 0.1, default: 4, tooltip: 'clip length in seconds' },
+    ],
+    bespoke: { editorId: 'timeline', hint: 'Edit keyframes in the Timeline panel.' },
+  },
+  MatGraph: {
+    name: 'MatGraph',
+    fields: [],
+    bespoke: { editorId: 'matgraph', hint: 'Build this material in the Mat Graph panel.' },
   },
 };
 
