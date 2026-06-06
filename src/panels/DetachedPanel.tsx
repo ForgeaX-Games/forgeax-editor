@@ -59,6 +59,19 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
     return () => window.removeEventListener('pagehide', onHide);
   }, [panel]);
 
+  // ?chromeless=1: rendered as an outer DockShell ep:* panel (inside dockview)
+  // rather than a floating OS window. The dockview tab already shows the panel
+  // name, so we skip the popout header and the panel's own h3 title.
+  const chromeless = new URLSearchParams(location.search).has('chromeless');
+
+  if (chromeless) {
+    return (
+      <div className="ed-overlay ed-popout ep-chromeless" data-testid="editor-panel-embed" data-panel={panel}>
+        <div className="popout-body ep-chromeless-body">{BODY[panel]()}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="ed-overlay ed-popout" data-testid="editor-popout" data-panel={panel}>
       <div className="popout-head">

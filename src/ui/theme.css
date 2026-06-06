@@ -232,6 +232,14 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .ed-popout .popout-body { min-height: 0; overflow: auto; }
 .ed-popout .popout-body > .panel { height: 100%; }
 
+/* Chromeless embed mode (?chromeless=1 from outer DockShell ep:* panels). The
+ * dockview tab already shows the panel name; hide the popout header entirely,
+ * the panel overlay chrome, and the panel's own h3 title (would show twice). */
+.ep-chromeless { position: static !important; inset: auto !important; display: flex; flex-direction: column; height: 100%; pointer-events: auto !important; }
+.ep-chromeless-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.ep-chromeless-body > .panel { height: 100%; }
+.ep-chromeless-body .panel > h3 { display: none; } /* dockview tab is the title */
+
 /* Assets panel rows */
 .asset-list { padding: 4px 0; }
 .asset-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; }
