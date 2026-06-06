@@ -20,7 +20,7 @@ import { DetachedPanel } from './panels/DetachedPanel';
 import { createEngineSync } from './engine/sync';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from './core/assets';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, broadcastAssetsChanged } from './store';
 import { getPopoutPanel } from './core/sync-channel';
 import './ui/theme.css';
 
@@ -211,12 +211,40 @@ function installConsoleBridge(): void {
 
 function installPreviewControls(): void {
   window.addEventListener('message', (ev) => {
-    const data = ev?.data as { type?: string } | undefined;
+    const data = ev?.data as { type?: string; payload?: unknown } | undefined;
     if (!data || typeof data.type !== 'string') return;
     switch (data.type) {
       case 'VAG_PREVIEW_PAUSE': app.value.pause(); break;
       case 'VAG_PREVIEW_PLAY': app.value.resume(); break;
       case 'VAG_PREVIEW_RELOAD': location.reload(); break;
+
+      case 'VAG_SPAWN_ENTITY': {
+        // Emitted by the interface shell after a successful auto-import pipeline
+        // (upload → process-gltf → import-scene). Dispatch to the authoritative
+        // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
+        // propagates to all ep:* panel iframes immediately.
+        const p = data.payload as { mode?: string; entity?: unknown; doc?: unknown; name?: string } | undefined;
+        if (!p) break;
+        if (p.mode === 'reference' && p.entity) {
+          const e = p.entity as { name: string; components: Record<string, unknown> };
+          bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
+        } else if (p.mode === 'full' && p.doc) {
+          const doc = p.doc as { order: number[]; entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }> };
+          const cmds = doc.order.map((id) => {
+            const ent = doc.entities[id]!;
+            return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
+          });
+          bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
+        }
+        broadcastAssetsChanged();
+        break;
+      }
+
+      case 'VAG_ASSETS_CHANGED':
+        // Relay from the interface shell to ep:* panel iframes so Assets panel
+        // Files tab refreshes its list after an import.
+        broadcastAssetsChanged();
+        break;
     }
   });
 }

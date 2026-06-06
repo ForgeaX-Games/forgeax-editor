@@ -347,7 +347,7 @@ export function HierarchyPanel() {
             复制 JSON
           </div>
           <div className="ctxitem" data-testid="ctx-ref-forgeax" onClick={() => { requestRefEntity(menu.id); setMenu(null); }}>
-            引用到 ForgeaX
+            引用到 Chat
           </div>
           {childrenOf(bus.doc, menu.id).length > 0 && (
             <div className="ctxitem" data-testid="ctx-ungroup" onClick={() => { ungroupEntity(menu.id); setMenu(null); }}>

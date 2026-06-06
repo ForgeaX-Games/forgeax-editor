@@ -252,6 +252,18 @@ export function requestRefEntity(id: EntityId): void {
   }
 }
 
+/** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
+export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
+  const node = bus.doc.entities[entityId];
+  if (!node) return;
+  try {
+    window.parent?.postMessage(
+      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: node.name, comp, value } },
+      '*',
+    );
+  } catch { /* cross-origin — non-fatal */ }
+}
+
 /** Pin an ASSET (material/texture/mesh) into the ForgeaX chat as a deixis handle
  * — same channel as requestRefEntity, payload.kind === 'asset'. */
 export function requestRefAsset(asset: { guid: string; kind: string; name: string; packPath?: string }): void {
@@ -435,6 +447,12 @@ function broadcastSnapshot(): void {
   if (syncChannel) postSync({ t: 'snapshot', snap: buildSnapshot() });
 }
 
+/** Notify all ep:* panel iframes that the asset file list changed (triggers
+ *  reload in the Assets panel's Files tab). No-op when not main or no channel. */
+export function broadcastAssetsChanged(): void {
+  if (!IS_POPOUT) postSync({ t: 'assetsChanged' });
+}
+
 // POPOUT: adopt the main window's authoritative state. We set bus.doc directly
 // and fan out the React-facing listener sets WITHOUT touching the bus's own
 // listeners (those drive main-only persistence), and we guard re-broadcasts.
@@ -520,7 +538,11 @@ function initPopout(ch: BroadcastChannel): void {
   bus.appliedCount = () => mirror?.applied ?? 0;
   ch.onmessage = (ev: MessageEvent) => {
     const msg = ev.data as EditorSyncMsg;
-    if (msg.t === 'snapshot') applySnapshot(msg.snap);
+    if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
+    if (msg.t === 'assetsChanged') {
+      // Relay as a window message so the Assets panel's listener can reload.
+      try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
+    }
   };
   postSync({ t: 'hello' }); // request the current state on open
 }

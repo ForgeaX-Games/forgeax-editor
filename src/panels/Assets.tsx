@@ -191,7 +191,7 @@ export function AssetsPanel() {
           </div>
           <div className="ctxitem" data-testid="asset-ctx-ref"
             onClick={() => { requestRefAsset({ guid: menuAsset.guid, kind: menuAsset.kind, name: menuAsset.name, packPath: menuAsset.packPath }); setMenu(null); }}>
-            加入 ForgeaX 对话
+            引用到 Chat
           </div>
           <div className="ctxitem" data-testid="asset-ctx-copy"
             onClick={() => { void navigator.clipboard?.writeText(menuAsset.guid); setMenu(null); }}>

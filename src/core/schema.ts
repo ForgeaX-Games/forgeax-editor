@@ -125,6 +125,15 @@ const REGISTRY: Record<string, ComponentSchema> = {
     fields: [],
     bespoke: { editorId: 'matgraph', hint: 'Build this material in the Mat Graph panel.' },
   },
+  GltfRef: {
+    name: 'GltfRef',
+    fields: [
+      { key: 'path', type: 'string', tooltip: 'path to the source .glb/.gltf file' },
+      { key: 'nodeCount', type: 'number', step: 1, default: 0, tooltip: 'number of nodes in the GLB (read-only)' },
+      { key: 'meshCount', type: 'number', step: 1, default: 0, tooltip: 'number of meshes in the GLB (read-only)' },
+    ],
+    bespoke: { editorId: 'assets', hint: 'GLB reference — renders as placeholder in editor, full geometry in Play mode.' },
+  },
 };
 
 export function getComponentSchema(name: string): ComponentSchema | undefined {

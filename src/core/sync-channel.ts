@@ -55,7 +55,9 @@ export type EditorSyncMsg =
   // popout → main: remember this window's geometry for next time (design §0.2.3)
   | { t: 'geom'; panel: SyncPanelId; w: number; h: number; x: number; y: number }
   // popout → main: the popout window is closing → redock the panel
-  | { t: 'bye'; panel: SyncPanelId };
+  | { t: 'bye'; panel: SyncPanelId }
+  // main → popouts: asset file list changed (trigger reload in Assets panel)
+  | { t: 'assetsChanged' };
 
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }
