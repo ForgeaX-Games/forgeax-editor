@@ -15,11 +15,21 @@ export function AssetsPanel() {
   const [loading, setLoading] = useState(true);
   const [menu, setMenu] = useState<Menu | null>(null);
 
+  const reload = () => {
+    setLoading(true);
+    void loadGameAssets(getSceneId()).then((a) => { setAssets(a); setLoading(false); });
+  };
+
   useEffect(() => {
-    let cancelled = false;
-    void loadGameAssets(getSceneId()).then((a) => { if (!cancelled) { setAssets(a); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, []);
+    reload();
+    // Refresh when the outer EditMode imports a new asset (VAG_ASSETS_CHANGED).
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data as { type?: string } | null;
+      if (d?.type === 'VAG_ASSETS_CHANGED') reload();
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const menuAsset = menu ? assets.find((a) => a.guid === menu.guid) : undefined;
 
