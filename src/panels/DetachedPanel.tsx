@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
+import { bus, setGizmoMode } from '../store';
 import { HierarchyPanel } from './Hierarchy';
 import { InspectorPanel } from './Inspector';
 import { AssetsPanel } from './Assets';
@@ -40,6 +41,31 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
+  // Global keyboard shortcuts — forwarded to the MAIN viewport via BroadcastChannel
+  // (bus.undo/redo in panel role call postSync({ t:'undo'/'redo' }) → main acts).
+  // This makes Undo/Redo work from any panel even without a visible toolbar.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      const el = e.target as HTMLElement | null;
+      if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) bus.redo(); else bus.undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); bus.redo(); return; }
+      if (!mod) {
+        const k = e.key.toLowerCase();
+        if (k === 'w') setGizmoMode('translate');
+        else if (k === 'e') setGizmoMode('rotate');
+        else if (k === 'r') setGizmoMode('scale');
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // On close (native button OR our redock button → window.close()), tell the
   // main window to redock this panel. pagehide fires for both reload and close;
   // the main window simply re-shows the panel in its dock.

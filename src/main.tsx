@@ -15,6 +15,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
+import { ViewportBar } from './ViewportBar';
 import { DetachedPanel } from './panels/DetachedPanel';
 import { createEngineSync } from './engine/sync';
 import { createViewport } from './engine/viewport';
@@ -111,14 +112,13 @@ if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
-// In viewportOnly mode: skip the DockManager overlay (panels live in outer
-// DockShell), but still mount the gizmo-mode toolbar in a minimal chrome so
-// W/E/R / Save work from the viewport.
+// viewportOnly: skip the full DockManager but mount a minimal ViewportBar so
+// Undo/Redo/Save/W-E-R are reachable directly from the viewport panel.
 const uiRoot = document.getElementById('ui');
-if (uiRoot && !viewportOnly) {
+if (uiRoot) {
   createRoot(uiRoot).render(
     <StrictMode>
-      <EditorApp />
+      {viewportOnly ? <ViewportBar /> : <EditorApp />}
     </StrictMode>,
   );
 }

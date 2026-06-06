@@ -326,6 +326,24 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .mg-pin.out.on { box-shadow: 0 0 0 2px var(--blue, #5aa9ff); }
 .ed-matgraph .mg-hint { padding: 5px 8px; font-size: 10px; border-top: 1px solid var(--line); }
 
+/* ViewportBar — minimal toolbar in viewportOnly mode */
+.vp-bar {
+  position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 10;
+  display: flex; align-items: center; gap: 3px; padding: 3px 8px;
+  background: rgba(21, 22, 24, 0.85); border-radius: 0 0 8px 8px;
+  border: 1px solid var(--line, #2a2d30); border-top: none;
+  backdrop-filter: blur(8px); pointer-events: auto;
+}
+.vp-btn {
+  background: transparent; border: 1px solid transparent; color: var(--fg2, #aaa);
+  border-radius: 4px; padding: 2px 7px; cursor: pointer; font-size: 14px;
+  transition: background 0.1s, color 0.1s;
+}
+.vp-btn:hover:not(:disabled) { background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed); }
+.vp-btn:disabled { opacity: 0.25; cursor: default; }
+.vp-btn.on { background: var(--lime, #d4ff48); color: var(--bg0, #0e0f10); }
+.vp-sep { width: 1px; height: 16px; background: var(--line, #2a2d30); margin: 0 2px; }
+
 /* Bespoke component banner in Inspector */
 .bespoke-hint { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg3); font-style: italic; border-bottom: 1px solid var(--line); }
 .bespoke-icon { font-size: 14px; color: var(--lime, #d4ff48); }
