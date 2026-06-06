@@ -37,6 +37,54 @@ async function packPaths(slug: string): Promise<string[]> {
   }
 }
 
+/** A raw imported file (GLB/PNG/audio) that lives in assets/ but hasn't been
+ *  processed into a pack yet, or a processed GLB whose meta.json exists. */
+export interface RawAsset {
+  kind: 'raw-model' | 'raw-image' | 'raw-audio' | 'raw-other';
+  name: string;
+  path: string;
+  /** true when <path>.meta.json exists alongside (GLB has been imported). */
+  processed?: boolean;
+}
+
+const RAW_EXTS: Record<string, RawAsset['kind']> = {
+  '.glb': 'raw-model', '.gltf': 'raw-model',
+  '.png': 'raw-image', '.jpg': 'raw-image', '.jpeg': 'raw-image', '.hdr': 'raw-image',
+  '.mp3': 'raw-audio', '.wav': 'raw-audio', '.ogg': 'raw-audio', '.aac': 'raw-audio',
+};
+
+/** Load raw imported files from the game's assets/ folder (non-pack.json). */
+export async function loadRawAssets(slug: string | null | undefined): Promise<RawAsset[]> {
+  if (!slug || slug === 'default') return [];
+  try {
+    const root = `.forgeax/games/${slug}/assets`;
+    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    if (!r.ok) return [];
+    const j = (await r.json()) as { tree?: TreeNode };
+    const out: RawAsset[] = [];
+    const metaPaths = new Set<string>();
+    const walk = (n?: TreeNode): void => {
+      if (!n) return;
+      if (n.type === 'file' && n.name.endsWith('.meta.json')) metaPaths.add(n.path);
+      n.children?.forEach(walk);
+    };
+    walk(j.tree);
+    const walkFiles = (n?: TreeNode): void => {
+      if (!n) return;
+      if (n.type === 'file' && !n.name.endsWith('.pack.json') && !n.name.endsWith('.meta.json')) {
+        const ext = n.name.slice(n.name.lastIndexOf('.')).toLowerCase();
+        const kind = RAW_EXTS[ext] ?? 'raw-other';
+        out.push({ kind, name: n.name, path: n.path, processed: metaPaths.has(`${n.path}.meta.json`) });
+      }
+      n.children?.forEach(walkFiles);
+    };
+    walkFiles(j.tree);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** Load + flatten every asset declared in the game's *.pack.json files. */
 export async function loadGameAssets(slug: string | null | undefined): Promise<PackAsset[]> {
   if (!slug || slug === 'default') return [];
