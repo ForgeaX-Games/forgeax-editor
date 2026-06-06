@@ -26,6 +26,22 @@ async function processGltf(path: string): Promise<{ ok: boolean; error?: string;
   } catch (e) { return { ok: false, error: (e as Error).message }; }
 }
 
+type SceneDoc = { version: string; nextId: number; entities: Record<number, unknown>; order: number[] };
+async function importScene(path: string, mode: 'reference' | 'full' | 'auto' = 'auto'): Promise<
+  { ok: true; mode: string; totalNodes: number; meshCount: number; doc?: SceneDoc; entity?: unknown; warning?: string } |
+  { ok: false; error: string }
+> {
+  try {
+    const r = await fetch('/api/assets/import-scene', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, mode }),
+    });
+    const j = await r.json() as { mode?: string; totalNodes?: number; meshCount?: number; doc?: SceneDoc; entity?: unknown; warning?: string; error?: string };
+    if (!r.ok) return { ok: false, error: j.error ?? `HTTP ${r.status}` };
+    return { ok: true, mode: j.mode ?? 'reference', totalNodes: j.totalNodes ?? 0, meshCount: j.meshCount ?? 0, doc: j.doc, entity: j.entity, warning: j.warning };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
 export function AssetsPanel() {
   useDocVersion();
   const sel = useSelection();
@@ -71,19 +87,28 @@ export function AssetsPanel() {
     reload();
   };
 
-  const handleAddToScene = (raw: RawAsset) => {
-    // Spawn a reference entity pointing to the GLB file path so the
-    // user/AI can further configure it with engine-gltf components.
-    const name = raw.name.replace(/\.[^.]+$/, '');
-    bus.dispatch({
-      kind: 'spawnEntity',
-      name,
-      components: {
-        Transform: { x: 0, y: 0, z: 0 },
-        // GltfRef marks the entity as a GLB instance for the engine to load.
-        GltfRef: { path: raw.path },
-      },
-    });
+  const handleAddToScene = async (raw: RawAsset) => {
+    const res = await importScene(raw.path, 'auto');
+    if (!res.ok) { alert(`导入场景失败: ${res.error}`); return; }
+    if (res.warning) {
+      const proceed = confirm(`${res.warning}\n\n确认以「单一引用实体」方式导入?`);
+      if (!proceed) return;
+    }
+    if (res.mode === 'reference' && res.entity) {
+      // Single GltfRef entity — recommended for large scenes.
+      const e = res.entity as { name: string; components: Record<string, unknown> };
+      bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
+      alert(`已导入「${e.name}」为场景引用实体 (${res.totalNodes} 节点 · ${res.meshCount} mesh)。\n\nGltfRef 组件将在 Play 模式中由引擎渲染真实几何体。`);
+    } else if (res.mode === 'full' && res.doc) {
+      // Full import: dispatch all entities as a transaction.
+      const doc = res.doc;
+      const cmds = doc.order.map((id) => {
+        const ent = doc.entities[id] as { name: string; parent: number | null; components: Record<string, unknown> };
+        return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
+      });
+      bus.dispatch({ kind: 'transaction', label: `Import GLB: ${raw.name}`, commands: cmds });
+      alert(`已导入 ${res.totalNodes} 个场景实体。`);
+    }
   };
 
   return (
