@@ -29,6 +29,14 @@ import './ui/theme.css';
 // last edited (or the demo). Must run before loadDocFromStorage below.
 setSceneId(new URLSearchParams(location.search).get('scene'));
 
+// ── Viewport-only mode (design: outer DockShell flat architecture) ────────────
+// Launched with `?viewportOnly=1`, this runs the engine + bus + BroadcastChannel
+// sync (as the authoritative "main") but mounts NO React panels — only the engine
+// canvas. All editor panels live in the outer DockShell as separate `ep:*` panel
+// iframes (?panel=X), each connecting via BroadcastChannel. This gives the
+// viewport maximum space while panels are arranged at the outer level.
+const viewportOnly = new URLSearchParams(location.search).has('viewportOnly');
+
 // ── Pop-out window entry (design §0.2.2) ──────────────────────────────────────
 // Launched with `?panel=<id>`, this OS window renders ONE panel that mirrors the
 // main window's bus over a BroadcastChannel — no engine boot, no toolbar. It
@@ -103,8 +111,11 @@ if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
+// In viewportOnly mode: skip the DockManager overlay (panels live in outer
+// DockShell), but still mount the gizmo-mode toolbar in a minimal chrome so
+// W/E/R / Save work from the viewport.
 const uiRoot = document.getElementById('ui');
-if (uiRoot) {
+if (uiRoot && !viewportOnly) {
   createRoot(uiRoot).render(
     <StrictMode>
       <EditorApp />
