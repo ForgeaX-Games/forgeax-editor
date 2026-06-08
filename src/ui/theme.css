@@ -43,7 +43,7 @@
 .tn .vis { margin-left: auto; color: var(--fg3); font-size: 11px; padding: 0 2px; }
 .tn .vis:hover { color: var(--lime); }
 .ctxmenu {
-  position: fixed; z-index: 1000; min-width: 140px; padding: 4px;
+  position: fixed; z-index: 99999; min-width: 140px; padding: 4px;
   background: var(--bg2); border: 1px solid var(--line); border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
@@ -359,6 +359,38 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .vp-btn:disabled { opacity: 0.25; cursor: default; }
 .vp-btn.on { background: var(--lime, #d4ff48); color: var(--bg0, #0e0f10); }
 .vp-sep { width: 1px; height: 16px; background: var(--line, #2a2d30); margin: 0 2px; }
+
+/* Dismissible controls cheat-sheet pinned to the bottom-center of the viewport. */
+.vp-hints {
+  position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 9;
+  display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px);
+  padding: 6px 30px 6px 12px; pointer-events: auto;
+  background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
+  border-radius: 8px; backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.vp-hints-rows { display: flex; flex-direction: column; gap: 2px; }
+.vp-hints-row {
+  font-size: 11px; line-height: 1.5; color: var(--fg2, #aab); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.vp-hints-row b { color: var(--fg, #e8eaed); font-weight: 600; }
+.vp-hints-close {
+  position: absolute; top: 4px; right: 6px; width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; border-radius: 4px;
+  color: var(--fg3, #778); font-size: 14px; line-height: 1;
+}
+.vp-hints-close:hover { background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed); }
+/* Collapsed state — a tiny "?" pill at the bottom-right to reopen the sheet. */
+.vp-hints-toggle {
+  position: fixed; bottom: 10px; right: 12px; z-index: 9; pointer-events: auto;
+  width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
+  border-radius: 50%; backdrop-filter: blur(8px); cursor: pointer;
+  color: var(--fg3, #778); font-size: 12px;
+}
+.vp-hints-toggle:hover { color: var(--fg, #e8eaed); border-color: var(--lime, #7ee04a); }
 
 /* Bespoke component banner in Inspector */
 .bespoke-hint { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg3); font-style: italic; border-bottom: 1px solid var(--line); }

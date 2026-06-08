@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
+import { showContextMenu } from '../ui/contextMenuService';
 import { childrenOf } from '../core/document';
 import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '../core/schema';
 import { focusPanel, openSourcePanel } from '../dock';
@@ -260,7 +261,6 @@ export function InspectorPanel() {
   const fieldPrev = useFieldPreview();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
-  const [compMenu, setCompMenu] = useState<{ comp: string; x: number; y: number } | null>(null);
   const toggleComp = (comp: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -284,7 +284,7 @@ export function InspectorPanel() {
   const parentOptions = bus.doc.order.filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => node.components[c] === undefined);
   return (
-    <div className="panel" data-testid="panel-inspector" onClick={() => compMenu && setCompMenu(null)}>
+    <div className="panel" data-testid="panel-inspector">
       <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span>
           Inspector <span className="insp-id" data-testid="insp-id">#{sel}</span>
@@ -349,40 +349,15 @@ export function InspectorPanel() {
           ))}
         </select>
       </div>
-      {compMenu && (
-        <div
-          className="ctxmenu"
-          data-testid="insp-ctxmenu"
-          style={{ left: compMenu.x, top: compMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div
-            className="ctxitem"
-            data-testid="insp-ctx-ref"
-            onClick={() => {
-              requestRefComponent(sel, compMenu.comp, node.components[compMenu.comp]);
-              setCompMenu(null);
-            }}
-          >
-            引用到 Chat
-          </div>
-          <div
-            className="ctxitem"
-            onClick={() => {
-              void navigator.clipboard?.writeText(JSON.stringify({ [compMenu.comp]: node.components[compMenu.comp] }, null, 2));
-              setCompMenu(null);
-            }}
-          >
-            复制 JSON
-          </div>
-        </div>
-      )}
       {Object.entries(node.components).map(([comp, value]) => (
-        <div key={comp} onClick={() => compMenu && setCompMenu(null)}>
+        <div key={comp}>
           <div
             className="compname"
             style={{ display: 'flex', justifyContent: 'space-between' }}
-            onContextMenu={(e) => { e.preventDefault(); setCompMenu({ comp, x: e.clientX, y: e.clientY }); }}
+            onContextMenu={(e) => showContextMenu(e, [
+              { label: '引用到 Chat', onClick: () => requestRefComponent(sel, comp, node.components[comp]) },
+              { label: '复制 JSON', onClick: () => { void navigator.clipboard?.writeText(JSON.stringify({ [comp]: node.components[comp] }, null, 2)); } },
+            ])}
           >
             <span style={{ cursor: 'pointer' }} data-testid={`insp-comp-toggle-${comp}`} onClick={() => toggleComp(comp)}>
               {collapsed.has(comp) ? '▸' : '▾'} {comp}

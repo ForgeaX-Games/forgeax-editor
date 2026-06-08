@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { showContextMenu } from '../ui/contextMenuService';
 import { loadGameAssets, loadRawAssets, materialSwatch, type PackAsset, type RawAsset } from '../core/assets';
 import { bus, dispatch, getSceneId, getSelection, requestRefAsset, useDocVersion, useSelection } from '../store';
 
@@ -49,7 +50,6 @@ export function AssetsPanel() {
   const [packs, setPacks] = useState<PackAsset[]>([]);
   const [rawFiles, setRawFiles] = useState<RawAsset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
 
   const reload = () => {
@@ -70,7 +70,15 @@ export function AssetsPanel() {
     return () => window.removeEventListener('message', onMsg);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const menuAsset = menu ? packs.find((a) => a.guid === menu.guid) : undefined;
+  // Right-click menu → shared service (renders at the top layer of the whole
+  // window / posts to the interface parent; never clipped by this panel).
+  const openMenu = (a: PackAsset, e: { clientX: number; clientY: number; preventDefault: () => void }) => {
+    showContextMenu(e, [
+      { label: `赋给选中实体${sel === null ? '(先选一个)' : ''}`, disabled: sel === null, onClick: () => { if (sel !== null) assign(a.guid); } },
+      { label: '引用到 Chat', onClick: () => requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath }) },
+      { label: '复制 GUID', onClick: () => { void navigator.clipboard?.writeText(a.guid); } },
+    ]);
+  };
 
   function assign(guid: string): void {
     const id = getSelection();
@@ -98,7 +106,7 @@ export function AssetsPanel() {
       // Single GltfRef entity — recommended for large scenes.
       const e = res.entity as { name: string; components: Record<string, unknown> };
       bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
-      alert(`已导入「${e.name}」为场景引用实体 (${res.totalNodes} 节点 · ${res.meshCount} mesh)。\n\nGltfRef 组件将在 Play 模式中由引擎渲染真实几何体。`);
+      alert(`已导入「${e.name}」(${res.totalNodes} 节点 · ${res.meshCount} mesh)。\n\n真实几何体由运行时 glTF 加载器异步载入——先看到占位方块，几秒后替换为真实模型（编辑器 + Play 都生效）。大场景节点多时编辑提交会略卡。`);
     } else if (res.mode === 'full' && res.doc) {
       // Full import: dispatch all entities as a transaction.
       const doc = res.doc;
@@ -112,7 +120,7 @@ export function AssetsPanel() {
   };
 
   return (
-    <div className="panel ed-assets" data-testid="panel-assets" onClick={() => menu && setMenu(null)}>
+    <div className="panel ed-assets" data-testid="panel-assets">
       <h3>Assets</h3>
       <div className="asset-tabs">
         <button type="button" className={`asset-tab${tab === 'packs' ? ' on' : ''}`} onClick={() => setTab('packs')}>Packs</button>
@@ -133,7 +141,7 @@ export function AssetsPanel() {
             return (
               <div key={a.guid} className="asset-row" data-testid={`asset-${a.guid}`}
                 title={`${a.kind} · ${a.guid}\n${a.packPath}`}
-                onContextMenu={(e) => { e.preventDefault(); setMenu({ guid: a.guid, x: e.clientX, y: e.clientY }); }}
+                onContextMenu={(e) => openMenu(a, e)}
                 onDoubleClick={() => assign(a.guid)}>
                 <span className="asset-swatch" style={swatch ? { background: swatch } : undefined}>
                   {swatch ? '' : a.kind === 'mesh' ? '◫' : a.kind === 'texture' ? '🖼' : '?'}
@@ -183,22 +191,6 @@ export function AssetsPanel() {
         </div>
       )}
 
-      {menu && menuAsset && (
-        <div className="ctxmenu" data-testid="asset-ctxmenu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <div className={`ctxitem${sel === null ? ' disabled' : ''}`} data-testid="asset-ctx-assign"
-            onClick={() => { if (sel !== null) assign(menu.guid); setMenu(null); }}>
-            赋给选中实体{sel === null ? '(先选一个)' : ''}
-          </div>
-          <div className="ctxitem" data-testid="asset-ctx-ref"
-            onClick={() => { requestRefAsset({ guid: menuAsset.guid, kind: menuAsset.kind, name: menuAsset.name, packPath: menuAsset.packPath }); setMenu(null); }}>
-            引用到 Chat
-          </div>
-          <div className="ctxitem" data-testid="asset-ctx-copy"
-            onClick={() => { void navigator.clipboard?.writeText(menuAsset.guid); setMenu(null); }}>
-            复制 GUID
-          </div>
-        </div>
-      )}
     </div>
   );
 }

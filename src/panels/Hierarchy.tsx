@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { showContextMenu, type MenuItemDef } from '../ui/contextMenuService';
 import { childrenOf } from '../core/document';
 import { openSourcePanel } from '../dock';
 import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '../ops';
@@ -194,7 +195,6 @@ export function HierarchyPanel() {
   const sel = useSelection();
   const selList = useSelectionList();
   const roots = childrenOf(bus.doc, null);
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<EntityId>>(loadCollapsed);
   const toggleCollapse = (id: EntityId) =>
@@ -205,7 +205,26 @@ export function HierarchyPanel() {
       saveCollapsed(next);
       return next;
     });
-  const menuNode = menu ? bus.doc.entities[menu.id] : undefined;
+  // Build the right-click menu items and hand them to the shared service, which
+  // renders at the top layer of the whole window (or posts to the interface
+  // parent when embedded in an iframe) — never clipped by this panel's bounds.
+  const openMenu = (m: Menu) => {
+    const node = bus.doc.entities[m.id];
+    const multi = getSelectionList().length > 1;
+    const items: MenuItemDef[] = [];
+    if (multi) {
+      items.push({ label: `成组 (${getSelectionList().length})`, onClick: () => groupSelected(getSelectionList()) });
+      items.push({ label: `删除选中 (${getSelectionList().length})`, onClick: () => deleteManyCascade(getSelectionList()) });
+      items.push({ sep: true });
+    }
+    items.push({ label: `⤴ 编辑源${node?.source ? ` (${node.source.plugin})` : ' (无来源)'}`, disabled: !node?.source, onClick: () => { if (node?.source) openSourcePanel(node.source.plugin, node.source.docId); } });
+    items.push({ label: '复制', onClick: () => duplicateEntity(m.id) });
+    items.push({ label: '复制 JSON', onClick: () => { const n = bus.doc.entities[m.id]; if (n) void navigator.clipboard?.writeText(JSON.stringify({ name: n.name, components: n.components }, null, 2)); } });
+    items.push({ label: '引用到 Chat', onClick: () => requestRefEntity(m.id) });
+    if (childrenOf(bus.doc, m.id).length > 0) items.push({ label: '解组', onClick: () => ungroupEntity(m.id) });
+    items.push({ label: '删除', danger: true, onClick: () => deleteEntity(m.id) });
+    showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
+  };
   const q = query.trim().toLowerCase();
   // When filtering, flatten to all entities whose NAME or any COMPONENT name
   // matches (tree semantics dropped so deep matches surface immediately). Matching
@@ -218,7 +237,7 @@ export function HierarchyPanel() {
       })
     : [];
   return (
-    <div className="panel" data-testid="panel-hierarchy" onClick={() => menu && setMenu(null)}>
+    <div className="panel" data-testid="panel-hierarchy">
       <h3>Hierarchy</h3>
       <div style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <button
@@ -288,7 +307,7 @@ export function HierarchyPanel() {
               no match
             </div>
           ) : (
-            matches.map((id) => <Row key={id} id={id} depth={0} onMenu={setMenu} flat highlight={query.trim()} />)
+            matches.map((id) => <Row key={id} id={id} depth={0} onMenu={openMenu} flat highlight={query.trim()} />)
           )}
         </div>
       ) : (
@@ -305,58 +324,8 @@ export function HierarchyPanel() {
           }}
         >
           {roots.map((id) => (
-            <Row key={id} id={id} depth={0} onMenu={setMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} />
+            <Row key={id} id={id} depth={0} onMenu={openMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} />
           ))}
-        </div>
-      )}
-      {menu && (
-        <div className="ctxmenu" data-testid="hier-ctxmenu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          {selList.length > 1 && (
-            <>
-              <div className="ctxitem" data-testid="ctx-group" onClick={() => { groupSelected(getSelectionList()); setMenu(null); }}>
-                成组 ({selList.length})
-              </div>
-              <div className="ctxitem" data-testid="ctx-delete-many" onClick={() => { deleteManyCascade(getSelectionList()); setMenu(null); }}>
-                删除选中 ({selList.length})
-              </div>
-              <div className="ctxsep" />
-            </>
-          )}
-          <div
-            className={`ctxitem${menuNode?.source ? '' : ' disabled'}`}
-            data-testid="ctx-edit-source"
-            onClick={() => {
-              if (menuNode?.source) openSourcePanel(menuNode.source.plugin, menuNode.source.docId);
-              setMenu(null);
-            }}
-          >
-            ⤴ 编辑源{menuNode?.source ? ` (${menuNode.source.plugin})` : ' (无来源)'}
-          </div>
-          <div className="ctxitem" data-testid="ctx-duplicate" onClick={() => { duplicateEntity(menu.id); setMenu(null); }}>
-            复制
-          </div>
-          <div
-            className="ctxitem"
-            data-testid="ctx-copy-json"
-            onClick={() => {
-              const n = bus.doc.entities[menu.id];
-              if (n) void navigator.clipboard?.writeText(JSON.stringify({ name: n.name, components: n.components }, null, 2));
-              setMenu(null);
-            }}
-          >
-            复制 JSON
-          </div>
-          <div className="ctxitem" data-testid="ctx-ref-forgeax" onClick={() => { requestRefEntity(menu.id); setMenu(null); }}>
-            引用到 Chat
-          </div>
-          {childrenOf(bus.doc, menu.id).length > 0 && (
-            <div className="ctxitem" data-testid="ctx-ungroup" onClick={() => { ungroupEntity(menu.id); setMenu(null); }}>
-              解组
-            </div>
-          )}
-          <div className="ctxitem" data-testid="ctx-delete" onClick={() => { deleteEntity(menu.id); setMenu(null); }}>
-            删除
-          </div>
         </div>
       )}
     </div>

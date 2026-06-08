@@ -16,8 +16,11 @@ import {
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
+import { ViewportHints } from './ViewportHints';
 import { DetachedPanel } from './panels/DetachedPanel';
+import { ContextMenuHost } from './ui/contextMenuService';
 import { createEngineSync } from './engine/sync';
+import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from './core/assets';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, broadcastAssetsChanged } from './store';
@@ -56,6 +59,9 @@ if (popoutPanel) {
   createRoot(root).render(
     <StrictMode>
       <DetachedPanel panel={popoutPanel} />
+      {/* Pop-out fallback renderer for context menus (embedded ep:* iframes
+          post to the interface parent instead — see contextMenuService). */}
+      <ContextMenuHost />
     </StrictMode>,
   );
 } else {
@@ -119,6 +125,7 @@ if (uiRoot) {
   createRoot(uiRoot).render(
     <StrictMode>
       {viewportOnly ? <ViewportBar /> : <EditorApp />}
+      <ViewportHints />
     </StrictMode>,
   );
 }
@@ -172,6 +179,12 @@ window.addEventListener('resize', () => viewport.refresh());
 app.value.start();
 installFpsReport();
 installPreviewControls();
+installErrorOverlay();
+
+// Ambient fill: PBR surfaces render ambient=0 with only a directional light, so
+// shaded faces go black. A neutral IBL Skylight provides soft fill (the missing
+// half of the lighting) — async precompute; the scene renders meanwhile.
+void setupEditorSkylight(world as never, renderer.assets as never, (renderer as unknown as { store: never }).store);
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
 // popped-out panel windows and apply their forwarded edits (design §0.2.2).
@@ -207,6 +220,39 @@ function installConsoleBridge(): void {
   window.addEventListener('unhandledrejection', (ev) => {
     try { window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() } }, '*'); } catch { /* */ }
   });
+}
+
+// On-canvas error surface. A per-frame render throw leaves the viewport BLACK
+// with no visible signal (fps stays 60 because the draw fast-fails) — invisible
+// in the desktop WKWebView where DevTools is off by default. This paints the
+// underlying RhiError (incl. its .detail) into a red overlay so it can be read
+// from a screenshot. De-dupes so it doesn't grow unbounded.
+function installErrorOverlay(): void {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;top:8px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
+    + 'background:rgba(140,10,10,0.94);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:10px 12px;'
+    + 'border-radius:6px;white-space:pre-wrap;display:none;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.5)';
+  document.body.appendChild(box);
+  const seen = new Set<string>();
+  let count = 0;
+  const stringifyArg = (x: unknown): string => {
+    if (x instanceof Error) {
+      const d = (x as unknown as { detail?: unknown }).detail;
+      return x.message + (d !== undefined ? ` | detail=${(() => { try { return JSON.stringify(d); } catch { return String(d); } })()}` : '');
+    }
+    return typeof x === 'string' ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })();
+  };
+  const show = (text: string): void => {
+    if (!/error|rhi|fail|exception|unsupported|invalid|adapter|gpu/i.test(text)) return;
+    if (seen.has(text) || seen.size > 40) return;
+    seen.add(text);
+    box.style.display = 'block';
+    box.textContent = `⚠ editor render error (${++count}):\n` + [...seen].join('\n');
+  };
+  const origErr = console.error.bind(console);
+  console.error = (...a: unknown[]): void => { origErr(...a); try { show(a.map(stringifyArg).join(' ')); } catch { /* */ } };
+  window.addEventListener('error', (ev) => show(`window error: ${ev.message} @ ${ev.filename}:${ev.lineno}`));
+  window.addEventListener('unhandledrejection', (ev) => show(`unhandled rejection: ${String((ev as PromiseRejectionEvent).reason)}`));
 }
 
 function installPreviewControls(): void {

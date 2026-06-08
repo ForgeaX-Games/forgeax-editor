@@ -2,8 +2,13 @@
 // mode (design EDITOR-MODE P1: 视口导航 / 点选 / gizmo). The forgeax port shipped
 // only the data model + Hierarchy + Inspector + doc→world render, leaving the
 // canvas inert; this module adds:
-//   • orbit camera   — left-drag empty = orbit, right/middle-drag = pan, wheel = zoom
-//   • click-to-pick  — left-click an entity → select it (ray vs per-entity AABB)
+//   • orbit camera   — Blender DEFAULT: MMB = orbit · Shift+MMB = pan ·
+//                      Ctrl+MMB = zoom · wheel = zoom. Mac trackpad ("emulate
+//                      3-button mouse"): Alt+LMB orbit / Shift+Alt+LMB pan /
+//                      Ctrl+Alt+LMB zoom. Left is reserved for select/gizmo so a
+//                      large object filling the view never blocks orbiting.
+//   • click-to-pick  — left-click an entity → select it (ray vs per-entity AABB);
+//                      left-click empty = deselect
 //   • drag-to-move   — left-drag a selected entity → slide it on the ground (XZ);
 //                      hold Shift → move vertically (Y). Live via world.set (no
 //                      doc churn), committed as ONE undoable setComponent on release.
@@ -20,6 +25,7 @@ import {
   quat,
   Materials,
   HANDLE_CUBE,
+  meshFromInterleaved,
 } from '@forgeax/engine-runtime';
 import type { EntityId, SceneDocument } from '../core/types';
 import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '../store';
@@ -221,28 +227,75 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   // center/radius for analytic plane hit-test.
   let barEnts: number[] = [];
   let bars: { center: Vec3; half: Vec3 }[] = [];
+  let tipEnts: number[] = [];   // cone arrowheads on the translate bars
   let planeEnts: number[] = [];
   let planes: { center: Vec3; half: Vec3 }[] = [];
   let ringEnts: number[] = [];
   let ringCenter: Vec3 = [0, 0, 0];
   let ringRadius = 0;
 
+  // A small cone mesh (apex at +Y, base ring at Y=0, closed) for the translate
+  // arrowheads. Unlit material ignores normals/uv, so those are dummy. Built
+  // once and reused for all three axes (oriented via per-axis quaternion).
+  let coneMesh: unknown = null;
+  function ensureCone(): unknown {
+    if (coneMesh) return coneMesh;
+    const SEG = 16;
+    const v: number[] = [];
+    const push = (x: number, y: number, z: number): void => { v.push(x, y, z, 0, 1, 0, 0, 0); };
+    push(0, 1, 0);  // 0: apex
+    push(0, 0, 0);  // 1: base center
+    for (let i = 0; i < SEG; i++) { const t = (i / SEG) * Math.PI * 2; push(Math.cos(t), 0, Math.sin(t)); }
+    const idx: number[] = [];
+    for (let i = 0; i < SEG; i++) {
+      const a = 2 + i, b = 2 + ((i + 1) % SEG);
+      idx.push(0, a, b);  // side face
+      idx.push(1, b, a);  // base cap
+    }
+    coneMesh = assets.register(meshFromInterleaved(new Float32Array(v), new Uint16Array(idx))).unwrap();
+    return coneMesh;
+  }
+  // Quaternion that rotates the cone's local +Y to point down each world axis.
+  const TIP_QUAT: [number, number, number, number][] = [
+    [0, 0, -0.70710678, 0.70710678], // X: +Y → +X
+    [0, 0, 0, 1],                     // Y: identity
+    [0.70710678, 0, 0, 0.70710678],   // Z: +Y → +Z
+  ];
+
   function ensureMats(): unknown[] {
-    if (!gizmoMats) gizmoMats = AXES.map((a) => assets.register(Materials.unlit([a.color[0], a.color[1], a.color[2], 1])).unwrap());
+    if (!gizmoMats) gizmoMats = AXES.map((a) => {
+      // Always-on-top gizmo: draw in the Overlay queue (4000, drawn last) with
+      // depthCompare:'always' + no depth write, so the handles are never hidden
+      // behind the (possibly huge) object they're anchored on.
+      const base = Materials.unlit([a.color[0], a.color[1], a.color[2], 1]) as {
+        passes?: { queue?: number; renderState?: Record<string, unknown> }[];
+      };
+      const mat = {
+        ...base,
+        passes: (base.passes ?? []).map((p) => ({
+          ...p,
+          queue: 4000, // RenderQueue.Overlay — drawn after all opaque geometry
+          renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
+        })),
+      };
+      return assets.register(mat).unwrap();
+    });
     return gizmoMats;
   }
-  function spawnHandleCube(material: unknown): number {
+  function spawnHandleMesh(mesh: unknown, material: unknown): number {
     return world.spawn(
       { component: Transform, data: {} },
-      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshFilter, data: { assetHandle: mesh } },
       { component: MeshRenderer, data: { material } },
     ).unwrap();
   }
+  const spawnHandleCube = (material: unknown): number => spawnHandleMesh(HANDLE_CUBE, material);
   function despawnHandles(): void {
     for (const e of barEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    for (const e of tipEnts) { try { world.despawn(e); } catch { /* gone */ } }
     for (const e of planeEnts) { try { world.despawn(e); } catch { /* gone */ } }
     for (const e of ringEnts) { try { world.despawn(e); } catch { /* gone */ } }
-    barEnts = []; bars = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
+    barEnts = []; bars = []; tipEnts = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
   }
   function buildShape(want: Shape): void {
     const mats = ensureMats();
@@ -253,6 +306,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]));
       bars = AXES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
       if (want === 'translate') {
+        // Cone arrowheads at each axis tip (move gizmo only).
+        const cone = ensureCone();
+        tipEnts = AXES.map((_, i) => spawnHandleMesh(cone, mats[i]));
         planeEnts = PLANES.map((p) => spawnHandleCube(mats[p.mat]));
         planes = PLANES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
       }
@@ -260,12 +316,32 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     shape = want;
   }
   function positionBars(center: Vec3, len: number, thick: number): void {
+    const hasTips = tipEnts.length > 0;
+    const tipLen = len * 0.34, tipRad = thick * 2.6;
     AXES.forEach((a, i) => {
       const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
       const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
       world.set(barEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
-      bars[i]!.center = hc;
-      bars[i]!.half = [sx / 2, sy / 2, sz / 2];
+      if (hasTips) {
+        // Cone base sits at the bar's outer end, apex pointing further out along
+        // the axis. scaleY is the cone's local height (→ length after the +Y→axis
+        // rotation); scaleX/Z are the base radius.
+        const base: Vec3 = [center[0] + a.axis[0] * len, center[1] + a.axis[1] * len, center[2] + a.axis[2] * len];
+        const q = TIP_QUAT[i]!;
+        world.set(tipEnts[i]!, Transform, {
+          posX: base[0], posY: base[1], posZ: base[2],
+          scaleX: tipRad, scaleY: tipLen, scaleZ: tipRad,
+          quatX: q[0], quatY: q[1], quatZ: q[2], quatW: q[3],
+        });
+        // Extend the grab AABB to the cone apex so the whole arrow is clickable.
+        const reach = len + tipLen;
+        bars[i]!.center = [center[0] + a.axis[0] * reach / 2, center[1] + a.axis[1] * reach / 2, center[2] + a.axis[2] * reach / 2];
+        const gx = a.axis[0] ? reach : thick, gy = a.axis[1] ? reach : thick, gz = a.axis[2] ? reach : thick;
+        bars[i]!.half = [gx / 2, gy / 2, gz / 2];
+      } else {
+        bars[i]!.center = hc;
+        bars[i]!.half = [sx / 2, sy / 2, sz / 2];
+      }
     });
   }
   function positionPlanes(center: Vec3, len: number, thick: number): void {
@@ -301,10 +377,14 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
    *  distance so handles stay grabbable at any zoom; shape switches with the mode. */
   function updateGizmo(): void {
     const sel = getSelection();
-    const t = sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined;
+    // During a live drag the DOC isn't touched (we only world.set a preview), so
+    // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
+    // — otherwise the gizmo lags at the pre-drag position until release.
+    const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
+    const t = live ?? (sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined);
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
-    const len = dist * 0.13, thick = dist * 0.014;
+    const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
     const gm = getGizmoMode();
     const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';
     if (shape !== want) { despawnHandles(); buildShape(want); }
@@ -477,7 +557,7 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   }
 
   // ── pointer interaction ──
-  type Mode = 'none' | 'orbit' | 'pan' | 'pendDrag' | 'drag' | 'axisDrag';
+  type Mode = 'none' | 'orbit' | 'pan' | 'zoom' | 'pendDrag' | 'drag' | 'axisDrag';
   let mode: Mode = 'none';
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
   let dragId: EntityId | null = null;
@@ -534,8 +614,18 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
     lastX = downX = e.clientX; lastY = downY = e.clientY;
-    if (e.button === 1 || e.button === 2) { mode = 'pan'; e.preventDefault(); return; }
+    // Blender DEFAULT navigation, aligned 1:1:
+    //   MMB = orbit · Shift+MMB = pan · Ctrl+MMB = zoom · wheel = zoom · LMB = select.
+    //   Left is freed entirely for selection + gizmo, so a large object filling
+    //   the view never blocks orbiting (orbit lives on the middle button).
+    const navMode = (): Mode => (e.shiftKey ? 'pan' : (e.ctrlKey || e.metaKey) ? 'zoom' : 'orbit');
+    if (e.button === 1) { mode = navMode(); e.preventDefault(); return; }
+    // RMB is Blender's context menu — the viewport has none, so just swallow it.
+    if (e.button === 2) { e.preventDefault(); return; }
     if (e.button !== 0) return;
+    // Mac trackpad — Blender "Emulate 3-Button Mouse": Alt+LMB = orbit,
+    // Shift+Alt+LMB = pan, Ctrl+Alt+LMB = zoom.
+    if (e.altKey) { mode = navMode(); e.preventDefault(); return; }
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     // gizmo handles take priority over entity/orbit picking.
     const sel = getSelection();
@@ -572,7 +662,10 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
       mode = 'pendDrag';
     } else {
-      mode = 'orbit';
+      // Left-click on empty space deselects (Blender-style). Orbiting moved to
+      // the middle button so it works even when a big object fills the viewport.
+      setSelection(null);
+      mode = 'none';
     }
   }
 
@@ -589,6 +682,10 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       target = [target[0] - rgt[0] * dx * k + upv[0] * dy * k,
                 target[1] - rgt[1] * dx * k + upv[1] * dy * k,
                 target[2] - rgt[2] * dx * k + upv[2] * dy * k];
+      applyCamera();
+    } else if (mode === 'zoom') {
+      // Ctrl+MMB drag-zoom (Blender): drag down = zoom out, up = zoom in.
+      dist = Math.max(2, Math.min(300, dist * (1 + dy * 0.005)));
       applyCamera();
     } else if (mode === 'axisDrag') {
       const { origin, dir } = rayAt(e.clientX, e.clientY);
