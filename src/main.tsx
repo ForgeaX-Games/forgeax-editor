@@ -12,6 +12,7 @@ import {
   Transform,
   Camera,
   perspective,
+  TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { EditorApp } from './EditorApp';
@@ -23,7 +24,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from './core/assets';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, broadcastAssetsChanged } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged } from './store';
 import { getPopoutPanel } from './core/sync-channel';
 import './ui/theme.css';
 
@@ -89,27 +90,22 @@ installConsoleBridge();
 // are ordinary commands → they land in the ledger and are undoable.
 function seed(): void {
   if (Object.keys(bus.doc.entities).length > 0) return;
+  // Mirrors the new-game template's scene.json (packages/engine/templates/
+  // game-default/scene.json): a lowpoly vignette + a movable `Player`. A scene-
+  // less game (or fresh workspace) opens on this same starter, fully editable.
   bus.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
   const level = (bus.ledger.at(-1) as { _id: number })._id;
-  bus.dispatch({
-    kind: 'spawnEntity',
-    name: 'Sun',
-    parent: level,
-    components: { Light: { type: 'directional', intensity: 1.2, color: '#fff8e0', directionX: -0.4, directionY: -1, directionZ: -0.3 } },
-  });
-  bus.dispatch({
-    kind: 'spawnEntity',
-    name: 'Crate',
-    parent: level,
-    components: { Transform: { x: 1, y: 0, z: 0 }, Mesh: { kind: 'cube' }, Material: { albedo: '#b87333', metallic: 0, roughness: 0.8 } },
-    source: { plugin: 'lowpoly', docId: 'crate-01' },
-  });
-  bus.dispatch({
-    kind: 'spawnEntity',
-    name: 'Ball',
-    parent: level,
-    components: { Transform: { x: -1, y: 0, z: -1 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#6cc6ff', emissive: '#6cc6ff', emissiveIntensity: 0.6 } },
-  });
+  const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
+    bus.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
+
+  add('Ground', { Transform: { x: 0, y: -0.1, z: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, Mesh: { kind: 'cube' }, Material: { albedo: '#7a9e5a', metallic: 0, roughness: 0.95 }, Collider: { shape: 'box' } });
+  add('Sun', { Transform: { x: 0, y: 6, z: 0 }, Light: { type: 'directional', color: '#fff5e0', intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
+  add('TreeTrunk', { Transform: { x: -4, y: 0.9, z: -3, scaleX: 0.4, scaleY: 1.8, scaleZ: 0.4 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#8a5a2b', metallic: 0, roughness: 0.9 } });
+  add('TreeCanopy', { Transform: { x: -4, y: 2.4, z: -3, scaleX: 1.4, scaleY: 1.4, scaleZ: 1.4 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#5fae4f', metallic: 0, roughness: 0.85 } });
+  add('RedBox', { Transform: { x: 3, y: 0.5, z: -2, scaleX: 1, scaleY: 1, scaleZ: 1 }, Mesh: { kind: 'cube' }, Material: { albedo: '#e76f51', metallic: 0, roughness: 0.7 } }, { plugin: 'lowpoly', docId: 'crate-01' });
+  add('BlueBall', { Transform: { x: 4.5, y: 0.8, z: 1.5, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#4aa3df', metallic: 0.1, roughness: 0.4 } });
+  add('YellowPillar', { Transform: { x: 2, y: 0.75, z: 3.5, scaleX: 0.6, scaleY: 1.5, scaleZ: 0.6 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#f4c542', metallic: 0, roughness: 0.6 } });
+  add('Player', { Transform: { x: 0, y: 0.55, z: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', metallic: 0, roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 }, Velocity: { vx: 0, vy: 0, vz: 0 } });
 }
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
@@ -131,7 +127,10 @@ if (uiRoot) {
 }
 
 // ── Engine boot ───────────────────────────────────────────────────────────────
-const app = await createApp(canvas, { shaderManifestUrl: `${BASE}/shaders/manifest.json` });
+// engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
+// options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
+// path (not the virtual:forgeax/bundler adapter), so pass it as the bundler arg.
+const app = await createApp(canvas, {}, { shaderManifestUrl: `${BASE}/shaders/manifest.json` });
 if (!app.ok) {
   paintDiagnosticMessage(app.error);
   throw new Error('[editor] createApp failed');
@@ -157,7 +156,8 @@ window.addEventListener('resize', () => {
 const aspect = canvas.width / canvas.height || 1;
 const cameraEntity = world.spawn(
   { component: Transform, data: { posY: 1.5, posZ: 9 } },
-  { component: Camera, data: perspective({ fov: Math.PI / 3, aspect }) },
+  // tonemap must be active for the HDR SkyboxBackground pass to draw.
+  { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED } },
 ).unwrap();
 
 // Load the open game's asset packs once, so a Material.materialAsset GUID
@@ -181,14 +181,26 @@ installFpsReport();
 installPreviewControls();
 installErrorOverlay();
 
-// Ambient fill: PBR surfaces render ambient=0 with only a directional light, so
-// shaded faces go black. A neutral IBL Skylight provides soft fill (the missing
-// half of the lighting) — async precompute; the scene renders meanwhile.
-void setupEditorSkylight(world as never, renderer.assets as never, (renderer as unknown as { store: never }).store);
+// Environment: load the game's authored HDR (assets/sky.hdr) → IBL Skylight
+// (ambient/specular fill) + visible SkyboxBackground; falls back to a synthetic
+// neutral gradient (ambient only) when there's no HDR. Async precompute; the scene
+// renders meanwhile. Chromium-only (WebKit can't do the rgba16float IBL path).
+{
+  const slug = getSceneId();
+  const hdrUrl = slug && slug !== 'default'
+    ? `/api/files/raw?path=${encodeURIComponent(`.forgeax/games/${slug}/assets/sky.hdr`)}`
+    : undefined;
+  void setupEditorSkylight(world as never, renderer.assets as never, (renderer as unknown as { store: never }).store, { hdrUrl });
+}
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
 // popped-out panel windows and apply their forwarded edits (design §0.2.2).
 initSync();
+
+// Live-reload the scene when an external writer (an AI agent editing scene.json
+// on disk) changes it — subscribes to the server's file-event WebSocket so the
+// viewport rebuilds without a manual refresh. No-op in popout windows.
+initDiskWatch();
 
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
 function installFpsReport(): void {
@@ -251,8 +263,15 @@ function installErrorOverlay(): void {
   };
   const origErr = console.error.bind(console);
   console.error = (...a: unknown[]): void => { origErr(...a); try { show(a.map(stringifyArg).join(' ')); } catch { /* */ } };
-  window.addEventListener('error', (ev) => show(`window error: ${ev.message} @ ${ev.filename}:${ev.lineno}`));
-  window.addEventListener('unhandledrejection', (ev) => show(`unhandled rejection: ${String((ev as PromiseRejectionEvent).reason)}`));
+  window.addEventListener('error', (ev) => {
+    const stack = (ev.error as Error | undefined)?.stack;
+    show(`window error: ${ev.message} @ ${ev.filename}:${ev.lineno}\n${stack ?? ''}`);
+  });
+  window.addEventListener('unhandledrejection', (ev) => {
+    const reason = (ev as PromiseRejectionEvent).reason;
+    const stack = (reason as { stack?: string } | undefined)?.stack;
+    show(`unhandled rejection: ${String(reason)}\n${stack ?? '(no stack)'}`);
+  });
 }
 
 function installPreviewControls(): void {

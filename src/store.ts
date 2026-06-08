@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { docToPack, packToDoc, isScenePack } from '@forgeax/scene';
 import { EditorBus } from './core/bus';
 import type { CommandOrigin, HistoryStep } from './core/bus';
 import { createDocument } from './core/document';
@@ -355,34 +356,66 @@ bus.subscribe(() => {
 //   .forgeax/games/<slug>/scene.json   (the active ?scene slug)
 // Reached via the server's /api/files (same-origin through the interface proxy).
 // localStorage stays as a fast offline mirror; disk is the durable source.
+//
+// The durable on-disk format is the engine's NATIVE scene pack (`scene.pack.json`)
+// — the editor's in-memory SceneDocument is converted to/from it via
+// @forgeax/scene's docToPack/packToDoc. (Legacy `scene.json` is still READ for
+// backward-compat; it is migrated to a pack on the next save.)
 function scenePath(): string | null {
+  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.pack.json`;
+}
+function legacyScenePath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.json`;
 }
+/** The exact byte content saveDocToDisk would write for the current doc (used by
+ *  the disk watcher to recognise its own echo). */
+function serializedPack(): string {
+  return JSON.stringify(docToPack(bus.doc), null, 2) + '\n';
+}
 
-/** Load the active game's scene.json from disk. Returns true if a valid doc was
- *  loaded (→ caller skips localStorage + seed). */
+/** Load the active game's scene from disk (native pack preferred, legacy
+ *  scene.json fallback). Returns true if a valid doc was loaded. */
 export async function loadDocFromDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
   try {
     const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
-    if (!r.ok) return false; // 404 = no authored scene yet → fall through
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return false;
-    const parsed = JSON.parse(j.content);
-    if (parsed && typeof parsed === 'object' && parsed.entities) {
-      bus.doc = parsed;
-      docVersion++;
-      for (const fn of docListeners) fn();
-      return true;
+    if (r.ok) {
+      const j = (await r.json()) as { content?: string };
+      if (j.content) {
+        const parsed = JSON.parse(j.content);
+        if (isScenePack(parsed)) {
+          bus.doc = packToDoc(parsed);
+          docVersion++;
+          for (const fn of docListeners) fn();
+          return true;
+        }
+      }
     }
-  } catch {
-    /* server unreachable / parse error → fall through to localStorage/seed */
+  } catch { /* fall through to legacy / localStorage / seed */ }
+  // Legacy scene.json (pre-native-pack) — load it; the next save writes a pack.
+  const lp = legacyScenePath();
+  if (lp) {
+    try {
+      const r = await fetch(`/api/files?path=${encodeURIComponent(lp)}`);
+      if (r.ok) {
+        const j = (await r.json()) as { content?: string };
+        if (j.content) {
+          const parsed = JSON.parse(j.content);
+          if (parsed && typeof parsed === 'object' && parsed.entities) {
+            bus.doc = parsed;
+            docVersion++;
+            for (const fn of docListeners) fn();
+            return true;
+          }
+        }
+      }
+    } catch { /* fall through */ }
   }
   return false;
 }
 
-/** Write the active game's scene.json to disk (POST /api/files). */
+/** Write the active game's scene to disk as a native engine scene pack. */
 export async function saveDocToDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
@@ -390,7 +423,7 @@ export async function saveDocToDisk(): Promise<boolean> {
     const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: p, content: JSON.stringify(bus.doc, null, 2) + '\n' }),
+      body: JSON.stringify({ path: p, content: serializedPack() }),
     });
     return r.ok;
   } catch {
@@ -404,8 +437,87 @@ export async function saveDocToDisk(): Promise<boolean> {
 let _diskSaveTimer: ReturnType<typeof setTimeout> | null = null;
 bus.subscribe(() => {
   if (_diskSaveTimer) clearTimeout(_diskSaveTimer);
-  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); }, 1500);
+  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); _diskSaveTimer = null; }, 1500);
 });
+
+// ── Disk watch: live-reload the scene when an EXTERNAL writer (an AI agent
+//    editing scene.json on disk) changes the active game's scene.json ──────────
+// The server already broadcasts chokidar file-events over ws://<host>/ws (the
+// same channel ▶ Play's PreviewMode uses to hot-reload). The editor never
+// subscribed, so agent edits required a manual refresh. We subscribe here and,
+// on an external scene.json change, re-fetch + replaceDoc() (which fires the bus
+// → engine resync + React, so the 3D viewport rebuilds live).
+//
+// Guards: (1) skip the echo of our own autosave (_lastDiskSaveAt window);
+// (2) skip while we have unsaved local edits pending (_diskSaveTimer active) so
+// an agent write never clobbers what the user is mid-editing.
+export function initDiskWatch(): void {
+  if (IS_POPOUT) return; // popouts mirror the main window over BroadcastChannel
+  let ws: WebSocket | null = null;
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  let backoff = 1000;
+
+  // Apply an externally-loaded doc WITHOUT rewriting it back to disk. replaceDoc
+  // fires the bus → schedules an autosave; we cancel that pending save so we DON'T
+  // overwrite the agent's just-written file with our canonical reformat. Rewriting
+  // it would (a) churn the file under the agent and (b) risk a reformat ping-pong /
+  // flicker. The next LOCAL edit will canonicalise it normally.
+  const applyExternal = (next: SceneDocument): void => {
+    replaceDoc(next);
+    if (_diskSaveTimer) { clearTimeout(_diskSaveTimer); _diskSaveTimer = null; }
+  };
+
+  const reloadFromDisk = async (): Promise<void> => {
+    const p = scenePath();
+    if (!p) return;
+    try {
+      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      if (!r.ok) return;
+      const j = (await r.json()) as { content?: string };
+      if (!j.content) return;
+      const parsed = JSON.parse(j.content);
+      const next = isScenePack(parsed) ? packToDoc(parsed)
+        : (parsed && typeof parsed === 'object' && parsed.entities) ? parsed as SceneDocument
+        : null;
+      if (!next) return;
+      // CANONICAL compare: normalise BOTH the incoming doc and the current doc
+      // through docToPack, then compare. This skips not just our own autosave echo
+      // but any reload that wouldn't actually change the scene (formatting / GUID /
+      // float-rounding differences in the agent's write) — the definitive
+      // no-op-reload / flicker-loop guard.
+      if (JSON.stringify(docToPack(next)) === JSON.stringify(docToPack(bus.doc))) return;
+      applyExternal(next);
+    } catch { /* server unreachable / parse error → keep current doc */ }
+  };
+
+  const connect = (): void => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    try { ws = new WebSocket(`${proto}//${location.host}/ws`); }
+    catch { return; }
+    ws.addEventListener('open', () => { backoff = 1000; });
+    ws.addEventListener('message', (ev) => {
+      let msg: { type?: string; path?: string; change?: string };
+      try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); } catch { return; }
+      if (msg?.type !== 'file-event') return;
+      const path = (msg.path ?? '').replace(/\\/g, '/');
+      if (path !== scenePath()) return;          // only THIS game's scene.json
+      if (msg.change === 'unlink') return;
+      if (_diskSaveTimer !== null) return;        // user has unsaved edits → don't clobber
+      // The reload itself content-compares against the current doc, so our own
+      // autosave echo is a no-op (identical content) — no rebuild, no loop.
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => { void reloadFromDisk(); }, 400);
+    });
+    const retry = (): void => {
+      ws = null;
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 15000);
+    };
+    ws.addEventListener('close', retry);
+    ws.addEventListener('error', () => { try { ws?.close(); } catch { /* */ } });
+  };
+  connect();
+}
 
 /** Replace the entire authored document (scene load/import). Resets selection
  * and undo history since old inverses no longer apply to the new doc. */

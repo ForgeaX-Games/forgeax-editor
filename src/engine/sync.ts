@@ -1,119 +1,126 @@
-// Engine sync — projects the authored SceneDocument onto a real forgeax world so
-// what you edit renders with the SAME engine the game plays on (WYSIWYG).
+// Engine sync — projects the authored SceneDocument onto the engine's NATIVE
+// scene pipeline, INCREMENTALLY. Instead of tearing down + rebuilding the whole
+// scene on every edit (a one-frame flash), it diffs the new projection against the
+// last one and applies only the delta:
 //
-// The doc→world mapping itself lives in @forgeax/scene's `instantiateScene` — the
-// SAME function games call in ▶ Play. This module just owns the editor-side
-// lifecycle: full rebuild on every bus change (the editor scene is small, so a
-// rebuild keeps the mapping trivially correct — no per-field diffing), despawning
-// the previous set first. Edit mode is intentionally STATIC (no Spin/Velocity
-// simulation): in forgeax, ▶ Play runs the real game; ✎ Edit authors it.
-import { instantiateScene, loadGltfRuntime, isGltfLoaded } from '@forgeax/scene';
+//   • value-only change (move / scale / rotate / recolour / relight / mesh-kind)
+//     → `world.set(entity, Component, data)` in place — NO rebuild, NO flash.
+//   • structural change (entity added/removed, a component added/removed e.g.
+//     castShadow toggled, light type swapped) → full native re-instantiate
+//     (`assets.instantiate(SceneAsset)`) — one flash, only on these rarer edits.
+//
+// First build is a native instantiate. Both paths render through the engine-native
+// scene-instance machinery (same as ▶ Play). Live drag uses `worldEntityFor` +
+// `world.set` directly (committed as one command on release).
+import {
+  sceneEntities,
+  instantiateSceneEntities,
+  makeSceneCaches,
+  SCENE_COMPONENT_TOKENS,
+  type SceneEntity,
+  type SceneCaches,
+} from '@forgeax/scene';
 import type { EntityId } from '../core/types';
 import { bus } from '../store';
 
-// Fetch a project file's raw bytes (binary) via the server. Used to feed the
-// runtime glTF loader so GltfRef entities render their REAL geometry, not just
-// the placeholder cube instantiateScene falls back to.
-async function fetchProjectBytes(path: string): Promise<ArrayBuffer> {
-  const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`);
-  if (!r.ok) throw new Error(`fetch ${path} → HTTP ${r.status}`);
-  return r.arrayBuffer();
-}
-
-// Collect every GltfRef path referenced by the doc (so we can preload them).
-function gltfRefPaths(doc: { entities: Record<number, { components?: Record<string, unknown> }> }): string[] {
-  const out = new Set<string>();
-  for (const e of Object.values(doc.entities)) {
-    const g = e.components?.GltfRef as { path?: string } | undefined;
-    if (g?.path) out.add(g.path);
-  }
-  return [...out];
-}
-
-// Minimal structural types for the slice of the forgeax world/renderer we use.
 interface WorldLike {
-  spawn(...componentDatas: unknown[]): { ok: boolean; value?: number; unwrap(): number };
-  despawn(entity: number): unknown;
+  set(entity: number, component: unknown, data: unknown): unknown;
+  sceneInstances: { despawnInstance(id: number): unknown };
 }
-interface RendererLike {
-  assets: { register(desc: unknown): { unwrap(): unknown } };
-}
+interface RendererLike { assets: unknown }
 
 export interface EngineSync {
-  /** Rebuild the rendered world from the current doc. Called on every bus change. */
+  /** Rebuild/patch the rendered world from the current doc. Called on every bus change. */
   resync(): void;
-  /** The live forgeax entity rendering doc entity `id`, if any. Lets the viewport
-   *  move an entity directly (world.set) during a drag — a live preview that
-   *  bypasses the doc + a full resync, committed as one command on release. */
+  /** The live forgeax entity rendering doc entity `id`, if any (for viewport drag). */
   worldEntityFor(id: EntityId): number | undefined;
   /** Stop listening to the bus. */
   dispose(): void;
 }
 
+interface RenderedEntity { entity: number; comps: Record<string, Record<string, unknown>> }
+
+const keySig = (comps: Record<string, unknown>): string => Object.keys(comps).sort().join('|');
+
 /**
- * Wire the bus to a forgeax world. Each doc change despawns the previous render
- * set and re-instantiates the document via @forgeax/scene (geometry, PBR/unlit
- * materials, emissive, lights — full fidelity with ▶ Play).
+ * Wire the bus to a forgeax world via the engine-native scene pipeline, with
+ * incremental diff-patch (see module note). Persistent mesh/material caches mean
+ * unchanged content keeps stable handles, so the diff sees "no change" and skips it.
  */
 export function createEngineSync(
   world: WorldLike,
   renderer: RendererLike,
   resolveMaterialAsset?: (guid: string) => unknown | null,
 ): EngineSync {
-  // doc entity id → a representative live forgeax entity (so the viewport can
-  // move a single entity live during a drag). NOT the teardown set — a GltfRef
-  // expands to thousands of world entities but only its first lands here.
-  let byDoc = new Map<EntityId, number>();
-  // EVERY live forgeax entity from the last build — the actual teardown set.
-  // Despawning only byDoc would orphan a GltfRef's extra entities, so each
-  // rebuild would stack a duplicate copy on top (overlapping geometry → the
-  // "scene flickers" bug). Despawn all of these instead.
-  let spawned: number[] = [];
-  // GltfRef paths whose async load has been started (one load + one resync each).
-  const kicked = new Set<string>();
-  // Signature of the last rendered state (doc content + which GLBs are loaded).
-  // resync() is wired to bus.subscribe, which can fire spuriously (snapshot /
-  // selection sync echoes etc.); rebuilding the whole world on an UNCHANGED doc
-  // is what makes a heavy scene flicker. Skipping no-op rebuilds kills that.
+  const caches: SceneCaches = makeSceneCaches();
+  // doc entity id → { live engine entity, last-applied components }.
+  let rendered = new Map<EntityId, RenderedEntity>();
+  // The live SceneInstance id (teardown handle), or null before the first build.
+  let instanceId: number | null = null;
+  // Skip no-op rebuilds (the bus fires on snapshot/selection echoes too).
   let lastSig: string | null = null;
+  const ctx = { world, assets: renderer.assets, resolveMaterialAsset } as never;
 
-  function clear(): void {
-    for (const ent of spawned) {
-      try { world.despawn(ent); } catch { /* already retired — ignore */ }
+  function despawnInstance(): void {
+    if (instanceId !== null) {
+      try { world.sceneInstances.despawnInstance(instanceId); } catch { /* already gone */ }
+      instanceId = null;
     }
-    spawned = [];
-    byDoc = new Map();
+  }
+
+  function fullRebuild(entities: SceneEntity[]): void {
+    despawnInstance();
+    rendered = new Map();
+    const r = instantiateSceneEntities(entities, ctx);
+    if (!r) { console.error('[editor] native scene instantiate failed'); lastSig = null; return; }
+    instanceId = r.instanceId;
+    for (const e of entities) {
+      const entity = r.byDoc.get(e.docId);
+      if (entity !== undefined) rendered.set(e.docId, { entity, comps: e.components });
+    }
+  }
+
+  function patch(entities: SceneEntity[]): void {
+    for (const e of entities) {
+      const rec = rendered.get(e.docId);
+      if (!rec) continue; // shouldn't happen (key-set check guarantees presence)
+      for (const [name, data] of Object.entries(e.components)) {
+        if (JSON.stringify(data) === JSON.stringify(rec.comps[name])) continue;
+        const token = SCENE_COMPONENT_TOKENS[name];
+        if (token === undefined) continue;
+        try { world.set(rec.entity, token, data); } catch { /* entity gone — next resync heals */ }
+      }
+      rec.comps = e.components;
+    }
   }
 
   function resync(): void {
-    const paths = gltfRefPaths(bus.doc as never);
-    // Skip the rebuild when nothing rendered has changed (doc content + which
-    // GLBs are loaded). The doc itself is tiny — a GltfRef expands to thousands
-    // of WORLD entities but stays ONE doc entity — so this signature is cheap.
-    const sig = JSON.stringify(bus.doc) + '#' + paths.map((p) => (isGltfLoaded(p) ? '1' : '0')).join('');
+    const sig = JSON.stringify(bus.doc);
     if (sig === lastSig) return;
     lastSig = sig;
 
-    clear();
-    const { entities, all } = instantiateScene(bus.doc, {
-      world: world as never,
-      assets: renderer.assets as never,
-      resolveMaterialAsset,
-    });
-    byDoc = entities as Map<EntityId, number>;
-    spawned = all as number[];
-    // Kick off async loading of any GltfRef GLB not yet parsed; when one lands,
-    // its isGltfLoaded flips → the signature changes → resync rebuilds ONCE,
-    // swapping the placeholder for real geometry. `kicked` ensures one load per
-    // path (no stacked .then(resync) bursts during the multi-second load).
-    for (const path of paths) {
-      if (isGltfLoaded(path) || kicked.has(path)) continue;
-      kicked.add(path);
-      void loadGltfRuntime(path, fetchProjectBytes, renderer.assets as never).then((loaded) => {
-        if (loaded) resync();
-        else kicked.delete(path); // failed — allow a later retry
-      });
+    let entities: SceneEntity[];
+    try {
+      entities = sceneEntities(bus.doc, ctx, caches).entities;
+    } catch (err) {
+      console.error('[editor] sceneEntities threw:', (err as Error)?.message ?? err, (err as Error)?.stack ?? '');
+      lastSig = null;
+      return;
     }
+
+    // Structural when the entity SET or any entity's component KEY-SET changed.
+    // (Pure value changes — incl. mesh-kind/material handle swaps — stay patchable.
+    //  Order is irrelevant: we patch by docId, not position.)
+    let structural = instanceId === null || entities.length !== rendered.size;
+    if (!structural) {
+      for (const e of entities) {
+        const rec = rendered.get(e.docId);
+        if (!rec || keySig(e.components) !== keySig(rec.comps)) { structural = true; break; }
+      }
+    }
+
+    if (structural) fullRebuild(entities);
+    else patch(entities);
   }
 
   const unsub = bus.subscribe(() => resync());
@@ -121,10 +128,7 @@ export function createEngineSync(
 
   return {
     resync,
-    worldEntityFor: (id) => byDoc.get(id),
-    dispose() {
-      unsub();
-      clear();
-    },
+    worldEntityFor: (id) => rendered.get(id)?.entity,
+    dispose() { unsub(); despawnInstance(); rendered = new Map(); },
   };
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { docToPack, packToDoc, isScenePack } from '@forgeax/scene';
 import { DockManager } from './panels/Dock';
 import { deleteEntityCascade, deleteManyCascade } from './ops';
 import {
@@ -60,18 +61,18 @@ export function EditorApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Save = persist the scene to the game's scene.json on disk (the design's
-  // `saveDocument`). Edits already autosave (debounced) + mirror to localStorage;
-  // this is an explicit immediate flush. Falls back to a JSON download only when
-  // there's no game bound (the `default`/unbound scene has no disk target).
+  // Save = persist the scene to the game's native scene.pack.json on disk. Edits
+  // already autosave (debounced) + mirror to localStorage; this is an explicit
+  // immediate flush. Falls back to downloading the native pack only when there's
+  // no game bound (the `default`/unbound scene has no disk target).
   function onSave() {
     void saveDocToDisk().then((ok) => {
       if (ok) return;
-      const blob = new Blob([JSON.stringify(bus.doc, null, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(docToPack(bus.doc), null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'scene.json';
+      a.download = 'scene.pack.json';
       a.click();
       URL.revokeObjectURL(url);
     });
@@ -81,8 +82,9 @@ export function EditorApp() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as SceneDocument;
-        if (parsed && typeof parsed === 'object' && parsed.entities) replaceDoc(parsed);
+        const parsed = JSON.parse(String(reader.result));
+        if (isScenePack(parsed)) replaceDoc(packToDoc(parsed));
+        else if (parsed && typeof parsed === 'object' && parsed.entities) replaceDoc(parsed as SceneDocument);
       } catch {
         /* malformed JSON — ignore */
       }

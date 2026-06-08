@@ -22,6 +22,7 @@ import {
   MeshRenderer,
   Camera,
   perspective,
+  TONEMAP_REINHARD_EXTENDED,
   quat,
   Materials,
   HANDLE_CUBE,
@@ -196,7 +197,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
       quatX: qCam[0], quatY: qCam[1], quatZ: qCam[2], quatW: qCam[3],
       scaleX: 1, scaleY: 1, scaleZ: 1,
     });
-    world.set(camera, Camera, perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }));
+    // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
+    // replaces the Camera component each frame, so tonemap must be re-applied).
+    world.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED });
     updateGizmo();
     updateParamGizmo();
   }
