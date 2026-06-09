@@ -15,7 +15,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
-import { loadGltfRuntime } from '@forgeax/scene';
+import { loadGltfRuntime } from './scene';
 import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
@@ -25,7 +25,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from './core/assets';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from './store';
 import { getPopoutPanel } from './core/sync-channel';
 import './ui/theme.css';
 
@@ -227,6 +227,22 @@ initSync();
 // on disk) changes it — subscribes to the server's file-event WebSocket so the
 // viewport rebuilds without a manual refresh. No-op in popout windows.
 initDiskWatch();
+
+// ── Flush pending edits before this editor surface goes away ──────────────────
+// The editor autosaves on a short debounce, but ▶ Play reads the on-disk pack and
+// the interface UNMOUNTS this iframe on a mode switch (edit→play) — which would
+// kill an in-flight debounce timer and lose the last edit, so Play would render a
+// stale scene. Flush eagerly via a teardown-safe sendBeacon when the page is
+// hidden / unloaded, AND when the interface explicitly asks (VAG_EDITOR_FLUSH,
+// posted right before it tears us down). Net: Play always reads the latest scene
+// the instant the user flips to it — no race against the debounce, no lost edit.
+window.addEventListener('pagehide', () => flushPendingSaveBeacon());
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushPendingSaveBeacon();
+});
+window.addEventListener('message', (ev: MessageEvent) => {
+  if ((ev?.data as { type?: string } | undefined)?.type === 'VAG_EDITOR_FLUSH') flushPendingSaveBeacon();
+});
 
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
 function installFpsReport(): void {

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { docToPack, packToDoc, isScenePack } from '@forgeax/scene';
+import { docToPack, packToDoc, isScenePack } from './scene';
 import { DockManager } from './panels/Dock';
 import { deleteEntityCascade, deleteManyCascade } from './ops';
 import {

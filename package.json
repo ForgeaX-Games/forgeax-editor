@@ -25,7 +25,8 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@forgeax/engine-gltf": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -19,7 +19,7 @@ import {
   SCENE_COMPONENT_TOKENS,
   type SceneEntity,
   type SceneCaches,
-} from '@forgeax/scene';
+} from '../scene';
 import type { EntityId } from '../core/types';
 import { bus } from '../store';
 

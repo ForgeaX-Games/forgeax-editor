@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { docToPack, packToDoc, isScenePack } from '@forgeax/scene';
+import { docToPack, packToDoc, isScenePack } from './scene';
 import { EditorBus } from './core/bus';
 import type { CommandOrigin, HistoryStep } from './core/bus';
 import { createDocument } from './core/document';
@@ -432,13 +432,48 @@ export async function saveDocToDisk(): Promise<boolean> {
 }
 
 // Debounced disk autosave: every edit lands in localStorage immediately (above)
-// and is flushed to the game's scene.json ~1.5s after the last change, so the
-// authored scene persists per-game without a manual Save.
+// and is flushed to the game's scene.pack.json shortly after the last change, so
+// the authored scene persists per-game without a manual Save. The debounce is
+// SHORT (was 1500ms) so the on-disk pack tracks edits closely — ▶ Play reads the
+// disk, so a long debounce meant a freshly-switched Play showed a stale scene.
+const AUTOSAVE_DEBOUNCE_MS = 400;
 let _diskSaveTimer: ReturnType<typeof setTimeout> | null = null;
 bus.subscribe(() => {
   if (_diskSaveTimer) clearTimeout(_diskSaveTimer);
-  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); _diskSaveTimer = null; }, 1500);
+  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); _diskSaveTimer = null; }, AUTOSAVE_DEBOUNCE_MS);
 });
+
+/** True while an edit is debounced but not yet written to disk. */
+export function hasPendingDiskSave(): boolean {
+  return _diskSaveTimer !== null;
+}
+
+// Flush a pending autosave SYNCHRONOUSLY-SAFE, even as the editor iframe is being
+// torn down (mode switch edit→play unmounts EditMode → destroys this iframe). A
+// normal `await fetch` would be aborted with the iframe; `navigator.sendBeacon`
+// is the one write the browser guarantees to deliver during unload/pagehide. The
+// server's POST /api/files reads c.req.json(), so a Blob typed application/json
+// parses identically to the regular fetch save. Called on pagehide /
+// visibilitychange(hidden) and on the VAG_EDITOR_FLUSH postMessage the interface
+// sends right before it unmounts the editor — so Play always reads the latest
+// pack the instant the user flips to it, with no race against the debounce.
+export function flushPendingSaveBeacon(): void {
+  if (_diskSaveTimer === null) return; // nothing dirty
+  const p = scenePath();
+  if (!p) return;
+  clearTimeout(_diskSaveTimer);
+  _diskSaveTimer = null;
+  try {
+    const blob = new Blob([JSON.stringify({ path: p, content: serializedPack() })], { type: 'application/json' });
+    const ok = navigator.sendBeacon('/api/files', blob);
+    // sendBeacon can refuse (queue full / too large); fall back to a keepalive
+    // fetch which also survives teardown for small bodies.
+    if (!ok) void fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
+  } catch {
+    // last resort — best-effort async save (may be aborted on teardown)
+    void saveDocToDisk();
+  }
+}
 
 // ── Disk watch: live-reload the scene when an EXTERNAL writer (an AI agent
 //    editing scene.json on disk) changes the active game's scene.json ──────────

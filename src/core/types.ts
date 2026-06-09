@@ -11,8 +11,8 @@ export type {
   EntitySource,
   EntityNode,
   SceneDocument,
-} from '@forgeax/scene';
-import type { EntityId, EntitySource } from '@forgeax/scene';
+} from '../scene';
+import type { EntityId, EntitySource } from '../scene';
 
 // ── Commands ────────────────────────────────────────────────────────────────
 // Each command is a plain JSON object → it doubles as an AI tool-call payload.
