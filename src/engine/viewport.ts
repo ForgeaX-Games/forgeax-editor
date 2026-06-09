@@ -289,7 +289,9 @@ export function createViewport({ canvas, world, assets, camera, sync }: Viewport
     return world.spawn(
       { component: Transform, data: {} },
       { component: MeshFilter, data: { assetHandle: mesh } },
-      { component: MeshRenderer, data: { material } },
+      // engine #317: MeshRenderer.material (single) -> materials[]. Passing the
+      // legacy single field leaves the gizmo unmaterialed -> default gray axes.
+      { component: MeshRenderer, data: { materials: [material] } },
     ).unwrap();
   }
   const spawnHandleCube = (material: unknown): number => spawnHandleMesh(HANDLE_CUBE, material);
