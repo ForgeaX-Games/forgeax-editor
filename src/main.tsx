@@ -325,19 +325,51 @@ function paintDiagnosticMessage(err: unknown): void {
     'background:#1a1a1f', 'color:#ff8a8a', 'font:14px/1.5 ui-monospace,monospace',
     'padding:24px', 'box-sizing:border-box', 'z-index:0', 'white-space:pre-wrap', 'text-align:left',
   ].join(';');
-  overlay.textContent = [
-    '⚠ forgeax editor: WebGPU not available',
+  // EngineEnvironmentError carries a structured detail with webgpuError /
+  // wgpuError — each is a RhiError shape with code/expected/hint/detail. The
+  // outer "no usable backend" string is generic; the inner RhiError is the
+  // real cause (often unrelated to GPU adapter — e.g. shader manifest 404
+  // returning HTML, asset pipeline failure). Surface inner detail when present.
+  const lines: string[] = [
+    '⚠ forgeax editor: engine init failed',
     '',
     `createApp error: ${err instanceof Error ? err.message : String(err)}`,
-    '',
-    'Likely causes:',
-    '  • No GPU adapter (headless VM without GPU)',
-    '  • Insecure context (WebGPU needs HTTPS or localhost)',
-    '  • iframe permissions policy blocking WebGPU',
+  ];
+  const e = err as Record<string, unknown> | null;
+  const detail = e && typeof e === 'object' ? (e.detail as Record<string, unknown> | undefined) : undefined;
+  function dumpInner(label: string, re: unknown): void {
+    if (!re || typeof re !== 'object') return;
+    const r = re as Record<string, unknown>;
+    lines.push('', `── ${label} ──`);
+    if (r.message) lines.push(`message:  ${String(r.message)}`);
+    if (r.code) lines.push(`code:     ${String(r.code)}`);
+    if (r.expected) lines.push(`expected: ${String(r.expected)}`);
+    if (r.hint) lines.push(`hint:     ${String(r.hint)}`);
+    if (r.detail !== undefined) {
+      try { lines.push(`detail:   ${JSON.stringify(r.detail)}`); }
+      catch { lines.push(`detail:   ${String(r.detail)}`); }
+    }
+  }
+  if (detail) {
+    dumpInner('webgpu (Channel 2)', detail.webgpuError);
+    dumpInner('wgpu (Channel 3 fallback)', detail.wgpuError);
+  }
+  const hasInner = !!(detail && (detail.webgpuError || detail.wgpuError));
+  if (!hasInner) {
+    lines.push(
+      '',
+      'Likely causes:',
+      '  • No GPU adapter (headless VM without GPU)',
+      '  • Insecure context (WebGPU needs HTTPS or localhost)',
+      '  • iframe permissions policy blocking WebGPU',
+    );
+  }
+  lines.push(
     '',
     'The editor panels (Hierarchy / Inspector / command bus) still work —',
-    'edits persist to the document; rendering resumes on a GPU-capable host.',
-  ].join('\n');
+    'edits persist to the document; rendering resumes once init succeeds.',
+  );
+  overlay.textContent = lines.join('\n');
   appRoot.appendChild(overlay);
 }
 } // end bootEditor
