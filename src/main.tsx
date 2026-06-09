@@ -15,6 +15,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
+import { loadGltfRuntime } from '@forgeax/scene';
 import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
@@ -191,6 +192,31 @@ installErrorOverlay();
     ? `/api/files/raw?path=${encodeURIComponent(`.forgeax/games/${slug}/assets/sky.hdr`)}`
     : undefined;
   void setupEditorSkylight(world as never, renderer.assets as never, (renderer as unknown as { store: never }).store, { hdrUrl });
+}
+
+// Preload any GltfRef GLBs so ✎ Edit shows the SAME real geometry as ▶ Play.
+// instantiateScene only spawns a placeholder cube for a GltfRef until its GLB
+// is decoded into the shared @forgeax/scene gltf cache — the editor never did
+// this, so GLB-based scenes (e.g. fps's IntelliScene arena) showed a placeholder
+// in Edit. Mirror fps/main.ts's Play-side preload, then resync so the real
+// geometry renders. GLBs fetch via the server's raw-file endpoint.
+{
+  const fetchGlb = async (p: string): Promise<ArrayBuffer> => {
+    const r = await fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+    if (!r.ok) throw new Error(`glb ${r.status}`);
+    return r.arrayBuffer();
+  };
+  void (async () => {
+    const paths = new Set<string>();
+    for (const e of Object.values(bus.doc.entities)) {
+      const p = (e?.components as { GltfRef?: { path?: string } } | undefined)?.GltfRef?.path;
+      if (typeof p === 'string' && p) paths.add(p);
+    }
+    if (paths.size === 0) return;
+    await Promise.all([...paths].map((p) =>
+      loadGltfRuntime(p, fetchGlb, renderer.assets as never).catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
+    engineSync.resync();
+  })();
 }
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
