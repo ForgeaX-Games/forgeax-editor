@@ -1,0 +1,18 @@
+{
+  "name": "forgeax-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "forgeax editor monorepo — 4 packages (core / panels / edit-runtime / play-runtime) for the forgeax editor",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "echo 'build: nothing to bundle (packages publish source directly)'",
+    "dev": "echo 'use per-package dev scripts: bun -F @forgeax/editor-edit-runtime dev'"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

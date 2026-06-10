@@ -1,0 +1,59 @@
+{
+  "name": "@forgeax/editor-play-runtime",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "forgeax editor Play mode thick host — FPS mouse capture, physics gate, per-game pack-index, loading overlay, diagnostic overlay, VAG_CONSOLE bridge",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "index.html",
+    "vite.config.ts",
+    "pack-catalog.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@forgeax/editor-core": "workspace:*",
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier2d": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/scene": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/bun": "^1.3.13",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.5"
+  }
+}

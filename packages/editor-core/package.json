@@ -1,0 +1,48 @@
+{
+  "name": "@forgeax/editor-core",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "forgeax editor core logic — SceneDocument SSOT, EditorBus command bus, undo/redo, ComponentSchema registry, sync-channel cross-window sync, anim, matgraph, assets, presets",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@forgeax/editor-panels": "workspace:*",
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/scene": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
