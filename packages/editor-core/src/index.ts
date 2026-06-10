@@ -12,7 +12,7 @@
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
 //   Anim (Clip, Track, Interp, etc.)
 //   Assets (PackAsset, RawAsset, loadGameAssets, etc.)
-//   Matgraph (MaterialGraph, etc.)
+//   Matgraph (MatGraph, etc.)
 //   Presets (ENTITY_PRESETS, getPreset, buildPresetComponents, etc.)
 
 // ── Scene types (SSOT definitions) ──
@@ -147,7 +147,7 @@ export {
   KINDS,
 } from './matgraph';
 export type {
-  MaterialGraph,
+  MatGraph,
   GraphNode,
   Edge,
   NodeKind,

@@ -1,14 +1,16 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { bus, setGizmoMode } from './store';
-import { HierarchyPanel } from './Hierarchy';
-import { InspectorPanel } from './Inspector';
-import { AssetsPanel } from './Assets';
-import { HistoryPanel } from './History';
-import { CapabilitiesPanel } from './Capabilities';
-import { MaterialPanel } from './Material';
-import { TimelinePanel } from './Timeline';
-import { MaterialGraphPanel } from './MaterialGraph';
+import {
+  HierarchyPanel,
+  InspectorPanel,
+  AssetsPanel,
+  HistoryPanel,
+  CapabilitiesPanel,
+  MaterialPanel,
+  TimelinePanel,
+  MaterialGraphPanel,
+} from '@forgeax/editor-panels';
 import { announcePopoutClosing, announcePopoutGeom } from './store';
 import type { SyncPanelId } from '@forgeax/editor-core';
 

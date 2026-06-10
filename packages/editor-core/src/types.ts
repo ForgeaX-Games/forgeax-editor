@@ -11,8 +11,22 @@ export type {
   EntitySource,
   EntityNode,
   SceneDocument,
-} from '../scene';
-import type { EntityId, EntitySource } from '../scene';
+} from './scene-types';
+import type { EntityId, EntitySource } from './scene-types';
+
+// Re-export scene types so editor-core consumers (instantiate.ts, scene-pack.ts)
+// import from ./types without knowing about the scene-types split.
+export type {
+  TransformData,
+  MeshData,
+  MeshKind,
+  MaterialData,
+  LightData,
+  LightType,
+  ColliderData,
+  ColliderShape,
+  Collider,
+} from './scene-types';
 
 // ── Commands ────────────────────────────────────────────────────────────────
 // Each command is a plain JSON object → it doubles as an AI tool-call payload.

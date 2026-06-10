@@ -66,7 +66,7 @@ export { ContextMenuHost, showContextMenu } from './contextMenuService';
 export type { MenuItemDef } from './contextMenuService';
 
 // ── Dock helpers ──
-export { focusPanel, openSourcePanel } from './dock';
+export { focusPanel, openSourcePanel } from './dock-bridge';
 
 // ── Engine ──
 export { createEngineSync } from './engine/sync';

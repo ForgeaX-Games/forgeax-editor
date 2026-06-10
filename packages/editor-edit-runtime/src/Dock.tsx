@@ -1,13 +1,15 @@
 import { useEffect, useReducer, useRef } from 'react';
 import type { PointerEvent as RPointerEvent, ReactNode } from 'react';
-import { HierarchyPanel } from './Hierarchy';
-import { InspectorPanel } from './Inspector';
-import { AssetsPanel } from './Assets';
-import { HistoryPanel } from './History';
-import { CapabilitiesPanel } from './Capabilities';
-import { MaterialPanel } from './Material';
-import { TimelinePanel } from './Timeline';
-import { MaterialGraphPanel } from './MaterialGraph';
+import {
+  HierarchyPanel,
+  InspectorPanel,
+  AssetsPanel,
+  HistoryPanel,
+  CapabilitiesPanel,
+  MaterialPanel,
+  TimelinePanel,
+  MaterialGraphPanel,
+} from '@forgeax/editor-panels';
 import { getSceneId, onPopoutClosed, onPopoutGeom } from './store';
 import type { PopoutGeom } from '@forgeax/editor-core';
 import {
