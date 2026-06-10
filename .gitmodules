@@ -1,0 +1,4 @@
+[submodule "packages/engine"]
+	path = packages/engine
+	url = https://github.com/ForgeaXGame/forgeax-engine.git
+	branch = stable

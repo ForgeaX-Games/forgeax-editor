@@ -5,7 +5,8 @@
   "type": "module",
   "description": "forgeax editor monorepo — 4 packages (core / panels / edit-runtime / play-runtime) for the forgeax editor",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/engine/packages/*"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
