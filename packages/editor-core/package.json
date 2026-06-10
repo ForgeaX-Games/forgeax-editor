@@ -39,8 +39,7 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@forgeax/engine-vite-plugin-pack": "workspace:*",
-    "@forgeax/scene": "workspace:*"
+    "@forgeax/engine-vite-plugin-pack": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.6.3"
