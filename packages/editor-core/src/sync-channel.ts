@@ -17,11 +17,13 @@
 //             ledger entries.
 import type { CommandOrigin, HistoryStep } from './bus';
 import type { EditorCommand, EntityId, SceneDocument } from './types';
+import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels';
 
 export type EditorRole = 'main' | 'popout';
 
-/** The dockable panels that can be popped out. Mirror of Dock's poppable set. */
-export type SyncPanelId = 'hierarchy' | 'assets' | 'inspector' | 'history' | 'capabilities' | 'material' | 'timeline' | 'matgraph';
+/** The dockable panels that can be popped out.
+ *  Re-exported from @forgeax/editor-panels (SSOT). */
+export type SyncPanelId = EditorPanelId;
 
 /** A full editor-state snapshot the main window broadcasts to popouts. */
 export interface EditorSnapshot {
@@ -62,7 +64,8 @@ export type EditorSyncMsg =
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }
 
-const ALL_PANELS: SyncPanelId[] = ['hierarchy', 'assets', 'inspector', 'history', 'capabilities', 'material', 'timeline', 'matgraph'];
+/** All dockable panel IDs, re-exported from @forgeax/editor-panels (SSOT). */
+const ALL_PANELS: readonly SyncPanelId[] = EDITOR_PANELS;
 
 /** A popout window is launched with `?panel=<id>`; everything else is main.
  *  `search` defaults to the live location so callers can pass it for tests. */

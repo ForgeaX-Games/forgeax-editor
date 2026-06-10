@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { bus, dispatch, setAnimPreview, useDocVersion, useSelection } from '../store';
-import { type Clip, type Interp, type Track, emptyClip, sampleClip, setKey, removeKey } from '../core/anim';
+import { bus, dispatch, setAnimPreview, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import { type Clip, type Interp, type Track, emptyClip, sampleClip, setKey, removeKey } from '@forgeax/editor-core';
 
 // Timeline panel (design EDITOR-MODE P2/P3) — keyframe animation for the selected
 // entity. The clip lives on an `Anim` component (duration + tracks) authored via

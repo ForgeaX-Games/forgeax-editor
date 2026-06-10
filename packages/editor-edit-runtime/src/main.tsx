@@ -15,18 +15,18 @@ import {
   TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
-import { loadGltfRuntime } from './scene';
+import { loadGltfRuntime } from '@forgeax/editor-core';
 import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
-import { DetachedPanel } from './panels/DetachedPanel';
-import { ContextMenuHost } from './ui/contextMenuService';
+import { DetachedPanel } from './DetachedPanel';
+import { ContextMenuHost } from './contextMenuService';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
-import { loadGameAssets, makeMaterialResolver } from './core/assets';
+import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from './store';
-import { getPopoutPanel } from './core/sync-channel';
+import { getPopoutPanel } from '@forgeax/editor-core';
 import './ui/theme.css';
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the

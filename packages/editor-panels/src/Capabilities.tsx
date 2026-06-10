@@ -1,4 +1,4 @@
-import { listComponentSchemas } from '../core/schema';
+import { listComponentSchemas } from '@forgeax/editor-core';
 
 // Capabilities panel — the component schema registry, the SAME source the
 // Inspector reflects into widgets AND the AI bridge reflects into

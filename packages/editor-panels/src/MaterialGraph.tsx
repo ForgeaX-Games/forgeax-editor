@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
-import { bus, dispatch, useDocVersion, useSelection } from '../store';
-import type { EditorCommand } from '../core/types';
+import { bus, dispatch, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import type { EditorCommand } from '@forgeax/editor-core';
 import {
   type MatGraph, type GraphNode, type NodeKind, type RGB,
   KINDS, evaluate, connect, disconnect, setParam, moveNode, removeNode, addNode,
   defaultGraph, rgbToHex, hexToRgb, pinType,
-} from '../core/matgraph';
+} from '@forgeax/editor-core';
 
 // Material Graph panel (design EDITOR-MODE P3) — a node canvas that authors a
 // Material by wiring typed nodes (see core/matgraph.ts, pure + tested). The graph

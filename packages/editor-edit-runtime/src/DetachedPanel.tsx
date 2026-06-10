@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { bus, setGizmoMode } from '../store';
+import { bus, setGizmoMode } from './store';
 import { HierarchyPanel } from './Hierarchy';
 import { InspectorPanel } from './Inspector';
 import { AssetsPanel } from './Assets';
@@ -9,8 +9,8 @@ import { CapabilitiesPanel } from './Capabilities';
 import { MaterialPanel } from './Material';
 import { TimelinePanel } from './Timeline';
 import { MaterialGraphPanel } from './MaterialGraph';
-import { announcePopoutClosing, announcePopoutGeom } from '../store';
-import type { SyncPanelId } from '../core/sync-channel';
+import { announcePopoutClosing, announcePopoutGeom } from './store';
+import type { SyncPanelId } from '@forgeax/editor-core';
 
 // DetachedPanel — the root rendered inside a popped-out OS window (design
 // EDITOR-MODE §0.2.2 "弹出 Pop-out"). The window loads the SAME /editor/ bundle

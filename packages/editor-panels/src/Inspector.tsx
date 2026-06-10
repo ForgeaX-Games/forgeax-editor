@@ -1,10 +1,10 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { showContextMenu } from '../ui/contextMenuService';
-import { childrenOf } from '../core/document';
-import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '../core/schema';
-import { focusPanel, openSourcePanel } from '../dock';
-import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '../store';
-import type { EditorCommand, EntityId } from '../core/types';
+import { showContextMenu } from '@forgeax/editor-edit-runtime';
+import { childrenOf } from '@forgeax/editor-core';
+import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '@forgeax/editor-core';
+import { focusPanel, openSourcePanel } from '@forgeax/editor-edit-runtime';
+import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-edit-runtime';
+import type { EditorCommand, EntityId } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on

@@ -1,5 +1,5 @@
-import { bus, dispatch, useDocVersion, useSelection } from '../store';
-import { defaultComponentData } from '../core/schema';
+import { bus, dispatch, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import { defaultComponentData } from '@forgeax/editor-core';
 
 // Material panel (design spec 域: Material 专属面板) — a focused PBR surface for the
 // selected entity's Material component: big color swatches + sliders, emissive,

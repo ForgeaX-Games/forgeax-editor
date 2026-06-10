@@ -1,4 +1,4 @@
-import { bus, setSelection, useDocVersion } from '../store';
+import { bus, setSelection, useDocVersion } from '@forgeax/editor-edit-runtime';
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
 // mutation (human UI OR AI tool-call) is one EditorCommand on the bus, so this is

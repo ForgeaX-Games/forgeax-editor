@@ -8,8 +8,8 @@ import { CapabilitiesPanel } from './Capabilities';
 import { MaterialPanel } from './Material';
 import { TimelinePanel } from './Timeline';
 import { MaterialGraphPanel } from './MaterialGraph';
-import { getSceneId, onPopoutClosed, onPopoutGeom } from '../store';
-import type { PopoutGeom } from '../core/sync-channel';
+import { getSceneId, onPopoutClosed, onPopoutGeom } from './store';
+import type { PopoutGeom } from '@forgeax/editor-core';
 import {
   type DockNode, type SplitNode, type TabsNode, type DropSide,
   tabs, split, movePanel, removePanel, setSizes, setActivePanel,

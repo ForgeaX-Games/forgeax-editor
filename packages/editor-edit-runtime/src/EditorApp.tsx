@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { docToPack, packToDoc, isScenePack } from './scene';
-import { DockManager } from './panels/Dock';
+import { docToPack, packToDoc, isScenePack } from '@forgeax/editor-core';
+import { DockManager } from './Dock';
 import { deleteEntityCascade, deleteManyCascade } from './ops';
 import {
   bus,
@@ -12,7 +12,7 @@ import {
   useDocVersion,
   useGizmoMode,
 } from './store';
-import type { SceneDocument } from './core/types';
+import type { SceneDocument } from '@forgeax/editor-core';
 
 // editor-runtime React shell: a fixed two-pane chrome (Hierarchy left, Inspector
 // right) over the transparent center where the forgeax canvas shows through.

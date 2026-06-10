@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { showContextMenu, type MenuItemDef } from '../ui/contextMenuService';
-import { childrenOf } from '../core/document';
-import { openSourcePanel } from '../dock';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '../ops';
-import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '../store';
-import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../core/presets';
-import type { EntityId } from '../core/types';
+import { showContextMenu, type MenuItemDef } from '@forgeax/editor-edit-runtime';
+import { childrenOf } from '@forgeax/editor-core';
+import { openSourcePanel } from '@forgeax/editor-edit-runtime';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-edit-runtime';
+import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-edit-runtime';
+import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
+import type { EntityId } from '@forgeax/editor-core';
 
 interface Menu {
   id: EntityId;

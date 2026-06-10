@@ -1,8 +1,8 @@
 // Shared entity operations used by panels and keyboard shortcuts. They go
 // through the bus (undoable) and live above core so they may touch selection.
-import { childrenOf, isSelfOrDescendant } from './core/document';
+import { childrenOf, isSelfOrDescendant } from '@forgeax/editor-core';
 import { bus, dispatch, setSelection, setSelectionMany } from './store';
-import type { EditorCommand, EntityId } from './core/types';
+import type { EditorCommand, EntityId } from '@forgeax/editor-core';
 
 export function reparentEntity(child: EntityId, parent: EntityId | null): void {
   if (parent !== null && isSelfOrDescendant(bus.doc, child, parent)) return;

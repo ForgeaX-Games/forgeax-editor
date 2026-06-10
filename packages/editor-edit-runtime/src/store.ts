@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from 'react';
-import { docToPack, packToDoc, isScenePack } from './scene';
-import { EditorBus } from './core/bus';
-import type { CommandOrigin, HistoryStep } from './core/bus';
-import { createDocument } from './core/document';
-import type { EditorCommand, EntityId, SceneDocument } from './core/types';
+import { docToPack, packToDoc, isScenePack } from '@forgeax/editor-core';
+import { EditorBus } from '@forgeax/editor-core';
+import type { CommandOrigin, HistoryStep } from '@forgeax/editor-core';
+import { createDocument } from '@forgeax/editor-core';
+import type { EditorCommand, EntityId, SceneDocument } from '@forgeax/editor-core';
 import {
   getPopoutPanel,
   openSyncChannel,
@@ -11,7 +11,7 @@ import {
   type EditorSyncMsg,
   type PopoutGeom,
   type SyncPanelId,
-} from './core/sync-channel';
+} from '@forgeax/editor-core';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a

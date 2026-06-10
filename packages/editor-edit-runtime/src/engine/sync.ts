@@ -19,8 +19,8 @@ import {
   SCENE_COMPONENT_TOKENS,
   type SceneEntity,
   type SceneCaches,
-} from '../scene';
-import type { EntityId } from '../core/types';
+} from '@forgeax/editor-core';
+import type { EntityId } from '@forgeax/editor-core';
 import { bus } from '../store';
 
 interface WorldLike {
