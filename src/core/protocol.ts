@@ -32,14 +32,21 @@
 import { z } from 'zod';
 
 // ── 1. VAG_ASSETS_CHANGED ────────────────────────────────────────────────────
-// Producer: EditMode.tsx:186 / 230 (interface), store.ts:691 (editor-runtime).
-// Sent to relay an asset-pack change so the viewport iframe and ep:* panels
-// refresh their asset listings. Payload carries the slug whose pack changed.
+// Producer: EditMode.tsx:186 / 230 (interface, slug-bearing) and
+// editor-runtime/store.ts (BroadcastChannel relay, payload-less ping).
+// Two real shapes coexist on the wire today: a with-payload form carrying
+// the slug whose pack changed, and a payload-less ping used by the relay
+// path inside editor-runtime where no slug context is available.
+// `payload` is therefore optional and `payload.slug` likewise — the
+// schema accepts both shapes. Consumers that need the slug should narrow
+// after safeParse.
 export const VagAssetsChangedSchema = z.object({
   type: z.literal('VAG_ASSETS_CHANGED'),
-  payload: z.object({
-    slug: z.string(),
-  }),
+  payload: z
+    .object({
+      slug: z.string().optional(),
+    })
+    .optional(),
 });
 export type VagAssetsChangedMessage = z.infer<typeof VagAssetsChangedSchema>;
 

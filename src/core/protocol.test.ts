@@ -33,15 +33,21 @@ import {
 } from './protocol';
 
 describe('VAG_ASSETS_CHANGED', () => {
-  test('pass: { type, payload: { slug } } accepted', () => {
+  test('pass: { type, payload: { slug } } accepted (slug-bearing form)', () => {
     const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED', payload: { slug: 'demo' } });
     expect(r.success).toBe(true);
   });
-  test('fail: missing payload.slug → issues[0].path includes "slug"', () => {
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED', payload: {} });
+  test('pass: { type } only accepted (relay-ping form, no payload)', () => {
+    // editor-runtime/store.ts emits a payload-less ping when relaying
+    // BroadcastChannel asset-changed events. Schema must accept this too.
+    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED' });
+    expect(r.success).toBe(true);
+  });
+  test('fail: wrong type literal → path includes "type"', () => {
+    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_REPLACED' });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues[0].path.join('.')).toContain('slug');
+      expect(r.error.issues.some((i) => i.path.includes('type'))).toBe(true);
     }
   });
 });
