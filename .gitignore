@@ -1,0 +1,32 @@
+# Build / runtime artifacts
+node_modules/
+*.log
+dist/
+build/
+
+# Vite caches (one per package)
+.vite/
+
+# run.sh symlinks the studio's instance-local .forgeax into editor-play-runtime
+# so engine vite can resolve /preview/.forgeax/games/<id>/...
+# It must never be tracked.
+.forgeax
+.forgeax/
+
+# Playwright scratch (snapshots, console dumps, traces)
+.playwright-cli/
+.playwright-mcp/
+test-results/
+playwright-report/
+
+# TypeScript / IDE
+*.tsbuildinfo
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets — defense-in-depth, even though dev work happens in the studio root
+.env
+.env.*
+!.env.example
