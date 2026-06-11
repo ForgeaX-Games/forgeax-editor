@@ -12,11 +12,12 @@
 // behavior; the GUID-collision silent-degrade is a charter-P3 gap tracked
 // as OOS-5 and not addressed here).
 
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
-import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry, TextureAsset } from '@forgeax/engine-types';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -27,7 +28,11 @@ interface PackJson {
 interface ExternalAssetMetaJson {
   readonly schemaVersion: string | number;
   readonly kind: 'external-asset-package';
-  readonly assetType: 'image' | 'gltf' | 'audio';
+  // feat-20260603-asset-import-loader-injection M2: the engine replaced the
+  // closed `assetType` enum with the open `importer` key (one-cut migration,
+  // no shim). This replica must read `importer` to match meta.schema.json and
+  // the engine's build-catalog.ts; reading `assetType` rejected every sidecar.
+  readonly importer: 'image' | 'gltf' | 'audio' | 'font';
   readonly source: string;
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
@@ -62,6 +67,76 @@ function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
   };
 }
 
+// Bake an `.hdr` equirect source into the rgba16float RGBA `.bin` the runtime
+// requires (it no longer decodes `.hdr` inline -- it reads ONLY a build-time
+// imported `.bin`; see asset-registry loadFromUpstreamEntry). We cook it HERE,
+// at per-game catalog build, via the same imageImporter the engine uses, then
+// point the catalog row directly at the `.bin` with the CORRECT rgba16float
+// metadata. This avoids the dev `POST /__import` round-trip whose engine-side
+// importTextureEntry mislabels the imported HDR as rgba8unorm -- which makes
+// uploadCubemapFromEquirect reject the source with `invalid-source-format`.
+// Cached on disk (cook only when the `.bin` + its dims sidecar are absent).
+async function bakeHdrEquirect(
+  sourceAbsPath: string,
+  guid: string,
+): Promise<{ binAbsPath: string; width: number; height: number } | null> {
+  const guidLower = guid.toLowerCase();
+  const binAbsPath = `${sourceAbsPath}.${guidLower}.bin`;
+  const dimsPath = `${binAbsPath}.dims.json`;
+  try {
+    const [binStat, dimsRaw] = await Promise.all([stat(binAbsPath), readFile(dimsPath, 'utf-8')]);
+    if (binStat.size > 0) {
+      const dims = JSON.parse(dimsRaw) as { width: number; height: number };
+      return { binAbsPath, width: dims.width, height: dims.height };
+    }
+  } catch {
+    // No cached .bin/dims -> cook below.
+  }
+
+  let src: Uint8Array;
+  try {
+    src = new Uint8Array(await readFile(sourceAbsPath));
+  } catch (e) {
+    console.warn(`[forgeax-pack] hdr bake: cannot read ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+  const ctx = {
+    source: sourceAbsPath,
+    readSource: async () => ({ ok: true as const, value: src }),
+    readSibling: async () => ({ ok: true as const, value: new Uint8Array() }),
+    decodeImage: async () => {
+      throw new Error('decodeImage seam unused on the .hdr bare-source bake path');
+    },
+    subAssets: [{ guid, sourceIndex: 0, kind: 'image' as const }],
+    importSettings: { colorSpace: 'linear' as const, mipmap: false },
+  };
+  let produced: readonly { guid: string; payload: unknown }[];
+  try {
+    produced = await imageImporter.import(ctx as never);
+  } catch (e) {
+    console.warn(`[forgeax-pack] hdr bake: importer threw for ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+  const tex = produced.find((a) => a.guid.toLowerCase() === guidLower)?.payload as TextureAsset | undefined;
+  if (tex === undefined) {
+    console.warn(`[forgeax-pack] hdr bake: importer produced no asset for ${sourceAbsPath}`);
+    return null;
+  }
+  const bytes =
+    tex.data instanceof Uint8Array
+      ? tex.data
+      : new Uint8Array(tex.data.buffer, tex.data.byteOffset, tex.data.byteLength);
+  try {
+    await mkdir(dirname(binAbsPath), { recursive: true });
+    await writeFile(binAbsPath, bytes);
+    await writeFile(dimsPath, JSON.stringify({ width: tex.width, height: tex.height }));
+  } catch (e) {
+    console.warn(`[forgeax-pack] hdr bake: write failed for ${binAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+  return { binAbsPath, width: tex.width, height: tex.height };
+}
+
 // ── URL base prefixing ─────────────────────────────────────────────────
 // The engine vite root uses `base: '/preview/'`, and the interface dev server
 // only proxies `/preview/*` to the engine (packages/interface/vite.config:
@@ -94,11 +169,11 @@ async function processMetaSidecar(
   }
 
   const metaObj = (metaRaw ?? {}) as Record<string, unknown>;
-  if (metaObj.assetType === undefined) {
-    return `sidecar ${rawPath} missing required 'assetType' field`;
+  if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
+    return `sidecar ${rawPath} missing required 'importer' field`;
   }
-  if (metaObj.assetType !== 'image' && metaObj.assetType !== 'gltf' && metaObj.assetType !== 'audio') {
-    return `sidecar ${rawPath} has invalid assetType: ${JSON.stringify(metaObj.assetType)}`;
+  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'audio') {
+    return `sidecar ${rawPath} has unfoldable importer: ${JSON.stringify(metaObj.importer)}`;
   }
 
   const valid = validateMeta(metaRaw);
@@ -115,11 +190,35 @@ async function processMetaSidecar(
   const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
   const normalizedUrl = withBase(base, sourceRel);
 
-  if (meta.assetType === 'image') {
+  if (meta.importer === 'image') {
     const metadata = buildImageMetadata(meta);
+    const isHdr = meta.source.toLowerCase().endsWith('.hdr');
     let cubeMetadata: CubeTextureMetadata | undefined;
     for (const sub of meta.subAssets) {
       if (sub.kind === 'image') {
+        if (isHdr) {
+          const baked = await bakeHdrEquirect(sourceAbsPath, sub.guid);
+          if (baked !== null) {
+            const binRel = relative(cwd, baked.binAbsPath).replace(/\\/g, '/');
+            out.push({
+              guid: sub.guid,
+              relativeUrl: withBase(base, binRel),
+              kind: 'texture',
+              sourcePath: sourceRel,
+              metadata: {
+                kind: 'texture',
+                width: baked.width,
+                height: baked.height,
+                format: 'rgba16float',
+                colorSpace: 'linear',
+                mipmap: false,
+              },
+            });
+            continue;
+          }
+          // Bake failed -> fall through to the raw .hdr row (loadByGuid then
+          // tries the dev /__import cook as a best-effort fallback).
+        }
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, metadata });
       } else if (sub.kind === 'cube-texture') {
         if (cubeMetadata === undefined) {
@@ -131,7 +230,7 @@ async function processMetaSidecar(
     }
   }
 
-  if (meta.assetType === 'audio') {
+  if (meta.importer === 'audio') {
     for (const sub of meta.subAssets) {
       if (sub.kind === 'audio') {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'audio', sourcePath: sourceRel });
@@ -139,7 +238,7 @@ async function processMetaSidecar(
     }
   }
 
-  if (meta.assetType === 'gltf') {
+  if (meta.importer === 'gltf') {
     for (const sub of meta.subAssets) {
       if (sub.kind === 'mesh' || sub.kind === 'material' || sub.kind === 'scene') {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel });
@@ -165,9 +264,19 @@ async function processMetaSidecar(
  * `relativeUrl` is prefixed with it so the runtime's `fetch(relativeUrl)` from
  * the iframe origin hits the engine through the interface's `/preview/*` proxy
  * (see withBase). Pass '' to emit unprefixed root-absolute URLs.
+ *
+ * `extraRoots` are SHARED asset dirs (e.g. the template's sky.hdr cube-texture)
+ * folded into every game's per-game catalog so template-provided assets resolve
+ * by GUID without being duplicated into each game's assets/ dir. Their sources
+ * must live under the engine vite root so `relative(cwd, ...)` + base yields a
+ * URL vite can serve.
  */
-export async function buildPerGameCatalog(root: string, base = '/preview'): Promise<PackIndexEntry[]> {
-  const roots: readonly string[] = [root];
+export async function buildPerGameCatalog(
+  root: string,
+  base = '/preview',
+  extraRoots: readonly string[] = [],
+): Promise<PackIndexEntry[]> {
+  const roots: readonly string[] = [root, ...extraRoots];
   const cwd = process.cwd();
   const result = await scan(roots);
   if (!result.ok) {

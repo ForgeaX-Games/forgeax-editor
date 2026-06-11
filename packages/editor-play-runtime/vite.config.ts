@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -73,6 +74,18 @@ function gameAssetRoots(): string[] {
     .filter((p) => existsSync(p));
 }
 
+// Shared template assets live under the engine vite root (here/shared-assets)
+// and are folded into EVERY game's per-game catalog. The default game template
+// loads its environment skylight from a single shared sky.hdr cube-texture
+// sidecar here rather than duplicating the 1.3MB HDR into each game's assets/.
+// Lives under the vite root so it ships with the frozen .app copy too (Tauri),
+// and its relativeUrl (relative to cwd=here, +base) is one vite serves.
+// Returns [] when absent (older deploys) so catalogs degrade to game-only.
+function sharedAssetRoots(): string[] {
+  const dir = resolve(here, 'shared-assets');
+  return existsSync(dir) ? [dir] : [];
+}
+
 // Return slugs for every game directory under .forgeax/games/ that has an
 // assets/ subdirectory. Symlink game directories are included because
 // existsSync follows symlinks. This mirrors gameAssetRoots() and is the
@@ -119,7 +132,7 @@ export function forgeaxPerGamePackIndex() {
         const slug = match[1];
         const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot);
+          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(catalog));
@@ -137,7 +150,7 @@ export function forgeaxPerGamePackIndex() {
       for (const slug of gameSlugs()) {
         const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot);
+          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
           const fileName = `pack-index/${slug}.json`;
           this.emitFile({
             type: 'asset',
@@ -242,6 +255,17 @@ export default defineConfig({
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
     pluginPack({ roots: gameAssetRoots(), base: '/preview/' }) as never,
+    // Second pluginPack instance scoped to shared template assets — needs
+    // imageImporter wired so the .hdr cube-texture sidecar produces a valid
+    // PackEntry (without it, /preview/__import on cold loadByGuid would
+    // mislabel the bare .hdr as rgba8unorm and uploadCubemapFromEquirect
+    // rejects with `invalid-source-format`). Co-existing with the per-game
+    // pluginPack is fine: GUIDs are disjoint by construction.
+    pluginPack({
+      roots: sharedAssetRoots(),
+      base: '/preview/',
+      importers: [imageImporter],
+    }) as never,
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,
     silenceShaderEmitInServe(forgeaxShader()) as never,
