@@ -27,7 +27,7 @@ import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
 import { getPopoutPanel } from '@forgeax/editor-core';
-import './ui/theme.css';
+import './theme.css';
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
 // interface EditMode iframe). Each game gets its OWN editor scene — without this

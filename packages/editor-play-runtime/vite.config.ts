@@ -281,6 +281,11 @@ export default defineConfig({
       '@forgeax/engine-ecs',
       '@forgeax/engine-types',
       '@forgeax/engine-shader',
+      // engine-gltf is imported by user games' scene-runtime/gltf-runtime.ts
+      // (e.g. @forgeax/game-fps). Pre-bundling it would split it from the
+      // engine subgraph (parseGlb / gltfDocToSceneAsset reach into engine-pack
+      // / engine-image internals). Mirror editor-edit-runtime/vite.config.ts.
+      '@forgeax/engine-gltf',
       // @forgeax/scene re-exports engine-runtime components (Transform/HANDLE_CUBE
       // etc.) to instantiate scene docs; it MUST share the engine subgraph's module
       // identity, so exclude it from pre-bundling too (else a games' import would
@@ -310,6 +315,7 @@ export default defineConfig({
       '@forgeax/engine-math',
       '@forgeax/engine-pack',
       '@forgeax/engine-image',
+      '@forgeax/engine-gltf',
       '@forgeax/scene',
     ],
     // User game files live at <studio-root>/.forgeax/games/<slug>/ (entry is a
