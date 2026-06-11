@@ -244,9 +244,25 @@ if (entry) {
 // ── Start the frame loop ──
 app.value.start();
 
-// ── FPS reporting ──
+// ── FPS reporting + throttled liveness heartbeat ──
+// Studio's PreviewMode treats every VAG_FPS_STATS message as "still rendering"
+// evidence: a longer-than-FPS_STALL_MS gap hides the iframe behind the loading
+// overlay (vite mid-restart, engine threw, …). Emit the heartbeat at HEARTBEAT_MS
+// cadence — a 1 Hz emit would oscillate the parent's 500 ms FPS_STALL_MS gate
+// every second on a perfectly-rendering scene (overlay-on / overlay-off flicker).
+// Per-frame 60 Hz postMessage across the iframe boundary pressures browser GC
+// enough to crash the renderer over time when paired with chat output churn
+// (Chrome OUT_OF_MEMORY / error code 5), so throttle to 100 ms — still 5× below
+// the parent's 500 ms stall threshold. fps averaging itself stays at 1 Hz; only
+// the emit rate is gated.
+//
+// History: this got lost in 5d4cc4f when engine-src moved out of packages/build
+// into this package. Restored from packages/build@22ba730 + 471de60.
+const HEARTBEAT_MS = 100;
 let frames = 0;
 let fpsAccum = 0;
+let lastFps = 0;
+let lastHeartbeat = 0;
 app.value.registerUpdate((dt) => {
   // First frame rendered (scene was instantiated during the awaited entry() above,
   // so frame 1 already shows it) → fade out the loading overlay.
@@ -254,12 +270,16 @@ app.value.registerUpdate((dt) => {
   frames++;
   fpsAccum += dt;
   if (fpsAccum >= 1) {
-    const fps = Math.round(frames / fpsAccum);
-    try {
-      window.parent?.postMessage({ type: 'VAG_FPS_STATS', payload: { fps } }, '*');
-    } catch { /* parent might be cross-origin */ }
+    lastFps = Math.round(frames / fpsAccum);
     frames = 0;
     fpsAccum = 0;
+  }
+  const now = performance.now();
+  if (now - lastHeartbeat >= HEARTBEAT_MS) {
+    lastHeartbeat = now;
+    try {
+      window.parent?.postMessage({ type: 'VAG_FPS_STATS', payload: { fps: lastFps } }, '*');
+    } catch { /* parent might be cross-origin */ }
   }
 });
 
