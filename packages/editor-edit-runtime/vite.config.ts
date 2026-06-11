@@ -94,6 +94,18 @@ export default defineConfig({
       '@forgeax/engine-gltf',
       // shares the engine subgraph's module identity (see engine-src vite.config).
       '@forgeax/scene',
+      // The editor-internal packages hold MUTABLE SINGLETON state (the
+      // EditorBus + the active sceneId in editor-shared/store.ts). With
+      // `preserveSymlinks: true`, vite's optimizeDeps walked through each
+      // package's nested-symlink view of its workspace deps and bundled a
+      // SECOND copy of editor-shared inside the editor-panels chunk — so
+      // main.tsx's `setSceneId(cow-survivor)` + loaded doc lived on the
+      // top-level instance, while HierarchyPanel read an empty bus.doc from
+      // the nested instance and rendered no rows. Excluding them keeps each
+      // served as a single ESM source module, shared by all importers.
+      '@forgeax/editor-shared',
+      '@forgeax/editor-core',
+      '@forgeax/editor-panels',
     ],
   },
   resolve: {
@@ -107,6 +119,13 @@ export default defineConfig({
       '@forgeax/engine-math',
       '@forgeax/engine-gltf',
       '@forgeax/scene',
+      // Belt-and-braces with optimizeDeps.exclude above: `dedupe` collapses
+      // any dual symlink-paths to the same realpath at resolve time, so even
+      // if a transitive importer reaches editor-shared via the nested
+      // symlink it lands on the same module instance.
+      '@forgeax/editor-shared',
+      '@forgeax/editor-core',
+      '@forgeax/editor-panels',
     ],
     preserveSymlinks: true,
   },
