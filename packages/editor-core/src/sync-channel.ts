@@ -17,12 +17,31 @@
 //             ledger entries.
 import type { CommandOrigin, HistoryStep } from './bus';
 import type { EditorCommand, EntityId, SceneDocument } from './types';
-import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';
+
+// Panel IDs are defined in @forgeax/editor-shared (SSOT). To avoid a
+// dep cycle (core → shared → core), we inline the list here instead of
+// importing from shared. The 8-panel set is stable (only changes during
+// major editor feature work), and the runtime cost of a second source
+// for an 8-element const array is negligible.
+
+/** The 8 dockable business panels of the forgeax editor. */
+const EDITOR_PANELS = [
+  'hierarchy',
+  'inspector',
+  'assets',
+  'history',
+  'capabilities',
+  'material',
+  'timeline',
+  'matgraph',
+] as const;
+
+/** Union type of all editor panel IDs. */
+type EditorPanelId = (typeof EDITOR_PANELS)[number];
 
 export type EditorRole = 'main' | 'popout';
 
-/** The dockable panels that can be popped out.
- *  Re-exported from @forgeax/editor-panels (SSOT). */
+/** The dockable panels that can be popped out. */
 export type SyncPanelId = EditorPanelId;
 
 /** A full editor-state snapshot the main window broadcasts to popouts. */
@@ -64,7 +83,7 @@ export type EditorSyncMsg =
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }
 
-/** All dockable panel IDs, re-exported from @forgeax/editor-panels (SSOT). */
+/** All dockable panel IDs. */
 const ALL_PANELS: readonly SyncPanelId[] = EDITOR_PANELS;
 
 /** A popout window is launched with `?panel=<id>`; everything else is main.
