@@ -43,36 +43,50 @@ function buildEnvironmentEquirect(w = 128, h = 64): Equirect {
 }
 
 // Fetch + decode an .hdr (Radiance RGBE) into an rgba32float equirect, or null.
+// 404 is the expected "this candidate doesn't exist, try the next one" signal
+// in the multi-URL fallback chain — silent. Decode failures still warn.
 async function loadHdrEquirect(url: string): Promise<Equirect | null> {
   try {
     const r = await fetch(url);
     if (!r.ok) return null;
     const bytes = new Uint8Array(await r.arrayBuffer());
     const res = decodeHdr(bytes) as { ok: boolean; value?: { width: number; height: number; data: Float32Array }; error?: unknown };
-    if (!res.ok || !res.value) { console.warn('[editor] decodeHdr failed:', res.error); return null; }
+    if (!res.ok || !res.value) { console.warn(`[editor] decodeHdr failed for ${url}:`, res.error); return null; }
     const { width, height, data } = res.value;
     return { kind: 'texture', width, height, format: 'rgba32float', data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength), colorSpace: 'linear', mipmap: false };
   } catch (e) {
-    console.warn('[editor] HDR fetch/decode error:', (e as Error)?.message ?? e);
+    console.warn(`[editor] HDR fetch error for ${url}:`, (e as Error)?.message ?? e);
     return null;
   }
 }
 
 /**
- * Set up the editor's environment: load the game's HDR (or fall back to a
- * synthetic gradient), precompute its IBL cubemap, and spawn a Skylight (+ a
- * SkyboxBackground when a real HDR is used). Chromium-only; never throws.
+ * Set up the editor's environment: try each candidate HDR URL in order (e.g.
+ * the game's authored `assets/sky.hdr`, then the shared template fallback),
+ * fall back to a synthetic gradient if none load, precompute the IBL cubemap,
+ * and spawn a Skylight (+ a SkyboxBackground when a real HDR was used).
+ * Chromium-only; never throws.
+ *
+ * `hdrUrl` accepts a single URL or an ordered list. `404` is silent — only
+ * decode failures log a warning. The first successful decode wins.
  */
 export async function setupEditorSkylight(
   world: WorldLike,
   assets: RegistryLike,
   store: StoreLike,
-  opts: { hdrUrl?: string; intensity?: number } = {},
+  opts: { hdrUrl?: string | readonly string[]; intensity?: number } = {},
 ): Promise<void> {
   const intensity = opts.intensity ?? 0.2;
   try {
+    // Skip the IBL precompute on WebKit/WKWebView — its WebGPU lacks the
+    // rgba16float render-attachment the engine's equirect→cubemap pass needs.
+    // Detect by UA: Safari/WKWebView contains "Safari" but NOT any Chromium
+    // marker (Chrome / Chromium / Edg / HeadlessChrome). Allowlisting the
+    // negative side directly is more robust than `\bChrome\b` whose word
+    // boundary misses Playwright's "HeadlessChrome" UA.
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    if (!/\b(Chrome|Chromium|Edg)\b/.test(ua)) {
+    const isChromium = /Chrome|Chromium|Edg/.test(ua);
+    if (!isChromium) {
       console.warn('[editor] non-Chromium WebGPU (WebKit/WKWebView): skipping IBL skylight/skybox; directional light only');
       return;
     }
@@ -80,7 +94,14 @@ export async function setupEditorSkylight(
       console.warn('[editor] no store.uploadCubemapFromEquirect — skipping skylight');
       return;
     }
-    const hdr = opts.hdrUrl ? await loadHdrEquirect(opts.hdrUrl) : null;
+    const candidates: readonly string[] = opts.hdrUrl === undefined
+      ? []
+      : (typeof opts.hdrUrl === 'string' ? [opts.hdrUrl] : opts.hdrUrl);
+    let hdr: Equirect | null = null;
+    for (const url of candidates) {
+      hdr = await loadHdrEquirect(url);
+      if (hdr) break;
+    }
     const equirect = hdr ?? buildEnvironmentEquirect();
     const handle = assets.register(equirect).unwrap();
     const res = await store.uploadCubemapFromEquirect(handle, equirect);
@@ -90,7 +111,9 @@ export async function setupEditorSkylight(
     // Visible sky only for a real HDR — the synthetic gradient is for ambient
     // fill, not a backdrop (and the skybox needs the camera's tonemap active).
     if (hdr) world.spawn({ component: SkyboxBackground, data: { cubemap, mode: SKYBOX_MODE_CUBEMAP } });
-    console.warn(hdr ? '[editor] HDR skylight + skybox active' : '[editor] synthetic skylight active (no HDR)');
+    // Success messages — informational, not warnings (Chrome devtools renders
+    // console.warn yellow; saving the warn channel for actually-skipped paths).
+    console.info(hdr ? '[editor] HDR skylight + skybox active' : '[editor] synthetic skylight active (no HDR)');
   } catch (e) {
     console.warn('[editor] setupEditorSkylight failed:', (e as Error)?.message ?? e);
   }

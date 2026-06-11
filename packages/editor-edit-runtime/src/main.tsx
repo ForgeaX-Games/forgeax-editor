@@ -182,17 +182,26 @@ installFpsReport();
 installPreviewControls();
 installErrorOverlay();
 
-// Environment: load the game's authored HDR (assets/sky.hdr) → IBL Skylight
-// (ambient/specular fill) + visible SkyboxBackground; falls back to a synthetic
-// neutral gradient (ambient only) when there's no HDR. Async precompute; the scene
-// renders meanwhile. Chromium-only (WebKit can't do the rgba16float IBL path).
-{
-  const slug = getSceneId();
-  const hdrUrl = slug && slug !== 'default'
-    ? `/api/files/raw?path=${encodeURIComponent(`.forgeax/games/${slug}/assets/sky.hdr`)}`
-    : undefined;
-  void setupEditorSkylight(world as never, renderer.assets as never, (renderer as unknown as { store: never }).store, { hdrUrl });
-}
+// Environment: load an HDR → IBL Skylight (ambient/specular fill) + visible
+// SkyboxBackground. Uses the shared template HDR (matches what ▶ Play installs
+// through the engine asset pack catalog at GUID 81eec382-...) — interface vite
+// proxies `/preview/*` to the editor-play-runtime, which serves shared-assets/
+// from its vite root. Falls back to a synthetic neutral gradient only when
+// the shared HDR doesn't resolve. Async precompute; the scene renders
+// meanwhile. Chromium-only (WebKit can't do the rgba16float IBL path).
+//
+// Per-game HDR overrides used to be probed at `assets/sky.hdr` first, but no
+// shipped game uses that mechanism (cow-survivor + the template both go through
+// the GUID catalog), so the eager probe just produced a guaranteed 404 in the
+// browser console. If a future game wants its own HDR, surface it via forge.json
+// instead and prepend the explicit path here — the multi-URL fallback already
+// supports it.
+void setupEditorSkylight(
+  world as never,
+  renderer.assets as never,
+  (renderer as unknown as { store: never }).store,
+  { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
+);
 
 // Preload any GltfRef GLBs so ✎ Edit shows the SAME real geometry as ▶ Play.
 // instantiateScene only spawns a placeholder cube for a GltfRef until its GLB
