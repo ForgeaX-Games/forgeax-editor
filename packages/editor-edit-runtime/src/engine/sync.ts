@@ -25,7 +25,13 @@ import { bus } from '@forgeax/editor-shared';
 
 interface WorldLike {
   set(entity: number, component: unknown, data: unknown): unknown;
-  sceneInstances: { despawnInstance(id: number): unknown };
+  /**
+   * Tear down a scene instance + every owned member. Engine 5dfeb0b6
+   * (feat-20260608-scene-nesting-ecs-fication) replaced the legacy
+   * `world.sceneInstances.despawnInstance(numericId)` registry with the
+   * synthetic-root + `despawnScene(root)` ECS pattern.
+   */
+  despawnScene(root: number): unknown;
 }
 interface RendererLike { assets: unknown }
 
@@ -55,16 +61,17 @@ export function createEngineSync(
   const caches: SceneCaches = makeSceneCaches();
   // doc entity id → { live engine entity, last-applied components }.
   let rendered = new Map<EntityId, RenderedEntity>();
-  // The live SceneInstance id (teardown handle), or null before the first build.
-  let instanceId: number | null = null;
+  // Synthetic-root Entity carrying the scene's `SceneInstance` component
+  // (teardown handle for `world.despawnScene`), or null before the first build.
+  let instanceRoot: number | null = null;
   // Skip no-op rebuilds (the bus fires on snapshot/selection echoes too).
   let lastSig: string | null = null;
   const ctx = { world, assets: renderer.assets, resolveMaterialAsset } as never;
 
   function despawnInstance(): void {
-    if (instanceId !== null) {
-      try { world.sceneInstances.despawnInstance(instanceId); } catch { /* already gone */ }
-      instanceId = null;
+    if (instanceRoot !== null) {
+      try { world.despawnScene(instanceRoot); } catch { /* already gone */ }
+      instanceRoot = null;
     }
   }
 
@@ -73,7 +80,7 @@ export function createEngineSync(
     rendered = new Map();
     const r = instantiateSceneEntities(entities, ctx);
     if (!r) { console.error('[editor] native scene instantiate failed'); lastSig = null; return; }
-    instanceId = r.instanceId;
+    instanceRoot = r.instanceRoot;
     for (const e of entities) {
       const entity = r.byDoc.get(e.docId);
       if (entity !== undefined) rendered.set(e.docId, { entity, comps: e.components });
@@ -111,7 +118,7 @@ export function createEngineSync(
     // Structural when the entity SET or any entity's component KEY-SET changed.
     // (Pure value changes — incl. mesh-kind/material handle swaps — stay patchable.
     //  Order is irrelevant: we patch by docId, not position.)
-    let structural = instanceId === null || entities.length !== rendered.size;
+    let structural = instanceRoot === null || entities.length !== rendered.size;
     if (!structural) {
       for (const e of entities) {
         const rec = rendered.get(e.docId);

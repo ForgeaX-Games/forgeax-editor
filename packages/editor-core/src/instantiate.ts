@@ -22,6 +22,7 @@ import {
   createSphereGeometry,
   createCylinderGeometry,
   quat,
+  SceneInstance,
 } from '@forgeax/engine-runtime';
 import { getLoadedGltf } from './gltf-runtime';
 import type {
@@ -497,46 +498,64 @@ export function buildNativeScene(doc: SceneDocument, ctx: InstantiateCtx, caches
 export interface NativeInstance {
   /** doc entity id → live engine entity (selection / live-drag / gameplay lookup). */
   byDoc: Map<EntityId, Entity>;
-  /** engine SceneInstanceId — pass to `world.sceneInstances.despawnInstance(id)`. */
-  instanceId: number;
+  /**
+   * Synthetic-root Entity — the entity carrying the `SceneInstance` component
+   * that the engine inserts above every instantiated SceneAsset. Pass to
+   * `world.despawnScene(instanceRoot)` to tear the whole instance down.
+   *
+   * History (engine 5dfeb0b6 — feat-20260608-scene-nesting-ecs-fication):
+   * `world.sceneInstances` was deleted; `assets.instantiate` now returns the
+   * synthetic-root Entity directly, replacing the prior numeric SceneInstanceId
+   * + `world.sceneInstances.byRef / despawnInstance` registry.
+   */
+  instanceRoot: Entity;
   /** collision primitives (XZ) projected from Collider-bearing entities. */
   colliders: Collider[];
 }
 
 // Register a precomputed entity list as a SceneAsset and instantiate it natively.
 // Shared by instantiateNative + the editor's incremental full-rebuild path.
-function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { byDoc: Map<EntityId, Entity>; instanceId: number } | null {
+function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { byDoc: Map<EntityId, Entity>; instanceRoot: Entity } | null {
   const nodes = entities.map((e, i) => ({ localId: i, components: e.components }));
   const w = ctx.world as unknown as {
-    sceneInstances: {
-      byRef(id: number): { mapping(): ReadonlyMap<number, number> } | undefined;
-      setSceneAssetResolver(fn: (h: unknown) => unknown): void;
-    };
+    get<T>(entity: Entity, component: unknown): { ok: boolean; value?: { mapping: ArrayLike<number> } };
   };
   const a = ctx.assets as unknown as {
-    get(h: unknown): unknown;
     register(desc: unknown): { unwrap(): unknown };
-    instantiate(handle: unknown, world: unknown): { ok: boolean; value?: number };
+    instantiate(handle: unknown, world: unknown): { ok: boolean; value?: Entity };
   };
-  try { w.sceneInstances.setSceneAssetResolver((h) => a.get(h)); } catch { /* older engine */ }
+  // Engine 5dfeb0b6 ECS-fied SceneInstance: assets.instantiate returns the
+  // synthetic-root Entity directly (a fresh entity with identity Transform +
+  // a `SceneInstance` component carrying source/mapping/state). The prior
+  // `world.sceneInstances.setSceneAssetResolver` is no longer needed —
+  // managed-ref resolution is wired by AssetRegistry.instantiate itself.
   // Engine #316 renamed SceneAsset.nodes -> entities (SceneNode -> SceneEntity).
   const sceneHandle = a.register({ kind: 'scene', entities: nodes }).unwrap();
   const res = a.instantiate(sceneHandle, ctx.world);
   if (!res.ok || res.value === undefined) return null;
-  const instanceId = res.value;
-  const m = w.sceneInstances.byRef(instanceId)?.mapping();
+  const instanceRoot = res.value;
+  // The localId -> Entity table lives on the synthetic root's `SceneInstance`
+  // component as a Uint32Array-shaped `mapping`, where mapping[localId] is the
+  // spawned Entity (mapping[0] == the original scene container).
+  const inst = w.get<unknown>(instanceRoot, SceneInstance);
   const byDoc = new Map<EntityId, Entity>();
-  if (m) for (const [localId, entity] of m) {
-    const docId = entities[localId]?.docId;
-    if (docId !== undefined) byDoc.set(docId, entity);
+  if (inst.ok && inst.value) {
+    const arr = inst.value.mapping;
+    for (let localId = 0; localId < arr.length; localId++) {
+      const entity = arr[localId] as Entity;
+      if (!entity) continue;
+      const docId = entities[localId]?.docId;
+      if (docId !== undefined) byDoc.set(docId, entity);
+    }
   }
-  return { byDoc, instanceId };
+  return { byDoc, instanceRoot };
 }
 
 /**
  * One-call native instantiate: build a SceneAsset from `doc` and spawn it through
- * the ENGINE-NATIVE `assets.instantiate` + `world.sceneInstances` path. Returns the
- * doc→entity map, the instance id (teardown), and colliders. Null if it failed.
+ * the ENGINE-NATIVE `assets.instantiate` path. Returns the doc→entity map, the
+ * synthetic-root Entity (teardown handle for `world.despawnScene`), and the
+ * projected colliders. Null if instantiation failed.
  *
  * Used by games (▶ Play). The editor (✎ Edit) uses `sceneEntities` +
  * `instantiateSceneEntities` directly for incremental diff-patch.
@@ -544,10 +563,10 @@ function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { 
 export function instantiateNative(doc: SceneDocument, ctx: InstantiateCtx, caches?: SceneCaches): NativeInstance | null {
   const { entities, colliders } = sceneEntities(doc, ctx, caches);
   const r = instantiateEntityList(entities, ctx);
-  return r ? { byDoc: r.byDoc, instanceId: r.instanceId, colliders } : null;
+  return r ? { byDoc: r.byDoc, instanceRoot: r.instanceRoot, colliders } : null;
 }
 
 /** Instantiate a precomputed entity list natively (editor incremental full-rebuild). */
-export function instantiateSceneEntities(entities: SceneEntity[], ctx: InstantiateCtx): { byDoc: Map<EntityId, Entity>; instanceId: number } | null {
+export function instantiateSceneEntities(entities: SceneEntity[], ctx: InstantiateCtx): { byDoc: Map<EntityId, Entity>; instanceRoot: Entity } | null {
   return instantiateEntityList(entities, ctx);
 }
