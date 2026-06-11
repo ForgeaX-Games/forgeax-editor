@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { bus, dispatch, setAnimPreview, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import { bus, dispatch, setAnimPreview, useDocVersion, useSelection } from '@forgeax/editor-shared';
 import { type Clip, type Interp, type Track, emptyClip, sampleClip, setKey, removeKey } from '@forgeax/editor-core';
 
 // Timeline panel (design EDITOR-MODE P2/P3) — keyframe animation for the selected

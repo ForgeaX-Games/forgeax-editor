@@ -1,24 +1,32 @@
-// @forgeax/editor-panels — panel manifest (SSOT for all panel IDs)
+// @forgeax/editor-panels — panel manifest re-export + component injection
 //
-// This is the single source of truth for the 8 dockable editor panel IDs.
-// editor-core/sync-channel.ts re-exports from here to eliminate the
-// implicit handshake between panelRegistry, EditorPanelFrame, and the
-// sync-channel protocol.
-//
-// Every consumer that needs panel IDs imports from this file:
-//   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels/panels';
+// The SSOT for panel IDs lives in @forgeax/editor-shared (manifest.ts).
+// This file imports from there, re-exports the manifest, and injects the
+// concrete panel component list that shared (which has no UI dep on panels)
+// cannot hold.
 
-/** The 8 dockable business panels of the forgeax editor. */
-export const EDITOR_PANELS = [
-  'hierarchy',
-  'inspector',
-  'assets',
-  'history',
-  'capabilities',
-  'material',
-  'timeline',
-  'matgraph',
-] as const;
+// ── Manifest SSOT (from @forgeax/editor-shared) ──
+export { EDITOR_PANELS } from '@forgeax/editor-shared';
+export type { EditorPanelId } from '@forgeax/editor-shared';
 
-/** Union type of all editor panel IDs — derived from EDITOR_PANELS. */
-export type EditorPanelId = (typeof EDITOR_PANELS)[number];
+// ── Panel component lookup — injected by panels, not carried by shared ──
+import React from 'react';
+import { AssetsPanel } from './Assets';
+import { CapabilitiesPanel } from './Capabilities';
+import { HierarchyPanel } from './Hierarchy';
+import { HistoryPanel } from './History';
+import { InspectorPanel } from './Inspector';
+import { MaterialPanel } from './Material';
+import { MaterialGraphPanel } from './MaterialGraph';
+import { TimelinePanel } from './Timeline';
+
+export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
+  hierarchy: HierarchyPanel,
+  inspector: InspectorPanel,
+  assets: AssetsPanel,
+  history: HistoryPanel,
+  capabilities: CapabilitiesPanel,
+  material: MaterialPanel,
+  timeline: TimelinePanel,
+  matgraph: MaterialGraphPanel,
+};

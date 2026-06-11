@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { bus, dispatch, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import { bus, dispatch, useDocVersion, useSelection } from '@forgeax/editor-shared';
 import type { EditorCommand } from '@forgeax/editor-core';
 import {
   type MatGraph, type GraphNode, type NodeKind, type RGB,

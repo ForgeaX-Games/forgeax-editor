@@ -23,6 +23,7 @@ export {
   replaceDoc,
   saveDocToDisk,
   setGizmoMode,
+  setSceneId,
   setSelection,
   setSelectionMany,
   setAnimPreview,
@@ -31,6 +32,7 @@ export {
   toggleSelection,
   onSelectionChange,
   onRenameRequest,
+  requestRename,
   onGizmoModeChange,
   onAnimPreview,
   onPopoutClosed,
@@ -47,6 +49,12 @@ export {
   useSelectionList,
   useHoverEntity,
   useFieldPreview,
+  loadDocFromStorage,
+  loadDocFromDisk,
+  initSync,
+  initDiskWatch,
+  broadcastAssetsChanged,
+  flushPendingSaveBeacon,
 } from './store';
 
 // ── Entity operations ──

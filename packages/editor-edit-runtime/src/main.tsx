@@ -20,12 +20,12 @@ import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
 import { DetachedPanel } from './DetachedPanel';
-import { ContextMenuHost } from './contextMenuService';
+import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from './store';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './ui/theme.css';
 

@@ -1,9 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { showContextMenu } from '@forgeax/editor-edit-runtime';
+import { showContextMenu } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '@forgeax/editor-core';
-import { focusPanel, openSourcePanel } from '@forgeax/editor-edit-runtime';
-import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-edit-runtime';
+import { focusPanel, openSourcePanel } from '@forgeax/editor-shared';
+import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-shared';
 import type { EditorCommand, EntityId } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While

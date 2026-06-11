@@ -17,7 +17,7 @@
 //             ledger entries.
 import type { CommandOrigin, HistoryStep } from './bus';
 import type { EditorCommand, EntityId, SceneDocument } from './types';
-import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels';
+import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';
 
 export type EditorRole = 'main' | 'popout';
 

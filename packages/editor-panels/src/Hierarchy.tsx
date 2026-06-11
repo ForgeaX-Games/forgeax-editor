@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { showContextMenu, type MenuItemDef } from '@forgeax/editor-edit-runtime';
+import { showContextMenu, type MenuItemDef } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
-import { openSourcePanel } from '@forgeax/editor-edit-runtime';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-edit-runtime';
-import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-edit-runtime';
+import { openSourcePanel } from '@forgeax/editor-shared';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-shared';
+import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-shared';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityId } from '@forgeax/editor-core';
 

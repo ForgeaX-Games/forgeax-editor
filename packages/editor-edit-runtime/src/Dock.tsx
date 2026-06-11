@@ -10,7 +10,7 @@ import {
   TimelinePanel,
   MaterialGraphPanel,
 } from '@forgeax/editor-panels';
-import { getSceneId, onPopoutClosed, onPopoutGeom } from './store';
+import { getSceneId, onPopoutClosed, onPopoutGeom } from '@forgeax/editor-shared';
 import type { PopoutGeom } from '@forgeax/editor-core';
 import {
   type DockNode, type SplitNode, type TabsNode, type DropSide,

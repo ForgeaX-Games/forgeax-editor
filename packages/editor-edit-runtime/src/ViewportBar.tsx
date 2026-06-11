@@ -11,7 +11,7 @@
 //   - Gizmo mode reads/writes the store's gizmoMode (same as EditorApp does).
 //   - Save calls saveDocToDisk; keyboard shortcuts are registered here too.
 import { useEffect } from 'react';
-import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from './store';
+import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-shared';
 
 export function ViewportBar() {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live

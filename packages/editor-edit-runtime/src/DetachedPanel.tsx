@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { bus, setGizmoMode } from './store';
+import { bus, setGizmoMode } from '@forgeax/editor-shared';
 import {
   HierarchyPanel,
   InspectorPanel,
@@ -11,7 +11,7 @@ import {
   TimelinePanel,
   MaterialGraphPanel,
 } from '@forgeax/editor-panels';
-import { announcePopoutClosing, announcePopoutGeom } from './store';
+import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
 import type { SyncPanelId } from '@forgeax/editor-core';
 
 // DetachedPanel — the root rendered inside a popped-out OS window (design

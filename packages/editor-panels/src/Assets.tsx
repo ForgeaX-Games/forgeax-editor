@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { showContextMenu } from '@forgeax/editor-edit-runtime';
+import { showContextMenu } from '@forgeax/editor-shared';
 import { loadGameAssets, loadRawAssets, materialSwatch, type PackAsset, type RawAsset } from '@forgeax/editor-core';
-import { bus, dispatch, getSceneId, getSelection, requestRefAsset, useDocVersion, useSelection } from '@forgeax/editor-edit-runtime';
+import { bus, dispatch, getSceneId, getSelection, requestRefAsset, useDocVersion, useSelection } from '@forgeax/editor-shared';
 
 // Assets panel — browses the OPEN game's asset packs + raw imported files.
 // Tab 1 "PACKS": *.pack.json assets (materials, mesh refs, scene refs).

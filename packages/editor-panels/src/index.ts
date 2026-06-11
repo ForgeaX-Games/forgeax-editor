@@ -1,14 +1,19 @@
 // @forgeax/editor-panels — 8 business panel components + manifest
 //
-// The panel manifest (EDITOR_PANELS, EditorPanelId) is the SSOT for all
-// dockable editor panel IDs. Import it via:
+// The panel manifest SSOT is in @forgeax/editor-shared (which breaks the
+// dep cycle between core and panels). This package re-exports the manifest
+// (via manifest.ts, which imports from shared and injects the concrete
+// component list).
+//
+// Import panel IDs from the SSOT:
+//   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';
+// Or from panels (which re-exports from shared):
 //   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels';
-// Or via the subpath export:
-//   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels/panels';
 
-// ── Manifest (SSOT) ──
+// ── Manifest (re-exported from @forgeax/editor-shared) ──
 export { EDITOR_PANELS } from './manifest';
 export type { EditorPanelId } from './manifest';
+export { PANEL_COMPONENTS } from './manifest';
 
 // ── Panel components ──
 export { AssetsPanel } from './Assets';
