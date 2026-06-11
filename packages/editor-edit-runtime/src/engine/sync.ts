@@ -21,7 +21,7 @@ import {
   type SceneCaches,
 } from '@forgeax/editor-core';
 import type { EntityId } from '@forgeax/editor-core';
-import { bus } from '../store';
+import { bus } from '@forgeax/editor-shared';
 
 interface WorldLike {
   set(entity: number, component: unknown, data: unknown): unknown;

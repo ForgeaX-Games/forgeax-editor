@@ -29,7 +29,7 @@ import {
   meshFromInterleaved,
 } from '@forgeax/engine-runtime';
 import type { EntityId, SceneDocument } from '@forgeax/editor-core';
-import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '../store';
+import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
 import type { EngineSync } from './sync';
 
 const DEG2RAD = Math.PI / 180;
