@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "forgeax editor monorepo — 4 packages (core / panels / edit-runtime / play-runtime) for the forgeax editor",
+  "description": "forgeax editor monorepo — 5 packages (core / shared / panels / edit-runtime / play-runtime) for the forgeax editor",
   "workspaces": [
     "packages/*",
     "packages/engine/packages/*"

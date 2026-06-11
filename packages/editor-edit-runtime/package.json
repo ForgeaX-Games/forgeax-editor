@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/editor-shared": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
