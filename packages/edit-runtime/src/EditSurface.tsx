@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import {
   sendVagMessage,
   VagConsoleSchema,
+  VagEditorFlushSchema,
   VagFpsStatsSchema,
   VagEditorOpenSourceSchema,
   VagEditorPopoutSchema,
@@ -194,7 +195,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // ── Flush editor's pending save on unmount ─────────────────────────────────
   useEffect(() => {
     return () => {
-      try { iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_EDITOR_FLUSH' }, '*'); } catch { /* cross-origin / already gone */ }
+      try { sendVagMessage(iframeRef.current?.contentWindow ?? null, VagEditorFlushSchema, {} as Record<string, never>); } catch { /* cross-origin / already gone */ }
     };
   }, []);
 
@@ -224,7 +225,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       }
 
       if (!isModel) {
-        iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_ASSETS_CHANGED', payload: { slug } }, '*');
+        sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
         setImportStep('done');
         setImportMsg(file.name);
         setTimeout(() => setImportStep(null), 3000);
@@ -261,11 +262,10 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       }
 
       const spawnMode: 'reference' | 'full' = sceneJ.mode === 'full' ? 'full' : 'reference';
-      iframeRef.current?.contentWindow?.postMessage({
-        type: 'VAG_SPAWN_ENTITY',
-        payload: { mode: spawnMode, entity: sceneJ.entity, doc: sceneJ.doc, name: baseName },
-      }, '*');
-      iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_ASSETS_CHANGED', payload: { slug } }, '*');
+      sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
+        mode: spawnMode, entity: sceneJ.entity, doc: sceneJ.doc, name: baseName,
+      });
+      sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
 
       setImportStep('done');
       setImportMsg(baseName);
