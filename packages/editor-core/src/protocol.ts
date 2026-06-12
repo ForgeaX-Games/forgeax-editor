@@ -259,3 +259,115 @@ export const VagSpawnEntitySchema = z.object({
   }),
 });
 export type VagSpawnEntityMessage = z.infer<typeof VagSpawnEntitySchema>;
+
+// ── sendVagMessage — generic typed postMessage helper ───────────────────────────
+//
+// Replaces every bare `postMessage({ type: 'VAG_*', ... })` call site with
+// a compile-time-checked alternative. The `payload` argument is type-inferred
+// via z.infer against the schema's inner payload shape, closing the OOS-9 gap
+// where call sites silently omit required fields (charter P3 fail-fast).
+//
+// Behaviour:
+//   - Schema safeParse passes → postMessage(target, { type, payload }, '*')
+//   - Schema safeParse fails  → throw VagMessageError (structured, P3)
+//   - target is null/undefined → no-op return (preserves optional-chain semantics)
+//   - postMessage itself is NOT wrapped in try/catch — cross-origin errors
+//     are the caller's existing problem (plan-strategy §2 D-6)
+//
+// Anchors:
+//   requirements §5 AC-15 (z.infer compile-time constraint)
+//   requirements §5 AC-16 (structured failure, charter P3)
+//   plan-strategy §2 D-6 (throw, not Result; no-op on null target)
+//   plan-strategy §8 (VagMessageError unified code/hint/expected)
+
+/**
+ * Extract the inner payload type from a VAG schema.
+ * For payload-wrapped schemas (most common), this is the `payload` field type.
+ * For type-only schemas (VAG_EDITOR_FLUSH, VAG_PREVIEW_*), this is `Record<string, never>`.
+ */
+
+export type VagSchemaTypes = z.infer<ReturnType<typeof vagSchemaUnion>>;
+
+function vagSchemaUnion() {
+  return z.union([
+    VagAssetsChangedSchema, VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
+    VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema, VagEditorPopoutSchema,
+    VagEditorRedockSchema, VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
+    VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema, VagSpawnEntitySchema,
+  ]);
+}
+
+// deno-lint-ignore no-explicit-any
+
+export type PayloadOf<S extends z.ZodType<{ type: string; payload?: any }>> =
+  z.input<S> extends { payload: infer P } ? P : Record<string, never>;
+
+/**
+ * Structured error for schema-mismatch failures in `sendVagMessage`.
+ *
+ * Conforms to charter P3 (explicit failure): properties `.code`, `.hint`,
+ * `.expected` are machine-readable and designed for attribute access by
+ * downstream AI consumers. `.issues` carries the raw ZodIssue[] for
+ * diagnostics, but AI consumers should use the structured fields first.
+ */
+export class VagMessageError extends Error {
+  /** Machine-readable error code. Fixed to 'VAG_SCHEMA_MISMATCH'. */
+  code = 'VAG_SCHEMA_MISMATCH' as const;
+
+  /** Raw Zod validation issues for diagnostics / logging. */
+  issues: z.ZodIssue[];
+
+  /** Human + machine-readable recovery hint. */
+  hint: string;
+
+  /** What was expected (human-readable). */
+  expected: string;
+
+  constructor(issues: z.ZodIssue[], schemaName: string) {
+    const pathStr = issues.map((i) => i.path.join('.')).join(', ');
+    super(`VAG_SCHEMA_MISMATCH: ${schemaName} validation failed at [${pathStr}]`);
+    this.name = 'VagMessageError';
+    this.issues = issues;
+    this.hint = `Check the payload you're sending against ${schemaName} — one or more fields are missing or have the wrong type.`;
+    this.expected = `Payload must satisfy ${schemaName}. See the .issues array for the full Zod validation error list.`;
+  }
+}
+
+/**
+ * Send a typed VAG message via postMessage.
+ *
+ * @param target  The postMessage target window. null/undefined → no-op.
+ * @param schema  A VAG_* zod schema (e.g. VagConsoleSchema).
+ * @param payload The inner payload for the message, type-checked via z.infer.
+ *
+ * @throws {VagMessageError} if payload fails schema validation.
+ *
+ * @example
+ *   sendVagMessage(window.parent, VagConsoleSchema, { level: 'warn', text: 'hi', ts: 0 });
+ */
+export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unknown }>>(
+  target: Window | null | undefined,
+  schema: S,
+  payload: PayloadOf<S>,
+): void {
+  if (target == null) return;
+
+  // Extract the type literal value from the schema's shape. We go through
+  // `unknown` first because the generic `S` only guarantees a ZodType, but
+  // every VAG_* schema is actually a ZodObject with a `.type` literal field.
+  const typeValue = (
+    (schema as unknown as z.ZodObject<{ type: z.ZodLiteral<string> }>).shape.type as z.ZodLiteral<string>
+  ).value;
+
+  const fullMessage = {
+    type: typeValue,
+    payload,
+  };
+
+  const result = schema.safeParse(fullMessage);
+  if (!result.success) {
+    throw new VagMessageError(result.error.issues, typeValue);
+  }
+
+  target.postMessage(result.data, '*');
+}

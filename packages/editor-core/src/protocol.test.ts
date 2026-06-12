@@ -31,7 +31,7 @@ describe('sendVagMessage (success path)', () => {
     sendVagMessage(win, VagConsoleSchema, payload);
 
     expect(postMessage).toHaveBeenCalledTimes(1);
-    const [msg] = postMessage.mock.calls[0] as [Record<string, unknown>, string];
+    const [msg] = postMessage.mock.calls[0] as unknown as [Record<string, unknown>, string];
     expect(msg.type).toBe('VAG_CONSOLE');
     expect(msg.payload).toEqual(payload);
   });
