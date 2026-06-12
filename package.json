@@ -5,6 +5,15 @@
   "license": "Apache-2.0",
   "type": "module",
   "description": "forgeax editor monorepo — 5 packages (core / shared / panels / edit-runtime / play-runtime) for the forgeax editor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ForgeaXGame/forgeax-studio.git",
+    "directory": "packages/editor"
+  },
+  "homepage": "https://github.com/ForgeaXGame/forgeax-studio/tree/main/packages/editor",
+  "bugs": {
+    "url": "https://github.com/ForgeaXGame/forgeax-studio/issues"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./panels": "./packages/editor-panels/src/manifest.ts",
