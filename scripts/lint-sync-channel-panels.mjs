@@ -2,7 +2,7 @@
 // lint-sync-channel-panels.mjs
 //
 // Order-sensitive guard for the EDITOR_PANELS literal duplicated between
-//   * packages/editor-shared/src/manifest.ts (SSOT)
+//   * packages/editor-core/src/manifest.ts (SSOT)
 //   * packages/editor-core/src/sync-channel.ts (inline copy)
 //
 // The inline copy exists by design (plan-strategy §2 D-2): editor-shared
@@ -32,7 +32,7 @@ const EDITOR_ROOT = resolve(__dirname, '..');
 
 const DEFAULT_SHARED = resolve(
   EDITOR_ROOT,
-  'packages/editor-shared/src/manifest.ts',
+  'packages/editor-core/src/manifest.ts',
 );
 const DEFAULT_CORE = resolve(
   EDITOR_ROOT,
