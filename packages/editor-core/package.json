@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "forgeax editor core logic — SceneDocument SSOT, EditorBus command bus, undo/redo, ComponentSchema registry, sync-channel cross-window sync, anim, matgraph, assets, presets",
+  "description": "core types + shared runtime — SceneDocument, EditorBus, ComponentSchema, VAG protocol, manifest, store, entity ops, context menu, dock bridge",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -14,6 +14,10 @@
     "./protocol": {
       "types": "./src/protocol.ts",
       "import": "./src/protocol.ts"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "import": "./src/manifest.ts"
     },
     "./package.json": "./package.json"
   },
@@ -30,6 +34,7 @@
   },
   "dependencies": {
     "zod": "^3.25.0",
+    "react": "^19.0.0",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
@@ -47,6 +52,7 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*"
   },
   "devDependencies": {
+    "@types/react": "^19.0.0",
     "typescript": "^5.6.3"
   }
 }
