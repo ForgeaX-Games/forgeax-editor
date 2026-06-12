@@ -1,17 +1,15 @@
-// @forgeax/editor-shared — cross-layer shared runtime services and panel manifest
+// @forgeax/editor-shared — alias barrel for @forgeax/editor-core
 //
-// This package breaks the dep cycle between editor-core, editor-panels, and
-// editor-edit-runtime. It hosts the zustand store, entity ops, context menu
-// service, dock bridge, and the EDITOR_PANELS panel manifest (SSOT for all
-// dockable panel IDs).
-//
-// DAG: engine ← core ← shared ← panels ← edit-runtime / play-runtime
+// After Wave A cleanup, editor-shared is a pass-through barrel. All business
+// source files moved to editor-core. The package is kept for backward compat
+// so existing consumers (@forgeax/editor-edit-runtime, @forgeax/editor-panels)
+// keep their import paths unchanged (plan-strategy §2 D-7).
 
 // ── Panel manifest (SSOT) ──
-export { EDITOR_PANELS } from './manifest';
-export type { EditorPanelId } from './manifest';
+export { EDITOR_PANELS } from '@forgeax/editor-core';
+export type { EditorPanelId } from '@forgeax/editor-core';
 
-// ── Store (zustand singleton — bus, selection, scene persistence) ──
+// ── Store (bus singleton — bus, selection, scene persistence) ──
 export {
   bus,
   dispatch,
@@ -66,8 +64,8 @@ export {
   writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
-} from './store';
-export type { SceneFileEntry, PlayConfig } from './store';
+} from '@forgeax/editor-core';
+export type { SceneFileEntry, PlayConfig } from '@forgeax/editor-core';
 
 // ── Entity operations ──
 export {
@@ -77,11 +75,11 @@ export {
   groupSelected,
   ungroupEntity,
   reparentEntity,
-} from './ops';
+} from '@forgeax/editor-core';
 
 // ── Context menu service ──
-export { ContextMenuHost, showContextMenu } from './contextMenuService';
-export type { MenuItemDef } from './contextMenuService';
+export { ContextMenuHost, showContextMenu } from '@forgeax/editor-core';
+export type { MenuItemDef } from '@forgeax/editor-core';
 
 // ── Dock bridge helpers ──
-export { focusPanel, openSourcePanel } from './dock-bridge';
+export { focusPanel, openSourcePanel } from '@forgeax/editor-core';
