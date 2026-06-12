@@ -13,9 +13,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, RotateCcwSquare, Maximize2, Minimize2, Monitor, Smartphone, ChevronDown } from 'lucide-react';
 import {
+  sendVagMessage,
   VagConsoleSchema,
   VagDeviceLostSchema,
   VagFpsStatsSchema,
+  VagPreviewDisposeSchema,
 } from '@forgeax/editor-core/protocol';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -182,7 +184,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
           reloadCount++;
           const ifr = iframeRef.current;
           if (ifr) {
-            try { ifr.contentWindow?.postMessage({ type: 'VAG_PREVIEW_DISPOSE' }, '*'); } catch { /* */ }
+            try { sendVagMessage(ifr.contentWindow ?? null, VagPreviewDisposeSchema, {} as Record<string, never>); } catch { /* */ }
             setTimeout(() => {
               // eslint-disable-next-line no-self-assign
               ifr.src = ifr.src;
@@ -222,7 +224,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   const onReload = () => {
     const ifr = iframeRef.current;
     if (!ifr) return;
-    try { ifr.contentWindow?.postMessage({ type: 'VAG_PREVIEW_DISPOSE' }, '*'); } catch { /* */ }
+    try { sendVagMessage(ifr.contentWindow ?? null, VagPreviewDisposeSchema, {} as Record<string, never>); } catch { /* */ }
     setTimeout(() => {
       // eslint-disable-next-line no-self-assign
       ifr.src = ifr.src;
