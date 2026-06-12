@@ -24,3 +24,4 @@ export { InspectorPanel } from './Inspector';
 export { MaterialPanel } from './Material';
 export { MaterialGraphPanel } from './MaterialGraph';
 export { TimelinePanel } from './Timeline';
+export { LauncherPanel } from './Launcher';

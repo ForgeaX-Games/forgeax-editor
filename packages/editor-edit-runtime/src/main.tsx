@@ -13,6 +13,7 @@ import {
   Camera,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
+  DirectionalLight,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime } from '@forgeax/editor-core';
@@ -25,7 +26,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, initSync, initDiskWatch, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
 
@@ -34,6 +35,9 @@ import './theme.css';
 // every game shared one global doc, so picking shoot-opt showed whatever was
 // last edited (or the demo). Must run before loadDocFromStorage below.
 setSceneId(new URLSearchParams(location.search).get('scene'));
+// Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
+// load so paths/storage keys resolve to the active scene file (UE level model).
+await initSceneList();
 
 // ── Viewport-only mode (design: outer DockShell flat architecture) ────────────
 // Launched with `?viewportOnly=1`, this runs the engine + bus + BroadcastChannel
@@ -173,8 +177,29 @@ const resolveMaterialAsset = makeMaterialResolver(renderer.assets as never, pack
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
 const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset);
 
+// Asset-edit mode: a standalone prefab-style pack (Assets 面板的怪物/角色资产,
+// id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
+// the arena-scale default framing leaves it a speck on the horizon, and without
+// a scene Sun its PBR reads near-black. Frame close-up and add a neutral key
+// light (NOT part of the doc, so it never saves into the asset).
+const sceneFile = getSceneFile() ?? '';
+const isAssetEdit = sceneFile.startsWith('monster:') || sceneFile.startsWith('character:');
+if (isAssetEdit) {
+  world.spawn(
+    { component: Transform, data: {} },
+    { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6 } },
+  );
+  world.spawn(
+    { component: Transform, data: {} },
+    { component: DirectionalLight, data: { directionX: 0.6, directionY: -0.3, directionZ: 0.7, colorR: 0.5, colorG: 0.6, colorB: 0.9, intensity: 0.9 } },
+  );
+}
+
 // Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
-const viewport = createViewport({ canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync });
+const viewport = createViewport({
+  canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync,
+  ...(isAssetEdit ? { initialOrbit: { target: [0, -0.9, 0] as [number, number, number], dist: 8.5, pitch: -0.18 } } : {}),
+});
 window.addEventListener('resize', () => viewport.refresh());
 
 app.value.start();

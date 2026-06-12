@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { docToPack, packToDoc, isScenePack } from '@forgeax/editor-core';
 import { DockManager } from './Dock';
+import { SceneBadge } from './SceneBadge';
 import { deleteEntityCascade, deleteManyCascade } from '@forgeax/editor-shared';
 import {
   bus,
@@ -96,6 +97,7 @@ export function EditorApp() {
     <div className="ed-overlay" data-testid="editor-overlay">
       <div className="ed-toolbar">
         <span className="ed-brand">✎ forgeax editor</span>
+        <SceneBadge />
         <button type="button" className="tbtn" data-testid="ed-undo" disabled={!bus.canUndo()} onClick={() => bus.undo()} title="Undo (⌘/Ctrl+Z)">↶ Undo</button>
         <button type="button" className="tbtn" data-testid="ed-redo" disabled={!bus.canRedo()} onClick={() => bus.redo()} title="Redo (⌘/Ctrl+Shift+Z)">↷ Redo</button>
         <span className="ed-tool-div" />

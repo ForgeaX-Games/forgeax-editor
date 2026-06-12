@@ -311,13 +311,230 @@ export function dispatch(cmd: EditorCommand): void {
 // save back to it. `setSceneId` must run at boot BEFORE loadDocFromStorage.
 const DOC_KEY_PREFIX = 'forgeax:editor:doc:v1';
 let currentSceneId = 'default';
-function docKey(id: string): string { return `${DOC_KEY_PREFIX}:${id}`; }
+function docKey(id: string): string {
+  return `${DOC_KEY_PREFIX}:${id}${currentSceneFile ? `:${currentSceneFile}` : ''}`;
+}
 
 export function setSceneId(id: string | null | undefined): void {
   const v = (id ?? '').trim();
   currentSceneId = v || 'default';
 }
 export function getSceneId(): string { return currentSceneId; }
+
+// ── Multi-scene (level) files per game ────────────────────────────────────────
+// A game may declare multiple scene packs in its forge.json:
+//   { "scenes": [{ "id": "level1", "name": "第1关", "pack": "scenes/level1.pack.json" }, …],
+//     "defaultScene": "level1" }
+// The editor then edits ONE of them at a time (`currentSceneFile`), switchable
+// live via the SceneSwitcher UI — the UE "level asset" model. Games without a
+// `scenes` manifest keep the legacy single `scene.pack.json` (currentSceneFile
+// stays null and every path/key reduces to the historical shape).
+export interface SceneFileEntry { id: string; name?: string; pack: string; group?: 'scene' | 'asset' }
+let currentSceneFile: string | null = null;
+let sceneList: SceneFileEntry[] = [];
+const sceneListListeners = new Set<() => void>();
+function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
+function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${currentSceneId}`; }
+
+export function getSceneFile(): string | null { return currentSceneFile; }
+export function getSceneList(): SceneFileEntry[] { return sceneList; }
+export function onSceneListChange(fn: () => void): () => void {
+  sceneListListeners.add(fn);
+  return () => sceneListListeners.delete(fn);
+}
+export function useSceneList(): SceneFileEntry[] {
+  return useSyncExternalStore(onSceneListChange, getSceneList, getSceneList);
+}
+export function useSceneFile(): string | null {
+  return useSyncExternalStore(onSceneListChange, getSceneFile, getSceneFile);
+}
+
+function forgeJsonPath(): string | null {
+  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/forge.json`;
+}
+
+async function readForgeJson(): Promise<Record<string, unknown> | null> {
+  const p = forgeJsonPath();
+  if (!p) return null;
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as { content?: string };
+    if (!j.content) return null;
+    const parsed = JSON.parse(j.content);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+/** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
+ *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
+ *  the active scene file. Games without a manifest stay in legacy mode.
+ *  Also lists assets/monsters/*.pack.json as the 怪物资产 group — standalone
+ *  prefab-style packs the editor opens exactly like a scene (UE asset editor). */
+export async function initSceneList(): Promise<void> {
+  currentSceneFile = null;
+  sceneList = [];
+  const fj = await readForgeJson();
+  const scenes = fj?.scenes;
+  if (Array.isArray(scenes)) {
+    sceneList = scenes
+      .filter((s): s is SceneFileEntry =>
+        !!s && typeof s === 'object' && typeof (s as SceneFileEntry).id === 'string' && typeof (s as SceneFileEntry).pack === 'string')
+      .map((s) => ({ ...s, group: 'scene' as const }));
+  }
+  // Monster/character asset packs — independent of the scenes manifest. Listed
+  // for path resolution; the Assets panel is their UI entry (UE content-browser
+  // style), the SceneSwitcher dropdown shows levels only.
+  if (currentSceneId !== 'default') {
+    for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
+      try {
+        const r = await fetch(`/api/files/tree?root=${encodeURIComponent(`.forgeax/games/${currentSceneId}/assets/${dir}`)}`);
+        if (r.ok) {
+          const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
+          for (const c of j.tree?.children ?? []) {
+            if (c.type !== 'file' || !c.name.endsWith('.pack.json')) continue;
+            const base = c.name.slice(0, -'.pack.json'.length);
+            sceneList.push({ id: `${prefix}:${base}`, name: base, pack: `assets/${dir}/${c.name}`, group: 'asset' });
+          }
+        }
+      } catch { /* no such dir — fine */ }
+    }
+  }
+  if (sceneList.length > 0) {
+    // Binding priority — a window edits exactly ONE scene (UE-style):
+    //   1. `?sceneFile=<id>` in the URL — the window's own hard binding
+    //      (set when an asset/level is opened from the Assets panel; lets
+    //      multiple editor windows edit different levels side by side)
+    //   2. per-game localStorage — what this game last had open (survives the
+    //      Studio Edit iframe being rebuilt without URL params)
+    //   3. forge.json defaultScene → first level → legacy single scene
+    let urlWant: string | null = null;
+    try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
+    let want: string | null = null;
+    try { want = localStorage.getItem(sceneFileStorageKey()); } catch { /* unavailable */ }
+    const def = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
+    const firstScene = sceneList.find((s) => s.group !== 'asset');
+    currentSceneFile =
+      (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
+      : (want && sceneList.some((s) => s.id === want)) ? want
+      : (def && sceneList.some((s) => s.id === def)) ? def
+      : firstScene ? firstScene.id
+      : null;  // only asset packs exist → keep editing the legacy single scene
+  }
+  emitSceneList();
+}
+
+/** Open another scene/asset pack IN THIS WINDOW: flush the outgoing scene's
+ *  pending save, persist the selection, and navigate to a URL that carries the
+ *  binding (`?sceneFile=<id>`) — one editor window edits exactly one scene;
+ *  multiple windows can edit different levels side by side (UE model). The
+ *  navigation reload also re-enters the proven cold-boot path (the engine-sync
+ *  structural-rebuild path currently leaves the renderer black — pre-existing
+ *  fullRebuild issue; value-only doc changes still live-patch as before). */
+export async function switchSceneFile(id: string): Promise<boolean> {
+  if (id === currentSceneFile) return true;
+  if (!sceneList.some((s) => s.id === id)) return false;
+  flushPendingSaveBeacon();
+  try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
+  // Tell this instance's scene-scoped panels (Hierarchy/Inspector/… mirroring
+  // over the old channel) to follow: they reload, re-read the persisted scene
+  // file and re-pair on the NEW per-scene channel.
+  if (!IS_POPOUT) postSync({ t: 'sceneChanged', id });
+  const u = new URL(location.href);
+  u.searchParams.set('sceneFile', id);
+  location.assign(u.toString());
+  return true;
+}
+
+/** Open a scene/asset pack from ANY editor surface. Panel iframes (ep:*) can't
+ *  reload the main viewport themselves — they forward an `openScene` over the
+ *  BroadcastChannel; the main window persists + reloads (and the panels follow
+ *  via the post-reload snapshot). This is the Assets-panel double-click path. */
+export function requestOpenScene(id: string): void {
+  if (IS_POPOUT) { postSync({ t: 'openScene', id }); return; }
+  void switchSceneFile(id);
+}
+
+// ── Launcher config (UE-style "play this level") ─────────────────────────────
+// .forgeax/games/<slug>/play-config.json — read by the GAME at boot:
+//   { mode: 'campaign' }                  → ▶ Play runs main from level 1
+//   { mode: 'level', level: '<sceneId>' } → ▶ Play runs just that level
+// The editor's PlayLauncher select writes it via /api/files (gitignored,
+// per-developer launcher state).
+export interface PlayConfig { mode: 'campaign' | 'level'; level?: string; endAfter?: boolean }
+function playConfigPath(): string | null {
+  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/play-config.json`;
+}
+export async function readPlayConfig(): Promise<PlayConfig> {
+  const p = playConfigPath();
+  if (!p) return { mode: 'campaign' };
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    if (r.ok) {
+      const j = (await r.json()) as { content?: string };
+      if (j.content) {
+        const cfg = JSON.parse(j.content) as PlayConfig;
+        if (cfg && (cfg.mode === 'campaign' || cfg.mode === 'level')) return cfg;
+      }
+    }
+  } catch { /* missing → campaign */ }
+  return { mode: 'campaign' };
+}
+export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
+  const p = playConfigPath();
+  if (!p) return false;
+  try {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: p, content: JSON.stringify(cfg, null, 2) + '\n' }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+/** Create a new scene file (empty, or duplicated from the current doc), register
+ *  it in forge.json's `scenes` manifest, and switch to it. A legacy single-scene
+ *  game is migrated on first use: its existing scene.pack.json is listed as the
+ *  `main` entry, new scenes land in scenes/<id>.pack.json. */
+export async function createSceneFile(id: string, name: string, duplicateCurrent: boolean): Promise<boolean> {
+  const fp = forgeJsonPath();
+  if (!fp) return false;
+  const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug || sceneList.some((s) => s.id === slug)) return false;
+  const fj = (await readForgeJson()) ?? {};
+  let scenes = Array.isArray(fj.scenes) ? [...(fj.scenes as SceneFileEntry[])] : [];
+  if (scenes.length === 0) {
+    // Legacy migration: keep the existing single scene where it is, list it.
+    scenes = [{ id: 'main', name: '主场景', pack: 'scene.pack.json' }];
+  }
+  const entry: SceneFileEntry = { id: slug, name: name || slug, pack: `scenes/${slug}.pack.json` };
+  scenes.push(entry);
+  fj.scenes = scenes;
+  if (typeof fj.defaultScene !== 'string') fj.defaultScene = scenes[0]!.id;
+  const sourceDoc = duplicateCurrent ? bus.doc : createDocument();
+  const packContent = JSON.stringify(docToPack(sourceDoc), null, 2) + '\n';
+  try {
+    const w1 = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: `.forgeax/games/${currentSceneId}/${entry.pack}`, content: packContent }),
+    });
+    if (!w1.ok) return false;
+    const w2 = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: fp, content: JSON.stringify(fj, null, 2) + '\n' }),
+    });
+    if (!w2.ok) return false;
+  } catch { return false; }
+  // Persist + navigate this window into the new scene (see switchSceneFile).
+  try { localStorage.setItem(sceneFileStorageKey(), slug); } catch { /* unavailable */ }
+  const u = new URL(location.href);
+  u.searchParams.set('sceneFile', slug);
+  location.assign(u.toString());
+  return true;
+}
 
 export function loadDocFromStorage(): boolean {
   if (typeof localStorage === 'undefined') return false;
@@ -362,7 +579,12 @@ bus.subscribe(() => {
 // @forgeax/scene's docToPack/packToDoc. (Legacy `scene.json` is still READ for
 // backward-compat; it is migrated to a pack on the next save.)
 function scenePath(): string | null {
-  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.pack.json`;
+  if (currentSceneId === 'default') return null;
+  if (currentSceneFile) {
+    const entry = sceneList.find((s) => s.id === currentSceneFile);
+    if (entry) return `.forgeax/games/${currentSceneId}/${entry.pack}`;
+  }
+  return `.forgeax/games/${currentSceneId}/scene.pack.json`;
 }
 function legacyScenePath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.json`;
@@ -664,9 +886,15 @@ function initMain(ch: BroadcastChannel): void {
       case 'refAsset': requestRefAsset(msg.asset); break;
       case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
       case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
-      default: break; // 'snapshot' is main→popout only
+      case 'openScene': void switchSceneFile(msg.id); break;
+      default: break; // 'snapshot'/'sceneChanged' are main→popout only
     }
   };
+  // Push the freshly-loaded doc to panels that were ALREADY open before this
+  // main window (re)booted — e.g. after a scene switch navigation, the paired
+  // Hierarchy/Inspector iframes must immediately mirror the new scene without
+  // waiting for the first edit.
+  broadcastSnapshot();
 }
 
 function initPopout(ch: BroadcastChannel): void {
@@ -686,6 +914,12 @@ function initPopout(ch: BroadcastChannel): void {
   ch.onmessage = (ev: MessageEvent) => {
     const msg = ev.data as EditorSyncMsg;
     if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
+    if (msg.t === 'sceneChanged') {
+      // Our authority viewport navigated to another scene — follow it: reload
+      // re-reads the persisted scene file and re-pairs on the new channel.
+      if (msg.id !== currentSceneFile) location.reload();
+      return;
+    }
     if (msg.t === 'assetsChanged') {
       // Relay as a window message so the Assets panel's listener can reload.
       try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
@@ -712,7 +946,11 @@ export function initSync(): void {
       }
     });
   }
-  syncChannel = openSyncChannel(getSceneId());
+  // The channel IS the viewport↔panels pair: keyed per game AND per scene
+  // file, so an editor instance editing level1 and another editing level2
+  // (same game, separate windows) never cross-talk. Panels resolve the same
+  // scene file via initSceneList before connecting.
+  syncChannel = openSyncChannel(`${getSceneId()}::${currentSceneFile ?? 'main'}`);
   if (!syncChannel) return; // BroadcastChannel unavailable → still have storage sync
   if (IS_POPOUT) initPopout(syncChannel);
   else initMain(syncChannel);

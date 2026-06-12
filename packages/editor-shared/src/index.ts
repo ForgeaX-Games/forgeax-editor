@@ -53,9 +53,21 @@ export {
   loadDocFromDisk,
   initSync,
   initDiskWatch,
+  initSceneList,
+  getSceneFile,
+  getSceneList,
+  onSceneListChange,
+  useSceneList,
+  useSceneFile,
+  switchSceneFile,
+  createSceneFile,
+  requestOpenScene,
+  readPlayConfig,
+  writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
 } from './store';
+export type { SceneFileEntry, PlayConfig } from './store';
 
 // ── Entity operations ──
 export {

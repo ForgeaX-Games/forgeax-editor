@@ -8,7 +8,7 @@ import {
   CapabilitiesPanel,
   MaterialPanel,
   TimelinePanel,
-  MaterialGraphPanel,
+  MaterialGraphPanel, LauncherPanel,
 } from '@forgeax/editor-panels';
 import { getSceneId, onPopoutClosed, onPopoutGeom } from '@forgeax/editor-shared';
 import type { PopoutGeom } from '@forgeax/editor-core';
@@ -27,11 +27,11 @@ import {
 // also FLOAT (⤢) as in-window windows or POP OUT (⤤) to a real OS window
 // (design §0.2.2). Tree + floats persist to localStorage (v4); popout is transient.
 
-type PanelId = 'viewport' | 'hierarchy' | 'assets' | 'inspector' | 'history' | 'capabilities' | 'material' | 'timeline' | 'matgraph';
+type PanelId = 'viewport' | 'hierarchy' | 'assets' | 'inspector' | 'history' | 'capabilities' | 'material' | 'timeline' | 'matgraph' | 'launcher';
 interface FloatRect { x: number; y: number; w: number; h: number }
 
 const TITLE: Record<PanelId, string> = {
-  viewport: 'Viewport', hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector', history: 'History', capabilities: 'Capabilities', material: 'Material', timeline: 'Timeline', matgraph: 'Mat Graph',
+  viewport: 'Viewport', hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector', history: 'History', capabilities: 'Capabilities', material: 'Material', timeline: 'Timeline', matgraph: 'Mat Graph', launcher: '启动器',
 };
 const BODY: Record<PanelId, () => ReactNode> = {
   viewport: () => null, // transparent — the engine canvas shows through
@@ -43,17 +43,18 @@ const BODY: Record<PanelId, () => ReactNode> = {
   material: () => <MaterialPanel />,
   timeline: () => <TimelinePanel />,
   matgraph: () => <MaterialGraphPanel />,
+  launcher: () => <LauncherPanel />,
 };
 // Every panel that can live in the dock tree (viewport included).
-const DOCK_PANELS: PanelId[] = ['viewport', 'hierarchy', 'assets', 'inspector', 'history', 'capabilities', 'material', 'timeline', 'matgraph'];
+const DOCK_PANELS: PanelId[] = ['viewport', 'hierarchy', 'assets', 'inspector', 'history', 'capabilities', 'material', 'timeline', 'matgraph', 'launcher'];
 // Panels that can float / pop out (viewport stays put).
-const POPPABLE = new Set<PanelId>(['hierarchy', 'assets', 'inspector', 'history', 'capabilities', 'material', 'timeline', 'matgraph']);
+const POPPABLE = new Set<PanelId>(['hierarchy', 'assets', 'inspector', 'history', 'capabilities', 'material', 'timeline', 'matgraph', 'launcher']);
 
 function defaultTree(): DockNode {
   return split('row', [
     tabs(['hierarchy', 'assets']),
     split('col', [tabs(['viewport']), tabs(['timeline', 'history', 'capabilities'])], [0.7, 0.3]),
-    tabs(['inspector', 'material', 'matgraph']),
+    tabs(['inspector', 'material', 'matgraph', 'launcher']),
   ], [0.2, 0.6, 0.2]);
 }
 

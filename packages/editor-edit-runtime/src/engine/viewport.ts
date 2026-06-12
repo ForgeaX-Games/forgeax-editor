@@ -157,6 +157,9 @@ export interface ViewportDeps {
   assets: AssetsLike;    // to register the gizmo handle materials
   camera: number;        // the editor camera entity
   sync: EngineSync;      // doc→world handle lookup (live drag) + resync
+  /** Optional initial orbit framing — asset-edit mode opens close-up on the
+   *  origin instead of the arena-scale default. */
+  initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
 }
 
 export interface Viewport {
@@ -167,10 +170,10 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, assets, camera, sync }: ViewportDeps): Viewport {
+export function createViewport({ canvas, world, assets, camera, sync, initialOrbit }: ViewportDeps): Viewport {
   // orbit state — frames the typical arena (centered, looking slightly down).
-  let target: Vec3 = [0, 2, 0];
-  let yaw = 0.6, pitch = -0.5, dist = 34;
+  let target: Vec3 = initialOrbit?.target ? [...initialOrbit.target] : [0, 2, 0];
+  let yaw = initialOrbit?.yaw ?? 0.6, pitch = initialOrbit?.pitch ?? -0.5, dist = initialOrbit?.dist ?? 34;
 
   // current camera basis (recomputed on every applyCamera).
   let camPos: Vec3 = [0, 0, 0];

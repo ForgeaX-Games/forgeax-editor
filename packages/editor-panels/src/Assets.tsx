@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { showContextMenu } from '@forgeax/editor-shared';
 import { loadGameAssets, loadRawAssets, materialSwatch, type PackAsset, type RawAsset } from '@forgeax/editor-core';
-import { bus, dispatch, getSceneId, getSelection, requestRefAsset, useDocVersion, useSelection } from '@forgeax/editor-shared';
+import { bus, dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, createSceneFile, useDocVersion, useSelection, useSceneList, useSceneFile } from '@forgeax/editor-shared';
 
-// Assets panel — browses the OPEN game's asset packs + raw imported files.
-// Tab 1 "PACKS": *.pack.json assets (materials, mesh refs, scene refs).
-// Tab 2 "FILES": raw imported files (GLB/PNG/audio) with status badges.
-//   - GLB unprocessed → "Process" button → /api/assets/process-gltf
-//   - GLB processed → "Add to Scene" button → spawns a SceneRef entity
+// Assets panel — the content browser (UE habit): levels AND character/monster
+// packs are assets here; double-click opens them in the editor (one window ↔
+// one scene; the binding rides `?sceneFile=`). Right-click a level for
+// new/duplicate. Below them: *.pack.json sub-assets (materials, meshes) and
+// raw imported files (GLB/PNG/audio) with process/import actions.
 
 interface Menu { guid: string; x: number; y: number }
 type Tab = 'packs' | 'files';
@@ -46,11 +46,34 @@ async function importScene(path: string, mode: 'reference' | 'full' | 'auto' = '
 export function AssetsPanel() {
   useDocVersion();
   const sel = useSelection();
+  const sceneList = useSceneList();
+  const openSceneFile = useSceneFile();
   const [tab, setTab] = useState<Tab>('packs');
   const [packs, setPacks] = useState<PackAsset[]>([]);
   const [rawFiles, setRawFiles] = useState<RawAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
+  // Editable scene/prefab packs discovered by initSceneList — levels (the UE
+  // "level asset") + monsters/characters. Double-click opens; ✎ marks what
+  // THIS window is editing.
+  const assetScenes = sceneList.filter((s) => s.group === 'asset');
+  const levelScenes = sceneList.filter((s) => s.group !== 'asset');
+
+  const newScene = (duplicate: boolean): void => {
+    const id = window.prompt('新场景 id（小写字母/数字/连字符，如 level3）：');
+    if (!id) return;
+    const name = window.prompt('场景显示名（可留空）：') ?? '';
+    void createSceneFile(id, name, duplicate).then((ok) => {
+      if (!ok) window.alert('创建场景失败：id 重复 / 写盘失败');
+    });
+  };
+
+  const openLevelMenu = (e: { clientX: number; clientY: number; preventDefault: () => void }) => {
+    showContextMenu(e, [
+      { label: '＋ 新建空场景…', onClick: () => newScene(false) },
+      { label: '⧉ 复制当前场景为新关卡…', onClick: () => newScene(true) },
+    ]);
+  };
 
   const reload = () => {
     setLoading(true);
@@ -130,6 +153,50 @@ export function AssetsPanel() {
 
       {tab === 'packs' && (
         <div className="asset-list" data-testid="asset-list">
+          {levelScenes.length > 0 && (
+            <>
+              <div className="asset-group-title" onContextMenu={openLevelMenu}
+                title="右键：新建/复制场景">
+                关卡 · 双击打开
+                <button type="button" className="asset-action-btn asset-group-add" title="新建空场景"
+                  onClick={() => newScene(false)}>＋</button>
+              </div>
+              {levelScenes.map((s) => {
+                const isOpen = openSceneFile === s.id;
+                return (
+                  <div key={s.id} className="asset-row" data-testid={`asset-scene-${s.id}`}
+                    title={`${s.pack}\n双击在本窗口打开该关卡`}
+                    onContextMenu={openLevelMenu}
+                    onDoubleClick={() => requestOpenScene(s.id)}>
+                    <span className="asset-swatch">🗺</span>
+                    <span className="asset-name">{s.name ?? s.id}</span>
+                    <span className="asset-kind">level</span>
+                    {isOpen && <span className="asset-processed-badge" title="本窗口正在编辑">✎</span>}
+                  </div>
+                );
+              })}
+            </>
+          )}
+          {assetScenes.length > 0 && (
+            <>
+              <div className="asset-group-title">角色 & 怪物 · 双击编辑</div>
+              {assetScenes.map((s) => {
+                const isChar = s.id.startsWith('character:');
+                const isOpen = openSceneFile === s.id;
+                return (
+                  <div key={s.id} className="asset-row" data-testid={`asset-scene-${s.id}`}
+                    title={`${s.pack}\n双击在编辑器中打开该资产`}
+                    onDoubleClick={() => requestOpenScene(s.id)}>
+                    <span className="asset-swatch">{isChar ? '🧍' : '🐮'}</span>
+                    <span className="asset-name">{s.name ?? s.id}</span>
+                    <span className="asset-kind">{isChar ? 'character' : 'monster'}</span>
+                    {isOpen && <span className="asset-processed-badge" title="正在编辑">✎</span>}
+                  </div>
+                );
+              })}
+              <div className="asset-group-title">材质 & 资源包</div>
+            </>
+          )}
           {loading ? (
             <div className="muted" style={{ padding: '4px 10px' }}>loading…</div>
           ) : packs.length === 0 ? (

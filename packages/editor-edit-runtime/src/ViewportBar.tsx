@@ -12,6 +12,7 @@
 //   - Save calls saveDocToDisk; keyboard shortcuts are registered here too.
 import { useEffect } from 'react';
 import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-shared';
+import { SceneBadge } from './SceneBadge';
 
 export function ViewportBar() {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live
@@ -42,6 +43,8 @@ export function ViewportBar() {
 
   return (
     <div className="vp-bar" data-testid="viewport-bar">
+      <SceneBadge />
+      <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-undo"
         disabled={!bus.canUndo()} onClick={() => bus.undo()} title="Undo (⌘Z)">
         ↶

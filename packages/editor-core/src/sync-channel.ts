@@ -34,6 +34,7 @@ const EDITOR_PANELS = [
   'material',
   'timeline',
   'matgraph',
+  'launcher',
 ] as const;
 
 /** Union type of all editor panel IDs. */
@@ -78,7 +79,13 @@ export type EditorSyncMsg =
   // popout → main: the popout window is closing → redock the panel
   | { t: 'bye'; panel: SyncPanelId }
   // main → popouts: asset file list changed (trigger reload in Assets panel)
-  | { t: 'assetsChanged' };
+  | { t: 'assetsChanged' }
+  // panel → main: open another scene/asset pack in the editor (the main
+  // window persists the selection and reloads into it — UE asset double-click)
+  | { t: 'openScene'; id: string }
+  // main → panels: the authority viewport is navigating to another scene —
+  // scene-scoped panels (Hierarchy/Inspector/…) reload and re-pair with it
+  | { t: 'sceneChanged'; id: string };
 
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }

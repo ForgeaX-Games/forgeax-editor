@@ -242,6 +242,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 
 /* Assets panel rows */
 .asset-list { padding: 4px 0; }
+.asset-group-title { padding: 6px 10px 2px; font-size: 10px; letter-spacing: 1px; color: var(--fg2, #888); text-transform: uppercase; }
 .asset-row { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; }
 .asset-row:hover { background: var(--bg2); }
 .asset-swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex: 0 0 auto; background: var(--bg3); }
@@ -359,6 +360,34 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .vp-btn:disabled { opacity: 0.25; cursor: default; }
 .vp-btn.on { background: var(--lime, #d4ff48); color: var(--bg0, #0e0f10); }
 .vp-sep { width: 1px; height: 16px; background: var(--line, #2a2d30); margin: 0 2px; }
+
+/* SceneSwitcher — level/scene-file picker (multi-scene games) */
+.vp-scene-select {
+  background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed);
+  border: 1px solid var(--line, #2a2d30); border-radius: 4px;
+  padding: 2px 6px; font-size: 12px; max-width: 180px; cursor: pointer;
+}
+.vp-scene-select:hover { border-color: var(--lime, #d4ff48); }
+
+/* SceneBadge — read-only "this window edits X" chip */
+.vp-scene-badge {
+  padding: 2px 8px; font-size: 12px; color: var(--fg, #e8eaed); white-space: nowrap;
+  background: var(--bg2, #1b1d1f); border: 1px solid var(--line, #2a2d30); border-radius: 4px;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Launcher panel (UE-style play settings) */
+.ed-launcher .launcher-section { padding: 8px 10px 2px; }
+.ed-launcher .launcher-label { font-size: 10px; letter-spacing: 1px; color: var(--fg2, #888); text-transform: uppercase; margin-bottom: 4px; }
+.ed-launcher .launcher-current { font-size: 13px; padding: 4px 8px; background: var(--bg2, #1b1d1f); border: 1px solid var(--line, #2a2d30); border-radius: 6px; display: inline-block; }
+.ed-launcher .launcher-option { display: flex; align-items: center; gap: 7px; padding: 4px 2px; font-size: 12px; cursor: pointer; }
+.ed-launcher .launcher-option:hover { color: var(--lime, #d4ff48); }
+.ed-launcher .launcher-hint { padding: 8px 10px; font-size: 11px; }
+.ed-launcher .launcher-saved { color: var(--lime, #7ee04a); }
+
+/* "+" button on the levels group title row */
+.asset-group-title { display: flex; align-items: center; gap: 6px; }
+.asset-group-add { margin-left: auto; }
 
 /* Dismissible controls cheat-sheet pinned to the bottom-center of the viewport. */
 .vp-hints {

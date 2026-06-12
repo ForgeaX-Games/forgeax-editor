@@ -10,6 +10,7 @@ import {
   MaterialPanel,
   TimelinePanel,
   MaterialGraphPanel,
+  LauncherPanel,
 } from '@forgeax/editor-panels';
 import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
 import type { SyncPanelId } from '@forgeax/editor-core';
@@ -30,6 +31,7 @@ const TITLE: Record<SyncPanelId, string> = {
   material: 'Material',
   timeline: 'Timeline',
   matgraph: 'Mat Graph',
+  launcher: '启动器',
 };
 const BODY: Record<SyncPanelId, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
@@ -38,6 +40,7 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
   history: () => <HistoryPanel />,
   capabilities: () => <CapabilitiesPanel />,
   material: () => <MaterialPanel />,
+  launcher: () => <LauncherPanel />,
   timeline: () => <TimelinePanel />,
   matgraph: () => <MaterialGraphPanel />,
 };
