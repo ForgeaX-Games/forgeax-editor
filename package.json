@@ -27,10 +27,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "echo 'build: nothing to bundle (packages publish source directly)'",
-    "dev": "echo 'use per-package dev scripts: bun -F @forgeax/editor-edit-runtime dev'",
+    "dev": "vite",
     "lint": "node scripts/lint-sync-channel-panels.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
-    "lint:dep": "dependency-cruise --output-type err-html -c .dependency-cruiser.cjs packages"
+    "lint:dep": "dependency-cruise --output-type err-html -c .dependency-cruiser.cjs packages",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@forgeax/interface": "workspace:*",
@@ -38,7 +40,9 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.45.0",
     "dependency-cruiser": "^17.4.3",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vite": "*"
   }
 }
