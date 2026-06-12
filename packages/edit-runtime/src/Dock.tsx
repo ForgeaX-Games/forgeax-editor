@@ -13,6 +13,11 @@ import {
 import { getSceneId, onPopoutClosed, onPopoutGeom } from '@forgeax/editor-shared';
 import type { PopoutGeom } from '@forgeax/editor-core';
 import {
+  sendVagMessage,
+  VagEditorPopoutSchema,
+  VagEditorRedockSchema,
+} from '@forgeax/editor-core/protocol';
+import {
   type DockNode, type SplitNode, type TabsNode, type DropSide,
   tabs, split, movePanel, removePanel, setSizes, setActivePanel,
   firstLeaf, reconcile,
@@ -151,7 +156,9 @@ export function DockManager() {
     const r = removePanel(treeRef.current, panel); if (r) treeRef.current = r;
     floatsRef.current.delete(panel);
     const geom = loadGeom(panel);
-    try { window.parent?.postMessage({ type: 'VAG_EDITOR_POPOUT', payload: { panel, scene: getSceneId(), title: TITLE[panel], geom } }, '*'); }
+    try {
+      sendVagMessage(window.parent, VagEditorPopoutSchema, { panel, scene: getSceneId(), title: TITLE[panel], geom });
+    }
     catch { /* cross-origin */ }
     save(); force();
   };
@@ -160,7 +167,9 @@ export function DockManager() {
     dockBack(panel); save(); force();
   };
   const closePopout = (panel: PanelId): void => {
-    try { window.parent?.postMessage({ type: 'VAG_EDITOR_REDOCK', payload: { panel } }, '*'); }
+    try {
+      sendVagMessage(window.parent, VagEditorRedockSchema, { panel });
+    }
     catch { /* cross-origin */ }
     redockFromPopout(panel);
   };

@@ -5,6 +5,11 @@ import {
   type GameEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
+import {
+  sendVagMessage,
+  VagConsoleSchema,
+  VagFpsStatsSchema,
+} from '@forgeax/editor-core/protocol';
 import type { GameContext } from './types';
 
 const root = document.getElementById('app') ?? document.body;
@@ -278,7 +283,7 @@ app.value.registerUpdate((dt) => {
   if (now - lastHeartbeat >= HEARTBEAT_MS) {
     lastHeartbeat = now;
     try {
-      window.parent?.postMessage({ type: 'VAG_FPS_STATS', payload: { fps: lastFps } }, '*');
+      sendVagMessage(window.parent, VagFpsStatsSchema, { fps: lastFps });
     } catch { /* parent might be cross-origin */ }
   }
 });
@@ -353,25 +358,19 @@ function fmtArg(a: unknown): string {
     original(...args);
     try {
       const text = args.map(fmtArg).join(' ');
-      window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level, text, ts: Date.now() } }, '*');
+      sendVagMessage(window.parent, VagConsoleSchema, { level, text, ts: Date.now() });
     } catch { /* parent might be cross-origin */ }
   };
 });
 
 window.addEventListener('error', (ev) => {
   try {
-    window.parent?.postMessage({
-      type: 'VAG_CONSOLE',
-      payload: { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() },
-    }, '*');
+    sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() });
   } catch { /* ignore */ }
 });
 window.addEventListener('unhandledrejection', (ev) => {
   try {
-    window.parent?.postMessage({
-      type: 'VAG_CONSOLE',
-      payload: { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() },
-    }, '*');
+    sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
   } catch { /* ignore */ }
 });
 
@@ -386,7 +385,7 @@ if (import.meta.hot) {
     try {
       const err = payload?.err;
       const where = err?.loc?.file ? ` (${err.loc.file}${err.loc.line ? `:${err.loc.line}` : ''})` : err?.id ? ` (${err.id})` : '';
-      window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level: 'error', text: `[vite build] ${err?.message ?? 'build error'}${where}`, ts: Date.now() } }, '*');
+      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `[vite build] ${err?.message ?? 'build error'}${where}`, ts: Date.now() });
     } catch { /* ignore */ }
   });
 }

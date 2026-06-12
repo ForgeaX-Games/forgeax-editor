@@ -17,6 +17,11 @@ import {
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime } from '@forgeax/editor-core';
+import {
+  sendVagMessage,
+  VagConsoleSchema,
+  VagFpsStatsSchema,
+} from '@forgeax/editor-core/protocol';
 import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
@@ -285,7 +290,7 @@ function installFpsReport(): void {
     frames++; accum += dt;
     if (accum >= 1) {
       const fps = Math.round(frames / accum);
-      try { window.parent?.postMessage({ type: 'VAG_FPS_STATS', payload: { fps } }, '*'); } catch { /* cross-origin */ }
+      sendVagMessage(window.parent, VagFpsStatsSchema, { fps });
       frames = 0; accum = 0;
     }
   });
@@ -298,15 +303,19 @@ function installConsoleBridge(): void {
       original(...args);
       try {
         const text = args.map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
-        window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level, text, ts: Date.now() } }, '*');
+        sendVagMessage(window.parent, VagConsoleSchema, { level, text, ts: Date.now() });
       } catch { /* cross-origin */ }
     };
   });
   window.addEventListener('error', (ev) => {
-    try { window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() } }, '*'); } catch { /* */ }
+    try {
+      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() });
+    } catch { /* cross-origin */ }
   });
   window.addEventListener('unhandledrejection', (ev) => {
-    try { window.parent?.postMessage({ type: 'VAG_CONSOLE', payload: { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() } }, '*'); } catch { /* */ }
+    try {
+      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
+    } catch { /* cross-origin */ }
   });
 }
 
