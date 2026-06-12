@@ -176,3 +176,82 @@ export type {
   ColliderShape,
   Collider,
 } from './scene-types';
+
+// ── Manifest (SSOT for panel IDs) ──
+export { EDITOR_PANELS } from './manifest';
+export type { EditorPanelId } from './manifest';
+
+// ── Store (bus singleton — bus, selection, scene persistence) ──
+export {
+  bus,
+  dispatch,
+  getSceneId,
+  getSelection,
+  getSelectionList,
+  getGizmoMode,
+  getAnimPreview,
+  replaceDoc,
+  saveDocToDisk,
+  setGizmoMode,
+  setSceneId,
+  setSelection,
+  setSelectionMany,
+  setAnimPreview,
+  setHoverEntity,
+  setFieldPreview,
+  toggleSelection,
+  onSelectionChange,
+  onRenameRequest,
+  requestRename,
+  onGizmoModeChange,
+  onAnimPreview,
+  onPopoutClosed,
+  onPopoutGeom,
+  announcePopoutClosing,
+  announcePopoutGeom,
+  requestFrame,
+  requestRefComponent,
+  requestRefAsset,
+  requestRefEntity,
+  useDocVersion,
+  useGizmoMode,
+  useSelection,
+  useSelectionList,
+  useHoverEntity,
+  useFieldPreview,
+  loadDocFromStorage,
+  loadDocFromDisk,
+  initSync,
+  initDiskWatch,
+  initSceneList,
+  getSceneFile,
+  getSceneList,
+  onSceneListChange,
+  useSceneList,
+  useSceneFile,
+  switchSceneFile,
+  createSceneFile,
+  requestOpenScene,
+  readPlayConfig,
+  writePlayConfig,
+  broadcastAssetsChanged,
+  flushPendingSaveBeacon,
+} from './store';
+export type { SceneFileEntry, PlayConfig } from './store';
+
+// ── Entity operations ──
+export {
+  deleteEntityCascade,
+  deleteManyCascade,
+  duplicateEntity,
+  groupSelected,
+  ungroupEntity,
+  reparentEntity,
+} from './ops';
+
+// ── Context menu service ──
+export { ContextMenuHost, showContextMenu } from './contextMenuService';
+export type { MenuItemDef } from './contextMenuService';
+
+// ── Dock bridge helpers ──
+export { focusPanel, openSourcePanel } from './dock-bridge';
