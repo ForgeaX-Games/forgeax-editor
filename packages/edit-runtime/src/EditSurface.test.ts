@@ -23,7 +23,7 @@ function mockFetch(
   impl: (url: string, init?: RequestInit) => Promise<Partial<Response>>,
 ): void {
   globalThis.fetch = mock(async (url: string, init?: RequestInit) => {
-    return impl(url, init) as Response;
+    return impl(url, init) as unknown as Response;
   }) as unknown as typeof globalThis.fetch;
 }
 
