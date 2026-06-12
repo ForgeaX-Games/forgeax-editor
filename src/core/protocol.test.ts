@@ -30,7 +30,7 @@ import {
   VagPreviewPlaySchema,
   VagPreviewReloadSchema,
   VagSpawnEntitySchema,
-} from './protocol';
+} from '../protocol';
 
 describe('VAG_ASSETS_CHANGED', () => {
   test('pass: { type, payload: { slug } } accepted (slug-bearing form)', () => {
@@ -318,7 +318,7 @@ describe('VAG_SPAWN_ENTITY', () => {
 
 describe('schema completeness — all 16 exports present', () => {
   test('Object.keys(...).filter(endsWith("Schema")).length === 16', async () => {
-    const mod = await import('./protocol');
+    const mod = await import('../protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
     expect(schemaKeys).toHaveLength(16);
   });
