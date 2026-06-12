@@ -42,6 +42,22 @@ bun -F @forgeax/editor-play-runtime dev
 > [!NOTE]
 > forgeax-editor 是独立 git 仓（`https://github.com/ForgeaXGame/forgeax-editor`），以 git submodule 形式接入 studio 仓的 `packages/editor`。5 个包均通过 `exports` 直接指向源入口（`./src/index.ts`），无 tsup build 步骤——由消费方的 bundler（vite）当场编译。
 
+## known limitations (baseline as of 2026-06-13)
+
+These capabilities carry over from P2 and are explicitly documented as
+**not passing under the current sandbox/standalone test environment**.
+They are tracked for a future full-studio regression sweep.
+
+| Capability | What it tests | Status | Constraint |
+|:--|:--|:--|:--|
+| AC-15B panel-mount e2e (P2 G-4) | panel mount on standalone chrome surface | deferred — `test.skip` in `standalone-chrome.spec.ts` | requires full studio harness with `ANTHROPIC_API_KEY` and running `forgeax-server` on :18900; unreachable under standalone/sandbox |
+| AC-16 producer-side z.infer fixup | producer-call-site strong type equivalence | deferred — P2 AC-16 carry-over from implement R3 reviewer accept-risk | requires `protocol.ts` SSOT relocation + full `z.infer` re-application across all producer call sites; tracked as OQ-1 for P3 |
+
+These are not regressions — they were never green in the standalone
+configuration. They will be re-validated once a `forgeax-server` instance
+with valid credentials is available in the test environment, or when the
+P3 SSOT-relocation loop closes the OQ-1 gap.
+
 ## troubleshooting
 
 | 症状 | 原因 | 解决 |
