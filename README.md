@@ -9,8 +9,8 @@
 | [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — SceneDocument、EditorBus、undo/redo、schema、sync-channel、动画、材质图、资源、预设 |
 | [`@forgeax/editor-shared`](./packages/editor-shared/) | 跨层共享运行时 — zustand store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT |
 | [`@forgeax/editor-panels`](./packages/editor-panels/) | 8 个业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Timeline、MaterialGraph）+ 面板组件注入 |
-| [`@forgeax/editor-edit-runtime`](./packages/editor-edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
-| [`@forgeax/editor-play-runtime`](./packages/editor-play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
+| [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
+| [`@forgeax/editor-play-runtime`](./packages/play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
 
 ## 依赖结构
 
