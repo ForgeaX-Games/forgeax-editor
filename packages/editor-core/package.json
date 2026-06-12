@@ -11,6 +11,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./protocol": {
+      "types": "./src/protocol.ts",
+      "import": "./src/protocol.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -24,6 +28,7 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
+    "zod": "^3.25.0",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
