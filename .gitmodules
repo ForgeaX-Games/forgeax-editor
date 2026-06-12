@@ -2,3 +2,7 @@
 	path = packages/engine
 	url = https://github.com/ForgeaXGame/forgeax-engine.git
 	branch = stable
+[submodule "forgeax-editor-assets"]
+	path = forgeax-editor-assets
+	url = https://github.com/ForgeaXGame/forgeax-editor-assets.git
+	branch = main
