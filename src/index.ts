@@ -36,7 +36,7 @@
 import { defineApp } from '@forgeax/interface/app-kit';
 import { EDITOR_PANELS } from '../packages/editor-shared/src/manifest';
 
-const app = defineApp({
+const editorApp = defineApp({
   id: 'editor',
   entryUrl: 'http://127.0.0.1:15280/?viewportOnly=1',
   panels: EDITOR_PANELS.map((id) => ({ id })),
@@ -44,6 +44,11 @@ const app = defineApp({
   routes: [],
 });
 
-export const manifest = app.manifest;
+// Named `app` export — preferred entry for AppKit consumers
+// (e.g. `mountStandalone(editorApp)` in standalone-editor-demo). Both
+// the named `manifest` re-export and the default export remain so that
+// existing AC-03 / AC-04 / AC-16 assertions stay green.
+export const app = editorApp;
+export const manifest = editorApp.manifest;
 
-export default { manifest };
+export default editorApp;
