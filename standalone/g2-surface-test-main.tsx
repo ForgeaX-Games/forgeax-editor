@@ -9,7 +9,7 @@ import { createRoot } from 'react-dom/client';
 
 // Once w13+w16 are implemented, this import will resolve.
 // In the red stage, it will be a compile error.
-import { EditSurface } from '@forgeax/editor-edit-runtime';
+import { EditSurface } from '@forgeax/editor/edit';
 
 const root = document.getElementById('root');
 if (root) {
