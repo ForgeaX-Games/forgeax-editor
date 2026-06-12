@@ -24,6 +24,7 @@
     "README.md"
   ],
   "scripts": {
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
   },
