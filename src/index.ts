@@ -36,6 +36,21 @@
 import { defineApp } from '@forgeax/interface/app-kit';
 import { EDITOR_PANELS } from '../packages/editor-shared/src/manifest';
 
+// `viewportOnly=1` query param: runtime contract.
+//
+// `?viewportOnly=1` tells the iframe-mounted editor runtime (served on
+// :15280, packages/editor/packages/edit-runtime + play-runtime) to render
+// only the 3D viewport surface and suppress any host-only chrome the
+// runtime might otherwise paint inside the iframe. Hosts (forgeax-studio
+// at :18920, the standalone shell at :15290) are responsible for the
+// surrounding panels / dock / chat surfaces; the iframe is purely the
+// 3D canvas. The flag is the documented contract between the iframe
+// runtime and host: it is part of the public manifest below
+// (`entryUrl`), is asserted by `packages/editor/src/index.test.ts`,
+// and is the value mounted by `packages/editor/standalone/main.tsx`.
+// Removing the flag is a host-vs-iframe boundary change and requires
+// an ADR. (verify R1 Pure-trial F-3 carry-over: discoverability
+// docstring, not a behavioural change.)
 const editorApp = defineApp({
   id: 'editor',
   entryUrl: 'http://127.0.0.1:15280/?viewportOnly=1',
@@ -50,5 +65,21 @@ const editorApp = defineApp({
 // existing AC-03 / AC-04 / AC-16 assertions stay green.
 export const app = editorApp;
 export const manifest = editorApp.manifest;
+
+// Convenience re-exports of the AppKit mount entry points so downstream
+// SDK consumers who only `import` from `@forgeax/editor` can reach
+// `mountStandalone` / `mountComposition` without a second-hop import
+// from `@forgeax/interface/app-kit`. These are pure pass-throughs of
+// the same symbols already in scope above (no side-effect imports
+// added: zero-transitive root entry per plan-strategy section 2 D-5).
+// (verify R1 Pure-trial F-1 carry-over: single-hop discoverability.)
+export { mountStandalone, mountComposition, AppKitError } from '@forgeax/interface/app-kit';
+export type {
+  MountStandaloneOptions,
+  MountOptions,
+  AppManifest,
+  AppManifestPanel,
+  DefinedApp,
+} from '@forgeax/interface/app-kit';
 
 export default editorApp;
