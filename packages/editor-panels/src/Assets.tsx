@@ -194,7 +194,7 @@ export function AssetsPanel() {
                   </div>
                 );
               })}
-              <div className="asset-group-title">材质 & 资源包</div>
+              <div className="asset-group-title">材质 · 双击应用到选中实体</div>
             </>
           )}
           {loading ? (
@@ -203,7 +203,14 @@ export function AssetsPanel() {
             <div className="muted" style={{ padding: '4px 10px' }} data-testid="asset-empty">
               暂无 *.pack.json — 导入 GLB 后点「Process」生成
             </div>
-          ) : packs.map((a) => {
+          ) : packs.filter((a) => a.kind !== 'scene').map((a) => {
+            // Hide `kind: 'scene'` sub-pack rows here — every level pack
+            // contains exactly one scene asset entry whose name reads as
+            // an opaque hex (`scene ad7cca38`) and whose double-click
+            // can't preview anything; the level itself is already in the
+            // 关卡 group above. Materials still list (with a pack-stem
+            // prefix from shortName so '<level1 · 1c720a13>' tells the
+            // user where it came from).
             const swatch = materialSwatch(a);
             return (
               <div key={a.guid} className="asset-row" data-testid={`asset-${a.guid}`}

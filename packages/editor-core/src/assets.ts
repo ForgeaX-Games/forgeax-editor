@@ -99,7 +99,7 @@ export async function loadGameAssets(slug: string | null | undefined): Promise<P
       const pack = JSON.parse(j.content) as { assets?: { guid: string; kind: string; payload?: Record<string, unknown> }[] };
       for (const a of pack.assets ?? []) {
         if (!a.guid) continue;
-        out.push({ guid: a.guid, kind: a.kind, name: shortName(a), payload: a.payload ?? {}, packPath: p });
+        out.push({ guid: a.guid, kind: a.kind, name: shortName(a, p), payload: a.payload ?? {}, packPath: p });
       }
     } catch {
       /* skip unreadable/malformed pack */
@@ -108,9 +108,19 @@ export async function loadGameAssets(slug: string | null | undefined): Promise<P
   return out;
 }
 
-/** A friendly label: a material's color hint, else the guid head. */
-function shortName(a: { guid: string; kind: string; payload?: Record<string, unknown> }): string {
-  return `${a.kind} ${a.guid.slice(0, 8)}`;
+/** A friendly label for a sub-pack asset row: "<pack-stem> · <guid8>".
+ *  e.g. `level1 · 1c720a13`, `grasscalf · b73e4290`. The pack stem tells
+ *  a human which level / monster / character / effect the material came
+ *  from — much more useful than `material 1c720a13` in a 50-row list. */
+function shortName(
+  a: { guid: string; kind: string; payload?: Record<string, unknown> },
+  packPath?: string,
+): string {
+  const stem = packPath
+    ? packPath.replace(/^.*\//, '').replace(/\.(fx|pack)\.json$/i, '').replace(/\.json$/i, '')
+    : '';
+  const tail = a.guid.slice(0, 8);
+  return stem ? `${stem} · ${tail}` : `${a.kind} ${tail}`;
 }
 
 interface AssetsLike { register(desc: unknown): { unwrap(): unknown } }
