@@ -236,8 +236,9 @@ export function packToDoc(pack: ScenePack): SceneDocument {
     }
     const mf = cc.MeshFilter as { assetHandle?: number } | undefined;
     if (mf?.assetHandle !== undefined) docComps.Mesh = { kind: kindForMeshGuid(refs[mf.assetHandle] ?? CUBE_GUID) };
-    const mr = cc.MeshRenderer as { material?: number } | undefined;
-    if (mr?.material !== undefined) docComps.Material = payloadToMat(matByGuid.get(refs[mr.material] ?? ''));
+    const mr = cc.MeshRenderer as { material?: number; materials?: number[] } | undefined;
+    const matRef: number | undefined = mr?.materials?.[0] ?? mr?.material;
+    if (matRef !== undefined) docComps.Material = payloadToMat(matByGuid.get(refs[matRef] ?? ''));
     if (cc.Collider) docComps.Collider = cc.Collider;
     const dl = cc.DirectionalLight as Record<string, number> | undefined;
     const pl = cc.PointLight as Record<string, number> | undefined;
