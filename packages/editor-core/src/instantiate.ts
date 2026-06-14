@@ -257,13 +257,17 @@ export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): Insta
           },
         });
         // Shadows require DirectionalLightShadow on the SAME entity as the
-        // DirectionalLight (else the engine warns "shadows disabled"). Opt-in via
-        // Light.castShadow. orthoHalfExtent is widened to cover a typical authored
-        // ground slab (the default 10 clips shadows past ±10 world units).
+        // DirectionalLight (else the engine warns "shadows disabled"). Opt-in
+        // via Light.castShadow. Engine feat-20260613-csm removed `orthoHalfExtent`
+        // (per-cascade AABB now auto-fits the visible scene) and added cascade
+        // fields. Engine 81dfc5297 fail-fast on unknown spawn-data fields, so
+        // a stray `orthoHalfExtent:16` rejects the WHOLE scene instantiate
+        // (every editor open went grey/empty until this was removed). 1 cascade
+        // keeps mapSize×1 atlas under Chrome's maxTextureDimension2D=8192 cap.
         if (light!.castShadow) {
           parts.push({
             component: DirectionalLightShadow,
-            data: { mapSize: 2048, orthoHalfExtent: 16, farPlane: 60 },
+            data: { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 },
           });
         }
       } else {
@@ -482,7 +486,7 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
           directionZ: num(light!.directionZ, -0.3),
           ...rgbIntensity(light!),
         };
-        if (light!.castShadow) components.DirectionalLightShadow = { mapSize: 2048, orthoHalfExtent: 16, farPlane: 60 };
+        if (light!.castShadow) components.DirectionalLightShadow = { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 };
       } else {
         components.PointLight = { ...rgbIntensity(light!), range: num(light!.range, 0) };
       }
