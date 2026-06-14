@@ -38,6 +38,10 @@ interface RendererLike { assets: unknown }
 export interface EngineSync {
   /** Rebuild/patch the rendered world from the current doc. Called on every bus change. */
   resync(): void;
+  /** Force a rebuild even when the doc is unchanged. Used when an EXTERNAL input
+   *  the projection depends on (e.g. an async GLB landing in the gltf-runtime
+   *  cache) changes — the doc sig is identical, so plain resync() would no-op. */
+  forceResync(): void;
   /** The live forgeax entity rendering doc entity `id`, if any (for viewport drag). */
   worldEntityFor(id: EntityId): number | undefined;
   /** Stop listening to the bus. */
@@ -135,6 +139,7 @@ export function createEngineSync(
 
   return {
     resync,
+    forceResync() { lastSig = null; resync(); },
     worldEntityFor: (id) => rendered.get(id)?.entity,
     dispose() { unsub(); despawnInstance(); rendered = new Map(); },
   };

@@ -254,7 +254,10 @@ void setupEditorSkylight(
     if (paths.size === 0) return;
     await Promise.all([...paths].map((p) =>
       loadGltfRuntime(p, fetchGlb, renderer.assets as never).catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
-    engineSync.resync();
+    // The GLB landed in the gltf-runtime cache but the doc sig is unchanged, so a
+    // plain resync() would no-op — force a rebuild so sceneEntities re-projects
+    // the now-loaded GLB into its real per-node geometry.
+    engineSync.forceResync();
   })();
 }
 

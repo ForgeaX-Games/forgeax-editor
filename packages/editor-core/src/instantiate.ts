@@ -418,9 +418,38 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
       else if (shape === 'cylinder') colliders.push({ shape: 'cylinder', x: px, z: pz, r: num(collider?.radius, Math.max(sx, sz) / 2) });
     }
 
-    // GltfRef (GLB): native GLB→SceneAsset is deferred (engine glTF cook gap);
-    // emit a tinted placeholder cube so the ref stays visible + selectable.
+    // GltfRef (GLB): if the bytes are loaded (gltf-runtime.ts), expand the GLB's
+    // REAL meshes — one SceneEntity per glTF node — so ✎ Edit renders the same
+    // geometry ▶ Play does (mirrors instantiateScene's expansion). Child nodes get
+    // a SYNTHETIC docId `(id+1)*1e6 + i` so each maps 1:1 in the engineSync diff
+    // (stable across resyncs → no spurious full-rebuild; selecting the ref still
+    // resolves via the doc id). Until the async load lands (or if it fails), fall
+    // back to a tinted placeholder cube so the entity stays visible + selectable.
     if (gltfRef && t) {
+      const loaded = gltfRef.path ? getLoadedGltf(gltfRef.path) : null;
+      if (loaded && loaded.nodes.length > 0) {
+        let i = 0;
+        for (const node of loaded.nodes) {
+          const synthId = ((id + 1) * 1_000_000 + i) as EntityId;
+          i++;
+          const nc = node.components;
+          if (!nc.MeshFilter && !nc.MeshRenderer) continue; // transform-only node — nothing to draw
+          const nt = (nc.Transform ?? {}) as Record<string, number>;
+          // Compose with the ref entity: translate by (px,py,pz), scale by (sx,sy,sz).
+          // (Ref rotation is not composed in v1 — imports start at identity.)
+          const data: Record<string, number> = {
+            posX: px + num(nt.posX, 0) * sx, posY: py + num(nt.posY, 0) * sy, posZ: pz + num(nt.posZ, 0) * sz,
+            scaleX: sx * num(nt.scaleX, 1), scaleY: sy * num(nt.scaleY, 1), scaleZ: sz * num(nt.scaleZ, 1),
+            quatX: num(nt.quatX, 0), quatY: num(nt.quatY, 0), quatZ: num(nt.quatZ, 0), quatW: num(nt.quatW, 1),
+          };
+          const components: Record<string, Record<string, unknown>> = { Transform: data };
+          if (nc.MeshFilter) components.MeshFilter = nc.MeshFilter as Record<string, unknown>;
+          if (nc.MeshRenderer) components.MeshRenderer = nc.MeshRenderer as Record<string, unknown>;
+          entities.push({ docId: synthId, components });
+        }
+        continue;
+      }
+      // Not loaded yet → placeholder cube (the loader triggers a resync on land).
       const placeholderMat = caches.mat.get('__gltf_placeholder__') ?? assets.register(Materials.standard({ baseColor: [0.4, 0.7, 1, 0.6], roughness: 0.5, metallic: 0.2 })).unwrap();
       caches.mat.set('__gltf_placeholder__', placeholderMat);
       entities.push({ docId: id, components: {
