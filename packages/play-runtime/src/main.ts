@@ -85,6 +85,29 @@ let physics: 'rapier-3d' | 'rapier-2d' | undefined;
 // to the bare '/shaders/manifest.json' which 404s + SPA-falls-back to HTML.
 const app = await createApp(canvas, physics ? { physics } : {}, {
   shaderManifestUrl: '/preview/shaders/manifest.json',
+  // Dev-mode import transport with explicit URL that matches the engine
+  // pluginPack middleware's literal route. The default
+  // createDevImportTransport() also uses `/__import/<guid>` — but here we
+  // spell it out to make the contract local + obvious. play-runtime runs
+  // under base `/preview/`, BUT pluginPack registers its dev middleware
+  // against the BARE `/__import/…` path (no base awareness), so the
+  // transport must NOT prefix the URL. Interface (port 18920) proxies all
+  // unknown paths to :15173, so this works in both direct + Studio modes.
+  importTransport: {
+    async fetchPack(guid: string) {
+      try {
+        const response = await fetch(`/__import/${guid}`, { method: 'POST' });
+        if (!response.ok) return { ok: false };
+        try {
+          const body = await response.json();
+          if (Array.isArray(body)) return { ok: true, entries: body };
+        } catch { /* empty/non-JSON body — re-resolve from cache */ }
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  },
 });
 
 if (!app.ok) {

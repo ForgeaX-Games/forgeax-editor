@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { gltfImporter } from '@forgeax/engine-gltf';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -254,7 +255,7 @@ export default defineConfig({
     forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
-    pluginPack({ roots: gameAssetRoots(), base: '/preview/' }) as never,
+    pluginPack({ roots: gameAssetRoots(), base: '/preview/', importers: [imageImporter, gltfImporter] }) as never,
     // Second pluginPack instance scoped to shared template assets — needs
     // imageImporter wired so the .hdr cube-texture sidecar produces a valid
     // PackEntry (without it, /preview/__import on cold loadByGuid would

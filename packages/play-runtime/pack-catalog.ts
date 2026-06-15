@@ -239,8 +239,15 @@ async function processMetaSidecar(
   }
 
   if (meta.importer === 'gltf') {
+    // gltfImporter emits up to 8+ sub-asset kinds: mesh / material / scene /
+    // texture / skeleton / skin + N animation-clip. The runtime resolves them
+    // all through the same .glb source URL — gltfImporter's transform hook
+    // re-parses the GLB and emits the right POD per (guid, sourceIndex) lookup.
+    // Without listing every kind here, loadByGuid for the missing rows would
+    // hit asset-not-imported, defeating skinned-mesh + animation playback.
+    const GLTF_KINDS = new Set(['mesh', 'material', 'scene', 'texture', 'skeleton', 'skin', 'animation-clip']);
     for (const sub of meta.subAssets) {
-      if (sub.kind === 'mesh' || sub.kind === 'material' || sub.kind === 'scene') {
+      if (GLTF_KINDS.has(sub.kind)) {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel });
       }
     }
