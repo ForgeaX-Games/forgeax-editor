@@ -140,14 +140,45 @@ if (uiRoot) {
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
 // options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
 // path (not the virtual:forgeax/bundler adapter), so pass it as the bundler arg.
-const app = await createApp(canvas, {}, { shaderManifestUrl: `${BASE}/shaders/manifest.json` });
+const app = await createApp(canvas, {}, {
+  shaderManifestUrl: `${BASE}/shaders/manifest.json`,
+  // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss
+  // so the editor viewport can lazily cook glTF sub-assets (skin, animation
+  // clips, skeleton) needed for Edit-mode skeletal animation preview. Studio
+  // outer proxy routes /__import + /__forgeax-ddc to the play engine, which
+  // owns the per-game pluginPack catalog. MUST be in the BundlerOptions (3rd
+  // arg) — the 2nd-arg CreateAppOptions silently drops it (engine #311 split).
+  importTransport: {
+    async fetchPack(guid: string) {
+      try {
+        const response = await fetch(`/__import/${guid}`, { method: 'POST' });
+        if (!response.ok) return { ok: false };
+        try {
+          const body = await response.json();
+          if (Array.isArray(body)) return { ok: true, entries: body };
+        } catch { /* empty/non-JSON body */ }
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  },
+});
 if (!app.ok) {
   paintDiagnosticMessage(app.error);
   throw new Error('[editor] createApp failed');
 }
 
 const { world, renderer } = app.value;
-renderer.assets.configurePackIndex(`${BASE}/pack-index.json`);
+// Point at the play engine's per-game catalog (proxied through the studio's
+// /preview/* route) when a game slug is active. Edit-runtime's own pluginPack
+// has empty roots, so without this every loadByGuid on a game asset (witch.glb
+// skin, animation-clip) would miss the catalog and bail before /__import.
+const sceneSlug = getSceneId();
+const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
+  ? `/preview/pack-index/${sceneSlug}.json`
+  : `${BASE}/pack-index.json`;
+renderer.assets.configurePackIndex(packIndexUrl);
 
 (window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus };
 void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
@@ -264,6 +295,77 @@ void setupEditorSkylight(
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
 // popped-out panel windows and apply their forwarded edits (design §0.2.2).
 initSync();
+
+// ── Skinned-mesh + animation preview hook (per-game) ──────────────────────────
+// Edit-mode wants to preview a skinned glb (e.g. hellforge's witch) alongside
+// the authored scene, so artists can verify rig + anim clips without flipping
+// to ▶ Play. Edit-mode persistence (Y.Doc → bus.doc) doesn't model Skin /
+// AnimationPlayer / animation-clip, so we sidestep the doc layer entirely and
+// instantiate the GLB sub-scene directly via the runtime asset registry — the
+// SAME path hellforge Play uses (assets.loadByGuid(scene) + assets.instantiate
+// + addComponent(AnimationPlayer)). Per-game opt-in via forge.json `preview:
+// { skin: { sceneGuid, clipGuids[], clipDefault, scale?, pos? } }`.
+void (async () => {
+  const slug = getSceneId();
+  if (!slug || slug === 'default') return;
+  // Wait for the renderer to come online — loadByGuid before then races the
+  // pack-index fetch and lands at `asset-not-imported` with no chance to retry.
+  await renderer.ready.catch(() => null);
+  try {
+    const fj = await fetch(`/api/files?path=.forgeax%2Fgames%2F${encodeURIComponent(slug)}%2Fforge.json`, { cache: 'no-store' })
+      .catch(() => null);
+    if (!fj || !fj.ok) return;
+    const wrapper = (await fj.json()) as { content?: string };
+    if (typeof wrapper?.content !== 'string') return;
+    const cfg = JSON.parse(wrapper.content) as { preview?: { skin?: { sceneGuid: string; clipGuids?: string[]; clipDefault?: string; scale?: number; pos?: [number, number, number] } } };
+    const skin = cfg?.preview?.skin;
+    if (!skin?.sceneGuid) return;
+    const { AnimationPlayer, Skin, SceneInstance, Transform, perspective: _p } = await import('@forgeax/engine-runtime');
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    const assets = renderer.assets;
+    const sceneGid = AssetGuid.parse(skin.sceneGuid);
+    if (!sceneGid.ok) return;
+    const sceneRes = await assets.loadByGuid(sceneGid.value);
+    if (!sceneRes.ok) { console.warn('[editor] preview skin scene load failed:', (sceneRes.error as { code?: string })?.code); return; }
+    const inst = assets.instantiate(sceneRes.value, world as never);
+    if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
+    const skinRoot = inst.value as { generation: number; index: number };
+    // Apply preview placement (pos + scale) on the SceneInstance root.
+    const [px, py, pz] = skin.pos ?? [0, 0, 0];
+    const s = skin.scale ?? 1;
+    (world as never as { set: (e: unknown, c: unknown, d: unknown) => unknown }).set(
+      skinRoot, Transform, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 },
+    );
+    // Find the Skin entity inside the instantiated hierarchy.
+    const sceneInst = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean; value?: { mapping: unknown[] } } }).get(skinRoot, SceneInstance);
+    if (!sceneInst.ok || !sceneInst.value) return;
+    let skinEnt: unknown = null;
+    for (const ent of sceneInst.value.mapping) {
+      if (!ent) continue;
+      const r = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean } }).get(ent, Skin);
+      if (r.ok) { skinEnt = ent; break; }
+    }
+    if (!skinEnt) return;
+    // Pick the default clip — load its handle if a guid was given, else first.
+    const defaultName = skin.clipDefault ?? 'idle';
+    const clipGuids = skin.clipGuids ?? [];
+    if (clipGuids.length === 0) return;
+    // Author convention: clipGuids[] mirrors the manifest order; clipDefault
+    // matches one of those names — but we only get guids, so just use the
+    // first available one. Authors who want a specific default put it first.
+    const firstGid = AssetGuid.parse(clipGuids[0]!);
+    if (!firstGid.ok) return;
+    const clipRes = await assets.loadByGuid(firstGid.value);
+    if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
+    (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
+      component: AnimationPlayer,
+      data: { clip: clipRes.value, time: 0, speed: 1, paused: false, looping: true },
+    });
+    console.log(`[editor] preview skin loaded for ${slug} (default clip via guid ${clipGuids[0]!.slice(0, 8)}, ${defaultName})`);
+  } catch (err) {
+    console.warn('[editor] preview skin hook failed:', (err as Error).message ?? err);
+  }
+})();
 
 // Live-reload the scene when an external writer (an AI agent editing scene.json
 // on disk) changes it — subscribes to the server's file-event WebSocket so the
