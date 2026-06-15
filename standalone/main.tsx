@@ -25,25 +25,47 @@
 //   plan §2 D-4          (mountStandalone implementation unchanged)
 //   plan §2 D-10         (DockShell reuse from @forgeax/interface)
 //   plan §4 R-9          (hideChatAndForge bypasses chat/forge render)
+//
+// Fix-up I-5: charter P3 (explicit failure) — mountStandalone and
+// createRoot.render are wrapped in try/catch with console.error; null
+// rootEl throws AppKitError instead of silently no-opping.
 
-import { mountStandalone } from '@forgeax/editor/app-kit';
+import { mountStandalone, AppKitError } from '@forgeax/editor/app-kit';
 import editorApp from '@forgeax/editor';
 import { createRoot } from 'react-dom/client';
 import { DockShell } from '@forgeax/interface';
 
 // Viewport iframe — mountStandalone creates the iframe at
 // editorApp.manifest.entryUrl (= http://127.0.0.1:15280/?viewportOnly=1).
-mountStandalone(editorApp, { hideChatAndForge: true });
+// Wrapped in try/catch so mount failures surface visibly rather than
+// silently no-opping (charter P3).
+try {
+  mountStandalone(editorApp, { hideChatAndForge: true });
+} catch (err) {
+  console.error('[standalone] mountStandalone failed:', err);
+  throw err;
+}
 
 // DockShell chrome — renders ep:* panel iframes via dockview. The
 // hideChatAndForge prop ensures the chat panel is not auto-mounted.
 const rootEl = document.getElementById('root');
-if (rootEl) {
+if (!rootEl) {
+  throw new AppKitError(
+    'standalone root element #root not found in index.html',
+    'INVALID_ROOT_EL',
+    'Ensure standalone/index.html contains <div id="root"></div> before the module script.',
+  );
+}
+
+try {
   createRoot(rootEl).render(
     <div className="standalone-shell">
       <DockShell hideChatAndForge={true} />
     </div>,
   );
+} catch (err) {
+  console.error('[standalone] DockShell render failed:', err);
+  throw err;
 }
 
 // Test hook (e2e parity with the legacy standalone-editor-demo). Bare
