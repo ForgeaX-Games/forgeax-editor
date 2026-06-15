@@ -16,6 +16,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./app-kit": "./src/app-kit.ts",
     "./edit": "./src/edit.ts",
     "./panels": "./packages/editor-panels/src/manifest.ts",
     "./play": "./src/play.ts",
@@ -37,7 +38,6 @@
     "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
-    "@forgeax/interface": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-edit-runtime": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
