@@ -7,12 +7,9 @@
 // new ports, so :15290 reuses the legacy standalone-editor-demo slot
 // (PORTS.md updated in w16).
 //
-// Fix-up I-1 (option b): self-contained dockview container does NOT import
-// @forgeax/interface — only needs @vitejs/plugin-react for JSX/TSX
-// transpilation of standalone/main.tsx. No path aliases or cross-package
-// optimizeDeps exclusions are needed because the dockview layout is
-// built entirely within the editor package's own dependency graph
-// (dockview + react + @forgeax/editor-core/manifest leaf module).
+// Fix-up I-1 (option b): standalone/main.tsx uses plain DOM API to create
+// panel iframes — no React, no dockview, no @forgeax/interface imports.
+// Therefore @vitejs/plugin-react is not needed.
 //
 // Fix-up I-2: server.proxy '/editor' → http://127.0.0.1:15280 so that
 // iframe src='/editor/?panel=...' in standalone/main.tsx resolves to the
@@ -24,19 +21,14 @@
 //   OOS-8 (port reuse, no new ports)
 
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [react()],
   root: resolve(PACKAGE_DIR, 'standalone'),
   base: '/',
-  resolve: {
-    dedupe: ['react', 'react-dom'],
-  },
   server: {
     port: 15290,
     strictPort: true,
