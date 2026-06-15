@@ -127,42 +127,7 @@ export const VagEditorOpenSourceSchema = z.object({
 });
 export type VagEditorOpenSourceMessage = z.infer<typeof VagEditorOpenSourceSchema>;
 
-// ── 8. VAG_EDITOR_POPOUT ─────────────────────────────────────────────────────
-// Producer: editor-runtime/panels/Dock.tsx:151. Asks interface to spawn a
-// labeled OS-window (Tauri WebviewWindow / window.open) carrying that panel.
-// scene defaults to 'default'; geom optionally restores remembered geometry.
-export const VagEditorPopoutSchema = z.object({
-  type: z.literal('VAG_EDITOR_POPOUT'),
-  payload: z.object({
-    panel: z.string(),
-    scene: z.string().optional(),
-    title: z.string().optional(),
-    geom: z
-      .object({
-        x: z.number(),
-        y: z.number(),
-        w: z.number(),
-        h: z.number(),
-      })
-      .nullable()
-      .optional(),
-  }),
-});
-export type VagEditorPopoutMessage = z.infer<typeof VagEditorPopoutSchema>;
-
-// ── 9. VAG_EDITOR_REDOCK ─────────────────────────────────────────────────────
-// Producer: editor-runtime/panels/Dock.tsx:160. Asks interface to close the
-// labeled popout window for the panel.
-export const VagEditorRedockSchema = z.object({
-  type: z.literal('VAG_EDITOR_REDOCK'),
-  payload: z.object({
-    panel: z.string(),
-  }),
-});
-export type VagEditorRedockMessage = z.infer<typeof VagEditorRedockSchema>;
-
-// ── 10. VAG_EDITOR_REF ───────────────────────────────────────────────────────
-// Producer: editor-runtime/store.ts:250 / 262 / 274 — three kinds:
+ // ── 8. VAG_EDITOR_REF
 //   kind='entity'    — id + name + components[] (+ source?)
 //   kind='component' — entityId + entityName + comp + value
 //   kind='asset'     — guid + assetKind + name (+ packPath?)
@@ -291,8 +256,8 @@ export type VagSchemaTypes = z.infer<ReturnType<typeof vagSchemaUnion>>;
 function vagSchemaUnion() {
   return z.union([
     VagAssetsChangedSchema, VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
-    VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema, VagEditorPopoutSchema,
-    VagEditorRedockSchema, VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
+    VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema,
+    VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
     VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema, VagSpawnEntitySchema,
   ]);
 }
