@@ -243,7 +243,7 @@ async function resolveGame(id: string): Promise<GameEntry | null> {
       const head = await fetch(url, { method: 'HEAD' });
       const ct = head.headers.get('content-type') ?? '';
       if (head.ok && ct.includes('javascript')) {
-        return await import(/* @vite-ignore */ url);
+        return await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
       }
     }
     throw new Error(`module not found: ${id}`);
