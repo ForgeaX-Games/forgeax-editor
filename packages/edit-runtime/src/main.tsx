@@ -2,10 +2,10 @@
 //
 // Boots the forgeax engine on a canvas (same path as @forgeax-studio/preview-
 // runtime: createApp + VAG postMessage bridge + diagnostic overlay) AND mounts
-// the React editor chrome (Hierarchy + Inspector + command-bus toolbar, ported
-// from the unveil-studio prototype). The authored SceneDocument is projected
-// onto the forgeax world by src/engine/sync.ts so what you edit renders with the
-// SAME engine the game plays on (WYSIWYG).
+// the React editor chrome (ViewportBar + ViewportHints). The authored SceneDocument
+// is projected onto the forgeax world by src/engine/sync.ts so what you edit renders
+// with the SAME engine the game plays on (WYSIWYG). Editor self-built dock retired;
+// default route is viewport-only. Panels live in outer DockShell as ep:* iframes.
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -22,7 +22,6 @@ import {
   VagConsoleSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
-import { EditorApp } from './EditorApp';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
 import { DetachedPanel } from './DetachedPanel';
@@ -44,12 +43,11 @@ setSceneId(new URLSearchParams(location.search).get('scene'));
 // load so paths/storage keys resolve to the active scene file (UE level model).
 await initSceneList();
 
-// ── Viewport-only mode (design: outer DockShell flat architecture) ────────────
-// Launched with `?viewportOnly=1`, this runs the engine + bus + BroadcastChannel
-// sync (as the authoritative "main") but mounts NO React panels — only the engine
-// canvas. All editor panels live in the outer DockShell as separate `ep:*` panel
-// iframes (?panel=X), each connecting via BroadcastChannel. This gives the
-// viewport maximum space while panels are arranged at the outer level.
+// ── Viewport-only mode (default path) ──────────────────────────────────────────
+// Default route: the editor runtime renders only the engine canvas with ViewportBar.
+// The `?viewportOnly=1` query is semantically identical to the default path after
+// dock retirement. All editor panels live in an outer DockShell as separate `ep:*`
+// panel iframes (?panel=X), each connecting via BroadcastChannel.
 const viewportOnly = new URLSearchParams(location.search).has('viewportOnly');
 
 // ── Pop-out window entry (design §0.2.2) ──────────────────────────────────────
@@ -124,13 +122,14 @@ if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
-// viewportOnly: skip the full DockManager but mount a minimal ViewportBar so
-// Undo/Redo/Save/W-E-R are reachable directly from the viewport panel.
+// Default path: always render ViewportBar (editor self-built dock retired; default
+// route is now viewport-only). The `?panel=X` and `?viewportOnly=1` query paths
+// are handled above (popout panel path) or are semantically identical.
 const uiRoot = document.getElementById('ui');
 if (uiRoot) {
   createRoot(uiRoot).render(
     <StrictMode>
-      {viewportOnly ? <ViewportBar /> : <EditorApp />}
+      <ViewportBar />
       <ViewportHints />
     </StrictMode>,
   );
@@ -182,7 +181,7 @@ const resolveMaterialAsset = makeMaterialResolver(renderer.assets as never, pack
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
 const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset);
 
-// Asset-edit mode: a standalone prefab-style pack (Assets 面板的怪物/角色资产,
+// Asset-edit mode: a standalone prefab-style pack (Assets panel monster/character asset,
 // id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
 // the arena-scale default framing leaves it a speck on the horizon, and without
 // a scene Sun its PBR reads near-black. Frame close-up and add a neutral key
