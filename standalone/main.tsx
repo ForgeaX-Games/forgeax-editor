@@ -23,7 +23,7 @@
 //   plan §2 D-4         (prop drilling stays React-side; SDK passes flag)
 //   plan §8             (this file IS the SDK consumption sample)
 
-import { mountStandalone } from '@forgeax/interface/app-kit';
+import { mountStandalone } from '@forgeax/editor/app-kit';
 import editorApp from '@forgeax/editor';
 
 mountStandalone(editorApp, { hideChatAndForge: true });
