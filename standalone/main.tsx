@@ -9,10 +9,11 @@
 //     iframe and does not consume manifest.panels).
 //   - The panel iframes (ep:hierarchy, ep:inspector, ep:assets, etc.) are
 //     created by a self-contained React-rendered dockview layout. Only
-//     dockview + its CSS + EDITOR_PANELS SSOT from @forgeax/editor-core/manifest
-//     (a zero-transitive-import leaf module) are imported. The
-//     @forgeax/interface DockShell is NOT imported — avoids pulling in its
-//     entire dependency tree (~13 unresolved path-alias / workspace imports).
+//     dockview + its CSS + EDITOR_PANELS SSOT from
+//     @forgeax/editor-core/manifest (a zero-transitive-import leaf module)
+//     are imported. Neither @forgeax/interface nor @forgeax/editor (barrel)
+//     are imported — both would pull in editor-core's barrel which
+//     transitively loads @forgeax/engine-runtime + @forgeax/engine-gltf.
 //   - No layout persistence (E-4) — every page load renders fresh.
 //
 // Frame count:
@@ -27,11 +28,11 @@
 //   plan §4 R-9          (no chat/forge panel)
 //
 // Fix-ups:
-//   I-1 (option b) — self-contained dockview container, no @forgeax/interface
+//   I-1 (option b) — self-contained dockview container, no @forgeax/interface,
+//                    no @forgeax/editor barrel
 //   I-5 — try/catch + AppKitError on null rootEl (charter P3)
 
-import { mountStandalone, AppKitError } from '@forgeax/editor/app-kit';
-import editorApp from '@forgeax/editor';
+import { mountStandalone, AppKitError, defineApp } from '@forgeax/editor/app-kit';
 import { createRoot } from 'react-dom/client';
 import React, { useCallback, useMemo, useRef } from 'react';
 import {
@@ -45,6 +46,20 @@ import 'dockview/dist/styles/dockview.css';
 // (zero transitive imports) to avoid pulling in the editor-core barrel
 // which transitively loads @forgeax/engine-runtime + @forgeax/engine-gltf.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
+
+// Inline the editorApp construction that normally lives in
+// @forgeax/editor/src/index.ts. We avoid importing that barrel because
+// it pulls editor-shared's manifest → @forgeax/editor-core barrel →
+// gltf-runtime.ts → @forgeax/engine-gltf / @forgeax/engine-runtime.
+// Instead we use only leaf modules: defineApp from app-kit.ts, and
+// EDITOR_PANELS from editor-core/manifest.ts.
+const editorApp = defineApp({
+  id: 'editor',
+  entryUrl: 'http://127.0.0.1:15280/?viewportOnly=1',
+  panels: EDITOR_PANELS.map((id) => ({ id })),
+  surfaces: [],
+  routes: [],
+});
 
 const PANEL_LABELS: Record<string, string> = {
   hierarchy: 'Hierarchy',
