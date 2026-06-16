@@ -3,7 +3,6 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -81,7 +80,12 @@ export default defineConfig({
     react(),
     shaderBaseStrip() as never,
     packBaseStrip() as never,
-    pluginPack({ roots: [], base: BASE }) as never,
+    // pluginPack is intentionally NOT registered here: edit-runtime proxies
+    // /preview/pack-index/*, /__import, and /__forgeax-ddc directly to the
+    // play engine's pluginPack (which holds the per-game gltfImporter +
+    // catalog). A local pluginPack with empty roots would intercept those
+    // routes first and 404 with `meta-not-found`, blocking the skinned-mesh
+    // preview load.
     silenceShaderEmitInServe(forgeaxShader() as never) as never,
   ],
   optimizeDeps: {
@@ -142,6 +146,14 @@ export default defineConfig({
     // it's same-origin already; this proxy makes a DIRECT :15280 visit work too.
     proxy: {
       '/api': { target: `http://127.0.0.1:${process.env.FORGEAX_SERVER_PORT ?? 18900}`, changeOrigin: true },
+      // Skinned-mesh preview (witch.glb sub-assets) lives in the play engine's
+      // per-game pluginPack catalog. /preview/* serves catalog + DDC bodies;
+      // /__import + /__forgeax-ddc are the gltfImporter cook + read endpoints
+      // (registered bare-prefix by pluginPack — no base awareness). Without
+      // these the edit-runtime preview hook fails with `asset-not-imported`.
+      '/preview': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true, ws: true },
+      '/__import': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
+      '/__forgeax-ddc': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
     },
   },
   build: { outDir: resolve(here, 'dist') },
