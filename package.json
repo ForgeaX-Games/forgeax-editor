@@ -16,6 +16,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./app-kit": "./src/app-kit.ts",
     "./edit": "./src/edit.ts",
     "./panels": "./packages/editor-panels/src/manifest.ts",
     "./play": "./src/play.ts",
@@ -37,7 +38,6 @@
     "test:e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
-    "@forgeax/interface": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-edit-runtime": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
@@ -45,8 +45,12 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@forgeax/interface": "workspace:*",
     "@playwright/test": "^1.45.0",
+    "@vitejs/plugin-react": "^4.3.0",
     "dependency-cruiser": "^17.4.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.6.3",
     "vite": "*"
   }

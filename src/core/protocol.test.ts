@@ -1,6 +1,6 @@
 // @forgeax/editor/protocol — VAG_* schema unit tests (M1 w1, TDD red phase)
 //
-// 16 zod schemas, 1 pass + 1 fail per type (≥ 32 assertions). Each fail
+// 14 zod schemas, 1 pass + 1 fail per type (≥ 28 assertions). Each fail
 // case asserts `error.issues[0].path` hits a specific field name so the
 // downstream consumer can present a structured error (plan-strategy §8).
 //
@@ -21,8 +21,6 @@ import {
   VagDeviceLostSchema,
   VagEditorFlushSchema,
   VagEditorOpenSourceSchema,
-  VagEditorPopoutSchema,
-  VagEditorRedockSchema,
   VagEditorRefSchema,
   VagFpsStatsSchema,
   VagPreviewDisposeSchema,
@@ -166,46 +164,6 @@ describe('VAG_EDITOR_OPEN_SOURCE', () => {
   });
 });
 
-describe('VAG_EDITOR_POPOUT', () => {
-  test('pass: payload { panel, scene?, title?, geom? } accepted', () => {
-    const r = VagEditorPopoutSchema.safeParse({
-      type: 'VAG_EDITOR_POPOUT',
-      payload: { panel: 'inspector', scene: 'demo', title: 'Inspector', geom: { x: 0, y: 0, w: 420, h: 640 } },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: missing payload.panel → path includes "panel"', () => {
-    const r = VagEditorPopoutSchema.safeParse({
-      type: 'VAG_EDITOR_POPOUT',
-      payload: {},
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('panel'))).toBe(true);
-    }
-  });
-});
-
-describe('VAG_EDITOR_REDOCK', () => {
-  test('pass: payload { panel } accepted', () => {
-    const r = VagEditorRedockSchema.safeParse({
-      type: 'VAG_EDITOR_REDOCK',
-      payload: { panel: 'assets' },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: missing payload.panel → path includes "panel"', () => {
-    const r = VagEditorRedockSchema.safeParse({
-      type: 'VAG_EDITOR_REDOCK',
-      payload: {},
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('panel'))).toBe(true);
-    }
-  });
-});
-
 describe('VAG_EDITOR_REF', () => {
   test('pass: entity-kind payload accepted', () => {
     const r = VagEditorRefSchema.safeParse({
@@ -316,10 +274,10 @@ describe('VAG_SPAWN_ENTITY', () => {
   });
 });
 
-describe('schema completeness — all 16 exports present', () => {
-  test('Object.keys(...).filter(endsWith("Schema")).length === 16', async () => {
+describe('schema completeness — all 14 exports present', () => {
+  test('Object.keys(...).filter(endsWith("Schema")).length === 14', async () => {
     const mod = await import('../protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
-    expect(schemaKeys).toHaveLength(16);
+    expect(schemaKeys).toHaveLength(14);
   });
 });

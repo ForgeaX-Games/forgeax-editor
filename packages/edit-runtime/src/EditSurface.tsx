@@ -24,8 +24,6 @@ import {
   VagEditorFlushSchema,
   VagFpsStatsSchema,
   VagEditorOpenSourceSchema,
-  VagEditorPopoutSchema,
-  VagEditorRedockSchema,
   VagEditorRefSchema,
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
@@ -302,14 +300,6 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         }
         case 'VAG_EDITOR_REF': {
           VagEditorRefSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_EDITOR_POPOUT': {
-          VagEditorPopoutSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_EDITOR_REDOCK': {
-          VagEditorRedockSchema.safeParse(ev.data);
           return;
         }
         case 'VAG_EDITOR_OPEN_SOURCE': {

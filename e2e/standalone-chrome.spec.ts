@@ -41,9 +41,10 @@ const FORGE_ENTRY_TESTID = '[data-testid="forge-entry"]';
 test.describe('standalone chrome — hideChatAndForge dual-side', () => {
   test('case A: hideChatAndForge=true hides chat-panel and forge-entry on :15290', async ({ page }) => {
     await page.goto(STANDALONE_URL);
-    // Wait for module evaluation + mountStandalone iframe attachment so the
-    // App chrome has had a chance to render whatever it intends to render.
-    await expect(page.locator('iframe')).toHaveCount(1, { timeout: 10_000 });
+    // Wait for the mountStandalone-created viewport iframe to attach (it is
+    // appended directly under <body>; DockShell's panel iframes live inside
+    // #root and are excluded by the `body > iframe` child combinator).
+    await expect(page.locator('body > iframe')).toHaveCount(1, { timeout: 10_000 });
     // The hideChatAndForge contract: neither testid exists on the host page.
     // Use locator.count() rather than toBeHidden so a non-rendered branch
     // (the conditional-render path D-4 prescribes) registers as 0, not as

@@ -121,8 +121,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
   display: grid; grid-template-columns: 1fr; grid-template-rows: 34px 1fr;
   grid-template-areas: "tool" "dock";
   font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg);
-  --dock-side: 248px; --dock-bottom: 170px;
-}
+  }
 .ed-toolbar {
   grid-area: tool; pointer-events: auto;
   display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -131,87 +130,6 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .ed-brand { font-family: var(--mono); font-weight: 700; color: var(--lime); font-size: 12px; }
 .ed-tool-sp { flex: 1; }
 .ed-tool-hint { color: var(--fg3); font-size: 11px; font-family: var(--mono); }
-
-/* ── Dock workspace (design §21 mockup): flush leaves, 1px separators (the gap),
-   square corners; rounded only on floating windows. Center is transparent so the
-   engine canvas shows through + the viewport gets pointer events. ── */
-.dockspace {
-  grid-area: dock; position: relative; pointer-events: none;
-  /* MUST stay transparent: the Viewport leaf is transparent and the engine canvas
-     lives BEHIND this overlay — an opaque bg here hides the rendered scene. The
-     recursive layout draws separators via explicit .dock-sep, not a grid-gap bg. */
-  display: flex; background: transparent; min-height: 0; min-width: 0;
-}
-/* Recursive Split(row/col) tree: panes share space by flex ratio; 1px (4px hit)
-   separators between siblings are the resize handles. */
-.dock-root { flex: 1 1 0; display: flex; min-width: 0; min-height: 0; }
-.dock-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
-.dock-split.row { flex-direction: row; }
-.dock-split.col { flex-direction: column; }
-.dock-pane { display: flex; min-width: 0; min-height: 0; }
-.dock-sep { flex: 0 0 4px; background: var(--line); pointer-events: auto; z-index: 2; }
-.dock-sep.row { cursor: col-resize; }
-.dock-sep.col { cursor: row-resize; }
-.dock-sep:hover { background: var(--lime, #7ee04a); }
-
-.dockleaf { pointer-events: auto; display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; min-width: 0; background: var(--bg1); overflow: hidden; }
-/* The Viewport leaf is a click-through window onto the engine canvas behind the
-   overlay: its body + frame pass pointer events to the canvas (orbit/pick); only
-   its tab bar stays interactive. */
-.leaf-viewport { background: transparent; pointer-events: none; }
-.leaf-viewport > .docktabs { pointer-events: auto; }
-.leaf-viewport > .dockbody { pointer-events: none; background: transparent; }
-.docktabs-sp { flex: 1 1 auto; }
-.dt-act { pointer-events: auto; cursor: pointer; color: var(--fg3); padding: 0 4px; }
-.dt-act:hover { color: var(--lime, #7ee04a); }
-.dockhead {
-  display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: grab;
-  background: var(--bg2); border-bottom: 1px solid var(--line); user-select: none; flex: 0 0 auto;
-  font-family: var(--mono); font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.06em;
-}
-.dockhead:active { cursor: grabbing; }
-.dh-grip { color: var(--fg3); opacity: 0.6; }
-.dh-title { flex: 1 1 auto; }
-.dh-x { cursor: pointer; color: var(--fg3); padding: 0 2px; }
-.dh-x:hover { color: var(--fg); }
-.dh-pop { cursor: pointer; color: var(--fg3); padding: 0 2px; }
-.dh-pop:hover { color: var(--lime, #7ee04a); }
-/* TabGroup bar — a docked region shows its panels as draggable tabs. */
-.docktabs { display: flex; flex: 0 0 auto; background: var(--bg2); border-bottom: 1px solid var(--line); overflow-x: auto; }
-.docktab {
-  display: flex; align-items: center; gap: 5px; padding: 3px 9px; cursor: grab; user-select: none;
-  font-family: var(--mono); font-size: 11px; color: var(--fg3); border-right: 1px solid var(--line);
-  white-space: nowrap; flex: 0 0 auto;
-}
-.docktab:hover { color: var(--fg2); }
-.docktab.on { background: var(--bg1); color: var(--fg); box-shadow: inset 0 -2px 0 var(--lime, #7ee04a); }
-.docktab:active { cursor: grabbing; }
-.dockbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.dockbody > .panel { height: 100%; }
-.dockbody .panel > h3 { display: none; } /* leaf head replaces the panel's own title */
-
-/* Floating window: detached, rounded, shadowed, on top. */
-.floatwin {
-  position: fixed; z-index: 30; border: 1px solid var(--line2, var(--line)); border-radius: 8px;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55); background: var(--bg1);
-}
-.floatwin .dockhead { border-radius: 8px 8px 0 0; }
-.float-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--fg3) 50%, var(--fg3) 60%, transparent 60%); }
-
-/* Drag drop indicator: highlights the hovered leaf + the sub-zone (center = tab,
-   edge = split) the panel will land in; a separate top band = pop-out. */
-.dropind { position: absolute; pointer-events: none; z-index: 40; }
-.dropind.popout-band { left: 0; right: 0; top: 0; height: 30px; background: var(--blue-soft, rgba(90, 169, 255, 0.22)); border-bottom: 1px solid var(--blue-line, #5aa9ff); display: flex; align-items: center; justify-content: center; }
-.dropind.popout-band .dzlabel { color: var(--blue, #5aa9ff); position: static; transform: none; }
-.di-zone { position: absolute; border: 1px solid var(--lime-line, #7ee04a); background: var(--lime-soft, rgba(126, 224, 74, 0.18)); display: flex; align-items: center; justify-content: center; }
-.di-zone.center { inset: 14%; }
-.di-zone.left { left: 0; top: 0; bottom: 0; width: 42%; }
-.di-zone.right { right: 0; top: 0; bottom: 0; width: 42%; }
-.di-zone.top { left: 0; right: 0; top: 0; height: 42%; }
-.di-zone.bottom { left: 0; right: 0; bottom: 0; height: 42%; }
-.dzlabel { font-family: var(--mono); font-size: 10px; color: var(--lime, #7ee04a); }
-.draggh { position: fixed; width: 150px; background: var(--bg2); border: 1px solid var(--lime-line, #7ee04a); border-radius: 7px; box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6); opacity: 0.92; transform: rotate(-2deg); z-index: 50; }
-.draggh .h { background: var(--bg3); padding: 3px 8px; font-size: 10px; color: var(--fg); border-radius: 6px 6px 0 0; }
 .draggh .b { padding: 6px 8px; font-size: 9px; color: var(--fg3); }
 
 /* Redock tray — lists panels currently popped out into OS windows so they can be
