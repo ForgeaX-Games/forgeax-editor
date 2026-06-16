@@ -279,6 +279,7 @@ export default defineConfig({
     exclude: [
       '@forgeax/engine-app',
       '@forgeax/engine-runtime',
+      '@forgeax/engine-render-graph',
       '@forgeax/engine-ecs',
       '@forgeax/engine-types',
       '@forgeax/engine-shader',
@@ -310,6 +311,7 @@ export default defineConfig({
     },
     dedupe: [
       '@forgeax/engine-runtime',
+      '@forgeax/engine-render-graph',
       '@forgeax/engine-ecs',
       '@forgeax/engine-types',
       '@forgeax/engine-rhi',
