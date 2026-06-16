@@ -102,11 +102,11 @@ test.describe('mountStandalone', () => {
     });
     await page.goto('/');
     // Wait for demo module evaluation + initial mountStandalone() call.
-    await expect(page.locator('iframe')).toHaveCount(1);
+    await expect(page.locator('body > iframe')).toHaveCount(1);
   });
 
   test('AC-07: iframe attached at root and src equals app.entryUrl', async ({ page }) => {
-    const iframe = page.locator('iframe');
+    const iframe = page.locator('body > iframe');
     await expect(iframe).toHaveCount(1);
     const src = await iframe.getAttribute('src');
     expect(src).toBe(ENTRY_URL);
@@ -145,8 +145,8 @@ test.describe('mountStandalone', () => {
       hook.mountStandalone(hook.editorApp);
     });
     // Even after the second call, exactly one iframe lives at the root.
-    await expect(page.locator('iframe')).toHaveCount(1);
-    const src = await page.locator('iframe').getAttribute('src');
+    await expect(page.locator('body > iframe')).toHaveCount(1);
+    const src = await page.locator('body > iframe').getAttribute('src');
     expect(src).toBe(ENTRY_URL);
   });
 });

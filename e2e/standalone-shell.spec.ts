@@ -1,45 +1,43 @@
 // e2e — standalone shell DockShell + ep:* iframes + viewport iframe (AC-10/AC-11).
 //
-// AC-spec-matrix (plan §2 D-14 — AC <-> spec assertion reverse map):
-//   AC-10  page.frames() >= 9                     -> assertion @ frameCountTest line ~85
-//   AC-11a 8 panel containers must be visible     -> assertion @ visibilityTest line ~104
-//   AC-11b first panel must show readable text    -> assertion @ readableTextTest line ~135
-//   AC-11c each iframe src contains ?panel=<id>   -> assertion @ panelUrlTest line ~155
-//   AC-11d viewport iframe src contains ?viewportOnly=1 -> @ panelUrlTest line ~150
-//   AC-18  postMessage source/origin gate         -> guarded by w14a grep on app-kit.ts (NOT in spec)
+// AC-spec-matrix (plan §2 D-14):
+//   AC-10  DockShell registers all 9 ep:* panels, each panel materialises
+//          an iframe when its tab is active            -> registrationTest, frameOnActivationTest
+//   AC-11a every panel iframe wrapper visible while its tab is active -> visibilityTest
+//   AC-11b first visible panel renders readable text   -> readableTextTest
+//   AC-11c each panel id appears in some iframe URL    -> panelUrlTest
+//   AC-11d viewport iframe URL contains ?viewportOnly=1 -> panelUrlTest
+//   AC-18  postMessage source/origin gate              -> guarded by w14a grep on app-kit.ts
 //
-// Falsification check (plan §2 D-13, §5.3 — confirm spec has discriminative power;
-// reviewer applies these manually, NOT in CI):
-//   1. Comment out <DockShell> render in standalone/main.tsx (keep only mountStandalone):
-//        expected: page.frames() == 1 (main only)  -> AC-10 frameCountTest FAILS.
-//   2. Add `style={{ display: 'none' }}` to each EditorPanelFrame container:
-//        expected: visibilityTest FAILS at first panel toBeVisible() (display:none guard).
-//   3. Render each panel iframe but with `width: 0; height: 0` instead of removed:
-//        expected: visibilityTest FAILS (zero-size guard built into Playwright toBeVisible).
+// Falsification (plan §2 D-13, §5.3 — reviewer applies manually, not in CI):
+//   1. Comment out <DockShell> render: registrationTest + visibilityTest FAIL
+//      (no __dockApi; no .ep-frame-wrap elements).
+//   2. R2-style display:none + setTimeout 5s iframes: visibilityTest FAILS
+//      (toBeVisible refuses display:none) + readableTextTest FAILS (hidden
+//      iframes render nothing).
+//   3. buildDefault forgets matgraph/launcher (the I-3 case): registrationTest
+//      FAILS + panelUrlTest FAILS (missing ids in URL set).
 //
-// Architecture independence from mount-standalone.spec.ts (plan §4 R-2):
-//   This spec navigates to :15290 (the standalone host page itself). It counts
-//   the React-rendered frame tree (8 panel iframes + 1 viewport iframe = 9
-//   total child frames; 10 if main frame is included in page.frames()).
+// Why activation walking: dockview unmounts inactive tab bodies, so
+// `page.frames().length` at any instant counts only the ~6 active panels.
+// AC-10's spirit ("DockShell registers every panel") is checked via the
+// dev-only `window.__dockApi` hook + sequential setActive() of each ep:*
+// panel. The union of iframe URLs seen across activations covers all 9 ids;
+// no single instant sees 9 iframes at once.
 //
-//   mount-standalone.spec.ts navigates to a different test fixture page where
-//   only mountStandalone() runs in isolation -> exactly 1 viewport iframe.
-//   The two specs are on different pages and their assertions do NOT collide;
-//   no setTimeout wrapping or display:none trickery is needed (and is forbidden
-//   by plan §2 D-4 R3).
+// mount-standalone.spec.ts is on the same :15290 page but scopes its
+// `iframe.toHaveCount(1)` assertion to `body > iframe` — DockShell's
+// iframes live inside #root, so they are excluded by the child combinator.
+// No setTimeout / display:none trickery is needed (forbidden by plan §2 D-4 R3).
 //
-// Anchors:
-//   requirements §AC-10 / §AC-11
-//   plan-strategy §2 D-13 (visibility assertion) / §2 D-14 (AC-spec-matrix red line)
-//   plan-strategy §4 R-2 (independent spec, no collision with mount-standalone)
-//   implement-review §R2-2 #R2-#1 / #R2-#2 (R2 setTimeout 5s + display:none rejected)
-//   implement-review §R2-5 (spec <-> requirement scope drift -> visibility + text added)
+// Refs: requirements §AC-10/§AC-11; plan §2 D-13/D-14; §4 R-2;
+//       implement-review §R2-2 #R2-#1/#R2-#2; §R2-5.
 
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 // EDITOR_PANELS SSOT lives in
-// packages/editor/packages/editor-core/src/manifest.ts — duplicated here for
-// test-only use; drift surfaces as a missing-panel assertion failure.
+// packages/editor/packages/editor-core/src/manifest.ts; duplicated here so a
+// drift between the panel list and the spec surfaces as a missing-id failure.
 const EDITOR_PANEL_IDS = [
   'hierarchy',
   'inspector',
@@ -54,71 +52,118 @@ const EDITOR_PANEL_IDS = [
 
 const STANDALONE_URL = 'http://127.0.0.1:15290/';
 
-// Frame budget — 8 panel iframes + 1 viewport iframe = 9 child frames.
-// page.frames() includes the main frame, so total reported frame count >= 10
-// after w14a; we keep the spec-level threshold at 9 to leave room for slight
-// implementation variation (e.g. plugin frames) while still ruling out the
-// pre-w14a baseline of 1 (main only) or 2 (main + viewport).
-const MIN_FRAMES = 9;
+// Activation walker — flips each ep:* panel active in turn and collects
+// every iframe URL the page exposes while that panel is active. Used by
+// AC-10 / AC-11 tests to compile the union of all panel iframe URLs across
+// dockview's tabbed default layout.
+async function collectPanelUrlsByActivation(page: Page): Promise<Set<string>> {
+  const collected = new Set<string>();
+  for (const id of EDITOR_PANEL_IDS) {
+    await page.evaluate((panelId) => {
+      // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
+      try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
+    }, id);
+    // Yield so React + dockview commit the activation; dockview lazily
+    // renders the panel body's iframe element.
+    await page.waitForTimeout(80);
+    for (const f of page.frames()) collected.add(f.url());
+  }
+  return collected;
+}
+
+async function readDockApiSnapshot(page: Page): Promise<{ panelIds: string[] }> {
+  return page.evaluate(() => {
+    // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
+    const api = (window as any).__dockApi;
+    if (!api) return { panelIds: [] };
+    return { panelIds: api.panels.map((p: { id: string }) => p.id) };
+  });
+}
 
 test.describe('standalone shell — DockShell + panel iframes + viewport', () => {
-  // AC-10 — frame count threshold (frameCountTest)
-  test('AC-10: standalone host renders >= 9 frames (8 panel + 1 viewport)', async ({ page }) => {
+  // AC-10 — DockShell registers all 9 ep:* panels (registrationTest)
+  // and each materialises an iframe when active (frameOnActivationTest).
+  test('AC-10: DockShell registers all 9 ep:* panels + viewport iframe', async ({ page }) => {
     await page.goto(STANDALONE_URL);
 
-    // Poll because dockview/React mount + iframe creation is async; with w14a
-    // there is NO setTimeout-based defer, so frames appear within the React
-    // commit cycle (~hundreds of ms). 15s timeout covers cold vite dev start.
-    await expect.poll(() => page.frames().length, {
-      timeout: 15_000,
-      message: `expected page.frames().length >= ${MIN_FRAMES}`,
-    }).toBeGreaterThanOrEqual(MIN_FRAMES);
-  });
-
-  // AC-11a + AC-11b — every panel container visible + first panel readable text (visibilityTest + readableTextTest)
-  test('AC-11: panel containers attached + at least 3 visible + first visible shows readable text', async ({ page }) => {
-    await page.goto(STANDALONE_URL);
-
-    // Wait for the React tree to mount its panels.
+    // Wait for DockShell + mountStandalone to mount.
     await expect.poll(() => page.frames().length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(MIN_FRAMES);
+      .toBeGreaterThanOrEqual(3);
 
-    // visibilityTest — every panel iframe wrapper must be in the DOM, and at
-    // least 3 must satisfy Playwright's toBeVisible (i.e. NOT display:none,
-    // NOT visibility:hidden, NOT zero-size, NOT detached). dockview tabs
-    // collapse inactive panel bodies, so a strict "all 8 visible" assertion
-    // would falsely fail the GREEN implementation. The 3-visible floor still
-    // discriminates against the R2 display:none trick (which makes ALL
-    // panels invisible) and the no-DockShell baseline (which makes 0
-    // attached).
-    //
-    // ep-frame-wrap is the EditorPanelFrame wrapper from
-    // packages/interface/src/components/DockShell/EditorPanelFrame.tsx;
-    // each is data-panel="<id>".
-    const visiblePanels: Array<{ id: string; locator: Locator }> = [];
+    // registrationTest — `__dockApi.panels` is the dockview API's source of
+    // truth for the registered panel set. Every ep:<id> for the 9
+    // EDITOR_PANELS must appear here; missing one indicates DockShell's
+    // buildDefault forgot to addPanel for it (the I-3 regression case).
+    const snap = await readDockApiSnapshot(page);
     for (const id of EDITOR_PANEL_IDS) {
-      const wrap = page.locator(`.ep-frame-wrap[data-panel="${id}"]`);
-      await expect(wrap, `panel container missing for "${id}"`).toBeAttached({ timeout: 10_000 });
-      visiblePanels.push({ id, locator: wrap });
+      expect(
+        snap.panelIds.includes(`ep:${id}`),
+        `expected DockShell panel ep:${id} to be registered (panels=${snap.panelIds.join(',')})`,
+      ).toBe(true);
     }
 
+    // frameOnActivationTest — walking every panel materialises iframes for
+    // each active panel. The viewport iframe (mountStandalone) plus the
+    // active panel's iframe must always be present.
+    await collectPanelUrlsByActivation(page);
+    expect(page.frames().length, 'expected >= 3 frames (main + viewport + at least one active panel iframe)')
+      .toBeGreaterThanOrEqual(3);
+  });
+
+  // AC-11a + AC-11b — visibility + readable text (visibilityTest + readableTextTest)
+  test('AC-11: panel containers attached + active ones visible + first visible shows readable text', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+
+    await expect.poll(() => page.frames().length, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(3);
+
+    // visibilityTest — each panel iframe wrapper, while its tab is active,
+    // must satisfy Playwright's toBeVisible (NOT display:none / hidden /
+    // zero-size / detached). dockview unmounts inactive tab bodies, so each
+    // panel's visibility is checked while its tab is active. (.ep-frame-wrap
+    // = EditorPanelFrame wrapper, data-panel="<id>".)
     let visibleCount = 0;
     let firstVisibleId: string | undefined;
-    for (const { id, locator } of visiblePanels) {
-      if (await locator.isVisible().catch(() => false)) {
+    for (const id of EDITOR_PANEL_IDS) {
+      await page.evaluate((panelId) => {
+        // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
+        try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
+      }, id);
+      // Yield so dockview commits the activation; the body iframe element
+      // attaches and Playwright can see its visibility computed style.
+      await page.waitForTimeout(80);
+      const wrap = page.locator(`.ep-frame-wrap[data-panel="${id}"]`);
+      if (await wrap.isVisible({ timeout: 1_000 }).catch(() => false)) {
         visibleCount++;
         firstVisibleId = firstVisibleId ?? id;
       }
     }
-    expect(visibleCount, 'expected >= 3 panel bodies actually visible (top-tab bodies)').toBeGreaterThanOrEqual(3);
+    // The R2 `display:none` trick fails this because ALL panel bodies stay
+    // invisible regardless of activation. The pre-w14a no-DockShell
+    // baseline fails because no .ep-frame-wrap elements ever attach.
+    expect(visibleCount, 'expected every activated panel to be visible while active')
+      .toBeGreaterThanOrEqual(EDITOR_PANEL_IDS.length);
 
-    // readableTextTest — first visible panel iframe must contain at least one
-    // readable text node (Latin letters). Not bound to a specific copy — any
-    // non-empty rendered text counts. R2's `display:none` iframe trick fails
-    // this because hidden iframes render nothing the user can read.
+    // readableTextTest — re-activate the first panel (the loop's last
+    // setActive may have moved on) and assert readable Latin text in its
+    // iframe. Any non-empty rendered text passes; R2's display:none iframes
+    // would render nothing readable and fail.
     expect(firstVisibleId, 'expected at least one visible panel to read text from').toBeDefined();
+    await page.evaluate((panelId) => {
+      // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
+      try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
+    }, firstVisibleId!);
+    await page.waitForTimeout(120);
     const firstFrame = page.frameLocator(`.ep-frame-wrap[data-panel="${firstVisibleId}"] iframe.ep-frame-iframe`);
-    await expect(firstFrame.locator('text=/[A-Za-z]/').first()).toBeVisible({ timeout: 15_000 });
+    // Prefer interactive/visible elements (button/input/option/aria-label) —
+    // hidden header text (e.g. <h3 hidden>Hierarchy</h3> from the chromeless
+    // panel skin) is intentionally invisible and must not satisfy this
+    // assertion. We require any element that contains Latin letters AND is
+    // actually visible.
+    const visibleText = firstFrame.locator(
+      ':is(button, [role="button"], a, input, option, [aria-label], h1, h2, h4, p, span, div):visible',
+    ).filter({ hasText: /[A-Za-z]/ }).first();
+    await expect(visibleText).toBeVisible({ timeout: 15_000 });
   });
 
   // AC-11c + AC-11d + AC-08 — iframe URL contracts (panelUrlTest)
@@ -126,21 +171,21 @@ test.describe('standalone shell — DockShell + panel iframes + viewport', () =>
     await page.goto(STANDALONE_URL);
 
     await expect.poll(() => page.frames().length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(MIN_FRAMES);
+      .toBeGreaterThanOrEqual(3);
 
-    const childFrames = page.frames().slice(1);
-    const childUrls = childFrames.map((f) => f.url());
+    const allUrls = await collectPanelUrlsByActivation(page);
 
     // Viewport iframe — exactly the one mountStandalone created at
     // entryUrl = http://127.0.0.1:15280/?viewportOnly=1
-    const viewportFrames = childUrls.filter((u) => u.includes('?viewportOnly=1'));
-    expect(viewportFrames.length, 'expected at least 1 viewport iframe with ?viewportOnly=1').toBeGreaterThanOrEqual(1);
+    const viewportUrls = [...allUrls].filter((u) => u.includes('?viewportOnly=1'));
+    expect(viewportUrls.length, 'expected viewport iframe with ?viewportOnly=1').toBeGreaterThanOrEqual(1);
 
-    // Panel iframes — 8 EDITOR_PANELS each addressed via ?panel=<id>. Origin
-    // must reach :15280 (edit-runtime), NOT :15290 (standalone host); the
-    // proxy in vite.config.ts rewrites /editor/* -> :15280 to satisfy this.
+    // Panel iframes — every id in EDITOR_PANELS must appear in some iframe
+    // URL as ?panel=<id>. Origin must reach :15280 (edit-runtime), NOT
+    // :15290 (standalone host); the proxy in vite.config.ts rewrites
+    // /editor/* -> :15280 to satisfy this.
     const panelIdsInUrls = new Set<string>();
-    for (const url of childUrls) {
+    for (const url of allUrls) {
       const m = url.match(/[?&]panel=([^&#]+)/);
       if (m) panelIdsInUrls.add(decodeURIComponent(m[1]));
     }
