@@ -33,7 +33,7 @@
 //   plan-strategy §2 D-5 (zero-transitive root entry form)
 //   plan-strategy §4 R2 (no side-effect imports of runtime sub-packages)
 
-import { defineApp } from '@forgeax/interface/app-kit';
+import { defineApp } from './app-kit';
 import { EDITOR_PANELS } from '../packages/editor-shared/src/manifest';
 
 // `viewportOnly=1` query param: runtime contract.
@@ -73,13 +73,13 @@ export const manifest = editorApp.manifest;
 // the same symbols already in scope above (no side-effect imports
 // added: zero-transitive root entry per plan-strategy section 2 D-5).
 // (verify R1 Pure-trial F-1 carry-over: single-hop discoverability.)
-export { mountStandalone, mountComposition, AppKitError } from '@forgeax/interface/app-kit';
+export { mountStandalone, mountComposition, AppKitError } from './app-kit';
 export type {
   MountStandaloneOptions,
   MountOptions,
   AppManifest,
   AppManifestPanel,
   DefinedApp,
-} from '@forgeax/interface/app-kit';
+} from './app-kit';
 
 export default editorApp;

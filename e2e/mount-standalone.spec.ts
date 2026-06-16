@@ -35,8 +35,6 @@ import {
   VagDeviceLostSchema,
   VagEditorFlushSchema,
   VagEditorOpenSourceSchema,
-  VagEditorPopoutSchema,
-  VagEditorRedockSchema,
   VagEditorRefSchema,
   VagFpsStatsSchema,
   VagPreviewDisposeSchema,
@@ -61,8 +59,6 @@ const VAG_SCHEMAS = {
   VAG_DEVICE_LOST: VagDeviceLostSchema,
   VAG_EDITOR_FLUSH: VagEditorFlushSchema,
   VAG_EDITOR_OPEN_SOURCE: VagEditorOpenSourceSchema,
-  VAG_EDITOR_POPOUT: VagEditorPopoutSchema,
-  VAG_EDITOR_REDOCK: VagEditorRedockSchema,
   VAG_EDITOR_REF: VagEditorRefSchema,
   VAG_FPS_STATS: VagFpsStatsSchema,
   VAG_PREVIEW_DISPOSE: VagPreviewDisposeSchema,
@@ -106,11 +102,11 @@ test.describe('mountStandalone', () => {
     });
     await page.goto('/');
     // Wait for demo module evaluation + initial mountStandalone() call.
-    await expect(page.locator('iframe')).toHaveCount(1);
+    await expect(page.locator('body > iframe')).toHaveCount(1);
   });
 
   test('AC-07: iframe attached at root and src equals app.entryUrl', async ({ page }) => {
-    const iframe = page.locator('iframe');
+    const iframe = page.locator('body > iframe');
     await expect(iframe).toHaveCount(1);
     const src = await iframe.getAttribute('src');
     expect(src).toBe(ENTRY_URL);
@@ -149,8 +145,8 @@ test.describe('mountStandalone', () => {
       hook.mountStandalone(hook.editorApp);
     });
     // Even after the second call, exactly one iframe lives at the root.
-    await expect(page.locator('iframe')).toHaveCount(1);
-    const src = await page.locator('iframe').getAttribute('src');
+    await expect(page.locator('body > iframe')).toHaveCount(1);
+    const src = await page.locator('body > iframe').getAttribute('src');
     expect(src).toBe(ENTRY_URL);
   });
 });

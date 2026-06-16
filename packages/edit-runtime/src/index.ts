@@ -13,9 +13,7 @@
 // Re-exported for AppKit / standalone consumers.
 
 // ── UI / Components ──
-export { DockManager } from './Dock';
 export { DetachedPanel } from './DetachedPanel';
-export { EditorApp } from './EditorApp';
 export { ViewportBar } from './ViewportBar';
 export { ViewportHints } from './ViewportHints';
 
