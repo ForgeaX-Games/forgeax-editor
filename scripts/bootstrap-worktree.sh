@@ -17,6 +17,11 @@ cd "$ROOT"
 # fallback. Idempotency: pnpm -r build itself skips packages whose tsup output
 # is up-to-date, so re-runs are cheap.
 ( cd packages/engine && pnpm -r --workspace-concurrency=1 --filter './packages/**' run build )
+# wgpu-wasm/pkg/*.wasm is gitignored (wasm-pack ~5 MB output); copy from a
+# sibling main-tree checkout if present, else rebuild via build.sh (needs Rust).
+WASM="packages/engine/packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm"
+[ -f "$WASM" ] || cp "${ROOT%/.worktrees/*}/$WASM" "$WASM" 2>/dev/null \
+  || ( cd packages/engine/packages/wgpu-wasm && bash build.sh )
 DIST_COUNT=$(find packages/engine/packages -mindepth 2 -maxdepth 3 -type d -name dist | wc -l | tr -d ' ')
 [ "$DIST_COUNT" -lt 3 ] && { echo "FAIL: expected >= 3 engine dist dirs, got $DIST_COUNT" >&2; exit 1; }
 echo "bootstrap OK: $DIST_COUNT engine dist dirs ready"
