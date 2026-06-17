@@ -81,8 +81,16 @@ const standaloneRenderers = {
 };
 
 function StandaloneShell() {
+  // DockShell's root (.fx-dockwrap) is `flex: 1 1 auto` — it needs a flex
+  // parent with a definite height, exactly as studio's .studio-shell/.studio-
+  // body chain provides. Without `display:flex` here the dock collapses to 0
+  // height and every panel renders as a thin strip. So the wrapper is a
+  // full-viewport flex column.
   return (
-    <div className="forgeax-standalone-shell" style={{ width: '100vw', height: '100vh' }}>
+    <div
+      className="forgeax-standalone-shell"
+      style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+    >
       <PanelRenderersProvider value={standaloneRenderers}>
         <DockShell hideChatAndForge />
       </PanelRenderersProvider>
