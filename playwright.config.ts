@@ -71,6 +71,11 @@ export default defineConfig({
       // (PORT=15280, base='/editor/') applies unchanged.
       command: 'bunx vite --port 15280 --strictPort',
       cwd: './packages/edit-runtime',
+      // Standalone host is :15290 (it proxies /editor → :15280 with ws:true),
+      // NOT the studio :18920. edit-runtime's HMR clientPort defaults to 18920
+      // for the studio-embed case; override it so the vite HMR socket connects
+      // back through the standalone host instead of a dead :18920.
+      env: { ...process.env, FORGEAX_INTERFACE_PORT: '15290' },
       url: 'http://127.0.0.1:15280/editor/',
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,

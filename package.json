@@ -31,6 +31,8 @@
     "typecheck": "tsc --noEmit",
     "build": "echo 'build: nothing to bundle (packages publish source directly)'",
     "dev": "vite",
+    "dev:edit-runtime": "FORGEAX_INTERFACE_PORT=15290 bun -F @forgeax/editor-edit-runtime dev -- --port 15280 --strictPort",
+    "dev:standalone": "bash scripts/dev-standalone.sh",
     "lint": "node scripts/lint-sync-channel-panels.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:dep": "dependency-cruise --output-type err-html -c .dependency-cruiser.cjs packages",
