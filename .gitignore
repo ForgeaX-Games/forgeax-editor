@@ -4,6 +4,16 @@ node_modules/
 dist/
 build/
 
+# python bytecode caches (harness venv + forgeax scripts emit these on every
+# invocation; never tracked).
+__pycache__/
+*.pyc
+
+# .forgeax-harness is a floating clone of forgeax-editor-harness (NOT a submodule —
+# see docs/specs/2026-06-17-harness-floating-clone.md). The editor never tracks it;
+# `bun run harness:sync` clones/pulls it on install.
+/.forgeax-harness/
+
 # Vite caches (one per package)
 .vite/
 

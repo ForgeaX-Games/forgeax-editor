@@ -28,6 +28,8 @@
     "packages/engine/packages/*"
   ],
   "scripts": {
+    "harness:sync": "node scripts/sync-harness.mjs",
+    "postinstall": "node scripts/sync-harness.mjs",
     "typecheck": "tsc --noEmit",
     "build": "echo 'build: nothing to bundle (packages publish source directly)'",
     "dev": "vite",
