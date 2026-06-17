@@ -6,3 +6,7 @@
 	path = forgeax-editor-assets
 	url = https://github.com/ForgeaXGame/forgeax-editor-assets.git
 	branch = main
+[submodule "packages/interface"]
+	path = packages/interface
+	url = https://github.com/ForgeaXGame/forgeax-interface.git
+	branch = main

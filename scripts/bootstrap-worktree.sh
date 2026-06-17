@@ -5,8 +5,17 @@
 # tree has these prebuilt, worktrees do not. Plan §2 D-12, R-9 (R3).
 # Idempotent: skips packages whose dist/ already exists.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# ROOT = the editor repo root (scripts/..). Correct for both a standalone
+# editor clone and an embedded studio worktree: editor always vendors engine at
+# packages/engine and interface at packages/interface relative to this root.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# Pull the vendored submodules (interface + engine) so a fresh standalone clone
+# has DockShell/app-kit (interface) and the engine build inputs present.
+git submodule update --init --recursive packages/interface packages/engine 2>/dev/null || true
+# interface is consumed as TS source via vite — no build step needed, just
+# fail loudly if the submodule did not populate.
+[ -f packages/interface/src/app-kit.ts ] || { echo "FAIL: packages/interface submodule missing (run: git submodule update --init --recursive)" >&2; exit 1; }
 [ -d node_modules ] || bun install
 # packages/engine is a pnpm sub-workspace (its own pnpm-workspace.yaml + lockfile);
 # tsup / tsc et al come from `pnpm install` there, not the bun-hoisted top tree.

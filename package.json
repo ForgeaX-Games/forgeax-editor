@@ -42,10 +42,10 @@
     "@forgeax/editor-edit-runtime": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-shared": "workspace:*",
+    "@forgeax/interface": "workspace:*",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@forgeax/interface": "workspace:*",
     "@playwright/test": "^1.45.0",
     "@vitejs/plugin-react": "^4.3.0",
     "dependency-cruiser": "^17.4.3",
