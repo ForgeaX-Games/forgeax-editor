@@ -22,19 +22,37 @@
 
 ## Dependency structure
 
+```mermaid
+flowchart RL
+    shared["editor-shared"] --> core["editor-core"]
+    panels["editor-panels"] --> shared
+    edit["editor-edit-runtime"] --> panels
+    play["editor-play-runtime"] -.->|"iframe VAG_* protocol"| core
 ```
-editor-core  ←── editor-shared  ←── editor-panels  ←── editor-edit-runtime
-    ↑
-    └── editor-play-runtime          (iframe VAG_* protocol)
-```
+
+The DAG is `core ← shared ← panels ← edit-runtime`; `play-runtime` is a separate
+thick host that talks to `core` only over the `VAG_*` iframe protocol.
+`bun run lint:dep` (dependency-cruiser) fails the build if any import breaks it.
 
 ## Quick start
 
+> [!IMPORTANT]
+> First-time clone must fetch submodules — the editor vendors **engine** and
+> **interface** as git submodules under `packages/`, and the root bun workspace
+> glob (`packages/*`) resolves `@forgeax/interface@workspace:*` from the
+> `packages/interface` checkout. An uninitialized (empty) submodule dir makes
+> `bun install` fail with `Workspace dependency "@forgeax/interface" not found`.
+
 ```bash
-bun install            # install workspace deps
-bun run typecheck      # tsc --noEmit across all packages
-bun run lint:dep       # dependency-cruiser — assert the DAG has no cycle
+git submodule update --init --recursive   # fetch engine + interface submodules
+bun install                               # install workspace deps
+bun run typecheck                         # tsc --noEmit across all packages
+bun run lint:dep                          # dependency-cruiser — assert no cycle
 ```
+
+> [!TIP]
+> Cloning fresh? `git clone --recurse-submodules <url>` does the submodule fetch
+> in one step.
 
 ## Run
 
@@ -45,6 +63,13 @@ everyday dev loop; **embedded** is how studio actually ships it.
 
 The standalone editor is a self-rendered React + DockShell chrome served by vite
 with `root=standalone/`. It needs **two** servers wired together:
+
+```mermaid
+flowchart LR
+    browser(["Browser"]) -->|"open"| host[":15290 standalone chrome host"]
+    host -->|"proxy /editor"| edit[":15280 edit-runtime"]
+    edit -.->|"HMR ws → clientPort 15290"| host
+```
 
 | Port | Server | Role |
 |:--|:--|:--|
@@ -130,7 +155,9 @@ P3 SSOT-relocation loop closes the OQ-1 gap.
 |:--|:--|:--|
 | Console floods with `ERR_CONNECTION_REFUSED` to `:18920` on `:15290` | started the standalone host without `FORGEAX_INTERFACE_PORT=15290`, so edit-runtime HMR targets the studio-embed port | use `bun run dev:standalone` (or `bun run dev:edit-runtime`), not a bare `bun -F …edit-runtime dev` |
 | `:15290` viewport / panels are blank | `:15280` edit-runtime not running; the `/editor` proxy has nothing to hit | start both servers — `bun run dev:standalone` |
-| `bun install` reports `unresolved workspace` | engine submodule not fetched or `workspace:*` pin broken | verify the relative path to the engine submodule; stacks resolve via the parent repo's bun workspaces glob |
+| `bun install`: `Workspace dependency "@forgeax/interface" not found` | the `packages/interface` submodule dir is empty (uninitialized) | `git submodule update --init --recursive`, then `bun install` |
+| `bun install`: `simple-git-hooks` postinstall `ENOENT … package.json` | first-extract race on the engine submodule's git-hook dep | just re-run `bun install` — the file is in place on the retry |
+| `bun install` reports `unresolved workspace` | engine submodule not fetched or `workspace:*` pin broken | `git submodule update --init --recursive`; stacks resolve via the parent repo's bun workspaces glob |
 | `bun run typecheck` fails | a package's deps aren't installed or types mismatch | run `bun install` first, then `bun run typecheck` |
 | `bun run lint:dep` reports no-circular | a new cross-package import broke the DAG | check `.dependency-cruiser.cjs` rules; keep the DAG `core ← shared ← panels ← edit-runtime` |
 | port `15290` / `15280` / `15173` in use | another vite instance wasn't stopped | `bash stop.sh` (studio repo) or manually `kill` the PID |
