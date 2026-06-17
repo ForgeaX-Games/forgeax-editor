@@ -367,7 +367,8 @@ async function readGameProject(): Promise<GameProject | null> {
     if (!r.ok) return null;
     const j = (await r.json()) as { content?: string };
     if (!j.content) return null;
-    const result = await loadGameProject(async (_path) => j.content);
+    const content = j.content;
+    const result = await loadGameProject(async (_path) => content);
     if (!result.ok) {
       // forge.json exists but doesn't pass strict validation — log and return null.
       // Most common case: scenes[] present (editor-managed multi-scene, D-5).
