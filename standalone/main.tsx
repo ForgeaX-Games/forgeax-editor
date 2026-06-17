@@ -1,33 +1,37 @@
 // Standalone editor chrome entry — :15290 host page that self-renders the
-// editor shell (DockShell + ep:* iframes) AND boots the engine via
-// app-kit's mountStandalone for the viewport iframe.
+// editor shell (DockShell + ep:* iframes + viewport) entirely inside React.
 //
 // AC-spec-matrix (plan §2 D-14):
-//   AC-10 — DockShell mounts; page.frames() >= 9 (8 panel iframes + 1 viewport)
+//   AC-10 — DockShell mounts; page.frames() >= 3 (viewport + active panel + main)
 //   AC-11 — every panel container is in the DOM, primary tabs are visible,
 //           first visible panel renders readable text from edit-runtime
 //   AC-18 — postMessage source/origin gates remain in app-kit.ts (grep
 //           guarded; no setTimeout-based bypass here)
 //
 // Architecture (plan §2 D-4 R3 + §2 D-10 R3):
-//   - mountStandalone(editorApp) creates the single viewport iframe at
-//     entryUrl=http://127.0.0.1:15280/?viewportOnly=1 (mountStandalone
-//     implementation unchanged).
-//   - createRoot()->render(<App />) draws the chrome inside #root: DockShell
-//     reused from @forgeax/interface (no self-rendered dockview, no
-//     panelRenderer prop). DockShell's edit workspace registers EditorPanelFrame
-//     for each ep:* panel id; matgraph + launcher were added in 1d061b9 so
-//     EDITOR_PANELS SSOT (9 ids) is fully covered.
+//   - The viewport iframe is rendered by `renderEdit` (see standaloneRenderers
+//     below), injected into DockShell's Edit panel via PanelRenderersProvider.
+//     Its src is `/editor/?viewportOnly=1` — a root-relative URL served through
+//     the :15290 vite proxy (→ :15280). There is NO body-level iframe: the
+//     viewport lives inside the dock like every other panel.
+//   - createRoot()->render(<StandaloneShell />) draws the whole shell inside
+//     #root: DockShell reused from @forgeax/interface. DockShell's edit
+//     workspace registers EditorPanelFrame for each ep:* panel id; matgraph +
+//     launcher were added in 1d061b9 so EDITOR_PANELS SSOT (9 ids) is covered.
 //   - hideChatAndForge: true closes the chat panel for the standalone host
 //     (BANDAGE; AC-12 keeps studio:18920 EditMode unchanged).
+//
+// NOTE: an earlier design called app-kit's mountStandalone() here to create the
+// viewport as a body-level iframe. That left a cross-origin GHOST iframe
+// (direct :15280, URL missing the /editor base, running a 2nd engine instance)
+// once renderEdit took over the real viewport. The mountStandalone() call was
+// removed; the primitive itself stays a public app-kit API covered by
+// interface/src/lib/app-kit.test.ts (bun).
 //
 // Forbidden by plan §2 D-4 R3 (do NOT reintroduce):
 //   - setTimeout >= 1s deferring iframe creation
 //   - display:none / visibility:hidden / zero-size plain-DOM iframes
 //   - document.createElement('iframe') outside React
-//   - any timer constructed to slip past mount-standalone.spec.ts beforeEach
-//     (mount-standalone runs against a different fixture page; this :15290
-//     host page does not collide with its 1-iframe assertion).
 //
 // Engine subpackage dist must be present — see scripts/bootstrap-worktree.sh
 // (plan §2 D-12 / w19). Without it, vite cannot resolve
@@ -43,20 +47,8 @@ import {
   PanelRenderersProvider,
   DEFAULT_PANEL_RENDERERS,
 } from '@forgeax/interface/components/DockShell/panelRenderers';
-import { mountStandalone, AppKitError, defineApp } from '@forgeax/editor/app-kit';
-import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
+import { AppKitError } from '@forgeax/editor/app-kit';
 import '@forgeax/interface/styles/global.css';
-
-// Inline editorApp — avoid pulling the @forgeax/editor barrel which would drag
-// the full edit/play surfaces into this bundle. Only the manifest fields
-// mountStandalone reads (id + entryUrl) are required.
-const editorApp = defineApp({
-  id: 'editor',
-  entryUrl: 'http://127.0.0.1:15280/?viewportOnly=1',
-  panels: EDITOR_PANELS.map((id) => ({ id })),
-  surfaces: [],
-  routes: [],
-});
 
 // Thin-shell renderers — the standalone host renders edit/preview as iframes to
 // edit-runtime (:15280, proxied), the same pattern as the ep:* panels, instead
@@ -109,19 +101,9 @@ function boot(): void {
     });
   }
 
-  // Viewport iframe — mountStandalone owns its own DOM creation; spec
-  // mount-standalone.spec.ts asserts it produces exactly 1 iframe in
-  // isolation. Wrapped in try/catch so AppKitError surfaces through the
-  // browser console even if the iframe append throws.
-  try {
-    mountStandalone(editorApp, { hideChatAndForge: true });
-  } catch (err) {
-    console.error('[standalone] mountStandalone failed:', err);
-    throw err;
-  }
-
-  // React tree — DockShell + EditorPanelFrame iframes render synchronously
-  // through React's commit cycle. No setTimeout, no display:none.
+  // React tree — DockShell + EditorPanelFrame iframes + the renderEdit viewport
+  // all render synchronously through React's commit cycle. No body-level iframe,
+  // no setTimeout, no display:none. The viewport is just DockShell's Edit panel.
   try {
     createRoot(rootEl).render(
       <StrictMode>
@@ -135,7 +117,3 @@ function boot(): void {
 }
 
 boot();
-
-// Test hook (e2e parity).
-// biome-ignore lint/suspicious/noExplicitAny: test hook injection
-(window as any).__forgeaxStandaloneTest = { mountStandalone, editorApp };

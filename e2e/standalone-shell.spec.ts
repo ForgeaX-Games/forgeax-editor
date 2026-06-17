@@ -25,10 +25,10 @@
 // panel. The union of iframe URLs seen across activations covers all 9 ids;
 // no single instant sees 9 iframes at once.
 //
-// mount-standalone.spec.ts is on the same :15290 page but scopes its
-// `iframe.toHaveCount(1)` assertion to `body > iframe` — DockShell's
-// iframes live inside #root, so they are excluded by the child combinator.
-// No setTimeout / display:none trickery is needed (forbidden by plan §2 D-4 R3).
+// The :15290 standalone page creates NO body-level iframe: the viewport is
+// DockShell's Edit panel (renderEdit → /editor/?viewportOnly=1 via the :15290
+// proxy), living inside #root like every other panel. No setTimeout /
+// display:none trickery is needed (forbidden by plan §2 D-4 R3).
 //
 // Refs: requirements §AC-10/§AC-11; plan §2 D-13/D-14; §4 R-2;
 //       implement-review §R2-2 #R2-#1/#R2-#2; §R2-5.
@@ -86,7 +86,7 @@ test.describe('standalone shell — DockShell + panel iframes + viewport', () =>
   test('AC-10: DockShell registers all 9 ep:* panels + viewport iframe', async ({ page }) => {
     await page.goto(STANDALONE_URL);
 
-    // Wait for DockShell + mountStandalone to mount.
+    // Wait for DockShell to mount.
     await expect.poll(() => page.frames().length, { timeout: 15_000 })
       .toBeGreaterThanOrEqual(3);
 
@@ -103,8 +103,8 @@ test.describe('standalone shell — DockShell + panel iframes + viewport', () =>
     }
 
     // frameOnActivationTest — walking every panel materialises iframes for
-    // each active panel. The viewport iframe (mountStandalone) plus the
-    // active panel's iframe must always be present.
+    // each active panel. The viewport iframe (renderEdit's Edit panel) plus
+    // the active panel's iframe must always be present.
     await collectPanelUrlsByActivation(page);
     expect(page.frames().length, 'expected >= 3 frames (main + viewport + at least one active panel iframe)')
       .toBeGreaterThanOrEqual(3);
@@ -175,8 +175,8 @@ test.describe('standalone shell — DockShell + panel iframes + viewport', () =>
 
     const allUrls = await collectPanelUrlsByActivation(page);
 
-    // Viewport iframe — exactly the one mountStandalone created at
-    // entryUrl = http://127.0.0.1:15280/?viewportOnly=1
+    // Viewport iframe — renderEdit's Edit panel at /editor/?viewportOnly=1
+    // (served through the :15290 proxy to :15280).
     const viewportUrls = [...allUrls].filter((u) => u.includes('?viewportOnly=1'));
     expect(viewportUrls.length, 'expected viewport iframe with ?viewportOnly=1').toBeGreaterThanOrEqual(1);
 

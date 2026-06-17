@@ -23,6 +23,15 @@ page.on('pageerror', (e) => pageErrors.push(e.message));
 
 await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 }).catch((e) => pageErrors.push('GOTO: ' + e.message));
 await page.waitForTimeout(3000);
+
+// Ghost-iframe check (#5): the standalone host must NOT create a body-level
+// viewport iframe. The real viewport lives inside the dock (renderEdit →
+// `.dv-react-part` > iframe, proxied via :15290). A `body > iframe` is the
+// leftover mountStandalone() ghost — cross-origin to :15280, URL missing the
+// /editor base, running a second engine instance.
+const ghostCount = await page.locator('body > iframe').count();
+const ghostSrc = ghostCount ? await page.locator('body > iframe').first().getAttribute('src') : null;
+
 await browser.close();
 
 const all = [...pageErrors, ...consoleErrors];
@@ -51,5 +60,8 @@ for (const [name, list] of Object.entries(bugs)) {
 }
 console.log(`${other.length === 0 ? '✅' : '⚠️ '} other (non-allowlisted): ${other.length}`);
 [...new Set(other)].slice(0, 8).forEach((e) => console.log('     • ' + e.split('\n')[0]));
+
+console.log(`${ghostCount === 0 ? '✅' : '❌'} no cross-origin body>iframe ghost (#5): count=${ghostCount}${ghostSrc ? ' src=' + ghostSrc : ''}`);
+if (ghostCount > 0) failed = true;
 
 process.exit(failed ? 1 : 0);

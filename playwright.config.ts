@@ -1,30 +1,25 @@
 // Playwright config for @forgeax/editor — AC-09/12/14/15 e2e gate.
 //
 // Two webServers (mode-C from research F-4 + plan-strategy 2 D-9): the
-// editor's standalone chrome host on :15290 (root = standalone/, calls
-// mountStandalone(editorApp, { hideChatAndForge: true })), and the
-// editor-edit-runtime vite root on :15280 (the iframe target that
-// mountStandalone points at via app.entryUrl). The `?viewportOnly=1`
-// URL is hard-wired in @forgeax/editor's defineApp call (research F-6
-// C-1) — we only need the dev server up; URL composition stays in
-// editor.
+// editor's standalone chrome host on :15290 (root = standalone/, renders
+// <DockShell hideChatAndForge /> with the viewport as renderEdit's Edit
+// panel), and the editor-edit-runtime vite root on :15280 (the iframe
+// target the dock's panels — including the viewport — point at via the
+// :15290 /editor proxy, at `?viewportOnly=1`).
 //
 // Single-server hint from the M5 task description named only `bun -F
-// editor dev` because that is the host page the AC-08 curl probes; the
-// iframe target server is still required for the mount-standalone
-// specs to receive VAG_* messages from the runtime, so it is added as
-// the second webServer entry. Both servers reuse the legacy
-// :15290/:15280 ports — OOS-8 forbids new ports.
+// editor dev` because that is the host page; the iframe target server is
+// still required for the standalone-shell specs to materialise the panel
+// iframes from the runtime, so it is added as the second webServer entry.
+// Both servers reuse the legacy :15290/:15280 ports — OOS-8 forbids new ports.
 //
 // Anchors:
-//   requirements AC-07 (iframe attached + src equals entryUrl) — port from P1.5
-//   requirements AC-08 (host receives ≥1 VAG_* + zod safeParse success) — port from P1.5
-//   requirements AC-09 (hideChatAndForge=true hides chat-panel + forge-entry; idempotent mount)
+//   requirements AC-09 (hideChatAndForge=true hides chat-panel + forge-entry)
+//   requirements AC-10/AC-11 (DockShell registers all panels + viewport; visible)
 //   requirements AC-12 (e2e green after the move from standalone-editor-demo)
 //   requirements AC-14 (bun -F editor test:e2e exit 0)
-//   plan-strategy 2 D-9 (mode C — exposeFunction + addInitScript)
 //   research F-4 (webServer array + 10s expect.poll fallback)
-//   research F-6 C-1 (entryUrl = http://127.0.0.1:15280/?viewportOnly=1)
+//   research F-6 C-1 (viewport URL = /editor/?viewportOnly=1, proxied to :15280)
 
 import { defineConfig } from '@playwright/test';
 
@@ -53,10 +48,10 @@ export default defineConfig({
   },
   webServer: [
     {
-      // editor standalone chrome host on :15290 — calls
-      // mountStandalone(editorApp, { hideChatAndForge: true }) on
-      // module load. Started via `bun -F editor dev` so the editor
-      // package's vite.config.ts (root=standalone/, port=15290) applies.
+      // editor standalone chrome host on :15290 — renders
+      // <DockShell hideChatAndForge /> on module load. Started via
+      // `bun -F editor dev` so the editor package's vite.config.ts
+      // (root=standalone/, port=15290) applies.
       command: 'bun run dev',
       cwd: '.',
       url: 'http://127.0.0.1:15290',

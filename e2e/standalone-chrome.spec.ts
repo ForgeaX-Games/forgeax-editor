@@ -14,11 +14,11 @@
 // case A (hidden when true) and case B (visible when omitted/false) pass.
 //
 // Topology:
-//   case A — :15290 standalone host (`packages/editor/standalone/`) calls
-//            mountStandalone(editorApp, { hideChatAndForge: true }).
+//   case A — :15290 standalone host (`packages/editor/standalone/`) renders
+//            <DockShell hideChatAndForge /> inside React.
 //            chat-panel testid + forge-entry testid MUST NOT exist anywhere
-//            in the host page (the iframe-targeted edit-runtime at :15280
-//            is the editor surface and is not expected to carry these
+//            in the host page (the dock's edit-runtime panel iframes at :15280
+//            are the editor surface and are not expected to carry these
 //            testids — they live on the host App.tsx chrome).
 //   case B — :18920 studio host (regular `bash start.sh`) renders the full
 //            chrome WITHOUT hideChatAndForge. Both testids MUST exist.
@@ -41,10 +41,10 @@ const FORGE_ENTRY_TESTID = '[data-testid="forge-entry"]';
 test.describe('standalone chrome — hideChatAndForge dual-side', () => {
   test('case A: hideChatAndForge=true hides chat-panel and forge-entry on :15290', async ({ page }) => {
     await page.goto(STANDALONE_URL);
-    // Wait for the mountStandalone-created viewport iframe to attach (it is
-    // appended directly under <body>; DockShell's panel iframes live inside
-    // #root and are excluded by the `body > iframe` child combinator).
-    await expect(page.locator('body > iframe')).toHaveCount(1, { timeout: 10_000 });
+    // Wait for DockShell to mount. The standalone host renders the viewport
+    // inside the dock via renderEdit (DockShell's Edit panel), so there is no
+    // body-level iframe to wait on — .fx-dockwrap is the shell's root element.
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 10_000 });
     // The hideChatAndForge contract: neither testid exists on the host page.
     // Use locator.count() rather than toBeHidden so a non-rendered branch
     // (the conditional-render path D-4 prescribes) registers as 0, not as
