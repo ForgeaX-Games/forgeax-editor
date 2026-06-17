@@ -85,7 +85,17 @@ function matToPayload(m: MaterialData | undefined): { kind: 'material'; passes: 
     const e = hexToRgba(emissive);
     if ((e[0] || e[1] || e[2]) && ei > 0) { paramValues.emissive = [e[0], e[1], e[2]]; paramValues.emissiveIntensity = ei; }
   }
-  return { kind: 'material', passes: [{ name: 'Forward', shader, tags: { LightMode: 'Forward' }, queue: 2000 }], paramValues };
+  const passes: unknown[] = [{ name: 'Forward', shader, tags: { LightMode: 'Forward' }, queue: 2000 }];
+  // Standard PBR materials cast shadows. The engine's directional-shadow pass
+  // only projects meshes whose material carries a ShadowCaster pass — Materials.
+  // standard() bundles one, and ✎ Edit renders through that factory, so Edit
+  // shows shadows. ▶ Play loads the SAVED material verbatim, so persist the pass
+  // here too; otherwise Play silently has no sun shadows (Play≠Edit). Unlit
+  // materials intentionally do not cast.
+  if (shading === 'standard') {
+    passes.push({ name: 'ShadowCaster', shader: 'forgeax::default-shadow-caster', tags: { LightMode: 'ShadowCaster' }, passKind: 'shadow-caster' });
+  }
+  return { kind: 'material', passes, paramValues };
 }
 function payloadToMat(payload: { passes?: Array<{ shader?: string }>; paramValues?: Record<string, unknown> } | undefined): MaterialData {
   const pv = payload?.paramValues ?? {};
@@ -177,7 +187,11 @@ export function docToPack(doc: SceneDocument): ScenePack {
       const intensity = num(light!.intensity, 1);
       if (light!.type === 'directional') {
         c.DirectionalLight = { directionX: num(light!.directionX, -0.4), directionY: num(light!.directionY, -1), directionZ: num(light!.directionZ, -0.3), colorR: r, colorG: g, colorB: b, intensity };
-        if (light!.castShadow) c.DirectionalLightShadow = { mapSize: 2048, orthoHalfExtent: 16, farPlane: 60 };
+        // CSM schema (engine feat-20260613-csm removed orthoHalfExtent). Must
+        // match instantiate.ts (Edit render) — saving the obsolete field made
+        // ▶ Play's strict instantiate fail-fast (spawn-data-unknown-field),
+        // aborting the WHOLE scene → empty Play (only ground).
+        if (light!.castShadow) c.DirectionalLightShadow = { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 };
       } else {
         c.PointLight = { colorR: r, colorG: g, colorB: b, intensity, range: num(light!.range, 0) };
       }
