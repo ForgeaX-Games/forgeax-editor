@@ -39,6 +39,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DockShell } from '@forgeax/interface/components/DockShell/DockShell';
+import {
+  PanelRenderersProvider,
+  DEFAULT_PANEL_RENDERERS,
+} from '@forgeax/interface/components/DockShell/panelRenderers';
 import { mountStandalone, AppKitError, defineApp } from '@forgeax/editor/app-kit';
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
 import '@forgeax/interface/styles/global.css';
@@ -54,10 +58,34 @@ const editorApp = defineApp({
   routes: [],
 });
 
+// Thin-shell renderers — the standalone host renders edit/preview as iframes to
+// edit-runtime (:15280, proxied), the same pattern as the ep:* panels, instead
+// of mounting EditSurface/PlaySurface in-process (which would drag the engine
+// barrel into this bundle). interface stays editor-agnostic; the editor app
+// supplies these surfaces through the PanelRenderers injection point.
+const SURFACE_IFRAME_STYLE: React.CSSProperties = { width: '100%', height: '100%', border: 'none', display: 'block' };
+
+const standaloneRenderers = {
+  ...DEFAULT_PANEL_RENDERERS,
+  renderEdit: ({ viewportOnly }: { viewportOnly?: boolean }) => (
+    <iframe
+      title="Edit"
+      src={`/editor/?${viewportOnly ? 'viewportOnly=1' : ''}`}
+      style={SURFACE_IFRAME_STYLE}
+      allow="autoplay; xr-spatial-tracking *; fullscreen *; pointer-lock *"
+    />
+  ),
+  renderPreview: () => (
+    <iframe title="Preview" src="/editor/?play=1" style={SURFACE_IFRAME_STYLE} />
+  ),
+};
+
 function StandaloneShell() {
   return (
     <div className="forgeax-standalone-shell" style={{ width: '100vw', height: '100vh' }}>
-      <DockShell hideChatAndForge />
+      <PanelRenderersProvider value={standaloneRenderers}>
+        <DockShell hideChatAndForge />
+      </PanelRenderersProvider>
     </div>
   );
 }
