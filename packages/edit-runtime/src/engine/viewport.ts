@@ -146,15 +146,19 @@ interface WorldLike {
   set(entity: number, component: unknown, data: unknown): unknown;
   spawn(...componentDatas: unknown[]): { unwrap(): number };
   despawn(entity: number): unknown;
+  /** Engine removed AssetRegistry.register; shared assets are now minted via
+   *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
+   *  directly (no Result / no .unwrap()). */
+  allocSharedRef(target: string, payload: unknown): unknown;
 }
 interface AssetsLike {
-  register(desc: unknown): { unwrap(): unknown };
+  register?(desc: unknown): { unwrap(): unknown };
 }
 
 export interface ViewportDeps {
   canvas: HTMLCanvasElement;
   world: WorldLike;
-  assets: AssetsLike;    // to register the gizmo handle materials
+  assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via world.allocSharedRef
   camera: number;        // the editor camera entity
   sync: EngineSync;      // doc→world handle lookup (live drag) + resync
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
@@ -170,7 +174,7 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, assets, camera, sync, initialOrbit }: ViewportDeps): Viewport {
+export function createViewport({ canvas, world, camera, sync, initialOrbit }: ViewportDeps): Viewport {
   // orbit state — frames the typical arena (centered, looking slightly down).
   let target: Vec3 = initialOrbit?.target ? [...initialOrbit.target] : [0, 2, 0];
   let yaw = initialOrbit?.yaw ?? 0.6, pitch = initialOrbit?.pitch ?? -0.5, dist = initialOrbit?.dist ?? 34;
@@ -258,7 +262,7 @@ export function createViewport({ canvas, world, assets, camera, sync, initialOrb
       idx.push(0, a, b);  // side face
       idx.push(1, b, a);  // base cap
     }
-    coneMesh = assets.register(meshFromInterleaved(new Float32Array(v), new Uint16Array(idx))).unwrap();
+    coneMesh = world.allocSharedRef('MeshAsset', meshFromInterleaved(new Float32Array(v), new Uint16Array(idx)));
     return coneMesh;
   }
   // Quaternion that rotates the cone's local +Y to point down each world axis.
@@ -284,7 +288,7 @@ export function createViewport({ canvas, world, assets, camera, sync, initialOrb
           renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
         })),
       };
-      return assets.register(mat).unwrap();
+      return world.allocSharedRef('MaterialAsset', mat);
     });
     return gizmoMats;
   }
@@ -438,7 +442,7 @@ export function createViewport({ canvas, world, assets, camera, sync, initialOrb
   let paramEnts: number[] = [];
   let paramMat: unknown | null = null;
   function ensureParamMat(): unknown {
-    if (!paramMat) paramMat = assets.register(Materials.unlit([1.0, 0.82, 0.25, 1])).unwrap();
+    if (!paramMat) paramMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
     return paramMat;
   }
   function despawnParam(): void {

@@ -16,11 +16,20 @@
 import { Skylight, SkyboxBackground, SKYBOX_MODE_CUBEMAP } from '@forgeax/engine-runtime';
 import { decodeHdr } from '@forgeax/engine-image/hdr-decoder';
 
-interface RegistryLike { register(desc: unknown): { unwrap(): unknown } }
+interface RegistryLike { register?(desc: unknown): { unwrap(): unknown } }
 interface StoreLike {
-  uploadCubemapFromEquirect(handle: unknown, pod: unknown): Promise<{ ok: boolean; value?: unknown; error?: unknown }>;
+  // Engine 2026-06-14: uploadCubemapFromEquirect takes 3 args
+  // (world, sourceHandle, sourcePod). The source equirect is minted as a shared
+  // column handle via world.allocSharedRef('TextureAsset', pod).
+  uploadCubemapFromEquirect(world: unknown, sourceHandle: unknown, sourcePod: unknown): Promise<{ ok: boolean; value?: unknown; error?: unknown }>;
 }
-interface WorldLike { spawn(...componentDatas: unknown[]): unknown }
+interface WorldLike {
+  spawn(...componentDatas: unknown[]): unknown;
+  /** Engine removed AssetRegistry.register; shared assets are now minted via
+   *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
+   *  directly (no Result / no .unwrap()). */
+  allocSharedRef(target: string, payload: unknown): unknown;
+}
 interface Equirect { kind: 'texture'; width: number; height: number; format: string; data: Uint8Array; colorSpace: string; mipmap: boolean }
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -72,7 +81,7 @@ async function loadHdrEquirect(url: string): Promise<Equirect | null> {
  */
 export async function setupEditorSkylight(
   world: WorldLike,
-  assets: RegistryLike,
+  _assets: RegistryLike,
   store: StoreLike,
   opts: { hdrUrl?: string | readonly string[]; intensity?: number } = {},
 ): Promise<void> {
@@ -103,8 +112,10 @@ export async function setupEditorSkylight(
       if (hdr) break;
     }
     const equirect = hdr ?? buildEnvironmentEquirect();
-    const handle = assets.register(equirect).unwrap();
-    const res = await store.uploadCubemapFromEquirect(handle, equirect);
+    // Mint the equirect source as a shared column handle, then precompute the
+    // IBL cubemap (engine 3-arg upload: world, sourceHandle, sourcePod).
+    const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
+    const res = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
     if (!res.ok || res.value === undefined) { console.warn('[editor] cubemap precompute failed:', res.error); return; }
     const cubemap = res.value;
     world.spawn({ component: Skylight, data: { cubemap, intensity } });

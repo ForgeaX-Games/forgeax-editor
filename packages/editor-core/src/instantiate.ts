@@ -44,9 +44,16 @@ type Handle = unknown;
 interface Result<T> { ok: boolean; value?: T; unwrap(): T; }
 export interface WorldLike {
   spawn(...componentDatas: unknown[]): Result<Entity>;
+  /** Engine removed AssetRegistry.register; shared assets are now minted via
+   *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
+   *  directly (NOT a Result — no .unwrap()). Brand: MeshAsset / MaterialAsset /
+   *  TextureAsset / SceneAsset. */
+  allocSharedRef(target: string, payload: unknown): Handle;
 }
 export interface AssetsLike {
-  register(desc: unknown): Result<Handle>;
+  /** Legacy slot kept for source-compat; the live paths now allocate via
+   *  `world.allocSharedRef`. Native instantiate still uses `instantiate`. */
+  register?(desc: unknown): Result<Handle>;
 }
 export interface InstantiateCtx {
   world: WorldLike;
@@ -93,7 +100,7 @@ const DEG2RAD = Math.PI / 180;
  * on demand and cached for the call (identical materials share one handle).
  */
 export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): InstantiateResult {
-  const { world, assets } = ctx;
+  const { world } = ctx;
   const entities = new Map<EntityId, Entity>();
   const all: Entity[] = [];
   const colliders: Collider[] = [];
@@ -107,7 +114,7 @@ export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): Insta
       const geo = kind === 'sphere'
         ? createSphereGeometry(1, 20, 14)
         : createCylinderGeometry(0.5, 0.5, 1, 18);
-      const h = assets.register((geo as { unwrap(): unknown }).unwrap()).unwrap();
+      const h = world.allocSharedRef('MeshAsset', (geo as { unwrap(): unknown }).unwrap());
       meshCache.set(kind, h);
       return h;
     }
@@ -146,7 +153,7 @@ export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): Insta
         ...(hasEmissive ? { emissive: e, emissiveIntensity } : {}),
       });
     }
-    const h = assets.register(desc).unwrap();
+    const h = world.allocSharedRef('MaterialAsset', desc);
     matCache.set(key, h);
     return h;
   };
@@ -211,7 +218,7 @@ export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): Insta
       }
       // Not loaded yet → placeholder cube (the loader will trigger a resync).
       const xfData: Record<string, number> = { posX: px, posY: py, posZ: pz, scaleX: sx, scaleY: sy, scaleZ: sz };
-      const placeholderMat = assets.register(Materials.standard({ baseColor: [0.4, 0.7, 1, 0.6], roughness: 0.5, metallic: 0.2 })).unwrap();
+      const placeholderMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.4, 0.7, 1, 0.6], roughness: 0.5, metallic: 0.2 }));
       const entity = world.spawn(
         { component: Transform, data: xfData },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -338,7 +345,7 @@ export interface SceneEntitiesResult { entities: SceneEntity[]; colliders: Colli
  * handle). Pure data: does NOT touch the world.
  */
 export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: SceneCaches = makeSceneCaches()): SceneEntitiesResult {
-  const { assets } = ctx;
+  const { world } = ctx;
   const colliders: Collider[] = [];
   const entities: SceneEntity[] = [];
 
@@ -348,7 +355,7 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
       const cached = caches.mesh.get('cylinder');
       if (cached !== undefined) return cached;
       const geo = createCylinderGeometry(0.5, 0.5, 1, 18);
-      const h = assets.register((geo as { unwrap(): unknown }).unwrap()).unwrap();
+      const h = world.allocSharedRef('MeshAsset', (geo as { unwrap(): unknown }).unwrap());
       caches.mesh.set('cylinder', h);
       return h;
     }
@@ -377,7 +384,7 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
       const hasEmissive = (e[0] || e[1] || e[2]) && emissiveIntensity > 0;
       desc = Materials.standard({ baseColor: hexToRgba(albedo), roughness, metallic, ...(hasEmissive ? { emissive: e, emissiveIntensity } : {}) });
     }
-    const h = assets.register(desc).unwrap();
+    const h = world.allocSharedRef('MaterialAsset', desc);
     caches.mat.set(key, h);
     return h;
   };
@@ -454,7 +461,7 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
         continue;
       }
       // Not loaded yet → placeholder cube (the loader triggers a resync on land).
-      const placeholderMat = caches.mat.get('__gltf_placeholder__') ?? assets.register(Materials.standard({ baseColor: [0.4, 0.7, 1, 0.6], roughness: 0.5, metallic: 0.2 })).unwrap();
+      const placeholderMat = caches.mat.get('__gltf_placeholder__') ?? world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.4, 0.7, 1, 0.6], roughness: 0.5, metallic: 0.2 }));
       caches.mat.set('__gltf_placeholder__', placeholderMat);
       entities.push({ docId: id, components: {
         Transform: transformData(px, py, pz, sx, sy, sz, t),
@@ -523,7 +530,9 @@ export function buildNativeScene(doc: SceneDocument, ctx: InstantiateCtx, caches
   const nodes = entities.map((e, i) => ({ localId: i, components: e.components }));
   const docIdByLocalId = new Map<number, EntityId>(entities.map((e, i) => [i, e.docId]));
   // Engine #316 renamed SceneAsset.nodes -> entities (SceneNode -> SceneEntity).
-  const sceneHandle = ctx.assets.register({ kind: 'scene', entities: nodes }).unwrap();
+  // Engine removed AssetRegistry.register; the SceneAsset POD is minted as a
+  // shared column handle via world.allocSharedRef.
+  const sceneHandle = ctx.world.allocSharedRef('SceneAsset', { kind: 'scene', entities: nodes });
   return { sceneHandle, docIdByLocalId, colliders };
 }
 
@@ -554,7 +563,6 @@ function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { 
     get<T>(entity: Entity, component: unknown): { ok: boolean; value?: { mapping: ArrayLike<number> } };
   };
   const a = ctx.assets as unknown as {
-    register(desc: unknown): { unwrap(): unknown };
     instantiate(handle: unknown, world: unknown): { ok: boolean; value?: Entity };
   };
   // Engine 5dfeb0b6 ECS-fied SceneInstance: assets.instantiate returns the
@@ -563,7 +571,9 @@ function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { 
   // `world.sceneInstances.setSceneAssetResolver` is no longer needed —
   // managed-ref resolution is wired by AssetRegistry.instantiate itself.
   // Engine #316 renamed SceneAsset.nodes -> entities (SceneNode -> SceneEntity).
-  const sceneHandle = a.register({ kind: 'scene', entities: nodes }).unwrap();
+  // Engine removed AssetRegistry.register; the SceneAsset POD is minted as a
+  // shared column handle via world.allocSharedRef, then instantiated natively.
+  const sceneHandle = ctx.world.allocSharedRef('SceneAsset', { kind: 'scene', entities: nodes });
   const res = a.instantiate(sceneHandle, ctx.world);
   if (!res.ok || res.value === undefined) return null;
   const instanceRoot = res.value;

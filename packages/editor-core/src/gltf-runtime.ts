@@ -26,6 +26,11 @@ export interface LoadedGltfNode { components: Record<string, Record<string, unkn
 export interface LoadedGltf { nodes: ReadonlyArray<LoadedGltfNode> }
 
 interface RegistryLike { register(desc: unknown): { unwrap(): unknown } }
+/** Minimal slice of the engine World used for asset allocation. The engine
+ *  removed AssetRegistry.register; shared assets are now minted via
+ *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
+ *  directly (no Result / no .unwrap()). */
+interface WorldLike { allocSharedRef(target: string, payload: unknown): unknown }
 
 const cache = new Map<string, LoadedGltf>();
 const inflight = new Map<string, Promise<LoadedGltf | null>>();
@@ -108,7 +113,7 @@ async function decodeImageToRgba(
 async function buildTextureHandles(
   container: { json: GlbJson; bin: Uint8Array | null } | null,
   doc: { textures?: readonly unknown[]; materials: readonly { metallicRoughnessTexture?: number; normalTexture?: number }[] },
-  assets: RegistryLike,
+  world: WorldLike,
 ): Promise<Map<number, unknown>> {
   const handles = new Map<number, unknown>();
   if (!container || !container.bin) return handles;
@@ -157,7 +162,7 @@ async function buildTextureHandles(
           mipmap: true,
           mipLevelCount,
         };
-        handles.set(texIndex, assets.register(texAsset).unwrap());
+        handles.set(texIndex, world.allocSharedRef('TextureAsset', texAsset));
       } catch {
         /* skip this texture — material falls back to flat color */
       }
@@ -188,7 +193,8 @@ function asDoubleSided(mat: { passes?: readonly Record<string, unknown>[] } & Re
 export function loadGltfRuntime(
   path: string,
   fetchBytes: (path: string) => Promise<ArrayBuffer>,
-  assets: RegistryLike,
+  _assets: RegistryLike,
+  world: WorldLike,
 ): Promise<LoadedGltf | null> {
   const hit = cache.get(path);
   if (hit) return Promise.resolve(hit);
@@ -225,16 +231,16 @@ export function loadGltfRuntime(
       for (const meshIndex of meshIndices) {
         const prims = (doc.meshes as readonly { meshIndex: number }[]).filter((m) => m.meshIndex === meshIndex);
         if (prims.length === 0) continue;
-        meshHandles.set(meshIndex, assets.register(meshIrToMeshAsset(prims as never)).unwrap());
+        meshHandles.set(meshIndex, world.allocSharedRef('MeshAsset', meshIrToMeshAsset(prims as never)));
       }
 
       // Decode + upload embedded textures (browser only; parseGlb keeps neither
       // buffers nor decoded images), then wire them into double-sided materials.
-      const textureHandles = await buildTextureHandles(readGlbContainer(buf), doc as never, assets);
+      const textureHandles = await buildTextureHandles(readGlbContainer(buf), doc as never, world);
       const materialHandles = new Map<number, unknown>();
       doc.materials.forEach((m, i) => {
         const mat = toMaterialAsset(m as never, { textureHandles: textureHandles as never });
-        materialHandles.set(i, assets.register(asDoubleSided(mat as never)).unwrap());
+        materialHandles.set(i, world.allocSharedRef('MaterialAsset', asDoubleSided(mat as never)));
       });
 
       // Node structure comes from the engine bridge — now the single source of

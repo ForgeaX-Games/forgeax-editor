@@ -123,7 +123,11 @@ function shortName(
   return stem ? `${stem} · ${tail}` : `${a.kind} ${tail}`;
 }
 
-interface AssetsLike { register(desc: unknown): { unwrap(): unknown } }
+/** Minimal slice of the engine World used for asset allocation. The engine
+ *  removed AssetRegistry.register; shared assets are now minted via
+ *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
+ *  directly (no Result / no .unwrap()). */
+interface WorldLike { allocSharedRef(target: string, payload: unknown): unknown }
 
 /** CSS color for a material asset's base color (for the panel swatch), or null. */
 export function materialSwatch(a: PackAsset): string | null {
@@ -135,8 +139,8 @@ export function materialSwatch(a: PackAsset): string | null {
   return `rgb(${u(c[0])}, ${u(c[1])}, ${u(c[2])})`;
 }
 
-/** Register an engine material handle from a pack material payload. */
-function registerMaterial(assets: AssetsLike, payload: Record<string, unknown>): unknown {
+/** Mint an engine material handle from a pack material payload. */
+function registerMaterial(world: WorldLike, payload: Record<string, unknown>): unknown {
   const pv = (payload.paramValues as Record<string, unknown> | undefined) ?? {};
   const base = Array.isArray(pv.baseColor) ? (pv.baseColor as number[]) : [0.8, 0.8, 0.8, 1];
   const passes = payload.passes as { shader?: string }[] | undefined;
@@ -149,20 +153,20 @@ function registerMaterial(assets: AssetsLike, payload: Record<string, unknown>):
         metallic: typeof pv.metallic === 'number' ? pv.metallic : 0,
         ...(Array.isArray(pv.emissive) ? { emissive: pv.emissive as number[], emissiveIntensity: typeof pv.emissiveIntensity === 'number' ? pv.emissiveIntensity : 1 } : {}),
       });
-  return assets.register(desc).unwrap();
+  return world.allocSharedRef('MaterialAsset', desc);
 }
 
 /** Build a sync GUID→material-handle resolver (for instantiateScene). Material
  *  handles are registered on first use + cached. GUIDs absent from the loaded
  *  packs return null → the instantiator falls back to the entity's inline PBR. */
-export function makeMaterialResolver(assets: AssetsLike, packAssets: PackAsset[]): (guid: string) => unknown | null {
+export function makeMaterialResolver(world: WorldLike, packAssets: PackAsset[]): (guid: string) => unknown | null {
   const byGuid = new Map(packAssets.filter((a) => a.kind === 'material').map((a) => [a.guid, a]));
   const cache = new Map<string, unknown>();
   return (guid: string) => {
     if (cache.has(guid)) return cache.get(guid)!;
     const a = byGuid.get(guid);
     if (!a) return null;
-    const h = registerMaterial(assets, a.payload);
+    const h = registerMaterial(world, a.payload);
     cache.set(guid, h);
     return h;
   };

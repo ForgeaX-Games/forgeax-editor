@@ -206,7 +206,7 @@ const cameraEntity = world.spawn(
 // the editor's pack-index is empty, so we can't loadByGuid). Sync lookup → the
 // instantiator stays synchronous.
 const packAssets = await loadGameAssets(getSceneId());
-const resolveMaterialAsset = makeMaterialResolver(renderer.assets as never, packAssets);
+const resolveMaterialAsset = makeMaterialResolver(world as never, packAssets);
 
 // Wire the authored doc → forgeax world (rebuilds on every bus change). The
 // doc→world mapping is @forgeax/scene's instantiateScene — the same path ▶ Play
@@ -284,7 +284,7 @@ void setupEditorSkylight(
     }
     if (paths.size === 0) return;
     await Promise.all([...paths].map((p) =>
-      loadGltfRuntime(p, fetchGlb, renderer.assets as never).catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
+      loadGltfRuntime(p, fetchGlb, renderer.assets as never, world as never).catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
     // The GLB landed in the gltf-runtime cache but the doc sig is unchanged, so a
     // plain resync() would no-op — force a rebuild so sceneEntities re-projects
     // the now-loaded GLB into its real per-node geometry.
