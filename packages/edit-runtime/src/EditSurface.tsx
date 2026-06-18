@@ -16,7 +16,7 @@
 //   charter P3 (structured errors)
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { RotateCcw, Maximize2, Minimize2, Import } from 'lucide-react';
+import { RotateCcw, Maximize2, Minimize2, Import, AlertTriangle } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
   sendVagMessage,
@@ -28,6 +28,32 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
+
+// ── Health forwarding ────────────────────────────────────────────────────────
+// The studio shell (cross-port parent) can't read this surface's console. Forward
+// health signals up so the shell's INFO/health status bar surfaces them. The shell
+// listens for `{type:'forgeax:health', level, source, code, message}` (interface
+// healthBridge.ts). Plain postMessage — no import of the interface here.
+type HealthLevel = 'info' | 'success' | 'warn' | 'error';
+function forwardHealth(level: HealthLevel, code: string, message: string): void {
+  try {
+    window.parent?.postMessage({ type: 'forgeax:health', level, source: 'edit', code, message }, '*');
+  } catch { /* parent might be cross-origin / gone */ }
+}
+
+const FATAL_PATTERNS: RegExp[] = [
+  /scene\s+instantiate\s+failed/i,
+  /createApp\s+(failed|error)/i,
+  /engine\s+init\s+failed/i,
+  /no\s+usable\s+backend/i,
+  /webgpu\s+(adapter|unavailable|requires|init)/i,
+  /failed\s+to\s+resolve\s+(import|module)/i,
+  /does\s+not\s+provide\s+an\s+export/i,
+  /loadByGuid.*fail/i,
+];
+function fatalReason(text: string): string | null {
+  return FATAL_PATTERNS.some((re) => re.test(text)) ? text : null;
+}
 
 // ── EditorImportError ──────────────────────────────────────────────────────────
 
@@ -168,6 +194,9 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   const [importStep, setImportStep] = useState<ImportStep>(null);
   const [importMsg, setImportMsg] = useState('');
   const [editorAvailable, setEditorAvailable] = useState<boolean | null>(null);
+  // Fatal banner — set on a fatal console error from the editor iframe; cleared
+  // on a live frame (fps) or explicit reload.
+  const [fatal, setFatal] = useState<{ code: string; message: string } | null>(null);
   const [importAnchor, setImportAnchor] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -288,14 +317,20 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
           const r = VagFpsStatsSchema.safeParse(ev.data);
           if (!r.success) { console.warn('VAG_FPS_STATS schema failure', { issues: r.error.issues }); return; }
           setFps(r.data.payload.fps);
+          setFatal(null); // a live editor frame means it recovered.
           return;
         }
         case 'VAG_CONSOLE': {
           const r = VagConsoleSchema.safeParse(ev.data);
           if (!r.success) { console.warn('VAG_CONSOLE schema failure', { issues: r.error.issues }); return; }
-          // Console messages are forwarded to the host's console for now.
-          // The full Console panel integration stays in interface.
-          console[r.data.payload.level]('[editor]', r.data.payload.text);
+          const { level, text } = r.data.payload;
+          console[level]('[editor]', text);
+          // Forward warn+ to the shell health feed; mark fatal region failures.
+          if (level === 'error' || level === 'warn') {
+            const reason = level === 'error' ? fatalReason(text) : null;
+            forwardHealth(level === 'error' ? 'error' : 'warn', reason ? 'scene-instantiate-failed' : 'vag-console', text);
+            if (reason) setFatal({ code: 'scene-instantiate-failed', message: reason });
+          }
           return;
         }
         case 'VAG_EDITOR_REF': {
@@ -326,6 +361,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   const onReload = () => {
     const ifr = iframeRef.current;
     if (!ifr) return;
+    setFatal(null);
     // eslint-disable-next-line no-self-assign
     ifr.src = ifr.src;
     setFps(null);
@@ -397,6 +433,18 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         </div>
       </div>
       <div className="preview-frame" ref={frameRef}>
+        {fatal && (
+          <div className="preview-fatal-banner" role="alert">
+            <AlertTriangle size={16} className="pfb-icon" />
+            <div className="pfb-body">
+              <div className="pfb-title">Editor failed to render</div>
+              <div className="pfb-msg" title={fatal.message}>{fatal.message}</div>
+            </div>
+            <button className="pfb-retry" type="button" onClick={onReload}>
+              <RotateCcw size={14} /> Reload
+            </button>
+          </div>
+        )}
         {editorAvailable === false ? (
           <div className="preview-center">
             <div className="preview-title">Editor runtime unavailable</div>

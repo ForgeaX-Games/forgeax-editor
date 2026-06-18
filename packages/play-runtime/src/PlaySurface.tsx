@@ -11,7 +11,7 @@
 //   requirements §5 AC-07 (G-2 case A e2e iframe src assertion)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw, RotateCcwSquare, Maximize2, Minimize2, Monitor, Smartphone, ChevronDown } from 'lucide-react';
+import { Pause, Play, RotateCcw, RotateCcwSquare, Maximize2, Minimize2, Monitor, Smartphone, ChevronDown, AlertTriangle } from 'lucide-react';
 import {
   sendVagMessage,
   VagConsoleSchema,
@@ -43,6 +43,35 @@ type Orient = 'portrait' | 'landscape';
 const FPS_STALL_MS = 500;
 const PROBE_INTERVAL_MS = 250;
 
+// ── Health forwarding ────────────────────────────────────────────────────────
+// The studio shell (cross-port parent) can't read this surface's console. Forward
+// health signals up so the shell's INFO/health status bar surfaces them. The shell
+// listens for `{type:'forgeax:health', level, source, code, message}` (interface
+// healthBridge.ts). This is plain postMessage — no import of the interface here
+// (keeps the editor/interface decoupling intact).
+type HealthLevel = 'info' | 'success' | 'warn' | 'error';
+function forwardHealth(level: HealthLevel, code: string, message: string): void {
+  try {
+    window.parent?.postMessage({ type: 'forgeax:health', level, source: 'play', code, message }, '*');
+  } catch { /* parent might be cross-origin / gone */ }
+}
+
+// Heuristics: which console-error texts mean the Play viewport is fatally broken
+// (black/empty), so the shell shows a banner + retry rather than a buried log line.
+const FATAL_PATTERNS: RegExp[] = [
+  /scene\s+instantiate\s+failed/i,
+  /createApp\s+(failed|error)/i,
+  /engine\s+init\s+failed/i,
+  /no\s+usable\s+backend/i,
+  /webgpu\s+(adapter|unavailable|requires|init)/i,
+  /failed\s+to\s+resolve\s+(import|module)/i,
+  /does\s+not\s+provide\s+an\s+export/i,
+  /loadByGuid.*fail/i,
+];
+function fatalReason(text: string): string | null {
+  return FATAL_PATTERNS.some((re) => re.test(text)) ? text : null;
+}
+
 // ── Props ──────────────────────────────────────────────────────────────────────
 
 export interface PlaySurfaceProps {
@@ -59,6 +88,9 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   const [deviceId, setDeviceId] = useState<string>(DEFAULT_DEVICE.id);
   const [orient, setOrient] = useState<Orient>('portrait');
   const [isFirstFrameLoading, setIsFirstFrameLoading] = useState(true);
+  // Fatal banner — set when the game iframe reports device-lost / a fatal console
+  // error. Cleared on a successful frame (fps heartbeat) or an explicit reload.
+  const [fatal, setFatal] = useState<{ code: string; message: string } | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const lastHeartbeatRef = useRef<number>(Date.now());
@@ -89,6 +121,8 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         lastHeartbeatRef.current = Date.now();
         hasReceivedFpsRef.current = true;
         setIsFirstFrameLoading(false);
+        // A live frame means the viewport recovered — clear any fatal banner.
+        setFatal(null);
         return;
       }
 
@@ -100,6 +134,8 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         }
         setFps(null);
         setIsFirstFrameLoading(true);
+        setFatal({ code: 'device-lost', message: 'WebGPU render device lost — the viewport stopped rendering.' });
+        forwardHealth('error', 'device-lost', 'WebGPU render device lost — the viewport stopped rendering.');
         const ifr = iframeRef.current;
         if (ifr) {
           setTimeout(() => {
@@ -117,7 +153,14 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
           console.warn('VAG_CONSOLE schema failure', { issues: r.error.issues });
           return;
         }
-        console[r.data.payload.level]('[play]', r.data.payload.text);
+        const { level, text } = r.data.payload;
+        console[level]('[play]', text);
+        // Forward warn+ to the shell health feed; mark fatal region failures.
+        if (level === 'error' || level === 'warn') {
+          const reason = level === 'error' ? fatalReason(text) : null;
+          forwardHealth(level === 'error' ? 'error' : 'warn', reason ? 'scene-instantiate-failed' : 'vag-console', text);
+          if (reason) setFatal({ code: 'scene-instantiate-failed', message: reason });
+        }
       }
     };
     window.addEventListener('message', onMessage);
@@ -225,6 +268,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
     const ifr = iframeRef.current;
     if (!ifr) return;
     try { sendVagMessage(ifr.contentWindow ?? null, VagPreviewDisposeSchema, {} as Record<string, never>); } catch { /* */ }
+    setFatal(null);
     setTimeout(() => {
       // eslint-disable-next-line no-self-assign
       ifr.src = ifr.src;
@@ -297,6 +341,18 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         </div>
       </div>
       <div className="preview-frame" ref={frameRef}>
+        {fatal && (
+          <div className="preview-fatal-banner" role="alert">
+            <AlertTriangle size={16} className="pfb-icon" />
+            <div className="pfb-body">
+              <div className="pfb-title">Preview failed to render</div>
+              <div className="pfb-msg" title={fatal.message}>{fatal.message}</div>
+            </div>
+            <button className="pfb-retry" type="button" onClick={onReload}>
+              <RotateCcw size={14} /> Reload
+            </button>
+          </div>
+        )}
         {mode === 'desktop' ? (
           <iframe
             ref={iframeRef}
