@@ -12,7 +12,6 @@ import {
   type PopoutGeom,
   type SyncPanelId,
 } from './sync-channel';
-import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a
@@ -351,41 +350,10 @@ export function useSceneFile(): string | null {
 }
 
 function forgeJsonPath(): string | null {
-  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/${FORGE_JSON}`;
+  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/forge.json`;
 }
 
-/**
- * Read forge.json via the authoritative loadGameProject loader (AC-11).
- * Returns typed GameProject for contract fields (id/name/defaultScene/physics/pointerLock/preview).
- * Returns null if forge.json missing or invalid — callers handle gracefully.
- */
-async function readGameProject(): Promise<GameProject | null> {
-  const p = forgeJsonPath();
-  if (!p) return null;
-  try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    const content = j.content;
-    const result = await loadGameProject(async (_path) => content);
-    if (!result.ok) {
-      // forge.json exists but doesn't pass strict validation — log and return null.
-      // Most common case: scenes[] present (editor-managed multi-scene, D-5).
-      console.warn('[editor-core] loadGameProject failed:', result.error.code, result.error.hint);
-      return null;
-    }
-    return result.value;
-  } catch { return null; }
-}
-
-/**
- * Read raw forge.json content as Record for editor-local scenes[] access (D-5).
- * Preserved so initSceneList/addScene/switchSceneFile can read/write scenes[]
- * without strict loader rejection. This is the editor's multi-scene management path
- * (OOS-6/step 3) — NOT converged to strict loader.
- */
-async function readRawForgeJson(): Promise<Record<string, unknown> | null> {
+async function readForgeJson(): Promise<Record<string, unknown> | null> {
   const p = forgeJsonPath();
   if (!p) return null;
   try {
@@ -396,12 +364,6 @@ async function readRawForgeJson(): Promise<Record<string, unknown> | null> {
     const parsed = JSON.parse(j.content);
     return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
   } catch { return null; }
-}
-
-async function readForgeJson(): Promise<Record<string, unknown> | null> {
-  // Legacy alias — delegates to raw reader for scenes[] access (D-5).
-  // Contract fields: use readGameProject() for typed access.
-  return readRawForgeJson();
 }
 
 /** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the

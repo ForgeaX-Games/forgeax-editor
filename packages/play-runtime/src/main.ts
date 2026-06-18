@@ -10,7 +10,6 @@ import {
   VagConsoleSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
-import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import type { GameContext } from './types';
 
 const root = document.getElementById('app') ?? document.body;
@@ -67,32 +66,16 @@ const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_templat
 // ▶ Play simulates. forge.json is fetched no-store so a freshly-toggled flag
 // takes effect on the next reload.
 let physics: 'rapier-3d' | 'rapier-2d' | undefined;
-let wantsPointerLock = false;
-// ── Load forge.json ONCE via the authoritative loader (AC-11) ─────────────────
-// fetchRead wraps the browser fetch to match loadGameProject's injection signature.
-// cache:'no-store' preserves the existing behaviour: fresh forge.json on every reload.
-const forgeBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
-const fetchRead = (path: string): Promise<string> =>
-  fetch(`${forgeBase}/.forgeax/games/${gameId}/${path}`, { cache: 'no-store' })
-    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); });
-let gpResult: Awaited<ReturnType<typeof loadGameProject>> | null = null;
 {
+  const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
   try {
-    gpResult = await loadGameProject(fetchRead);
-  } catch { /* read injection threw → treat as missing */ }
-}
-if (gpResult?.ok) {
-  const gp = gpResult.value;
-  {
-    const p = gp.physics;
-    if (p === '3d' || p === true || p === 'rapier-3d') physics = 'rapier-3d';
-    else if (p === '2d' || p === 'rapier-2d') physics = 'rapier-2d';
-  }
-  // ── Pointer-lock gate (per-game opt-in via forge.json) ──────────────────────
-  // Default = off → no HUD, no cursor grab (clean preview).
-  if (gameId && gameId !== '_template') {
-    wantsPointerLock = gp.pointerLock === true || gp.input === 'fps';
-  }
+    const fj = await fetch(`${base}/.forgeax/games/${gameId}/forge.json`, { cache: 'no-store' });
+    if (fj.ok) {
+      const p = ((await fj.json()) as { physics?: unknown } | null)?.physics;
+      if (p === '3d' || p === true || p === 'rapier-3d') physics = 'rapier-3d';
+      else if (p === '2d' || p === 'rapier-2d') physics = 'rapier-2d';
+    }
+  } catch { /* no manifest / parse error → physics stays off */ }
 }
 
 // ── createApp (replaces manual createRenderer + World + component registration) ──
@@ -177,7 +160,17 @@ window.addEventListener('resize', () => {
 // "click to lock" HUD plus grabbing the cursor on click is noise there. So it's
 // gated — a game opts in with `"pointerLock": true` (or `"input": "fps"`) in
 // its forge.json. Default = off → no HUD, no cursor grab (clean preview).
-// (wantsPointerLock is resolved above from the single loadGameProject call.)
+let wantsPointerLock = false;
+if (gameId && gameId !== '_template') {
+  try {
+    const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+    const fj = await fetch(`${base}/.forgeax/games/${gameId}/forge.json`);
+    if (fj.ok) {
+      const j = (await fj.json()) as { pointerLock?: boolean; input?: string } | null;
+      wantsPointerLock = j?.pointerLock === true || j?.input === 'fps';
+    }
+  } catch { /* no manifest / parse error → stays off */ }
+}
 // engine-input auto-calls canvas.requestPointerLock() on EVERY canvas click
 // (browser-backend onCanvasClick) — that pops Chrome's "cursor hidden, press Esc"
 // banner even for top-down / click / WASD games that never use mouse-look. For
@@ -233,13 +226,13 @@ async function resolveGame(id: string): Promise<GameEntry | null> {
   // `src/`, which holds the rest of the game code). We still fall back to the
   // legacy `src/main.ts` so games created before the rename keep loading.
   const candidates: string[] = [];
-  // Use the gpResult loaded at the top of play-runtime (AC-11: single loadGameProject).
-  // Non-template games: resolve entry from the typed gp.value.entry; template games won't
-  // have a forge.json at all so fall through to defaults.
-  if (id !== '_template' && gpResult?.ok) {
-    const entry = gpResult.value.entry;
-    if (typeof entry === 'string' && entry) candidates.push(entry.replace(/^\.?\//, ''));
-  }
+  try {
+    const fj = await fetch(`${gameBase}/forge.json`);
+    if (fj.ok) {
+      const entry = (await fj.json())?.entry;
+      if (typeof entry === 'string' && entry) candidates.push(entry.replace(/^\.?\//, ''));
+    }
+  } catch { /* no forge.json / parse error → fall through to defaults */ }
   for (const fallback of ['main.ts', 'src/main.ts']) {
     if (!candidates.includes(fallback)) candidates.push(fallback);
   }

@@ -31,7 +31,6 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
-import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
 
@@ -312,19 +311,13 @@ void (async () => {
   // pack-index fetch and lands at `asset-not-imported` with no chance to retry.
   await renderer.ready.catch(() => null);
   try {
-    // Load forge.json via the authoritative loader (AC-11) instead of fetch+parse.
-    // fetchRead wraps the studio /api/files endpoint to match loadGameProject injection.
-    const gameForgePath = `.forgeax/games/${slug}/${FORGE_JSON}`;
-    const fetchRead = async (path: string): Promise<string> => {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { content?: string };
-      if (!j.content) throw new Error('Empty content');
-      return j.content;
-    };
-    const gpResult = await loadGameProject(fetchRead);
-    if (!gpResult.ok) return;
-    const skin = gpResult.value.preview?.skin;
+    const fj = await fetch(`/api/files?path=.forgeax%2Fgames%2F${encodeURIComponent(slug)}%2Fforge.json`, { cache: 'no-store' })
+      .catch(() => null);
+    if (!fj || !fj.ok) return;
+    const wrapper = (await fj.json()) as { content?: string };
+    if (typeof wrapper?.content !== 'string') return;
+    const cfg = JSON.parse(wrapper.content) as { preview?: { skin?: { sceneGuid: string; clipGuids?: string[]; clipDefault?: string; scale?: number; pos?: [number, number, number] } } };
+    const skin = cfg?.preview?.skin;
     if (!skin?.sceneGuid) return;
     const { AnimationPlayer, Skin, SceneInstance, Transform, perspective: _p } = await import('@forgeax/engine-runtime');
     const { AssetGuid } = await import('@forgeax/engine-pack/guid');

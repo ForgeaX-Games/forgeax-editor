@@ -49,7 +49,6 @@
     "@forgeax/engine-rhi-wgpu": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
-    "@forgeax/engine-project": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
