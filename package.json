@@ -37,7 +37,7 @@
     "dev:standalone": "bash scripts/dev-standalone.sh",
     "lint": "node scripts/lint-sync-channel-panels.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
-    "lint:dep": "dependency-cruise --output-type err-html -c .dependency-cruiser.cjs packages",
+    "lint:dep": "dependency-cruiser --output-type err-html -c .dependency-cruiser.cjs packages",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium"
   },
