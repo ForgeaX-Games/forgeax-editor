@@ -14,6 +14,7 @@ import {
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   DirectionalLight,
+  DirectionalLightShadow,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime } from '@forgeax/editor-core';
@@ -218,16 +219,20 @@ const engineSync = createEngineSync(world as never, renderer as never, resolveMa
 // the arena-scale default framing leaves it a speck on the horizon, and without
 // a scene Sun its PBR reads near-black. Frame close-up and add a neutral key
 // light (NOT part of the doc, so it never saves into the asset).
+//
+// EXACTLY ONE DirectionalLight: the engine's first-slice cap supports a single
+// directional (N>1 drops the rest + warns "render-system-multi-light"), so the
+// old key+fill rig silently lost the fill anyway. The cool fill is replaced by
+// the Skylight ambient installed below. DirectionalLightShadow on the SAME
+// entity clears the "DirectionalLight present without DirectionalLightShadow"
+// warn (and gives the preview a contact shadow).
 const sceneFile = getSceneFile() ?? '';
 const isAssetEdit = sceneFile.startsWith('monster:') || sceneFile.startsWith('character:');
 if (isAssetEdit) {
   world.spawn(
     { component: Transform, data: {} },
     { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6 } },
-  );
-  world.spawn(
-    { component: Transform, data: {} },
-    { component: DirectionalLight, data: { directionX: 0.6, directionY: -0.3, directionZ: 0.7, colorR: 0.5, colorG: 0.6, colorB: 0.9, intensity: 0.9 } },
+    { component: DirectionalLightShadow, data: { cascadeCount: 2, mapSize: 2048, farPlane: 40, nearPlane: 0.05 } },
   );
 }
 
