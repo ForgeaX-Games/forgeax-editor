@@ -1,4 +1,4 @@
-import { bus, setSelection, useDocVersion } from '@forgeax/editor-shared';
+import { bus, setSelection, useDocVersion, useMainConnected } from '@forgeax/editor-shared';
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
 // mutation (human UI OR AI tool-call) is one EditorCommand on the bus, so this is
@@ -7,6 +7,7 @@ import { bus, setSelection, useDocVersion } from '@forgeax/editor-shared';
 // human vs AI — the editor's whole point is that both go through the same path.
 export function HistoryPanel() {
   useDocVersion(); // re-render on every bus change
+  const connected = useMainConnected(); // false = no Edit viewport answering yet
   const steps = bus.historySteps();
   const head = bus.appliedCount();
 
@@ -14,7 +15,11 @@ export function HistoryPanel() {
     <div className="panel" data-testid="panel-history">
       <h3>History</h3>
       <div className="hist-list" data-testid="hist-list">
-        {steps.length === 0 ? (
+        {!connected ? (
+          <div className="muted" style={{ padding: '4px 10px' }} data-testid="hist-disconnected">
+            等待 Edit 视口… 打开「Edit」面板后这里会实时显示每一步操作。
+          </div>
+        ) : steps.length === 0 ? (
           <div className="muted" style={{ padding: '4px 10px' }}>无操作</div>
         ) : (
           steps.map((s, i) => (

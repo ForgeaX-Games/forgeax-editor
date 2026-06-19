@@ -295,6 +295,32 @@ export function useDocVersion(): number {
   return useSyncExternalStore(subscribeDoc, () => docVersion, () => docVersion);
 }
 
+// ── Popout ↔ main connectivity (design §0.2.2) ───────────────────────────────
+// A popped-out / ep:* panel is a pure MIRROR: it has no authoritative bus and
+// only shows content once the MAIN viewport (the BroadcastChannel "main") has
+// answered its `hello` with a snapshot. Until then History/Timeline render an
+// empty state that is INDISTINGUISHABLE from "viewport open but nothing edited
+// yet" — so a panel docked without an open Edit viewport looks silently broken
+// ("没接通"). This flag makes the distinction legible: false = no main has
+// answered (show a "open the Edit viewport" hint); true = mirroring a live
+// viewport (empty is then genuinely empty). Always true in the main window.
+let mainConnected = !IS_POPOUT;
+const connectedListeners = new Set<() => void>();
+function markMainConnected(): void {
+  if (mainConnected) return;
+  mainConnected = true;
+  for (const fn of connectedListeners) fn();
+}
+function subscribeConnected(fn: () => void): () => void {
+  connectedListeners.add(fn);
+  return () => connectedListeners.delete(fn);
+}
+/** True once this surface has authority (main window) or a live snapshot from
+ *  one (popout). False in a popout whose Edit viewport isn't open yet. */
+export function useMainConnected(): boolean {
+  return useSyncExternalStore(subscribeConnected, () => mainConnected, () => mainConnected);
+}
+
 export function dispatch(cmd: EditorCommand): void {
   // In a popout the bus is a read-only mirror: forward the command to the main
   // window (the authority), which applies it and broadcasts the new snapshot
@@ -867,6 +893,7 @@ function applySnapshot(snap: EditorSnapshot): void {
   applyingSnapshot = true;
   try {
     mirror = snap;
+    markMainConnected(); // a main answered → this panel is live, not orphaned
     bus.doc = snap.doc;
     selectionList = [...snap.selection];
     if (gizmoMode !== snap.gizmo) {
@@ -963,7 +990,19 @@ function initPopout(ch: BroadcastChannel): void {
       try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
     }
   };
-  postSync({ t: 'hello' }); // request the current state on open
+  // Request the current state on open. A SINGLE hello is lost if the main
+  // viewport hasn't booted yet — and in the studio DockShell the reload
+  // coordinator serializes iframe loads one-at-a-time, so a panel routinely
+  // connects SECONDS before its Edit viewport ("main") is ready to answer. The
+  // panel would then wait for the next edit-triggered snapshot (looking
+  // "没接通" until the user happens to edit). Re-poll a few times so we latch
+  // onto a late-booting main; stop as soon as a snapshot lands (markMainConnected).
+  postSync({ t: 'hello' });
+  let tries = 0;
+  const poll = setInterval(() => {
+    if (mainConnected || ++tries > 20) { clearInterval(poll); return; }
+    postSync({ t: 'hello' });
+  }, 500);
 }
 
 export function initSync(): void {

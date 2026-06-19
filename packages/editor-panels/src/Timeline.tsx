@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { bus, dispatch, setAnimPreview, useDocVersion, useSelection } from '@forgeax/editor-shared';
+import { bus, dispatch, setAnimPreview, useDocVersion, useMainConnected, useSelection } from '@forgeax/editor-shared';
 import { type Clip, type Interp, type Track, emptyClip, sampleClip, setKey, removeKey } from '@forgeax/editor-core';
 
 // Timeline panel (design EDITOR-MODE P2/P3) — keyframe animation for the selected
@@ -16,6 +16,7 @@ const round = (x: number): number => Math.round(x * 100) / 100;
 
 export function TimelinePanel() {
   useDocVersion();
+  const connected = useMainConnected(); // false = no Edit viewport answering yet
   const sel = useSelection();
   const node = sel !== null ? bus.doc.entities[sel] : undefined;
   const raw = node?.components.Anim as { duration?: number; tracks?: Track[] } | undefined;
@@ -44,6 +45,9 @@ export function TimelinePanel() {
     return () => cancelAnimationFrame(raf);
   }, [playing, dur]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (!connected) {
+    return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty" data-testid="tl-disconnected">等待 Edit 视口… 打开「Edit」面板后，选中实体即可编辑动画。</div></div>;
+  }
   if (sel === null || !node) {
     return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty">选中一个实体以编辑动画。</div></div>;
   }

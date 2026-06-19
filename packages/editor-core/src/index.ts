@@ -214,6 +214,7 @@ export {
   requestRefAsset,
   requestRefEntity,
   useDocVersion,
+  useMainConnected,
   useGizmoMode,
   useSelection,
   useSelectionList,
