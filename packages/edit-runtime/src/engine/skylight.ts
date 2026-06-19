@@ -23,8 +23,12 @@ interface StoreLike {
   // column handle via world.allocSharedRef('TextureAsset', pod).
   uploadCubemapFromEquirect(world: unknown, sourceHandle: unknown, sourcePod: unknown): Promise<{ ok: boolean; value?: unknown; error?: unknown }>;
 }
+interface SpawnResultLike { unwrap(): unknown }
 interface WorldLike {
-  spawn(...componentDatas: unknown[]): unknown;
+  spawn(...componentDatas: unknown[]): SpawnResultLike;
+  /** Patch component fields on an existing entity (used to upgrade a
+   *  solid-color Skylight to image-based lighting once the cubemap is ready). */
+  set(entity: unknown, component: unknown, data: unknown): unknown;
   /** Engine removed AssetRegistry.register; shared assets are now minted via
    *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
    *  directly (no Result / no .unwrap()). */
@@ -86,21 +90,36 @@ export async function setupEditorSkylight(
   opts: { hdrUrl?: string | readonly string[]; intensity?: number } = {},
 ): Promise<void> {
   const intensity = opts.intensity ?? 0.2;
+  // ALWAYS spawn a solid-color Skylight first. The forgeax PBR shader computes
+  // ambient=0 without a Skylight, so a lone DirectionalLight leaves shaded faces
+  // black. A cubemap-less Skylight binds the engine's 1×1 white irradiance cube
+  // — ambient is live on the first frame with no async GPU work, and it renders
+  // on WebKit/WKWebView (the desktop Studio app) whose WebGPU lacks the
+  // rgba16float render-attachment the IBL precompute needs. Neutral studio fill.
+  let skylight: unknown;
+  try {
+    skylight = world.spawn(
+      { component: Skylight, data: { colorR: 0.85, colorG: 0.9, colorB: 1.0, intensity: 0.35 } },
+    ).unwrap();
+  } catch (e) {
+    console.warn('[editor] solid skylight spawn failed:', (e as Error)?.message ?? e);
+    return;
+  }
   try {
     // Skip the IBL precompute on WebKit/WKWebView — its WebGPU lacks the
-    // rgba16float render-attachment the engine's equirect→cubemap pass needs.
-    // Detect by UA: Safari/WKWebView contains "Safari" but NOT any Chromium
-    // marker (Chrome / Chromium / Edg / HeadlessChrome). Allowlisting the
-    // negative side directly is more robust than `\bChrome\b` whose word
-    // boundary misses Playwright's "HeadlessChrome" UA.
+    // rgba16float render-attachment the engine's equirect→cubemap pass needs
+    // (and calling it there poisons the device). The solid ambient above
+    // remains. Detect by UA: Safari/WKWebView contains "Safari" but NOT any
+    // Chromium marker. Allowlisting the negative side directly is more robust
+    // than `\bChrome\b` whose word boundary misses Playwright's "HeadlessChrome".
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
     const isChromium = /Chrome|Chromium|Edg/.test(ua);
     if (!isChromium) {
-      console.warn('[editor] non-Chromium WebGPU (WebKit/WKWebView): skipping IBL skylight/skybox; directional light only');
+      console.info('[editor] non-Chromium WebGPU (WebKit/WKWebView): solid-color skylight only (no IBL/skybox)');
       return;
     }
     if (typeof store?.uploadCubemapFromEquirect !== 'function') {
-      console.warn('[editor] no store.uploadCubemapFromEquirect — skipping skylight');
+      console.warn('[editor] no store.uploadCubemapFromEquirect — solid-color skylight only');
       return;
     }
     const candidates: readonly string[] = opts.hdrUrl === undefined
@@ -118,7 +137,9 @@ export async function setupEditorSkylight(
     const res = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
     if (!res.ok || res.value === undefined) { console.warn('[editor] cubemap precompute failed:', res.error); return; }
     const cubemap = res.value;
-    world.spawn({ component: Skylight, data: { cubemap, intensity } });
+    // Upgrade the existing Skylight to image-based lighting (neutral tint lets
+    // the cubemap drive the color).
+    world.set(skylight, Skylight, { cubemap, colorR: 1, colorG: 1, colorB: 1, intensity });
     // Visible sky only for a real HDR — the synthetic gradient is for ambient
     // fill, not a backdrop (and the skybox needs the camera's tonemap active).
     if (hdr) world.spawn({ component: SkyboxBackground, data: { cubemap, mode: SKYBOX_MODE_CUBEMAP } });
