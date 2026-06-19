@@ -312,6 +312,12 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       const t = (ev.data as { type?: unknown } | null)?.type;
       if (typeof t !== 'string' || !t.startsWith('VAG_')) return;
 
+      // Forward the network stream up to the Studio shell (Network panel).
+      if (t === 'VAG_NETWORK') {
+        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
+        return;
+      }
+
       switch (t) {
         case 'VAG_FPS_STATS': {
           const r = VagFpsStatsSchema.safeParse(ev.data);

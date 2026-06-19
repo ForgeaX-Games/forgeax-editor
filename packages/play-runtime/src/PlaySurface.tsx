@@ -111,6 +111,13 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       const t = (ev.data as { type?: unknown } | null)?.type;
       if (typeof t !== 'string' || !t.startsWith('VAG_')) return;
 
+      // Forward the network stream up to the Studio shell (Network panel). The
+      // shell is one frame above and never sees the engine iframe's postMessage.
+      if (t === 'VAG_NETWORK') {
+        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
+        return;
+      }
+
       if (t === 'VAG_FPS_STATS') {
         const r = VagFpsStatsSchema.safeParse(ev.data);
         if (!r.success) {

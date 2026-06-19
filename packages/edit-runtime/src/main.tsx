@@ -21,6 +21,7 @@ import { loadGltfRuntime } from '@forgeax/editor-core';
 import {
   sendVagMessage,
   VagConsoleSchema,
+  VagNetworkSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
 import { ViewportBar } from './ViewportBar';
@@ -94,6 +95,7 @@ canvas.height = window.innerHeight * dpr;
 appRoot.appendChild(canvas);
 
 installConsoleBridge();
+installNetworkBridge();
 
 // ── Seed / restore the authored document ──────────────────────────────────────
 // A small demo scene so the editor opens with something to edit + render. These
@@ -454,6 +456,68 @@ function installConsoleBridge(): void {
       sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
     } catch { /* cross-origin */ }
   });
+}
+
+// Network bridge — fetch / XHR / WebSocket proxy → VAG_NETWORK (mirrors the
+// console bridge). Feeds the Studio Network panel. Best-effort, never throws.
+function installNetworkBridge(): void {
+  const send = (kind: 'fetch' | 'xhr' | 'ws', method: string, url: string, status: number, ms: number, ok: boolean): void => {
+    try {
+      sendVagMessage(window.parent, VagNetworkSchema, { kind, method, url: String(url).slice(0, 2048), status, ms: Math.round(ms), ok, ts: Date.now() });
+    } catch { /* cross-origin */ }
+  };
+  const origFetch = window.fetch?.bind(window);
+  if (origFetch) {
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const t0 = performance.now();
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+      const method = (init?.method ?? (input instanceof Request ? input.method : 'GET') ?? 'GET').toUpperCase();
+      try {
+        const res = await origFetch(input as RequestInfo, init);
+        send('fetch', method, url, res.status, performance.now() - t0, res.ok);
+        return res;
+      } catch (e) {
+        send('fetch', method, url, 0, performance.now() - t0, false);
+        throw e;
+      }
+    };
+  }
+  const XHR = window.XMLHttpRequest;
+  if (XHR) {
+    const origOpen = XHR.prototype.open;
+    const origSend = XHR.prototype.send;
+    XHR.prototype.open = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, method: string, url: string, ...rest: unknown[]) {
+      this.__fxN = { m: String(method).toUpperCase(), u: String(url), t0: 0 };
+      // @ts-expect-error variadic passthrough
+      return origOpen.call(this, method, url, ...rest);
+    };
+    XHR.prototype.send = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, body?: Document | XMLHttpRequestBodyInit | null) {
+      const n = this.__fxN;
+      if (n) {
+        n.t0 = performance.now();
+        this.addEventListener('loadend', () => send('xhr', n.m, n.u, this.status, performance.now() - n.t0, this.status >= 200 && this.status < 400));
+      }
+      return origSend.call(this, body as Document);
+    };
+  }
+  const OrigWS = window.WebSocket;
+  if (OrigWS) {
+    const WSProxy = function (this: unknown, url: string | URL, protocols?: string | string[]) {
+      const t0 = performance.now();
+      const ws = protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
+      const u = typeof url === 'string' ? url : url.href;
+      ws.addEventListener('open', () => send('ws', 'WS', u, 101, performance.now() - t0, true));
+      ws.addEventListener('error', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
+      ws.addEventListener('close', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
+      return ws;
+    } as unknown as typeof WebSocket;
+    WSProxy.prototype = OrigWS.prototype;
+    Object.defineProperty(WSProxy, 'CONNECTING', { value: OrigWS.CONNECTING });
+    Object.defineProperty(WSProxy, 'OPEN', { value: OrigWS.OPEN });
+    Object.defineProperty(WSProxy, 'CLOSING', { value: OrigWS.CLOSING });
+    Object.defineProperty(WSProxy, 'CLOSED', { value: OrigWS.CLOSED });
+    window.WebSocket = WSProxy;
+  }
 }
 
 // On-canvas error surface. A per-frame render throw leaves the viewport BLACK

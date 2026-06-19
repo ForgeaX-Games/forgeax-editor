@@ -64,6 +64,24 @@ export const VagConsoleSchema = z.object({
 });
 export type VagConsoleMessage = z.infer<typeof VagConsoleSchema>;
 
+// ── 2b. VAG_NETWORK ──────────────────────────────────────────────────────────
+// Producer: play-runtime/main.ts + edit-runtime/main.tsx network bridge
+// (fetch / XHR / WebSocket proxy). Carries one network request summary. Consumer
+// pushes to the in-UI Network panel (asset/HTTP/WS debugging — 404s, 503s, …).
+export const VagNetworkSchema = z.object({
+  type: z.literal('VAG_NETWORK'),
+  payload: z.object({
+    kind: z.enum(['fetch', 'xhr', 'ws']),
+    method: z.string(),
+    url: z.string(),
+    status: z.number(), // HTTP status; 0 = failed/pending; for ws: 101 open / 0 closed
+    ms: z.number(), // duration (ms); ws: time-to-open
+    ok: z.boolean(),
+    ts: z.number(),
+  }),
+});
+export type VagNetworkMessage = z.infer<typeof VagNetworkSchema>;
+
 // ── 3. VAG_CONTEXT_MENU ──────────────────────────────────────────────────────
 // Producer: editor-runtime/ui/contextMenuService.tsx:57.
 // Flat shape — no payload wrapper. menuId pairs the open with the action.
