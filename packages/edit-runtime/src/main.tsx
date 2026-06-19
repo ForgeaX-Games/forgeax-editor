@@ -199,7 +199,12 @@ const aspect = canvas.width / canvas.height || 1;
 const cameraEntity = world.spawn(
   { component: Transform, data: { posY: 1.5, posZ: 9 } },
   // tonemap must be active for the HDR SkyboxBackground pass to draw.
-  { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED } },
+  // clearR/G/B = visible sky background. On WebKit/WKWebView (the desktop app)
+  // the cubemap SkyboxBackground can't render (needs rgba16float render targets),
+  // so without this the Edit viewport background is pure black; a neutral studio
+  // blue reads as sky. On Chromium the cubemap skybox draws over it. Linear/pre-
+  // tonemap. The viewport drives only the camera Transform, so this clear sticks.
+  { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
 ).unwrap();
 
 // Load the open game's asset packs once, so a Material.materialAsset GUID
