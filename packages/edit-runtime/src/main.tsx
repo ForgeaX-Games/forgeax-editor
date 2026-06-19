@@ -343,7 +343,19 @@ void (async () => {
     if (!sceneGid.ok) return;
     const sceneRes = await assets.loadByGuid(sceneGid.value);
     if (!sceneRes.ok) { console.warn('[editor] preview skin scene load failed:', (sceneRes.error as { code?: string })?.code); return; }
-    const inst = assets.instantiate(sceneRes.value, world as never);
+    // Teardown/switch guard: if the game changed while we awaited the scene
+    // load, the previous world's shared-refs have been released. Instantiating
+    // now resolves released handles ('shared-ref-released') and leaves a partial
+    // skinned SceneInstance that wedges the renderer (engine runs but renders
+    // nothing). Bail silently — the new game's hook will run its own preview.
+    if (getSceneId() !== slug) return;
+    // engine e53f4616: `loadByGuid` returns the PAYLOAD; `instantiate` wants a
+    // Handle. Mint a shared-ref from the payload (mirrors hellforge Play). The
+    // old code passed the payload straight in, where it was read as a released
+    // handle → 'shared-ref-released' + a wedged partial instantiate on EVERY
+    // hellforge Edit load (the only game with preview.skin).
+    const sceneHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('SceneAsset', sceneRes.value);
+    const inst = assets.instantiate(sceneHandle as never, world as never);
     if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
     const skinRoot = inst.value as { generation: number; index: number };
     // Apply preview placement (pos + scale) on the SceneInstance root.
@@ -373,9 +385,13 @@ void (async () => {
     if (!firstGid.ok) return;
     const clipRes = await assets.loadByGuid(firstGid.value);
     if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
+    if (getSceneId() !== slug) return; // game switched while loading the clip — don't touch a stale world
+    // loadByGuid returns the PAYLOAD; AnimationPlayer.clip wants a Handle — mint
+    // a shared-ref (brand 'AnimationClip'), same as hellforge Play.
+    const clipHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('AnimationClip', clipRes.value);
     (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
       component: AnimationPlayer,
-      data: { clip: clipRes.value, time: 0, speed: 1, paused: false, looping: true },
+      data: { clip: clipHandle, time: 0, speed: 1, paused: false, looping: true },
     });
     console.log(`[editor] preview skin loaded for ${slug} (default clip via guid ${clipGuids[0]!.slice(0, 8)}, ${defaultName})`);
   } catch (err) {
