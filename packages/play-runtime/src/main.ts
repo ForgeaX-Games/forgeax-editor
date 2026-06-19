@@ -184,7 +184,35 @@ window.addEventListener('resize', () => {
 // non-FPS games (the default), no-op the canvas's requestPointerLock so the banner
 // never appears. FPS games (below) use the native Tauri cursor-grab path instead.
 if (!wantsPointerLock) {
-  try { (canvas as HTMLCanvasElement & { requestPointerLock: () => void }).requestPointerLock = () => {}; } catch { /* ignore */ }
+  try { (canvas as unknown as { requestPointerLock: () => void }).requestPointerLock = () => {}; } catch { /* ignore */ }
+} else {
+  // FPS / pointerLock games: engine-input's onCanvasClick auto-calls
+  // canvas.requestPointerLock() on EVERY canvas click (browser-backend.ts) with
+  // NO .catch and NO focus gate. The new Pointer Lock spec returns a Promise
+  // that REJECTS asynchronously — most notoriously in WKWebView (desktop app)
+  // where the window starts unfocused: `WrongDocumentError: Pointer lock
+  // requires the window to have focus`. A bare auto-call → unhandled rejection
+  // (the ×4 [play]/[shell] errors), and if it lands on the load/init path it can
+  // wedge the iframe at "加载中…". try/catch does NOT catch a rejected Promise,
+  // so wrapping the engine's call in try/catch (which games do) is insufficient.
+  // Replace the canvas's instance method with a SAFE version that actually locks
+  // but (a) focus-gates — no-op when the window lacks focus, the next focused
+  // click re-locks — and (b) swallows the rejected Promise. Renderer-agnostic:
+  // WrongDocumentError fires in any browser without focus, so this fixes desktop
+  // (WKWebView) and web alike. The real method is saved so the games' own
+  // pointer-lock chains (which read HTMLElement.prototype.requestPointerLock
+  // BEFORE this runs, then call realRequestLock.call(canvas)) keep working.
+  try {
+    const realRequestLock = (canvas as HTMLCanvasElement).requestPointerLock.bind(canvas);
+    (canvas as unknown as { requestPointerLock: () => void }).requestPointerLock = () => {
+      try {
+        if (!document.hasFocus()) { try { window.focus(); } catch { /* ignore */ } }
+        if (!document.hasFocus()) return; // still unfocused → skip; next focused click re-locks
+        const r = realRequestLock() as unknown;
+        if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => {});
+      } catch { /* ignore — denied / not user-activated */ }
+    };
+  } catch { /* ignore */ }
 }
 if (wantsPointerLock) {
   const hud = document.getElementById('hud');
