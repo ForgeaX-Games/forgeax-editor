@@ -155,6 +155,11 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         }
         const { level, text } = r.data.payload;
         console[level]('[play]', text);
+        // Forward the FULL console stream (all levels) up to the Studio shell so
+        // its Console panel (store.consoleLog) shows it — the shell is one frame
+        // above this surface and never receives the engine iframe's own
+        // VAG_CONSOLE postMessage directly.
+        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
         // Forward warn+ to the shell health feed; mark fatal region failures.
         if (level === 'error' || level === 'warn') {
           const reason = level === 'error' ? fatalReason(text) : null;
@@ -359,7 +364,14 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
             src={`/preview/?game=${encodeURIComponent(slug)}`}
             className="preview-iframe"
             title={`game preview: ${slug}`}
-            allow="xr-spatial-tracking *; fullscreen *"
+            // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
+            // chain: Chrome 2026 + WebKit (Safari 26) no longer silently inherit
+            // pointer lock from same-origin parents, so without this entry the
+            // API is denied (pointerlockerror). On the Tauri desktop app that
+            // denial fell back to a native CGAssociate cursor-grab whose frozen
+            // cursor yields movementX=0 → dead mouse-look; granting it lets the
+            // real Pointer Lock API engage in BOTH web and WKWebView.
+            allow="xr-spatial-tracking *; fullscreen *; pointer-lock *"
             onMouseDown={(e) => { try { e.currentTarget.contentWindow?.focus(); } catch { /* guard */ } }}
           />
         ) : (
@@ -370,7 +382,9 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
                 src={`/preview/?game=${encodeURIComponent(slug)}`}
                 className="preview-iframe-mobile"
                 title={`game preview: ${slug}`}
-                allow="xr-spatial-tracking *; fullscreen *"
+                // pointer-lock *: see the desktop iframe above — required for the
+                // FPS requestPointerLock chain in both web and WKWebView.
+                allow="xr-spatial-tracking *; fullscreen *; pointer-lock *"
                 onMouseDown={(e) => { try { e.currentTarget.contentWindow?.focus(); } catch { /* guard */ } }}
               />
             </div>

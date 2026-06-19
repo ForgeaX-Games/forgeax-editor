@@ -325,6 +325,11 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
           if (!r.success) { console.warn('VAG_CONSOLE schema failure', { issues: r.error.issues }); return; }
           const { level, text } = r.data.payload;
           console[level]('[editor]', text);
+          // Forward the FULL console stream (all levels) up to the Studio shell so
+          // its Console panel (store.consoleLog) shows it — the shell is one frame
+          // above this surface and never receives the engine iframe's own
+          // VAG_CONSOLE postMessage directly.
+          try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
           // Forward warn+ to the shell health feed; mark fatal region failures.
           if (level === 'error' || level === 'warn') {
             const reason = level === 'error' ? fatalReason(text) : null;
@@ -457,7 +462,15 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
             src={src}
             className="preview-iframe"
             title="forgeax editor"
-            allow="xr-spatial-tracking *; fullscreen *"
+            // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
+            // chain inside the game: Chrome 2026 + WebKit (Safari 26) no longer
+            // silently inherit pointer lock from same-origin parents, so without
+            // this Permissions-Policy entry requestPointerLock is denied
+            // (pointerlockerror). On the Tauri desktop app that denial used to
+            // fall back to a native CGAssociate cursor-grab whose frozen cursor
+            // yields movementX=0 → dead mouse-look. Granting it here lets the
+            // real Pointer Lock API engage in BOTH renderers (web + WKWebView).
+            allow="xr-spatial-tracking *; fullscreen *; pointer-lock *"
             onMouseDown={(e) => { try { e.currentTarget.contentWindow?.focus(); } catch { /* guard */ } }}
           />
         )}
