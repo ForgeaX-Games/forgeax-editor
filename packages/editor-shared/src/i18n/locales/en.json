@@ -13,6 +13,82 @@
     "detachedPanel": {
       "redock": "Redock",
       "redockTitle": "Dock back to the main window"
+    },
+    "hierarchy": {
+      "menu": {
+        "group": "Group ({{n}})",
+        "deleteSelected": "Delete selected ({{n}})",
+        "editSource": "⤴ Edit source ({{plugin}})",
+        "editSourceNone": "⤴ Edit source (no source)",
+        "duplicate": "Duplicate",
+        "copyJson": "Copy JSON",
+        "refToChat": "Reference in Chat",
+        "ungroup": "Ungroup",
+        "delete": "Delete"
+      }
+    },
+    "history": {
+      "waitingForViewport": "Waiting for Edit viewport… Open the \"Edit\" panel and every operation will show here in real time.",
+      "empty": "No operations",
+      "jumpToStep": "Jump to step {{step}}",
+      "originAi": "AI",
+      "originHuman": "Human"
+    },
+    "inspector": {
+      "batchTitle": "Inspector · Batch ({{count}})",
+      "batchNote": "Editing the shared properties below applies to all selected at once (single undo step).",
+      "alignToPrimary": "Align to primary",
+      "noCommonComponents": "Selected entities have no components in common.",
+      "editSource": "Edit source",
+      "refToChat": "Reference in Chat",
+      "copyJson": "Copy JSON",
+      "trackChannels": "channels: {{count}} (edit keys/tracks in Timeline)"
+    },
+    "launcher": {
+      "title": "Launcher",
+      "noGameOpen": "No game open.",
+      "editingInThisWindow": "Editing in this window",
+      "editingHint": "Double-click another level/asset in the Assets panel to switch (or open in a new window)",
+      "mainScene": "Main scene",
+      "playRun": "▶ Play runs",
+      "campaignOption": "Global (main) — full campaign, starting from level 1",
+      "levelOnly": "Only {{name}}",
+      "configHint": "Writes play-config.json (local launcher state, not committed); read on ▶ Play startup.",
+      "saved": "✓ Saved"
+    },
+    "material": {
+      "selectEntityHint": "Select an entity to edit its material.",
+      "noComponent": "“{{name}}” has no Material component.",
+      "addMaterial": "+ Add Material",
+      "assetsSection": "Assets / Textures (GUID)",
+      "noAssetTitle": "No asset referenced — using inline PBR",
+      "inline": "Inline",
+      "clearAsset": "Clear asset reference",
+      "noTexture": "No texture",
+      "clearTexture": "Clear texture",
+      "hint": "Tip: right-click “Assign to selected entity” in the Assets panel to set the material asset GUID."
+    },
+    "matgraph": {
+      "empty": "Select an entity to edit its material graph.",
+      "addNode": "Add {{label}} node",
+      "evalResult": "Graph evaluation result",
+      "outputPin": "Output — click, then click an input",
+      "deleteNode": "Delete node",
+      "pinDisconnect": " — click to disconnect",
+      "pinConnect": " — click to connect",
+      "hint": "Click an output pin → then click an input pin to wire; click a connected input pin to disconnect. Graph changes apply to the Material immediately."
+    },
+    "timeline": {
+      "waitingViewport": "Waiting for the Edit viewport… open the \"Edit\" panel, then select an entity to edit its animation.",
+      "selectEntity": "Select an entity to edit its animation.",
+      "pause": "Pause",
+      "playPreview": "Play preview",
+      "captureKey": "Capture the current Transform as a keyframe at the playhead",
+      "removeKey": "Delete the keyframe at the playhead",
+      "interpMode": "Interpolation mode for new keyframes",
+      "duration": "Duration",
+      "hint": "Move the entity to a frame → press \"● K\" to capture a keyframe; frames are interpolated automatically.",
+      "keyTooltip": "t={{t}}s v={{v}} ({{interp}}) — click to jump to this frame"
     }
   }
 }

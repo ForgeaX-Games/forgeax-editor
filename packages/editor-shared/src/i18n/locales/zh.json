@@ -13,6 +13,82 @@
     "detachedPanel": {
       "redock": "停靠",
       "redockTitle": "停靠回主窗"
+    },
+    "hierarchy": {
+      "menu": {
+        "group": "成组 ({{n}})",
+        "deleteSelected": "删除选中 ({{n}})",
+        "editSource": "⤴ 编辑源 ({{plugin}})",
+        "editSourceNone": "⤴ 编辑源 (无来源)",
+        "duplicate": "复制",
+        "copyJson": "复制 JSON",
+        "refToChat": "引用到 Chat",
+        "ungroup": "解组",
+        "delete": "删除"
+      }
+    },
+    "history": {
+      "waitingForViewport": "等待 Edit 视口… 打开「Edit」面板后这里会实时显示每一步操作。",
+      "empty": "无操作",
+      "jumpToStep": "跳转到第 {{step}} 步",
+      "originAi": "AI",
+      "originHuman": "人"
+    },
+    "inspector": {
+      "batchTitle": "Inspector · 批量 ({{count}})",
+      "batchNote": "编辑下列共有属性将一次性应用到全部选中（单步撤销）。",
+      "alignToPrimary": "对齐到 primary",
+      "noCommonComponents": "选中项无共有组件。",
+      "editSource": "编辑源",
+      "refToChat": "引用到 Chat",
+      "copyJson": "复制 JSON",
+      "trackChannels": "channels: {{count}}（keys/tracks 在 Timeline 编辑）"
+    },
+    "launcher": {
+      "title": "启动器",
+      "noGameOpen": "未打开游戏。",
+      "editingInThisWindow": "本窗口正在编辑",
+      "editingHint": "从 Assets 面板双击其它关卡/资产可切换（或在新窗口打开）",
+      "mainScene": "主场景",
+      "playRun": "▶ Play 运行",
+      "campaignOption": "全局 (main) — 完整战役，从第 1 关开始",
+      "levelOnly": "仅 {{name}}",
+      "configHint": "写入 play-config.json（本地启动器状态，不进版本库）；▶ Play 启动时读取。",
+      "saved": "✓ 已保存"
+    },
+    "material": {
+      "selectEntityHint": "选中一个实体以编辑材质。",
+      "noComponent": "「{{name}}」没有 Material 组件。",
+      "addMaterial": "+ 添加 Material",
+      "assetsSection": "资产 / 贴图 (GUID)",
+      "noAssetTitle": "未引用资产 — 用内联 PBR",
+      "inline": "内联",
+      "clearAsset": "清除资产引用",
+      "noTexture": "无贴图",
+      "clearTexture": "清除贴图",
+      "hint": "提示：从 Assets 面板右键「赋给选中实体」可设材质资产 GUID。"
+    },
+    "matgraph": {
+      "empty": "选中一个实体以编辑材质图。",
+      "addNode": "添加 {{label}} 节点",
+      "evalResult": "图求值结果",
+      "outputPin": "输出 — 单击后再点输入",
+      "deleteNode": "删除节点",
+      "pinDisconnect": " — 单击断开",
+      "pinConnect": " — 单击连接",
+      "hint": "单击输出 pin → 再单击输入 pin 连线;单击已连输入 pin 断开。图变化即应用到 Material。"
+    },
+    "timeline": {
+      "waitingViewport": "等待 Edit 视口… 打开「Edit」面板后，选中实体即可编辑动画。",
+      "selectEntity": "选中一个实体以编辑动画。",
+      "pause": "暂停",
+      "playPreview": "播放预览",
+      "captureKey": "在播放头记录当前 Transform 关键帧",
+      "removeKey": "删除播放头处的关键帧",
+      "interpMode": "新关键帧的插值方式",
+      "duration": "时长",
+      "hint": "移动实体到某帧 → 按「● K」记录关键帧；多帧之间自动插值。",
+      "keyTooltip": "t={{t}}s v={{v}} ({{interp}}) — 单击跳到此帧"
     }
   }
 }
