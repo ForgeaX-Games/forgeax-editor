@@ -39,6 +39,43 @@ import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
 
+// ── Boot watchdog (root-cause-agnostic dead-boot backstop) ───────────────────
+// The editor boots behind several top-level `await`s (initSceneList,
+// loadDocFromDisk, createApp/WebGPU init). If ANY stalls — a dev-server bounced
+// mid-session, vite re-optimizing deps, a WKWebView WebGPU init that never
+// returns — the module never finishes evaluating and the user is stuck on a dead
+// black viewport (FPS '--', clicks dead) with no error and no recovery. This
+// timer is registered SYNCHRONOUSLY before the first await; a stalled top-level
+// await suspends the module but the event loop still fires this timer. If boot
+// hasn't completed in time it paints a reload affordance instead of a silent
+// hang. (Per-fetch timeouts in editor-core handle the fetch variant; this is the
+// backstop for everything else, incl. createApp.)
+let bootCompleted = false;
+const bootWatchdog = setTimeout(() => {
+  if (bootCompleted) return;
+  try {
+    const o = document.createElement('div');
+    o.style.cssText =
+      'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(26,26,30,.82);backdrop-filter:blur(2px);color:#eee;font:14px system-ui;text-align:center;padding:24px';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:15px;font-weight:600';
+    title.textContent = '编辑器启动卡住了';
+    const desc = document.createElement('div');
+    desc.style.cssText = 'opacity:.7;max-width:420px;line-height:1.5';
+    desc.textContent = 'Edit 在启动时卡住（通常是 dev server 刚重启 / WebGPU 初始化未返回）。点下面重载即可恢复。';
+    const btn = document.createElement('button');
+    btn.textContent = '↻ 重新加载编辑器';
+    btn.style.cssText = 'padding:8px 18px;border-radius:8px;border:1px solid #555;background:#2a2a30;color:#fff;cursor:pointer;font:13px system-ui';
+    btn.onclick = () => location.reload();
+    o.append(title, desc, btn);
+    (document.getElementById('ui') ?? document.body).appendChild(o);
+  } catch { /* DOM unavailable — nothing we can do */ }
+}, 15000);
+function markBootComplete(): void {
+  bootCompleted = true;
+  clearTimeout(bootWatchdog);
+}
+
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
 // interface EditMode iframe). Each game gets its OWN editor scene — without this
 // every game shared one global doc, so picking shoot-opt showed whatever was
@@ -78,6 +115,7 @@ if (popoutPanel) {
       <ContextMenuHost />
     </StrictMode>,
   );
+  markBootComplete();
 } else {
   await bootEditor();
 }
@@ -256,6 +294,7 @@ app.value.start();
 installFpsReport();
 installPreviewControls();
 installErrorOverlay();
+markBootComplete(); // boot reached the live render loop — cancel the dead-boot watchdog
 
 // Environment: load an HDR → IBL Skylight (ambient/specular fill) + visible
 // SkyboxBackground. Uses the shared template HDR (matches what ▶ Play installs
