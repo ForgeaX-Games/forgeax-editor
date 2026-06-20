@@ -236,6 +236,13 @@ if (wantsPointerLock) {
   canvas.addEventListener('mousedown', () => { try { window.focus(); canvas.focus(); } catch { /* ignore */ } });
   canvas.addEventListener('click', () => setCaptured(true));
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && captured) setCaptured(false); });
+  // Release the native cursor grab if Play loses focus / is torn down (app switch,
+  // Play→Edit unmount). Without this the OS cursor stays frozen → whole window
+  // uninteractable. (Esc-only release was insufficient — the shell also releases
+  // on PlaySurface unmount; this is the in-game belt-and-suspenders.)
+  const releaseOnLeave = () => { if (captured) setCaptured(false); };
+  window.addEventListener('blur', releaseOnLeave);
+  window.addEventListener('pagehide', releaseOnLeave);
 }
 
 // ── GameContext (superset: includes both legacy `renderer` and new `app` fields) ──

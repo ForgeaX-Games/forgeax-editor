@@ -185,6 +185,41 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
     hasReceivedFpsRef.current = false;
   }, [slug]);
 
+  // ── Release the native FPS cursor grab when leaving Play ────────────────────
+  // The Play game grabs the OS cursor via the Tauri `set_pointer_capture` bridge
+  // (CGAssociate) for mouse-look, and ONLY released it on Esc. Switching to Edit /
+  // AI while locked unmounts this surface but left the cursor FROZEN — the whole
+  // desktop window became uninteractable ("从 Play 切到 Edit 窗口交互不了/死了").
+  // Headless Playwright can't catch this (no Tauri `invoke`). Force-release on
+  // unmount (mode switch), on game change, and on window blur (app switch). The
+  // shell forwards fx-pointer-capture:false to the Tauri release command; harmless
+  // on web (no native grab to release).
+  useEffect(() => {
+    const release = () => {
+      try { window.parent?.postMessage({ type: 'fx-pointer-capture', capture: false }, '*'); } catch { /* parent gone */ }
+    };
+    window.addEventListener('blur', release);
+    return () => { release(); window.removeEventListener('blur', release); };
+  }, [slug]);
+
+  // ── Auto-pause when hidden (keep-alive background) ──────────────────────────
+  // The shell keeps this surface MOUNTED but display:none'd when you switch to
+  // Edit (so the game iframe + its WebGPU context survive without a reboot). While
+  // hidden, pause the game so only the visible surface draws — the context stays
+  // alive for an instant resume on switch-back. IntersectionObserver fires
+  // not-intersecting whenever an ancestor is display:none.
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      const visible = entries.some((e) => e.isIntersecting);
+      try { iframeRef.current?.contentWindow?.postMessage({ type: visible ? 'VAG_PREVIEW_PLAY' : 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* iframe gone */ }
+      setIsPlaying(visible);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [slug]);
+
   // ── Stall detection ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPlaying) return;

@@ -353,5 +353,9 @@ export default defineConfig({
       clientPort: Number(process.env.FORGEAX_INTERFACE_PORT ?? 18920),
     },
   },
-  build: { outDir: resolve(here, 'dist') },
+  // esnext: keep parity with edit-runtime — the engine host entry may use
+  // top-level await; vite's default build target (es2020/chrome87/safari14)
+  // forbids TLA. This runtime only runs in WKWebView/Chrome (TLA-capable) and
+  // dev serve already runs it untranspiled, so esnext is safe.
+  build: { outDir: resolve(here, 'dist'), target: 'esnext' },
 });

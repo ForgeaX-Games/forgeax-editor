@@ -156,5 +156,9 @@ export default defineConfig({
       '/__forgeax-ddc': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
     },
   },
-  build: { outDir: resolve(here, 'dist') },
+  // esnext: the entry (main.tsx) uses top-level await (initSceneList/bootEditor);
+  // vite's default build target (es2020/chrome87/safari14) forbids TLA and the
+  // desktop build fails. This runtime only runs in WKWebView/Chrome (which
+  // support TLA) — dev serve already runs it untranspiled — so esnext is safe.
+  build: { outDir: resolve(here, 'dist'), target: 'esnext' },
 });

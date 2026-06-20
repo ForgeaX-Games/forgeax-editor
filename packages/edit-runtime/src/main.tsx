@@ -51,8 +51,24 @@ import './theme.css';
 // hang. (Per-fetch timeouts in editor-core handle the fetch variant; this is the
 // backstop for everything else, incl. createApp.)
 let bootCompleted = false;
+let bootStage = 'init';
+// Emit a boot breadcrumb to the shell health feed (Info panel + .forgeax/logs).
+// Posts DIRECTLY to the parent rather than via console — installConsoleBridge runs
+// late in boot, so a stall BEFORE it would otherwise be invisible. This makes a
+// hang observable: the Info panel shows the boot stages and exactly where Edit
+// got stuck, instead of a silent dead viewport you have to guess about.
+function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+  try {
+    window.parent?.postMessage(
+      { type: 'forgeax:health', level, source: 'edit', code: 'boot', message, ts: Date.now() },
+      '*',
+    );
+  } catch { /* no parent / cross-origin — overlay still covers the user */ }
+}
+function setBootStage(s: string): void { bootStage = s; emitBoot(`boot ▸ ${s}`); }
 const bootWatchdog = setTimeout(() => {
   if (bootCompleted) return;
+  emitBoot(`Edit 启动卡在「${bootStage}」阶段 >15s — 已显示重载入口`, 'error');
   try {
     const o = document.createElement('div');
     o.style.cssText =
@@ -62,7 +78,7 @@ const bootWatchdog = setTimeout(() => {
     title.textContent = '编辑器启动卡住了';
     const desc = document.createElement('div');
     desc.style.cssText = 'opacity:.7;max-width:420px;line-height:1.5';
-    desc.textContent = 'Edit 在启动时卡住（通常是 dev server 刚重启 / WebGPU 初始化未返回）。点下面重载即可恢复。';
+    desc.textContent = `Edit 卡在「${bootStage}」阶段（dev server 刚重启 / WebGPU 初始化未返回）。点下面重载即可恢复。`;
     const btn = document.createElement('button');
     btn.textContent = '↻ 重新加载编辑器';
     btn.style.cssText = 'padding:8px 18px;border-radius:8px;border:1px solid #555;background:#2a2a30;color:#fff;cursor:pointer;font:13px system-ui';
@@ -74,6 +90,7 @@ const bootWatchdog = setTimeout(() => {
 function markBootComplete(): void {
   bootCompleted = true;
   clearTimeout(bootWatchdog);
+  emitBoot('boot ✓ ready');
 }
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
@@ -83,6 +100,7 @@ function markBootComplete(): void {
 setSceneId(new URLSearchParams(location.search).get('scene'));
 // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
 // load so paths/storage keys resolve to the active scene file (UE level model).
+setBootStage('initSceneList');
 await initSceneList();
 
 // ── Viewport-only mode (default path) ──────────────────────────────────────────
@@ -162,6 +180,7 @@ function seed(): void {
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
 // starts from the seed and persists per-game from there.
+setBootStage('loadDoc');
 if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
@@ -183,6 +202,7 @@ if (uiRoot) {
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
 // options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
 // path (not the virtual:forgeax/bundler adapter), so pass it as the bundler arg.
+setBootStage('createApp');
 const app = await createApp(canvas, {}, {
   shaderManifestUrl: `${BASE}/shaders/manifest.json`,
   // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss

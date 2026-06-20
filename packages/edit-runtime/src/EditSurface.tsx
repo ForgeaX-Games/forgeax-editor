@@ -224,6 +224,24 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     };
   }, []);
 
+  // ── Auto-pause when hidden (keep-alive background) ──────────────────────────
+  // The shell keeps the editor MOUNTED but display:none'd when you switch to Play,
+  // so the editor iframe + its WebGPU context survive without a reboot (fixes
+  // "Play→Edit 切回去就死掉"). While hidden, pause the editor's render loop so only
+  // the visible surface draws; the context stays alive for an instant resume.
+  // VAG_PREVIEW_PAUSE/PLAY are handled by edit-runtime installPreviewControls
+  // (→ app.pause/resume); raw postMessage is fine (the receiver schema-validates).
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      const visible = entries.some((e) => e.isIntersecting);
+      try { iframeRef.current?.contentWindow?.postMessage({ type: visible ? 'VAG_PREVIEW_PLAY' : 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* iframe gone */ }
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   // ── Import helpers ──────────────────────────────────────────────────────────
   const pickAndImport = useCallback((accept: string) => {
     const inp = importFileRef.current;

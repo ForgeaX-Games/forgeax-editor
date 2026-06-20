@@ -39,7 +39,8 @@
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:dep": "dependency-cruiser --output-type err-html -c .dependency-cruiser.cjs packages",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install --with-deps chromium"
+    "test:e2e:install": "playwright install --with-deps chromium",
+    "selfcheck": "node scripts/selfcheck.mjs"
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",

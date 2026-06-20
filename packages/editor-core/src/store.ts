@@ -382,21 +382,28 @@ function forgeJsonPath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/${FORGE_JSON}`;
 }
 
-/** fetch() that REJECTS (AbortError) after `ms` rather than hanging forever.
- *  The editor boots behind a top-level `await initSceneList()` + `await
- *  loadDocFromDisk()` (edit-runtime main.tsx), so a SINGLE stalled boot fetch —
- *  a dev-server bounced mid-session, vite re-optimizing deps, a stale WKWebView
- *  keep-alive connection in the desktop app — would wedge the ENTIRE editor:
- *  module evaluation never finishes → nothing mounts, no renderer, FPS stuck at
- *  "--", clicks dead, no error, no recovery. Bounding every boot fetch turns that
- *  hard hang into graceful degradation (legacy/empty fallback + a clean reload). */
+/** fetch() that is GUARANTEED to settle within `ms`, even if the underlying
+ *  connection wedges forever. The editor boots behind a top-level
+ *  `await initSceneList()` + `await loadDocFromDisk()` (edit-runtime main.tsx), so
+ *  a single stalled boot fetch wedges the ENTIRE editor (black viewport, FPS "--",
+ *  no mount, no recovery). On the real desktop (WKWebView) this reproduces
+ *  intermittently: `/api/files/tree` is instant via curl, yet the iframe's fetch
+ *  never resolves — and an AbortController does NOT reliably reject a wedged
+ *  WKWebView connection (the old impl hung >45s despite a 6s abort). So we RACE
+ *  the fetch against a timer that REJECTS: the dangling fetch promise is simply
+ *  abandoned, the race settles, and the caller's try/catch falls back to
+ *  empty/legacy — boot always proceeds. The abort is still fired best-effort to
+ *  free the socket. */
 async function fetchWithTimeout(url: string, ms = 6000): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } reject(new Error('fetch-timeout')); }, ms);
+  });
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await Promise.race([fetch(url, { signal: ctrl.signal }), timeout]);
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timer!);
   }
 }
 
