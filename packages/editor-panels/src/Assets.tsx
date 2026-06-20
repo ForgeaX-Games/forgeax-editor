@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu } from '@forgeax/editor-shared';
 import { loadGameAssets, loadRawAssets, materialSwatch, type PackAsset, type RawAsset } from '@forgeax/editor-core';
 import { bus, dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, createSceneFile, useDocVersion, useSelection, useSceneList, useSceneFile } from '@forgeax/editor-shared';
@@ -44,6 +45,7 @@ async function importScene(path: string, mode: 'reference' | 'full' | 'auto' = '
 }
 
 export function AssetsPanel() {
+  const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
   const sceneList = useSceneList();
@@ -60,18 +62,17 @@ export function AssetsPanel() {
   const levelScenes = sceneList.filter((s) => s.group !== 'asset');
 
   const newScene = (duplicate: boolean): void => {
-    const id = window.prompt('新场景 id（小写字母/数字/连字符，如 level3）：');
+    const id = window.prompt(t('editor.assets.newLevelPrompt'));
     if (!id) return;
-    const name = window.prompt('场景显示名（可留空）：') ?? '';
-    void createSceneFile(id, name, duplicate).then((ok) => {
-      if (!ok) window.alert('创建场景失败：id 重复 / 写盘失败');
+    void createSceneFile(id, duplicate).then((ok) => {
+      if (!ok) window.alert(t('editor.assets.newLevelFailed'));
     });
   };
 
   const openLevelMenu = (e: { clientX: number; clientY: number; preventDefault: () => void }) => {
     showContextMenu(e, [
-      { label: '＋ 新建空场景…', onClick: () => newScene(false) },
-      { label: '⧉ 复制当前场景为新关卡…', onClick: () => newScene(true) },
+      { label: t('editor.assets.menuNewEmptyScene'), onClick: () => newScene(false) },
+      { label: t('editor.assets.menuDuplicateScene'), onClick: () => newScene(true) },
     ]);
   };
 
@@ -97,9 +98,9 @@ export function AssetsPanel() {
   // window / posts to the interface parent; never clipped by this panel).
   const openMenu = (a: PackAsset, e: { clientX: number; clientY: number; preventDefault: () => void }) => {
     showContextMenu(e, [
-      { label: `赋给选中实体${sel === null ? '(先选一个)' : ''}`, disabled: sel === null, onClick: () => { if (sel !== null) assign(a.guid); } },
-      { label: '引用到 Chat', onClick: () => requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath }) },
-      { label: '复制 GUID', onClick: () => { void navigator.clipboard?.writeText(a.guid); } },
+      { label: `${t('editor.assets.menuAssignToSelected')}${sel === null ? t('editor.assets.menuAssignSelectFirst') : ''}`, disabled: sel === null, onClick: () => { if (sel !== null) assign(a.guid); } },
+      { label: t('editor.assets.menuRefToChat'), onClick: () => requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath }) },
+      { label: t('editor.assets.menuCopyGuid'), onClick: () => { void navigator.clipboard?.writeText(a.guid); } },
     ]);
   };
 
@@ -113,23 +114,23 @@ export function AssetsPanel() {
     setProcessing((s) => new Set([...s, raw.path]));
     const res = await processGltf(raw.path);
     setProcessing((s) => { const n = new Set(s); n.delete(raw.path); return n; });
-    if (!res.ok) { alert(`处理失败: ${res.error}`); return; }
-    alert(`处理完成！产生 ${res.total} 个子资产 (mesh/material/scene 等)`);
+    if (!res.ok) { alert(t('editor.assets.processFailed', { error: res.error })); return; }
+    alert(t('editor.assets.processDone', { total: res.total }));
     reload();
   };
 
   const handleAddToScene = async (raw: RawAsset) => {
     const res = await importScene(raw.path, 'auto');
-    if (!res.ok) { alert(`导入场景失败: ${res.error}`); return; }
+    if (!res.ok) { alert(t('editor.assets.importSceneFailed', { error: res.error })); return; }
     if (res.warning) {
-      const proceed = confirm(`${res.warning}\n\n确认以「单一引用实体」方式导入?`);
+      const proceed = confirm(t('editor.assets.importSceneWarning', { warning: res.warning }));
       if (!proceed) return;
     }
     if (res.mode === 'reference' && res.entity) {
       // Single GltfRef entity — recommended for large scenes.
       const e = res.entity as { name: string; components: Record<string, unknown> };
       bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
-      alert(`已导入「${e.name}」(${res.totalNodes} 节点 · ${res.meshCount} mesh)。\n\n真实几何体由运行时 glTF 加载器异步载入——先看到占位方块，几秒后替换为真实模型（编辑器 + Play 都生效）。大场景节点多时编辑提交会略卡。`);
+      alert(t('editor.assets.importRefDone', { name: e.name, totalNodes: res.totalNodes, meshCount: res.meshCount }));
     } else if (res.mode === 'full' && res.doc) {
       // Full import: dispatch all entities as a transaction.
       const doc = res.doc;
@@ -138,7 +139,7 @@ export function AssetsPanel() {
         return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
       });
       bus.dispatch({ kind: 'transaction', label: `Import GLB: ${raw.name}`, commands: cmds });
-      alert(`已导入 ${res.totalNodes} 个场景实体。`);
+      alert(t('editor.assets.importFullDone', { totalNodes: res.totalNodes }));
     }
   };
 
@@ -148,7 +149,7 @@ export function AssetsPanel() {
       <div className="asset-tabs">
         <button type="button" className={`asset-tab${tab === 'packs' ? ' on' : ''}`} onClick={() => setTab('packs')}>Packs</button>
         <button type="button" className={`asset-tab${tab === 'files' ? ' on' : ''}`} onClick={() => setTab('files')}>Files</button>
-        <button type="button" className="asset-reload" title="刷新" onClick={reload}>↻</button>
+        <button type="button" className="asset-reload" title={t('editor.assets.reloadTitle')} onClick={reload}>↻</button>
       </div>
 
       {tab === 'packs' && (
@@ -156,22 +157,22 @@ export function AssetsPanel() {
           {levelScenes.length > 0 && (
             <>
               <div className="asset-group-title" onContextMenu={openLevelMenu}
-                title="右键：新建/复制场景">
-                关卡 · 双击打开
-                <button type="button" className="asset-action-btn asset-group-add" title="新建空场景"
+                title={t('editor.assets.levelGroupTitleAttr')}>
+                {t('editor.assets.levelGroupTitle')}
+                <button type="button" className="asset-action-btn asset-group-add" title={t('editor.assets.newEmptySceneTitle')}
                   onClick={() => newScene(false)}>＋</button>
               </div>
               {levelScenes.map((s) => {
                 const isOpen = openSceneFile === s.id;
                 return (
                   <div key={s.id} className="asset-row" data-testid={`asset-scene-${s.id}`}
-                    title={`${s.pack}\n双击在本窗口打开该关卡`}
+                    title={t('editor.assets.levelRowTitle', { pack: s.pack })}
                     onContextMenu={openLevelMenu}
                     onDoubleClick={() => requestOpenScene(s.id)}>
                     <span className="asset-swatch">🗺</span>
                     <span className="asset-name">{s.name ?? s.id}</span>
                     <span className="asset-kind">level</span>
-                    {isOpen && <span className="asset-processed-badge" title="本窗口正在编辑">✎</span>}
+                    {isOpen && <span className="asset-processed-badge" title={t('editor.assets.editingInThisWindow')}>✎</span>}
                   </div>
                 );
               })}
@@ -179,29 +180,29 @@ export function AssetsPanel() {
           )}
           {assetScenes.length > 0 && (
             <>
-              <div className="asset-group-title">角色 & 怪物 · 双击编辑</div>
+              <div className="asset-group-title">{t('editor.assets.charMonsterGroupTitle')}</div>
               {assetScenes.map((s) => {
                 const isChar = s.id.startsWith('character:');
                 const isOpen = openSceneFile === s.id;
                 return (
                   <div key={s.id} className="asset-row" data-testid={`asset-scene-${s.id}`}
-                    title={`${s.pack}\n双击在编辑器中打开该资产`}
+                    title={t('editor.assets.assetRowTitle', { pack: s.pack })}
                     onDoubleClick={() => requestOpenScene(s.id)}>
                     <span className="asset-swatch">{isChar ? '🧍' : '🐮'}</span>
                     <span className="asset-name">{s.name ?? s.id}</span>
                     <span className="asset-kind">{isChar ? 'character' : 'monster'}</span>
-                    {isOpen && <span className="asset-processed-badge" title="正在编辑">✎</span>}
+                    {isOpen && <span className="asset-processed-badge" title={t('editor.assets.editing')}>✎</span>}
                   </div>
                 );
               })}
-              <div className="asset-group-title">材质 · 双击应用到选中实体</div>
+              <div className="asset-group-title">{t('editor.assets.materialGroupTitle')}</div>
             </>
           )}
           {loading ? (
             <div className="muted" style={{ padding: '4px 10px' }}>loading…</div>
           ) : packs.length === 0 ? (
             <div className="muted" style={{ padding: '4px 10px' }} data-testid="asset-empty">
-              暂无 *.pack.json — 导入 GLB 后点「Process」生成
+              {t('editor.assets.emptyPacks')}
             </div>
           ) : packs.filter((a) => a.kind !== 'scene').map((a) => {
             // Hide `kind: 'scene'` sub-pack rows here — every level pack
@@ -234,7 +235,7 @@ export function AssetsPanel() {
             <div className="muted" style={{ padding: '4px 10px' }}>loading…</div>
           ) : rawFiles.length === 0 ? (
             <div className="muted" style={{ padding: '4px 10px' }}>
-              暂无导入文件 — 使用编辑器工具栏的「导入」按钮
+              {t('editor.assets.emptyFiles')}
             </div>
           ) : rawFiles.map((raw) => {
             const isProc = processing.has(raw.path);
@@ -246,19 +247,19 @@ export function AssetsPanel() {
                 <span className="asset-name">{raw.name}</span>
                 {isModel && !raw.processed && (
                   <button type="button" className="asset-action-btn" disabled={isProc}
-                    title="生成 meta.json + sub-asset GUIDs，之后才能加入场景"
+                    title={t('editor.assets.processTitle')}
                     onClick={() => handleProcess(raw)}>
-                    {isProc ? '…' : '处理'}
+                    {isProc ? '…' : t('editor.assets.processBtn')}
                   </button>
                 )}
                 {isModel && raw.processed && (
                   <button type="button" className="asset-action-btn ok"
-                    title="在当前场景根节点加入该 GLB 的引用实体"
+                    title={t('editor.assets.addToSceneTitle')}
                     onClick={() => handleAddToScene(raw)}>
-                    + 场景
+                    {t('editor.assets.addToSceneBtn')}
                   </button>
                 )}
-                {raw.processed && <span className="asset-processed-badge" title="已处理 · meta.json 存在">✓</span>}
+                {raw.processed && <span className="asset-processed-badge" title={t('editor.assets.processedBadge')}>✓</span>}
               </div>
             );
           })}
