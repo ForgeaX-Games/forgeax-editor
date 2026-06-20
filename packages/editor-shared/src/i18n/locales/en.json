@@ -1,0 +1,18 @@
+{
+  "editor": {
+    "sceneBadge": {
+      "mainScene": "Main scene",
+      "title": "What this window is editing (level/asset) — double-click another item in the Assets panel to switch"
+    },
+    "viewportHints": {
+      "toggleTitle": "Show controls",
+      "closeTitle": "Close (click the ? at the bottom-right to reopen)",
+      "row1": "<b>Middle</b> orbit · <b>Shift+Middle</b> pan · <b>Ctrl+Middle / Wheel</b> zoom · <b>Left</b> select",
+      "row2": "<b>W / E / R</b> move·rotate·scale · <b>F</b> focus selection · trackpad <b>Alt+Left</b> orbit · <b>⇧Alt</b> pan"
+    },
+    "detachedPanel": {
+      "redock": "Redock",
+      "redockTitle": "Dock back to the main window"
+    }
+  }
+}

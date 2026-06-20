@@ -1,0 +1,18 @@
+{
+  "editor": {
+    "sceneBadge": {
+      "mainScene": "主场景",
+      "title": "本窗口编辑的关卡/资产 — 在 Assets 面板双击其它条目可切换"
+    },
+    "viewportHints": {
+      "toggleTitle": "显示操作说明",
+      "closeTitle": "关闭（点右下角 ? 可重新打开）",
+      "row1": "<b>中键</b> 旋转 · <b>Shift+中键</b> 平移 · <b>Ctrl+中键 / 滚轮</b> 缩放 · <b>左键</b> 选择",
+      "row2": "<b>W / E / R</b> 移动·旋转·缩放 · <b>F</b> 聚焦选中 · 触控板 <b>Alt+左键</b> 旋转 · <b>⇧Alt</b> 平移"
+    },
+    "detachedPanel": {
+      "redock": "停靠",
+      "redockTitle": "停靠回主窗"
+    }
+  }
+}

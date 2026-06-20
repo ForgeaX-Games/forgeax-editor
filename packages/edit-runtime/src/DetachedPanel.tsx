@@ -13,6 +13,7 @@ import {
   LauncherPanel,
 } from '@forgeax/editor-panels';
 import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
+import { useTranslation } from '@forgeax/editor-shared/i18n';
 import type { SyncPanelId } from '@forgeax/editor-core';
 
 // DetachedPanel — the root rendered inside a popped-out OS window (design
@@ -31,7 +32,7 @@ const TITLE: Record<SyncPanelId, string> = {
   material: 'Material',
   timeline: 'Timeline',
   matgraph: 'Mat Graph',
-  launcher: '启动器',
+  launcher: 'Launcher',
 };
 const BODY: Record<SyncPanelId, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
@@ -46,6 +47,7 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
+  const { t } = useTranslation();
   // Global keyboard shortcuts — forwarded to the MAIN viewport via BroadcastChannel
   // (bus.undo/redo in panel role call postSync({ t:'undo'/'redo' }) → main acts).
   // This makes Undo/Redo work from any panel even without a visible toolbar.
@@ -111,10 +113,10 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
         <button
           type="button"
           className="ph-redock"
-          title="停靠回主窗"
+          title={t('editor.detachedPanel.redockTitle')}
           onClick={() => window.close()}
         >
-          ⊟ 停靠
+          ⊟ {t('editor.detachedPanel.redock')}
         </button>
       </div>
       <div className="popout-body">{BODY[panel]()}</div>
