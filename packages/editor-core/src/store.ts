@@ -7,12 +7,14 @@ import type { EditorCommand, EntityId, SceneDocument } from './types';
 import {
   getPopoutPanel,
   openSyncChannel,
+  parseEditorSyncMsg,
   type EditorSnapshot,
   type EditorSyncMsg,
   type PopoutGeom,
   type SyncPanelId,
 } from './sync-channel';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
+import { findScenePackByGuid } from './assets';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a
@@ -380,6 +382,24 @@ function forgeJsonPath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/${FORGE_JSON}`;
 }
 
+/** fetch() that REJECTS (AbortError) after `ms` rather than hanging forever.
+ *  The editor boots behind a top-level `await initSceneList()` + `await
+ *  loadDocFromDisk()` (edit-runtime main.tsx), so a SINGLE stalled boot fetch —
+ *  a dev-server bounced mid-session, vite re-optimizing deps, a stale WKWebView
+ *  keep-alive connection in the desktop app — would wedge the ENTIRE editor:
+ *  module evaluation never finishes → nothing mounts, no renderer, FPS stuck at
+ *  "--", clicks dead, no error, no recovery. Bounding every boot fetch turns that
+ *  hard hang into graceful degradation (legacy/empty fallback + a clean reload). */
+async function fetchWithTimeout(url: string, ms = 6000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Read forge.json via the authoritative loadGameProject loader (AC-11).
  * Returns typed GameProject for contract fields (id/name/defaultScene/physics/pointerLock/preview).
@@ -389,7 +409,7 @@ async function readGameProject(): Promise<GameProject | null> {
   const p = forgeJsonPath();
   if (!p) return null;
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
     if (!r.ok) return null;
     const j = (await r.json()) as { content?: string };
     if (!j.content) return null;
@@ -415,7 +435,7 @@ async function readRawForgeJson(): Promise<Record<string, unknown> | null> {
   const p = forgeJsonPath();
   if (!p) return null;
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
     if (!r.ok) return null;
     const j = (await r.json()) as { content?: string };
     if (!j.content) return null;
@@ -439,29 +459,39 @@ export async function initSceneList(): Promise<void> {
   currentSceneFile = null;
   sceneList = [];
   const fj = await readForgeJson();
-  const scenes = fj?.scenes;
-  if (Array.isArray(scenes)) {
-    sceneList = scenes
-      .filter((s): s is SceneFileEntry =>
-        !!s && typeof s === 'object' && typeof (s as SceneFileEntry).id === 'string' && typeof (s as SceneFileEntry).pack === 'string')
-      .map((s) => ({ ...s, group: 'scene' as const }));
-  }
-  // Monster/character asset packs — independent of the scenes manifest. Listed
-  // for path resolution; the Assets panel is their UI entry (UE content-browser
-  // style), the SceneSwitcher dropdown shows levels only.
+  // Scene + asset discovery is DIRECTORY-driven, never forge.json-driven. The
+  // engine-project loader's schema is `.strict()`, so an editor-only `scenes[]`
+  // field makes loadGameProject FAIL — and ▶ Play reads physics/pointerLock off
+  // that same loader (play-runtime AC-11), so a stray `scenes[]` silently
+  // disables the game's physics. ubpa's w21 forge.json migration dropped it for
+  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json
+  // (group 'scene'), exactly like the monster/character packs under assets/
+  // (group 'asset'). forge.json is read only for its typed contract fields.
   if (currentSceneId !== 'default') {
-    for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
+    const listPacks = async (root: string): Promise<string[]> => {
       try {
-        const r = await fetch(`/api/files/tree?root=${encodeURIComponent(`.forgeax/games/${currentSceneId}/assets/${dir}`)}`);
-        if (r.ok) {
-          const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
-          for (const c of j.tree?.children ?? []) {
-            if (c.type !== 'file' || !c.name.endsWith('.pack.json')) continue;
-            const base = c.name.slice(0, -'.pack.json'.length);
-            sceneList.push({ id: `${prefix}:${base}`, name: base, pack: `assets/${dir}/${c.name}`, group: 'asset' });
-          }
-        }
-      } catch { /* no such dir — fine */ }
+        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(`.forgeax/games/${currentSceneId}/${root}`)}`);
+        if (!r.ok) return [];
+        const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
+        return (j.tree?.children ?? [])
+          .filter((c) => c.type === 'file' && c.name.endsWith('.pack.json'))
+          .map((c) => c.name)
+          .sort();   // deterministic order → level1 before level2
+      } catch { return []; }   // no such dir — fine
+    };
+    // Levels — scenes/<id>.pack.json. id = file stem, matched 1:1 against the
+    // game's LEVELS[].id (the launcher writes play-config.json { level:<id> }).
+    for (const name of await listPacks('scenes')) {
+      const base = name.slice(0, -'.pack.json'.length);
+      sceneList.push({ id: base, name: base, pack: `scenes/${name}`, group: 'scene' });
+    }
+    // Monster/character asset packs — opened in the editor like a scene (UE
+    // content-browser style); the Assets panel is their UI entry.
+    for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
+      for (const name of await listPacks(`assets/${dir}`)) {
+        const base = name.slice(0, -'.pack.json'.length);
+        sceneList.push({ id: `${prefix}:${base}`, name: base, pack: `assets/${dir}/${name}`, group: 'asset' });
+      }
     }
   }
   if (sceneList.length > 0) {
@@ -477,11 +507,21 @@ export async function initSceneList(): Promise<void> {
     let want: string | null = null;
     try { want = localStorage.getItem(sceneFileStorageKey()); } catch { /* unavailable */ }
     const def = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
+    // forge.json.defaultScene is a scene GUID (the engine SSOT — the scene ▶ Play
+    // boots). Resolve it to the pack that DECLARES that scene asset and prefer
+    // that entry, so ✎ Edit opens the SAME scene Play does — not merely the
+    // alphabetically-first level. (The old `s.id === def` test never matched:
+    // sceneList ids are file stems, `def` is a GUID, so it silently fell through
+    // to firstScene and only lined up by luck when the default sorted first.)
+    const defPack = def ? await findScenePackByGuid(currentSceneId, def) : null;
+    const defId = defPack
+      ? (sceneList.find((s) => s.group !== 'asset' && s.pack === defPack)?.id ?? null)
+      : null;
     const firstScene = sceneList.find((s) => s.group !== 'asset');
     currentSceneFile =
       (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
       : (want && sceneList.some((s) => s.id === want)) ? want
-      : (def && sceneList.some((s) => s.id === def)) ? def
+      : defId ? defId
       : firstScene ? firstScene.id
       : null;  // only asset packs exist → keep editing the legacy single scene
   }
@@ -557,40 +597,24 @@ export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Create a new scene file (empty, or duplicated from the current doc), register
- *  it in forge.json's `scenes` manifest, and switch to it. A legacy single-scene
- *  game is migrated on first use: its existing scene.pack.json is listed as the
- *  `main` entry, new scenes land in scenes/<id>.pack.json. */
-export async function createSceneFile(id: string, name: string, duplicateCurrent: boolean): Promise<boolean> {
-  const fp = forgeJsonPath();
-  if (!fp) return false;
+/** Create a new level under scenes/<slug>.pack.json (empty, or duplicated from
+ *  the current doc) and switch to it. Discovery is directory-driven
+ *  (see initSceneList) — NOTHING is written to forge.json, whose strict
+ *  engine-project schema rejects an editor `scenes[]` field. The display name
+ *  is the file stem (`slug`), so the game's LEVELS[].id can match it 1:1. */
+export async function createSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
+  if (currentSceneId === 'default') return false;
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
-  const fj = (await readForgeJson()) ?? {};
-  let scenes = Array.isArray(fj.scenes) ? [...(fj.scenes as SceneFileEntry[])] : [];
-  if (scenes.length === 0) {
-    // Legacy migration: keep the existing single scene where it is, list it.
-    scenes = [{ id: 'main', name: 'Main Scene', pack: 'scene.pack.json' }];
-  }
-  const entry: SceneFileEntry = { id: slug, name: name || slug, pack: `scenes/${slug}.pack.json` };
-  scenes.push(entry);
-  fj.scenes = scenes;
-  if (typeof fj.defaultScene !== 'string') fj.defaultScene = scenes[0]!.id;
   const sourceDoc = duplicateCurrent ? bus.doc : createDocument();
   const packContent = JSON.stringify(docToPack(sourceDoc), null, 2) + '\n';
   try {
     const w1 = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: `.forgeax/games/${currentSceneId}/${entry.pack}`, content: packContent }),
+      body: JSON.stringify({ path: `.forgeax/games/${currentSceneId}/scenes/${slug}.pack.json`, content: packContent }),
     });
     if (!w1.ok) return false;
-    const w2 = await fetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: fp, content: JSON.stringify(fj, null, 2) + '\n' }),
-    });
-    if (!w2.ok) return false;
   } catch { return false; }
   // Persist + navigate this window into the new scene (see switchSceneFile).
   try { localStorage.setItem(sceneFileStorageKey(), slug); } catch { /* unavailable */ }
@@ -665,7 +689,7 @@ export async function loadDocFromDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
     if (r.ok) {
       const j = (await r.json()) as { content?: string };
       if (j.content) {
@@ -683,7 +707,7 @@ export async function loadDocFromDisk(): Promise<boolean> {
   const lp = legacyScenePath();
   if (lp) {
     try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(lp)}`);
+      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(lp)}`);
       if (r.ok) {
         const j = (await r.json()) as { content?: string };
         if (j.content) {
@@ -936,7 +960,8 @@ function initMain(ch: BroadcastChannel): void {
   onSelectionChange(() => broadcastSnapshot());
   onGizmoModeChange(() => broadcastSnapshot());
   ch.onmessage = (ev: MessageEvent) => {
-    const msg = ev.data as EditorSyncMsg;
+    const msg = parseEditorSyncMsg(ev.data);
+    if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
     switch (msg.t) {
       case 'hello': broadcastSnapshot(); break;
       case 'cmd': bus.dispatch(msg.cmd, msg.origin); break;
@@ -977,7 +1002,8 @@ function initPopout(ch: BroadcastChannel): void {
   bus.historySteps = (): HistoryStep[] => mirror?.history ?? [];
   bus.appliedCount = () => mirror?.applied ?? 0;
   ch.onmessage = (ev: MessageEvent) => {
-    const msg = ev.data as EditorSyncMsg;
+    const msg = parseEditorSyncMsg(ev.data);
+    if (!msg) { console.warn('[sync] dropped malformed channel message (popout)', ev.data); return; }
     if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
     if (msg.t === 'sceneChanged') {
       // Our authority viewport navigated to another scene — follow it: reload
@@ -1013,7 +1039,7 @@ export function initSync(): void {
   // (Fires only in OTHER contexts, never the writer — so no loop; loadDocFromStorage
   // sets bus.doc + bumps the React version without re-persisting.)
   if (typeof window !== 'undefined') {
-    window.addEventListener('storage', (e) => {
+    const onStorage = (e: StorageEvent): void => {
       if (e.key === docKey(currentSceneId) && e.newValue) { loadDocFromStorage(); return; }
       if (e.key === selKey() && e.newValue) {
         try {
@@ -1021,7 +1047,16 @@ export function initSync(): void {
           if (Array.isArray(ids)) { applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false; }
         } catch { /* ignore */ }
       }
-    });
+    };
+    window.addEventListener('storage', onStorage);
+    // Lifecycle: the channel + storage listener live for the document's lifetime,
+    // but explicitly release them on pagehide so a reused bfcache document or a
+    // popout that navigates doesn't leak a dangling channel / double-handle.
+    window.addEventListener('pagehide', () => {
+      try { syncChannel?.close(); } catch { /* already closed */ }
+      syncChannel = null;
+      window.removeEventListener('storage', onStorage);
+    }, { once: true });
   }
   // The channel IS the viewport↔panels pair: keyed per game AND per scene
   // file, so an editor instance editing level1 and another editing level2

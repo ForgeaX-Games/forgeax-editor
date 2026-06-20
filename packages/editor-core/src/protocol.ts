@@ -354,3 +354,134 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
 
   target.postMessage(result.data, '*');
 }
+
+// ── Receive side — validated dispatch (SSOT mirror of sendVagMessage) ─────────
+//
+// Every cross-iframe receiver previously hand-rolled its own
+// `addEventListener('message')` + `switch` + ad-hoc `safeParse` (or a raw
+// `e.data as T` cast with NO validation, and usually NO origin check). That
+// scattering is the robustness/security hole: foreign-origin pages could drive
+// `VAG_PREVIEW_*` / `VAG_SPAWN_ENTITY` straight into the engine bus, and
+// malformed payloads reached handlers untyped. `onVagMessage` centralizes the
+// trust boundary: source gate → origin allowlist → known-type → schema parse →
+// typed dispatch, with rejected messages reported (never silently dropped).
+
+/** type-literal → schema map. Includes VAG_NETWORK (absent from vagSchemaUnion). */
+const VAG_SCHEMA_BY_TYPE = {
+  VAG_ASSETS_CHANGED: VagAssetsChangedSchema,
+  VAG_CONSOLE: VagConsoleSchema,
+  VAG_NETWORK: VagNetworkSchema,
+  VAG_CONTEXT_MENU: VagContextMenuSchema,
+  VAG_CONTEXT_MENU_ACTION: VagContextMenuActionSchema,
+  VAG_DEVICE_LOST: VagDeviceLostSchema,
+  VAG_EDITOR_FLUSH: VagEditorFlushSchema,
+  VAG_EDITOR_OPEN_SOURCE: VagEditorOpenSourceSchema,
+  VAG_EDITOR_REF: VagEditorRefSchema,
+  VAG_FPS_STATS: VagFpsStatsSchema,
+  VAG_PREVIEW_DISPOSE: VagPreviewDisposeSchema,
+  VAG_PREVIEW_PAUSE: VagPreviewPauseSchema,
+  VAG_PREVIEW_PLAY: VagPreviewPlaySchema,
+  VAG_PREVIEW_RELOAD: VagPreviewReloadSchema,
+  VAG_SPAWN_ENTITY: VagSpawnEntitySchema,
+} as const;
+
+export type VagType = keyof typeof VAG_SCHEMA_BY_TYPE;
+type VagMessageFor<T extends VagType> = z.infer<(typeof VAG_SCHEMA_BY_TYPE)[T]>;
+
+/** Typed per-type handler map. A handler receives the SCHEMA-VALIDATED message. */
+export type VagHandlers = {
+  [T in VagType]?: (msg: VagMessageFor<T>, ev: MessageEvent) => void;
+};
+
+export type VagRejectReason = 'bad-origin' | 'unknown-type' | 'failed-validation';
+export interface VagReject {
+  reason: VagRejectReason;
+  type: string;
+  origin: string;
+  issues?: z.ZodIssue[];
+}
+
+export interface OnVagMessageOpts {
+  /** Origin allowlist. Default: `allowedParentOrigins()`. A function gets the raw origin. */
+  allowedOrigins?: readonly string[] | ((origin: string) => boolean);
+  /** When set, messages whose `event.source` !== the returned window are dropped
+   *  SILENTLY (normal iframe churn — other frames share the message bus). */
+  expectSource?: () => Window | null | undefined;
+  handlers: VagHandlers;
+  /** Called when a VAG_* message is rejected (bad origin / unknown type / failed
+   *  validation). Default logs to console.warn — never a silent drop. Interface
+   *  callers inject a sink that routes to the health store / log sink. */
+  onReject?: (r: VagReject) => void;
+}
+
+/** Origins to trust for messages from the embedding shell: this window's own
+ *  origin (same-origin prod, where :18920 proxies /preview + /editor) plus the
+ *  referrer origin (split-dev, where the shell is a different port). */
+export function allowedParentOrigins(): string[] {
+  const out = new Set<string>();
+  try { out.add(self.origin); } catch { /* no self */ }
+  try { if (document.referrer) out.add(new URL(document.referrer).origin); } catch { /* no/odd referrer */ }
+  return [...out];
+}
+
+function makeOriginPredicate(
+  allowed: OnVagMessageOpts['allowedOrigins'],
+): (origin: string) => boolean {
+  if (typeof allowed === 'function') return allowed;
+  const list = allowed ?? allowedParentOrigins();
+  // An empty allowlist (e.g. opaque origin) would reject everything and wedge
+  // the wire; treat "no derivable origin" as allow-same-origin only.
+  const set = new Set(list);
+  return (origin) => set.size === 0 ? origin === safeSelfOrigin() : set.has(origin);
+}
+
+function safeSelfOrigin(): string {
+  try { return self.origin; } catch { return ''; }
+}
+
+function defaultReject(r: VagReject): void {
+  // eslint-disable-next-line no-console
+  console.warn(`[vag] rejected ${r.type} (${r.reason}) from ${r.origin || '<null origin>'}`,
+    r.issues ? r.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : '');
+}
+
+/**
+ * Install a validated VAG_* message receiver. Returns an unsubscribe fn.
+ *
+ * Pipeline per inbound message:
+ *   1. source gate (if `expectSource`) → silent drop on mismatch
+ *   2. shape check: object with a string `type` starting `VAG_` → else ignore
+ *      (foreign protocols share the bus: forgeax:health, vite HMR, …)
+ *   3. origin allowlist → reject `bad-origin`
+ *   4. known VAG type → reject `unknown-type`
+ *   5. schema safeParse → reject `failed-validation` (carries `issues`)
+ *   6. dispatch the validated message to `handlers[type]`
+ */
+export function onVagMessage(win: Window, opts: OnVagMessageOpts): () => void {
+  const originOk = makeOriginPredicate(opts.allowedOrigins);
+  const onReject = opts.onReject ?? defaultReject;
+  const handlers = opts.handlers as Record<string, ((m: unknown, e: MessageEvent) => void) | undefined>;
+
+  const listener = (ev: MessageEvent): void => {
+    if (opts.expectSource) {
+      const want = opts.expectSource();
+      if (want && ev.source !== want) return; // not our frame — silent
+    }
+    const data = ev.data as { type?: unknown } | null | undefined;
+    if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+    const type = data.type;
+    if (!type.startsWith('VAG_')) return; // foreign protocol on the shared bus — not ours
+    if (!originOk(ev.origin)) { onReject({ reason: 'bad-origin', type, origin: ev.origin }); return; }
+    const schema = VAG_SCHEMA_BY_TYPE[type as VagType];
+    if (!schema) { onReject({ reason: 'unknown-type', type, origin: ev.origin }); return; }
+    const result = schema.safeParse(data);
+    if (!result.success) {
+      onReject({ reason: 'failed-validation', type, origin: ev.origin, issues: result.error.issues });
+      return;
+    }
+    handlers[type]?.(result.data, ev);
+  };
+
+  win.addEventListener('message', listener);
+  return () => win.removeEventListener('message', listener);
+}

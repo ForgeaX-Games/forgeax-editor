@@ -37,6 +37,58 @@ async function packPaths(slug: string): Promise<string[]> {
   }
 }
 
+/** Every `*.pack.json` under the WHOLE game dir (not just assets/) — needed to
+ *  find scene packs that live in `scenes/` or at the game root, which `packPaths`
+ *  (assets-only) never sees. */
+async function allGamePackPaths(slug: string): Promise<string[]> {
+  const root = `.forgeax/games/${slug}`;
+  try {
+    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    if (!r.ok) return [];
+    const j = (await r.json()) as { tree?: TreeNode };
+    const out: string[] = [];
+    const walk = (n?: TreeNode): void => {
+      if (!n) return;
+      // Skip dirs that never hold authored scene packs (and could be huge).
+      if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git')) return;
+      if (n.type === 'file' && n.name.endsWith('.pack.json')) out.push(n.path);
+      n.children?.forEach(walk);
+    };
+    walk(j.tree);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolve the engine SSOT `forge.json.defaultScene` (a scene GUID) to the
+ * game-relative pack path that DECLARES that scene asset (e.g.
+ * `scenes/rogue-encampment.pack.json`). This is how the editor opens the SAME
+ * scene ▶ Play boots, instead of falling back to a stray legacy `scene.pack.json`.
+ * Returns null when the GUID isn't found in any pack (caller keeps legacy mode).
+ */
+export async function findScenePackByGuid(
+  slug: string | null | undefined,
+  guid: string | null | undefined,
+): Promise<string | null> {
+  if (!slug || slug === 'default' || !guid) return null;
+  const prefix = `.forgeax/games/${slug}/`;
+  for (const p of await allGamePackPaths(slug)) {
+    try {
+      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      if (!r.ok) continue;
+      const j = (await r.json()) as { content?: string };
+      if (!j.content) continue;
+      const parsed = JSON.parse(j.content) as { assets?: Array<{ guid?: string; kind?: string }> };
+      const hit = Array.isArray(parsed.assets)
+        && parsed.assets.some((a) => a?.kind === 'scene' && a?.guid === guid);
+      if (hit) return p.startsWith(prefix) ? p.slice(prefix.length) : p;
+    } catch { /* unparseable pack — skip */ }
+  }
+  return null;
+}
+
 /** A raw imported file (GLB/PNG/audio) that lives in assets/ but hasn't been
  *  processed into a pack yet, or a processed GLB whose meta.json exists. */
 export interface RawAsset {

@@ -7,9 +7,12 @@ import {
 import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
 import {
   sendVagMessage,
+  onVagMessage,
+  allowedParentOrigins,
   VagConsoleSchema,
   VagNetworkSchema,
   VagFpsStatsSchema,
+  VagDeviceLostSchema,
 } from '@forgeax/editor-core/protocol';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import type { GameContext } from './types';
@@ -308,6 +311,19 @@ if (entry) {
 // ── Start the frame loop ──
 app.value.start();
 
+// ── Device-lost → ask the shell to self-heal (reload this iframe) ──
+// The engine's onError fan-out carries the RhiError 'device-lost'/'context-lost'
+// arms. PlaySurface listens for VAG_DEVICE_LOST and reloads. Previously NOTHING
+// emitted it, so a real GPU loss left a dead canvas with no recovery. Send once
+// (device-lost is terminal — the engine runs its cleanup funnel).
+let deviceLostSent = false;
+app.value.onError((err) => {
+  if ((err.code === 'device-lost' || err.code === 'context-lost') && !deviceLostSent) {
+    deviceLostSent = true;
+    sendVagMessage(window.parent, VagDeviceLostSchema, {});
+  }
+});
+
 // ── FPS reporting + throttled liveness heartbeat ──
 // Studio's PreviewMode treats every VAG_FPS_STATS message as "still rendering"
 // evidence: a longer-than-FPS_STALL_MS gap hides the iframe behind the loading
@@ -522,20 +538,16 @@ if (import.meta.hot) {
 })();
 
 // ── Pause / Play / Reload (VAG_PREVIEW_* postMessage protocol) ──
-window.addEventListener('message', (ev) => {
-  const data = ev?.data as { type?: string } | undefined;
-  if (!data || typeof data.type !== 'string') return;
-  switch (data.type) {
-    case 'VAG_PREVIEW_PAUSE':
-      app.value.pause();
-      break;
-    case 'VAG_PREVIEW_PLAY':
-      app.value.resume();
-      break;
-    case 'VAG_PREVIEW_RELOAD':
-      location.reload();
-      break;
-  }
+// Origin-gated via onVagMessage: ONLY the embedding shell may drive the engine.
+// Previously this accepted these commands from ANY window with no origin/source
+// check — any embedder could pause/reload the running game.
+onVagMessage(window, {
+  allowedOrigins: allowedParentOrigins(),
+  handlers: {
+    VAG_PREVIEW_PAUSE: () => app.value.pause(),
+    VAG_PREVIEW_PLAY: () => app.value.resume(),
+    VAG_PREVIEW_RELOAD: () => location.reload(),
+  },
 });
 
 // ── Vite HMR ──

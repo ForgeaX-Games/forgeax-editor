@@ -23,8 +23,6 @@ import {
   VagConsoleSchema,
   VagEditorFlushSchema,
   VagFpsStatsSchema,
-  VagEditorOpenSourceSchema,
-  VagEditorRefSchema,
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
@@ -344,18 +342,10 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
           }
           return;
         }
-        case 'VAG_EDITOR_REF': {
-          VagEditorRefSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_EDITOR_OPEN_SOURCE': {
-          VagEditorOpenSourceSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_ASSETS_CHANGED': {
-          VagAssetsChangedSchema.safeParse(ev.data);
-          return;
-        }
+        // VAG_EDITOR_REF / VAG_EDITOR_OPEN_SOURCE / VAG_ASSETS_CHANGED are NOT
+        // consumed by this surface — they target the shell (window.parent) or
+        // ep:* panels. They were `safeParse`d-then-discarded here (validation
+        // theater); dropped — unknown/unhandled types fall through to ignore.
       }
     };
     window.addEventListener('message', onMessage);

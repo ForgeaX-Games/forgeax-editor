@@ -20,6 +20,8 @@ import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime } from '@forgeax/editor-core';
 import {
   sendVagMessage,
+  onVagMessage,
+  allowedParentOrigins,
   VagConsoleSchema,
   VagNetworkSchema,
   VagFpsStatsSchema,
@@ -418,8 +420,9 @@ window.addEventListener('pagehide', () => flushPendingSaveBeacon());
 window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushPendingSaveBeacon();
 });
-window.addEventListener('message', (ev: MessageEvent) => {
-  if ((ev?.data as { type?: string } | undefined)?.type === 'VAG_EDITOR_FLUSH') flushPendingSaveBeacon();
+onVagMessage(window, {
+  allowedOrigins: allowedParentOrigins(),
+  handlers: { VAG_EDITOR_FLUSH: () => flushPendingSaveBeacon() },
 });
 
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
@@ -560,43 +563,64 @@ function installErrorOverlay(): void {
   });
 }
 
-function installPreviewControls(): void {
-  window.addEventListener('message', (ev) => {
-    const data = ev?.data as { type?: string; payload?: unknown } | undefined;
-    if (!data || typeof data.type !== 'string') return;
-    switch (data.type) {
-      case 'VAG_PREVIEW_PAUSE': app.value.pause(); break;
-      case 'VAG_PREVIEW_PLAY': app.value.resume(); break;
-      case 'VAG_PREVIEW_RELOAD': location.reload(); break;
+// Shape guards for VAG_SPAWN_ENTITY's `entity`/`doc` — the schema declares them
+// `z.unknown()` (the engine ECS doc shape evolves independently), so we validate
+// them HERE before they reach the authoritative bus.
+type SpawnRef = { name: string; components: Record<string, unknown> };
+type SpawnDoc = {
+  order: number[];
+  entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }>;
+};
+function isSpawnRef(x: unknown): x is SpawnRef {
+  const r = x as SpawnRef | null;
+  return !!r && typeof r === 'object' && typeof r.name === 'string'
+    && typeof r.components === 'object' && r.components !== null;
+}
+function isSpawnDoc(x: unknown): x is SpawnDoc {
+  const d = x as SpawnDoc | null;
+  return !!d && typeof d === 'object'
+    && Array.isArray(d.order) && d.order.every((n) => typeof n === 'number')
+    && typeof d.entities === 'object' && d.entities !== null;
+}
 
-      case 'VAG_SPAWN_ENTITY': {
-        // Emitted by the interface shell after a successful auto-import pipeline
-        // (upload → process-gltf → import-scene). Dispatch to the authoritative
-        // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
-        // propagates to all ep:* panel iframes immediately.
-        const p = data.payload as { mode?: string; entity?: unknown; doc?: unknown; name?: string } | undefined;
-        if (!p) break;
-        if (p.mode === 'reference' && p.entity) {
-          const e = p.entity as { name: string; components: Record<string, unknown> };
-          bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
-        } else if (p.mode === 'full' && p.doc) {
-          const doc = p.doc as { order: number[]; entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }> };
+function installPreviewControls(): void {
+  // Origin-gated + schema-validated via onVagMessage. Previously this accepted
+  // VAG_PREVIEW_* / VAG_SPAWN_ENTITY from ANY window with NO origin/source check
+  // and fed `entity`/`doc` to bus.dispatch UNVALIDATED — any embedder could
+  // pause/reload or spawn arbitrary entities into the authoritative editor bus.
+  onVagMessage(window, {
+    allowedOrigins: allowedParentOrigins(),
+    handlers: {
+      VAG_PREVIEW_PAUSE: () => app.value.pause(),
+      VAG_PREVIEW_PLAY: () => app.value.resume(),
+      VAG_PREVIEW_RELOAD: () => location.reload(),
+
+      // Emitted by the interface shell after a successful auto-import pipeline
+      // (upload → process-gltf → import-scene). Dispatch to the authoritative
+      // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
+      // propagates to all ep:* panel iframes immediately.
+      VAG_SPAWN_ENTITY: (msg) => {
+        const p = msg.payload;
+        if (p.mode === 'reference' && isSpawnRef(p.entity)) {
+          bus.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
+        } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
+          const doc = p.doc;
           const cmds = doc.order.map((id) => {
             const ent = doc.entities[id]!;
             return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
           });
           bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
+        } else {
+          console.warn('[edit] VAG_SPAWN_ENTITY: malformed entity/doc payload — ignored');
+          return;
         }
         broadcastAssetsChanged();
-        break;
-      }
+      },
 
-      case 'VAG_ASSETS_CHANGED':
-        // Relay from the interface shell to ep:* panel iframes so Assets panel
-        // Files tab refreshes its list after an import.
-        broadcastAssetsChanged();
-        break;
-    }
+      // Relay from the interface shell to ep:* panel iframes so the Assets panel
+      // Files tab refreshes its list after an import.
+      VAG_ASSETS_CHANGED: () => broadcastAssetsChanged(),
+    },
   });
 }
 
