@@ -213,9 +213,26 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     return () => { cancelled = true; };
   }, [base]);
 
+  // ── Deferred game-load while hidden (keep-alive contention guard) ────────────
+  // The shell's keep-alive layer keeps BOTH the Edit and Play surfaces mounted at
+  // once. If the iframe src tracked `slug` directly, switching GAMES would cold-boot
+  // the new game's editor here AND the new game's preview in the (hidden) Play iframe
+  // simultaneously → two concurrent WebGPU boots wedge the WKWebView GPU process
+  // ("切一个新游戏的 edit 又卡死"). So the iframe loads `loadedSlug`, which only
+  // advances to the latest `slug` while THIS surface is visible — a hidden surface
+  // defers the new game until shown, so only one engine boots at a time. `slug`
+  // still loads on first mount (loadedSlug seeded = slug).
+  const [loadedSlug, setLoadedSlug] = useState(slug);
+  const slugRef = useRef(slug);
+  slugRef.current = slug;
+  const visibleRef = useRef(true);
+  useEffect(() => {
+    if (visibleRef.current) setLoadedSlug(slug);
+  }, [slug]);
+
   // ── iframe src ─────────────────────────────────────────────────────────────
   const voParam = viewportOnly ? '&viewportOnly=1' : '';
-  const src = `/editor/?scene=${encodeURIComponent(slug)}${voParam}`;
+  const src = `/editor/?scene=${encodeURIComponent(loadedSlug)}${voParam}`;
 
   // ── Flush editor's pending save on unmount ─────────────────────────────────
   useEffect(() => {
@@ -236,7 +253,11 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     if (!el || typeof IntersectionObserver === 'undefined') return;
     const io = new IntersectionObserver((entries) => {
       const visible = entries.some((e) => e.isIntersecting);
+      visibleRef.current = visible;
       try { iframeRef.current?.contentWindow?.postMessage({ type: visible ? 'VAG_PREVIEW_PLAY' : 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* iframe gone */ }
+      // Becoming visible flushes a game switch deferred while hidden — boots the new
+      // game's editor now (and only now, so it never collides with the Play boot).
+      if (visible) setLoadedSlug(slugRef.current);
     });
     io.observe(el);
     return () => io.disconnect();

@@ -96,6 +96,24 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   const lastHeartbeatRef = useRef<number>(Date.now());
   const hasReceivedFpsRef = useRef<boolean>(false);
 
+  // ── Deferred game-load while hidden (keep-alive contention guard) ────────────
+  // With the shell's keep-alive layer, BOTH the Play and Edit surfaces stay mounted
+  // at once (one visible, one display:none'd). If we drove the iframe src straight
+  // from `slug`, switching GAMES would cold-boot the new game in this hidden iframe
+  // AND in the visible Edit iframe simultaneously → two concurrent WebGPU boots wedge
+  // the WKWebView GPU process ("切一个新游戏的 edit 又卡死"). So the iframe loads
+  // `loadedSlug`, which only advances to the latest `slug` while this surface is
+  // VISIBLE — a hidden surface defers the new game until it's shown (one boot at a
+  // time). `slug` still loads immediately on first mount (loadedSlug seeded = slug).
+  const [loadedSlug, setLoadedSlug] = useState(slug);
+  const slugRef = useRef(slug);
+  slugRef.current = slug;
+  const visibleRef = useRef(true);
+  // slug changed while visible → load now; while hidden → defer to the IO show flush.
+  useEffect(() => {
+    if (visibleRef.current) setLoadedSlug(slug);
+  }, [slug]);
+
   const device = useMemo(() => DEVICES.find((d) => d.id === deviceId) ?? DEFAULT_DEVICE, [deviceId]);
   const screen = useMemo(
     () => (orient === 'portrait' ? { w: device.w, h: device.h } : { w: device.h, h: device.w }),
@@ -179,46 +197,61 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  // ── Slug switch → reset loading state ─────────────────────────────────────
+  // ── Loaded-game switch → reset loading state ───────────────────────────────
+  // Keyed on loadedSlug (the game actually in the iframe), not slug — a hidden
+  // surface whose slug changed but hasn't loaded yet must not reset/probe.
   useEffect(() => {
     setIsFirstFrameLoading(true);
     hasReceivedFpsRef.current = false;
-  }, [slug]);
+  }, [loadedSlug]);
 
   // ── Release the native FPS cursor grab when leaving Play ────────────────────
   // The Play game grabs the OS cursor via the Tauri `set_pointer_capture` bridge
   // (CGAssociate) for mouse-look, and ONLY released it on Esc. Switching to Edit /
-  // AI while locked unmounts this surface but left the cursor FROZEN — the whole
-  // desktop window became uninteractable ("从 Play 切到 Edit 窗口交互不了/死了").
-  // Headless Playwright can't catch this (no Tauri `invoke`). Force-release on
-  // unmount (mode switch), on game change, and on window blur (app switch). The
-  // shell forwards fx-pointer-capture:false to the Tauri release command; harmless
-  // on web (no native grab to release).
+  // AI while locked left the cursor FROZEN — the whole desktop window became
+  // uninteractable ("从 Play 切到 Edit 窗口交互不了/死了"). Headless Playwright can't
+  // catch this (no Tauri `invoke`). The shell forwards fx-pointer-capture:false to
+  // the Tauri release command; harmless on web (no native grab to release).
+  //
+  // CRITICAL with keep-alive: the shell now keeps this surface MOUNTED (display:none)
+  // across a Play→Edit switch instead of unmounting it, so an unmount-cleanup release
+  // NO LONGER fires on switch. We therefore also release on HIDE (the Intersection
+  // Observer below) — that's the actual switch-away moment. Here we keep the
+  // blur (app-switch) + unmount (game change / real teardown) releases.
+  const releasePointerCapture = () => {
+    try { window.parent?.postMessage({ type: 'fx-pointer-capture', capture: false }, '*'); } catch { /* parent gone */ }
+  };
   useEffect(() => {
-    const release = () => {
-      try { window.parent?.postMessage({ type: 'fx-pointer-capture', capture: false }, '*'); } catch { /* parent gone */ }
-    };
-    window.addEventListener('blur', release);
-    return () => { release(); window.removeEventListener('blur', release); };
+    window.addEventListener('blur', releasePointerCapture);
+    return () => { releasePointerCapture(); window.removeEventListener('blur', releasePointerCapture); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
-  // ── Auto-pause when hidden (keep-alive background) ──────────────────────────
+  // ── Auto-pause + release cursor when hidden (keep-alive background) ──────────
   // The shell keeps this surface MOUNTED but display:none'd when you switch to
   // Edit (so the game iframe + its WebGPU context survive without a reboot). While
-  // hidden, pause the game so only the visible surface draws — the context stays
-  // alive for an instant resume on switch-back. IntersectionObserver fires
-  // not-intersecting whenever an ancestor is display:none.
+  // hidden, (1) pause the game so only the visible surface draws — the context stays
+  // alive for an instant resume on switch-back; and (2) RELEASE the native cursor
+  // grab so a Play→Edit switch while pointer-locked can't freeze the whole desktop
+  // window. IntersectionObserver fires not-intersecting whenever an ancestor is
+  // display:none.
   useEffect(() => {
     const el = frameRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     const io = new IntersectionObserver((entries) => {
       const visible = entries.some((e) => e.isIntersecting);
+      visibleRef.current = visible;
       try { iframeRef.current?.contentWindow?.postMessage({ type: visible ? 'VAG_PREVIEW_PLAY' : 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* iframe gone */ }
+      if (!visible) releasePointerCapture(); // switch-away while locked → free the OS cursor
+      // Becoming visible flushes any game switch deferred while hidden — boots the
+      // new game now (and only now, so it never collides with the other surface).
+      if (visible) setLoadedSlug(slugRef.current);
       setIsPlaying(visible);
     });
     io.observe(el);
     return () => io.disconnect();
-  }, [slug]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Stall detection ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -229,7 +262,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       if (elapsed > FPS_STALL_MS) setIsFirstFrameLoading(true);
     }, 100);
     return () => clearInterval(id);
-  }, [slug, isPlaying]);
+  }, [loadedSlug, isPlaying]);
 
   // ── Vite restart probe ────────────────────────────────────────────────────
   useEffect(() => {
@@ -251,7 +284,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       }
       let up = false;
       try {
-        const r = await fetch(`/preview/?game=${encodeURIComponent(slug)}`, {
+        const r = await fetch(`/preview/?game=${encodeURIComponent(loadedSlug)}`, {
           method: 'GET',
           cache: 'no-store',
         });
@@ -291,7 +324,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
 
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [slug]);
+  }, [loadedSlug]);
 
   // ── Fullscreen ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -403,7 +436,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         {mode === 'desktop' ? (
           <iframe
             ref={iframeRef}
-            src={`/preview/?game=${encodeURIComponent(slug)}`}
+            src={`/preview/?game=${encodeURIComponent(loadedSlug)}`}
             className="preview-iframe"
             title={`game preview: ${slug}`}
             // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
@@ -421,7 +454,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
             <div className="preview-mobile-frame" style={{ width: screen.w, height: screen.h }}>
               <iframe
                 ref={iframeRef}
-                src={`/preview/?game=${encodeURIComponent(slug)}`}
+                src={`/preview/?game=${encodeURIComponent(loadedSlug)}`}
                 className="preview-iframe-mobile"
                 title={`game preview: ${slug}`}
                 // pointer-lock *: see the desktop iframe above — required for the

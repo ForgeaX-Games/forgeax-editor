@@ -15,6 +15,7 @@ import {
 } from './sync-channel';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { findScenePackByGuid } from './assets';
+import { fetchWithTimeout } from './net';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a
@@ -380,31 +381,6 @@ export function useSceneFile(): string | null {
 
 function forgeJsonPath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/${FORGE_JSON}`;
-}
-
-/** fetch() that is GUARANTEED to settle within `ms`, even if the underlying
- *  connection wedges forever. The editor boots behind a top-level
- *  `await initSceneList()` + `await loadDocFromDisk()` (edit-runtime main.tsx), so
- *  a single stalled boot fetch wedges the ENTIRE editor (black viewport, FPS "--",
- *  no mount, no recovery). On the real desktop (WKWebView) this reproduces
- *  intermittently: `/api/files/tree` is instant via curl, yet the iframe's fetch
- *  never resolves — and an AbortController does NOT reliably reject a wedged
- *  WKWebView connection (the old impl hung >45s despite a 6s abort). So we RACE
- *  the fetch against a timer that REJECTS: the dangling fetch promise is simply
- *  abandoned, the race settles, and the caller's try/catch falls back to
- *  empty/legacy — boot always proceeds. The abort is still fired best-effort to
- *  free the socket. */
-async function fetchWithTimeout(url: string, ms = 6000): Promise<Response> {
-  const ctrl = new AbortController();
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } reject(new Error('fetch-timeout')); }, ms);
-  });
-  try {
-    return await Promise.race([fetch(url, { signal: ctrl.signal }), timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
 }
 
 /**

@@ -6,6 +6,7 @@
 // pack payload's paramValues. Reached through the server's /api/files{,/tree}
 // (same-origin via the interface proxy).
 import { Materials } from '@forgeax/engine-runtime';
+import { fetchWithTimeout } from './net';
 
 export interface PackAsset {
   guid: string;
@@ -21,7 +22,7 @@ interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?
 async function packPaths(slug: string): Promise<string[]> {
   const root = `.forgeax/games/${slug}/assets`;
   try {
-    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
     const out: string[] = [];
@@ -43,7 +44,7 @@ async function packPaths(slug: string): Promise<string[]> {
 async function allGamePackPaths(slug: string): Promise<string[]> {
   const root = `.forgeax/games/${slug}`;
   try {
-    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
     const out: string[] = [];
@@ -76,7 +77,7 @@ export async function findScenePackByGuid(
   const prefix = `.forgeax/games/${slug}/`;
   for (const p of await allGamePackPaths(slug)) {
     try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) continue;
       const j = (await r.json()) as { content?: string };
       if (!j.content) continue;
@@ -110,7 +111,7 @@ export async function loadRawAssets(slug: string | null | undefined): Promise<Ra
   if (!slug || slug === 'default') return [];
   try {
     const root = `.forgeax/games/${slug}/assets`;
-    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
     const out: RawAsset[] = [];
@@ -144,7 +145,7 @@ export async function loadGameAssets(slug: string | null | undefined): Promise<P
   const out: PackAsset[] = [];
   for (const p of paths) {
     try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) continue;
       const j = (await r.json()) as { content?: string };
       if (!j.content) continue;
