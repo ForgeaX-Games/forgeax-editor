@@ -1,0 +1,1988 @@
+.main-area {
+  flex: 1; min-width: 0;
+  background: var(--color-background-canvas);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  /* Positioning context for the always-mounted keep-alive CenterPluginLayer. */
+  position: relative;
+}
+
+/* === Keep-alive center plugin overlay (Plan A) ===
+ * Always-mounted overlay that owns standalone center plugins so their iframes
+ * survive tab/mode switches. Absolute over .main-area; self-hides (inline
+ * visibility:hidden + pointer-events:none) when no standalone plugin is open. */
+.fx-center-plugin-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+.fx-center-plugin-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+
+/* Keep-alive iframe stack: visited plugin iframes share one stable parent and
+ * overlap absolutely; only the active one is visible (StandalonePluginIframe
+ * applies visibility:hidden to the rest). Re-parenting is avoided so iframes
+ * never reload on switch. */
+.fx-keepalive-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+.fx-keepalive-item {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+/* === Preview === */
+.preview-mode {
+  flex: 1; display: flex; flex-direction: column;
+}
+.preview-frame {
+  flex: 1;
+  background: var(--color-background-base);
+  position: relative; overflow: hidden;
+}
+.preview-frame.preview-frame--waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Hides the iframe behind a spinner from slug-change / reload to first FPS.
+   Covers the new-game vite rescan-restart blank window so the user never sees
+   the bare iframe go black mid-load. pointer-events: none keeps the iframe
+   reachable underneath once interactions resume. */
+.preview-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--color-background-base);
+  z-index: 1;
+  pointer-events: none;
+}
+.preview-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--color-border-default);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: preview-loading-spin 0.8s linear infinite;
+}
+.preview-loading-text {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+@keyframes preview-loading-spin {
+  to { transform: rotate(360deg); }
+}
+/* Surface wrapper (SurfacePanels) — fills the dock panel and is the positioning
+   context for the absolutely-pinned FatalBanner overlay. The injected edit /
+   preview surface is the second child and takes the full box. */
+.surface-region {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.surface-region > :not(.preview-fatal-banner) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Fatal banner — pinned to the top of a Play/Edit region when the engine reports
+   device-lost / scene-instantiate / WebGPU init failure. Gives the user the
+   reason (not just a black viewport) + a one-click reload. Shared by PlaySurface
+   + EditSurface (same class). */
+.preview-fatal-banner {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(150, 24, 24, 0.97), rgba(120, 18, 18, 0.95));
+  color: #ffe2e2;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  border-bottom: 1px solid rgba(255, 120, 120, 0.4);
+}
+.preview-fatal-banner .pfb-icon { flex-shrink: 0; color: #ffd0a0; }
+.preview-fatal-banner .pfb-body { flex: 1 1 auto; min-width: 0; }
+.preview-fatal-banner .pfb-title { font-weight: 600; color: #fff; }
+.preview-fatal-banner .pfb-msg {
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.preview-fatal-banner .pfb-retry {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.preview-fatal-banner .pfb-retry:hover { background: rgba(255, 255, 255, 0.26); }
+.preview-toolbar.top {
+  height: 36px; flex-shrink: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  background: var(--color-background-base);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: 14px; color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  position: relative;
+}
+.preview-toolbar .pt-left,
+.preview-toolbar .pt-center,
+.preview-toolbar .pt-right { display: flex; align-items: center; min-width: 0; }
+.preview-toolbar .pt-left  { justify-self: start;  padding: 0 4px; }
+.preview-toolbar .pt-center { justify-self: center; gap: 12px; }
+.preview-toolbar .pt-right  { justify-self: end;    padding: 0 8px; gap: 0; }
+.preview-toolbar .pt-fps { padding: 0 8px; font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
+.preview-toolbar .pt-slug { padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.preview-toolbar .pt-divider {
+  width: 1px; height: 13.5px; flex-shrink: 0;
+  background: var(--color-divider-default);
+  margin: 0 8px;
+}
+.preview-toolbar .pt-btn {
+  background: transparent; border: none; cursor: pointer; padding: 4px;
+  color: var(--color-text-secondary);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+}
+.preview-toolbar .pt-btn:hover { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.preview-toolbar .pt-btn.selected { color: var(--color-text-primary); background: var(--color-interaction-selected-neutral); }
+.preview-toolbar .pt-btn.selected:hover { background: var(--color-interaction-selected-neutral); }
+.preview-toolbar .pt-btn[disabled] { color: var(--color-icon-disabled); cursor: not-allowed; }
+/* Device group (right side) */
+.preview-toolbar .pt-device-group {
+  display: flex; align-items: center; gap: 8px;
+}
+.preview-toolbar .pt-device-pill {
+  position: relative;
+  display: flex; align-items: center; gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--color-background-elevated);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.preview-toolbar .pt-device-name {
+  font-size: 14px; font-family: var(--font-mono);
+  white-space: nowrap;
+}
+/* transparent native select overlaid on top of the pill — keeps OS dropdown UX */
+.preview-toolbar .pt-device-select {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer; width: 100%;
+  border: none; background: transparent;
+}
+.preview-toolbar .pt-device-pill:hover { background: var(--color-background-floating); }
+
+/* Import asset dropdown */
+.preview-toolbar .pt-import-wrap { position: relative; }
+.preview-toolbar .pt-import-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: var(--z-dock-float);
+  min-width: 180px; background: var(--color-background-elevated, #161619);
+  border: 1px solid var(--color-border-default, #2a2d30); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); overflow: hidden;
+}
+.preview-toolbar .pt-import-head {
+  padding: 5px 12px 4px; font-size: 10px; color: var(--color-text-tertiary, #778);
+  text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--color-border-default, #2a2d30);
+}
+.preview-toolbar .pt-import-item {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  width: 100%; padding: 7px 12px; background: none; border: none; cursor: pointer;
+  color: var(--color-text-primary, #e8eaed); font-size: 13px; text-align: left;
+}
+.preview-toolbar .pt-import-item:hover { background: var(--color-interaction-hover, rgba(255,255,255,0.06)); }
+.preview-toolbar .pt-import-label { white-space: nowrap; }
+.preview-toolbar .pt-import-desc { font-size: 11px; color: var(--color-text-tertiary, #778); white-space: nowrap; font-family: var(--font-mono, monospace); }
+
+/* Import pipeline status indicator */
+.preview-toolbar .pt-import-status {
+  font-size: 11px; font-family: var(--font-mono, monospace);
+  padding: 0 8px; white-space: nowrap; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-import-status--uploading,
+.preview-toolbar .pt-import-status--processing,
+.preview-toolbar .pt-import-status--importing { color: var(--color-text-secondary, #aaa); }
+.preview-toolbar .pt-import-status--done  { color: #7ec87e; }
+.preview-toolbar .pt-import-status--error { color: #e07070; }
+
+.preview-iframe {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border: 0; background: var(--prim-color-neutral-1000);
+}
+.preview-mobile-wrap {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: auto;
+  padding: 12px;
+}
+.preview-orient-btn {
+  position: absolute; bottom: 16px; right: 16px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px;
+  background: var(--color-background-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.preview-orient-btn:hover {
+  background: var(--color-background-floating);
+  color: var(--color-text-primary);
+}
+.preview-mobile-frame {
+  background: var(--prim-color-neutral-1000);
+  border-radius: 18px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7),   0 0 0 2px rgba(255,255,255,0.06);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.preview-iframe-mobile {
+  width: 100%; height: 100%;
+  border: 0; background: var(--prim-color-neutral-1000);
+  display: block;
+}
+/* gradient overlay only shows when iframe absent (loading state) */
+.preview-frame:not(:has(iframe))::before {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(212, 255, 72, 0.20) 0%, transparent 45%),
+    radial-gradient(circle at 70% 60%, rgba(72, 255, 207, 0.15) 0%, transparent 45%),
+    radial-gradient(circle at 50% 90%, rgba(168, 85, 247, 0.12) 0%, transparent 50%);
+  pointer-events: none;
+}
+.preview-label {
+  position: absolute; top: 14px; left: 14px;
+  background: rgba(0,0,0,0.55);
+  padding: 4px 12px; border-radius: 100px;
+  font-size: 11px; color: var(--color-text-secondary);
+}
+.preview-center { text-align: center; z-index: 1; }
+.preview-title { font-size: 18px; color: var(--color-text-primary); margin-bottom: 4px; }
+.preview-sub { color: var(--color-text-tertiary); font-size: 12px; }
+.preview-retry-btn {
+  margin-top: 12px; padding: 6px 16px;
+  border: 1px solid var(--color-border-secondary); border-radius: 6px;
+  background: var(--color-background-surface); color: var(--color-text-primary);
+  font-size: 13px; cursor: pointer;
+}
+.preview-retry-btn:hover { background: var(--color-background-hover); }
+
+/* === Workbench === */
+.workbench-mode {
+  flex: 1;
+  display: flex; flex-direction: column;
+  background: var(--color-background-canvas);
+  overflow: hidden;
+}
+
+/* MainArea-takeover workbench plugin host (e.g. wb-character iframe). */
+.wb-plugin-host, .wb-plugin-host-empty {
+  flex: 1;
+  display: flex; flex-direction: column;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+.wb-plugin-host-bar {
+  height: 36px;
+  flex: 0 0 auto;
+  display: flex; align-items: center;
+  padding: 0 8px;
+  background: var(--color-background-base);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.wb-plugin-back {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 100%;
+  max-width: 140px; min-width: 100px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.wb-plugin-back span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wb-plugin-back:hover {
+  color: var(--color-text-secondary);
+}
+
+/* Windowing — 弹出/收回独立窗口按钮 (Tauri shell only; hidden in browser). */
+.wb-plugin-window-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px;
+  margin-left: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.wb-plugin-window-toggle:hover {
+  color: var(--text-primary, var(--color-text-secondary));
+  background: var(--bg-2, transparent);
+}
+/* Floating placeholder shown in the body when a surface is detached. */
+.fx-surface-floating {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  text-align: center;
+}
+
+/* WorkbenchAgentPicker — corner widget on host bar. Iter-1 single-panel:
+ * click rebinds active tab agent (same as AgentSwitcher), Iter-2 will turn
+ * each agent into its own independent chat panel. */
+.wb-agent-picker {
+  position: relative;
+  margin-left: auto;
+}
+.wb-agent-picker-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent; border: 1px solid var(--color-border-default);
+  padding: 3px 8px; border-radius: 4px;
+  cursor: pointer;
+  max-width: 200px;
+}
+.wb-agent-picker-btn:hover { color: var(--text-primary); background: var(--bg-2); }
+.wb-agent-picker-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wb-agent-picker-hint { color: var(--accent-cyan); }
+.wb-agent-picker-menu {
+  position: absolute; right: 0; top: calc(100% + 4px);
+  min-width: 180px;
+  background: var(--bg-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  padding: 4px 0;
+  z-index: 100;
+}
+.wb-agent-picker-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent; border: none;
+  padding: 5px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.wb-agent-picker-item:hover { background: var(--bg-2); color: var(--text-primary); }
+.wb-agent-picker-item.active { color: var(--text-primary); background: var(--bg-2); }
+.wb-agent-picker-empty {
+  font-size: 11px; color: var(--text-tertiary);
+  padding: 6px 10px;
+}
+.wb-plugin-host-body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.wb-plugin-iframe-wrap {
+  /* Works in both flex (MainArea host body) and block (sidebar tools pane)
+   * parents: flex:1 covers flex-column hosts, height:100% covers block hosts. */
+  flex: 1; min-height: 0;
+  height: 100%;
+  display: flex; flex-direction: column;
+  position: relative;
+}
+
+.wb-tabbar {
+  height: 36px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  background: var(--color-background-base);
+  border-bottom: 1px solid var(--color-border-default);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.wb-tabbar::-webkit-scrollbar { height: 0; }
+.wb-tab {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px;
+  height: 100%;
+  flex: none;
+  width: 140px;
+  min-width: 100px;
+  max-width: 140px;
+  border-radius: 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wb-tab:hover { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.wb-tab.active {
+  background: var(--color-interaction-selected-neutral);
+  color: var(--color-text-primary);
+}
+.wb-tab-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 14px;
+  align-self: center;
+  background: var(--color-border-subtle);
+  margin: 0 4px;
+}
+.wb-tab-ico { flex-shrink: 0; display: flex; align-items: center; }
+.wb-tab-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wb-tab-close {
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: none;
+  align-items: center; justify-content: center;
+  color: var(--color-text-tertiary);
+}
+.wb-tab:hover .wb-tab-close { display: inline-flex; }
+.wb-tab.active:not(:hover) .wb-tab-close { display: none; }
+.wb-tab-close:hover { color: var(--color-text-primary); }
+/* .wb-tab.dirty:not(:hover) .wb-tab-close { display: none; } — TODO: dirty indicator */
+.wb-tab-tooltip {
+  position: fixed;
+  z-index: var(--z-menu);
+  background: var(--color-background-floating);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-editor {
+  flex: 1; padding: 12px; overflow: hidden; display: flex;
+}
+.cm-mock {
+  flex: 1; margin: 0; overflow: auto;
+  background: var(--color-background-canvas);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.cm-mock code { background: none; padding: 0; color: inherit; }
+
+.wb-bottom {
+  height: 140px;
+  background: var(--color-background-elevated);
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.wb-resize-bar {
+  height: 4px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  margin: -2px 0;
+}
+.wb-resize-bar::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--color-border-default);
+  transition: background 150ms;
+  pointer-events: none;
+}
+.wb-resize-bar:hover::after,
+.wb-resize-bar:active::after {
+  background: var(--color-border-strong);
+}
+.wb-bottom-tabs {
+  height: 40px;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--color-background-elevated);
+  padding: 8px;
+  flex-shrink: 0;
+}
+.wbb-tab {
+  height: 100%;
+  padding: 4px 8px;
+  display: flex; align-items: center; gap: 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+  font-family: var(--font-mono);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.wbb-tab:hover { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.wbb-tab.selected {
+  color: var(--color-text-primary);
+  background: var(--color-interaction-selected-neutral);
+}
+.wbb-tab.selected:hover { background: var(--color-interaction-selected-neutral); }
+.wbb-badge {
+  background: var(--color-accent-orange-default);
+  color: var(--prim-color-neutral-950);
+  border-radius: var(--radius-pill);
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 700;
+}
+.wb-bottom-body {
+  flex: 1; padding: 8px 14px; overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.wbb-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--color-border-default);
+}
+.wbb-row:last-child { border: none; }
+.wbb-time { color: var(--color-text-tertiary); font-size: 10px; flex-shrink: 0; }
+.wbb-tag {
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.wbb-tag.tool { background: var(--color-accent-green-soft); color: var(--color-accent-green-default); }
+.wbb-tag.agent { background: var(--color-accent-purple-soft); color: var(--color-accent-purple-default); }
+.wbb-tag.user { background: var(--accent-cyan-soft); color: var(--accent-cyan); }
+
+/* ── Bottom panel ledger event rows ─────────────────────────────────────── */
+.wbb-row.event-row {
+  width: 100%; text-align: left;
+  background: transparent; border: none; cursor: pointer;
+  display: flex; gap: 10px; align-items: center;
+  padding: 4px 0;
+  color: var(--color-text-secondary);
+  font-size: 11px; font-family: inherit;
+}
+.wbb-row.event-row:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.wbb-row .wbb-ico { font-size: 11px; }
+.wbb-row .wbb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Console panel rows ────────────────────────────────────────────────── */
+.wbb-row.console-row {
+  font-family: var(--font-mono);
+  padding: 2px 0;
+  gap: 6px;
+}
+.wbb-row.console-row.level-warn .console-text { color: var(--color-accent-orange-default); }
+.wbb-row.console-row.level-error .console-text { color: var(--color-accent-error-default); }
+.wbb-tag.console-log { background: rgba(255,255,255,0.05); color: var(--color-text-tertiary); }
+.wbb-tag.console-warn { background: rgba(255,140,66,0.12); color: var(--color-accent-orange-default); }
+.wbb-tag.console-error { background: rgba(255,107,107,0.12); color: var(--color-accent-error-default); }
+.wbb-tag.console-info { background: rgba(108,196,255,0.12); color: var(--color-kind-cli-provider); }
+.wbb-tag.console-debug { background: rgba(255,255,255,0.05); color: var(--color-text-tertiary); }
+.console-text { white-space: pre-wrap; word-break: break-word; flex: 1; min-width: 0; }
+
+/* ── Workbench editor: source textarea + markdown preview + view toggle ── */
+.wb-view-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 0 10px; }
+.wb-view-toggle {
+  display: inline-flex; padding: 2px; gap: 1px;
+  background: rgba(0,0,0,0.3); border-radius: 5px;
+  border: 1px solid var(--color-border-default);
+}
+.wb-view-btn {
+  background: transparent; border: none; cursor: pointer;
+  padding: 3px 8px;
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--color-text-tertiary);
+  font-size: 10px; border-radius: 3px;
+  font-family: inherit;
+}
+.wb-view-btn:hover { color: var(--color-text-primary); }
+.wb-view-btn.active { background: rgba(212,255,72,0.12); color: var(--color-brand-primary); }
+.wb-save-btn {
+  background: rgba(212,255,72,0.12); border: 1px solid rgba(212,255,72,0.25);
+  color: var(--color-brand-primary); cursor: pointer; padding: 4px 10px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; border-radius: 4px; font-family: inherit;
+}
+.wb-save-btn:hover:not(:disabled) { background: rgba(212,255,72,0.2); }
+.wb-save-btn:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; border-color: var(--color-border-default); color: var(--color-text-tertiary); }
+.wb-source {
+  flex: 1; margin: 0; padding: 14px;
+  background: var(--color-background-canvas); border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
+  color: var(--color-text-primary);
+  outline: none; resize: none;
+  tab-size: 2;
+}
+.wb-source:focus { border-color: var(--color-brand-primary); }
+.wb-save-err {
+  position: absolute; right: 16px; bottom: 16px;
+  background: rgba(255,107,107,0.12); border: 1px solid rgba(255,107,107,0.3);
+  color: var(--color-accent-error-default);
+  padding: 6px 10px; border-radius: 4px;
+  font-size: 11px;
+}
+/* Multimodal asset preview (image/audio/video/glb) — added 2026-05-17 to
+   replace the textarea dump that rendered PNG/GLB bytes as mojibake. */
+.wb-asset {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px;
+  padding: 18px;
+  background: var(--color-background-canvas);
+  overflow: auto;
+  position: relative;
+}
+.wb-asset-image img {
+  max-width: 100%; max-height: calc(100% - 28px);
+  object-fit: contain;
+  border-radius: 2px;
+  background:
+    linear-gradient(45deg, rgba(255,255,255,0.04) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, rgba(255,255,255,0.04) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.04) 75%) 8px 8px / 16px 16px,
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.04) 75%) 8px 8px / 16px 16px;
+}
+.wb-asset-audio audio { width: min(520px, 90%); }
+.wb-asset-video video {
+  max-width: 100%; max-height: calc(100% - 28px);
+  border-radius: 2px;
+  background: var(--prim-color-neutral-1000);
+}
+.wb-asset-model {
+  flex: 1;
+  width: 100%;
+  display: flex; flex-direction: column;
+  background: var(--color-background-canvas);
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+.wb-asset-model model-viewer {
+  flex: 1; width: 100%; min-height: 0;
+}
+.wb-asset-model .wb-asset-meta {
+  padding: 6px 12px;
+  border-top: 1px solid var(--color-border-default);
+}
+.wb-asset-meta {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+.wb-asset-binary {
+  gap: 14px;
+}
+.wb-asset-binary-msg {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+.wb-asset-download {
+  display: inline-block;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--color-brand-primary);
+  border: 1px solid rgba(212,255,72,0.4);
+  border-radius: 4px;
+  text-decoration: none;
+}
+.wb-asset-download:hover {
+  background: rgba(212,255,72,0.12);
+}
+/* react-markdown preview rendering */
+.md-preview {
+  flex: 1; overflow: auto;
+  padding: 18px 28px;
+  background: var(--color-background-canvas);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  font-size: 13px; line-height: 1.65;
+  color: var(--color-text-primary);
+}
+.md-preview h1, .md-preview h2, .md-preview h3, .md-preview h4 {
+  font-weight: 600;
+  margin: 1.4em 0 0.5em;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border-default);
+  padding-bottom: 4px;
+}
+.md-preview h1 { font-size: 1.5em; }
+.md-preview h2 { font-size: 1.3em; }
+.md-preview h3 { font-size: 1.15em; border-bottom: none; }
+.md-preview h4 { font-size: 1em; border-bottom: none; }
+.md-preview p { margin: 0.6em 0; color: var(--color-text-secondary); }
+.md-preview ul, .md-preview ol { padding-left: 1.6em; margin: 0.4em 0; color: var(--color-text-secondary); }
+.md-preview li { margin: 0.2em 0; }
+.md-preview blockquote {
+  border-left: 3px solid var(--color-brand-primary);
+  padding: 4px 12px;
+  margin: 0.8em 0;
+  background: rgba(212,255,72,0.04);
+  color: var(--color-text-secondary);
+}
+.md-preview code {
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px; border-radius: 3px;
+  font-family: var(--font-mono); font-size: 0.9em;
+  color: var(--color-kind-cli-provider);
+}
+.md-preview pre {
+  background: var(--color-background-base);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 12px 14px; overflow-x: auto;
+  margin: 0.8em 0;
+}
+.md-preview pre code { background: none; padding: 0; color: var(--color-text-primary); }
+.md-preview table { border-collapse: collapse; margin: 0.8em 0; width: 100%; }
+.md-preview th, .md-preview td { border: 1px solid var(--color-border-default); padding: 6px 10px; font-size: 12px; }
+.md-preview th { background: rgba(255,255,255,0.04); font-weight: 600; }
+.md-preview a { color: var(--color-kind-cli-provider); }
+.md-preview hr { border: none; border-top: 1px solid var(--color-border-default); margin: 1.2em 0; }
+.wb-editor { position: relative; }
+
+/* P3.15 — PreviewToolbar.pt-left TEAM dot strip. Inserted between .pt-fps and
+ * .pt-slug so the player sees "team composition" before "game slug" in the
+ * left-to-right reading order. Role-tribe colors mirror
+ * .agent-card[data-role=...] in Sidebar.css (P3.8) — keep these two blocks
+ * in lockstep when adding new roles.
+ */
+.preview-toolbar .pt-team {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 0 6px;
+  border-left: 1px solid var(--color-border-default);
+  height: 18px;
+  font-family: var(--font-mono);
+}
+.preview-toolbar .pt-team-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(255,255,255,0.45);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.preview-toolbar .pt-team-dots {
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.preview-toolbar .pt-team-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.20);
+  flex-shrink: 0;
+  cursor: help;
+}
+.preview-toolbar .pt-team-dot.is-placeholder { opacity: 0.55; }
+.preview-toolbar .pt-team-dot.r-orchestrator { background: var(--color-role-orchestrator); }
+.preview-toolbar .pt-team-dot.r-pillar       { background: var(--color-brand-primary); }
+.preview-toolbar .pt-team-dot.r-design       { background: var(--color-role-design); }
+.preview-toolbar .pt-team-dot.r-narrative    { background: var(--color-role-narrative); }
+.preview-toolbar .pt-team-dot.r-art          { background: var(--color-role-art); }
+.preview-toolbar .pt-team-dot.r-coding       { background: var(--color-role-coding); }
+.preview-toolbar .pt-team-count {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-interaction-hover);
+  line-height: 14px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* === P3.19 — Workbench empty-state plugin gallery ===
+ * Replaces the legacy `.cm-mock` 2-line hint when no file is open. The grid
+ * uses auto-fill so it gracefully reflows from 4 cols (wide) → 1 col when the
+ * main area is squeezed by Sidebar+ChatPanel. Color tokens deliberately reuse
+ * Sidebar `.ws-icon-btn.bus` lime family so the visual story "wb-* = bus
+ * sourced" stays unified across surfaces.
+ */
+.wb-gallery {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 16px 24px;
+  display: flex; flex-direction: column;
+  gap: 14px;
+  background:
+    radial-gradient(ellipse at top, rgba(75,222,128,0.04), transparent 60%),
+    var(--color-background-canvas);
+}
+.wbg-header {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.wbg-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: 0.02em;
+}
+.wbg-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(75,222,128,0.85);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.wbg-sub {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  margin-left: auto;
+}
+/* P4.46 — gallery header aggregate stats strip. Sits between `.wbg-count`
+ * (11 plugins) and `.wbg-sub` (instruction text pushed right by margin-left:auto).
+ * Mirrors P4.45 AgentsHub header `Σ N total | run·stop·dead` Σ-prefix +
+ * 1px×11px amber vsep pattern, and reuses the per-tile chip colors below
+ * (amber WIP / orange tools / sky events) so the strip and the tiles speak
+ * one visual vocabulary. */
+.wbg-stats {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.wbg-stats-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.wbg-stats-total {
+  background: var(--color-interaction-hover);
+  border: 1px solid var(--color-border-default);
+  color: rgba(255,255,255,0.78);
+}
+.wbg-stats-sigma {
+  font-size: 10px; font-weight: 500;
+  color: rgba(255,255,255,0.55);
+}
+.wbg-stats-n { font-weight: 700; }
+.wbg-stats-vsep {
+  display: inline-block;
+  width: 1px; height: 10px;
+  background: rgba(245,158,11,0.32);
+  margin: 0 1px;
+}
+.wbg-stats-wip {
+  color: rgba(245,178,67,0.90);
+  background: rgba(245,178,67,0.10);
+  border: 1px solid rgba(245,178,67,0.34);
+  text-transform: uppercase;
+}
+.wbg-stats-tools {
+  color: rgba(255,140,66,0.90);
+  background: rgba(255,140,66,0.10);
+  border: 1px solid rgba(255,140,66,0.34);
+}
+.wbg-stats-events {
+  color: rgba(108,196,255,0.90);
+  background: rgba(108,196,255,0.10);
+  border: 1px solid rgba(108,196,255,0.34);
+}
+/* P4.59 — 5th stats pill, lavender to mirror the per-tile `.wbg-tile-tag.ver.bumped`
+   chip from P4.58. Reads "v N" where N = plugins whose manifest version is
+   not 0.0.x. Same #c4a3ff hue family as the per-tile bumped chip / orchestrator
+   ★ pin so the player learns "lavender = bumped / main version" once and reads
+   it the same way at strip-level and tile-level. */
+.wbg-stats-bumped {
+  color: rgba(196,163,255,0.95);
+  background: rgba(196,163,255,0.10);
+  border: 1px solid rgba(196,163,255,0.42);
+  font-variant-numeric: tabular-nums;
+}
+.wbg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.wbg-tile {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  padding: 12px 12px 10px;
+  min-height: 110px;
+  text-align: left;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+  font-family: inherit;
+  position: relative;
+}
+.wbg-tile:hover {
+  background: rgba(75,222,128,0.06);
+  border-color: rgba(75,222,128,0.35);
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+.wbg-tile:focus-visible {
+  outline: 1px solid rgba(75,222,128,0.6);
+  outline-offset: 1px;
+}
+/* P4.61 — escalate the "bumped manifest version" signal from sub-pixel chips
+   (P4.58 meta chip · P4.59 header strip pill · P4.60 corner ᵛ badge on emoji)
+   up to the tile FRAME itself. Bumped tile (today only wb-character-forge
+   v0.1.0) gets a 2px lavender left-edge inset bar + barely-perceptible
+   lavender tint + slightly more saturated border. Across the 12-tile grid the
+   bumped one now pops at glance without zooming in — the left-edge accent is
+   the first frame-level differentiator beyond hover state. Color family
+   exactly mirrors `.wbg-tile-tag.ver.bumped` (rgba 196,163,255) so the muscle
+   memory chain holds: corner ᵛ → meta chip vN.N.N → strip pill v · N → tile
+   frame edge — all the same lavender. Hover still escalates to the standard
+   lime green so click-affordance language stays consistent across tiles. */
+.wbg-tile.bumped {
+  background: rgba(196,163,255,0.025);
+  border-color: rgba(196,163,255,0.22);
+  box-shadow: inset 2px 0 0 rgba(196,163,255,0.55);
+}
+.wbg-tile.bumped:hover {
+  background: rgba(75,222,128,0.06);
+  border-color: rgba(75,222,128,0.35);
+  box-shadow: inset 2px 0 0 rgba(196,163,255,0.75);
+}
+/* P4.56 — top-right `#N` rank badge on each gallery tile (1..N derived from
+   manifest workbench.position sort order). Gives the 12-tile grid an at-a-
+   glance ordering signal so players can talk about "tile #3" or notice
+   reordering without reading every name. Neutral white-on-dark by default
+   (doesn't compete with WIP/🛠/📡 chips below); brightens to the same lime
+   #4bde80 family on parent tile hover for muscle-memory consistency with
+   .wbg-tile:hover. tabular-nums keeps double-digit (#10–#12) widths
+   aligned. */
+.wbg-tile-rank {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: rgba(255,255,255,0.45);
+  background: var(--color-interaction-hover);
+  border: 1px solid var(--color-border-default);
+  padding: 1px 4px;
+  border-radius: 7px;
+  pointer-events: none;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.wbg-tile:hover .wbg-tile-rank {
+  color: rgba(75,222,128,0.85);
+  background: rgba(75,222,128,0.10);
+  border-color: rgba(75,222,128,0.35);
+}
+.wbg-tile-ico {
+  font-size: 22px;
+  line-height: 1;
+  margin-bottom: 2px;
+  filter: saturate(0.92);
+  position: relative;
+  display: inline-block;
+  width: max-content;
+}
+/* P4.60 — corner `ᵛ` badge anchored to top-right of the icon glyph (only on
+   tiles where manifest version has bumped past 0.0.x). Roll-up of the same
+   "bumped lavender" language used on the meta-row `.wbg-tile-tag.ver.bumped`
+   chip (P4.58) and the header `.wbg-stats-bumped` pill (P4.59), now landing
+   on the icon itself so the bumped tile pops at a 3rd visual depth: emoji
+   glyph + corner v sticker. Stronger glance signal than the chip — players
+   spot the lavender corner before reading any chip text. */
+.wbg-tile-ico-ver {
+  position: absolute;
+  top: -3px;
+  right: -10px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: rgba(196,163,255,0.95);
+  background: rgba(196,163,255,0.12);
+  border: 1px solid rgba(196,163,255,0.42);
+  padding: 1px 3px;
+  border-radius: 4px;
+  pointer-events: none;
+  text-transform: lowercase;
+}
+.wbg-tile-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.25;
+}
+.wbg-tile-desc {
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wbg-tile-meta {
+  margin-top: auto;
+  display: flex; gap: 4px; flex-wrap: wrap;
+  padding-top: 6px;
+}
+.wbg-tile-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(75,222,128,0.80);
+  background: rgba(75,222,128,0.08);
+  border: 1px solid rgba(75,222,128,0.22);
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: lowercase;
+}
+.wbg-tile-tag.size {
+  color: rgba(255,255,255,0.55);
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+/* P4.43 — bus capability chips on each gallery tile.
+   `WIP` (amber #f5b243) flags experimental:true placeholders, today on all
+   12 tiles so the gallery visibly says "all these are scaffolds";
+   `🛠 N` (tool-tribe orange #ff8c42) and `📡 N` (sky #6cc4ff) only render
+   when tools / events arrays are non-empty — currently just on
+   wb-character-forge (5 tools / 4 events), giving the first per-tile
+   visual differentiation in the gallery. Matches existing chip dims
+   (.wbg-tile-tag base) so the meta row stays one line on size-md tiles. */
+.wbg-tile-tag.wip {
+  color: rgba(245,178,67,0.85);
+  background: rgba(245,178,67,0.10);
+  border-color: rgba(245,178,67,0.32);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wbg-tile-tag.tools {
+  color: rgba(255,140,66,0.85);
+  background: rgba(255,140,66,0.10);
+  border-color: rgba(255,140,66,0.32);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+.wbg-tile-tag.events {
+  color: rgba(108,196,255,0.85);
+  background: rgba(108,196,255,0.10);
+  border-color: rgba(108,196,255,0.32);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+/* P4.58 — manifest `version` chip on each gallery tile.
+   Default (.ver, 0.0.x placeholder) — muted lavender so it sits behind
+   the green wb-id / grey size / amber WIP chips, just a quiet readout.
+   `.bumped` (version not matching 0.0.*) lights up the same lavender at
+   higher saturation — today only wb-character-forge v0.1.0 lights up,
+   giving a 12th-chip differentiator that compounds with the existing
+   🛠/📡 chips: "this is the only one with real tools, events, AND a
+   bumped manifest version". Same chip footprint as siblings so the
+   meta row stays one line on size-md tiles. */
+.wbg-tile-tag.ver {
+  color: rgba(196,163,255,0.62);
+  background: rgba(196,163,255,0.05);
+  border-color: rgba(196,163,255,0.18);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.wbg-tile-tag.ver.bumped {
+  color: rgba(196,163,255,0.95);
+  background: rgba(196,163,255,0.12);
+  border-color: rgba(196,163,255,0.42);
+  font-weight: 700;
+}
+
+/* ── P3.98 BusPulse — PreviewToolbar.pt-right live event indicator ───────
+   First surface on the default ⌘1 view that visibly changes on its own:
+   a 6×6 lime dot + uppercase mono `BUS` label + tabular-nums event count.
+   Every time /api/health bus.ringSize grows, the dot's `is-flashing` class
+   restarts a 600ms keyframe via key= re-mount, so consecutive events all
+   produce a fresh flash even if they arrive mid-frame. Colors reuse the
+   lime #4bde80 family from TopBar.tb-bus-chip / BusHealthLamp / TabStrip
+   ts-bus-chip so the player learns "lime dot = bus host healthy" once
+   across 4 surfaces. */
+.preview-toolbar .pt-pulse {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid rgba(75,222,128,0.22);
+  background: rgba(75,222,128,0.05);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  user-select: none;
+}
+.preview-toolbar .pt-pulse.is-pending {
+  border-color: var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+}
+.preview-toolbar .pt-pulse.is-down {
+  border-color: rgba(248,113,113,0.32);
+  background: rgba(248,113,113,0.05);
+}
+.preview-toolbar .pt-pulse-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--prim-color-green-400);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-pulse-dot.is-pending {
+  background: rgba(255,255,255,0.22);
+  box-shadow: none;
+}
+.preview-toolbar .pt-pulse-dot.is-down {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+.preview-toolbar .pt-pulse-dot.is-flashing {
+  animation: pt-pulse-flash 600ms ease-out;
+}
+@keyframes pt-pulse-flash {
+  0%   { background: var(--color-text-primary); box-shadow: none; transform: scale(1.35); }
+  35%  { background: var(--color-brand-primary); box-shadow: none;       transform: scale(1.15); }
+  100% { background: var(--prim-color-green-400); box-shadow: none;       transform: scale(1); }
+}
+.preview-toolbar .pt-pulse-label {
+  color: rgba(75,222,128,0.78);
+  font-weight: 600;
+}
+.preview-toolbar .pt-pulse.is-pending .pt-pulse-label,
+.preview-toolbar .pt-pulse.is-down .pt-pulse-label {
+  color: rgba(255,255,255,0.40);
+}
+.preview-toolbar .pt-pulse-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.preview-toolbar .pt-pulse.is-pending .pt-pulse-count {
+  color: rgba(255,255,255,0.45);
+}
+.preview-toolbar .pt-pulse.is-down .pt-pulse-count {
+  color: rgba(248,113,113,0.92);
+}
+
+/* ── P4.6 ModelBindingPulse — PreviewToolbar.pt-right model-binding LED pill ──
+   Mirrors TopBar tb-model (P4.5) but scoped to the Preview toolbar. Same teal
+   #7be7c4 family used everywhere else for kind=model-binding (BusAdminPanel
+   .ba-chip.k-model-binding / ChatPanel .cp-bus-chip.k-model-binding /
+   Composer .cb-mb-row). Three tone states share the pt-pulse pill grammar
+   so the two pt-right pills (BUS + MB) read as siblings.
+─────────────────────────────────────────────────────────────────────────── */
+.preview-toolbar .pt-mb {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid rgba(126,231,196,0.26);
+  background: rgba(126,231,196,0.05);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.preview-toolbar .pt-mb.is-loading {
+  border-color: var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+}
+.preview-toolbar .pt-mb.is-empty {
+  border-color: rgba(126,231,196,0.18);
+  background: rgba(126,231,196,0.03);
+}
+.preview-toolbar .pt-mb.is-down {
+  border-color: rgba(248,113,113,0.32);
+  background: rgba(248,113,113,0.05);
+}
+.preview-toolbar .pt-mb:hover {
+  background: rgba(126,231,196,0.13);
+  border-color: rgba(126,231,196,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-mb:focus-visible {
+  outline: 2px solid rgba(126,231,196,0.65);
+  outline-offset: 1px;
+}
+.preview-toolbar .pt-mb:active { transform: translateY(0.5px); }
+.preview-toolbar .pt-mb-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent-mint);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-mb.is-loading .pt-mb-dot {
+  background: rgba(255,255,255,0.22);
+  box-shadow: none;
+  animation: pt-mb-dot-pulse 1400ms ease-in-out infinite;
+}
+.preview-toolbar .pt-mb.is-empty .pt-mb-dot {
+  background: rgba(126,231,196,0.30);
+  box-shadow: none;
+}
+.preview-toolbar .pt-mb.is-down .pt-mb-dot {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+@keyframes pt-mb-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+.preview-toolbar .pt-mb-icon {
+  color: var(--color-kind-model-binding);
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-mb.is-loading .pt-mb-icon,
+.preview-toolbar .pt-mb.is-empty .pt-mb-icon,
+.preview-toolbar .pt-mb.is-down .pt-mb-icon { color: var(--color-icon-tertiary); }
+.preview-toolbar .pt-mb-label {
+  color: rgba(126,231,196,0.82);
+  font-weight: 600;
+}
+.preview-toolbar .pt-mb.is-loading .pt-mb-label,
+.preview-toolbar .pt-mb.is-empty .pt-mb-label,
+.preview-toolbar .pt-mb.is-down .pt-mb-label {
+  color: rgba(255,255,255,0.42);
+}
+.preview-toolbar .pt-mb-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(126,231,196,0.12);
+  border: 1px solid rgba(126,231,196,0.28);
+}
+.preview-toolbar .pt-mb.is-loading .pt-mb-count {
+  color: rgba(255,255,255,0.45);
+  background: transparent;
+  border-color: transparent;
+}
+.preview-toolbar .pt-mb.is-empty .pt-mb-count {
+  color: rgba(126,231,196,0.55);
+  background: transparent;
+  border-color: rgba(126,231,196,0.18);
+}
+.preview-toolbar .pt-mb.is-down .pt-mb-count {
+  color: rgba(248,113,113,0.92);
+  background: rgba(248,113,113,0.08);
+  border-color: rgba(248,113,113,0.32);
+}
+
+/* ── P4.7 ProvidersPulse — PreviewToolbar.pt-right CLI provider LED pill ──
+   Mirrors TopBar tb-providers (P4.3) into the Preview toolbar so the player
+   can see {ok}/{total} CLI provider health right next to the BUS + MB pills.
+   Three tones: lime #4bde80 (all ok) / amber #f5b243 (partial) / red #ff6b6b
+   (none ok). Shares the pt-pulse + pt-mb pill grammar so MB / BUS / PROV
+   read as siblings on the pt-right rail.
+─────────────────────────────────────────────────────────────────────────── */
+.preview-toolbar .pt-prov {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.preview-toolbar .pt-prov.is-ok {
+  border-color: rgba(75,222,128,0.26);
+  background: rgba(75,222,128,0.05);
+}
+.preview-toolbar .pt-prov.is-warn {
+  border-color: rgba(245,178,67,0.32);
+  background: rgba(245,178,67,0.05);
+}
+.preview-toolbar .pt-prov.is-down {
+  border-color: rgba(255,107,107,0.32);
+  background: rgba(255,107,107,0.05);
+}
+.preview-toolbar .pt-prov-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.25);
+  box-shadow: 0 0 0 0 transparent;
+  flex-shrink: 0;
+  transition: background 160ms ease, box-shadow 200ms ease;
+}
+.preview-toolbar .pt-prov.is-ok .pt-prov-dot {
+  background: var(--prim-color-green-400);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-warn .pt-prov-dot {
+  background: var(--color-status-amber);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-down .pt-prov-dot {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-loading .pt-prov-dot {
+  animation: pt-prov-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pt-prov-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+.preview-toolbar .pt-prov-icon {
+  color: var(--color-icon-tertiary);
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-prov.is-ok .pt-prov-icon { color: var(--prim-color-green-400); }
+.preview-toolbar .pt-prov.is-warn .pt-prov-icon { color: var(--color-status-amber); }
+.preview-toolbar .pt-prov.is-down .pt-prov-icon { color: var(--color-accent-error-default); }
+.preview-toolbar .pt-prov-label {
+  color: rgba(255,255,255,0.42);
+  font-weight: 600;
+}
+.preview-toolbar .pt-prov.is-ok .pt-prov-label   { color: rgba(75,222,128,0.82); }
+.preview-toolbar .pt-prov.is-warn .pt-prov-label { color: rgba(245,178,67,0.82); }
+.preview-toolbar .pt-prov.is-down .pt-prov-label { color: rgba(255,107,107,0.82); }
+.preview-toolbar .pt-prov-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid transparent;
+}
+.preview-toolbar .pt-prov.is-ok .pt-prov-count {
+  background: rgba(75,222,128,0.12);
+  border-color: rgba(75,222,128,0.28);
+}
+.preview-toolbar .pt-prov.is-warn .pt-prov-count {
+  background: rgba(245,178,67,0.12);
+  border-color: rgba(245,178,67,0.32);
+}
+.preview-toolbar .pt-prov.is-down .pt-prov-count {
+  color: rgba(255,107,107,0.92);
+  background: rgba(255,107,107,0.10);
+  border-color: rgba(255,107,107,0.32);
+}
+.preview-toolbar .pt-prov.is-loading .pt-prov-count {
+  color: rgba(255,255,255,0.45);
+  background: transparent;
+  border-color: transparent;
+}
+.preview-toolbar .pt-prov.is-ok:hover {
+  background: rgba(75,222,128,0.13);
+  border-color: rgba(75,222,128,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-warn:hover {
+  background: rgba(245,178,67,0.13);
+  border-color: rgba(245,178,67,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-down:hover {
+  background: rgba(255,107,107,0.13);
+  border-color: rgba(255,107,107,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-prov.is-loading:hover {
+  background: var(--color-divider-subtle);
+  border-color: var(--color-border-default);
+}
+.preview-toolbar .pt-prov:focus-visible {
+  outline: 2px solid rgba(255,255,255,0.45);
+  outline-offset: 1px;
+}
+.preview-toolbar .pt-prov.is-ok:focus-visible { outline-color: rgba(75,222,128,0.65); }
+.preview-toolbar .pt-prov.is-warn:focus-visible { outline-color: rgba(245,178,67,0.65); }
+.preview-toolbar .pt-prov.is-down:focus-visible { outline-color: rgba(255,107,107,0.65); }
+.preview-toolbar .pt-prov:active { transform: translateY(0.5px); }
+
+/* ── P4.23 SkillPulse — PreviewToolbar.pt-right skill LED pill ──
+   Mirrors TopBar tb-skill (P4.20) into the Preview toolbar. Same gold
+   #ffc878 family used everywhere else for kind=skill (BusAdminPanel
+   .ba-chip.k-skill / TabStrip ts-kind-chip.k-skill / Composer slash
+   menu Sparkles icon). Four tone states (loading / empty / down / ok)
+   share the pt-mb pill grammar so MB / BUS / PROV / SKILL read as
+   siblings on the pt-right rail.
+─────────────────────────────────────────────────────────────────────────── */
+.preview-toolbar .pt-skill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid rgba(255,200,120,0.26);
+  background: rgba(255,200,120,0.05);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.preview-toolbar .pt-skill.is-loading {
+  border-color: var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+}
+.preview-toolbar .pt-skill.is-empty {
+  border-color: rgba(255,200,120,0.18);
+  background: rgba(255,200,120,0.03);
+}
+.preview-toolbar .pt-skill.is-down {
+  border-color: rgba(248,113,113,0.32);
+  background: rgba(248,113,113,0.05);
+}
+.preview-toolbar .pt-skill:hover {
+  background: rgba(255,200,120,0.13);
+  border-color: rgba(255,200,120,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-skill:focus-visible {
+  outline: 2px solid rgba(255,200,120,0.65);
+  outline-offset: 1px;
+}
+.preview-toolbar .pt-skill:active { transform: translateY(0.5px); }
+.preview-toolbar .pt-skill-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--color-role-narrative);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-skill.is-loading .pt-skill-dot {
+  background: rgba(255,255,255,0.22);
+  box-shadow: none;
+  animation: pt-skill-dot-pulse 1400ms ease-in-out infinite;
+}
+.preview-toolbar .pt-skill.is-empty .pt-skill-dot {
+  background: rgba(255,200,120,0.30);
+  box-shadow: none;
+}
+.preview-toolbar .pt-skill.is-down .pt-skill-dot {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+@keyframes pt-skill-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+.preview-toolbar .pt-skill-icon {
+  color: var(--color-kind-skill);
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-skill.is-loading .pt-skill-icon,
+.preview-toolbar .pt-skill.is-empty .pt-skill-icon,
+.preview-toolbar .pt-skill.is-down .pt-skill-icon { color: var(--color-icon-tertiary); }
+.preview-toolbar .pt-skill-label {
+  color: rgba(255,200,120,0.82);
+  font-weight: 600;
+}
+.preview-toolbar .pt-skill.is-loading .pt-skill-label,
+.preview-toolbar .pt-skill.is-empty .pt-skill-label,
+.preview-toolbar .pt-skill.is-down .pt-skill-label {
+  color: rgba(255,255,255,0.42);
+}
+.preview-toolbar .pt-skill-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(255,200,120,0.12);
+  border: 1px solid rgba(255,200,120,0.28);
+}
+.preview-toolbar .pt-skill.is-loading .pt-skill-count {
+  color: rgba(255,255,255,0.45);
+  background: transparent;
+  border-color: transparent;
+}
+.preview-toolbar .pt-skill.is-empty .pt-skill-count {
+  color: rgba(255,200,120,0.55);
+  background: transparent;
+  border-color: rgba(255,200,120,0.18);
+}
+.preview-toolbar .pt-skill.is-down .pt-skill-count {
+  color: rgba(248,113,113,0.92);
+  background: rgba(248,113,113,0.08);
+  border-color: rgba(248,113,113,0.32);
+}
+
+/* ── P4.24 ToolPulse — PreviewToolbar.pt-right tool LED pill ──
+   Mirrors TopBar tb-tool (P4.21) into the Preview toolbar. Same orange
+   #ff8c42 family used everywhere else for kind=tool (TopBar tb-tool /
+   BusAdminPanel .ba-chip.k-tool / TabStrip ts-kind-chip.k-tool). Four
+   tone states (loading / empty / down / ok) share the pt-mb / pt-skill
+   pill grammar so MB / BUS / PROV / SKILL / TOOL read as siblings on
+   the pt-right rail. Pushes pt-right from 4 to 5 live LEDs; next
+   remaining 6th would be pt-agent (violet).
+─────────────────────────────────────────────────────────────────────────── */
+.preview-toolbar .pt-tool {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid rgba(255,140,66,0.26);
+  background: rgba(255,140,66,0.05);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.preview-toolbar .pt-tool.is-loading {
+  border-color: var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+}
+.preview-toolbar .pt-tool.is-empty {
+  border-color: rgba(255,140,66,0.18);
+  background: rgba(255,140,66,0.03);
+}
+.preview-toolbar .pt-tool.is-down {
+  border-color: rgba(248,113,113,0.32);
+  background: rgba(248,113,113,0.05);
+}
+.preview-toolbar .pt-tool:hover {
+  background: rgba(255,140,66,0.13);
+  border-color: rgba(255,140,66,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-tool:focus-visible {
+  outline: 2px solid rgba(255,140,66,0.65);
+  outline-offset: 1px;
+}
+.preview-toolbar .pt-tool:active { transform: translateY(0.5px); }
+.preview-toolbar .pt-tool-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--color-role-coding);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-tool.is-loading .pt-tool-dot {
+  background: rgba(255,255,255,0.22);
+  box-shadow: none;
+  animation: pt-tool-dot-pulse 1400ms ease-in-out infinite;
+}
+.preview-toolbar .pt-tool.is-empty .pt-tool-dot {
+  background: rgba(255,140,66,0.30);
+  box-shadow: none;
+}
+.preview-toolbar .pt-tool.is-down .pt-tool-dot {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+@keyframes pt-tool-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+.preview-toolbar .pt-tool-icon {
+  color: var(--color-kind-tool);
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-tool.is-loading .pt-tool-icon,
+.preview-toolbar .pt-tool.is-empty .pt-tool-icon,
+.preview-toolbar .pt-tool.is-down .pt-tool-icon { color: var(--color-icon-tertiary); }
+.preview-toolbar .pt-tool-label {
+  color: rgba(255,140,66,0.82);
+  font-weight: 600;
+}
+.preview-toolbar .pt-tool.is-loading .pt-tool-label,
+.preview-toolbar .pt-tool.is-empty .pt-tool-label,
+.preview-toolbar .pt-tool.is-down .pt-tool-label {
+  color: rgba(255,255,255,0.42);
+}
+.preview-toolbar .pt-tool-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(255,140,66,0.12);
+  border: 1px solid rgba(255,140,66,0.28);
+}
+.preview-toolbar .pt-tool.is-loading .pt-tool-count {
+  color: rgba(255,255,255,0.45);
+  background: transparent;
+  border-color: transparent;
+}
+.preview-toolbar .pt-tool.is-empty .pt-tool-count {
+  color: rgba(255,140,66,0.55);
+  background: transparent;
+  border-color: rgba(255,140,66,0.18);
+}
+.preview-toolbar .pt-tool.is-down .pt-tool-count {
+  color: rgba(248,113,113,0.92);
+  background: rgba(248,113,113,0.08);
+  border-color: rgba(248,113,113,0.32);
+}
+
+/* P4.25 — pt-agent (violet #c4a3ff = rgb(196,163,255)) — final 6th LED
+   on pt-right, mirrors TopBar tb-agent (P4.22). Same family grammar
+   as .pt-tool (orange) / .pt-skill (gold) / .pt-prov (amber-sky) /
+   .pt-mb (teal) / .pt-pulse (lime BUS). Completes the bus-kind matrix
+   reading on the default ⌘1 Preview workspace. */
+.preview-toolbar .pt-agent {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid rgba(196,163,255,0.26);
+  background: rgba(196,163,255,0.05);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.preview-toolbar .pt-agent.is-loading {
+  border-color: var(--color-border-default);
+  background: rgba(255,255,255,0.03);
+}
+.preview-toolbar .pt-agent.is-empty {
+  border-color: rgba(196,163,255,0.18);
+  background: rgba(196,163,255,0.03);
+}
+.preview-toolbar .pt-agent.is-down {
+  border-color: rgba(248,113,113,0.32);
+  background: rgba(248,113,113,0.05);
+}
+.preview-toolbar .pt-agent:hover {
+  background: rgba(196,163,255,0.13);
+  border-color: rgba(196,163,255,0.48);
+  transform: translateY(-0.5px);
+  box-shadow: none;
+}
+.preview-toolbar .pt-agent:focus-visible {
+  outline: 2px solid rgba(196,163,255,0.65);
+  outline-offset: 1px;
+}
+.preview-toolbar .pt-agent:active { transform: translateY(0.5px); }
+.preview-toolbar .pt-agent-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--color-role-orchestrator);
+  box-shadow: none;
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-agent.is-loading .pt-agent-dot {
+  background: rgba(255,255,255,0.22);
+  box-shadow: none;
+  animation: pt-agent-dot-pulse 1400ms ease-in-out infinite;
+}
+.preview-toolbar .pt-agent.is-empty .pt-agent-dot {
+  background: rgba(196,163,255,0.30);
+  box-shadow: none;
+}
+.preview-toolbar .pt-agent.is-down .pt-agent-dot {
+  background: var(--color-accent-error-default);
+  box-shadow: none;
+}
+@keyframes pt-agent-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+.preview-toolbar .pt-agent-icon {
+  color: var(--color-kind-agent);
+  flex-shrink: 0;
+}
+.preview-toolbar .pt-agent.is-loading .pt-agent-icon,
+.preview-toolbar .pt-agent.is-empty .pt-agent-icon,
+.preview-toolbar .pt-agent.is-down .pt-agent-icon { color: var(--color-icon-tertiary); }
+.preview-toolbar .pt-agent-label {
+  color: rgba(196,163,255,0.82);
+  font-weight: 600;
+}
+.preview-toolbar .pt-agent.is-loading .pt-agent-label,
+.preview-toolbar .pt-agent.is-empty .pt-agent-label,
+.preview-toolbar .pt-agent.is-down .pt-agent-label {
+  color: rgba(255,255,255,0.42);
+}
+.preview-toolbar .pt-agent-count {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 4px;
+  border-radius: 7px;
+  background: rgba(196,163,255,0.12);
+  border: 1px solid rgba(196,163,255,0.28);
+}
+.preview-toolbar .pt-agent.is-loading .pt-agent-count {
+  color: rgba(255,255,255,0.45);
+  background: transparent;
+  border-color: transparent;
+}
+.preview-toolbar .pt-agent.is-empty .pt-agent-count {
+  color: rgba(196,163,255,0.55);
+  background: transparent;
+  border-color: rgba(196,163,255,0.18);
+}
+.preview-toolbar .pt-agent.is-down .pt-agent-count {
+  color: rgba(248,113,113,0.92);
+  background: rgba(248,113,113,0.08);
+  border-color: rgba(248,113,113,0.32);
+}
+
+
+/* ── AgentsMainArea (WorkbenchMode agents tab) ── */
+.wm-agents-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--color-background-canvas);
+}
+.wm-agents-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.wm-agents-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.wm-agents-count {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.wm-agents-loading,
+.wm-agents-err,
+.wm-agents-empty {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  padding: 40px 0;
+  text-align: center;
+}
+.wm-agents-err { color: var(--color-status-error); }
+.wm-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.wm-agent-card {
+  background: var(--color-background-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s;
+}
+.wm-agent-card.main {
+  border-color: var(--color-brand-primary);
+}
+.wm-agent-card.placeholder {
+  opacity: 0.5;
+}
+.wm-agent-card.is-clickable { cursor: pointer; }
+.wm-agent-card.is-clickable:hover {
+  border-color: var(--color-brand-primary);
+  background: var(--color-background-elevated-hover, var(--color-background-elevated));
+}
+.wm-agent-card.is-clickable:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  outline-offset: 2px;
+}
+.wm-agent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wm-agent-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  color: #fff;
+  font-weight: 700;
+}
+.wm-agent-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wm-agent-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wm-agent-role {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wm-agent-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.wm-agent-badge.active {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+.wm-agent-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wm-agent-file-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 5px;
+  text-align: left;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  transition: background 0.1s, color 0.1s;
+}
+.wm-agent-file-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-text-primary);
+}
+.wm-agent-file-ico { flex-shrink: 0; }
+.wm-agent-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wm-agent-no-files {
+  font-size: 11px;
+  color: var(--color-text-quaternary, var(--color-text-tertiary));
+  padding: 4px 6px;
+}
+
+/* ─── Reel Player in Play workspace ─── */
+.preview-mode--reel {
+  position: relative;
+}
+.preview-iframe--reel {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
+}

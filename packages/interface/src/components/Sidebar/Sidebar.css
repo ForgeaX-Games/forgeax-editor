@@ -1,0 +1,1548 @@
+.sidebar {
+  background: var(--color-background-elevated);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* === Sidebar top toolbar === */
+.sb-toolbar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.sb-nav-icons-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sb-icon-btn {
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.sb-icon-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-interaction-hover);
+}
+.sb-icon-btn.active {
+  color: var(--color-text-primary);
+  background: var(--color-interaction-selected-neutral);
+}
+.sb-icon-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: -1px;
+  border-radius: 4px;
+}
+/* === Icon button tooltip (data-tip) === */
+.sb-icon-btn[data-tip] {
+  position: relative;
+}
+.sb-icon-btn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--color-background-overlay, #1e2124);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  border: 1px solid var(--color-border-default);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  transition-delay: 0.6s;
+  z-index: 100;
+}
+.sb-icon-btn[data-tip]:hover::after {
+  opacity: 1;
+}
+
+/* === Collapsed sidebar (36px strip) === */
+.sidebar.sidebar-collapsed {
+  min-width: 36px;
+  border-right: 1px solid var(--color-border-default);
+}
+.sb-toolbar-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 8px;
+}
+.sb-nav-divider {
+  height: 12px;
+  flex-shrink: 0;
+}
+.sb-nav-icons-v {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.ss-section {
+  padding: 14px 12px 10px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.ss-section:last-child { border-bottom: none; }
+
+/* Workbench section claims all remaining vertical space (the only section
+   today; the footer-kinds row was removed 2026-05-17). Allows iframe / split-
+   surface plugin panels to fill the full Sidebar height instead of collapsing
+   to their natural ~200px content height. */
+.ss-section.workbench {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ss-section.workbench .ws-active-content {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  /* Positioning context for the keep-alive left-pane plugin overlay. */
+  position: relative;
+}
+
+/* Keep-alive overlay for left-pane standalone plugins (Plan A). Absolute over
+ * ws-active-content; self-hides (inline visibility:hidden + pointer-events:none)
+ * when the active tab is not a left-pane plugin, while the visited iframes
+ * inside stay mounted & alive. */
+.ws-pane-keepalive {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The rail-panel flow-in animation rule `.ws-active-content.rail-panel > *`
+   (below) forces position:relative on EVERY direct child — its (0,2,0)
+   specificity clobbers the (0,1,0) rule above, dropping this overlay's
+   absolute+inset:0 so it collapses to 0 height and the left-pane (options)
+   iframe becomes invisible. Restore the overlay with a higher-specificity
+   selector. (Regression fix 2026-06: workbench plugin options panel blank.) */
+.ws-active-content.rail-panel > .ws-pane-keepalive {
+  position: absolute;
+  inset: 0;
+}
+.ws-pane-keepalive .fx-keepalive-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.ws-pane-keepalive .wb-plugin-iframe-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* Windowing — left-pane 弹出/收回 (Tauri only). A small corner affordance so it
+   doesn't steal sidebar width. */
+.ws-pane-window-toggle {
+  position: absolute;
+  top: 4px; right: 4px;
+  z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  color: var(--color-text-primary);
+  background: var(--color-background-base);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.ws-pane-window-toggle:hover { opacity: 1; }
+.ws-pane-floating {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  font-size: 12px; color: var(--color-text-secondary, #888);
+}
+.ws-pane-floating .ws-pane-window-toggle { position: static; }
+
+/* P3.1 — bus health chip: dot + plugin-count badge inline.
+ * Previously a 7×7 lamp with hover-only tooltip; now the count is visible by default
+ * so the sidebar exposes bus host scale without leaving the home view. */
+.bus-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px 1px 4px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.bus-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.bus-chip-text {
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+.bus-chip-ok    .bus-chip-dot  { background: var(--accent-green); box-shadow: none; }
+.bus-chip-ok    .bus-chip-text { color: var(--accent-green); }
+.bus-chip-warn  .bus-chip-dot  { background: var(--accent-orange); animation: pulse 1.5s infinite; }
+.bus-chip-warn  .bus-chip-text { color: var(--accent-orange); }
+.bus-chip-down  .bus-chip-dot  { background: var(--accent-error); }
+.bus-chip-down  .bus-chip-text { color: var(--accent-error); }
+.bus-chip-idle  .bus-chip-dot  { background: rgba(255,255,255,0.25); }
+.bus-chip-idle  .bus-chip-text { color: var(--text-dim); }
+
+/* P3.87 (2026-05-17): BusHealthLamp upgraded to deep-link button — adds
+ * cursor:pointer + hover/focus/active states + sliding-in `→` arrow + an
+ * is-active variant when current mode === 'bus' (current-tab indicator). */
+button.bus-chip.is-link {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+  margin: 0;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
+}
+button.bus-chip.is-link:hover {
+  background: rgba(0, 255, 135, 0.10);
+  border-color: rgba(0, 255, 135, 0.45);
+  box-shadow: none;
+  transform: translateY(-0.5px);
+}
+button.bus-chip.is-link:hover .bus-chip-arrow {
+  opacity: 0.92;
+  transform: translateX(1px);
+}
+button.bus-chip.is-link:focus-visible {
+  border-color: rgba(0, 255, 135, 0.55);
+  box-shadow: 0 0 0 2px rgba(0, 255, 135, 0.55);
+}
+button.bus-chip.is-link:active {
+  background: rgba(0, 255, 135, 0.16);
+  transform: translateY(0);
+  box-shadow: none;
+}
+button.bus-chip.is-link.is-active {
+  background: rgba(0, 255, 135, 0.18);
+  border-color: rgba(0, 255, 135, 0.55);
+}
+button.bus-chip.is-link.bus-chip-warn:hover {
+  background: rgba(255, 170, 60, 0.12);
+  border-color: rgba(255, 170, 60, 0.50);
+  box-shadow: none;
+}
+button.bus-chip.is-link.bus-chip-warn:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 170, 60, 0.55);
+}
+.bus-chip-arrow {
+  font-size: 9px;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0;
+  margin-left: 1px;
+  transform: translateX(-1px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+/* P4.48 — Σ glyph in healthy BusHealthLamp chip. Sigma reads as "summed
+ * total" and shares the muscle-memory language with AgentsHub header
+ * (P4.45), WbGallery stats (P4.46), Sidebar AgentsPanel header (P4.47),
+ * BusAdminPanel summary (P4.42). 9px to match the chip's text size with a
+ * slight 0.62 alpha tint so it reads as a label-marker rather than a
+ * fellow count digit; -1px right margin tightens it against the count.
+ * Hover lifts opacity to lend the chip extra interactivity affordance. */
+.bus-chip-sigma {
+  font-size: 9px;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.62;
+  margin-right: -1px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 140ms ease;
+}
+button.bus-chip.is-link:hover .bus-chip-sigma { opacity: 0.92; }
+
+/* P4.91 (2026-05-17) — bus-chip-ring · live event-ring occupancy badge.
+ * BusStatus.ringSize 字段在 /api/health bus.* 自 Phase 1.5b 起即存在,但 4 周来
+ * 只藏在 chip 的 title tooltip 里 (`Bus: 20 plugin · 0 broken · 0 listener · ring 85`)
+ * — 玩家必须把鼠标 hover 上去才能看到。本拍把 ring N 前置到 chip 文字旁,
+ * 让 bus event 活跃度成为 0-click 可见的肌肉记忆。
+ * 8px 比 .bus-chip-text 小一档 + 0.42 opacity 比 Σ (0.62) 更弱 — 视觉层级:
+ * 主数字 (count) > Σ marker > R{N} ring,玩家眼睛先抓 20,再扫到 Σ,最后才到 R85。
+ * 用 currentColor 跟随 bus tone (ok 绿 / warn 橙 / down 红 / idle 灰) — 单 token 切色。
+ * margin-left: 2px 紧贴 chip-text；letter-spacing 0 与 sigma 一致避免奇怪行间距。 */
+.bus-chip-ring {
+  font-size: 8px;
+  line-height: 1;
+  color: rgba(180, 200, 220, 0.92);
+  opacity: 0.42;
+  margin-left: 2px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 140ms ease;
+}
+.bus-chip-ok   .bus-chip-ring { color: var(--accent-green); }
+.bus-chip-warn .bus-chip-ring { color: var(--accent-orange); }
+button.bus-chip.is-link:hover .bus-chip-ring { opacity: 0.78; }
+
+/* P4.92 (2026-05-17) — bus-chip-listeners · live subscriber count on bus.
+ * 复利 P4.91 bus-chip-ring 的同表面同语言：第二条 0-click runtime 字段。
+ * BusStatus.listenerCount 自 Phase 1.5b 起即存在 (host.ts:309-319 status())
+ * 但 4 周来同样只藏在 chip title tooltip 里 (`Bus: 20 plugin · 0 broken · 0 listener · ring …`)
+ * 玩家必须 hover 才能看到 "现在有几个 plugin 在订阅 bus 事件"。本拍把 L<N>
+ * 紧贴在 R<N> 后面 (margin-left: 1px),让 chip 一行同时读出 ring 占用与 listener
+ * 注册两条 runtime 信号。8px / 0.42 opacity 与 ring 完全一致,视觉同档；
+ * 同色 family (bus tone) 让 R/L 读作一对 (telemetry pair) 而非两个对立维度。
+ * 不像 ring 有 `> 0` gate, L 即使 0 也渲染 — L0 是有意义的状态 (bus up
+ * 但暂无订阅,玩家想看也得看见)。 */
+.bus-chip-listeners {
+  font-size: 8px;
+  line-height: 1;
+  color: rgba(180, 200, 220, 0.92);
+  opacity: 0.42;
+  margin-left: 1px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 140ms ease;
+}
+.bus-chip-ok   .bus-chip-listeners { color: var(--accent-green); }
+.bus-chip-warn .bus-chip-listeners { color: var(--accent-orange); }
+button.bus-chip.is-link:hover .bus-chip-listeners { opacity: 0.78; }
+.ss-body { display: flex; flex-direction: column; gap: 1px; }
+
+/* === Workbench 顶部水平图标行 (Figma 116:669 Tool Switcher) === */
+.ws-icons-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 48px;
+  padding: 8px;
+  flex-shrink: 0;
+}
+.ws-icons-pill {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1;
+  padding: 6px;
+  background: var(--color-background-floating);
+  border-radius: 8px;
+  min-width: 0;
+}
+.ws-icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-icon-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
+  position: relative;
+  flex-shrink: 0;
+}
+.ws-icon-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--color-text-primary);
+}
+.ws-icon-btn:active {
+  background: rgba(255,255,255,0.12);
+}
+.ws-icon-btn.active {
+  background: rgba(255,255,255,0.15);
+  color: var(--color-text-primary);
+}
+.ws-icon-btn.active svg {
+  stroke-width: 2.2;
+}
+.ws-icon-btn.bus svg {
+  display: block;
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: opacity 0.12s ease;
+}
+.ws-icon-btn.bus:hover svg { opacity: 1; }
+.ws-icon-btn.bus.active svg { opacity: 1; }
+/* P3.51 — keyboard focus ring on workbench tab buttons. Previously there was no
+ * focus-visible style, so the new ←→/↑↓/Home/End nav (P3.51) produced no
+ * pixel signal when Tab walked into the row. 2px white outline matches the
+ * Sidebar BUS KINDS footer chip focus style (P3.37) so the same family of
+ * keyboard cues applies to both rows. */
+.ws-icon-btn:focus-visible {
+  outline: 2px solid rgba(255,255,255,0.55);
+  outline-offset: -1px;
+  border-radius: 4px;
+}
+
+.ws-active-content {
+  /* AgentsPanel / Workbench plugin placeholder live here; keep a real box so
+     rail-panel motion can run on Workbench tab switches. */
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.ws-active-content.rail-panel {
+  position: relative;
+  will-change: opacity, transform;
+  overflow: hidden;
+  animation: ws-workbench-panel-in 360ms var(--motion-ease-out) both;
+}
+
+@keyframes ws-workbench-panel-in {
+  from {
+    opacity: 0.72;
+    transform: translate3d(0, -6px, 0);
+    clip-path: inset(0 0 18% 0 round 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    clip-path: inset(0 0 0 0 round 0);
+  }
+}
+
+.ws-active-content.rail-panel > * {
+  position: relative;
+  z-index: 1;
+  animation: ws-workbench-flow-in 520ms var(--motion-ease-out) both;
+}
+.ws-active-content.rail-panel > *:nth-child(1) { animation-delay: 0ms; }
+.ws-active-content.rail-panel > *:nth-child(2) { animation-delay: 45ms; }
+.ws-active-content.rail-panel > *:nth-child(3) { animation-delay: 90ms; }
+.ws-active-content.rail-panel > *:nth-child(4) { animation-delay: 135ms; }
+.ws-active-content.rail-panel > *:nth-child(5) { animation-delay: 180ms; }
+.ws-active-content.rail-panel > *:nth-child(n + 6) { animation-delay: 225ms; }
+
+@keyframes ws-workbench-flow-in {
+  from {
+    opacity: 0;
+    filter: blur(5px);
+    transform: translate3d(0, -12px, 0) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+
+/* Doc 06 §panes — when a bus plugin renders its declared `panes.left` iframe
+ * inside the Sidebar, give it the full remaining sidebar height. The wrap
+ * itself takes flex space; the iframe inside is already 100%/100%. */
+.ws-pane-iframe-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+.ws-pane-iframe-wrap .wb-plugin-iframe-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* AgentsPanel — agent 列表 */
+.agents-panel {
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+/* P2.6c — show split between marketplace agents and bus-sourced agents.
+ * Header sits above all cards; divider separates bus-only cards when bus
+ * lists agents missing from marketplace.json. */
+.ap-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 2px 4px 2px;
+  font-size: 9px;
+  color: var(--text-muted);
+  border-bottom: 1px dashed rgba(255,255,255,0.06);
+  margin-bottom: 2px;
+}
+.ap-h-label { letter-spacing: 0.6px; font-weight: 600; }
+.ap-h-count { display: inline-flex; gap: 4px; align-items: center; }
+.ap-h-pill {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255,255,255,0.05);
+}
+.ap-h-pill.mkt { color: var(--text-secondary); }
+.ap-h-pill.bus {
+  color: var(--color-kind-cli-provider);
+  background: rgba(109,211,255,0.10);
+}
+/* ── P4.47 ap-h-pill.total — Σ {totalVisible} prefix capsule. Sister of
+ *   AgentsHub P4.45 .ah-pill-total + .ah-pill-vsep. Reads "actual number
+ *   of agent cards rendered" so player no longer mentally adds marketplace
+ *   + bus-only. Amber 1×10px vsep separates "total" from "source split".
+ */
+.ap-h-pill.total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--color-status-amber);
+  background: rgba(245,197,88,0.08);
+  border: 1px solid rgba(245,197,88,0.32);
+  padding: 1px 6px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ap-h-sigma {
+  font-size: 9px;
+  color: rgba(245,197,88,0.78);
+  line-height: 1;
+}
+.ap-h-total-n {
+  font-size: 10px;
+  color: var(--color-status-amber);
+  line-height: 1;
+}
+.ap-h-vsep {
+  display: inline-block;
+  width: 1px;
+  height: 10px;
+  background: rgba(245,197,88,0.32);
+  margin: 0 1px;
+}
+
+/* P-session-scoped — slim hint strip below header when the active thread has
+   not yet launched any sub-agents.  Avoids panic / blank-state. */
+.ap-session-hint {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+  padding: 5px 10px;
+  line-height: 1.35;
+}
+
+/* P-session-scoped — view-mode toggle (本 session / 全部) sitting in ap-header
+   between the AGENTS label and the count pill.  Two tiny tab buttons sharing
+   one pill background for tight visual grouping. */
+.ap-h-mode {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border-default);
+  border-radius: 999px;
+  padding: 1px;
+  margin: 0 6px;
+  gap: 1px;
+}
+.ap-h-mode-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 100ms, background 100ms;
+  font-family: inherit;
+  letter-spacing: 0.2px;
+  line-height: 1;
+}
+.ap-h-mode-tab:hover { color: var(--text); }
+.ap-h-mode-tab.is-active {
+  background: color-mix(in srgb, var(--primary) 18%, var(--color-background-elevated));
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.ap-divider {
+  font-size: 9px;
+  color: var(--color-kind-cli-provider);
+  padding: 4px 2px 2px 2px;
+  border-top: 1px dashed rgba(109,211,255,0.18);
+  margin-top: 4px;
+  letter-spacing: 0.4px;
+}
+/* ── P4.0 ap-tribes — role-tribe legend strip below the mkt/bus pills. ──
+ * One chip per tribe with ≥ 1 agent. Click jumps focus to first agent of
+ * that tribe and flashes the row. Palette is the existing 6-tribe family
+ * pinned on .ac-role-dot (Sidebar.css P3.8 above and Dashboard.css P3.35).
+ */
+.ap-tribes {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  padding: 4px 2px 4px 2px;
+  border-bottom: 1px dashed rgba(255,255,255,0.05);
+  margin-bottom: 2px;
+}
+.ap-tribes-label {
+  font-size: 8.5px;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding-right: 2px;
+}
+.ap-tribe-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  font-family: inherit;
+}
+.ap-tribe-chip:hover { transform: translateY(-0.5px); }
+.ap-tribe-chip:active { transform: translateY(0.5px); }
+.ap-tribe-chip:focus-visible { outline: none; }
+.ap-tribe-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block;
+}
+.ap-tribe-label { font-weight: 600; letter-spacing: 0.3px; }
+.ap-tribe-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+/* Tribe-specific chip tints — dot + hover bg/border/glow + count emphasis. */
+.ap-tribe-chip.r-orchestrator:hover { background: rgba(196,163,255,0.13); border-color: rgba(196,163,255,0.48); box-shadow: none; }
+.ap-tribe-chip.r-orchestrator:focus-visible { box-shadow: 0 0 0 2px rgba(196,163,255,0.55); }
+.ap-tribe-dot.r-orchestrator { background: var(--color-role-orchestrator); box-shadow: none; }
+.ap-tribe-chip.r-pillar:hover { background: rgba(212,255,72,0.13); border-color: rgba(212,255,72,0.48); box-shadow: none; }
+.ap-tribe-chip.r-pillar:focus-visible { box-shadow: 0 0 0 2px rgba(212,255,72,0.55); }
+.ap-tribe-dot.r-pillar { background: var(--primary); box-shadow: none; }
+.ap-tribe-chip.r-design:hover { background: rgba(255,109,181,0.13); border-color: rgba(255,109,181,0.48); box-shadow: none; }
+.ap-tribe-chip.r-design:focus-visible { box-shadow: 0 0 0 2px rgba(255,109,181,0.55); }
+.ap-tribe-dot.r-design { background: var(--color-role-design); box-shadow: none; }
+.ap-tribe-chip.r-narrative:hover { background: rgba(255,200,120,0.13); border-color: rgba(255,200,120,0.48); box-shadow: none; }
+.ap-tribe-chip.r-narrative:focus-visible { box-shadow: 0 0 0 2px rgba(255,200,120,0.55); }
+.ap-tribe-dot.r-narrative { background: var(--color-role-narrative); box-shadow: none; }
+.ap-tribe-chip.r-art:hover { background: rgba(125,211,252,0.13); border-color: rgba(125,211,252,0.48); box-shadow: none; }
+.ap-tribe-chip.r-art:focus-visible { box-shadow: 0 0 0 2px rgba(125,211,252,0.55); }
+.ap-tribe-dot.r-art { background: var(--color-role-art); box-shadow: none; }
+.ap-tribe-chip.r-coding:hover { background: rgba(255,140,66,0.13); border-color: rgba(255,140,66,0.48); box-shadow: none; }
+.ap-tribe-chip.r-coding:focus-visible { box-shadow: 0 0 0 2px rgba(255,140,66,0.55); }
+.ap-tribe-dot.r-coding { background: var(--color-role-coding); box-shadow: none; }
+.ac-bus-pill {
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(109,211,255,0.12);
+  color: var(--color-kind-cli-provider);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.ac-bus-pill.bus-only {
+  background: rgba(109,211,255,0.20);
+}
+/*
+ * P3.32 — bus pill is now a deep-link into Bus admin tab + auto-expand row.
+ * .is-link variant (always set when click handler is wired — every AgentsPanel
+ * bus pill carries this class) adds cursor:pointer + border + lift hover/focus
+ * states so the player can tell it's interactive vs the static pill in older
+ * surfaces. Colors come from the same #6dd3ff (sky-blue) family as ac-bus-pill
+ * base and ac-bus-pill.bus-only, so the new affordance reads as "same pill,
+ * now clickable" rather than introducing a new color token.
+ */
+.ac-bus-pill.is-link {
+  cursor: pointer;
+  border: 1px solid rgba(109,211,255,0.32);
+  transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease, transform 120ms ease;
+  user-select: none;
+}
+.ac-bus-pill.is-link:hover {
+  background: rgba(109,211,255,0.28);
+  border-color: rgba(109,211,255,0.55);
+  box-shadow: 0 0 0 1px rgba(109,211,255,0.18);
+  transform: translateY(-0.5px);
+}
+.ac-bus-pill.is-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(109,211,255,0.55);
+}
+.ac-bus-pill.is-link:active {
+  transform: translateY(0.5px);
+  background: rgba(109,211,255,0.36);
+}
+.agent-card.has-bus { border-left: 2px solid rgba(109,211,255,0.32); padding-left: 4px; }
+.agent-card.bus-only {
+  background: rgba(109,211,255,0.04);
+  border-color: rgba(109,211,255,0.18);
+}
+
+.agent-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 5px;
+  padding: 5px 6px;
+}
+.agent-card.selected {
+  background: rgba(212,255,72,0.06);
+  border-left: 2px solid var(--primary);
+  padding-left: 4px;
+}
+.agent-card.sub {
+  margin-left: 0;
+}
+/* Placeholder agents (manifest status: 'placeholder') aren't wired into the
+ * runtime yet — dim them so users can scan past at a glance and focus on
+ * the active ones. The "· 占位" suffix in ac-role stays for explicit signal. */
+.agent-card.placeholder { opacity: 0.55; }
+.agent-card.placeholder.selected { opacity: 1; }
+
+/* P3.33 — transient flash highlight applied for ~1.5s when player jumps in
+ * from BusAdminPanel "← Sidebar" reverse deep-link. Uses the same sky-blue
+ * (#6dd3ff) family as .ac-bus-pill.is-link so the visual association reads
+ * as "this is the bus-marked surface I just navigated from". Two-phase
+ * keyframe pulses brighter at 50% and decays back, giving the player a
+ * peripheral motion cue even if the card was already in view (no scroll). */
+.agent-card.is-flash {
+  animation: ac-flash 1.5s ease-out;
+}
+@keyframes ac-flash {
+  0%   { background: rgba(255,255,255,0.02); box-shadow: none; }
+  20%  { background: rgba(109,211,255,0.18); box-shadow: 0 0 0 1px rgba(109,211,255,0.55); }
+  60%  { background: rgba(109,211,255,0.10); box-shadow: 0 0 0 1px rgba(109,211,255,0.32); }
+  100% { background: rgba(255,255,255,0.02); box-shadow: none; }
+}
+.agent-card.placeholder.is-flash { opacity: 1; }
+.ac-row {
+  width: 100%;
+  display: flex; align-items: center; gap: 6px;
+  background: transparent; border: none; cursor: pointer;
+  padding: 0; text-align: left;
+}
+/* P3.52 — focus ring matches .ws-icon-btn:focus-visible (P3.51) so the
+ * Sidebar's WORKBENCH tab strip and AGENTS listbox share one visual contract
+ * for arrow-key focus. */
+.ac-row:focus-visible {
+  outline: 2px solid rgba(255,255,255,0.55);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.ac-avatar {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  color: var(--prim-color-neutral-950);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ac-name-block {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  line-height: 1.2;
+}
+.ac-name {
+  font-size: 12px; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* P4.50 — main-agent pin glyph rendered only on cards where the manifest
+ * sets isMain:true (one orchestrator in marketplace.json today). The ★
+ * sits as an inline span inside .ac-name so the ellipsis truncates the
+ * trailing name text when the column narrows — the pin never gets clipped,
+ * which is the whole point of marking the orchestrator. Color uses the
+ * orchestrator role-dot hue (#c4a3ff) so the visual link to the existing
+ * data-role="orchestrator" palette reads as one family rather than a new
+ * token. tabular padding is 0 — ★ optical width already feels balanced.
+ *
+ * Hover lifts the pin from 0.78 → 1.0 alpha + adds a soft 4px violet glow
+ * so when the player hovers the row the pin pulses subtly, reinforcing
+ * "this is the special one" without animation noise on the default state. */
+.ac-main-pin {
+  display: inline-block;
+  color: var(--color-role-orchestrator);
+  opacity: 0.78;
+  font-size: 10px;
+  line-height: 1;
+  margin-right: 4px;
+  vertical-align: 1px;
+  text-shadow: 0 0 0 transparent;
+  transition: opacity 120ms ease, text-shadow 120ms ease;
+  cursor: help;
+}
+.agent-card:hover .ac-main-pin,
+.agent-card.selected .ac-main-pin {
+  opacity: 1;
+  text-shadow: 0 0 4px rgba(196, 163, 255, 0.55);
+}
+.ac-role {
+  font-size: 9px; color: var(--text-muted); font-weight: 400;
+  display: inline-flex; align-items: center;
+}
+/* P3.8 — role-tribe colored dot in front of role text. Six marketplace+bus
+ * role keys today (orchestrator/pillar/design/narrative/art/coding) each get
+ * a stable hue so the AGENTS column reads as a colored ladder. Colors reuse
+ * the established forgeax palette (lime/violet/sky-blue from BusAdminPanel
+ * kind chips; amber/pink/orange round out the 6-way axis). Unknown roles
+ * fall through to a low-contrast neutral.
+ *
+ * Why a dot and not a left border: the card already uses left-border for
+ * (a) `.has-bus` sky-blue accent and (b) `.selected` lime accent — adding a
+ * third role-driven border would overwrite either depending on state. A dot
+ * sits inside .ac-role so it stacks with both without conflict.
+ */
+.ac-role-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  margin-right: 4px;
+  background: rgba(255,255,255,0.20);
+  flex-shrink: 0;
+}
+.agent-card[data-role="orchestrator"] .ac-role-dot { background: var(--color-role-orchestrator); }
+.agent-card[data-role="pillar"]       .ac-role-dot { background: var(--primary); }
+.agent-card[data-role="design"]       .ac-role-dot { background: var(--color-role-design); }
+.agent-card[data-role="narrative"]    .ac-role-dot { background: var(--color-role-narrative); }
+.agent-card[data-role="art"]          .ac-role-dot { background: var(--color-role-art); }
+.agent-card[data-role="coding"]       .ac-role-dot { background: var(--color-role-coding); }
+/* P2.7c — agents_from_bus[].produces[] 在 role 行下方常驻 mini-strip。
+ * 用同色系蓝色 (#6dd3ff) 跟 ac-bus-pill 视觉锚定，等宽字体让 *.ts/*.tsx
+ * 看起来像 code chip 而不是普通文本；ellipsis 兜底卡片窄到放不下 6 glob。
+ */
+.ac-produces {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(109,211,255,0.78);
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ac-badge {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+}
+
+.ac-files {
+  margin-top: 4px; padding-left: 26px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.ac-file {
+  width: 100%;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  font-family: inherit;
+}
+.ac-file:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.ac-file.active { color: var(--text-primary); background: rgba(212,255,72,0.08); }
+.ac-fi { font-size: 10px; }
+.ac-fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-fs { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.ac-fs.done { background: var(--accent-green); }
+.ac-fs.running { background: var(--accent-orange); animation: pulse 1.5s infinite; }
+.ac-fs.pending { background: var(--accent-cyan); }
+.ac-fs.error { background: var(--accent-error); }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 53, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 107, 53, 0); }
+}
+
+/* === FilesPanel — VSCode 风文件树 === */
+.files-panel {
+  display: flex; flex-direction: column;
+  gap: 0;
+}
+.fp-header {
+  padding: 4px 6px 2px 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.fp-slug {
+  font-family: var(--mono, var(--font-mono));
+  letter-spacing: 0.3px;
+}
+.fp-empty {
+  padding: 8px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* ── P4.1 fp-types — file extension family legend strip below fp-header.
+ * Six families: code (lime · ts/tsx/js/...) · json (cyan) · text (gold ·
+ * md/txt) · image (pink · png/jpg/svg/...) · audio (purple · mp3/wav) ·
+ * other (gray). Each chip is a button; click expands ancestors + scrolls
+ * the first matching file into view and runs a 1.5s flash ring (same
+ * pattern as AgentsPanel ap-tribes P4.0). Palette intentionally distinct
+ * from the 6-tribe role family so the player doesn't confuse "this file
+ * is text" with "this agent is narrative". 0 store / 0 server change.
+ */
+.fp-types {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  padding: 4px 6px 5px 6px;
+  border-bottom: 1px dashed rgba(255,255,255,0.05);
+  margin-bottom: 2px;
+}
+.fp-types-label {
+  font-size: 8.5px;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding-right: 2px;
+}
+.fp-type-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease, color 120ms ease;
+  font-family: inherit;
+}
+.fp-type-chip:hover { transform: translateY(-0.5px); color: rgba(255,255,255,0.95); }
+.fp-type-chip:active { transform: translateY(0.5px); }
+.fp-type-chip:focus-visible { outline: none; }
+.fp-type-chip:disabled { opacity: 0.35; cursor: not-allowed; }
+.fp-type-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block;
+}
+.fp-type-label { font-weight: 600; letter-spacing: 0.3px; }
+.fp-type-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+/* P4.49 — Σ total prefix composite (matches BusHealthLamp / AgentsHub /
+ * AgentsPanel / WbGallery / BusAdminPanel sibling surfaces). The total
+ * cell is now `[vsep] [Σ] [N]` instead of the stale `= N` prefix. The
+ * 1×9px amber vsep separates "总量" from the per-family chips to the
+ * left, same visual grammar the other 5 surfaces share. Σ sits at
+ * 9px 0.72 alpha currentColor, the count at 9.5px tabular-nums for
+ * digit alignment when total crosses 10/100/1000 boundaries. */
+.fp-types-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+  padding-left: 1px;
+}
+.fp-types-vsep {
+  width: 1px;
+  height: 9px;
+  background: rgba(245,197,88,0.32);
+  display: inline-block;
+  margin-right: 1px;
+}
+.fp-types-sigma {
+  font-size: 9px;
+  opacity: 0.72;
+  color: currentColor;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  margin-right: -1px;
+}
+.fp-types-total-n {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  font-variant-numeric: tabular-nums;
+}
+/* Family palettes (chip dot + hover tint). Lime/cyan/gold/pink/violet/gray. */
+.fp-type-dot.fam-code  { background: var(--primary); box-shadow: none; }
+.fp-type-chip.fam-code:hover  { background: rgba(212,255,72,0.13); border-color: rgba(212,255,72,0.48); box-shadow: none; }
+.fp-type-chip.fam-code:focus-visible  { box-shadow: 0 0 0 2px rgba(212,255,72,0.55); }
+.fp-type-dot.fam-json  { background: var(--color-kind-cli-provider); box-shadow: none; }
+.fp-type-chip.fam-json:hover  { background: rgba(109,211,255,0.13); border-color: rgba(109,211,255,0.48); box-shadow: none; }
+.fp-type-chip.fam-json:focus-visible  { box-shadow: 0 0 0 2px rgba(109,211,255,0.55); }
+.fp-type-dot.fam-text  { background: var(--prim-color-yellow-300); box-shadow: none; }
+.fp-type-chip.fam-text:hover  { background: rgba(255,214,106,0.13); border-color: rgba(255,214,106,0.48); box-shadow: none; }
+.fp-type-chip.fam-text:focus-visible  { box-shadow: 0 0 0 2px rgba(255,214,106,0.55); }
+.fp-type-dot.fam-image { background: var(--color-role-design); box-shadow: none; }
+.fp-type-chip.fam-image:hover { background: rgba(255,109,181,0.13); border-color: rgba(255,109,181,0.48); box-shadow: none; }
+.fp-type-chip.fam-image:focus-visible { box-shadow: 0 0 0 2px rgba(255,109,181,0.55); }
+.fp-type-dot.fam-audio { background: var(--prim-color-purple-300); box-shadow: none; }
+.fp-type-chip.fam-audio:hover { background: rgba(180,139,255,0.13); border-color: rgba(180,139,255,0.48); box-shadow: none; }
+.fp-type-chip.fam-audio:focus-visible { box-shadow: 0 0 0 2px rgba(180,139,255,0.55); }
+.fp-type-dot.fam-other { background: var(--prim-color-neutral-350); box-shadow: none; }
+.fp-type-chip.fam-other:hover { background: rgba(156,163,175,0.13); border-color: rgba(156,163,175,0.45); box-shadow: none; }
+.fp-type-chip.fam-other:focus-visible { box-shadow: 0 0 0 2px rgba(156,163,175,0.55); }
+
+/* fp-row.file flash ring — used when a fp-types chip click jumps to the
+ * first file of that family. Transient (1.5s) and family-tinted: the
+ * ring color matches the chip dot, so the eye can connect chip → row
+ * even before the scroll-into-view completes.
+ */
+.fp-row.file.is-flash { animation: fp-row-flash 1.5s ease-out 1; }
+@keyframes fp-row-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0.55); background: rgba(255,255,255,0.10); }
+  35%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.18); background: rgba(255,255,255,0.05); }
+  100% { box-shadow: 0 0 0 0 rgba(255,255,255,0);     background: transparent; }
+}
+.fp-row.file.fam-code.is-flash  { animation-name: fp-row-flash-code; }
+.fp-row.file.fam-json.is-flash  { animation-name: fp-row-flash-json; }
+.fp-row.file.fam-text.is-flash  { animation-name: fp-row-flash-text; }
+.fp-row.file.fam-image.is-flash { animation-name: fp-row-flash-image; }
+.fp-row.file.fam-audio.is-flash { animation-name: fp-row-flash-audio; }
+.fp-row.file.fam-other.is-flash { animation-name: fp-row-flash-other; }
+@keyframes fp-row-flash-code  { 0% { box-shadow: 0 0 0 0 rgba(212,255,72,0.65);  background: rgba(212,255,72,0.16);  } 35% { box-shadow: 0 0 0 3px rgba(212,255,72,0.22);  background: rgba(212,255,72,0.07);  } 100% { box-shadow: 0 0 0 0 rgba(212,255,72,0);  background: transparent; } }
+@keyframes fp-row-flash-json  { 0% { box-shadow: 0 0 0 0 rgba(109,211,255,0.65); background: rgba(109,211,255,0.16); } 35% { box-shadow: 0 0 0 3px rgba(109,211,255,0.22); background: rgba(109,211,255,0.07); } 100% { box-shadow: 0 0 0 0 rgba(109,211,255,0); background: transparent; } }
+@keyframes fp-row-flash-text  { 0% { box-shadow: 0 0 0 0 rgba(255,214,106,0.65); background: rgba(255,214,106,0.16); } 35% { box-shadow: 0 0 0 3px rgba(255,214,106,0.22); background: rgba(255,214,106,0.07); } 100% { box-shadow: 0 0 0 0 rgba(255,214,106,0); background: transparent; } }
+@keyframes fp-row-flash-image { 0% { box-shadow: 0 0 0 0 rgba(255,109,181,0.65); background: rgba(255,109,181,0.16); } 35% { box-shadow: 0 0 0 3px rgba(255,109,181,0.22); background: rgba(255,109,181,0.07); } 100% { box-shadow: 0 0 0 0 rgba(255,109,181,0); background: transparent; } }
+@keyframes fp-row-flash-audio { 0% { box-shadow: 0 0 0 0 rgba(180,139,255,0.65); background: rgba(180,139,255,0.16); } 35% { box-shadow: 0 0 0 3px rgba(180,139,255,0.22); background: rgba(180,139,255,0.07); } 100% { box-shadow: 0 0 0 0 rgba(180,139,255,0); background: transparent; } }
+@keyframes fp-row-flash-other { 0% { box-shadow: 0 0 0 0 rgba(156,163,175,0.55); background: rgba(156,163,175,0.14); } 35% { box-shadow: 0 0 0 3px rgba(156,163,175,0.18); background: rgba(156,163,175,0.06); } 100% { box-shadow: 0 0 0 0 rgba(156,163,175,0); background: transparent; } }
+.fp-row {
+  width: 100%;
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px 3px 0;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-radius: 3px;
+  text-align: left;
+  height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.fp-row:hover { background: rgba(255,255,255,0.04); color: var(--text-primary); }
+.fp-row.active {
+  background: var(--primary-soft);
+  color: var(--text-primary);
+}
+.fp-row.active .fp-file-ico { color: var(--primary); }
+
+.fp-chev {
+  width: 12px; height: 12px;
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+}
+.fp-folder-ico {
+  flex-shrink: 0;
+  color: var(--accent-cyan);
+}
+.fp-row.dir:hover .fp-folder-ico { color: var(--secondary); }
+.fp-file-ico {
+  flex-shrink: 0;
+  color: var(--color-icon-tertiary);
+}
+.fp-name {
+  flex: 1;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.fp-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.fp-dot.done { background: var(--accent-green); }
+.fp-dot.running { background: var(--accent-orange); animation: pulse 1.5s infinite; }
+.fp-dot.pending { background: var(--accent-cyan); }
+.fp-dirty {
+  font-size: 11px;
+  color: var(--accent-orange);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Tool placeholder（非 Agents tab 时） */
+.tool-placeholder {
+  padding: 30px 12px;
+  text-align: center;
+}
+.tp-title {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.tp-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* P2.6a — richer placeholder for bus-sourced workbench tabs.
+ * Replaces the legacy "Coming soon" sub with the manifest's emoji + zh
+ * description so clicking a wb-* icon actually shows what that plugin is
+ * about. Visual delta: previously bone-empty pane → now icon + title + desc. */
+.tool-placeholder.bus-tool {
+  text-align: left;
+  padding: 14px 4px;
+}
+.bus-tool-hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.bus-tool-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+.bus-tool-headings { display: flex; flex-direction: column; min-width: 0; }
+.bus-tool-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.bus-tool-pluginid {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bus-tool-desc {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 6px 0 2px;
+}
+/* P2.7h — second-line en description rendered under .bus-tool-desc.
+   Same modular role as P2.7c/.ac-produces (Sidebar agent produces) and
+   P2.7g/.cb-cli-desc (Composer cli desc): manifest field promoted from
+   title-tooltip → default-visible mini-strip. Greyer + italic so i18n
+   readers see it but it doesn't compete with the zh line. */
+.bus-tool-desc-en {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: italic;
+  line-height: 1.45;
+  margin: 0 0 10px;
+  opacity: 0.85;
+}
+.bus-tool-meta {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.bus-tool-tag {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.02em;
+}
+.bus-tool-tag.experimental {
+  color: var(--accent-orange);
+  background: rgba(255,107,53,0.10);
+}
+.bus-tool-tag.warn {
+  color: var(--accent-orange);
+  background: rgba(255,107,53,0.10);
+}
+
+/* P2.7f — meta grid + manifest path + deep-link button.
+ * Visual goal: turn the placeholder from "emoji + a sentence + 3 tags" into
+ * a small info card with manifest filesystem path the player can copy and a
+ * one-click jump into BusAdminPanel detail row. */
+.bus-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.bus-tool-cell {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 4px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+.bus-tool-cell-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.bus-tool-cell-value {
+  font-size: 11px;
+  color: var(--text-primary);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bus-tool-cell-value.mono {
+  font-family: var(--font-mono);
+}
+/* Match BusAdminPanel kind colors so the player visually links the two surfaces. */
+.bus-tool-cell-value.k-workbench { color: var(--accent-cyan); }
+.bus-tool-cell-value.k-agent { color: var(--accent-blue); }
+.bus-tool-cell-value.k-cli-provider { color: var(--color-text-primary); }
+.bus-tool-cell-value.k-model-binding { color: var(--color-text-primary); }
+.bus-tool-cell-value.k-skill { color: var(--color-text-primary); }
+.bus-tool-cell-value.k-tool { color: var(--color-text-primary); }
+
+/* P4.98 — provides stat strip in BusPluginPlaceholder. Three colored
+ * pills (T tools orange / E events pink / S skills purple) reuse the
+ * BusAdminPanel .ba-prov-tag palette so the player learns one cross-
+ * surface language: "orange = tools the AI can call, pink = events the
+ * plugin emits, purple = chat-composer skills". Empty-state pills stay
+ * visible at low opacity so every workbench tab gets the same strip
+ * geometry — only the highlight changes. */
+.bus-tool-provides {
+  margin: 0 0 8px;
+}
+.bus-tool-provides.empty .bus-tool-cell-label {
+  opacity: 0.6;
+}
+.bus-tool-provides-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+.bus-tool-prov {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  line-height: 1.2;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+}
+.bus-tool-prov b {
+  font-weight: 700;
+  font-size: 11px;
+  margin: 0 1px;
+}
+.bus-tool-prov.k-tool {
+  color: var(--color-role-coding);
+  background: rgba(255, 140, 66, 0.14);
+  border-color: rgba(255, 140, 66, 0.45);
+}
+.bus-tool-prov.k-event {
+  color: var(--color-role-design);
+  background: rgba(255, 109, 181, 0.14);
+  border-color: rgba(255, 109, 181, 0.45);
+}
+.bus-tool-prov.k-skill {
+  color: var(--color-text-primary);
+  background: rgba(245, 122, 204, 0.12);
+  border-color: rgba(245, 122, 204, 0.40);
+}
+.bus-tool-prov.muted {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.06);
+  opacity: 0.55;
+}
+
+.bus-tool-manifest {
+  background: rgba(78,205,196,0.06);
+  border-left: 2px solid rgba(78,205,196,0.4);
+  border-radius: 0 4px 4px 0;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+}
+.bus-tool-manifest-path {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  cursor: text;
+}
+
+.bus-tool-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-cyan);
+  background: rgba(78,205,196,0.08);
+  border: 1px solid rgba(78,205,196,0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.bus-tool-open:hover {
+  background: rgba(78,205,196,0.15);
+  border-color: rgba(78,205,196,0.55);
+}
+.bus-tool-open:active {
+  transform: translateY(1px);
+}
+
+/* P4.99 — family deep-link row. Same cyan palette family as
+   .bus-tool-manifest (4ecdc4) so the strip reads as a continuation of the
+   manifest "where to look" cluster — manifest tells you *which file*, family
+   tells you *who else is in this kind*. Hover lifts the bg and underlines the
+   arrow; the count <b> is brighter so the scannable number pops. */
+.bus-tool-family {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  background: rgba(78,205,196,0.04);
+  border: 1px solid rgba(78,205,196,0.18);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.bus-tool-family:hover {
+  background: rgba(78,205,196,0.12);
+  border-color: rgba(78,205,196,0.4);
+  color: var(--text-primary);
+}
+.bus-tool-family:active {
+  transform: translateY(1px);
+}
+.bus-tool-family-icon {
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.bus-tool-family-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.bus-tool-family-text {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+.bus-tool-family-text b {
+  color: var(--accent-cyan);
+  font-weight: 600;
+  font-size: 11px;
+}
+.bus-tool-family-arrow {
+  color: var(--accent-cyan);
+  font-size: 11px;
+  opacity: 0.7;
+  transition: opacity 120ms, transform 120ms;
+}
+.bus-tool-family:hover .bus-tool-family-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* P2.7i — bus kinds 6-chip strip pinned at sidebar bottom (sibling of
+ * .ss-section workbench, not nested inside it, so it survives any future
+ * sectioning). Shares the BusAdminPanel kind palette so the player learns
+ * one color language across surfaces:
+ *   workbench=lime  agent=violet  cli-provider=blue
+ *   model-binding=teal  skill=amber  tool=orange
+ * Chip layout = `name [tabular n]`, wrap-aware so a 220px-wide sidebar still
+ * fits all six on two rows. Empty kinds dim down but stay visible — the row
+ * works as a "what kinds exist at all" legend too. */
+.ss-footer {
+  margin-top: auto;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--color-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ss-footer-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+/* P3.50 — keyboard hint glyph inside the footer label. Mono'd + tinted so the
+ * `←→` reads as a key-cap legend distinct from the surrounding caption. */
+.ss-footer-kbd {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  padding: 0 3px;
+  margin: 0 1px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: var(--text);
+}
+.ss-kinds-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ss-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px 1px 5px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  line-height: 1;
+  font-size: 9px;
+  font-weight: 600;
+  /* P3.37 — chips render as <button>; reset native UA chrome so the kind
+   * palette below still owns color/border, and only the click affordance
+   * (cursor, transform, focus ring) is layered in via .is-link. */
+  font-family: inherit;
+  appearance: none;
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+.ss-kind-chip.is-empty {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* P3.37 — non-empty kinds get a clickable affordance that mirrors the
+ * sky-blue family deep-link buttons (P3.32 .ac-bus-pill.is-link / P3.33
+ * .ba-backlink / P3.34 .cp-agent-bar-bus / P3.36 .cb-cli-bus-pill.is-link).
+ * Each chip keeps its own kind color, but hover lifts by 1px + brightens
+ * background + thickens border to ~55% of the kind's accent. focus-visible
+ * draws a 2px white ring so keyboard users see the target distinctly from
+ * mouse hover. */
+.ss-kind-chip.is-link {
+  cursor: pointer;
+}
+.ss-kind-chip.is-link:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.08);
+}
+.ss-kind-chip.is-link:focus-visible {
+  outline: 2px solid rgba(255,255,255,0.55);
+  outline-offset: 1px;
+}
+.ss-kind-chip.is-link:active {
+  transform: translateY(0);
+}
+.ss-kind-chip-name { letter-spacing: 0.04em; }
+.ss-kind-chip-n {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+/* Six kind variants — match BusAdminPanel.css .ba-chip.k-* palette so chips
+ * read the same across Sidebar footer + Bus admin filter row + row k-tag. */
+.ss-kind-chip.k-workbench     { background: rgba(212, 255,  72, 0.10); border-color: rgba(212, 255,  72, 0.32); color: var(--primary); }
+.ss-kind-chip.k-agent         { background: rgba(168,  85, 247, 0.12); border-color: rgba(168,  85, 247, 0.35); color: var(--color-role-orchestrator); }
+.ss-kind-chip.k-cli-provider  { background: rgba(108, 196, 255, 0.10); border-color: rgba(108, 196, 255, 0.34); color: var(--color-kind-cli-provider); }
+.ss-kind-chip.k-model-binding { background: rgba(126, 231, 196, 0.10); border-color: rgba(126, 231, 196, 0.32); color: var(--accent-mint); }
+.ss-kind-chip.k-skill         { background: rgba(255, 200, 120, 0.10); border-color: rgba(255, 200, 120, 0.34); color: var(--color-role-narrative); }
+.ss-kind-chip.k-tool          { background: rgba(255, 140,  66, 0.10); border-color: rgba(255, 140,  66, 0.34); color: var(--color-role-coding); }
+/* P3.37 — per-kind hover/focus tints. Background brightens to ~24%, border
+ * thickens to ~55% of the kind's accent so hover reads as "this chip is
+ * activating" rather than a generic gray. Outer glow with same hue +12%
+ * alpha for tactile click affordance. */
+.ss-kind-chip.k-workbench.is-link:hover     { background: rgba(212, 255,  72, 0.22); border-color: rgba(212, 255,  72, 0.55); box-shadow: none; }
+.ss-kind-chip.k-agent.is-link:hover         { background: rgba(168,  85, 247, 0.24); border-color: rgba(168,  85, 247, 0.58); box-shadow: none; }
+.ss-kind-chip.k-cli-provider.is-link:hover  { background: rgba(108, 196, 255, 0.22); border-color: rgba(108, 196, 255, 0.56); box-shadow: none; }
+.ss-kind-chip.k-model-binding.is-link:hover { background: rgba(126, 231, 196, 0.22); border-color: rgba(126, 231, 196, 0.55); box-shadow: none; }
+.ss-kind-chip.k-skill.is-link:hover         { background: rgba(255, 200, 120, 0.22); border-color: rgba(255, 200, 120, 0.56); box-shadow: none; }
+.ss-kind-chip.k-tool.is-link:hover          { background: rgba(255, 140,  66, 0.22); border-color: rgba(255, 140,  66, 0.56); box-shadow: none; }
+
+/* P3.38 — reverse deep-link flash. Sidebar BUS KINDS chip pulses for ~1.5s when
+ * BusAdminPanel.toggleKind fires on the matching kind. Each kind reuses its own
+ * accent for the glow so player learns "kind = color" twice over: hover tint
+ * (P3.37) AND flash echo (P3.38). Keyframes mix bg/border/box-shadow + a small
+ * scale bounce so peripheral vision catches it even if not directly looking at
+ * the Sidebar (player just clicked in MainArea Bus tab). 0% and 100% return to
+ * the resting style so the animation gracefully lands back into is-link state.
+ *
+ * `animation-fill-mode: none` so on cleanup the chip drops back to its base
+ * style (no leftover transform). 1.5s matches the cleanup timer in Sidebar.tsx.
+ */
+@keyframes ss-kind-chip-flash {
+  0%   { transform: scale(1.0); }
+  18%  { transform: scale(1.18); }
+  45%  { transform: scale(1.04); }
+  100% { transform: scale(1.0); }
+}
+.ss-kind-chip.is-flashing {
+  animation: ss-kind-chip-flash 1.5s ease-out;
+  position: relative;
+  z-index: 2;
+}
+.ss-kind-chip.is-flashing.k-workbench     { background: rgba(212, 255,  72, 0.32); border-color: rgba(212, 255,  72, 0.75); box-shadow: none; color: var(--primary); }
+.ss-kind-chip.is-flashing.k-agent         { background: rgba(168,  85, 247, 0.34); border-color: rgba(168,  85, 247, 0.78); box-shadow: none; color: var(--primary); }
+.ss-kind-chip.is-flashing.k-cli-provider  { background: rgba(108, 196, 255, 0.32); border-color: rgba(108, 196, 255, 0.76); box-shadow: none; color: var(--primary); }
+.ss-kind-chip.is-flashing.k-model-binding { background: rgba(126, 231, 196, 0.32); border-color: rgba(126, 231, 196, 0.75); box-shadow: none; color: var(--primary); }
+.ss-kind-chip.is-flashing.k-skill         { background: rgba(255, 200, 120, 0.32); border-color: rgba(255, 200, 120, 0.76); box-shadow: none; color: var(--primary); }
+.ss-kind-chip.is-flashing.k-tool          { background: rgba(255, 140,  66, 0.32); border-color: rgba(255, 140,  66, 0.76); box-shadow: none; color: var(--primary); }
+
+/* ── P4.54 — FilesPanel folder file-count badge ──
+   Each .fp-row.dir gains a small dim count chip after the folder name
+   showing the recursive file count. Lets the player size each folder
+   without expanding it (e.g. `src 23` vs `design 47`). 9px tabular-nums
+   on a 0.06 alpha slab, dimmed to 0.55 opacity so it never out-shouts
+   the folder name. Hover row → bump to 0.85 for legibility. Pure visual
+   layer; no spacing change to neighbors (margin-left: auto pins to the
+   right edge of the row, replacing the slot used by .fp-dot/.fp-dirty
+   which only appear on files). */
+.fp-dir-count {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  opacity: 0.55;
+  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+}
+.fp-row.dir:hover .fp-dir-count {
+  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-primary);
+}
