@@ -7,6 +7,7 @@ import type { EditorCommand, EntityId, SceneDocument } from './types';
 import {
   getPopoutPanel,
   openSyncChannel,
+  openControlChannel,
   parseEditorSyncMsg,
   type EditorSnapshot,
   type EditorSyncMsg,
@@ -35,9 +36,16 @@ export const bus = new EditorBus(createDocument());
 // scene id is known) so the name keys per game.
 export const IS_POPOUT = getPopoutPanel() !== null;
 let syncChannel: BroadcastChannel | null = null;
+// Per-GAME control channel (survives scene-file switches) — carries only the
+// file-independent navigation signals so a scene switch re-pairs every window IN
+// PLACE (no location.reload → no WebGPU context recreate → no WKWebView wedge).
+let controlChannel: BroadcastChannel | null = null;
 let applyingSnapshot = false; // guard: applying a remote snapshot must not re-emit upstream
 function postSync(msg: EditorSyncMsg): void {
   syncChannel?.postMessage(msg);
+}
+function postControl(msg: EditorSyncMsg): void {
+  controlChannel?.postMessage(msg);
 }
 
 // Selection is a list; the LAST element is the "primary" (drives single-target
@@ -468,6 +476,21 @@ export async function initSceneList(): Promise<void> {
       const base = name.slice(0, -'.pack.json'.length);
       sceneList.push({ id: base, name: base, pack: `scenes/${name}`, group: 'scene' });
     }
+    // Fallback for games whose scene pack still lives in assets/ (not scenes/):
+    // resolve forge.json `defaultScene` to its pack so ✎ Edit opens the REAL
+    // scene instead of seeding a default vignette (which then gets persisted and
+    // permanently masks the real scene — the cow-level/hellforge "弹出默认场景"
+    // bug). Only when the scenes/ scan above found nothing.
+    if (!sceneList.some((s) => s.group === 'scene')) {
+      const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
+      if (defGuid) {
+        const pack = await findScenePackByGuid(currentSceneId, defGuid);
+        if (pack) {
+          const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
+          sceneList.push({ id: stem, name: stem, pack, group: 'scene' });
+        }
+      }
+    }
     // Monster/character asset packs — opened in the editor like a scene (UE
     // content-browser style); the Assets panel is their UI entry.
     for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
@@ -523,14 +546,39 @@ export async function switchSceneFile(id: string): Promise<boolean> {
   if (!sceneList.some((s) => s.id === id)) return false;
   flushPendingSaveBeacon();
   try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
-  // Tell this instance's scene-scoped panels (Hierarchy/Inspector/… mirroring
-  // over the old channel) to follow: they reload, re-read the persisted scene
-  // file and re-pair on the NEW per-scene channel.
-  if (!IS_POPOUT) postSync({ t: 'sceneChanged', id });
-  const u = new URL(location.href);
-  u.searchParams.set('sceneFile', id);
-  location.assign(u.toString());
-  return true;
+  // IN-PLACE switch (no location.reload). Reloading the main window re-creates the
+  // WebGPU device, which wedges WKWebView's GPU process (the desktop "切场景就死机").
+  // Instead: update the URL via history, repair the per-file sync channel, reload the
+  // doc (createEngineSync re-renders the viewport reactively — same world/renderer,
+  // no context recreate), and signal the DOM-only panels (no GPU) to re-pair via the
+  // per-game control channel. Falls back to a full reload if the in-place path throws.
+  try {
+    currentSceneFile = id;
+    const u = new URL(location.href);
+    u.searchParams.set('sceneFile', id);
+    try { history.replaceState(history.state, '', u.toString()); } catch { /* SSR/old */ }
+    const ok = await loadDocFromDisk();
+    if (!ok) loadDocFromStorage();
+    // loadDocFromDisk/Storage set bus.doc DIRECTLY and notify React doc listeners,
+    // but NOT the bus.subscribe listeners createEngineSync uses to (re)build the
+    // RENDERED scene — so without this the viewport keeps showing the OLD scene
+    // (verified: doc updates 64→136 but world stays 67). Fire them via replaceDoc,
+    // which also clears the previous scene's undo history (correct for a swap).
+    // Run BEFORE repairSceneChannelMain so its broadcastSnapshot carries the NEW doc.
+    replaceDoc(bus.doc);
+    repairSceneChannelMain();
+    // Panels are separate DOM iframes (no WebGPU) — reloading them is cheap + safe.
+    // Sent on the per-GAME control channel so they hear it regardless of which
+    // per-file channel they were paired on.
+    postControl({ t: 'sceneChanged', id });
+    return true;
+  } catch (e) {
+    console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
+    const u = new URL(location.href);
+    u.searchParams.set('sceneFile', id);
+    location.assign(u.toString());
+    return true;
+  }
 }
 
 /** Open a scene/asset pack from ANY editor surface. Panel iframes (ep:*) can't
@@ -538,7 +586,11 @@ export async function switchSceneFile(id: string): Promise<boolean> {
  *  BroadcastChannel; the main window persists + reloads (and the panels follow
  *  via the post-reload snapshot). This is the Assets-panel double-click path. */
 export function requestOpenScene(id: string): void {
-  if (IS_POPOUT) { postSync({ t: 'openScene', id }); return; }
+  // Post on the per-GAME control channel (not the per-file channel) so the main
+  // window receives it regardless of which scene file each side is currently on —
+  // the main then switches IN PLACE (no reload). Falls back to the per-file
+  // channel too, for any window still paired only there.
+  if (IS_POPOUT) { postControl({ t: 'openScene', id }); postSync({ t: 'openScene', id }); return; }
   void switchSceneFile(id);
 }
 
@@ -741,6 +793,16 @@ export function hasPendingDiskSave(): boolean {
   return _diskSaveTimer !== null;
 }
 
+/** Cancel a debounced autosave WITHOUT writing. Used after the editor seeds a
+ *  default scene for a genuinely scene-less game: the bare seed must NOT be
+ *  persisted to the game dir (that creates a scene.pack.json the user never
+ *  authored — and, for a game whose real scene the editor failed to locate, it
+ *  would permanently mask it). The seed stays in-memory; the user's first real
+ *  edit re-schedules a normal save. */
+export function cancelPendingDiskSave(): void {
+  if (_diskSaveTimer) { clearTimeout(_diskSaveTimer); _diskSaveTimer = null; }
+}
+
 // Flush a pending autosave SYNCHRONOUSLY-SAFE, even as the editor iframe is being
 // torn down (mode switch edit→play unmounts EditMode → destroys this iframe). A
 // normal `await fetch` would be aborted with the iframe; `navigator.sendBeacon`
@@ -938,36 +1000,53 @@ export function announcePopoutGeom(panel: SyncPanelId, geom: PopoutGeom): void {
   postSync({ t: 'geom', panel, ...geom });
 }
 
+// Extracted so repairSceneChannelMain() can re-attach it to a fresh per-file
+// channel after an IN-PLACE scene switch (no page reload). The bus/selection/gizmo
+// subscriptions live in initMain (attached ONCE) and post to whatever syncChannel
+// is current via postSync — so swapping the channel needs only onmessage + a push.
+function mainOnMessage(ev: MessageEvent): void {
+  const msg = parseEditorSyncMsg(ev.data);
+  if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
+  switch (msg.t) {
+    case 'hello': broadcastSnapshot(); break;
+    case 'cmd': bus.dispatch(msg.cmd, msg.origin); break;
+    case 'undo': bus.undo(); break;
+    case 'redo': bus.redo(); break;
+    case 'jumpTo': bus.jumpTo(msg.target); break;
+    case 'replaceDoc': replaceDoc(msg.doc); break;
+    case 'selection': setSelectionMany(msg.ids); break;
+    case 'gizmo': setGizmoMode(msg.mode); break;
+    case 'frame': requestFrame(); break;
+    case 'refEntity': requestRefEntity(msg.id); break;
+    case 'refAsset': requestRefAsset(msg.asset); break;
+    case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
+    case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
+    case 'openScene': void switchSceneFile(msg.id); break;
+    default: break; // 'snapshot'/'sceneChanged' are main→popout only
+  }
+}
+
 function initMain(ch: BroadcastChannel): void {
   bus.subscribe(() => broadcastSnapshot());
   onSelectionChange(() => broadcastSnapshot());
   onGizmoModeChange(() => broadcastSnapshot());
-  ch.onmessage = (ev: MessageEvent) => {
-    const msg = parseEditorSyncMsg(ev.data);
-    if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
-    switch (msg.t) {
-      case 'hello': broadcastSnapshot(); break;
-      case 'cmd': bus.dispatch(msg.cmd, msg.origin); break;
-      case 'undo': bus.undo(); break;
-      case 'redo': bus.redo(); break;
-      case 'jumpTo': bus.jumpTo(msg.target); break;
-      case 'replaceDoc': replaceDoc(msg.doc); break;
-      case 'selection': setSelectionMany(msg.ids); break;
-      case 'gizmo': setGizmoMode(msg.mode); break;
-      case 'frame': requestFrame(); break;
-      case 'refEntity': requestRefEntity(msg.id); break;
-      case 'refAsset': requestRefAsset(msg.asset); break;
-      case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
-      case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
-      case 'openScene': void switchSceneFile(msg.id); break;
-      default: break; // 'snapshot'/'sceneChanged' are main→popout only
-    }
-  };
+  ch.onmessage = mainOnMessage;
   // Push the freshly-loaded doc to panels that were ALREADY open before this
   // main window (re)booted — e.g. after a scene switch navigation, the paired
   // Hierarchy/Inspector iframes must immediately mirror the new scene without
   // waiting for the first edit.
   broadcastSnapshot();
+}
+
+// Swap the MAIN window's per-file sync channel to the current scene file WITHOUT a
+// page reload — reloading the main window re-creates the WebGPU device, which
+// wedges WKWebView's GPU process. The bus subscriptions from initMain persist and
+// post to the new channel (postSync reads the current syncChannel), so we only
+// re-attach onmessage + push a fresh snapshot for the reloaded panels.
+function repairSceneChannelMain(): void {
+  try { syncChannel?.close(); } catch { /* already closed */ }
+  syncChannel = openSyncChannel(`${getSceneId()}::${currentSceneFile ?? 'main'}`);
+  if (syncChannel) { syncChannel.onmessage = mainOnMessage; broadcastSnapshot(); }
 }
 
 function initPopout(ch: BroadcastChannel): void {
@@ -1037,7 +1116,9 @@ export function initSync(): void {
     // popout that navigates doesn't leak a dangling channel / double-handle.
     window.addEventListener('pagehide', () => {
       try { syncChannel?.close(); } catch { /* already closed */ }
+      try { controlChannel?.close(); } catch { /* already closed */ }
       syncChannel = null;
+      controlChannel = null;
       window.removeEventListener('storage', onStorage);
     }, { once: true });
   }
@@ -1049,6 +1130,24 @@ export function initSync(): void {
   if (!syncChannel) return; // BroadcastChannel unavailable → still have storage sync
   if (IS_POPOUT) initPopout(syncChannel);
   else initMain(syncChannel);
+
+  // Per-GAME control channel — survives scene-file switches so an in-place
+  // switchSceneFile re-pairs every window WITHOUT a page reload (no WebGPU context
+  // recreate → no WKWebView wedge). Main: a panel's openScene → switch in place.
+  // Panels: the viewport's sceneChanged → reload the (GPU-less) panel iframe to
+  // re-pair on the new per-file channel.
+  controlChannel = openControlChannel(getSceneId());
+  if (controlChannel) {
+    controlChannel.onmessage = (ev: MessageEvent) => {
+      const msg = parseEditorSyncMsg(ev.data);
+      if (!msg) return;
+      if (!IS_POPOUT) {
+        if (msg.t === 'openScene') void switchSceneFile(msg.id);
+      } else if (msg.t === 'sceneChanged' && msg.id !== currentSceneFile) {
+        location.reload();
+      }
+    };
+  }
 }
 
 // ── Asset selection (cross-panel: Content Browser → Material panel) ──────────

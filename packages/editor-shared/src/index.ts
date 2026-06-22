@@ -65,6 +65,7 @@ export {
   writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
+  cancelPendingDiskSave,
   setAssetSelection,
   getAssetSelection,
   useAssetSelection,

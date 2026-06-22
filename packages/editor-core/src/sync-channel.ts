@@ -162,3 +162,18 @@ export function openSyncChannel(sceneId: string): BroadcastChannel | null {
     return null;
   }
 }
+
+/** Open the per-GAME control channel — survives scene-file switches (the per-file
+ *  sync channel above is recreated on every switch). Carries only the
+ *  file-independent navigation signals (`openScene` panel→main, `sceneChanged`
+ *  main→panels) so a scene switch can re-pair every window/panel IN PLACE without
+ *  a full `location.reload` (which on WKWebView drops the WebGPU context and
+ *  wedges the GPU process). Keyed per game so two games never cross-talk. */
+export function openControlChannel(gameId: string): BroadcastChannel | null {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    return new BroadcastChannel(`forgeax:editor:scene-ctl:${gameId}`);
+  } catch {
+    return null;
+  }
+}

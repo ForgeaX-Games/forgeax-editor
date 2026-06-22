@@ -34,7 +34,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave } from '@forgeax/editor-shared';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -181,7 +181,18 @@ function seed(): void {
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
 // starts from the seed and persists per-game from there.
 setBootStage('loadDoc');
-if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
+// Load order: on-disk authored scene → localStorage mirror → demo seed. Seed
+// whenever the result is EMPTY (sceneless game, fresh workspace, OR a prior
+// session that persisted a 0-entity doc) — otherwise the viewport opens blank
+// and looks "dead". seed() self-guards against clobbering a non-empty doc.
+await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
+if (Object.keys(bus.doc.entities).length === 0) {
+  seed();
+  // The bare seed is a viewport convenience for a scene-less game — do NOT
+  // auto-persist it to the game dir (avoids creating an unauthored scene.pack.json
+  // / masking a real scene). The user's first real edit re-schedules a save.
+  cancelPendingDiskSave();
+}
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
@@ -227,10 +238,29 @@ const app = await createApp(canvas, {}, {
     },
   },
 });
+const CREATE_APP_RETRY_KEY = 'forgeax.editor.createApp.retries';
 if (!app.ok) {
+  // WKWebView/WebGPU (the desktop Studio app) transiently fails to (re)create
+  // the GPU device on a reload or under concurrent surface boots — the device
+  // request rejects and the Edit viewport goes pitch-black, while a FRESH page
+  // load succeeds (Chromium never hits this). This is exactly what a scene/level
+  // switch (switchSceneFile → location.reload) and HMR trigger. Rather than leave
+  // a black viewport, auto-reload a BOUNDED number of times to recover; the
+  // counter resets on the next success so the budget refills per session.
+  let retries = 0;
+  try { retries = Number(sessionStorage.getItem(CREATE_APP_RETRY_KEY) ?? '0') || 0; } catch { /* no storage */ }
+  if (retries < 3) {
+    try { sessionStorage.setItem(CREATE_APP_RETRY_KEY, String(retries + 1)); } catch { /* no storage */ }
+    console.warn(`[editor] createApp failed (auto-reload ${retries + 1}/3 to recover):`, app.error);
+    setTimeout(() => location.reload(), 500 + retries * 500);
+    throw new Error('[editor] createApp failed — reloading to recover');
+  }
+  console.error('[editor] createApp failed after 3 reload attempts — giving up:', app.error);
   paintDiagnosticMessage(app.error);
   throw new Error('[editor] createApp failed');
 }
+// Booted cleanly — refill the auto-reload budget for the next reload/scene switch.
+try { sessionStorage.removeItem(CREATE_APP_RETRY_KEY); } catch { /* no storage */ }
 
 const { world, renderer } = app.value;
 // Point at the play engine's per-game catalog (proxied through the studio's
@@ -243,7 +273,7 @@ const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
   : `${BASE}/pack-index.json`;
 renderer.assets.configurePackIndex(packIndexUrl);
 
-(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus };
+(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile };
 void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
   if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
 });
