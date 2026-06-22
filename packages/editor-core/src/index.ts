@@ -238,8 +238,11 @@ export {
   writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
+  setAssetSelection,
+  getAssetSelection,
+  useAssetSelection,
 } from './store';
-export type { SceneFileEntry, PlayConfig } from './store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset } from './store';
 
 // ── Entity operations ──
 export {

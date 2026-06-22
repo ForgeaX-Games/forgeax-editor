@@ -228,6 +228,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .cb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px; padding: 6px 8px; }
 .asset-card { display: flex; flex-direction: column; align-items: center; padding: 6px 4px 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; transition: background 0.1s, border-color 0.1s; }
 .asset-card:hover { background: var(--bg2); border-color: var(--line); }
+.asset-card.sel { background: rgba(212, 255, 72, 0.12); border-color: var(--lime, #d4ff48); }
 .asset-card-thumb { width: 48px; height: 48px; border-radius: 6px; background: var(--bg2); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; margin-bottom: 4px; overflow: hidden; }
 .asset-thumb-swatch { width: 100%; height: 100%; border-radius: 5px; }
 .asset-thumb-icon { font-size: 22px; line-height: 1; }

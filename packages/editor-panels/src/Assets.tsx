@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu } from '@forgeax/editor-shared';
 import { loadGameAssets, materialSwatch, extractPackDirs, type PackAsset } from '@forgeax/editor-core';
-import { dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, createSceneFile, useDocVersion, useSelection, useSceneList, useSceneFile } from '@forgeax/editor-shared';
+import { dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, createSceneFile, setAssetSelection, useAssetSelection, useDocVersion, useSelection, useSceneList, useSceneFile } from '@forgeax/editor-shared';
 import { AssetFolderTree } from './AssetFolderTree';
 import { AssetCard } from './AssetCard';
 import { Breadcrumb } from './Breadcrumb';
@@ -19,6 +19,7 @@ export function AssetsPanel() {
   const sceneList = useSceneList();
   const openSceneFile = useSceneFile();
 
+  const assetSel = useAssetSelection();
   const [packs, setPacks] = useState<PackAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDir, setSelectedDir] = useState('');
@@ -97,6 +98,10 @@ export function AssetsPanel() {
     const id = getSelection();
     if (id === null) return;
     dispatch({ kind: 'setComponent', entity: id, component: 'Material', patch: { materialAsset: guid } });
+  }
+
+  function selectAsset(a: PackAsset): void {
+    setAssetSelection({ guid: a.guid, kind: a.kind, name: a.name, payload: a.payload, packPath: a.packPath });
   }
 
   return (
@@ -195,6 +200,8 @@ export function AssetsPanel() {
               <div className="cb-grid">
                 {filtered.map(a => (
                   <AssetCard key={a.guid} asset={a}
+                    selected={assetSel?.guid === a.guid}
+                    onClick={() => selectAsset(a)}
                     onDoubleClick={() => assign(a.guid)}
                     onContextMenu={(e) => openMenu(a, e)} />
                 ))}
@@ -204,8 +211,9 @@ export function AssetsPanel() {
                 {filtered.map(a => {
                   const swatch = materialSwatch(a);
                   return (
-                    <div key={a.guid} className="asset-row"
+                    <div key={a.guid} className={`asset-row${assetSel?.guid === a.guid ? ' sel' : ''}`}
                       title={`${a.kind} · ${a.guid}\n${a.packPath}`}
+                      onClick={() => selectAsset(a)}
                       onContextMenu={(e) => openMenu(a, e)}
                       onDoubleClick={() => assign(a.guid)}>
                       <span className="asset-swatch" style={swatch ? { background: swatch } : undefined}>

@@ -1050,3 +1050,33 @@ export function initSync(): void {
   if (IS_POPOUT) initPopout(syncChannel);
   else initMain(syncChannel);
 }
+
+// ── Asset selection (cross-panel: Content Browser → Material panel) ──────────
+// Lightweight pub/sub for the currently-selected pack asset. When a user clicks
+// an asset card in the Content Browser, other panels (Material, future Preview)
+// can react by displaying its properties.
+
+export interface SelectedAsset {
+  guid: string;
+  kind: string;
+  name: string;
+  payload: Record<string, unknown>;
+  packPath: string;
+}
+
+let selectedAsset: SelectedAsset | null = null;
+const assetSelListeners = new Set<() => void>();
+function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
+
+export function setAssetSelection(asset: SelectedAsset | null): void {
+  selectedAsset = asset;
+  emitAssetSel();
+}
+export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
+function subscribeAssetSel(fn: () => void): () => void {
+  assetSelListeners.add(fn);
+  return () => assetSelListeners.delete(fn);
+}
+export function useAssetSelection(): SelectedAsset | null {
+  return useSyncExternalStore(subscribeAssetSel, getAssetSelection, getAssetSelection);
+}

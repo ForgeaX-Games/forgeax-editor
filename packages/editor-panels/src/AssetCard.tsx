@@ -8,15 +8,17 @@ const ASSET_ICON: Record<string, string> = {
 
 interface AssetCardProps {
   asset: PackAsset;
+  selected?: boolean;
+  onClick: () => void;
   onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
-export function AssetCard({ asset, onDoubleClick, onContextMenu }: AssetCardProps) {
+export function AssetCard({ asset, selected, onClick, onDoubleClick, onContextMenu }: AssetCardProps) {
   const swatch = materialSwatch(asset);
   return (
-    <div className="asset-card"
-         onDoubleClick={onDoubleClick} onContextMenu={onContextMenu}
+    <div className={`asset-card${selected ? ' sel' : ''}`}
+         onClick={onClick} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu}
          title={`${asset.kind} · ${asset.guid}\n${asset.packPath}`}>
       <div className="asset-card-thumb">
         {swatch
