@@ -14,8 +14,17 @@ import {
   VagFpsStatsSchema,
   VagDeviceLostSchema,
 } from '@forgeax/editor-core/protocol';
-import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
+import {
+  loadGameProject,
+  resolveDefaultScene,
+  FORGE_JSON,
+} from '@forgeax/engine-project';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { SceneAsset, AssetError } from '@forgeax/engine-types';
+import type { ImageError } from '@forgeax/engine-types';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { GameContext } from './types';
+import { createResolveGuidAdapter } from './resolve-guid-adapter';
 
 const root = document.getElementById('app') ?? document.body;
 
@@ -245,13 +254,81 @@ if (wantsPointerLock) {
   window.addEventListener('pagehide', releaseOnLeave);
 }
 
-// ── GameContext (superset: includes both legacy `renderer` and new `app` fields) ──
+// ── Capture variables for ctx assembly (D-2 / R3) ──────────────────────────
+// ctx assembly is deferred until after the defaultScene instantiate block so
+// the readonly GameContext can be populated with the instantiated root +
+// SceneAsset in a single object literal — no write-back or temporal coupling.
+let defaultSceneRoot: EntityHandle | undefined;
+let defaultScene: SceneAsset | undefined;
+
+// ── resolveGuid adapter (D-2 / C3) ─────────────────────────────────────────
+// Defined in ./resolve-guid-adapter.ts and imported above so the unit test
+// (w3/w4) can import it without pulling in DOM-heavy main.ts top-level code.
+
+// ── Default Scene instantiate (asset-first startup — D-2 / AC-01) ──────────
+// Read defaultScene from the single gpResult loaded at L82 (AC-01 single-load
+// invariant — no second fetch of forge.json). When present, resolve the scene
+// GUID via the adapter + resolveDefaultScene, then instantiate the scene into
+// the live world BEFORE entry() runs, so the game module receives a world that
+// already contains the default scene entities.
+// When defaultScene is absent (spin-cube, shoot-opt): graceful skip, no error
+// (AC-06). If resolveDefaultScene fails, log the structured error
+// (charter P3) but DO NOT abort — entry() still fires after (AC-10).
+//
+// CAUTION (D-2 / OQ1): resolveDefaultScene (engine loader.ts:261-268)
+// discards the adapter-passed error.kind on the GuidResult error branch,
+// unifying all failures as forge-scene-unresolved. The host does NOT
+// bypass resolveDefaultScene with a direct loadByGuid query (charter P4
+// consistent abstraction — AI users see a single resolution path).
+// End-to-end error.kind differentiation is deferred to a future engine feat.
+if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.value.defaultScene.length > 0) {
+  const defaultSceneGuidStr = gpResult.value.defaultScene;
+  const parsed = AssetGuid.parse(defaultSceneGuidStr);
+  if (parsed.ok) {
+    const adapter = createResolveGuidAdapter(async (guid: string) => {
+      const parsedG = AssetGuid.parse(guid);
+      if (!parsedG.ok) return { ok: false as const, error: parsedG.error };
+      // loadByGuid returns the asset payload directly (D-17); SceneAsset
+      // carries .kind so the adapter can extract it and backfill guid.
+      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsedG.value);
+      return assetRes;
+    });
+    const resolved = await resolveDefaultScene({ read: fetchRead, resolveGuid: adapter });
+    if (resolved.ok) {
+      // Success: loadByGuid returns the SceneAsset payload (D-17).
+      // Mint a shared handle via world.allocSharedRef then instantiate.
+      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsed.value);
+      if (assetRes.ok) {
+        defaultScene = assetRes.value; // capture loaded SceneAsset (D-4)
+        const handle = world.allocSharedRef('SceneAsset', assetRes.value);
+        const instantiateRes = renderer.assets.instantiate(handle, world);
+        if (instantiateRes.ok) {
+          defaultSceneRoot = instantiateRes.value; // capture synthetic root (D-2)
+        } else {
+          console.error('[engine] defaultScene instantiate failed:', instantiateRes.error);
+        }
+      } else {
+        console.error('[engine] defaultScene loadByGuid (re-fetch for instantiate) failed:', assetRes.error);
+      }
+    } else {
+      console.error('[engine] resolveDefaultScene failed:', resolved.error);
+    }
+  } else {
+    console.error('[engine] defaultScene GUID malformed:', defaultSceneGuidStr, parsed.error);
+  }
+}
+// No else-branch needed — absent defaultScene = graceful skip (AC-06).
+
+// ── GameContext (D-2: assembled after instantiate, so defaultSceneRoot +
+// defaultScene are captured in a single readonly literal — no write-back) ──
 const ctx: GameContext = {
   world,
   renderer,
   assets: renderer.assets,
   app: app.value,
   registerUpdate(fn) { app.value.registerUpdate(fn); },
+  ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
+  ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
 
 // ── loadGame ──
@@ -304,6 +381,12 @@ async function resolveGame(id: string): Promise<GameEntry | null> {
   return result.value;
 }
 
+// ── entry bootstrap hook (D-3: semantic downgrade — host instantiates
+// defaultScene before this point, so the game module receives a world that
+// already contains the default scene entities. entry is no longer the "total
+// entry" that fetches + instantiates the scene itself; it is a bootstrap hook
+// whose job is wiring HUD / inputs / custom systems onto the live world.
+// Signature unchanged: export default start (C4 / OOS-3).
 const entry = await resolveGame(gameId);
 if (entry) {
   await entry(ctx);
@@ -463,8 +546,13 @@ window.addEventListener('unhandledrejection', (ev) => {
 // Surfacing them as VAG_CONSOLE errors makes the Studio Console (hence the
 // agent) aware the Preview is broken even when nothing executed.
 if (import.meta.hot) {
-  import.meta.hot.on('vite:error', (payload: { err?: { message?: string; id?: string; loc?: { file?: string; line?: number } } }) => {
+  // Narrow via ...args because the generic inference on ViteHotContext.on is
+  // fragile — the cb parameter resolves to () => void under strict mode even
+  // though 'vite:error' maps to ErrorPayload in CustomEventMap. Runtime
+  // behaviour is unchanged.
+  import.meta.hot.on('vite:error', (...args: unknown[]) => {
     try {
+      const payload = args[0] as { err?: { message?: string; id?: string; loc?: { file?: string; line?: number } } } | undefined;
       const err = payload?.err;
       const where = err?.loc?.file ? ` (${err.loc.file}${err.loc.line ? `:${err.loc.line}` : ''})` : err?.id ? ` (${err.id})` : '';
       sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `[vite build] ${err?.message ?? 'build error'}${where}`, ts: Date.now() });
@@ -488,7 +576,7 @@ if (import.meta.hot) {
   // fetch
   const origFetch = window.fetch?.bind(window);
   if (origFetch) {
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const wrappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const t0 = performance.now();
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
       const method = (init?.method ?? (input instanceof Request ? input.method : 'GET') ?? 'GET').toUpperCase();
@@ -501,6 +589,10 @@ if (import.meta.hot) {
         throw e;
       }
     };
+    // Preserve preconnect (if present) to satisfy typeof fetch at the cost of a
+    // local cast — tsconfig strict prevents a direct assignment without it.
+    if (origFetch.preconnect) (wrappedFetch as unknown as Record<string, unknown>)['preconnect'] = origFetch.preconnect.bind(window);
+    window.fetch = wrappedFetch as unknown as typeof fetch;
   }
   // XHR
   const XHR = window.XMLHttpRequest;

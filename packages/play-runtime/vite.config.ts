@@ -131,6 +131,7 @@ export function forgeaxPerGamePackIndex() {
         const match = req.url?.match(PER_GAME_ROUTE_RE);
         if (!match) { next(); return; }
         const slug = match[1];
+        if (slug === undefined) { next(); return; }
         const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
         try {
           const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
@@ -298,7 +299,7 @@ export default defineConfig({
       // `@forgeax/engine-pack/guid` (AssetGuid) + `@forgeax/engine-image/hdr-decoder`
       // (decodeHdr); left in the pre-bundle, vite discovers them lazily on a NEW
       // game's first load → "optimized dependencies changed, reloading" → the
-      // preview reloads a few times (the "新建项目后游戏闪几下" flicker). Exclude
+      // preview reloads a few times (the "new game flicker" after project creation). Exclude
       // them (native ESM, same as the rest of the engine subgraph) so there is no
       // runtime re-optimize and no reload.
       '@forgeax/engine-pack',
