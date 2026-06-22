@@ -138,10 +138,12 @@ export async function loadRawAssets(slug: string | null | undefined): Promise<Ra
   }
 }
 
-/** Load + flatten every asset declared in the game's *.pack.json files. */
+/** Load + flatten every asset declared in the game's *.pack.json files.
+ *  Scans the ENTIRE game directory (assets/, scenes/, root) so materials
+ *  embedded in scene packs are also discovered. */
 export async function loadGameAssets(slug: string | null | undefined): Promise<PackAsset[]> {
   if (!slug || slug === 'default') return [];
-  const paths = await packPaths(slug);
+  const paths = await allGamePackPaths(slug);
   const out: PackAsset[] = [];
   for (const p of paths) {
     try {
@@ -174,6 +176,21 @@ function shortName(
     : '';
   const tail = a.guid.slice(0, 8);
   return stem ? `${stem} · ${tail}` : `${a.kind} ${tail}`;
+}
+
+/** Extract unique directory paths from pack asset paths, for building a folder tree. */
+export function extractPackDirs(assets: PackAsset[]): string[] {
+  const dirs = new Set<string>();
+  for (const a of assets) {
+    const dir = a.packPath.replace(/\/[^/]+$/, '');
+    let cur = dir;
+    while (cur) {
+      dirs.add(cur);
+      const slash = cur.lastIndexOf('/');
+      cur = slash > 0 ? cur.slice(0, slash) : '';
+    }
+  }
+  return [...dirs].sort();
 }
 
 /** Minimal slice of the engine World used for asset allocation. The engine

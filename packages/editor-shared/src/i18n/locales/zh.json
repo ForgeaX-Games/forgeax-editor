@@ -121,7 +121,17 @@
       "processBtn": "处理",
       "addToSceneTitle": "在当前场景根节点加入该 GLB 的引用实体",
       "addToSceneBtn": "+ 场景",
-      "processedBadge": "已处理 · meta.json 存在"
+      "processedBadge": "已处理 · meta.json 存在",
+      "searchPlaceholder": "搜索资产名称 / GUID…",
+      "noResults": "无匹配资产",
+      "filter": {
+        "all": "全部",
+        "level": "关卡",
+        "character": "角色",
+        "material": "材质",
+        "mesh": "网格",
+        "texture": "贴图"
+      }
     }
   }
 }

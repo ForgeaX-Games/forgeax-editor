@@ -121,7 +121,17 @@
       "processBtn": "Process",
       "addToSceneTitle": "Add a reference entity for this GLB at the current scene root",
       "addToSceneBtn": "+ Scene",
-      "processedBadge": "Processed · meta.json exists"
+      "processedBadge": "Processed · meta.json exists",
+      "searchPlaceholder": "Search asset name / GUID…",
+      "noResults": "No matching assets",
+      "filter": {
+        "all": "All",
+        "level": "Level",
+        "character": "Character",
+        "material": "Material",
+        "mesh": "Mesh",
+        "texture": "Texture"
+      }
     }
   }
 }

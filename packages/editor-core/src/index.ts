@@ -126,6 +126,7 @@ export {
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,
+  extractPackDirs,
 } from './assets';
 export type { PackAsset, RawAsset } from './assets';
 
