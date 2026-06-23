@@ -562,8 +562,15 @@ function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { 
   // Engine removed AssetRegistry.register; the SceneAsset POD is minted as a
   // shared column handle via world.allocSharedRef, then instantiated natively.
   const sceneHandle = ctx.world.allocSharedRef('SceneAsset', { kind: 'scene', entities: nodes });
-  const res = a.instantiate(sceneHandle, ctx.world);
-  if (!res.ok || res.value === undefined) return null;
+  const res = a.instantiate(sceneHandle, ctx.world) as { ok: boolean; value?: Entity; error?: { code?: string; field?: string; expected?: string; hint?: string } };
+  if (!res.ok || res.value === undefined) {
+    // Surface the engine's structured error instead of the opaque
+    // "native scene instantiate failed" — a schema mismatch (engine bump) here
+    // otherwise gives no clue which component/field the new engine rejected.
+    const e = res.error;
+    if (e) console.error('[editor] engine instantiate rejected:', e.code, e.field ?? '', e.expected ?? '', e.hint ?? '');
+    return null;
+  }
   const instanceRoot = res.value;
   // The localId -> Entity table lives on the synthetic root's `SceneInstance`
   // component as a Uint32Array-shaped `mapping`, where mapping[localId] is the

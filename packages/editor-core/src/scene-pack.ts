@@ -274,7 +274,14 @@ export function packToDoc(pack: ScenePack): SceneDocument {
     const dl = cc.DirectionalLight as Record<string, number> | undefined;
     const pl = cc.PointLight as Record<string, number> | undefined;
     if (dl) {
-      docComps.Light = { type: 'directional', color: rgbaToHex([dl.colorR, dl.colorG, dl.colorB]), intensity: num(dl.intensity, 1), directionX: num(dl.directionX, -0.4), directionY: num(dl.directionY, -1), directionZ: num(dl.directionZ, -0.3), ...(dl.castShadow ? { castShadow: true } : {}) };
+      // Shadow: engine #479 merged the separate DirectionalLightShadow component
+      // INTO DirectionalLight (castShadow + cascade fields). Read BOTH the new
+      // merged `dl.castShadow` AND the legacy standalone `DirectionalLightShadow`
+      // component so a pre-#479 pack opened in the editor self-heals: packToDoc
+      // sets castShadow → docToPack re-saves the merged form the new engine
+      // accepts. Without this, opening an old pack silently drops its shadow.
+      const castShadow = !!dl.castShadow || cc.DirectionalLightShadow !== undefined;
+      docComps.Light = { type: 'directional', color: rgbaToHex([dl.colorR, dl.colorG, dl.colorB]), intensity: num(dl.intensity, 1), directionX: num(dl.directionX, -0.4), directionY: num(dl.directionY, -1), directionZ: num(dl.directionZ, -0.3), ...(castShadow ? { castShadow: true } : {}) };
     } else if (pl) {
       docComps.Light = { type: 'point', color: rgbaToHex([pl.colorR, pl.colorG, pl.colorB]), intensity: num(pl.intensity, 1), range: num(pl.range, 0) };
     }
