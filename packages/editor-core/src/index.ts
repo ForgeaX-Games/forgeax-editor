@@ -1,13 +1,13 @@
 // @forgeax/editor-core — pure logic layer (no UI/React)
 //
 // Re-exports:
-//   Scene types (EntityId, EntityNode, SceneDocument, EntitySource)
+//   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
 //   Scene pack (docToPack, packToDoc, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
 //   Instantiate (instantiateScene, buildNativeScene, etc.)
 //   glTF runtime (loadGltfRuntime, LoadedGltf, etc.)
 //   EditorCommand & types
 //   EditorBus & bus types
-//   Command document (createDocument, applyCommand, etc.)
+//   Command session (createEditSession, applyCommand, etc.)
 //   Component schema (listComponentSchemas, getComponentSchema, etc.)
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
 //   Anim (Clip, Track, Interp, etc.)
@@ -20,7 +20,8 @@ export type {
   EntityId,
   EntitySource,
   EntityNode,
-  SceneDocument,
+  EditSession,
+  SceneAsset,
 } from './types';
 
 export type { EditorCommand, CommandError, ApplyResult } from './types';
@@ -78,8 +79,9 @@ export type {
   HistoryStep,
 } from './bus';
 
-// ── Document ──
-export { createDocument, applyCommand, childrenOf, isSelfOrDescendant } from './document';
+// ── Edit session (authoring working state) ──
+export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
+export { makeEditSession, projectSessionAsset } from './edit-session';
 
 // ── Schema ──
 export {

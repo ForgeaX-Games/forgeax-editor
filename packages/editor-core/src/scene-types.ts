@@ -1,14 +1,20 @@
-// SceneDocument — the authoritative scene format. The editor (✎ Edit) authors it
-// through its command bus; games (▶ Play) fetch the SAME JSON and instantiate it
-// via `instantiateScene`. Engine-agnostic data only (no engine handles leak in
-// here) so the file is git-trackable, AI-readable, and portable.
+// EditSession — the editor's authoring working state. The editor (✎ Edit) authors
+// a scene through its command bus into an EditSession, which holds the engine's
+// pure `SceneAsset` POD projection (`asset`) PLUS the editor-local ID management
+// (`nextLocalId` self-increment allocator + `order` spawn-order list) that the
+// engine SceneAsset POD intentionally does NOT carry — keeping the engine POD
+// free of any "edit"-only field (A0 red line; plan-strategy D-6).
 //
-// This is the权威定义 shared across editor-runtime, games, and the engine host.
-// editor-runtime's core/types.ts re-exports these and adds its own EditorCommand.
+// games (▶ Play) fetch the SAME on-disk pack and instantiate it through the
+// engine-native scene pipeline. Engine-agnostic authoring data only (no engine
+// handles leak into the authoring entity map) so the on-disk pack is
+// git-trackable, AI-readable, and portable.
+
+import type { SceneAsset } from '@forgeax/engine-types';
 
 export type EntityId = number;
 
-/** Provenance: which Workbench source produced this instance (enables 编辑源
+/** Provenance: which Workbench source produced this instance (enables edit-source
  *  round-trip back to the originating plugin). */
 export interface EntitySource {
   plugin: string;
@@ -25,9 +31,24 @@ export interface EntityNode {
   hidden?: boolean;
 }
 
-export interface SceneDocument {
-  version: string;
-  nextId: EntityId;
+/**
+ * The editor's authoring working state.
+ *
+ * `asset` is the engine `SceneAsset` POD projection of the authored entities
+ * (rebuilt from `entities`/`order` on every mutation, so it is always fresh) —
+ * it carries NO editor-only field. `nextLocalId` + `order` + the rich
+ * `entities` authoring map (names / parent links / hidden flags that the engine
+ * SceneEntity POD does not model) live here, in the editor, never in the engine
+ * POD (A0 red line; plan-strategy D-6).
+ */
+export interface EditSession {
+  /** Engine POD projection of the authored entities (always derived; never the
+   *  source of truth — `entities`/`order` are). Pure `{ kind:'scene', entities }`
+   *  with NO `nextId`/`order`/`version` field (A0). */
+  readonly asset: SceneAsset;
+  /** editor-local self-increment id allocator. */
+  nextLocalId: EntityId;
+  /** authoring entity map — names/parent/hidden the engine POD does not model. */
   entities: Record<EntityId, EntityNode>;
   /** spawn order; per-parent child order derived from `parent`. */
   order: EntityId[];

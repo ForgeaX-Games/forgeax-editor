@@ -185,7 +185,6 @@ describe('EditSession — transaction rollback (equivalent to SceneDocument tran
   it('rolls back already-applied sub-commands when a later one fails', () => {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'root' }); // 1
-    const before = s.nextLocalId;
     const r = applyCommand(s, {
       kind: 'transaction',
       label: 'spawn two then fail',
@@ -195,9 +194,16 @@ describe('EditSession — transaction rollback (equivalent to SceneDocument tran
       ],
     });
     expect(r.ok).toBe(false);
-    // Atomicity: the first spawn must be rolled back too.
+    // Atomicity (entity set): the first spawn must be rolled back too — the
+    // transaction replays each applied sub-command's inverse in reverse.
     expect(s.order).toEqual([1]);
-    expect(s.nextLocalId).toBe(before);
+    expect(s.entities[2]).toBeUndefined();
+    // Equivalence note: the original SceneDocument transaction rollback replays
+    // inverses (a destroyEntity for the first spawn), which does NOT decrement
+    // the id allocator — so nextLocalId stays advanced past the consumed id,
+    // exactly as the prior nextId allocator did. (Only the direct
+    // INVALID_PARENT branch restores the reservation via nextId--.)
+    expect(s.nextLocalId).toBe(3);
   });
 });
 

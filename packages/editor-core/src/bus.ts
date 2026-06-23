@@ -1,7 +1,7 @@
-import { applyCommand, createDocument } from './document';
-import type { CommandError, EditorCommand, SceneDocument } from './types';
+import { applyCommand, createEditSession } from './document';
+import type { CommandError, EditorCommand, EditSession } from './types';
 
-export type BusListener = (doc: SceneDocument, lastCommand: EditorCommand | null) => void;
+export type BusListener = (doc: EditSession, lastCommand: EditorCommand | null) => void;
 
 export type DispatchResult =
   | { ok: true }
@@ -45,7 +45,7 @@ function step(label: string, origin: CommandOrigin, future: boolean, entity: num
  * command here — it is transient view state (see selection store).
  */
 export class EditorBus {
-  doc: SceneDocument;
+  doc: EditSession;
   private undoStack: StackEntry[] = [];
   private redoStack: StackEntry[] = [];
   private listeners = new Set<BusListener>();
@@ -54,7 +54,7 @@ export class EditorBus {
   /** origin of each ledger entry (index-aligned): who issued the command. */
   readonly origins: CommandOrigin[] = [];
 
-  constructor(doc: SceneDocument = createDocument()) {
+  constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
   }
 
@@ -69,9 +69,9 @@ export class EditorBus {
     return { ok: true };
   }
 
-  /** Swap in a new authored document (scene load). Clears history — old
-   * inverses target the previous doc and must not be replayed. */
-  replaceDoc(doc: SceneDocument): void {
+  /** Swap in a new authored session (scene load). Clears history — old
+   * inverses target the previous session and must not be replayed. */
+  replaceDoc(doc: EditSession): void {
     this.doc = doc;
     this.undoStack.length = 0;
     this.redoStack.length = 0;
