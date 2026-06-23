@@ -83,6 +83,10 @@ export type {
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
 export { makeEditSession, projectSessionAsset } from './edit-session';
 
+// ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
+export { schemaFingerprint, decideReloadTier } from './hot-reload';
+export type { ReloadTier, SchemaSource } from './hot-reload';
+
 // ── Schema ──
 export {
   listComponentSchemas,

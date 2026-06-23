@@ -21,3 +21,9 @@ export { ViewportHints } from './ViewportHints';
 export { createEngineSync } from './engine/sync';
 export { setupEditorSkylight } from './engine/skylight';
 export { createViewport } from './engine/viewport';
+
+// ── Hot reload (two-tier, D-8) + writeback chain (D-1) ──
+export { applyScriptChange, initHotReload } from './hot-reload';
+export type { HotReloadHost, HotReloadOutcome } from './hot-reload';
+export { writebackInstance } from './writeback-chain';
+export type { WritebackTarget, WritebackResult } from './writeback-chain';
