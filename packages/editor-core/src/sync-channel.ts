@@ -25,7 +25,7 @@ import type { EditorCommand, EntityId, SceneDocument } from './types';
 // major editor feature work), and the runtime cost of a second source
 // for an 8-element const array is negligible.
 
-/** The 8 dockable business panels of the forgeax editor. */
+/** The 10 dockable business panels of the forgeax editor. */
 const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -36,6 +36,7 @@ const EDITOR_PANELS = [
   'timeline',
   'matgraph',
   'launcher',
+  'asset-inspector',
 ] as const;
 
 /** Union type of all editor panel IDs. */
@@ -86,7 +87,9 @@ export type EditorSyncMsg =
   | { t: 'openScene'; id: string }
   // main → panels: the authority viewport is navigating to another scene —
   // scene-scoped panels (Hierarchy/Inspector/…) reload and re-pair with it
-  | { t: 'sceneChanged'; id: string };
+  | { t: 'sceneChanged'; id: string }
+  // any panel → all: asset selection changed (Content Browser → Asset Inspector)
+  | { t: 'assetSelect'; asset: { guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string } | null };
 
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }
@@ -142,6 +145,7 @@ const EditorSyncMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('assetsChanged') }),
   z.object({ t: z.literal('openScene'), id: z.string() }),
   z.object({ t: z.literal('sceneChanged'), id: z.string() }),
+  z.object({ t: z.literal('assetSelect'), asset: z.union([ObjZ, z.null()]) }),
 ]);
 
 /** Validate an inbound BroadcastChannel message envelope. Returns the typed

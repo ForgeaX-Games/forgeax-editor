@@ -1,9 +1,11 @@
 import { materialSwatch, type PackAsset } from '@forgeax/editor-core';
 
 const ASSET_ICON: Record<string, string> = {
-  level: '🗺', character: '🧍', monster: '🐮',
-  material: '🎨', mesh: '◫', texture: '🖼',
-  scene: '🗺', animation: '▶',
+  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
+  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
+  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
+  'render-pipeline': '🔧', tileset: '🧱',
+  level: '🗺', character: '🧍', monster: '🐮', animation: '▶',
 };
 
 interface AssetCardProps {
@@ -23,7 +25,7 @@ export function AssetCard({ asset, selected, onClick, onDoubleClick, onContextMe
       <div className="asset-card-thumb">
         {swatch
           ? <div className="asset-thumb-swatch" style={{ background: swatch }} />
-          : <span className="asset-thumb-icon">{ASSET_ICON[asset.kind] ?? '?'}</span>
+          : <span className="asset-thumb-icon">{ASSET_ICON[asset.kind] ?? '📦'}</span>
         }
       </div>
       <div className="asset-card-label">{asset.name}</div>

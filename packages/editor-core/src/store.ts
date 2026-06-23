@@ -1050,7 +1050,8 @@ function mainOnMessage(ev: MessageEvent): void {
     case 'refAsset': requestRefAsset(msg.asset); break;
     case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
     case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
-    case 'openScene': void switchSceneFile(msg.id); break;
+      case 'openScene': void switchSceneFile(msg.id); break;
+    case 'assetSelect': applyRemoteAssetSelection(msg.asset as SelectedAsset | null); break;
     default: break; // 'snapshot'/'sceneChanged' are main→popout only
   }
 }
@@ -1105,6 +1106,11 @@ function initPopout(ch: BroadcastChannel): void {
     if (msg.t === 'assetsChanged') {
       // Relay as a window message so the Assets panel's listener can reload.
       try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
+      return;
+    }
+    if (msg.t === 'assetSelect') {
+      applyRemoteAssetSelection(msg.asset as SelectedAsset | null);
+      return;
     }
   };
   // Request the current state on open. A SINGLE hello is lost if the main
@@ -1196,9 +1202,18 @@ let selectedAsset: SelectedAsset | null = null;
 const assetSelListeners = new Set<() => void>();
 function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
 
+let applyingRemoteAssetSel = false;
 export function setAssetSelection(asset: SelectedAsset | null): void {
+  if (selectedAsset?.guid === asset?.guid) return;
   selectedAsset = asset;
   emitAssetSel();
+  if (!applyingRemoteAssetSel) postSync({ t: 'assetSelect', asset });
+}
+export function applyRemoteAssetSelection(asset: SelectedAsset | null): void {
+  applyingRemoteAssetSel = true;
+  selectedAsset = asset;
+  emitAssetSel();
+  applyingRemoteAssetSel = false;
 }
 export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
 function subscribeAssetSel(fn: () => void): () => void {
