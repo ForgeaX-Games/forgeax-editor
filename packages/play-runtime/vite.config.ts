@@ -87,6 +87,18 @@ function sharedAssetRoots(): string[] {
   return existsSync(dir) ? [dir] : [];
 }
 
+// Per-game pack roots: a game's own `assets/` AND `scenes/`. Levels live in
+// scenes/<id>.pack.json (the editor's level discovery scans there — see
+// editor-core store.initSceneList; the game's main.ts loads them by GUID from
+// THIS per-game catalog). Monsters/materials live in assets/. Both dirs are
+// optional; filter to those that exist. Without scenes/ here, asset-first Play
+// can't loadByGuid a level pack that lives in scenes/ (the editor still shows
+// it, but Play 404s the GUID) — keep this in sync with the editor convention.
+function perGamePackRoots(slug: string): string[] {
+  const base = resolve(here, '.forgeax', 'games', slug);
+  return ['assets', 'scenes'].map((d) => join(base, d)).filter((p) => existsSync(p));
+}
+
 // Return slugs for every game directory under .forgeax/games/ that has an
 // assets/ subdirectory. Symlink game directories are included because
 // existsSync follows symlinks. This mirrors gameAssetRoots() and is the
@@ -132,9 +144,10 @@ export function forgeaxPerGamePackIndex() {
         if (!match) { next(); return; }
         const slug = match[1];
         if (slug === undefined) { next(); return; }
-        const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
+        const roots = perGamePackRoots(slug);
+        if (roots.length === 0) { next(); return; }
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
+          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(catalog));
@@ -150,9 +163,10 @@ export function forgeaxPerGamePackIndex() {
       // (registered before us) already emits the global /pack-index.json
       // and cooks textures. We add per-game sidecars.
       for (const slug of gameSlugs()) {
-        const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
+        const roots = perGamePackRoots(slug);
+        if (roots.length === 0) continue;
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
+          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           const fileName = `pack-index/${slug}.json`;
           this.emitFile({
             type: 'asset',

@@ -123,6 +123,36 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   // ── VAG_* message consumption ──────────────────────────────────────────────
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
+      const t0 = (ev.data as { type?: unknown } | null)?.type;
+      // Control signal from the Studio shell / editor Launcher (a DIFFERENT
+      // window than the game iframe) asking ▶ Play to reload — e.g. the launcher
+      // picked another level and rewrote play-config.json, which the game only
+      // reads at boot. Handle it BEFORE the same-source gate below (that gate
+      // exists to ignore other iframes' telemetry, but this is a legit command).
+      if (t0 === 'VAG_PREVIEW_RELOAD') {
+        const ifr = iframeRef.current;
+        if (ifr) {
+          setIsFirstFrameLoading(true);
+          setFatal(null);
+          // eslint-disable-next-line no-self-assign
+          ifr.src = ifr.src;
+          lastHeartbeatRef.current = Date.now();
+        }
+        return;
+      }
+      // Launcher "play this level" → forward to the running game so it switches
+      // level IN PLACE (game main.ts handles VAG_SET_LEVEL via unloadLevel+
+      // loadLevel) — no iframe reload, no WebGPU context recreate. Single-scene
+      // games ignore it (no-op). Also from the shell (a DIFFERENT window), so
+      // handle before the same-source gate.
+      if (t0 === 'VAG_SET_LEVEL') {
+        const level = (ev.data as { level?: unknown })?.level;
+        if (typeof level === 'string') {
+          try { iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_SET_LEVEL', level }, '*'); } catch { /* iframe gone */ }
+        }
+        return;
+      }
+
       const expectedSource = iframeRef.current?.contentWindow ?? null;
       if (expectedSource && ev.source !== expectedSource) return;
 

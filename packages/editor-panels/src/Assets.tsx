@@ -52,6 +52,17 @@ export function AssetsPanel() {
     });
   }, [dirAssets, kindFilter, searchQuery]);
 
+  // Levels are scene-kind packs (group 'scene'), which dirAssets deliberately
+  // excludes from the catalog grid (scenes open in the viewport, not assign-able
+  // like a material). They live in the left LEVELS rail — but a user clicking
+  // the "Level" filter expects them in the main view too, so surface them here.
+  const levelFiltered = useMemo(() => {
+    if (!searchQuery) return levelScenes;
+    const q = searchQuery.toLowerCase();
+    return levelScenes.filter((s) => (s.name ?? s.id).toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
+  }, [levelScenes, searchQuery]);
+  const showingLevels = kindFilter === 'level';
+
   const newScene = (duplicate: boolean): void => {
     const id = window.prompt(t('editor.assets.newLevelPrompt'));
     if (!id) return;
@@ -119,31 +130,9 @@ export function AssetsPanel() {
           </div>
 
           <div className="cb-source-scenes">
-            {levelScenes.length > 0 && (
-              <>
-                <div className="asset-group-title" onContextMenu={openLevelMenu}
-                  title={t('editor.assets.levelGroupTitleAttr')}>
-                  {t('editor.assets.levelGroupTitle')}
-                  <button type="button" className="asset-action-btn asset-group-add"
-                    title={t('editor.assets.newEmptySceneTitle')}
-                    onClick={() => newScene(false)}>＋</button>
-                </div>
-                {levelScenes.map((s) => {
-                  const isOpen = openSceneFile === s.id;
-                  return (
-                    <div key={s.id} className="asset-row"
-                      title={t('editor.assets.levelRowTitle', { pack: s.pack })}
-                      onContextMenu={openLevelMenu}
-                      onDoubleClick={() => requestOpenScene(s.id)}>
-                      <span className="asset-swatch">🗺</span>
-                      <span className="asset-name">{s.name ?? s.id}</span>
-                      <span className="asset-kind">level</span>
-                      {isOpen && <span className="asset-processed-badge" title={t('editor.assets.editingInThisWindow')}>✎</span>}
-                    </div>
-                  );
-                })}
-              </>
-            )}
+            {/* Levels moved to the main view's "Level" filter (cb-filters) —
+                the redundant left rail was removed. Characters/monsters keep
+                their rail here since they have no filter-tab equivalent. */}
             {assetScenes.length > 0 && (
               <>
                 <div className="asset-group-title">{t('editor.assets.charMonsterGroupTitle')}</div>
@@ -192,6 +181,27 @@ export function AssetsPanel() {
           <div className="cb-content">
             {loading ? (
               <div className="muted" style={{ padding: '8px 10px' }}>loading…</div>
+            ) : showingLevels ? (
+              levelFiltered.length === 0 ? (
+                <div className="muted" style={{ padding: '8px 10px' }}>{t('editor.assets.noResults')}</div>
+              ) : (
+                <div className="cb-list">
+                  {levelFiltered.map((s) => {
+                    const isOpen = openSceneFile === s.id;
+                    return (
+                      <div key={s.id} className={`asset-row${isOpen ? ' sel' : ''}`}
+                        title={t('editor.assets.levelRowTitle', { pack: s.pack })}
+                        onContextMenu={openLevelMenu}
+                        onDoubleClick={() => requestOpenScene(s.id)}>
+                        <span className="asset-swatch">🗺</span>
+                        <span className="asset-name">{s.name ?? s.id}</span>
+                        <span className="asset-kind">level</span>
+                        {isOpen && <span className="asset-processed-badge" title={t('editor.assets.editingInThisWindow')}>✎</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             ) : filtered.length === 0 ? (
               <div className="muted" style={{ padding: '8px 10px' }}>
                 {packs.length === 0 ? t('editor.assets.emptyPacks') : t('editor.assets.noResults')}

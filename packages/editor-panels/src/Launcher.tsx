@@ -35,7 +35,20 @@ export function LauncherPanel() {
   const pick = (v: string): void => {
     setValue(v);
     void writePlayConfig(v === CAMPAIGN ? { mode: 'campaign' } : { mode: 'level', level: v })
-      .then((ok) => { if (ok) setSavedAt(Date.now()); });
+      .then((ok) => {
+        if (!ok) return;
+        setSavedAt(Date.now());
+        // Switch the running ▶ Play to the picked level LIVE — post VAG_SET_LEVEL
+        // so the game switches in place (unloadLevel+loadLevel) instead of
+        // reloading the Play iframe (a reload re-creates the WebGPU context, which
+        // wedges WKWebView's GPU process). CAMPAIGN → first level. Multi-level
+        // games handle it; single-scene games ignore it (no-op). PlaySurface lives
+        // in the Studio shell (top window) and forwards it to the game iframe.
+        const level = v === CAMPAIGN ? (levels[0]?.id ?? '') : v;
+        if (level) {
+          try { window.top?.postMessage({ type: 'VAG_SET_LEVEL', level }, '*'); } catch { /* cross-origin */ }
+        }
+      });
   };
 
   return (
