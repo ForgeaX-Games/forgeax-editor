@@ -14,6 +14,7 @@ import {
   AssetInspectorPanel,
 } from '@forgeax/editor-panels';
 import { SystemsPanel } from './panels/systems-panel';
+import { InspectorWithAddComponent } from './panels/inspector';
 import { announcePopoutClosing, announcePopoutGeom, getSceneId } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import type { SyncPanelId } from '@forgeax/editor-core';
@@ -41,7 +42,7 @@ const TITLE: Record<string, string> = {
 const BODY: Record<string, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
   assets: () => <AssetsPanel />,
-  inspector: () => <InspectorPanel />,
+  inspector: () => <InspectorWithAddComponent />,
   history: () => <HistoryPanel />,
   capabilities: () => <CapabilitiesPanel />,
   material: () => <MaterialPanel />,
