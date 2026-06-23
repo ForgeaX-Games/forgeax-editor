@@ -1,14 +1,14 @@
 // dirty-indicator.tsx — editor toolbar dirty (unsaved-changes) indicator (M5 w27).
 //
 // Renders a colored dot in the editor toolbar that is colored (e.g. orange/yellow)
-// when the authored document has pending disk saves (memory state differs from
+// when the authored document has unsaved edits (memory state differs from the
 // on-disk pack), and grey when clean. Data source: hasPendingDiskSave() from
-// editor-core store.ts (line 824 — already exposed).
+// editor-core store.ts.
 //
-// The indicator itself is visual-only in M5; the actual manual-save wiring
-// (replacing auto-save debounce) lands in M6 w36 (store.ts scheduleSave
-// removal). This component reads the current dirty state and will integrate
-// with M6's isDirty semantics once they land.
+// M6 w36 replaced the auto-save debounce with the manual-save dirty flag
+// (`_isDirty`): every edit marks dirty; a successful saveDocToDisk (user clicks
+// Save) clears it. hasPendingDiskSave() now returns that flag, so this indicator
+// shows pending-vs-saved state under the manual-save model (D-7).
 //
 // Anchors:
 //   requirements AC-14 human: dirty indicator visible in toolbar
@@ -25,7 +25,7 @@ export function DirtyIndicator(): ReactNode {
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    // Polling is cheap — hasPendingDiskSave checks a timer flag.
+    // Polling is cheap — hasPendingDiskSave reads the in-memory dirty flag.
     const check = () => setDirty(hasPendingDiskSave());
     check();
     const interval = setInterval(check, 500);

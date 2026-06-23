@@ -807,7 +807,9 @@ export async function loadDocFromDisk(): Promise<boolean> {
   return false;
 }
 
-/** Write the active game's scene to disk as a native engine scene pack. */
+/** Write the active game's scene to disk as a native engine scene pack. This is
+ *  the MANUAL save (D-7): the user clicks Save in the toolbar → this runs and,
+ *  on success, clears the dirty flag so the dirty indicator turns off. */
 export async function saveDocToDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
@@ -817,54 +819,55 @@ export async function saveDocToDisk(): Promise<boolean> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: p, content: serializedPack() }),
     });
+    if (r.ok) _isDirty = false;
     return r.ok;
   } catch {
     return false;
   }
 }
 
-// Debounced disk autosave: every edit lands in localStorage immediately (above)
-// and is flushed to the game's scene.pack.json shortly after the last change, so
-// the authored scene persists per-game without a manual Save. The debounce is
-// SHORT (was 1500ms) so the on-disk pack tracks edits closely — ▶ Play reads the
-// disk, so a long debounce meant a freshly-switched Play showed a stale scene.
-const AUTOSAVE_DEBOUNCE_MS = 400;
-let _diskSaveTimer: ReturnType<typeof setTimeout> | null = null;
-bus.subscribe(() => {
-  if (_diskSaveTimer) clearTimeout(_diskSaveTimer);
-  _diskSaveTimer = setTimeout(() => { void saveDocToDisk(); _diskSaveTimer = null; }, AUTOSAVE_DEBOUNCE_MS);
-});
+// Manual disk save (requirements-decisions #5; plan-strategy D-7). Every edit
+// lands in localStorage immediately (above) and marks the in-memory scene DIRTY.
+// The on-disk scene.pack.json is written ONLY when the user clicks Save (the UI
+// layer calls saveDocToDisk), NOT on a debounce timer — deliberately deviating
+// from the prior 400ms auto-save so authoring edits are not silently persisted.
+// `_isDirty` is the dirty-indicator source the toolbar reads (via
+// hasPendingDiskSave); it clears on a successful saveDocToDisk / explicit cancel
+// / beacon flush.
+let _isDirty = false;
+bus.subscribe(() => { _isDirty = true; });
 
-/** True while an edit is debounced but not yet written to disk. */
+/** True while the in-memory scene has unsaved edits (drives the dirty
+ *  indicator + the disk-watch "don't clobber my edits" guard). Manual-save
+ *  model: this stays true until the user saves (or a flush/cancel clears it). */
 export function hasPendingDiskSave(): boolean {
-  return _diskSaveTimer !== null;
+  return _isDirty;
 }
 
-/** Cancel a debounced autosave WITHOUT writing. Used after the editor seeds a
- *  default scene for a genuinely scene-less game: the bare seed must NOT be
- *  persisted to the game dir (that creates a scene.pack.json the user never
- *  authored — and, for a game whose real scene the editor failed to locate, it
- *  would permanently mask it). The seed stays in-memory; the user's first real
- *  edit re-schedules a normal save. */
+/** Clear the dirty flag WITHOUT writing. Used after the editor seeds a default
+ *  scene for a genuinely scene-less game: the bare seed must NOT be persisted to
+ *  the game dir (that creates a scene.pack.json the user never authored — and,
+ *  for a game whose real scene the editor failed to locate, it would permanently
+ *  mask it). The seed stays in-memory; the user's first real edit re-marks
+ *  dirty. */
 export function cancelPendingDiskSave(): void {
-  if (_diskSaveTimer) { clearTimeout(_diskSaveTimer); _diskSaveTimer = null; }
+  _isDirty = false;
 }
 
-// Flush a pending autosave SYNCHRONOUSLY-SAFE, even as the editor iframe is being
+// Flush unsaved edits SYNCHRONOUSLY-SAFE, even as the editor iframe is being
 // torn down (mode switch edit→play unmounts EditMode → destroys this iframe). A
 // normal `await fetch` would be aborted with the iframe; `navigator.sendBeacon`
 // is the one write the browser guarantees to deliver during unload/pagehide. The
 // server's POST /api/files reads c.req.json(), so a Blob typed application/json
 // parses identically to the regular fetch save. Called on pagehide /
 // visibilitychange(hidden) and on the VAG_EDITOR_FLUSH postMessage the interface
-// sends right before it unmounts the editor — so Play always reads the latest
-// pack the instant the user flips to it, with no race against the debounce.
+// sends right before it unmounts the editor — so an in-flight edit is not lost
+// when the user flips to Play, even under the manual-save model (D-7).
 export function flushPendingSaveBeacon(): void {
-  if (_diskSaveTimer === null) return; // nothing dirty
+  if (!_isDirty) return; // nothing dirty
   const p = scenePath();
   if (!p) return;
-  clearTimeout(_diskSaveTimer);
-  _diskSaveTimer = null;
+  _isDirty = false;
   try {
     const blob = new Blob([JSON.stringify({ path: p, content: serializedPack() })], { type: 'application/json' });
     const ok = navigator.sendBeacon('/api/files', blob);
@@ -885,9 +888,9 @@ export function flushPendingSaveBeacon(): void {
 // on an external scene.json change, re-fetch + replaceDoc() (which fires the bus
 // → engine resync + React, so the 3D viewport rebuilds live).
 //
-// Guards: (1) skip the echo of our own autosave (_lastDiskSaveAt window);
-// (2) skip while we have unsaved local edits pending (_diskSaveTimer active) so
-// an agent write never clobbers what the user is mid-editing.
+// Guards: (1) skip the echo of our own save (content-compare, see below);
+// (2) skip while we have unsaved local edits pending (_isDirty) so an agent
+// write never clobbers what the user is mid-editing.
 export function initDiskWatch(): void {
   if (IS_POPOUT) return; // popouts mirror the main window over BroadcastChannel
   let ws: WebSocket | null = null;
@@ -895,13 +898,13 @@ export function initDiskWatch(): void {
   let backoff = 1000;
 
   // Apply an externally-loaded doc WITHOUT rewriting it back to disk. replaceDoc
-  // fires the bus → schedules an autosave; we cancel that pending save so we DON'T
-  // overwrite the agent's just-written file with our canonical reformat. Rewriting
-  // it would (a) churn the file under the agent and (b) risk a reformat ping-pong /
-  // flicker. The next LOCAL edit will canonicalise it normally.
+  // fires the bus → marks the scene dirty; we clear that dirty flag so a later
+  // flush/save does NOT overwrite the agent's just-written file with our
+  // canonical reformat. Rewriting it would (a) churn the file under the agent and
+  // (b) risk a reformat ping-pong / flicker. The next LOCAL edit re-marks dirty.
   const applyExternal = (next: EditSession): void => {
     replaceDoc(next);
-    if (_diskSaveTimer) { clearTimeout(_diskSaveTimer); _diskSaveTimer = null; }
+    _isDirty = false;
   };
 
   const reloadFromDisk = async (): Promise<void> => {
@@ -939,9 +942,9 @@ export function initDiskWatch(): void {
       const path = (msg.path ?? '').replace(/\\/g, '/');
       if (path !== scenePath()) return;          // only THIS game's scene.json
       if (msg.change === 'unlink') return;
-      if (_diskSaveTimer !== null) return;        // user has unsaved edits → don't clobber
+      if (_isDirty) return;                        // user has unsaved edits → don't clobber
       // The reload itself content-compares against the current doc, so our own
-      // autosave echo is a no-op (identical content) — no rebuild, no loop.
+      // save echo is a no-op (identical content) — no rebuild, no loop.
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => { void reloadFromDisk(); }, 400);
     });
