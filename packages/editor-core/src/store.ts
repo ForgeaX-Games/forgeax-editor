@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from 'react';
-import { docToPack, packToDoc, isScenePack, stableGuid } from './scene-pack';
+import { sessionToPack, packToSession, isScenePack, stableGuid } from './scene-pack';
 import { EditorBus } from './bus';
 import type { CommandOrigin, HistoryStep } from './bus';
-import { createDocument } from './document';
-import type { EditorCommand, EntityId, SceneDocument } from './types';
+import { createEditSession } from './document';
+import { makeEditSession } from './edit-session';
+import type { EditorCommand, EntityId, EditSession } from './types';
 import {
   getPopoutPanel,
   openSyncChannel,
@@ -26,7 +27,7 @@ import { fetchWithTimeout } from './net';
 // snapshot / runtime-systems half of the prototype store is dropped here because
 // in forgeax the *engine itself* runs Play mode (see interface ▶ Play). The Edit
 // surface keeps the authored doc static and projects it onto the forgeax world.
-export const bus = new EditorBus(createDocument());
+export const bus = new EditorBus(createEditSession());
 
 // ── Cross-window sync (design §0.2.2 Pop-out) ────────────────────────────────
 // `?panel=<id>` marks a popped-out OS window that renders a SINGLE panel and
@@ -650,12 +651,12 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   if (currentSceneId === 'default') return false;
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
-  const sourceDoc = duplicateCurrent ? bus.doc : createDocument();
+  const sourceDoc = duplicateCurrent ? bus.doc : createEditSession();
   const newPath = `.forgeax/games/${currentSceneId}/scenes/${slug}.pack.json`;
   // A NEW level gets its own stable, path-derived GUID — never the source
   // scene's GUID (duplicate must be a distinct asset) and never an order-derived
   // one (which would drift on the first edit).
-  const packContent = JSON.stringify(docToPack(sourceDoc, stableGuid('scene|' + newPath)), null, 2) + '\n';
+  const packContent = JSON.stringify(sessionToPack(sourceDoc, stableGuid('scene|' + newPath)), null, 2) + '\n';
   try {
     const w1 = await fetch('/api/files', {
       method: 'POST',
@@ -672,6 +673,20 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   return true;
 }
 
+/** Revive a plain parsed object (localStorage mirror / legacy scene.json) into a
+ *  live EditSession with the engine-POD `asset` getter. Reads either the current
+ *  `nextLocalId` field or a legacy `nextId` (pre-M6 persisted mirrors). */
+function reviveSession(parsed: {
+  entities: EditSession['entities'];
+  order?: EntityId[];
+  nextLocalId?: EntityId;
+  nextId?: EntityId;
+}): EditSession {
+  const order = parsed.order ?? Object.keys(parsed.entities).map(Number);
+  const next = parsed.nextLocalId ?? parsed.nextId ?? (order.reduce((m, id) => Math.max(m, id), 0) + 1);
+  return makeEditSession(parsed.entities, order, next);
+}
+
 export function loadDocFromStorage(): boolean {
   if (typeof localStorage === 'undefined') return false;
   try {
@@ -679,7 +694,7 @@ export function loadDocFromStorage(): boolean {
     if (!raw) return false;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.entities) {
-      bus.doc = parsed;
+      bus.doc = reviveSession(parsed);
       docVersion++;
       for (const fn of docListeners) fn();
       return true;
@@ -703,7 +718,7 @@ bus.subscribe(() => {
 });
 
 // ── Disk persistence: the game's authored scene-asset ────────────────────────
-// Design (editor-feature-spec §15): the SceneDocument is the SSOT, serialized as
+// Design (editor-feature-spec §15): the EditSession is the SSOT, serialized as
 // self-describing JSON. We persist it to the GAME's folder so it's git-trackable,
 // AI-readable, and the same file ▶ Play can instantiate. Path:
 //   .forgeax/games/<slug>/scene.json   (the active ?scene slug)
@@ -711,8 +726,8 @@ bus.subscribe(() => {
 // localStorage stays as a fast offline mirror; disk is the durable source.
 //
 // The durable on-disk format is the engine's NATIVE scene pack (`scene.pack.json`)
-// — the editor's in-memory SceneDocument is converted to/from it via
-// @forgeax/scene's docToPack/packToDoc. (Legacy `scene.json` is still READ for
+// — the editor in-memory EditSession is converted to/from it via
+// @forgeax/scene's sessionToPack/packToSession. (Legacy `scene.json` is still READ for
 // backward-compat; it is migrated to a pack on the next save.)
 function scenePath(): string | null {
   if (currentSceneId === 'default') return null;
@@ -740,7 +755,7 @@ function sceneGuidForSave(): string | undefined {
 /** The exact byte content saveDocToDisk would write for the current doc (used by
  *  the disk watcher to recognise its own echo). */
 function serializedPack(): string {
-  return JSON.stringify(docToPack(bus.doc, sceneGuidForSave()), null, 2) + '\n';
+  return JSON.stringify(sessionToPack(bus.doc, sceneGuidForSave()), null, 2) + '\n';
 }
 
 /** Load the active game's scene from disk (native pack preferred, legacy
@@ -762,7 +777,7 @@ export async function loadDocFromDisk(): Promise<boolean> {
           // Preserve the scene asset's GUID across edits (its stable identity).
           const sceneAsset = parsed.assets.find((a) => a.kind === 'scene');
           if (sceneAsset?.guid) currentSceneGuid = sceneAsset.guid;
-          bus.doc = packToDoc(parsed);
+          bus.doc = packToSession(parsed);
           docVersion++;
           for (const fn of docListeners) fn();
           return true;
@@ -780,7 +795,7 @@ export async function loadDocFromDisk(): Promise<boolean> {
         if (j.content) {
           const parsed = JSON.parse(j.content);
           if (parsed && typeof parsed === 'object' && parsed.entities) {
-            bus.doc = parsed;
+            bus.doc = reviveSession(parsed);
             docVersion++;
             for (const fn of docListeners) fn();
             return true;
@@ -884,7 +899,7 @@ export function initDiskWatch(): void {
   // overwrite the agent's just-written file with our canonical reformat. Rewriting
   // it would (a) churn the file under the agent and (b) risk a reformat ping-pong /
   // flicker. The next LOCAL edit will canonicalise it normally.
-  const applyExternal = (next: SceneDocument): void => {
+  const applyExternal = (next: EditSession): void => {
     replaceDoc(next);
     if (_diskSaveTimer) { clearTimeout(_diskSaveTimer); _diskSaveTimer = null; }
   };
@@ -898,16 +913,16 @@ export function initDiskWatch(): void {
       const j = (await r.json()) as { content?: string };
       if (!j.content) return;
       const parsed = JSON.parse(j.content);
-      const next = isScenePack(parsed) ? packToDoc(parsed)
-        : (parsed && typeof parsed === 'object' && parsed.entities) ? parsed as SceneDocument
+      const next = isScenePack(parsed) ? packToSession(parsed)
+        : (parsed && typeof parsed === 'object' && parsed.entities) ? reviveSession(parsed)
         : null;
       if (!next) return;
       // CANONICAL compare: normalise BOTH the incoming doc and the current doc
-      // through docToPack, then compare. This skips not just our own autosave echo
+      // through sessionToPack, then compare. This skips not just our own autosave echo
       // but any reload that wouldn't actually change the scene (formatting / GUID /
       // float-rounding differences in the agent's write) — the definitive
       // no-op-reload / flicker-loop guard.
-      if (JSON.stringify(docToPack(next)) === JSON.stringify(docToPack(bus.doc))) return;
+      if (JSON.stringify(sessionToPack(next)) === JSON.stringify(sessionToPack(bus.doc))) return;
       applyExternal(next);
     } catch { /* server unreachable / parse error → keep current doc */ }
   };
@@ -943,9 +958,13 @@ export function initDiskWatch(): void {
 
 /** Replace the entire authored document (scene load/import). Resets selection
  * and undo history since old inverses no longer apply to the new doc. */
-export function replaceDoc(doc: SceneDocument): void {
+export function replaceDoc(doc: EditSession): void {
   if (IS_POPOUT && !applyingSnapshot) { postSync({ t: 'replaceDoc', doc }); return; }
-  bus.replaceDoc(doc);
+  // A doc arriving over the BroadcastChannel (replaceDoc message) is a
+  // structuredClone that has lost the EditSession `asset` getter — revive it so
+  // downstream `bus.doc.asset` reads stay live (w34). A locally-built session
+  // already carries the getter; reviveSession rebuilds it idempotently.
+  bus.replaceDoc(reviveSession(doc));
   selectionList = [];
   emitSelection();
   docVersion++;
@@ -995,7 +1014,9 @@ function applySnapshot(snap: EditorSnapshot): void {
   try {
     mirror = snap;
     markMainConnected(); // a main answered → this panel is live, not orphaned
-    bus.doc = snap.doc;
+    // BroadcastChannel structuredClone drops the EditSession `asset` getter —
+    // revive it so popout panels reading bus.doc.asset stay live (w34).
+    bus.doc = reviveSession(snap.doc);
     selectionList = [...snap.selection];
     if (gizmoMode !== snap.gizmo) {
       gizmoMode = snap.gizmo;
