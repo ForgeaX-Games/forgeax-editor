@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
@@ -9,6 +9,31 @@ import { gltfImporter } from '@forgeax/engine-gltf';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// Cross-platform setup for shared-assets:
+// Git on Windows without core.symlinks=true checks out symlinks as plain text files containing the target path.
+// This breaks Vite dev server. We dynamically create a 'junction' on Windows if needed.
+(function setupSharedAssets() {
+  const linkPath = resolve(here, 'shared-assets');
+  const targetPath = resolve(here, '..', '..', 'forgeax-editor-assets');
+  if (existsSync(linkPath)) {
+    const stat = lstatSync(linkPath);
+    if (!stat.isSymbolicLink() && stat.isFile()) {
+      // It's the text file checked out by Git on Windows. Remove it.
+      try { unlinkSync(linkPath); } catch {}
+    } else {
+      // Already a valid symlink or junction, leave it alone.
+      return;
+    }
+  }
+  // Create a proper symlink/junction
+  try {
+    symlinkSync(targetPath, linkPath, 'junction');
+  } catch (e) {
+    console.warn(`[forgeax] failed to create shared-assets junction:`, e);
+  }
+})();
+
 // Self-contained vite root: the engine directory itself. Pre-2026-05-13 the
 // root was the parent dir (packages/forgeax/), which forced an
 // engine-host-specific index.html to live one level up. With root = here,
