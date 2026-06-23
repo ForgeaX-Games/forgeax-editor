@@ -14,11 +14,6 @@ export type RunCondition = (world: World) => boolean;
 
 /**
  * Compose multiple run conditions with AND logic.
- *
- * @param conds 0-2+ run conditions to AND together.
- *   - 0 conds → always true.
- *   - 1 cond → identity (returns the single condition).
- *   - 2+ conds → AND of all.
  */
 export function and(...conds: RunCondition[]): RunCondition {
   if (conds.length === 0) return () => true;
@@ -27,12 +22,19 @@ export function and(...conds: RunCondition[]): RunCondition {
 }
 
 /**
- * notEditing — returns true when the editor is NOT in edit mode.
+ * notEditing — true when we are NOT in edit mode.
  *
- * Edit mode is signalled by an EditMode resource with `active: true`.
- * When the resource is absent or `active === false`, notEditing returns `false`
- * (systems are allowed to run).
+ * Formula: !getResource('EditMode')?.active (plan-strategy D-5).
+ *
+ * - EditMode.active=true  → notEditing=false (systems frozen in edit mode)
+ * - EditMode.active=false → notEditing=true  (systems run in play mode)
+ * - EditMode absent       → notEditing=true  (default: systems run)
  */
 export function notEditing(world: World): boolean {
-  return !(world as any).getResource?.('EditMode')?.active;
+  // Use hasResource + getResource instead of try-catch for cleaner semantic matching.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = world as any;
+  if (!w.hasResource?.('EditMode')) return true; // absent → true
+  const state = w.getResource('EditMode') as { active?: boolean } | undefined;
+  return !(state?.active);
 }

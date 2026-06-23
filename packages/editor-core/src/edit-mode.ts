@@ -20,5 +20,7 @@ export interface EditModeState {
  * Idempotent — overwrites any existing EditMode resource.
  */
 export function injectEditMode(world: World, active: boolean): void {
-  (world as any).insertResource?.(EDIT_MODE_KEY, { active } as EditModeState);
+  // Engine World.insertResource(key, value) — idempotent overwrite.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (world as any).insertResource('EditMode', { active } as EditModeState);
 }

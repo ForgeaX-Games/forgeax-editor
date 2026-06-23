@@ -76,22 +76,22 @@ function freshWorld(): World {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('w19 — notEditing freeze gameplay system', () => {
-  it('notEditing(world) returns true when EditMode is active', () => {
+  it('notEditing(world) returns false when EditMode is active (editing)', () => {
     const world = freshWorld();
     injectEditMode(world, true);
+    expect(notEditing(world)).toBe(false);
+  });
+
+  it('notEditing(world) returns true when EditMode is inactive', () => {
+    const world = freshWorld();
+    injectEditMode(world, false);
     expect(notEditing(world)).toBe(true);
   });
 
-  it('notEditing(world) returns false when EditMode is inactive', () => {
+  it('notEditing(world) returns true when EditMode resource is absent', () => {
     const world = freshWorld();
-    injectEditMode(world, false);
-    expect(notEditing(world)).toBe(false);
-  });
-
-  it('notEditing(world) returns false when EditMode resource is absent', () => {
-    const world = freshWorld();
-    // EditMode resource not injected → defaults to false.
-    expect(notEditing(world)).toBe(false);
+    // No EditMode resource — optional chaining: !undefined?.active === true.
+    expect(notEditing(world)).toBe(true);
   });
 
   it('gameplay system with and(runIf, notEditing) does NOT execute when editing', () => {
