@@ -2,7 +2,7 @@
 //
 // Boots the forgeax engine on a canvas (same path as @forgeax-studio/preview-
 // runtime: createApp + VAG postMessage bridge + diagnostic overlay) AND mounts
-// the React editor chrome (ViewportBar + ViewportHints). The authored SceneDocument
+// the React editor chrome (ViewportBar + ViewportHints). The authored EditSession
 // is projected onto the forgeax world by src/engine/sync.ts so what you edit renders
 // with the SAME engine the game plays on (WYSIWYG). Editor self-built dock retired;
 // default route is viewport-only. Panels live in outer DockShell as ep:* iframes.
@@ -276,9 +276,9 @@ renderer.assets.configurePackIndex(packIndexUrl);
 (window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile };
 
   // ── openProject proof-of-life (M3 w15): call openProject with fetch reader ──
-  // This call path is an ADDITION (does not replace the existing SceneDocument
-  // flow). It proves the openProject contract works end-to-end. M6 will unify
-  // both paths under SceneAsset. The result world is exposed on the window
+  // This call path is an ADDITION (does not replace the existing EditSession
+  // flow). It proves the openProject contract works end-to-end; both paths now
+  // project through SceneAsset (M6). The result world is exposed on the window
   // object for manual verification (AC-06 human part).
   if (sceneSlug && sceneSlug !== 'default') {
     openProject(sceneSlug, createFetchReader(sceneSlug)).then((projectResult) => {
