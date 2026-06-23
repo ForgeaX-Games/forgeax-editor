@@ -211,25 +211,13 @@ export type { Asset, MeshAsset } from './asset-registry';
  */
 export {
   AssetRegistry,
+  BUILTIN_FLOATS_PER_VERTEX,
   HANDLE_CUBE,
   HANDLE_NINESLICE_QUAD,
   HANDLE_QUAD,
   HANDLE_SPHERE,
   HANDLE_TRIANGLE,
 } from './asset-registry';
-// D-15: builtin payloads + slot boundary are owned by the process-static
-// BuiltinAssetRegistry tier (builtin-asset-registry.ts), not the World-bound
-// AssetRegistry. BUILTIN_FLOATS_PER_VERTEX is the single vertex-layout SSOT.
-export {
-  BUILTIN_BASE,
-  BUILTIN_CUBE,
-  BUILTIN_FLOATS_PER_VERTEX,
-  BUILTIN_NINESLICE_QUAD,
-  BUILTIN_QUAD,
-  BUILTIN_SPHERE,
-  BUILTIN_TRIANGLE,
-  BuiltinAssetRegistry,
-} from './builtin-asset-registry';
 /**
  * 5-component schema set (Transform / MeshFilter / MeshRenderer /
  * Camera / DirectionalLight). Each is a frozen `Component<N, S>`
@@ -240,7 +228,7 @@ export {
  * dual material-binding component (the previously separate component
  * carrying `{ material: 'ref' }`) and its companion data-shape re-export
  * were physically deleted alongside the component file; the merged
- * `MeshRenderer` (`{ materials: 'array<shared<MaterialAsset>>' }` schema) is the
+ * `MeshRenderer` (`{ material: 'handle<MaterialAsset>' }` schema) is the
  * single material-binding component AI users see; spawn payloads omit
  * `material` to request the mid-grey default (D-Q7 case B). Migration
  * SSOT lives in AGENTS.md §Breaking changes row dated 2026-05-17.
@@ -447,10 +435,6 @@ export { LoaderRegistry } from './loader-registry';
  *   } from '@forgeax/engine-runtime';
  */
 export type { RenderSystem } from './render-system';
-// M7 w56: resolveAssetHandle two-tier slot-range dispatch (D-15).
-// Single-entry handle-to-payload resolution; AI users import one helper
-// instead of switching between BuiltinAssetRegistry.resolve and assets.get.
-export { resolveAssetHandle } from './resolve-asset-handle';
 export type { SpriteParamValues } from './sprite-param-values';
 /**
  * Transparent-bucket sort configuration (feat-20260520-2d-sprite-layer-mvp
@@ -566,12 +550,8 @@ export type { RegisterRuntimeInspectorResult } from './register-inspector';
 // ─── Animation system wiring (M1 / T-19 - feat-20260523-skin-skeleton-animation) ──
 
 export {
-  ADVANCE_ANIMATION_PLAYER_SYSTEM,
-  AdvanceAnimationPlayer,
-  ANIMATION_ASSET_RESOLVER_KEY,
   createAnimationAssetResolver,
   PROPAGATE_TRANSFORMS_SYSTEM,
-  PropagateTransforms,
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
 } from './createRenderer';
@@ -599,7 +579,7 @@ export {
 } from './hdrp-pipeline';
 export type { PickHit } from './pick';
 /**
- * `pick(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`
+ * `pick(world, assets, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`
  * unprojects a viewport-relative screen coordinate into a world-space ray through the
  * supplied camera and returns the nearest pickable mesh entity's `PickHit`
  * (`{ entity, point, distance }`), or `undefined` on a miss. A `cameraEntity` without a
@@ -607,7 +587,7 @@ export type { PickHit } from './pick';
  *
  * @example
  *   import { pick, type PickHit, PickError, type PickErrorCode } from '@forgeax/engine-runtime';
- *   const hit = pick(world, cameraEntity, x, y, canvas.width, canvas.height);
+ *   const hit = pick(world, renderer.assets, cameraEntity, x, y, canvas.width, canvas.height);
  *   if (hit) world.set(hit.entity, MeshRenderer, { materials: [highlight] });
  */
 export { pick } from './pick';

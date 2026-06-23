@@ -1,7 +1,7 @@
 // apps/learn-render/5.advanced-lighting/6.hdr/src/index.ts
 // LearnOpenGL section 5.6 - HDR.
 //
-// Two RenderPipelineAsset PODs, hot-swapped via `renderer.installPipeline`:
+// Two RenderPipelineAsset handles, hot-swapped via `renderer.installPipeline`:
 //   key '1' -> HDR pipeline (rgba16float offscreen + LO exposure tonemap)
 //   key '2' -> LDR pipeline (rgba16float offscreen + passthrough; burns to
 //                            white because the swap-chain rgba8unorm-srgb
@@ -34,7 +34,6 @@ import {
   perspective,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
@@ -257,15 +256,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Tunnel material: standard PBR wood baseColor, matte finish (rough +
   // non-metal) so the bright lights paint clear specular highlights.
-  const tunnelMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const tunnelMatRes = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [1.0, 1.0, 1.0, 1.0],
       roughness: 0.85,
       metallic: 0.0,
-      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
+      baseColorTexture: woodTex,
     }),
   );
+  if (!tunnelMatRes.ok) {
+    console.error('[learn-render 5.6 hdr] tunnel material register failed:', tunnelMatRes.error);
+    return;
+  }
 
   // Tunnel = HANDLE_CUBE scaled long along Z. Camera sits inside; back-
   // face culling plus the inside-out scale makes the cube interior the
@@ -284,7 +286,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [tunnelMat] } },
+      { component: MeshRenderer, data: { materials: [tunnelMatRes.value] } },
     )
     .unwrap();
 
@@ -292,8 +294,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // 4.0 -> per-channel emissive output substantially exceeds 1.0, which
   // is the whole point of HDR (rgba16float offscreen preserves the
   // signal; LDR passthrough clamps it; LO exposure tonemaps it).
-  const strongMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const strongMatRes = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [1.0, 1.0, 1.0, 1.0],
       roughness: 0.4,
@@ -301,6 +302,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       emissiveIntensity: STRONG_LIGHT_EMISSIVE_INTENSITY,
     }),
   );
+  if (!strongMatRes.ok) {
+    console.error('[learn-render 5.6 hdr] strong light material failed:', strongMatRes.error);
+    return;
+  }
   world
     .spawn(
       {
@@ -315,7 +320,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [strongMat] } },
+      { component: MeshRenderer, data: { materials: [strongMatRes.value] } },
     )
     .unwrap();
   world.spawn(
@@ -337,8 +342,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const pos = WEAK_LIGHT_POSITIONS[i];
     const color = WEAK_LIGHT_COLORS[i];
     if (pos === undefined || color === undefined) continue;
-    const weakMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-      'MaterialAsset',
+    const weakMatRes = assets.register<MaterialAsset>(
       Materials.standard({
         baseColor: [1.0, 1.0, 1.0, 1.0],
         roughness: 0.4,
@@ -346,6 +350,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         emissiveIntensity: WEAK_LIGHT_EMISSIVE_INTENSITY,
       }),
     );
+    if (!weakMatRes.ok) {
+      console.error('[learn-render 5.6 hdr] weak light material failed:', weakMatRes.error);
+      return;
+    }
     world
       .spawn(
         {
@@ -360,7 +368,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [weakMat] } },
+        { component: MeshRenderer, data: { materials: [weakMatRes.value] } },
       )
       .unwrap();
     world.spawn(
@@ -418,8 +426,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Five-step chain (mirrors gamma-correction 5.2 idiom):
   //   1. postProcess.register(SHADER_ID, { source, reads })  x 2
   //   2. registerPipeline(PIPELINE_ID, makeHdrPipeline(mode)) x 2
-  //   3. build RenderPipelineAsset POD                         x 2
-  //   4. installPipeline(initialAsset)                        boot default
+  //   3. assets.register<RenderPipelineAsset>(...)            x 2
+  //   4. installPipeline(initialHandle)                       boot default
   //   5. window keydown 1/2 -> installHdrPipelineByKey
   try {
     renderer.postProcess.register(HDR_EXPOSURE_POSTPROCESS_ID, {
@@ -437,19 +445,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const hdrAsset: RenderPipelineAsset = {
+  const hdrAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: HDR_PIPELINE_ID,
-  };
-  const ldrAsset: RenderPipelineAsset = {
+  });
+  const ldrAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: LDR_PIPELINE_ID,
-  };
+  });
+  if (!hdrAssetRes.ok || !ldrAssetRes.ok) {
+    console.error('[learn-render 5.6 hdr] pipeline asset register failed');
+    return;
+  }
 
   setHdrPipelineRegistryForTest({
-    assetsByKey: new Map([
-      ['1', hdrAsset],
-      ['2', ldrAsset],
+    handlesByKey: new Map([
+      ['1', hdrAssetRes.value],
+      ['2', ldrAssetRes.value],
     ]),
     renderer,
   });

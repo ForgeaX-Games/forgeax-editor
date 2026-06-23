@@ -32,15 +32,16 @@ import type {
 import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
 import {
   derive,
+  type Handle,
   type MaterialRenderState,
   type ParamSchemaEntry,
   type PassKind,
   type PrimitiveTopology,
   type RenderPipelineAsset,
   RenderQueue,
+  unwrapHandle,
 } from '@forgeax/engine-types';
 import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from './asset-registry';
-
 import type { EngineMetrics } from './engine-metrics';
 import { HdrpCapsInsufficientError } from './errors';
 import type { PostProcessShaderEntry } from './fullscreen-post-process-pass';
@@ -252,14 +253,13 @@ export interface RenderSystem {
    */
   registerPipeline(id: string, impl: RenderPipelineDef): void;
   /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w7 (D-19): install the pipeline
-   * described by a `RenderPipelineAsset` POD. Looks up `pipelineId` in the registry; on an
-   * unregistered id returns `Result.err(PipelineError{code:'pipeline-not-found'})`. On
-   * success the next `draw` detects the install-epoch bump and rebuilds the memoized
-   * per-frame graph (hot-swap). Takes the payload directly because installation happens at
-   * boot/swap time before any World exists -- there is no handle to resolve.
+   * feat-20260601-customizable-render-pipeline-seam M1 / w7: install the pipeline bound by
+   * a `RenderPipelineAsset` handle. Resolves the POD off the AssetRegistry + looks up
+   * `pipelineId` in the registry; on a stale / unregistered handle returns
+   * `Result.err(PipelineError{code:'pipeline-not-found'})`. On success the next `draw`
+   * detects the handle change and rebuilds the memoized per-frame graph (hot-swap).
    */
-  installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError>;
+  installPipeline(handle: Handle<'RenderPipelineAsset', 'unmanaged'>): Result<void, PipelineError>;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
    * fullscreen post-process shader registry, parallel to ShaderRegistry.registerMaterialShader
@@ -1290,11 +1290,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // ShaderRegistry.registerMaterialShader.
   const pipelineRegistry = new Map<string, RenderPipelineDef>();
   let lastBuiltPipelineHandle = 0;
-  // Monotonic install epoch: bumped on every installPipeline call to brand the
-  // installed pipeline so `draw` can detect a swap and rebuild the per-frame
-  // graph. Replaces the prior raw-handle brand (D-19: installPipeline takes a
-  // POD, no handle).
-  let installEpoch = 0;
   // feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / w13:
   // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
   // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.registerMaterialShader.
@@ -1419,7 +1414,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // entries in queue order per plan-strategy D-3.
         recordFrame(
           internals,
-          world,
           cameras,
           lights,
           renderables,
@@ -1463,12 +1457,17 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       }
       pipelineRegistry.set(id, impl);
     },
-    installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError> {
-      const impl = pipelineRegistry.get(asset.pipelineId);
+    installPipeline(
+      handle: Handle<'RenderPipelineAsset', 'unmanaged'>,
+    ): Result<void, PipelineError> {
+      const raw = unwrapHandle(handle);
+      const podRes = internals.assets.get<RenderPipelineAsset>(handle);
+      if (!podRes.ok) {
+        return err(new PipelineError({ code: 'pipeline-not-found', detail: { handle: raw } }));
+      }
+      const impl = pipelineRegistry.get(podRes.value.pipelineId);
       if (impl === undefined) {
-        return err(
-          new PipelineError({ code: 'pipeline-not-found', detail: { handle: installEpoch } }),
-        );
+        return err(new PipelineError({ code: 'pipeline-not-found', detail: { handle: raw } }));
       }
       // feat-20260608-cluster-lighting M2 / w10: HDRP grid validation.
       // When the pipelineId is 'forgeax::hdrp', validate clusterGrid dimensions
@@ -1479,7 +1478,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // Before grid validation, check device.caps.maxStorageBuffersPerShaderStage >= 4.
       // Caps insufficient throws HdrpCapsInsufficientError (RuntimeErrorCode member,
       // synchronously at install time).
-      if (asset.pipelineId === 'forgeax::hdrp') {
+      if (podRes.value.pipelineId === 'forgeax::hdrp') {
         const storageBuffersCap = internals.device.limits.maxStorageBuffersPerShaderStage;
         if (storageBuffersCap < 4) {
           throw new HdrpCapsInsufficientError(
@@ -1488,28 +1487,21 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             4,
           );
         }
-        const grid = asset.config?.clusterGrid ?? { x: 16, y: 9, z: 24 };
+        const grid = podRes.value.config?.clusterGrid ?? { x: 16, y: 9, z: 24 };
         const gridResult = validateClusterGrid(grid);
         if (!gridResult.ok) {
           throw gridResult.error;
         }
       }
       frameState.activePipeline = impl;
-      // installPipeline no longer carries a handle (D-19: RenderPipelineAsset is
-      // installed as a POD at boot/swap time before any World exists). The
-      // brand-number that `draw` compares to force a per-frame graph rebuild is
-      // now a monotonic epoch bumped on every install -- distinct configs (and
-      // even identical re-installs) trigger the rebuild, which is correct: install
-      // is a rare boot/swap event, never a per-frame cost.
-      installEpoch += 1;
-      frameState.installedPipelineHandle = installEpoch;
-      frameState.isHdrpActive = asset.pipelineId === 'forgeax::hdrp';
+      frameState.installedPipelineHandle = raw;
+      frameState.isHdrpActive = podRes.value.pipelineId === 'forgeax::hdrp';
       // feat-20260601 verify round 2: thread the install-time config to buildGraph. The
-      // install epoch changes on every install (two assets sharing one logic id
-      // but differing in config get different epochs), so the `draw` brand-number compare
+      // raw handle changes on every distinct asset install (two assets sharing one logic id
+      // but differing in config get different handles), so the `draw` brand-number compare
       // already forces a graph rebuild; the rebuilt graph now reads this config via
       // RenderPipelineData.config. config.passCount is no longer a silent no-op.
-      frameState.installedPipelineConfig = asset.config;
+      frameState.installedPipelineConfig = podRes.value.config;
       return ok(undefined);
     },
     postProcess: {

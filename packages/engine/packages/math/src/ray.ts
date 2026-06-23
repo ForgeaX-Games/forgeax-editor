@@ -21,7 +21,7 @@
 
 import type { Box3Like } from './box3';
 import * as mat4 from './mat4';
-import type { Mat4Like, Vec2, Vec3, Vec3Like } from './types';
+import type { Mat4Like, Vec3, Vec3Like } from './types';
 
 /**
  * Ray storage: Float32Array length 6 [ox, oy, oz, dx, dy, dz], direction normalized.
@@ -344,102 +344,4 @@ export function screenToRay(
   }
 
   return out;
-}
-
-// ============================================================
-// worldToScreen (feat-20260617-host-engine-contract-and-video-cutscene M2 w5)
-// ============================================================
-//
-// Self-contained mat4 * vec4 to get pre-divide w (do NOT wrap projectPoint — it discards w,
-// research Finding 3). behind = w<0; onScreen = NDC xyz all in [-1,1] for xy and [0,1] for z.
-// Pixel map y-down top-left: px=(ndc.x*0.5+0.5)*w, py=(1-(ndc.y*0.5+0.5))*h.
-// out-param writes Vec2; returns plain {onScreen, behind} flags (no allocation).
-//
-// Related: requirements AC-01; plan-strategy D-2; research Finding 3/5/6.
-
-/** Result of projecting a world-space point to screen-space pixel coordinates. */
-export interface WorldToScreenResult {
-  /** True if the NDC coordinates are within clip-space bounds. */
-  onScreen: boolean;
-  /** True if the original world-space point is behind the camera (w < 0).
-   *  When true, `out` is meaningless (requirements §7). */
-  behind: boolean;
-}
-
-/**
- * Project a world-space point to screen-space pixel coordinates.
- *
- * Performs a full mat4 * vec4 internally to capture the pre-divide `w` component
- * (projectPoint discards `w`, so it cannot report `behind`).
- *
- * Pixel mapping: top-left origin, y-down (DOM convention).
- *   px = (ndc.x * 0.5 + 0.5) * canvasW
- *   py = (1 - (ndc.y * 0.5 + 0.5)) * canvasH
- *
- * Degenerate viewport (canvasW <= 0 || canvasH <= 0): returns { onScreen: false, behind: false },
- * leaves `out` untouched.
- *
- * @param out Vec2 to write pixel coordinates into (y-down, top-left origin).
- * @param worldPos World-space point (3 floats).
- * @param viewProj Combined view-projection matrix (proj * view, 16 floats).
- * @param canvasW Canvas width in pixels.
- * @param canvasH Canvas height in pixels.
- * @returns { onScreen: boolean, behind: boolean } — pure data flags, no allocation.
- */
-export function worldToScreen(
-  out: Vec2,
-  worldPos: Vec3Like,
-  viewProj: Mat4Like,
-  canvasW: number,
-  canvasH: number,
-): WorldToScreenResult {
-  // Degenerate viewport: leave `out` untouched, report off-screen.
-  if (!(canvasW > 0) || !(canvasH > 0)) {
-    return { onScreen: false, behind: false };
-  }
-
-  const x = worldPos[0] as number;
-  const y = worldPos[1] as number;
-  const z = worldPos[2] as number;
-
-  // clip = viewProj * [x, y, z, 1]  (column-major: m[col*4 + row])
-  const clipX =
-    (viewProj[0] as number) * x +
-    (viewProj[4] as number) * y +
-    (viewProj[8] as number) * z +
-    (viewProj[12] as number);
-  const clipY =
-    (viewProj[1] as number) * x +
-    (viewProj[5] as number) * y +
-    (viewProj[9] as number) * z +
-    (viewProj[13] as number);
-  const clipZ =
-    (viewProj[2] as number) * x +
-    (viewProj[6] as number) * y +
-    (viewProj[10] as number) * z +
-    (viewProj[14] as number);
-  const clipW =
-    (viewProj[3] as number) * x +
-    (viewProj[7] as number) * y +
-    (viewProj[11] as number) * z +
-    (viewProj[15] as number);
-
-  // behind = camera-space point is behind the eye (w < 0); `out` is then meaningless.
-  if (clipW < 0) {
-    return { onScreen: false, behind: true };
-  }
-
-  const invW = 1 / clipW;
-  const ndcX = clipX * invW;
-  const ndcY = clipY * invW;
-  const ndcZ = clipZ * invW;
-
-  // y-down pixel map, top-left origin (DOM convention).
-  out[0] = (ndcX * 0.5 + 0.5) * canvasW;
-  out[1] = (1 - (ndcY * 0.5 + 0.5)) * canvasH;
-
-  // onScreen: NDC xy in [-1, 1], NDC z in [0, 1] (WebGPU clip-space z convention).
-  const onScreen = ndcX >= -1 && ndcX <= 1 && ndcY >= -1 && ndcY <= 1 && ndcZ >= 0 && ndcZ <= 1;
-
-  return { onScreen, behind: false };
 }

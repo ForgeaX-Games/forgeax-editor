@@ -196,7 +196,7 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     expect(ready.ok).toBe(true);
     if (!ready.ok) return;
 
-    const matAsset: MaterialAsset = {
+    const matRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -207,7 +207,9 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
         },
       ],
       paramValues: { baseColor: [0.9, 0.2, 0.2, 1], metallic: 0, roughness: 0.5 },
-    } as MaterialAsset;
+    });
+    expect(matRes.ok).toBe(true);
+    if (!matRes.ok) return;
 
     // Build ~60 instances (well under 128 uniform cap), 2D grid
     const GRID = 8;
@@ -230,10 +232,6 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     }
 
     const world = new World();
-    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-      'MaterialAsset',
-      matAsset,
-    );
     world.spawn(
       {
         component: Transform,
@@ -251,7 +249,7 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matHandle] } },
+      { component: MeshRenderer, data: { materials: [matRes.value] } },
       { component: Instances, data: { transforms } },
     );
     world.spawn(

@@ -10,7 +10,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, LayoutDashboard, MessagesSquare, Layers, BarChart3 } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { Overview } from './Overview';
 import { SessionsList } from './ThreadsList';
@@ -36,7 +35,6 @@ type DashCounts = { sessions: number | null };
 const EMPTY_COUNTS: DashCounts = { sessions: null };
 
 export function Dashboard() {
-  const { t } = useTranslation();
   const open = useAppStore((s) => s.dashboardOpen);
   const setOpen = useAppStore((s) => s.setDashboardOpen);
   const [page, setPage] = useState<DashPage>('overview');
@@ -93,9 +91,7 @@ export function Dashboard() {
 
   const brandTotal = counts.sessions;
   const brandTotalTitle =
-    brandTotal == null
-      ? t('common.loading')
-      : t('dashboard.brandTotalTitle', { count: brandTotal });
+    brandTotal == null ? '加载中…' : `${brandTotal} sessions · 30s 自动刷新`;
   const brandTotalAria =
     brandTotal == null ? undefined : `Total ${brandTotal} sessions`;
 
@@ -125,7 +121,7 @@ export function Dashboard() {
               <button
                 type="button"
                 className="dash-close"
-                title={t('dashboard.closeTitle')}
+                title="关闭 · Esc"
                 aria-label="close dashboard"
               >
                 <X size={16} />
@@ -156,8 +152,8 @@ export function Dashboard() {
                   tabIndex={activeIdx === idx ? 0 : -1}
                   title={
                     showChip
-                      ? t('dashboard.navItemTitleWithCount', { label: n.label, count: c })
-                      : t('dashboard.navItemTitle', { label: n.label })
+                      ? `${n.label} · ${c} 项 · ↑↓ 切换子页`
+                      : `${n.label} · ↑↓ 切换子页`
                   }
                   aria-label={
                     showChip ? `${n.label}, ${c} items` : undefined

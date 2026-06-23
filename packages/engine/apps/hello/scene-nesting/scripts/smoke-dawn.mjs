@@ -121,6 +121,7 @@ const {
   SceneInstance,
   Transform,
 } = enginePkg;
+const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
@@ -152,10 +153,23 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Mint a user-tier column handle for the unlit material so the inline
-// SceneAsset materials array references a real shared-ref id.
+// Register materials.
+const unlitMatGuid = AssetGuid.parse('008e4f75-e7a3-4715-b05b-b93a9ec12074');
+if (!unlitMatGuid.ok) {
+  console.error(`[smoke] FAIL - unlit material GUID parse: ${unlitMatGuid.error.code}`);
+  process.exit(1);
+}
+const unlitMatHandle = assets.registerWithGuid(unlitMatGuid.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
+
 const world = new World();
-const unlitMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.8, 0.4, 0.2, 1]));
+
+// Build inline SceneAsset PODs (same as the test).
+const { toUnmanaged } = await import('@forgeax/engine-types');
+
+function registerManagedRef(worldRef, asset) {
+  const managed = worldRef.allocManagedRef('SceneAsset', asset);
+  return toUnmanaged(managed);
+}
 
 // R2/B-5: bind a real material to the cube so the smoke produces a
 // non-black frame when the engine is healthy. Empty materials [] (the
@@ -191,9 +205,9 @@ const outerScene = {
   }],
 };
 
-const innerHandle = world.allocSharedRef('SceneAsset', innerScene);
+const innerHandle = registerManagedRef(world, innerScene);
 
-const outerHandle = world.allocSharedRef('SceneAsset', outerScene);
+const outerHandle = registerManagedRef(world, outerScene);
 const outerHandleRaw = Number(outerHandle);
 
 world._setSceneAssetResolver?.((sourceIdx, parentHandle) => {

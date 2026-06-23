@@ -192,9 +192,8 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Mint standard PBR material as a user-tier shared ref (same as demo main.ts).
-const world = new World();
-const materialHandle = world.allocSharedRef('MaterialAsset', {
+// Register standard PBR material (same as demo main.ts).
+const materialRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -210,6 +209,15 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     roughness: 0.4,
   },
 });
+if (!materialRes.ok) {
+  console.error(
+    `[smoke] FAIL - material register: ${materialRes.error.code}` +
+      ` hint=${materialRes.error.hint}` +
+      ` detail=${JSON.stringify(materialRes.error.detail)}`,
+  );
+  process.exit(1);
+}
+const materialHandle = materialRes.value;
 
 const device = sharedDevice;
 if (!device) {
@@ -218,6 +226,8 @@ if (!device) {
 }
 
 // --- 4. Build the ONE World with the hierarchy consume path wired -----------
+
+const world = new World();
 
 // The line that makes the hierarchy take effect: propagate derives every
 // entity's Transform.world each frame (the world mat4 lives on Transform).

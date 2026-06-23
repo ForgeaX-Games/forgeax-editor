@@ -26,7 +26,7 @@
 //
 // Recipe (charter P1 progressive disclosure):
 //   (1) createApp(canvas, {}, { shaderManifestUrl }) + spawn Camera with clear* fields
-//   (2) world.allocSharedRef<'MaterialAsset', MaterialAsset>(standard PBR) -> materialHandle
+//   (2) assets.register<MaterialAsset>(standard PBR) -> materialHandle
 //   (3) world.spawn 4 geometries, DirectionalLight, Camera (save entity)
 //   (4) world.addSystem press-edge toggle + HUD sync
 //   (5) app.start()
@@ -89,10 +89,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const world = app.world;
+  const assets = app.renderer.assets;
+  if (assets === null) {
+    console.error(
+      '[msaa] AssetRegistry is null (renderer construction did not complete successfully)',
+    );
+    return;
+  }
 
   // Step 2: register the standard PBR material shared across all 4 geometries.
-  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const materialRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -108,13 +114,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       roughness: 0.4,
     },
   });
+  if (!materialRes.ok) {
+    console.error('[msaa] material register failed:', materialRes.error.code);
+    return;
+  }
+  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = materialRes.value;
+
+  const world = app.world;
 
   // Step 3: spawn 4 static geometries (triangle + cube + quad + sphere).
   // Layout: 4 bodies spread horizontally so edges stay visible and
   // aliasing is obvious in the ANTIALIAS_NONE state. The triangle and
   // cube have the sharpest diagonal edges.
   const LAYOUT: readonly {
-    readonly handle: Handle<'MeshAsset', 'shared'>;
+    readonly handle: Handle<'MeshAsset', 'unmanaged'>;
     readonly posX: number;
   }[] = [
     { handle: HANDLE_TRIANGLE, posX: -1.05 },

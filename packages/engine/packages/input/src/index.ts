@@ -1,9 +1,9 @@
 // @forgeax/engine-input -- public surface (charter F2 minimal surface).
 //
 // AI users:
-//   - Insert the `InputBackend` producer as a World resource under
-//     `INPUT_BACKEND_KEY`, then add the `InputFrameStartScan` system token to
-//     the schedule. After `world.update()` runs, read the snapshot through
+//   - Build the snapshot Resource via `createFrameStartScanSystem(backend, world)`
+//     and add the returned `SystemDescriptor` to the schedule. After
+//     `world.update()` runs, read the snapshot through
 //     `world.getResource<InputSnapshot>('InputSnapshot')` (or the
 //     re-exported `INPUT_SNAPSHOT_RESOURCE_KEY` constant).
 //   - In a browser context, attach a PointerLock-aware producer with
@@ -16,8 +16,7 @@
 // Single import path:
 //   import {
 //     attachBrowserInputBackend,
-//     INPUT_BACKEND_KEY,
-//     InputFrameStartScan,
+//     createFrameStartScanSystem,
 //     createInputSnapshot,
 //     INPUT_SNAPSHOT_RESOURCE_KEY,
 //     type InputSnapshot,
@@ -29,9 +28,8 @@ export {
   type BrowserInputBackendOptions,
 } from './browser-backend';
 export {
+  createFrameStartScanSystem,
   FRAME_START_SCAN_SYSTEM_NAME,
-  INPUT_BACKEND_KEY,
-  InputFrameStartScan,
 } from './frame-start-scan-system';
 export type { InputBackend, InputBackendSample, InputSnapshot } from './input-snapshot';
 export {

@@ -4,7 +4,7 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  z-index: var(--z-app-modal);
+  z-index: var(--z-popover);
   display: flex;
   align-items: stretch;
   justify-content: center;
@@ -31,7 +31,7 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  z-index: var(--z-app-modal-top);
+  z-index: calc(var(--z-popover) + 1);
 }
 
 .dash-header {

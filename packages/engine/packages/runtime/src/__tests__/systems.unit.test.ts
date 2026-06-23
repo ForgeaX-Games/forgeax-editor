@@ -78,7 +78,7 @@ import type {
   SkeletonAsset,
   TextureFormat,
 } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import {
@@ -106,7 +106,6 @@ import { MeshRenderer } from '../components/mesh-renderer';
 import { Name } from '../components/name';
 import { Skin } from '../components/skin';
 import { SkyboxBackground } from '../components/skybox-background';
-import { Skylight } from '../components/skylight';
 import { Transform } from '../components/transform';
 import { selectSwapChainFormat } from '../createRenderer';
 import {
@@ -499,9 +498,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ];
   }
 
-  describe('Camera schema (22 fields: 21 f32 + autoAspect bool after w9 + tonemap-mvp + fxaa + bloom + clear-color + aspect-sync extensions)', () => {
-    it('Camera.schema has 22 fields (21 f32 + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
-      expect(Object.keys(Camera.schema).length).toBe(22);
+  describe('Camera schema (21 f32 fields after w9 + tonemap-mvp + fxaa + bloom + clear-color extensions)', () => {
+    it('Camera.schema has 21 f32 fields (perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet)', () => {
+      expect(Object.keys(Camera.schema).length).toBe(21);
       expect(Camera.schema.fov).toBe('f32');
       expect(Camera.schema.aspect).toBe('f32');
       expect(Camera.schema.near).toBe('f32');
@@ -526,9 +525,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.clearG).toBe('f32');
       expect(Camera.schema.clearB).toBe('f32');
       expect(Camera.schema.clearA).toBe('f32');
-      // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
-      // opt-out flag (bool column tier).
-      expect(Camera.schema.autoAspect).toBe('bool');
     });
   });
 
@@ -832,7 +828,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { recordFrame } = await import('../render-system-record');
       recordFrame(
         internals as never,
-        new World() as never,
         [makeCamera('none')],
         EMPTY_LIGHTS,
         [],
@@ -884,7 +879,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { recordFrame } = await import('../render-system-record');
       recordFrame(
         internals as never,
-        new World() as never,
         [makeCamera('fxaa')],
         EMPTY_LIGHTS,
         [],
@@ -1395,21 +1389,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
       const device = makeMockDevice(probe);
 
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: register surface narrows by kind
+      const regRes = reg.register(equirect as any);
+      const equirectHandle = (regRes as { ok: true; value: unknown }).value;
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (pod: CubeTextureAsset) => reg.register(pod),
         mockCaps,
       );
 
-      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: handle is unmanaged
+      const result = await store.uploadCubemapFromEquirect(equirectHandle as any, equirect);
       expect(result.ok).toBe(true);
       expect(probe.submitCalls).toBeGreaterThanOrEqual(1);
     });
@@ -1422,21 +1419,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
       const device = makeMockDevice(probe);
 
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: register surface narrows by kind
+      const regRes = reg.register(equirect as any);
+      const equirectHandle = (regRes as { ok: true; value: unknown }).value;
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (pod: CubeTextureAsset) => reg.register(pod),
         mockCaps,
       );
 
-      await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: handle is unmanaged
+      await store.uploadCubemapFromEquirect(equirectHandle as any, equirect);
 
       const totalBeginPass = probe.encoders.reduce((s, e) => s + e.beginRenderPassCount, 0);
       // 4 distinct pass families; each cube-face family unfolds to 6 sub-passes
@@ -1465,21 +1465,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
       const device = makeMockDevice(probe);
 
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
-      const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: register surface narrows by kind
+      const regRes = reg.register(equirect as any);
+      const equirectHandle = (regRes as { ok: true; value: unknown }).value;
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (pod: CubeTextureAsset) => reg.register(pod),
         mockCaps,
       );
 
-      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: handle is unmanaged
+      const result = await store.uploadCubemapFromEquirect(equirectHandle as any, equirect);
 
       // Whether result.ok is true or false depends on impl error propagation;
       // the critical assertion is the counter invariant -- counters must NOT
@@ -2006,14 +2009,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const C = await importComponents();
       const world = new World();
 
-      const triHandle = world.allocSharedRef('MeshAsset', indexedTriangleMesh()) as Handle<
-        'MeshAsset',
-        'shared'
-      >;
-      const lineHandle = world.allocSharedRef('MeshAsset', indexedLineMesh()) as Handle<
-        'MeshAsset',
-        'shared'
-      >;
+      const triReg = renderer.assets.register(indexedTriangleMesh());
+      expect(triReg.ok).toBe(true);
+      const lineReg = renderer.assets.register(indexedLineMesh());
+      expect(lineReg.ok).toBe(true);
+      const triHandle = triReg.value as Handle<'MeshAsset', 'managed'>;
+      const lineHandle = lineReg.value as Handle<'MeshAsset', 'managed'>;
 
       world.spawn(
         {
@@ -2549,11 +2550,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
   });
 
-  // ─── Assertion (c): fallback texture_cube depthOrArrayLayers=6 + white
-  // irradiance / zero prefilter+brdfLut (downstream integration #4) ───
+  // ─── Assertion (c): fallback texture_cube depthOrArrayLayers=6 + all-zero ───
 
-  describe('t40 round-4 (c) fallback cube texture geometry + white irradiance data', () => {
-    it('fallback cube texture is depthOrArrayLayers=6; irradiance is white (6 faces), prefilter+brdfLut are zero', () => {
+  describe('t40 round-4 (c) fallback cube texture geometry + zero data', () => {
+    it('fallback cube texture is created with depthOrArrayLayers=6 and uploaded pixels are all zero', () => {
       const device = makeMockDevice();
       const queue = makeMockQueue();
       createSkylightFallback(
@@ -2571,36 +2571,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(desc.size.height).toBe(1);
       }
 
-      // The white irradiance pixel is half-float RGBA 1.0 = 0x3c00 per channel
-      // in the first 8 bytes (the rest of the 256B-padded row is zero). The
-      // zero payloads (prefilter cube * 6 faces + brdfLut * 1) are all-zero.
-      // We can't distinguish textures by identity (the mock returns one shared
-      // texture object), so we classify each writeTexture payload by content
-      // and count: exactly 6 white (irradiance faces) + 7 zero (prefilter
-      // 6 faces + brdfLut 1).
-      let whiteCount = 0;
-      let zeroCount = 0;
       expect(queue.writeTexture.mock.calls.length).toBeGreaterThan(0);
       for (const call of queue.writeTexture.mock.calls) {
         const dataArg = call[1] as ArrayBufferView | undefined;
-        if (dataArg === undefined) continue;
-        const bytes = new Uint8Array(dataArg.buffer, dataArg.byteOffset, dataArg.byteLength);
-        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-        const isWhiteHead =
-          dv.getUint16(0, true) === 0x3c00 &&
-          dv.getUint16(2, true) === 0x3c00 &&
-          dv.getUint16(4, true) === 0x3c00 &&
-          dv.getUint16(6, true) === 0x3c00;
-        if (isWhiteHead) {
-          whiteCount += 1;
-        } else {
-          // non-white head must be fully zero (prefilter / brdfLut fallback)
-          for (const b of bytes) expect(b).toBe(0);
-          zeroCount += 1;
+        if (dataArg !== undefined) {
+          const bytes = new Uint8Array(dataArg.buffer, dataArg.byteOffset, dataArg.byteLength);
+          for (const b of bytes) {
+            expect(b).toBe(0);
+          }
         }
       }
-      expect(whiteCount).toBe(6);
-      expect(zeroCount).toBe(7);
     });
 
     it('createSkylightFallback allocates exactly one sampler (reused across the 3 texture slots)', () => {
@@ -3749,7 +3729,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const cameras = [makeCamera('none')];
       recordFrame(
         internals as never,
-        new World() as never,
         cameras,
         EMPTY_LIGHTS,
         [],
@@ -3817,7 +3796,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const cameras = [makeCamera('reinhard-extended')];
       recordFrame(
         internals as never,
-        new World() as never,
         cameras,
         EMPTY_LIGHTS,
         [],
@@ -3926,7 +3904,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // Frame 1: alloc HDR + create tonemap BindGroup.
       recordFrame(
         internals1 as never,
-        new World() as never,
         cameras,
         EMPTY_LIGHTS,
         [],
@@ -3972,7 +3949,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // create a fresh tonemap-bg.
       recordFrame(
         internals1 as never,
-        new World() as never,
         cameras,
         EMPTY_LIGHTS,
         [],
@@ -4049,13 +4025,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('Skin is a registered component with name "Skin" and schema fields skeleton + joints', () => {
       expect(Skin.name).toBe('Skin');
       expect(Skin.schema).toEqual({
-        skeleton: 'shared<SkeletonAsset>',
+        skeleton: 'handle<SkeletonAsset>',
         joints: 'array<entity>',
       });
     });
 
-    it('Skin.schema.skeleton is shared<SkeletonAsset> (schema-vocab keyword)', () => {
-      expect(Skin.schema.skeleton).toBe('shared<SkeletonAsset>');
+    it('Skin.schema.skeleton is handle<SkeletonAsset> (schema-vocab keyword)', () => {
+      expect(Skin.schema.skeleton).toBe('handle<SkeletonAsset>');
     });
 
     it('Skin.schema.joints is array<entity> (schema-vocab keyword)', () => {
@@ -4068,7 +4044,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: Skin,
           data: {
-            skeleton: toShared<'SkeletonAsset'>(1),
+            skeleton: toUnmanaged<'SkeletonAsset'>(1),
             joints: new Uint32Array(0),
           },
         })
@@ -4097,12 +4073,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
               scaleZ: 1,
             },
           },
-          { component: MeshFilter, data: { assetHandle: toShared<'MeshAsset'>(1) } },
-          { component: MeshRenderer, data: { materials: [toShared<'MaterialAsset'>(1)] } },
+          { component: MeshFilter, data: { assetHandle: toUnmanaged<'MeshAsset'>(1) } },
+          { component: MeshRenderer, data: { materials: [toUnmanaged<'MaterialAsset'>(1)] } },
           {
             component: Skin,
             data: {
-              skeleton: toShared<'SkeletonAsset'>(1),
+              skeleton: toUnmanaged<'SkeletonAsset'>(1),
               joints: new Uint32Array(0),
             },
           },
@@ -4160,7 +4136,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function makeResolver(clips: Map<number, AnimationClip>): AnimationAssetResolver {
     return {
-      resolveAnimationClip(_world: World, handleRaw: number): AnimationClip | undefined {
+      resolveAnimationClip(handleRaw: number): AnimationClip | undefined {
         return clips.get(handleRaw);
       },
     };
@@ -4185,10 +4161,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         component: AnimationPlayer,
         data: {
           clips: [
-            toShared<'AnimationClip'>(clipId),
-            0 as Handle<'AnimationClip', 'shared'>,
-            0 as Handle<'AnimationClip', 'shared'>,
-            0 as Handle<'AnimationClip', 'shared'>,
+            toUnmanaged<'AnimationClip'>(clipId),
+            0 as Handle<'AnimationClip', 'unmanaged'>,
+            0 as Handle<'AnimationClip', 'unmanaged'>,
+            0 as Handle<'AnimationClip', 'unmanaged'>,
           ],
           times: new Float32Array([0, 0, 0, 0]),
           weights: new Float32Array([1, 0, 0, 0]),
@@ -4276,10 +4252,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4288,7 +4264,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4313,10 +4289,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4325,7 +4301,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4346,10 +4322,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4358,7 +4334,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4450,10 +4426,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4462,7 +4438,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4508,10 +4484,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4520,7 +4496,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4585,10 +4561,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
@@ -4597,7 +4573,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4654,10 +4630,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -4666,7 +4642,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4706,10 +4682,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
@@ -4718,7 +4694,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4764,10 +4740,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              toShared<'AnimationClip'>(3),
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              toUnmanaged<'AnimationClip'>(3),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1 / 3, 1 / 3, 1 / 3, 0]),
@@ -4776,7 +4752,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4817,10 +4793,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([0.6, 0.6, 0, 0]),
@@ -4829,7 +4805,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -4862,10 +4838,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             component: AnimationPlayer,
             data: {
               clips: [
-                toShared<'AnimationClip'>(1),
-                0 as Handle<'AnimationClip', 'shared'>,
-                0 as Handle<'AnimationClip', 'shared'>,
-                0 as Handle<'AnimationClip', 'shared'>,
+                toUnmanaged<'AnimationClip'>(1),
+                0 as Handle<'AnimationClip', 'unmanaged'>,
+                0 as Handle<'AnimationClip', 'unmanaged'>,
+                0 as Handle<'AnimationClip', 'unmanaged'>,
               ],
               times: new Float32Array([0, 0, 0, 0]),
               weights: new Float32Array([-0.5, 0, 0, 0]),
@@ -4875,7 +4851,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Skin,
             data: {
-              skeleton: toShared<'SkeletonAsset'>(100),
+              skeleton: toUnmanaged<'SkeletonAsset'>(100),
               joints: new Uint32Array([jointE]),
             },
           },
@@ -4927,10 +4903,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             component: AnimationPlayer,
             data: {
               clips: [
-                toShared<'AnimationClip'>(1),
-                toShared<'AnimationClip'>(2),
-                0 as Handle<'AnimationClip', 'shared'>,
-                0 as Handle<'AnimationClip', 'shared'>,
+                toUnmanaged<'AnimationClip'>(1),
+                toUnmanaged<'AnimationClip'>(2),
+                0 as Handle<'AnimationClip', 'unmanaged'>,
+                0 as Handle<'AnimationClip', 'unmanaged'>,
               ],
               times: new Float32Array([0.5, 0.2, 0, 0]),
               weights: new Float32Array([0.5, 0.5, 0, 0]),
@@ -4941,7 +4917,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Skin,
             data: {
-              skeleton: toShared<'SkeletonAsset'>(100),
+              skeleton: toUnmanaged<'SkeletonAsset'>(100),
               joints: new Uint32Array([jointE]),
             },
           },
@@ -4984,10 +4960,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0.5, 0, 0]),
@@ -4996,7 +4972,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5035,10 +5011,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -5047,7 +5023,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5086,10 +5062,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
@@ -5098,7 +5074,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5133,10 +5109,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -5145,7 +5121,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5165,12 +5141,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // Sign fix will negate one for short-arc nlerp.
       const sampR1 = makeSampler(
         [0, 1],
-        [0, Math.SQRT1_2, 0, Math.SQRT1_2, 0, Math.SQRT1_2, 0, Math.SQRT1_2],
+        [0, 0.70710678, 0, 0.70710678, 0, 0.70710678, 0, 0.70710678],
         'LINEAR',
       );
       const sampR2 = makeSampler(
         [0, 1],
-        [0, -Math.SQRT1_2, 0, Math.SQRT1_2, 0, -Math.SQRT1_2, 0, Math.SQRT1_2],
+        [0, -0.70710678, 0, 0.70710678, 0, -0.70710678, 0, 0.70710678],
         'LINEAR',
       );
       const clipA = makeClip(1, [
@@ -5197,10 +5173,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              toShared<'AnimationClip'>(2),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              toUnmanaged<'AnimationClip'>(2),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0.5, 0.5, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
@@ -5209,7 +5185,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5241,10 +5217,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0.5, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -5253,7 +5229,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array([jointE]) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5276,10 +5252,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -5288,7 +5264,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
         {
           component: Skin,
-          data: { skeleton: toShared<'SkeletonAsset'>(100), joints: new Uint32Array(0) },
+          data: { skeleton: toUnmanaged<'SkeletonAsset'>(100), joints: new Uint32Array(0) },
         },
         { component: Transform, data: defaultTransform },
       );
@@ -5341,10 +5317,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toShared<'AnimationClip'>(1),
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
-              0 as Handle<'AnimationClip', 'shared'>,
+              toUnmanaged<'AnimationClip'>(1),
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
+              0 as Handle<'AnimationClip', 'unmanaged'>,
             ],
             times: new Float32Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
@@ -5354,7 +5330,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         {
           component: Skin,
           data: {
-            skeleton: toShared<'SkeletonAsset'>(100),
+            skeleton: toUnmanaged<'SkeletonAsset'>(100),
             joints: new Uint32Array([jointA, jointB]),
           },
         },
@@ -5401,16 +5377,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         runtime: {
           device: { caps: { backendKind: 'webgpu' as const } },
           errorRegistry: { fire: () => {} },
-        },
-        // bug-20260612 made urpPipeline.buildGraph derive offscreen target
-        // formats from the swap-chain SSOT (ctx.pipelineState.format /
-        // .colorAttachmentFormat) instead of hard-coding rgba8unorm. The graph
-        // shape under test is format-agnostic, so any valid pair works here.
-        // (#425) pipelineState is a non-nullable layer-3 carrier
-        // (render-pipeline-context.ts), so the fixture must supply it.
-        pipelineState: {
-          format: 'bgra8unorm' as const,
-          colorAttachmentFormat: 'bgra8unorm-srgb' as const,
         },
       };
       const graph = urpPipeline.buildGraph(ctx, {});
@@ -6042,7 +6008,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       queryRun(state, world, (bundle) => {
         const s = bundle.SkyboxBackground;
         for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const cubemapRaw = s.cubemap?.get(i);
+          const cubemapRaw = s.cubemap?.[i];
           const modeRaw = s.mode?.[i] ?? 0;
           skyboxCount += 1;
           if (snapshot === undefined && cubemapRaw !== undefined) {
@@ -6098,7 +6064,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       queryRun(state, world, (bundle) => {
         const s = bundle.SkyboxBackground;
         for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const cubemapRaw = s.cubemap?.get(i);
+          const cubemapRaw = s.cubemap?.[i];
           skyboxCount += 1;
           if (snapshot === undefined && cubemapRaw !== undefined) {
             snapshot = {
@@ -7861,26 +7827,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   async function spawnMultiMaterialScene(
-    _renderer: RendererLike,
+    renderer: RendererLike,
     meshAsset: MeshAsset,
     colors: ReadonlyArray<readonly [number, number, number]>,
   ): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
     const world = new World();
-    const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
-      'MeshAsset',
-      'shared'
-    >;
+    const reg = renderer.assets.register(meshAsset);
+    expect(reg.ok).toBe(true);
+    const meshHandle = reg.value as Handle<'MeshAsset', 'managed'>;
 
-    const materialHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+    const materialHandles: Handle<'MaterialAsset', 'managed'>[] = [];
     for (const color of colors) {
-      materialHandles.push(
-        world.allocSharedRef('MaterialAsset', unlitMaterial(color)) as Handle<
-          'MaterialAsset',
-          'shared'
-        >,
-      );
+      const matReg = renderer.assets.register(unlitMaterial(color));
+      expect(matReg.ok).toBe(true);
+      materialHandles.push(matReg.value as Handle<'MaterialAsset', 'managed'>);
     }
 
     world.spawn(
@@ -8349,32 +8311,28 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   async function spawnScene(
-    _renderer: RendererLike,
+    renderer: RendererLike,
     meshAsset: MeshAsset,
     materialCount: number,
   ): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
     const world = new World();
-    const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
-      'MeshAsset',
-      'shared'
-    >;
+    const reg = renderer.assets.register(meshAsset);
+    expect(reg.ok).toBe(true);
+    const meshHandle = reg.value as Handle<'MeshAsset', 'managed'>;
 
-    // Mint N unlit materials (one per submesh).
-    const materialHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+    // Register N unlit materials (one per submesh).
+    const materialHandles: Handle<'MaterialAsset', 'managed'>[] = [];
     const colors: Array<readonly [number, number, number]> = [
       [1, 0, 0],
       [0, 1, 0],
       [0, 0, 1],
     ];
     for (let i = 0; i < materialCount; i++) {
-      materialHandles.push(
-        world.allocSharedRef('MaterialAsset', unlitMaterial(colors[i])) as Handle<
-          'MaterialAsset',
-          'shared'
-        >,
-      );
+      const matReg = renderer.assets.register(unlitMaterial(colors[i]));
+      expect(matReg.ok).toBe(true);
+      materialHandles.push(matReg.value as Handle<'MaterialAsset', 'managed'>);
     }
 
     world.spawn(
@@ -8588,8 +8546,8 @@ function makeSkinM2AssetRegistry(): AssetRegistry {
   return new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry());
 }
 
-function registerSkinM2Mesh(world: World): Handle<'MeshAsset', 'shared'> {
-  return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+function registerSkinM2Mesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
+  const result = assets.register<MeshAsset>({
     kind: 'mesh',
     vertices: SKIN_M2_TRIANGLE_VERTICES,
     indices: new Uint16Array([0, 1, 2]),
@@ -8601,10 +8559,14 @@ function registerSkinM2Mesh(world: World): Handle<'MeshAsset', 'shared'> {
     aabb: SKIN_M2_AABB,
     submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
   });
+  if (!result.ok) throw new Error('register skin-m2 mesh failed');
+  return result.value;
 }
 
-function registerSkinM2PbrSkinMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
-  return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+function registerSkinM2PbrSkinMaterial(
+  assets: AssetRegistry,
+): Handle<'MaterialAsset', 'unmanaged'> {
+  const result = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -8616,12 +8578,14 @@ function registerSkinM2PbrSkinMaterial(world: World): Handle<'MaterialAsset', 's
     ],
     paramValues: { baseColor: [1, 1, 1] },
   });
+  if (!result.ok) throw new Error('register pbr-skin material failed');
+  return result.value;
 }
 
 function registerSkinM2Skeleton(
-  world: World,
+  assets: AssetRegistry,
   jointCount: number,
-): Handle<'SkeletonAsset', 'shared'> {
+): Handle<'SkeletonAsset', 'unmanaged'> {
   const ibm = new Float32Array(jointCount * 16);
   for (let j = 0; j < jointCount; j++) {
     ibm[j * 16 + 0] = 1;
@@ -8629,11 +8593,13 @@ function registerSkinM2Skeleton(
     ibm[j * 16 + 10] = 1;
     ibm[j * 16 + 15] = 1;
   }
-  return world.allocSharedRef<'SkeletonAsset', SkeletonAsset>('SkeletonAsset', {
+  const result = assets.register<SkeletonAsset>({
     kind: 'skeleton',
     inverseBindMatrices: ibm,
     jointCount,
   });
+  if (!result.ok) throw new Error('register skin-m2 skeleton failed');
+  return result.value;
 }
 
 function spawnSkinM2Camera(world: World): void {
@@ -8666,9 +8632,9 @@ function spawnSkinM2Joint(world: World): EntityHandle {
 
 function spawnSkinM2SkinnedEntity(
   world: World,
-  meshHandle: Handle<'MeshAsset', 'shared'>,
-  matHandle: Handle<'MaterialAsset', 'shared'>,
-  skeletonHandle: Handle<'SkeletonAsset', 'shared'>,
+  meshHandle: Handle<'MeshAsset', 'unmanaged'>,
+  matHandle: Handle<'MaterialAsset', 'unmanaged'>,
+  skeletonHandle: Handle<'SkeletonAsset', 'unmanaged'>,
   jointEntities: readonly EntityHandle[],
 ): EntityHandle {
   const joints = new Uint32Array(jointEntities.length);
@@ -8734,9 +8700,9 @@ type ExtractFrameWithPipeline = (
     it('two skinned entities -> first slice byteOffset>=0, second>0; writeJointPalette called twice (m2-1)', () => {
       const world = new World();
       const assets = makeSkinM2AssetRegistry();
-      const meshHandle = registerSkinM2Mesh(world);
-      const matHandle = registerSkinM2PbrSkinMaterial(world);
-      const skeletonHandle = registerSkinM2Skeleton(world, 2);
+      const meshHandle = registerSkinM2Mesh(assets);
+      const matHandle = registerSkinM2PbrSkinMaterial(assets);
+      const skeletonHandle = registerSkinM2Skeleton(assets, 2);
       spawnSkinM2Camera(world);
       const joint0a = spawnSkinM2Joint(world);
       const joint0b = spawnSkinM2Joint(world);
@@ -8790,10 +8756,10 @@ type ExtractFrameWithPipeline = (
   describe('feat-20260612 M2 / m2-2: assets===null equiv bind-pose (no error)', () => {
     it('skinned entity + extractFrame(world, null) -> no _routeError, no skin slice (m2-2)', () => {
       const world = new World();
-      const _assets = makeSkinM2AssetRegistry();
-      const meshHandle = registerSkinM2Mesh(world);
-      const matHandle = registerSkinM2PbrSkinMaterial(world);
-      const skeletonHandle = registerSkinM2Skeleton(world, 1);
+      const assets = makeSkinM2AssetRegistry();
+      const meshHandle = registerSkinM2Mesh(assets);
+      const matHandle = registerSkinM2PbrSkinMaterial(assets);
+      const skeletonHandle = registerSkinM2Skeleton(assets, 1);
       spawnSkinM2Camera(world);
       const jointA = spawnSkinM2Joint(world);
       spawnSkinM2SkinnedEntity(world, meshHandle, matHandle, skeletonHandle, [jointA]);
@@ -8826,13 +8792,13 @@ type ExtractFrameWithPipeline = (
     it('Skin.skeleton points at unregistered handle -> _routeError(skeleton-resolve-failed) + continue (m2-3)', () => {
       const world = new World();
       const assets = makeSkinM2AssetRegistry();
-      const meshHandle = registerSkinM2Mesh(world);
-      const matHandle = registerSkinM2PbrSkinMaterial(world);
-      const skeletonHandleGood = registerSkinM2Skeleton(world, 1);
-      // Synthesize an unregistered skeleton handle: a numeric id (>= BUILTIN_BASE)
-      // that was never minted in world.sharedRefs. resolveAssetHandle(world, handle)
-      // on this handle returns asset-not-found.
-      const skeletonHandleMissing = toShared<'SkeletonAsset'>(99999);
+      const meshHandle = registerSkinM2Mesh(assets);
+      const matHandle = registerSkinM2PbrSkinMaterial(assets);
+      const skeletonHandleGood = registerSkinM2Skeleton(assets, 1);
+      // Synthesize an unregistered skeleton handle: a numeric id that is NOT
+      // present in the AssetRegistry. assets.get<SkeletonAsset>() on this
+      // handle returns asset-not-found.
+      const skeletonHandleMissing = toUnmanaged<'SkeletonAsset'>(99999);
       spawnSkinM2Camera(world);
       const jointBad = spawnSkinM2Joint(world);
       const jointGood = spawnSkinM2Joint(world);
@@ -8871,11 +8837,11 @@ type ExtractFrameWithPipeline = (
     it('SkinAsset.joints.length !== SkeletonAsset.jointCount -> joint-count-mismatch + continue (m2-4a)', () => {
       const world = new World();
       const assets = makeSkinM2AssetRegistry();
-      const meshHandle = registerSkinM2Mesh(world);
-      const matHandle = registerSkinM2PbrSkinMaterial(world);
+      const meshHandle = registerSkinM2Mesh(assets);
+      const matHandle = registerSkinM2PbrSkinMaterial(assets);
       // Skeleton declares jointCount=3; spawn provides only 2 joints -> mismatch.
-      const skeletonHandle = registerSkinM2Skeleton(world, 3);
-      const skeletonHandleGood = registerSkinM2Skeleton(world, 1);
+      const skeletonHandle = registerSkinM2Skeleton(assets, 3);
+      const skeletonHandleGood = registerSkinM2Skeleton(assets, 1);
       spawnSkinM2Camera(world);
       const j0 = spawnSkinM2Joint(world);
       const j1 = spawnSkinM2Joint(world);
@@ -8910,10 +8876,10 @@ type ExtractFrameWithPipeline = (
     it('Skin.joints[i] is despawned -> joint-entity-dangling + continue (m2-4b)', () => {
       const world = new World();
       const assets = makeSkinM2AssetRegistry();
-      const meshHandle = registerSkinM2Mesh(world);
-      const matHandle = registerSkinM2PbrSkinMaterial(world);
-      const skeletonHandle = registerSkinM2Skeleton(world, 2);
-      const skeletonHandleGood = registerSkinM2Skeleton(world, 1);
+      const meshHandle = registerSkinM2Mesh(assets);
+      const matHandle = registerSkinM2PbrSkinMaterial(assets);
+      const skeletonHandle = registerSkinM2Skeleton(assets, 2);
+      const skeletonHandleGood = registerSkinM2Skeleton(assets, 1);
       spawnSkinM2Camera(world);
       // Two joints; despawn one to make Skin.joints[1] dangling.
       const jLive = spawnSkinM2Joint(world);
@@ -9096,51 +9062,6 @@ type ExtractFrameWithPipeline = (
       // exactly one createBindGroup call covers all three skin entries.
       expect(bindGroupCounts.createBindGroup).toBe(1);
       expect(bindGroupCounts.keys).toHaveLength(1);
-    });
-  });
-}
-
-// ── downstream integration #4: Skylight solid-color ambient (no cubemap) ──
-// A Skylight WITHOUT a cubemap must still produce an extract snapshot so the
-// record stage can write a non-zero ambient uniform (intensity + color) and
-// sample the white fallback irradiance cube -- giving instant solid-color
-// ambient with no async IBL precompute. The prior extract gate dropped
-// color-only skylights, leaving such scenes black.
-{
-  describe('Skylight solid-color ambient extract (downstream #4)', () => {
-    it('Skylight with no cubemap still yields a snapshot (handle 0) with white default color', () => {
-      const world = new World();
-      world.spawn({ component: Skylight, data: {} });
-
-      const frame = extractFrame(world, null as unknown as never) as unknown as {
-        skylight?: { cubemapHandle: number; color: readonly number[]; intensity: number };
-        skylightCount: number;
-      };
-
-      expect(frame.skylightCount).toBe(1);
-      expect(frame.skylight).toBeDefined();
-      expect(frame.skylight?.cubemapHandle).toBe(0);
-      expect(frame.skylight?.intensity).toBe(1);
-      expect(Array.from(frame.skylight?.color ?? [])).toEqual([1, 1, 1]);
-    });
-
-    it('Skylight color + intensity flow through to the snapshot verbatim', () => {
-      const world = new World();
-      world.spawn({
-        component: Skylight,
-        data: { colorR: 0.2, colorG: 0.4, colorB: 0.8, intensity: 0.5 },
-      });
-
-      const frame = extractFrame(world, null as unknown as never) as unknown as {
-        skylight?: { cubemapHandle: number; color: readonly number[]; intensity: number };
-      };
-
-      expect(frame.skylight?.cubemapHandle).toBe(0);
-      expect(frame.skylight?.intensity).toBeCloseTo(0.5, 5);
-      const c = Array.from(frame.skylight?.color ?? []);
-      expect(c[0]).toBeCloseTo(0.2, 5);
-      expect(c[1]).toBeCloseTo(0.4, 5);
-      expect(c[2]).toBeCloseTo(0.8, 5);
     });
   });
 }

@@ -15,7 +15,6 @@
 //             local authoritative bus; every edit is FORWARDED to main and the
 //             resulting snapshot is applied back. No divergence, no double
 //             ledger entries.
-import { z } from 'zod';
 import type { CommandOrigin, HistoryStep } from './bus';
 import type { EditorCommand, EntityId, SceneDocument } from './types';
 
@@ -107,72 +106,12 @@ export function getEditorRole(search?: string): EditorRole {
   return getPopoutPanel(search) ? 'popout' : 'main';
 }
 
-// ── Inbound validation ───────────────────────────────────────────────────────
-// BroadcastChannel is same-origin-only, so this is NOT a cross-origin attack
-// surface — but both receivers (store.ts initMain/initPopout) previously
-// raw-cast `ev.data as EditorSyncMsg` and applied `cmd`/`replaceDoc`/`snapshot`
-// to the AUTHORITATIVE bus with zero shape check. A version-skewed or corrupt
-// message (e.g. a stale popout after a code update) could drive the bus into a
-// bad state. We validate the ENVELOPE (discriminant + scalar fields) here;
-// heavy payloads (snap/cmd/doc — SceneDocument / EditorCommand trees that evolve
-// independently) stay loose (object-presence only) so legit docs are never
-// rejected, mirroring the VAG_SPAWN_ENTITY z.unknown() approach.
-const GizmoModeZ = z.enum(['translate', 'rotate', 'scale']);
-const EntityIdZ = z.union([z.number(), z.string()]);
-const ObjZ = z.object({}).passthrough();
-
-const EditorSyncMsgSchema = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('hello') }),
-  z.object({ t: z.literal('snapshot'), snap: ObjZ }),
-  z.object({ t: z.literal('cmd'), cmd: ObjZ, origin: z.unknown() }),
-  z.object({ t: z.literal('undo') }),
-  z.object({ t: z.literal('redo') }),
-  z.object({ t: z.literal('jumpTo'), target: z.number() }),
-  z.object({ t: z.literal('replaceDoc'), doc: ObjZ }),
-  z.object({ t: z.literal('selection'), ids: z.array(EntityIdZ) }),
-  z.object({ t: z.literal('gizmo'), mode: GizmoModeZ }),
-  z.object({ t: z.literal('frame'), id: EntityIdZ.optional() }),
-  z.object({ t: z.literal('refEntity'), id: EntityIdZ }),
-  z.object({
-    t: z.literal('refAsset'),
-    asset: z.object({ guid: z.string(), kind: z.string(), name: z.string(), packPath: z.string().optional() }),
-  }),
-  z.object({ t: z.literal('geom'), panel: z.string(), w: z.number(), h: z.number(), x: z.number(), y: z.number() }),
-  z.object({ t: z.literal('bye'), panel: z.string() }),
-  z.object({ t: z.literal('assetsChanged') }),
-  z.object({ t: z.literal('openScene'), id: z.string() }),
-  z.object({ t: z.literal('sceneChanged'), id: z.string() }),
-]);
-
-/** Validate an inbound BroadcastChannel message envelope. Returns the typed
- *  message (loose inner payloads cast to the precise union — the producer is
- *  trusted for deep ECS shape), or null if the envelope is malformed. */
-export function parseEditorSyncMsg(data: unknown): EditorSyncMsg | null {
-  const r = EditorSyncMsgSchema.safeParse(data);
-  return r.success ? (r.data as EditorSyncMsg) : null;
-}
-
 /** Open the per-scene sync channel, or null if BroadcastChannel is unavailable
  *  (very old runtime) — callers then degrade to a no-op (single-window only). */
 export function openSyncChannel(sceneId: string): BroadcastChannel | null {
   if (typeof BroadcastChannel === 'undefined') return null;
   try {
     return new BroadcastChannel(`forgeax:editor:sync:${sceneId}`);
-  } catch {
-    return null;
-  }
-}
-
-/** Open the per-GAME control channel — survives scene-file switches (the per-file
- *  sync channel above is recreated on every switch). Carries only the
- *  file-independent navigation signals (`openScene` panel→main, `sceneChanged`
- *  main→panels) so a scene switch can re-pair every window/panel IN PLACE without
- *  a full `location.reload` (which on WKWebView drops the WebGPU context and
- *  wedges the GPU process). Keyed per game so two games never cross-talk. */
-export function openControlChannel(gameId: string): BroadcastChannel | null {
-  if (typeof BroadcastChannel === 'undefined') return null;
-  try {
-    return new BroadcastChannel(`forgeax:editor:scene-ctl:${gameId}`);
   } catch {
     return null;
   }

@@ -170,8 +170,8 @@ if (!boxResult.ok) {
   console.error(`[smoke] FAIL - createBoxGeometry failed: ${boxResult.error.code}`);
   process.exit(1);
 }
-const cubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
-const defaultHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.55, 0.55, 0.6, 1]));
+const cubeHandle = renderer.assets.register(boxResult.value).unwrap();
+const defaultHandle = renderer.assets.register(Materials.unlit([0.55, 0.55, 0.6, 1])).unwrap();
 
 // Cube at the origin + a perspective camera looking down -Z. The center of the
 // viewport casts a ray straight through the origin -> the cube must be hit.
@@ -205,8 +205,8 @@ console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, tar
 
 // --- 5. Direct pick assertions (structural, no pixel readback) ---
 
-const centerHit = pick(world, cameraEntity, WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT);
-const cornerMiss = pick(world, cameraEntity, 1, 1, WIDTH, HEIGHT);
+const centerHit = pick(world, renderer.assets, cameraEntity, WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT);
+const cornerMiss = pick(world, renderer.assets, cameraEntity, 1, 1, WIDTH, HEIGHT);
 console.log(
   `[picking] centerHit=${centerHit ? `entity=${centerHit.entity} distance=${centerHit.distance.toFixed(3)}` : 'undefined'}`,
 );

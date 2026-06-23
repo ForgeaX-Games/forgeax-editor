@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from '@/i18n';
 import { useAppStore, seedUninstalledIfFirstRun } from '../../store';
 
 type WorkbenchAgent = {
@@ -57,7 +56,6 @@ function initialFor(id: string): string {
  *   • selected → 2px brand-color border on the avatar circle
  */
 export function ChatAgentCapsule() {
-  const { t } = useTranslation();
   const activeSid = useAppStore((s) => s.activeSid);
   const tabs = useAppStore((s) => s.tabs);
   const setTabAgent = useAppStore((s) => s.setTabAgent);
@@ -396,7 +394,7 @@ export function ChatAgentCapsule() {
           <button
             type="button"
             className={['cas-nav-btn cas-nav-prev', !hasPrev && 'is-disabled'].filter(Boolean).join(' ')}
-            aria-label={t('chatAgentCapsule.prevPage')}
+            aria-label="上一页"
             disabled={!hasPrev}
             onClick={() => changePage(-1)}
           >
@@ -431,7 +429,7 @@ export function ChatAgentCapsule() {
                   {initialFor(a.id)}
                 </span>
                 {isLoading && <span className="cas-spinner" aria-hidden />}
-                {isUnread && <span className="cas-unread-dot" aria-label={t('chatAgentCapsule.unreadMessage')} />}
+                {isUnread && <span className="cas-unread-dot" aria-label="未读消息" />}
               </span>
               <span className="cas-name" aria-hidden="true">
                 {a.name}
@@ -443,7 +441,7 @@ export function ChatAgentCapsule() {
           <button
             type="button"
             className={['cas-nav-btn cas-nav-next', !hasNext && 'is-disabled'].filter(Boolean).join(' ')}
-            aria-label={t('chatAgentCapsule.nextPage')}
+            aria-label="下一页"
             disabled={!hasNext}
             onClick={() => changePage(1)}
           >

@@ -1,13 +1,13 @@
 // instantiateScene main path tests (w30 M4 rewrite).
 //
 // Rewrite: old scene container API replaced with `world.instantiateScene` +
-// `registerSceneAsset` (allocUniqueRef). Mapping accessed via
+// `registerSceneAsset` (allocManagedRef). Mapping accessed via
 // `world.get(root, { mapping: 'array<entity>' })` read path.
 
 /// <reference types="vitest" />
 
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { ok, toShared } from '@forgeax/engine-types';
+import { ok, toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, resolveComponent } from '../component';
 import type { EntityHandle } from '../entity-handle';
@@ -28,9 +28,9 @@ const ChildOf = defineComponent('ChildOf', {
 // The component schema matches the runtime definition in
 // @forgeax/engine-runtime; state ref stores a SceneInstanceState payload.
 defineComponent('SceneInstance', {
-  source: { type: 'shared<SceneAsset>' },
+  source: { type: 'handle<SceneAsset>' },
   mapping: { type: 'array<entity>' },
-  state: { type: 'unique<SceneInstanceState>' },
+  state: { type: 'ref<SceneInstanceState>' },
 });
 
 function localId(n: number): LocalEntityId {
@@ -41,8 +41,9 @@ function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
   return { kind: 'scene', entities: nodes };
 }
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
-  return world.allocSharedRef('SceneAsset', asset);
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
+  const managed = world.allocManagedRef('SceneAsset', asset);
+  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
 }
 
 /** Read mapping from root's SceneInstance component. */
@@ -367,102 +368,5 @@ describe('instantiateScene mount fail-fast (R2 verify fixups)', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect((r.error as unknown as { code: string }).code).toBe('pack-mount-localid-overlap');
-  });
-});
-
-// ─── feat-20260614 M5 / w24: D-5 SceneInstance rc invariant ──────────────
-//
-// instantiateScene routes SceneAsset handles through SharedRefStore (w21
-// allocSharedRef + scalar shared retain on spawn). The alloc-grant rc=1
-// stays held by the producer (here: the test harness via
-// world.allocSharedRef directly); the SceneInstance.source spawn retain
-// bumps to rc=2; despawn drops back to rc=1; explicit
-// world.sharedRefs.release(handle) drops to rc=0 / per-handle deleter fires.
-describe('w24 SceneInstance rc invariant (feat-20260614 M5 / D-5)', () => {
-  it('alloc -> rc=1; instantiateScene -> rc>=2', () => {
-    const world = new World();
-    const asset: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
-    };
-    const handle = world.allocSharedRef('SceneAsset', asset);
-    expect(world.sharedRefs.refcount(handle)).toBe(1);
-    const r = world.instantiateScene(handle);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(world.sharedRefs.refcount(handle)).toBeGreaterThanOrEqual(2);
-  });
-
-  it('despawn the synthetic root drops rc back to 1 (alloc-grant survives)', () => {
-    const world = new World();
-    const asset: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
-    };
-    const handle = world.allocSharedRef('SceneAsset', asset);
-    const r = world.instantiateScene(handle);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const rcAfterSpawn = world.sharedRefs.refcount(handle);
-    expect(rcAfterSpawn).toBeGreaterThanOrEqual(2);
-    const dr = world.despawn(r.value);
-    expect(dr.ok).toBe(true);
-    expect(world.sharedRefs.refcount(handle)).toBe(rcAfterSpawn - 1);
-    expect(world.sharedRefs.refcount(handle)).toBeGreaterThanOrEqual(1);
-  });
-
-  it('explicit sharedRefs.release after despawn drops rc=0; per-handle deleter fires', () => {
-    const world = new World();
-    const cb = vi.fn();
-    const asset: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: localId(0), components: {} }],
-    };
-    // M6 D-10: the release signal is the per-handle deleter (allocSharedRef
-    // third argument), not a global onLastRelease listener.
-    const handle = world.allocSharedRef('SceneAsset', asset, cb);
-    const r = world.instantiateScene(handle);
-    if (!r.ok) throw new Error('instantiate failed');
-    world.despawn(r.value);
-    // Rc is now 1 (alloc-grant); explicit release brings it to 0.
-    const releaseR = world.sharedRefs.release(handle);
-    expect(releaseR.ok).toBe(true);
-    expect(world.sharedRefs.refcount(handle)).toBe(0);
-    expect(cb).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ─── w32 (D-15 / AC-31): scene-referenced builtin handle short-circuits ───
-// instantiateScene mints the SceneAsset handle through allocSharedRef (user
-// tier, rc>=2 after spawn). Builtin handles referenced inside the scene's
-// entities (e.g. a MeshFilter-style field pointing at HANDLE_CUBE=slot 1) are
-// process-static — the write barrier must short-circuit on them (no
-// SharedRefStore retain/release, no error) per AC-31.
-describe('w32 instantiateScene: builtin handle in scene short-circuits write barrier (AC-31)', () => {
-  it('scene entity carrying a builtin shared<MeshAsset> handle makes 0 SharedRefStore retain calls for the builtin slot', () => {
-    defineComponent('W32MeshHolder', { asset: { type: 'shared<MeshAsset>' } });
-    const world = new World();
-    const builtinHandle = toShared<'MeshAsset'>(1); // HANDLE_CUBE slot
-
-    const asset: SceneAsset = {
-      kind: 'scene',
-      entities: [{ localId: localId(0), components: { W32MeshHolder: { asset: builtinHandle } } }],
-    };
-    const sceneHandle = world.allocSharedRef('SceneAsset', asset);
-
-    const retainSpy = vi.spyOn(world.sharedRefs, 'retain');
-    const r = world.instantiateScene(sceneHandle);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    // Any retains observed must be for the user-tier SceneAsset handle, never
-    // the builtin slot 1.
-    for (const call of retainSpy.mock.calls) {
-      expect(call[0]).not.toBe(1);
-    }
-    // scene handle rc >= 2 (alloc-grant + SceneInstance.source retain), AC-15.
-    expect(world.sharedRefs.refcount(sceneHandle)).toBeGreaterThanOrEqual(2);
-
-    // Despawn must not throw a builtin-slot error.
-    expect(() => world.despawn(r.value).unwrap()).not.toThrow();
   });
 });

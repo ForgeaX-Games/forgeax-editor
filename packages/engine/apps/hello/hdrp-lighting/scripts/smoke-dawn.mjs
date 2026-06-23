@@ -191,17 +191,21 @@ if (assets === null) {
   process.exit(1);
 }
 
-const world = app.world;
+const hdrpAssetRes = assets.register({
+  kind: 'render-pipeline',
+  pipelineId: HDRP_PIPELINE_ID,
+  config: { clusterGrid: { x: 16, y: 9, z: 24 } },
+});
+if (!hdrpAssetRes.ok) {
+  originalConsoleError(`[smoke] FAIL - HDRP asset register: ${hdrpAssetRes.error.code}`);
+  process.exit(1);
+}
 
 let installSuccess = false;
 if (FALSIFY === 'force-urp') {
   console.log('[smoke] FALSIFY=force-urp -- skipping installPipeline(hdrpHandle)');
 } else {
-  const installRes = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-  });
+  const installRes = app.renderer.installPipeline(hdrpAssetRes.value);
   if (!installRes.ok) {
     originalConsoleError(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
     process.exit(1);
@@ -209,7 +213,7 @@ if (FALSIFY === 'force-urp') {
   installSuccess = true;
 }
 
-const matHandle = world.allocSharedRef('MaterialAsset', {
+const matRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -225,16 +229,22 @@ const matHandle = world.allocSharedRef('MaterialAsset', {
     roughness: 0.6,
   },
 });
+if (!matRes.ok) {
+  originalConsoleError(`[smoke] FAIL - material register: ${matRes.error.code}`);
+  process.exit(1);
+}
+
+const world = app.world;
 
 world.spawn(
   { component: Transform, data: { posX: 0, posY: -0.5, posZ: 0, quatW: 1, scaleX: 6, scaleY: 0.1, scaleZ: 6 } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matHandle] } },
+  { component: MeshRenderer, data: { materials: [matRes.value] } },
 );
 world.spawn(
   { component: Transform, data: { posX: 0, posY: 0.6, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matHandle] } },
+  { component: MeshRenderer, data: { materials: [matRes.value] } },
 );
 
 function mulberry32(seed) {

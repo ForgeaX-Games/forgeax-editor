@@ -31,11 +31,11 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type {
+  Handle,
   MaterialAsset,
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 import {
@@ -143,11 +143,14 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
 
 type GammaKey = '1' | '2';
 
-let pipelineAssetsByKey: ReadonlyMap<GammaKey, RenderPipelineAsset> | null = null;
+let pipelineHandlesByKey: ReadonlyMap<
+  GammaKey,
+  Handle<'RenderPipelineAsset', 'unmanaged'>
+> | null = null;
 let activeRendererForInstall:
   | {
       installPipeline(
-        asset: RenderPipelineAsset,
+        handle: Handle<'RenderPipelineAsset', 'unmanaged'>,
       ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
     }
   | null = null;
@@ -161,7 +164,7 @@ let activeRendererForInstall:
 export function installGammaPipelineByKey(
   key: string,
 ): { ok: true } | { ok: false; error: { code: string; hint: string } } {
-  if (pipelineAssetsByKey === null || activeRendererForInstall === null) {
+  if (pipelineHandlesByKey === null || activeRendererForInstall === null) {
     return {
       ok: false,
       error: {
@@ -170,8 +173,8 @@ export function installGammaPipelineByKey(
       },
     };
   }
-  const asset = pipelineAssetsByKey.get(key as GammaKey);
-  if (asset === undefined) {
+  const handle = pipelineHandlesByKey.get(key as GammaKey);
+  if (handle === undefined) {
     return {
       ok: false,
       error: {
@@ -180,7 +183,7 @@ export function installGammaPipelineByKey(
       },
     };
   }
-  const installRes = activeRendererForInstall.installPipeline(asset);
+  const installRes = activeRendererForInstall.installPipeline(handle);
   if (!installRes.ok) {
     return {
       ok: false,
@@ -250,7 +253,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const woodTex = woodHandleRes.value;
 
-  const planeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const planeMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -263,9 +266,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.8,
-      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
+      baseColorTexture: woodTex,
     },
   });
+  if (!planeMatRes.ok) {
+    console.error(
+      '[learn-render 5.2 gamma-correction] plane material register failed:',
+      planeMatRes.error,
+    );
+    return;
+  }
 
   // HANDLE_QUAD lies in XY facing +Z; place at origin so the camera at
   // (0,0,3) looks straight at it. A single textured plane is enough to
@@ -274,7 +284,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       { component: Transform, data: { posZ: 0 } },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      { component: MeshRenderer, data: { materials: [planeMat] } },
+      { component: MeshRenderer, data: { materials: [planeMatRes.value] } },
     )
     .unwrap();
 
@@ -326,20 +336,32 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // D-19: pipeline assets are installed as PODs directly, not user-tier shared
-  // refs. Hold the payloads keyed by digit for hot-swap.
-  const correctAsset: RenderPipelineAsset = {
+  const correctAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: GAMMA_CORRECT_PIPELINE_ID,
-  };
-  const wrongAsset: RenderPipelineAsset = {
+  });
+  if (!correctAssetRes.ok) {
+    console.error(
+      '[learn-render 5.2 gamma-correction] correct asset failed:',
+      correctAssetRes.error,
+    );
+    return;
+  }
+  const wrongAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: GAMMA_WRONG_PIPELINE_ID,
-  };
+  });
+  if (!wrongAssetRes.ok) {
+    console.error(
+      '[learn-render 5.2 gamma-correction] wrong asset failed:',
+      wrongAssetRes.error,
+    );
+    return;
+  }
 
-  pipelineAssetsByKey = new Map<GammaKey, RenderPipelineAsset>([
-    ['1', correctAsset],
-    ['2', wrongAsset],
+  pipelineHandlesByKey = new Map<GammaKey, Handle<'RenderPipelineAsset', 'unmanaged'>>([
+    ['1', correctAssetRes.value],
+    ['2', wrongAssetRes.value],
   ]);
   activeRendererForInstall = renderer;
 

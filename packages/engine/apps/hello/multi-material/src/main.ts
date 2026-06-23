@@ -33,10 +33,10 @@
 //
 // Recipe (charter P1 progressive disclosure):
 //   (1) createApp(canvas, { clearColor, shaderManifestUrl })
-//   (2) world.allocSharedRef('MeshAsset', { kind:'mesh', vertices, indices,
-//        attributes, submeshes:[T0, T1] }) -> meshHandle
-//   (3) world.allocSharedRef('MaterialAsset', red unlit)  -> redHandle
-//   (4) world.allocSharedRef('MaterialAsset', cyan unlit) -> cyanHandle
+//   (2) assets.register({ kind:'mesh', vertices, indices, attributes,
+//        submeshes:[T0, T1] }) -> meshHandle
+//   (3) assets.register(red unlit)  -> redHandle
+//   (4) assets.register(cyan unlit) -> cyanHandle
 //   (5) world.spawn Transform + MeshFilter(meshHandle) +
 //        MeshRenderer({ materials:[redHandle, cyanHandle] })
 //   (6) world.spawn Camera (no light needed for unlit)
@@ -207,15 +207,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[multi-material] AssetRegistry is null (renderer construction failed)');
     return;
   }
-  const world = app.world;
 
   const built = buildMultiPrimMesh();
-  const meshHandle: Handle<'MeshAsset', 'shared'> = world.allocSharedRef('MeshAsset', built.mesh);
+  const meshRes = assets.register<MeshAsset>(built.mesh);
+  if (!meshRes.ok) {
+    console.error(
+      '[multi-material] mesh register failed:',
+      meshRes.error.code,
+      meshRes.error.hint,
+    );
+    return;
+  }
+  const meshHandle: Handle<'MeshAsset', 'unmanaged'> = meshRes.value;
 
-  const redHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef<
-    'MaterialAsset',
-    MaterialAsset
-  >('MaterialAsset', {
+  const redRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -229,11 +234,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: [1.0, 0.15, 0.15],
     },
   });
+  if (!redRes.ok) {
+    console.error('[multi-material] red material register failed:', redRes.error.code);
+    return;
+  }
+  const redHandle: Handle<'MaterialAsset', 'unmanaged'> = redRes.value;
 
-  const cyanHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef<
-    'MaterialAsset',
-    MaterialAsset
-  >('MaterialAsset', {
+  const cyanRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -247,7 +254,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: [0.1, 0.9, 1.0],
     },
   });
+  if (!cyanRes.ok) {
+    console.error('[multi-material] cyan material register failed:', cyanRes.error.code);
+    return;
+  }
+  const cyanHandle: Handle<'MaterialAsset', 'unmanaged'> = cyanRes.value;
 
+  const world = app.world;
   // Spawn the multi-submesh entity: ONE MeshFilter + ONE MeshRenderer with
   // a 2-element materials array. Render records 2 drawIndexed calls; each
   // picks the topology-matched PSO at record time.

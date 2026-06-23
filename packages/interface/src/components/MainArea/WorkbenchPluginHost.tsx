@@ -1,6 +1,5 @@
 import type { ReactElement } from 'react';
 import { MoveLeft } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import type { BusPluginInfo } from '../../lib/bus-api';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
@@ -39,7 +38,6 @@ export function pluginRendersInSidebarLeftPane(pluginInfo?: BusPluginInfo | null
  *  this for `WB_PLUGIN_AUTHOR_ID`; the manifest fetch just feeds the agent
  *  picker's preferredAgent. */
 export function WorkbenchPluginHost(): ReactElement | null {
-  const { t } = useTranslation();
   const pluginId = useAppStore((s) => s.workbenchExpandedPluginId);
   const setPluginId = useAppStore((s) => s.setWorkbenchExpandedPluginId);
   const manifest = usePluginManifest(pluginId ?? '');
@@ -47,8 +45,8 @@ export function WorkbenchPluginHost(): ReactElement | null {
   if (!pluginId) return null;
 
   const back = (
-    <button className="wb-plugin-back" onClick={() => setPluginId(null)} title={t('centerPlugin.backToTileGridTitle')}>
-      <MoveLeft size={12} /><span>{t('centerPlugin.backToWorkbench')}</span>
+    <button className="wb-plugin-back" onClick={() => setPluginId(null)} title="返回 12 个工作台 tile 网格">
+      <MoveLeft size={12} /><span>返回工作台</span>
     </button>
   );
 

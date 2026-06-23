@@ -172,9 +172,7 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
     expect(ready.ok).toBe(true);
     if (!ready.ok) return;
 
-    const world = new World();
-
-    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const matRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -192,9 +190,11 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         emissiveIntensity: 0,
         occlusionStrength: 1,
       },
-    } as MaterialAsset);
+    });
+    expect(matRes.ok).toBe(true);
+    if (!matRes.ok) return;
 
-    const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const floorMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -212,7 +212,11 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         emissiveIntensity: 0,
         occlusionStrength: 1,
       },
-    } as MaterialAsset);
+    });
+    expect(floorMatRes.ok).toBe(true);
+    if (!floorMatRes.ok) return;
+
+    const world = new World();
 
     // Floor: large flattened cube at Y=-3
     world.spawn(
@@ -232,7 +236,8 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [floorMatHandle] } },
+      // biome-ignore lint/suspicious/noExplicitAny: cast
+      { component: MeshRenderer, data: { materials: [floorMatRes.value as any] } },
     );
 
     // Camera: looks down at the scene from above-right
@@ -318,7 +323,8 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matHandle] } },
+      // biome-ignore lint/suspicious/noExplicitAny: cast
+      { component: MeshRenderer, data: { materials: [matRes.value as any] } },
       { component: Instances, data: { transforms: instanceTransforms } },
     );
 

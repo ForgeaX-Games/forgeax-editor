@@ -4,16 +4,12 @@
 // Same in-degree systems ordered by addSystem call order (stable tie-breaker, D-05).
 
 import { err, ok, type Result } from '@forgeax/engine-types';
+import type { ArchetypeGraph } from './archetype-graph';
 import type { CommandBuffer } from './commands';
 import type { Component } from './component';
 import { CyclicDependencyError, ScheduleMutationError } from './errors';
 import type { ColumnBundle, NestedColumnBundle, QueryDescriptor, QueryState } from './query';
 import { createQueryState, queryRun } from './query';
-// type-only import: erases at build time, carries no runtime edge (same
-// criterion as scripts/check-ecs-no-runtime-import.mjs). `world.ts` already
-// value-imports `schedule.ts`; this back-reference is type-space only so no
-// runtime cycle forms (plan-strategy D-1).
-import type { World } from './world';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
@@ -125,7 +121,7 @@ export type ParamValidation =
  * world.addSystem({
  *   name: 'movement',
  *   queries: [{ with: [Position, Velocity] }],
- *   fn: (_world, queryResults, _commands) => {
+ *   fn: (queryResults, _commands) => {
  *     for (const bundles of queryResults[0]) {
  *       // bundles.Position.x: Float32Array — directly usable, no `as` cast.
  *       const xs = bundles.Position.x;
@@ -146,7 +142,7 @@ export type ParamValidation =
  * world.addSystem({
  *   name: 'multi',
  *   queries: [{ with: [Position] }, { with: [Health] }],
- *   fn: (_world, queryResults) => {
+ *   fn: (queryResults) => {
  *     // queryResults[0]: NestedColumnBundle<readonly [typeof Position]>[]
  *     // queryResults[1]: NestedColumnBundle<readonly [typeof Health]>[]
  *     for (const b of queryResults[0]) void b.Position.x;
@@ -161,7 +157,7 @@ export type ParamValidation =
  * world.addSystem({
  *   name: 'spawner',
  *   queries: [],
- *   fn: (_world, _queryResults, commands) => {
+ *   fn: (_queryResults, commands) => {
  *     commands.spawn({ component: Position, data: { x: 0, y: 0 } });
  *   },
  * });
@@ -175,17 +171,14 @@ export interface SystemDescriptor<
   /** Query descriptors this system reads. */
   readonly queries: Qs;
   /**
-   * System function — receives the World, resolved query results, and commands.
+   * System function — receives resolved query results + commands.
    *
-   * @param world The owning World — read resources (`world.getResource(KEY)`),
-   * resolve components by name, etc. without closure capture.
    * @param queryResults Mapped over `Qs`: `queryResults[i][j]` is a
    * `NestedColumnBundle<Qs[i]['with']>` with per-component TypedArray fields.
    * Direct access (`bundles.Position.x`) compiles without `as` casts.
    * @param commands Deferred-mutation buffer (flushed after the system).
    */
   readonly fn: (
-    world: World,
     queryResults: {
       [K in keyof Qs]: Qs[K] extends QueryDescriptor<infer Cs extends ReadonlyArray<Component>>
         ? NestedColumnBundle<NoInfer<Cs>>[]
@@ -199,26 +192,7 @@ export interface SystemDescriptor<
   readonly before?: ReadonlyArray<string>;
   /** Required resource keys. Missing resource triggers 'invalid' validation (Layer 2). */
   readonly resources?: ReadonlyArray<string>;
-  /**
-   * Run condition. Evaluated each frame after ParamValidation passes (tag
-   * 'ok') and before queryRun. Returning `false` skips the system silently —
-   * no query runs, no fn call, no state added (plan-strategy D-8). Omitting it
-   * (undefined) always runs the system.
-   */
-  readonly runIf?: (world: World) => boolean;
-  /** Free-form labels for grouping / filtering (e.g. 'physics', 'input'). */
-  readonly labels?: ReadonlyArray<string>;
 }
-
-/**
- * A registered system token returned by {@link defineSystem}. Structurally the
- * frozen {@link SystemDescriptor} itself (plan-strategy D-6 — "define ==
- * register"). `world.addSystem(handle)` consumes it directly; the generic `Qs`
- * flows through so the `fn` first-query bundle shapes survive (S-5).
- */
-export type SystemHandle<
-  Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
-> = SystemDescriptor<Qs>;
 
 /** Internal system record with registration index. */
 interface SystemRecord {
@@ -275,56 +249,6 @@ export function addSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
   };
   schedule.systems.set(descriptor.name, record);
   schedule.dirty = true;
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Global system registry (defineSystem — "define == register", plan-strategy D-6)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Global registry of all defined systems, keyed by system name.
- *
- * `defineSystem` writes here; `getRegisteredSystems` returns a read-only view.
- * Mirrors the `STATE_REGISTRY` pattern in `@forgeax/engine-state`.
- */
-const SYSTEM_REGISTRY = new Map<string, SystemHandle>();
-
-/**
- * Define a system at module level. Returns a frozen {@link SystemHandle} token
- * (the descriptor itself) and records it in the global registry under its name.
- *
- * `world.addSystem(handle)` consumes the token directly — no by-name overload
- * (OOS-8). Duplicate names silently overwrite (SYSTEM_REGISTRY.set, no guard),
- * matching `defineComponent` (OOS-3).
- *
- * `const Qs` locks the `queries` tuple so `fn`'s query-results parameter
- * recovers per-query bundle shapes without `as const` (S-5).
- *
- * @example
- * ```ts
- * const Move = defineSystem({
- *   name: 'movement',
- *   queries: [{ with: [Position, Velocity] }],
- *   fn: (_world, queryResults) => { ... },
- * });
- * world.addSystem(Move);
- * ```
- */
-export function defineSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
-  descriptor: SystemDescriptor<Qs>,
-): SystemHandle<Qs> {
-  const handle = Object.freeze(descriptor) as SystemHandle<Qs>;
-  SYSTEM_REGISTRY.set(handle.name, handle as SystemHandle);
-  return handle;
-}
-
-/**
- * Read-only snapshot of all systems defined via {@link defineSystem}, keyed by
- * name. The aux enumeration path is type-erased (`SystemHandle<any>` values) —
- * the heterogeneous `Qs` cannot be expressed inside one Map (KD-3).
- */
-export function getRegisteredSystems(): ReadonlyMap<string, SystemHandle> {
-  return SYSTEM_REGISTRY;
 }
 
 /**
@@ -536,7 +460,7 @@ export interface ResourceChecker {
  */
 export function runSchedule(
   schedule: Schedule,
-  world: World,
+  world: { _getGraph(): ArchetypeGraph } & ResourceChecker,
   commands: CommandBuffer,
   errorHandler?: ErrorHandler,
 ): void {
@@ -572,12 +496,6 @@ export function runSchedule(
       continue;
     }
 
-    // ── Run condition (runIf) — evaluated after ParamValidation 'ok', before
-    // queryRun. false → skip silently (no query, no fn, no state) (D-8). ──
-    if (record.descriptor.runIf && !record.descriptor.runIf(world)) {
-      continue;
-    }
-
     // Run each query and collect results
     const queryResults: ColumnBundle[][] = [];
     for (const qs of record.queryStates) {
@@ -589,8 +507,7 @@ export function runSchedule(
     // ── Layer 3: system execution + Result collection ──
     // trusted-cast: F-R2 single-direction; runtime correctness guaranteed by buildColumnBundle
     const returnValue = record.descriptor.fn(
-      world,
-      queryResults as Parameters<typeof record.descriptor.fn>[1],
+      queryResults as Parameters<typeof record.descriptor.fn>[0],
       commands,
     );
 

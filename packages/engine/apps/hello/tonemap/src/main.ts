@@ -69,7 +69,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -93,23 +93,37 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
+  const assets = renderer.assets;
+  if (assets === null) {
+    console.error('[tonemap] AssetRegistry is null (renderer construction did not complete successfully)');
+    return;
+  }
+
   const sphereRes = createSphereGeometry(0.6, 32, 24);
   if (!sphereRes.ok) {
     console.error('[tonemap] createSphereGeometry failed:', sphereRes.error);
     return;
   }
-
-  const world = new World();
-
-  const sphereHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', sphereRes.value);
+  const sphereHandleRes = assets.register<MeshAsset>(sphereRes.value);
+  if (!sphereHandleRes.ok) {
+    console.error('[tonemap] sphere register failed:', sphereHandleRes.error);
+    return;
+  }
+  const sphereHandle: Handle<'MeshAsset', 'unmanaged'> = sphereHandleRes.value;
 
   // Mid-grey standard PBR material; the high-intensity light is what
   // pushes the luminance > 1.0 into the integer-white burn band on the
   // default path. feat-20260523 M8-T03: schema-driven register form.
-  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const materialRes = assets.register<MaterialAsset>(
     Materials.standard({ baseColor: [0.7, 0.7, 0.7, 1], metallic: 0.0, roughness: 0.4 }),
   );
+  if (!materialRes.ok) {
+    console.error('[tonemap] material register failed:', materialRes.error);
+    return;
+  }
+  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = materialRes.value;
+
+  const world = new World();
 
   // Sphere at origin (PBR; standard pipeline; 12F vertex stride).
   world.spawn(

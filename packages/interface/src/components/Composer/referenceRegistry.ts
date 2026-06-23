@@ -29,12 +29,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PillPayload } from './pill';
-import { t } from '@/i18n';
 
 /** Canonical visible label for the "send this into Chat" action. The ONLY
  *  place this string is defined — every menu reads it so the wording can never
  *  drift (it previously existed as 3 variants). */
-export const REFERENCE_LABEL = t('reference.send_to_chat');
+export const REFERENCE_LABEL = '引用到 Chat';
 
 /** A copy action a unit can offer in its context menu (in addition to the
  *  reference action). Plain data so this module stays free of menu/JSX deps. */
@@ -74,14 +73,14 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const name = path.split('/').pop() || path;
       return {
         kind: 'file', display: name, icon: '📄',
-        detail: `[${t('reference.file_ref')}: \`${path}\`]`,
-        tooltip: { title: `📄 ${t('reference.file')} · ${name}`, lines: [`${t('reference.path')}: ${path}`, t('reference.chip_hint')] },
+        detail: `[文件引用: \`${path}\`]`,
+        tooltip: { title: `📄 文件 · ${name}`, lines: [`路径: ${path}`, `单击 chip 可删除 / hover 查看详情`] },
       };
     },
     copy: (el) => {
       const path = el.dataset.fpPath || text(el.querySelector('.fp-name'));
       const name = path.split('/').pop() || path;
-      return name ? [{ label: t('reference.copy_file_name'), text: name }] : [];
+      return name ? [{ label: '复制文件名', text: name }] : [];
     },
   },
   {
@@ -92,8 +91,8 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       if (!name) return null;
       return {
         kind: 'dir', display: name, icon: '📁',
-        detail: `[${t('reference.dir_ref')}: \`${name}\`]`,
-        tooltip: { title: `📁 ${t('reference.directory')} · ${name}`, lines: [`${t('reference.dir_name')}: ${name}`] },
+        detail: `[目录引用: \`${name}\`]`,
+        tooltip: { title: `📁 目录 · ${name}`, lines: [`目录名: ${name}`] },
       };
     },
   },
@@ -135,8 +134,8 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const label = el.getAttribute('aria-label') || pluginId;
       return {
         kind: 'tool', display: label, icon: '🔧',
-        detail: `[${t('reference.workshop_plugin_ref')}: \`${pluginId}\` · ${label}]`,
-        tooltip: { title: `🔧 ${t('reference.workshop_plugin')} · ${label}`, lines: [`plugin id: ${pluginId}`] },
+        detail: `[工坊插件引用: \`${pluginId}\` · ${label}]`,
+        tooltip: { title: `🔧 工坊插件 · ${label}`, lines: [`plugin id: ${pluginId}`] },
       };
     },
   },
@@ -148,8 +147,8 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       if (!slug) return null;
       return {
         kind: 'game', display: slug, icon: '🎮',
-        detail: `[${t('reference.current_game_ref')}: \`games/${slug}\`]`,
-        tooltip: { title: `🎮 ${t('reference.current_game')} · ${slug}`, lines: [`slug: ${slug}`, `${t('reference.path_prefix')}: .forgeax/games/${slug}/`] },
+        detail: `[当前 game 引用: \`games/${slug}\`]`,
+        tooltip: { title: `🎮 当前 game · ${slug}`, lines: [`slug: ${slug}`, `路径前缀: .forgeax/games/${slug}/`] },
       };
     },
   },
@@ -161,11 +160,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       if (!line) return null;
       return {
         kind: 'log', display: truncate(line, 40), icon: '📜',
-        detail: `[${t('reference.console_log')}: \`${line}\`]`,
-        tooltip: { title: t('reference.console_log_line'), lines: [line] },
+        detail: `[控制台日志: \`${line}\`]`,
+        tooltip: { title: `📜 控制台日志行`, lines: [line] },
       };
     },
-    copy: (el) => { const line = text(el); return line ? [{ label: t('reference.copy_log_line'), text: line }] : []; },
+    copy: (el) => { const line = text(el); return line ? [{ label: '复制日志行', text: line }] : []; },
   },
   {
     kind: 'workspace-tab',
@@ -185,11 +184,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       if (!slug) return null;
       return {
         kind: 'game', display: slug, icon: '🎮',
-        detail: `[${t('reference.game_ref')}: \`games/${slug}\`]`,
-        tooltip: { title: `🎮 Game · ${slug}`, lines: [`${t('reference.path')}: .forgeax/games/${slug}/`, `slug: ${slug}`] },
+        detail: `[game 引用: \`games/${slug}\`]`,
+        tooltip: { title: `🎮 Game · ${slug}`, lines: [`路径: .forgeax/games/${slug}/`, `slug: ${slug}`] },
       };
     },
-    copy: (el) => { const s = el.dataset.gameSlug || ''; return s ? [{ label: t('reference.copy_slug'), text: s }] : []; },
+    copy: (el) => { const s = el.dataset.gameSlug || ''; return s ? [{ label: '复制 slug', text: s }] : []; },
   },
   {
     kind: 'session-row',
@@ -200,11 +199,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const name = el.dataset.sessionName || sid.slice(0, 8);
       return {
         kind: 'tool', display: name, icon: '💬',
-        detail: `[${t('reference.session_ref')}: sid=${sid} name="${name}"]`,
+        detail: `[Session 引用: sid=${sid} name="${name}"]`,
         tooltip: { title: `💬 Session · ${name}`, lines: [`sid: ${sid}`] },
       };
     },
-    copy: (el) => { const s = el.dataset.sessionId || ''; return s ? [{ label: t('reference.copy_session_id'), text: s }] : []; },
+    copy: (el) => { const s = el.dataset.sessionId || ''; return s ? [{ label: '复制 session id', text: s }] : []; },
   },
   {
     kind: 'chat-msg',
@@ -215,11 +214,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const head = truncate(raw, 60);
       return {
         kind: 'log', display: head, icon: '💭',
-        detail: `[${t('reference.chat_ref')}: "${truncate(raw, 200)}"]`,
-        tooltip: { title: `💭 ${t('reference.chat_message_ref')}`, lines: [head] },
+        detail: `[对话引用: "${truncate(raw, 200)}"]`,
+        tooltip: { title: '💭 对话消息引用', lines: [head] },
       };
     },
-    copy: (el) => { const m = text(el); return m ? [{ label: t('reference.copy_message'), text: m }] : []; },
+    copy: (el) => { const m = text(el); return m ? [{ label: '复制消息', text: m }] : []; },
   },
   {
     kind: 'user-msg',
@@ -230,11 +229,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const head = truncate(raw, 60);
       return {
         kind: 'log', display: head, icon: '🧑',
-        detail: `[${t('reference.user_message_ref')}: "${truncate(raw, 200)}"]`,
-        tooltip: { title: `🧑 ${t('reference.user_message_ref')}`, lines: [head] },
+        detail: `[用户消息引用: "${truncate(raw, 200)}"]`,
+        tooltip: { title: '🧑 用户消息引用', lines: [head] },
       };
     },
-    copy: (el) => { const m = text(el); return m ? [{ label: t('reference.copy_message'), text: m }] : []; },
+    copy: (el) => { const m = text(el); return m ? [{ label: '复制消息', text: m }] : []; },
   },
   {
     kind: 'bus-plugin',
@@ -247,11 +246,11 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
       const label = truncate(text(el).split('\n')[0] || pluginId, 40);
       return {
         kind: 'tool', display: label || pluginId, icon: '🔌',
-        detail: `[${t('reference.bus_plugin_ref')}: id="${pluginId}" label="${label}"]`,
-        tooltip: { title: `🔌 ${t('reference.bus_plugin')} · ${label}`, lines: [`plugin id: ${pluginId}`] },
+        detail: `[Bus 插件引用: id="${pluginId}" label="${label}"]`,
+        tooltip: { title: `🔌 Bus 插件 · ${label}`, lines: [`plugin id: ${pluginId}`] },
       };
     },
-    copy: (el) => { const id = el.dataset.pluginId || ''; return id ? [{ label: t('reference.copy_plugin_id'), text: id }] : []; },
+    copy: (el) => { const id = el.dataset.pluginId || ''; return id ? [{ label: '复制 plugin id', text: id }] : []; },
   },
 ];
 
@@ -278,19 +277,19 @@ export function buildPillFromTarget(target: Element | null): PillPayload | null 
 // ── Editor-iframe reference builders ─────────────────────────────────────────
 // The editor (✎ Edit) lives in an iframe; its units (entities/assets/components)
 // can't be reached by the DOM registry above, so the iframe posts a
-// VAG_EDITOR_REF message and App.tsx's listener turns it into a pill. Those builders
+// VAG_EDITOR_REF message and EditMode.tsx turns it into a pill. Those builders
 // live HERE too so pill construction (icons/labels/detail format) has a single
 // home and can't drift from the DOM path.
 
 export function buildEntityPill(p: { id?: number | string; name: string; components?: unknown; source?: { plugin?: string; docId?: string } }): PillPayload {
   const comps = Array.isArray(p.components) ? (p.components as string[]).join(', ') : '';
-  const srcStr = p.source?.plugin ? ` ${t('reference.source')}=${p.source.plugin}/${p.source.docId ?? ''}` : '';
+  const srcStr = p.source?.plugin ? ` 源=${p.source.plugin}/${p.source.docId ?? ''}` : '';
   return {
     kind: 'entity', display: p.name, icon: '🎯',
-    detail: `[${t('reference.scene_entity')}: id=${p.id} name="${p.name}"${comps ? ` components=[${comps}]` : ''}${srcStr}]`,
+    detail: `[场景实体: id=${p.id} name="${p.name}"${comps ? ` components=[${comps}]` : ''}${srcStr}]`,
     tooltip: {
-      title: `🎯 ${t('reference.scene_entity')} · ${p.name}`,
-      lines: [`id: ${p.id}`, comps ? `${t('reference.components')}: ${comps}` : '', p.source?.plugin ? `${t('reference.source')}: ${p.source.plugin}/${p.source.docId ?? ''}` : ''].filter(Boolean),
+      title: `🎯 场景实体 · ${p.name}`,
+      lines: [`id: ${p.id}`, comps ? `组件: ${comps}` : '', p.source?.plugin ? `源: ${p.source.plugin}/${p.source.docId ?? ''}` : ''].filter(Boolean),
     },
   };
 }
@@ -299,9 +298,9 @@ export function buildAssetPill(p: { guid: string; name?: string; assetKind?: str
   const name = p.name ?? p.guid.slice(0, 8);
   return {
     kind: 'entity', display: name, icon: '🧱',
-    detail: `[${t('reference.asset')}: guid=${p.guid} kind=${p.assetKind ?? ''}${p.packPath ? ` pack=${p.packPath}` : ''}]`,
+    detail: `[资产: guid=${p.guid} kind=${p.assetKind ?? ''}${p.packPath ? ` pack=${p.packPath}` : ''}]`,
     tooltip: {
-      title: `🧱 ${t('reference.asset')} · ${name}`,
+      title: `🧱 资产 · ${name}`,
       lines: [`guid: ${p.guid}`, p.assetKind ? `kind: ${p.assetKind}` : '', p.packPath ? `pack: ${p.packPath}` : ''].filter(Boolean),
     },
   };
@@ -312,8 +311,8 @@ export function buildAssetPill(p: { guid: string; name?: string; assetKind?: str
 export function buildWorkspacePill(wsId: string, wsName: string): PillPayload {
   return {
     kind: 'tool', display: wsName, icon: '🗂',
-    detail: `[${t('reference.workspace_ref')}: "${wsName}" id=${wsId}]`,
-    tooltip: { title: `🗂 ${t('reference.workspace')} · ${wsName}`, lines: [`id: ${wsId}`, t('reference.workspace_context_hint')] },
+    detail: `[工作区引用: "${wsName}" id=${wsId}]`,
+    tooltip: { title: `🗂 工作区 · ${wsName}`, lines: [`id: ${wsId}`, `右键可重命名或删除此工作区`] },
   };
 }
 
@@ -321,7 +320,7 @@ export function buildComponentPill(p: { entityId?: number; entityName: string; c
   const json = JSON.stringify({ [p.comp]: p.value }, null, 2);
   return {
     kind: 'entity', display: `${p.entityName}.${p.comp}`, icon: '🔧',
-    detail: `[${t('reference.component_property')}: ${p.entityName}#${p.entityId ?? '?'}.${p.comp} = ${json}]`,
+    detail: `[组件属性: ${p.entityName}#${p.entityId ?? '?'}.${p.comp} = ${json}]`,
     tooltip: { title: `🔧 ${p.comp} · ${p.entityName}`, lines: [truncate(json, 80)] },
   };
 }

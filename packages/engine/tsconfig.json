@@ -36,9 +36,6 @@
       "path": "./packages/shader-compiler"
     },
     {
-      "path": "./packages/state"
-    },
-    {
       "path": "./packages/vite-plugin-shader"
     },
     {
@@ -76,9 +73,6 @@
     },
     {
       "path": "./packages/rhi-debug"
-    },
-    {
-      "path": "./packages/vite-plugin-rhi-debug"
     }
   ]
 }

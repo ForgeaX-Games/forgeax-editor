@@ -4,9 +4,7 @@ import { FloatingMenu } from '../ui/FloatingMenu';
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import { WbPluginDockPanel } from './WbPluginDockPanel';
-import { RecoveryBoundary } from '../ErrorBoundary';
 import { getWindowManager } from '../../lib/platform';
-import { useTranslation, getLocale } from '@/i18n';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { useAppStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
@@ -101,11 +99,6 @@ function buildDefault(api: DockviewApi, workspaceId: string = 'edit'): void {
   api.addPanel({ id: 'ep:history', component: 'ep:history', title: PANEL_TITLE['ep:history'] ?? 'History', position: { referencePanel: 'edit', direction: 'below' } });
   api.addPanel({ id: 'ep:timeline', component: 'ep:timeline', title: PANEL_TITLE['ep:timeline'] ?? 'Timeline', position: { referencePanel: 'ep:history', direction: 'within' } });
   api.addPanel({ id: 'ep:capabilities', component: 'ep:capabilities', title: PANEL_TITLE['ep:capabilities'] ?? 'Capabilities', position: { referencePanel: 'ep:history', direction: 'within' } });
-  // Info (health/log feed) docks in the SAME bottom group as History/Timeline/
-  // Capabilities — a sibling tab, not the default-active one (History stays
-  // active, set below). Keeps the Info panel discoverable in the default layout
-  // instead of floating at top-right when first opened.
-  api.addPanel({ id: 'info', component: 'info', title: PANEL_TITLE['info'] ?? 'Info', position: { referencePanel: 'ep:history', direction: 'within' } });
   // Fix-up I-3: matgraph + launcher were missing from the 'edit' default
   // layout (EDITOR_PANELS SSOT = 9 ids, buildDefault only seeded 7 ep:*
   // panels). Add matgraph as a tab alongside inspector/material in the
@@ -165,7 +158,6 @@ function popPanelToWindow(
 // Per-group header affordance: explicit "pop out to OS window" button, shown
 // only in Tauri (#10). Reliable counterpart to drag-tear-off.
 function PanelPopoutAction(props: IDockviewHeaderActionsProps): React.ReactNode {
-  const { t } = useTranslation();
   if (!getWindowManager().canDetach()) return null;
   const id = props.activePanel?.id;
   if (!id || !SURFACE_PANELS.has(id)) return null;
@@ -173,7 +165,7 @@ function PanelPopoutAction(props: IDockviewHeaderActionsProps): React.ReactNode 
     <button
       type="button"
       className="fx-dock-popout"
-      title={t('dockShell.popoutToWindow')}
+      title="弹出为独立 OS 窗口"
       onClick={() => popPanelToWindow(props.containerApi, id)}
     >
       ⧉
@@ -230,13 +222,7 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
     ...BASE_COMPONENTS,
     ...Object.fromEntries(busPlugins.map((p) => [
       `wb:${p.id}`,
-      // Region-scoped recovery: a plugin panel crash shows a retry/reload
-      // affordance for that panel only, not the whole shell.
-      () => (
-        <RecoveryBoundary scope={`wb:${p.id}`} fullscreen={false}>
-          <WbPluginDockPanel pluginId={p.id} />
-        </RecoveryBoundary>
-      ),
+      () => <WbPluginDockPanel pluginId={p.id} />,
     ])),
   }), [busPlugins]);
   const preFullscreen = useRef<{ workbench: boolean; chat: boolean } | null>(null);
@@ -397,24 +383,6 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
     };
     window.addEventListener(APP_EVENTS.dockReset, onReset);
     return () => { window.removeEventListener(APP_EVENTS.dockReset, onReset); };
-  }, []);
-
-  // Open (or focus, if already open) an arbitrary dock panel by id — used by the
-  // bottom HealthStatusBar peek to surface the Info panel. Reuses `reopen` (via
-  // ref so this listener registers once) for the "not open yet" case.
-  useEffect(() => {
-    const onOpen = (e: Event) => {
-      const id = (e as CustomEvent).detail?.id as string | undefined;
-      if (!id) return;
-      const api = apiRef.current;
-      if (!api) return;
-      const existing = api.getPanel(id);
-      if (existing) { try { existing.api.setActive(); } catch { /* noop */ } return; }
-      reopenRef.current?.(id);
-      try { apiRef.current?.getPanel(id)?.api.setActive(); } catch { /* noop */ }
-    };
-    window.addEventListener(APP_EVENTS.openPanel, onOpen);
-    return () => { window.removeEventListener(APP_EVENTS.openPanel, onOpen); };
   }, []);
 
   // On mount: load workspace layouts from server into localStorage (only when
@@ -607,7 +575,6 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
 }
 
 function LayoutControl({ apiRef, onReopen, busPlugins }: { apiRef: React.RefObject<DockviewApi | null>; onReopen: (id: string) => void; busPlugins: BusPluginInfo[] }) {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   // Anchor rect of the trigger button (TopBar LayoutGrid icon), passed via the
   // toggle event so the portalled menu lands right under the button.
@@ -631,10 +598,10 @@ function LayoutControl({ apiRef, onReopen, busPlugins }: { apiRef: React.RefObje
           {/* 重置布局 pinned at the top (sticky) so it's always reachable even
               when the plugin list below is long enough to scroll. */}
           <button type="button" className="fx-dl-item fx-dl-reset" onClick={() => { window.dispatchEvent(new CustomEvent(APP_EVENTS.dockReset)); setOpen(false); }}>
-            <RotateCcw size={12} /> {t('dockShell.resetLayout')}
+            <RotateCcw size={12} /> 重置布局
           </button>
           <div className="fx-dl-sep" />
-          <div className="fx-dl-head">{t('dockShell.editorPanels')}</div>
+          <div className="fx-dl-head">编辑器面板</div>
           {EDITOR_PANEL_IDS.map((id) => {
             const panelId = `ep:${id}`;
             return (
@@ -644,14 +611,14 @@ function LayoutControl({ apiRef, onReopen, busPlugins }: { apiRef: React.RefObje
               </button>
             );
           })}
-          <div className="fx-dl-head">{t('dockShell.mainPanels')}</div>
+          <div className="fx-dl-head">主面板</div>
           {PANEL_IDS.map((id) => (
             <button key={id} type="button" className={`fx-dl-item${isOpen(id) ? ' on' : ''}`}
               onClick={() => { if (isOpen(id)) apiRef.current?.getPanel(id)?.api.close(); else onReopen(id); }}>
               <span className="fx-dl-check">{isOpen(id) ? '✓' : ''}</span>{PANEL_TITLE[id]}
             </button>
           ))}
-          <div className="fx-dl-head">{t('dockShell.morePanels')}</div>
+          <div className="fx-dl-head">更多面板</div>
           {OPTIONAL_IDS.map((id) => (
             <button key={id} type="button" className={`fx-dl-item${isOpen(id) ? ' on' : ''}`}
               onClick={() => { if (isOpen(id)) apiRef.current?.getPanel(id)?.api.close(); else onReopen(id); }}>
@@ -660,10 +627,10 @@ function LayoutControl({ apiRef, onReopen, busPlugins }: { apiRef: React.RefObje
           ))}
           {busPlugins.length > 0 && (
             <>
-              <div className="fx-dl-head">{t('dockShell.pluginPanels')}</div>
+              <div className="fx-dl-head">插件面板</div>
               {busPlugins.map((p) => {
                 const id = `wb:${p.id}`;
-                const label = pickLang(p.displayName, getLocale(), p.id);
+                const label = pickLang(p.displayName, 'zh', p.id);
                 return (
                   <button key={id} type="button" className={`fx-dl-item${isOpen(id) ? ' on' : ''}`}
                     onClick={() => { if (isOpen(id)) apiRef.current?.getPanel(id)?.api.close(); else onReopen(id); }}>

@@ -37,14 +37,8 @@
 //     natural reverse)
 //   - charter P4 (single Transform write per joint per tick)
 
-import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
-import {
-  createQueryState,
-  defineSystem,
-  ENTITY_NULL_RAW,
-  Entity,
-  queryRun,
-} from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { createQueryState, ENTITY_NULL_RAW, Entity, queryRun } from '@forgeax/engine-ecs';
 import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
 import { AnimationPlayer } from '../components/animation-player';
 import { Name } from '../components/name';
@@ -58,21 +52,8 @@ import { Transform } from '../components/transform';
  */
 export const ADVANCE_ANIMATION_PLAYER_SYSTEM = 'advanceAnimationPlayer' as const;
 
-/**
- * Resource key under which the {@link AnimationAssetResolver} is inserted
- * (M2 — full resource-ification, D-2 / D-7). The `advanceAnimationPlayer`
- * system declares it in `resources` so a missing resolver triggers the
- * structured ParamValidation 'invalid' path rather than a raw throw; the fn
- * body reads it back via `world.getResource(ANIMATION_ASSET_RESOLVER_KEY)`.
- *
- * Aligns with the `TIME_RESOURCE_KEY` / `AUDIO_ENGINE_RESOURCE_KEY` naming
- * convention. Consumers import the constant rather than the bare string so a
- * typo degrades to an import error (charter P3).
- */
-export const ANIMATION_ASSET_RESOLVER_KEY = 'AnimationAssetResolver' as const;
-
 export interface AnimationAssetResolver {
-  resolveAnimationClip(world: World, handleRaw: number): AnimationClip | undefined;
+  resolveAnimationClip(handleRaw: number): AnimationClip | undefined;
 }
 
 const SLOT_COUNT = 4 as const;
@@ -174,7 +155,7 @@ export function advanceAnimationPlayer(
       // (ENTITY_NULL_RAW = 0xffffffff). Treat any column read as authoritative.
       const entityRaw = entitySelf[row] ?? 0;
       const entity = entityRaw as EntityHandle;
-      const activeSlots = collectActiveSlotsAndAdvanceTimes(world, ctx, row, assetResolver, dt);
+      const activeSlots = collectActiveSlotsAndAdvanceTimes(ctx, row, assetResolver, dt);
       if (activeSlots.length === 0) continue;
       tickEntityJoints(world, entity, entityRaw, activeSlots);
     }
@@ -205,7 +186,6 @@ interface RowContext {
  * looping=false branch clamps to 0.
  */
 function collectActiveSlotsAndAdvanceTimes(
-  world: World,
   ctx: RowContext,
   row: number,
   assetResolver: AnimationAssetResolver,
@@ -220,7 +200,7 @@ function collectActiveSlotsAndAdvanceTimes(
     const slotOffset = base + i;
     const clipHandleRaw = ctx.clipsView[slotOffset] ?? 0;
     if (clipHandleRaw === 0) continue;
-    const clip = assetResolver.resolveAnimationClip(world, clipHandleRaw);
+    const clip = assetResolver.resolveAnimationClip(clipHandleRaw);
     if (clip === undefined) continue;
 
     const speed = ctx.speedsView[slotOffset] ?? 0;
@@ -731,40 +711,25 @@ function sliceOutput(output: Float32Array, index: number, elementCount: number):
 }
 
 /**
- * The `advanceAnimationPlayer` system token (M2 — full resource-ification, D-4).
- *
- * Module-level `defineSystem` with the real fn body — no closure, no
- * placeholder. The fn reads the {@link AnimationAssetResolver} from the World
- * resource ({@link ANIMATION_ASSET_RESOLVER_KEY}); `resources` declares the
- * dependency so a missing resolver routes through the structured
- * ParamValidation 'invalid' path (D-2) instead of a raw throw. Runs
- * `before: ['propagateTransforms']` and is labelled `'animation'`
- * (spec §6.2 label-anchor map).
- */
-export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
-  name: ADVANCE_ANIMATION_PLAYER_SYSTEM,
-  queries: [],
-  labels: ['animation'],
-  resources: [ANIMATION_ASSET_RESOLVER_KEY],
-  before: ['propagateTransforms'],
-  fn: (world) => {
-    const assetResolver = world.getResource<AnimationAssetResolver>(ANIMATION_ASSET_RESOLVER_KEY);
-    advanceAnimationPlayer(world, assetResolver, 1 / 60);
-  },
-});
-
-/**
  * Register `advanceAnimationPlayer` into the ECS schedule before
- * `propagateTransforms`. The {@link AnimationAssetResolver} is supplied via the
- * World resource ({@link ANIMATION_ASSET_RESOLVER_KEY}); callers insert it
- * before this system first runs (createApp does so at wire time).
+ * `propagateTransforms`.
  *
  * @example Driver registers once per World:
  *   const world = new World();
- *   world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, assetResolver);
- *   registerAdvanceAnimationPlayer(world);
+ *   registerAdvanceAnimationPlayer(world, assetResolver);
  *   // ...system will run each world.update() before propagateTransforms...
  */
-export function registerAdvanceAnimationPlayer(world: World): void {
-  world.addSystem(AdvanceAnimationPlayer);
+export function registerAdvanceAnimationPlayer(
+  world: World,
+  assetResolver: AnimationAssetResolver,
+): void {
+  const descriptor = {
+    name: ADVANCE_ANIMATION_PLAYER_SYSTEM,
+    queries: [],
+    fn: () => {
+      advanceAnimationPlayer(world, assetResolver, 1 / 60);
+    },
+    before: ['propagateTransforms'],
+  };
+  world.addSystem(descriptor);
 }

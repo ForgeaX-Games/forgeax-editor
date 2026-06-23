@@ -107,11 +107,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[skin] loadByGuid(scene) failed:', sceneRes.error);
     return;
   }
-  // loadByGuid returns the payload (D-17); mint a user-tier SceneAsset column
-  // handle before instantiate.
-  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
 
-  type ClipHandle = Handle<'AnimationClip', 'shared'>;
+  type ClipHandle = Handle<'AnimationClip', 'unmanaged'>;
   const clipHandles: { name: string; clip: ClipHandle }[] = [];
   for (const def of CLIPS) {
     const guidRes = AssetGuid.parse(def.guid);
@@ -124,12 +121,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       console.error('[skin] loadByGuid failed for', def.name, clipRes.error);
       return;
     }
-    // loadByGuid returns the payload (D-17); mint a user-tier column handle.
-    const clip = world.allocSharedRef('AnimationClip', clipRes.value);
-    clipHandles.push({ name: def.name, clip });
+    clipHandles.push({ name: def.name, clip: clipRes.value });
   }
 
-  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+  const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
   if (!instRes.ok) {
     console.error('[skin] instantiate failed:', (instRes.error as { code: string }).code);
     return;
@@ -343,7 +338,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Resolve clip handles by semantic name once -- the blend driver references
   // Walk / Run / Survey by role rather than CLIPS array index so re-ordering
   // CLIPS does not silently flip behaviour.
-  const findClip = (name: string): Handle<'AnimationClip', 'shared'> => {
+  const findClip = (name: string): Handle<'AnimationClip', 'unmanaged'> => {
     const entry = clipHandles.find((c) => c.name === name);
     if (entry === undefined) throw new Error(`[skin] clip '${name}' missing from CLIPS`);
     return entry.clip;

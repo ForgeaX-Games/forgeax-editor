@@ -34,7 +34,6 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -155,12 +154,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Register materials.
   // Wood floor: standard PBR + wood base color texture.
-  const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const floorMatHandle = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [1.0, 1.0, 1.0, 1.0],
       roughness: 0.9,
-      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
+      baseColorTexture: woodTex,
     }),
   );
 
@@ -173,23 +171,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       metallic: 0.8,
       emissive: BOX_EMISSIVE_COLOR,
       emissiveIntensity: intensity,
-      emissiveTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2SpecularTex)),
-      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2Tex)),
+      emissiveTexture: container2SpecularTex,
+      baseColorTexture: container2Tex,
     });
   }
 
-  const boxAMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_A_INTENSITY),
-  );
-  const boxBMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_B_INTENSITY),
-  );
-  const boxCMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_C_INTENSITY),
-  );
+  const boxAMatHandle = assets.register<MaterialAsset>(makeBoxMaterial(BOX_A_INTENSITY));
+  const boxBMatHandle = assets.register<MaterialAsset>(makeBoxMaterial(BOX_B_INTENSITY));
+  const boxCMatHandle = assets.register<MaterialAsset>(makeBoxMaterial(BOX_C_INTENSITY));
+
+  if (!floorMatHandle.ok || !boxAMatHandle.ok || !boxBMatHandle.ok || !boxCMatHandle.ok) {
+    console.error('[learn-render 5.7 bloom] material register failed');
+    return;
+  }
 
   // Spawn wood floor: HANDLE_CUBE scaled flat and wide.
   world
@@ -206,15 +200,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [floorMatHandle] } },
+      { component: MeshRenderer, data: { materials: [floorMatHandle.value] } },
     )
     .unwrap();
 
   // Spawn 3 emissive light boxes.
   for (const [posX, handle] of [
-    [BOX_A_POS_X, boxAMatHandle],
-    [BOX_B_POS_X, boxBMatHandle],
-    [BOX_C_POS_X, boxCMatHandle],
+    [BOX_A_POS_X, boxAMatHandle.value],
+    [BOX_B_POS_X, boxBMatHandle.value],
+    [BOX_C_POS_X, boxCMatHandle.value],
   ] as const) {
     world
       .spawn(

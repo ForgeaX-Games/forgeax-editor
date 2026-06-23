@@ -5,15 +5,15 @@
 // children-instances-managed-buffer-array w3 — `array<entity>` is the SSOT
 // now; migration covered by `managed-array-vocab.test-d.ts`):
 //   - 'buffer:<bytes>'    => Uint8Array
-//   - 'unique<T>'            => Handle<T, 'unique'>
-//   - 'shared<T>'         => Handle<T, 'shared'>
+//   - 'ref<T>'            => Handle<T, 'managed'>
+//   - 'handle<T>'         => Handle<T, 'unmanaged'>
 //   - 'entity'            => Entity | null
 //   - 'array<entity>'     => VarArrayView<Entity>  (covered in managed-array-vocab.test-d)
 //
 // These five keywords are the schema-vocab surface AI users compose into
-// component schemas (`defineComponent('Foo', { mat: { type: 'unique<MaterialAsset>' } })`).
+// component schemas (`defineComponent('Foo', { mat: { type: 'ref<MaterialAsset>' } })`).
 // `FieldValueType<T>` resolves the JS-value shape so `world.get(e, Foo).mat`
-// is automatically typed as `Handle<'MaterialAsset','unique'>` without casts.
+// is automatically typed as `Handle<'MaterialAsset','managed'>` without casts.
 //
 // Anti-keyword guardrail (AC-01 §"unsupported-keyword fail-fast"): unknown
 // keywords like `'foobar'` must NOT typecheck as a `ScalarFieldType`. The
@@ -33,21 +33,21 @@ describe('schema vocab — keyword recognition (w3, AC-01)', () => {
     expectTypeOf<FieldValueType<'buffer<65536>'>>().toEqualTypeOf<Uint8Array>();
   });
 
-  it("ref<T> derives to Handle<T, 'unique'>", () => {
-    expectTypeOf<FieldValueType<'unique<MaterialAsset>'>>().toEqualTypeOf<
-      Handle<'MaterialAsset', 'unique'>
+  it("ref<T> derives to Handle<T, 'managed'>", () => {
+    expectTypeOf<FieldValueType<'ref<MaterialAsset>'>>().toEqualTypeOf<
+      Handle<'MaterialAsset', 'managed'>
     >();
-    expectTypeOf<FieldValueType<'unique<TextureAsset>'>>().toEqualTypeOf<
-      Handle<'TextureAsset', 'unique'>
+    expectTypeOf<FieldValueType<'ref<TextureAsset>'>>().toEqualTypeOf<
+      Handle<'TextureAsset', 'managed'>
     >();
   });
 
-  it("handle<T> derives to Handle<T, 'shared'>", () => {
-    expectTypeOf<FieldValueType<'shared<MeshAsset>'>>().toEqualTypeOf<
-      Handle<'MeshAsset', 'shared'>
+  it("handle<T> derives to Handle<T, 'unmanaged'>", () => {
+    expectTypeOf<FieldValueType<'handle<MeshAsset>'>>().toEqualTypeOf<
+      Handle<'MeshAsset', 'unmanaged'>
     >();
-    expectTypeOf<FieldValueType<'shared<MaterialAsset>'>>().toEqualTypeOf<
-      Handle<'MaterialAsset', 'shared'>
+    expectTypeOf<FieldValueType<'handle<MaterialAsset>'>>().toEqualTypeOf<
+      Handle<'MaterialAsset', 'unmanaged'>
     >();
   });
 
@@ -56,8 +56,8 @@ describe('schema vocab — keyword recognition (w3, AC-01)', () => {
   });
 
   it('cross-keyword: ref/handle differ on the mode axis (managed vs unmanaged)', () => {
-    type Managed = FieldValueType<'unique<MaterialAsset>'>;
-    type Unmanaged = FieldValueType<'shared<MaterialAsset>'>;
+    type Managed = FieldValueType<'ref<MaterialAsset>'>;
+    type Unmanaged = FieldValueType<'handle<MaterialAsset>'>;
     expectTypeOf<Managed>().not.toEqualTypeOf<Unmanaged>();
   });
 });
@@ -74,14 +74,14 @@ describe('schema vocab — ShapeOf composition (w3, AC-01)', () => {
   it('ShapeOf threads each keyword through FieldValueType', () => {
     type S = {
       data: 'buffer<64>';
-      mat: 'unique<MaterialAsset>';
-      mesh: 'shared<MeshAsset>';
+      mat: 'ref<MaterialAsset>';
+      mesh: 'handle<MeshAsset>';
       parent: 'entity';
     };
     type Expected = {
       data: Uint8Array;
-      mat: Handle<'MaterialAsset', 'unique'>;
-      mesh: Handle<'MeshAsset', 'shared'>;
+      mat: Handle<'MaterialAsset', 'managed'>;
+      mesh: Handle<'MeshAsset', 'unmanaged'>;
       parent: EntityHandle | null;
     };
     expectTypeOf<ShapeOf<S>>().toEqualTypeOf<Expected>();
@@ -90,14 +90,14 @@ describe('schema vocab — ShapeOf composition (w3, AC-01)', () => {
   it('defineComponent infers the new vocab from the schema literal', () => {
     const C = defineComponent('VocabSample', {
       data: { type: 'buffer<32>' },
-      mat: { type: 'unique<MaterialAsset>' },
-      mesh: { type: 'shared<MeshAsset>' },
+      mat: { type: 'ref<MaterialAsset>' },
+      mesh: { type: 'handle<MeshAsset>' },
       parent: { type: 'entity' },
     });
     type Shape = ShapeOf<typeof C.schema>;
     expectTypeOf<Shape['data']>().toEqualTypeOf<Uint8Array>();
-    expectTypeOf<Shape['mat']>().toEqualTypeOf<Handle<'MaterialAsset', 'unique'>>();
-    expectTypeOf<Shape['mesh']>().toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();
+    expectTypeOf<Shape['mat']>().toEqualTypeOf<Handle<'MaterialAsset', 'managed'>>();
+    expectTypeOf<Shape['mesh']>().toEqualTypeOf<Handle<'MeshAsset', 'unmanaged'>>();
     expectTypeOf<Shape['parent']>().toEqualTypeOf<EntityHandle | null>();
   });
 });

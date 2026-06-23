@@ -45,25 +45,16 @@
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::shadow_pcf::{sample_shadow_2d}
 
-// Pick the cascade layer for a positive view-space depth -- walks
-// splitPlanes in order, returns the first split the depth falls below. Last
-// layer (count - 1) catches everything beyond splits[count-2]. cascadeCount=1
-// returns 0 unconditionally without a special branch (count - 1u == 0
-// short-circuits the loop trip count).
-//
-// NOTE the sign: the vertex stage emits `viewZ = -clipPos.w` (NEGATIVE in
-// front of the camera -- the deliberate convention the cluster Z-slice path
-// also relies on), but `pssmSplit` host-side produces POSITIVE view-space
-// split depths. The caller therefore passes `viewDepth = -viewZ` so this
-// comparison is positive-vs-positive. Comparing the raw negative viewZ against
-// positive splits collapsed every visible fragment to layer 0 (its near slab),
-// projecting far geometry out of the tile -> shadowFactor always 1.0 (no
-// occlusion). (downstream template integration #1.)
-fn _pickCascadeLayer(viewDepth : f32, count : u32) -> u32 {
+// Pick the cascade layer for `viewZ` -- walks splitPlanes in order, returns
+// the first split that viewZ falls below. Last layer (count - 1) catches
+// everything beyond splits[count-2]. cascadeCount=1 returns 0
+// unconditionally without a special branch (count - 1u == 0 short-circuits
+// the loop trip count).
+fn _pickCascadeLayer(viewZ : f32, count : u32) -> u32 {
   var layer : u32 = count - 1u;
   for (var i : u32 = 0u; i < count - 1u; i = i + 1u) {
     let sp = view.splitPlanes[i].x;
-    if (viewDepth < sp) {
+    if (viewZ < sp) {
       layer = i;
       break;
     }
@@ -131,19 +122,10 @@ fn _sampleShadowForCascade(
   }
   let texelDims = vec2<f32>(textureDimensions(shadowMap, 0));
   let texel = vec2<f32>(1.0 / texelDims.x, 1.0 / texelDims.y);
-  // AC-07 (bug-20260619): the OOB guard above is in tile-local space, but the
-  // 9-tap PCF offset is applied in atlas space. For count>1 (inv<1) a fragment
-  // within one texel of a tile edge would sample into a NEIGHBOURING cascade's
-  // tile, reading the wrong depth and producing a 1-texel seam at cascade
-  // boundaries. Clamp every tap to this cascade's tile rect
-  // [tileOrigin, tileOrigin+inv) (one texel inset) so taps stay in-tile. For
-  // count<=1 (single full-atlas tile) this is a no-op widening of the bound.
-  let tileLo = tileOrigin + texel;
-  let tileHi = tileOrigin + vec2<f32>(inv) - texel;
   var blocked = 0.0;
   for (var x = -1; x <= 1; x++) {
     for (var y = -1; y <= 1; y++) {
-      let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
+      let offsetUv = uv + vec2<f32>(f32(x), f32(y)) * texel;
       let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, adjustedDepth);
       blocked = blocked + (1.0 - lit);
     }
@@ -186,11 +168,7 @@ fn evalDirectional(
   // CSM derives them per-cascade after dispatch). F-J-1 future-tracks the
   // dedup once `forgeax_view::cascade` lands as its own module (post-#387).
   let count = u32(max(view.cascadeCount, 1.0));
-  // viewZ is negative in front of the camera; splitPlanes are positive
-  // view-space depths. Convert once so cascade selection + blend math are
-  // positive-vs-positive (see _pickCascadeLayer).
-  let viewDepth = -viewZ;
-  let layer = _pickCascadeLayer(viewDepth, count);
+  let layer = _pickCascadeLayer(viewZ, count);
   let shadowCurr = _sampleShadowForCascade(worldPos, layer, count, normal, l);
 
   // cascadeBlend mixes the current cascade with the next one across a
@@ -202,9 +180,7 @@ fn evalDirectional(
     let spCurr = view.splitPlanes[layer].x;
     let blendWidth = spCurr * view.cascadeBlend;
     if (blendWidth > 0.0) {
-      // Positive view-space depth (viewDepth), matching spCurr's sign;
-      // `dist` shrinks to 0 as the fragment approaches the split boundary.
-      let dist = spCurr - viewDepth;
+      let dist = spCurr - viewZ;
       let t = clamp(1.0 - dist / blendWidth, 0.0, 1.0);
       if (t > 0.0) {
         let shadowNext = _sampleShadowForCascade(worldPos, layer + 1u, count, normal, l);

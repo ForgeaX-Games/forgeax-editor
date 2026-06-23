@@ -17,11 +17,7 @@ const AlertDialogOverlay = React.forwardRef<
   <AlertDialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      // Top tier (--z-toplevel) so a blocking confirm/alert always sits above
-      // every app layer it can be triggered from — settings panel (--z-app-modal
-      // 1500) AND topbar menus (--z-menu 10001). At a lower z it rendered behind
-      // the settings scrim: unclickable + dimmed-illegible. See styles/tokens.css.
-      'fixed inset-0 z-[var(--z-toplevel)] bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-[1000] bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className,
     )}
     {...props}
@@ -38,9 +34,7 @@ const AlertDialogContent = React.forwardRef<
     <AlertDialogPrimitive.Content
       ref={ref}
       className={cn(
-        // Elevated modal surface on design tokens: popover (elev1) bg + white
-        // fg + token border/radius, matching the app's other floating panels.
-        'fixed left-[50%] top-[50%] z-[var(--z-toplevel)] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
+        'fixed left-[50%] top-[50%] z-[1000] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
         className,
       )}
       {...props}
@@ -116,15 +110,7 @@ const AlertDialogCancel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Cancel
     ref={ref}
-    // The default `outline` variant renders bg-background (invisible on the
-    // dialog's own surface) and flips to lime `bg-accent` on hover — neither
-    // matches the app. Use the app's canonical neutral button instead: subtle
-    // white-overlay fill + faint border + secondary text + neutral hover.
-    className={cn(
-      buttonVariants({ variant: 'outline' }),
-      'border-white/10 bg-white/[0.06] text-foreground/80 hover:bg-white/10 hover:text-foreground',
-      className,
-    )}
+    className={cn(buttonVariants({ variant: 'outline' }), className)}
     {...props}
   />
 ))

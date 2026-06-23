@@ -9,7 +9,7 @@
 // (importer:'image') + a font.pack.json (internal-text-package) whose payload
 // already contains atlasGuid / samplerGuid / glyphs / common — exactly what
 // the runtime fontLoader expects. The demo only has to:
-//   1. catalog<SamplerAsset>(SAMPLER_GUID, ...) so the font.pack.json
+//   1. registerWithGuid<SamplerAsset>(SAMPLER_GUID, ...) so the font.pack.json
 //      `samplerGuid` field resolves to a real Handle at fontLoader time.
 //   2. await loadByGuid<FontAsset>(FONT_GUID), which fetches the .pack.json,
 //      resolves atlas + sampler refs, and yields a Handle<FontAsset>.
@@ -32,18 +32,18 @@ export const SAMPLER_GUID = '019eb276-4d96-7313-b4f0-f5d55536acd2';
 export const PACK_INDEX_URL = '/pack-index.json';
 
 /**
- * Catalog the SamplerAsset that font.pack.json's `samplerGuid` field
- * references. Idempotent: re-cataloguing the same GUID overwrites with the
- * identical payload.
+ * Register the SamplerAsset that font.pack.json's `samplerGuid` field
+ * references. Idempotent: re-registering the same GUID is a no-op (the asset
+ * registry's registerWithGuid contract).
  */
 export function registerSharedSampler(
   assets: AssetRegistry,
-): void {
+): Handle<'SamplerAsset', 'unmanaged'> {
   const guidParsed = AssetGuid.parse(SAMPLER_GUID);
   if (!guidParsed.ok) {
     throw new Error(`[text] SAMPLER_GUID parse failed: ${guidParsed.error.code}`);
   }
-  assets.catalog<SamplerAsset>(guidParsed.value, {
+  return assets.registerWithGuid<SamplerAsset>(guidParsed.value, {
     kind: 'sampler',
     addressModeU: 'clamp-to-edge',
     addressModeV: 'clamp-to-edge',
@@ -76,7 +76,7 @@ export const TEXT_SCENES: ReadonlyArray<{
 /** Spawn the four world-space text scenes. Shared by demo + smoke. */
 export function spawnTextScenes(
   world: World,
-  fontHandle: Handle<'FontAsset', 'shared'>,
+  fontHandle: Handle<'FontAsset', 'unmanaged'>,
 ): void {
   for (const s of TEXT_SCENES) {
     world

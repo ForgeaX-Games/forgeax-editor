@@ -266,7 +266,7 @@ function spawnGrid(w: World, count: number): EntityHandle[] {
 // reading this pattern see one MaterialAsset per palette entry, not one
 // per cell — the AssetRegistry keeps the handle space bounded.
 let assetRegistry: AssetRegistry | null = null;
-const materialCache = new Map<string, Handle<'MaterialAsset', 'shared'>>();
+const materialCache = new Map<string, Handle<'MaterialAsset', 'unmanaged'>>();
 
 function colorKey(r: number, g: number, b: number): string {
   // Quantise to 1/256 so floating-point drift between paint frames does
@@ -277,15 +277,12 @@ function colorKey(r: number, g: number, b: number): string {
   return `${qr},${qg},${qb}`;
 }
 
-function materialFor(r: number, g: number, b: number): Handle<'MaterialAsset', 'shared'> | null {
+function materialFor(r: number, g: number, b: number): Handle<'MaterialAsset', 'unmanaged'> | null {
   if (assetRegistry === null) return null;
   const key = colorKey(r, g, b);
   const cached = materialCache.get(key);
   if (cached !== undefined) return cached;
-  const handle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.unlit([r, g, b, 1]),
-  );
+  const handle = assetRegistry.register<MaterialAsset>(Materials.unlit([r, g, b, 1])).unwrap();
   materialCache.set(key, handle);
   return handle;
 }

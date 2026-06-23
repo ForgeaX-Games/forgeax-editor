@@ -47,6 +47,7 @@ import {
   Transform,
   URP_PIPELINE_ID,
 } from '@forgeax/engine-runtime';
+import type { MaterialAsset, RenderPipelineAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CANVAS_W = 512;
@@ -106,11 +107,19 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  const installRes = hdrpRenderer.installPipeline({
+  const hdrpAssetRes = hdrpRenderer.assets?.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: HDRP_PIPELINE_ID,
     config: { clusterGrid: { x: 16, y: 9, z: 24 } },
   });
+  if (!hdrpAssetRes || !hdrpAssetRes.ok) {
+    console.error(
+      '[parity-urp-vs-hdrp] HDRP register failed:',
+      hdrpAssetRes ? hdrpAssetRes.error.code : '<assets null>',
+    );
+    return;
+  }
+  const installRes = hdrpRenderer.installPipeline(hdrpAssetRes.value);
   if (!installRes.ok) {
     console.error(
       '[parity-urp-vs-hdrp] installPipeline failed:',
@@ -132,14 +141,18 @@ async function bootstrap(): Promise<void> {
   declareCaptureHooks(urpRenderer, urpWorld, hdrpRenderer, hdrpWorld);
 }
 
-function populateScene(_renderer: Renderer, world: World): void {
+function populateScene(renderer: Renderer, world: World): void {
+  const assets = renderer.assets;
+  if (assets === null) {
+    console.error('[parity-urp-vs-hdrp] AssetRegistry null');
+    return;
+  }
   // Standard PBR material -- both pipelines route the same material
   // through their forward shading path. The ≤4-light forward inner loop
   // (URP) and the cluster-forward inner loop (HDRP, with the cluster
   // bins for our 4 spawn positions populated) should produce
-  // pixel-equivalent radiance. Material lives as a user-tier shared ref on
-  // the World (D-19: no AssetRegistry round-trip for engine-built payloads).
-  const matHandle = world.allocSharedRef('MaterialAsset', {
+  // pixel-equivalent radiance.
+  const matRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -155,6 +168,11 @@ function populateScene(_renderer: Renderer, world: World): void {
       roughness: 0.4,
     },
   });
+  if (!matRes.ok) {
+    console.error('[parity-urp-vs-hdrp] material register:', matRes.error.code);
+    return;
+  }
+  const matHandle = matRes.value;
 
   // Hero cube at origin facing camera.
   world.spawn(

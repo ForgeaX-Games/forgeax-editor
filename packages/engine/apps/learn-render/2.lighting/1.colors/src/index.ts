@@ -29,7 +29,7 @@ import {
   perspective,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
@@ -99,26 +99,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const assets = renderer.assets;
   assets.configurePackIndex('/pack-index.json');
 
-  // The engine ships HANDLE_CUBE as the procedural cube; MeshFilter uses it
-  // directly below (no per-demo GUID round-trip needed).
+  // Register builtin cube mesh under a dummy GUID for loadByGuid path.
+  // The engine ships HANDLE_CUBE as the procedural cube; the pack-index
+  // maps GUID-based loadByGuid calls to this asset.
+  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
+  if (!cubeAsset.ok) {
+    console.error('[learn-render 2.lighting 1.colors] HANDLE_CUBE asset unavailable');
+    return;
+  }
 
-  // feat-20260523 M8-T03: schema-driven material; paramSchema declared inline
-  // so the demo stays self-contained without a .pack.json sidecar.
-  const objectMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  // feat-20260523 M8-T03: schema-driven register entry (replaces legacy
+  // register<StandardMaterialAsset>); paramSchema declared inline so the
+  // demo stays self-contained without a .pack.json sidecar.
+  const objectMatHandle = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [OBJECT_BASE_COLOR[0], OBJECT_BASE_COLOR[1], OBJECT_BASE_COLOR[2], 1],
       metallic: 0.0,
       roughness: 0.5,
     }),
-  );
+  ).unwrap();
 
-  // Unlit material for the lamp cube (always renders white, like LO's
-  // separate light cube shader).
-  const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.unlit([1.0, 1.0, 1.0, 1.0]),
-  );
+  // Register an unlit material for the lamp cube (always renders white,
+  // like LO's separate light cube shader).
+  const lampMatHandle = assets.register<MaterialAsset>(Materials.unlit([1.0, 1.0, 1.0, 1.0])).unwrap();
 
   // Spawn the colored object cube at origin (LO: cube at origin).
   world
@@ -224,7 +227,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
     name: 'learn-render-colors-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
-    fn: (world, queryResults) => {
+    fn: (queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) return;
       scrollFov.apply(snapshot.mouse.wheelDelta);

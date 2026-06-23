@@ -15,30 +15,11 @@
       "types": "./dist/adapter.d.ts",
       "import": "./dist/adapter.mjs"
     },
-    "./capture-browser": {
-      "types": "./dist/capture-browser.d.ts",
-      "import": "./dist/capture-browser.mjs"
-    },
     "./inspector": {
       "types": "./dist/inspector.d.ts",
       "import": "./dist/inspector.mjs"
     },
-    "./inspect-core": {
-      "types": "./dist/inspect-core.d.ts",
-      "import": "./dist/inspect-core.mjs"
-    },
-    "./rt-to-canvas": {
-      "types": "./dist/rt-to-canvas.d.ts",
-      "import": "./dist/rt-to-canvas.mjs"
-    },
-    "./cli": {
-      "types": "./dist/cli.d.ts",
-      "import": "./dist/cli.mjs"
-    },
     "./package.json": "./package.json"
-  },
-  "bin": {
-    "forgeax-rhi-debug": "./dist/cli.mjs"
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -60,8 +41,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/pngjs": "^6.0.5",
-    "@webgpu/types": "^0.1.70",
-    "webgpu": "^0.4.0"
+    "@webgpu/types": "^0.1.70"
   },
   "peerDependencies": {
     "@forgeax/engine-rhi-webgpu": "workspace:*",

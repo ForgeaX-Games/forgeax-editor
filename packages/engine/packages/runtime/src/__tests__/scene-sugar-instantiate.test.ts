@@ -18,7 +18,7 @@
 
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { ChildOf, SceneInstance } from '../components';
@@ -43,8 +43,9 @@ function buildScene(): SceneAsset {
   return { kind: 'scene', entities: nodes };
 }
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
-  return world.allocSharedRef('SceneAsset', asset);
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
+  const managed = world.allocManagedRef('SceneAsset', asset);
+  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
 }
 
 describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', () => {
@@ -125,7 +126,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const world = new World();
     // Use a handle that is not a managed ref -> instantiateScene returns Err.
-    const bogusHandle = toShared<'SceneAsset'>(9999);
+    const bogusHandle = toUnmanaged<'SceneAsset'>(9999);
     const r = reg.instantiate<SceneAsset>(bogusHandle, world);
     expect(r.ok).toBe(false);
     if (r.ok) return;

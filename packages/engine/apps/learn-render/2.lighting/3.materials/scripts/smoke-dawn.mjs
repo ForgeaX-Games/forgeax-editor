@@ -167,35 +167,25 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const world = new World();
-
 // Register materials (mirrors src/index.ts scene setup).
 // Single standard material with roughness ~0.3 (PBR equivalent of LO shininess=32).
-// feat-20260614 M8 (D-15/D-17): pass-based MaterialAsset minted via allocSharedRef.
 const objectBaseColor = [1.0, 0.5, 0.31, 1.0];
 
-const objectMatHandle = world.allocSharedRef('MaterialAsset', {
+const objectMatHandle = assets.register({
   kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-      queue: 2000,
-    },
-  ],
-  paramValues: {
-    baseColor: [objectBaseColor[0], objectBaseColor[1], objectBaseColor[2]],
-    metallic: 0.0,
-    roughness: 0.3,
-  },
+  shadingModel: 'standard',
+  baseColor: objectBaseColor,
+  metallic: 0.0,
+  roughness: 0.3,
 });
 
-const lampMatHandle = world.allocSharedRef('MaterialAsset', {
+const lampMatHandle = assets.register({
   kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
+  shadingModel: 'unlit',
+  baseColor: [1.0, 1.0, 1.0, 1.0],
 });
+
+const world = new World();
 
 // Spawn the object cube at origin (LO: model = identity).
 world

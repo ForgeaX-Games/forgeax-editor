@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
 
 // Dismissible controls cheat-sheet pinned to the bottom of the viewport. Lists
 // the Blender-default camera + gizmo bindings. Closing it persists to
@@ -7,7 +6,6 @@ import { useTranslation } from '@forgeax/editor-shared/i18n';
 const KEY = 'forgeax:editor:hints-dismissed';
 
 export function ViewportHints() {
-  const { t } = useTranslation();
   const [open, setOpen] = useState<boolean>(() => {
     try { return localStorage.getItem(KEY) !== '1'; } catch { return true; }
   });
@@ -24,20 +22,22 @@ export function ViewportHints() {
   if (!open) {
     return (
       <button type="button" className="vp-hints-toggle" data-testid="viewport-hints-toggle"
-        title={t('editor.viewportHints.toggleTitle')} onClick={reopen}>?</button>
+        title="显示操作说明" onClick={reopen}>?</button>
     );
   }
 
   return (
     <div className="vp-hints" data-testid="viewport-hints">
       <div className="vp-hints-rows">
-        {/* Static, fully-controlled cheat-sheet strings from our own catalog —
-            the only markup is <b> keycaps, so dangerouslySetInnerHTML is safe. */}
-        <span className="vp-hints-row" dangerouslySetInnerHTML={{ __html: t('editor.viewportHints.row1') }} />
-        <span className="vp-hints-row" dangerouslySetInnerHTML={{ __html: t('editor.viewportHints.row2') }} />
+        <span className="vp-hints-row">
+          <b>中键</b> 旋转 · <b>Shift+中键</b> 平移 · <b>Ctrl+中键 / 滚轮</b> 缩放 · <b>左键</b> 选择
+        </span>
+        <span className="vp-hints-row">
+          <b>W / E / R</b> 移动·旋转·缩放 · <b>F</b> 聚焦选中 · 触控板 <b>Alt+左键</b> 旋转 · <b>⇧Alt</b> 平移
+        </span>
       </div>
       <button type="button" className="vp-hints-close" data-testid="viewport-hints-close"
-        title={t('editor.viewportHints.closeTitle')} onClick={dismiss}>×</button>
+        title="关闭（点右下角 ? 可重新打开）" onClick={dismiss}>×</button>
     </div>
   );
 }

@@ -148,7 +148,6 @@ const {
   Camera,
   createRenderer,
   HANDLE_TRIANGLE,
-  Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -187,10 +186,14 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const world = new World();
 // LO 1.2 fragment shader literal: vec4(1.0, 0.5, 0.2, 1.0) flat orange.
-// M8 D-17: mint a user-tier column handle from the unlit MaterialAsset POD.
-const orangeMaterial = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
+const orangeMaterial = assets.register({
+  kind: 'material',
+  shadingModel: 'unlit',
+  baseColor: [1.0, 0.5, 0.2, 1.0],
+});
+
+const world = new World();
 world.spawn(
   {
     component: Transform,

@@ -38,11 +38,11 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type {
+  Handle,
   MaterialAsset,
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -194,7 +194,7 @@ const appRes = await createApp(
     if (bus !== undefined) bus.push({ code: planetMeshRes.error.code, hint: planetMeshRes.error.hint });
     return;
   }
-  const planetMeshHandle = world.allocSharedRef('MeshAsset', planetMeshRes.value);
+  const planetMeshHandle: Handle<'MeshAsset', 'unmanaged'> = planetMeshRes.value;
 
   const marsTexRes = await assets.loadByGuid<TextureAsset>(MARS_TEXTURE_GUID.value);
   if (!marsTexRes.ok) {
@@ -203,7 +203,7 @@ const appRes = await createApp(
     if (bus !== undefined) bus.push({ code: marsTexRes.error.code, hint: marsTexRes.error.hint });
     return;
   }
-  const marsTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', marsTexRes.value));
+  const marsTexHandle: Handle<'TextureAsset', 'unmanaged'> = marsTexRes.value;
 
   const rockMeshRes = await assets.loadByGuid<MeshAsset>(ROCK_MESH_GUID.value);
   if (!rockMeshRes.ok) {
@@ -212,7 +212,7 @@ const appRes = await createApp(
     if (bus !== undefined) bus.push({ code: rockMeshRes.error.code, hint: rockMeshRes.error.hint });
     return;
   }
-  const rockMeshHandle = world.allocSharedRef('MeshAsset', rockMeshRes.value);
+  const rockMeshHandle: Handle<'MeshAsset', 'unmanaged'> = rockMeshRes.value;
 
   const rockTexRes = await assets.loadByGuid<TextureAsset>(ROCK_TEXTURE_GUID.value);
   if (!rockTexRes.ok) {
@@ -221,11 +221,10 @@ const appRes = await createApp(
     if (bus !== undefined) bus.push({ code: rockTexRes.error.code, hint: rockTexRes.error.hint });
     return;
   }
-  const rockTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', rockTexRes.value));
+  const rockTexHandle: Handle<'TextureAsset', 'unmanaged'> = rockTexRes.value;
 
   // Central planet material — PBR standard with mars.png baseColorTexture.
-  const planetMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const planetMatRes = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [0.7, 0.7, 0.7, 1],
       metallic: 0.1,
@@ -233,13 +232,16 @@ const appRes = await createApp(
       baseColorTexture: marsTexHandle,
     }),
   );
+  if (!planetMatRes.ok) {
+    console.error('[learn-render 4.9 instancing] planet material register failed:', planetMatRes.error.code);
+    return;
+  }
 
   // Asteroid material — PBR standard with rock.png baseColorTexture.
   // rock.mtl maps rock.png via map_Bump (normalTexture), not map_Kd
   // (baseColorTexture). Research F-7: demo self-manufactures material,
   // ignoring gltf built-in material entirely.
-  const asteroidMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const asteroidMatRes = assets.register<MaterialAsset>(
     Materials.standard({
       baseColor: [0.7, 0.7, 0.7, 1],
       metallic: 0.05,
@@ -247,6 +249,10 @@ const appRes = await createApp(
       baseColorTexture: rockTexHandle,
     }),
   );
+  if (!asteroidMatRes.ok) {
+    console.error('[learn-render 4.9 instancing] asteroid material register failed:', asteroidMatRes.error.code);
+    return;
+  }
 
   // Central planet — a single non-instanced sphere at the origin, using
   // vendored planet mesh + mars.png texture.
@@ -256,7 +262,7 @@ const appRes = await createApp(
       data: { posX: 0, posY: 0, posZ: 0, scaleX: PLANET_SCALE, scaleY: PLANET_SCALE, scaleZ: PLANET_SCALE },
     },
     { component: MeshFilter, data: { assetHandle: planetMeshHandle } },
-    { component: MeshRenderer, data: { materials: [planetMat] } },
+    { component: MeshRenderer, data: { materials: [planetMatRes.value] } },
   );
 
   // Asteroid belt — ONE entity carrying the packed per-instance transforms.
@@ -266,7 +272,7 @@ const appRes = await createApp(
   world.spawn(
     { component: Transform, data: {} },
     { component: MeshFilter, data: { assetHandle: rockMeshHandle } },
-    { component: MeshRenderer, data: { materials: [asteroidMat] } },
+    { component: MeshRenderer, data: { materials: [asteroidMatRes.value] } },
     { component: Instances, data: { transforms } },
   );
 
@@ -312,21 +318,10 @@ const appRes = await createApp(
     return;
   }
   console.warn(`[learn-render 4.9 instancing] backend=${renderer.backend}`);
-
-  // Positive "bootstrap ran to completion" marker for the onerror-gate
-  // tripwire (#426). Reaching here means every loadByGuid resolved and the
-  // demo started — i.e. the OOS-1 mesh-DDC gap is closed. The reverse-
-  // expectation test reads this to tell "OOS-1 fixed -> flip the tripwire
-  // red" apart from "bootstrap disrupted before the planet load -> stay
-  // green, inconclusive". Only set on the all-clear path; every early
-  // return above leaves it unset.
-  (globalThis as unknown as { __learnRenderBootstrapComplete?: boolean }).__learnRenderBootstrapComplete =
-    true;
 }
 
 declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
-    __learnRenderBootstrapComplete?: boolean;
   }
 }

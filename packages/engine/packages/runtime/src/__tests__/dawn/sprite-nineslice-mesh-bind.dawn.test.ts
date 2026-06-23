@@ -111,8 +111,6 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     const assets = renderer.assets;
     expect(assets).toBeInstanceOf(AssetRegistry);
 
-    const world = new World();
-
     // ── Build a 4x4 RGBA texture (16 texels) with a recognizable pattern. ──
     // The exact pixels are not asserted -- the frame just needs to render
     // without firing RhiError. 4x4 is below the wgpu mipmap requirement so
@@ -133,9 +131,11 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       mipmap: false,
       data: pixels,
     };
-    const texHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texAsset);
+    const texRes = assets.register<TextureAsset>(texAsset);
+    expect(texRes.ok).toBe(true);
+    if (!texRes.ok) return;
     // feat-20260601-gpu-resource-store-extraction M1: explicit texture GPU upload.
-    const texUploadRes = await renderer.store.uploadTexture(texHandle, texAsset, {
+    const texUploadRes = await renderer.store.uploadTexture(texRes.value, texAsset, {
       bytes: pixels,
       width: 4,
       height: 4,
@@ -154,32 +154,34 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       minFilter: 'linear',
       mipmapFilter: 'nearest',
     };
-    const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>(
-      'SamplerAsset',
-      samplerAsset,
-    );
+    const samplerRes = assets.register<SamplerAsset>(samplerAsset);
+    expect(samplerRes.ok).toBe(true);
+    if (!samplerRes.ok) return;
 
     // Sprite material with non-zero slices -- this triggers the w11 mesh
     // routing override to HANDLE_NINESLICE_QUAD. paramValues includes
     // texture + sampler so the missing-texture debug-pink branch stays cold.
-    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const matRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         { name: 'Sprite', shader: 'forgeax::sprite', queue: 3000, tags: { LightMode: 'Forward' } },
       ],
       paramValues: {
-        texture: texHandle as unknown as string,
-        sampler: samplerHandle as unknown as string,
+        texture: texRes.value as unknown as string,
+        sampler: samplerRes.value as unknown as string,
         slices: [0.25, 0.25, 0.25, 0.25],
         sliceMode: 0,
       },
     });
+    expect(matRes.ok).toBe(true);
+    if (!matRes.ok) return;
 
     const errors: unknown[] = [];
     renderer.onError((e) => {
       errors.push(e);
     });
 
+    const world = new World();
     world.spawn(
       {
         component: Transform,
@@ -197,7 +199,7 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      { component: MeshRenderer, data: { materials: [matHandle] } },
+      { component: MeshRenderer, data: { materials: [matRes.value] } },
     );
     world.spawn(
       {

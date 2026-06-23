@@ -484,7 +484,7 @@ async function main() {
     const first = failures[0];
     failStructured(
       'metric-status-not-ok',
-      `${first.member}.${first.kind} reports status === '${first.status}' (expected 'ok')`,
+      `${first.member}.${first.kind} reports status === 'ok'`,
       `inspect report/${first.pkg}/${first.kind}.json for value vs threshold; rerun: pnpm metrics:run`,
     );
   }

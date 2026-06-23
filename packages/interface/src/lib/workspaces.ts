@@ -18,10 +18,8 @@ const LAYOUT_VERSION_KEY = STORAGE_KEYS.wsLayoutVersion;
 // next load, migrateLayoutVersion() discards every saved layout whose stamp is
 // older, so existing users automatically pick up the new default WITHOUT having
 // to hit "重置布局" manually. (Version 3: 2026-06 — evict layouts saved while
-// editor iframes fell back to the outer Studio shell, causing nested workspaces.
-// Version 4: 2026-06 — Info panel now defaults into the bottom History/Timeline/
-// Capabilities group instead of floating top-right.)
-export const CURRENT_LAYOUT_VERSION = 4;
+// editor iframes fell back to the outer Studio shell, causing nested workspaces.)
+export const CURRENT_LAYOUT_VERSION = 3;
 
 // Core workspace IDs — always present, cannot be deleted.
 export const CORE_WORKSPACE_IDS = new Set(['preview', 'edit', 'workbench']);
@@ -131,25 +129,6 @@ export function setActiveWorkspace(id: string): void {
   if (!state.list.find((w) => w.id === id)) return;
   saveState({ ...state, activeId: id });
   notify();
-}
-
-/**
- * Boot-time AppMode derived from the persisted active workspace.
- *
- * Bug (2026-06-19): the store hard-coded `mode: 'preview'` while the active
- * workspace tab was restored separately from localStorage. On refresh the tab
- * highlight showed the last workspace (e.g. AI / Edit) but the main area
- * rendered the Play preview — a mismatch the user hit while editing the story
- * tree. Deriving the initial `mode` from the restored workspace keeps the
- * highlighted tab and the rendered surface in sync after a refresh, with no
- * tab-then-content flash. Mirrors `modeForWorkspace()` in WorkspaceTabs.tsx
- * (kept standalone here to avoid a store ↔ component import cycle).
- */
-export function bootAppMode(): 'preview' | 'workbench' | 'edit' {
-  const { activeId } = loadWorkspaces();
-  if (activeId === 'preview') return 'preview';
-  if (activeId === 'edit') return 'edit';
-  return 'workbench';
 }
 
 // ── Workspace CRUD ─────────────────────────────────────────────────────────

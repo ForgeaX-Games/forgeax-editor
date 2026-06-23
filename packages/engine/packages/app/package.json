@@ -37,7 +37,6 @@
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

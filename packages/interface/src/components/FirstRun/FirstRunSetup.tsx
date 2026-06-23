@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { useTranslation } from '@/i18n';
 
 // First-run API-key onboarding (U3). Shows a blocking overlay when no
 // ANTHROPIC_API_KEY is configured — the main gap for the bundled desktop .app,
@@ -9,7 +8,6 @@ import { useTranslation } from '@/i18n';
 // PUT /api/settings/env, which now also live-applies to process.env so the
 // running server picks the key up without a restart.
 export function FirstRunSetup() {
-  const { t } = useTranslation();
   const [needsKey, setNeedsKey] = useState(false);
   const [key, setKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -32,7 +30,7 @@ export function FirstRunSetup() {
   if (!needsKey) return null;
 
   const save = async () => {
-    if (!key.trim()) { setErr(t('firstRun.errMissingKey')); return; }
+    if (!key.trim()) { setErr('请输入 API Key'); return; }
     setBusy(true); setErr(null);
     try {
       const patch: Record<string, string> = { ANTHROPIC_API_KEY: key.trim() };
@@ -43,7 +41,7 @@ export function FirstRunSetup() {
         body: JSON.stringify(patch),
       });
       const j = (await r.json()) as { error?: string };
-      if (!r.ok || j.error) { setErr(j.error ?? t('firstRun.errSaveFailed')); setBusy(false); return; }
+      if (!r.ok || j.error) { setErr(j.error ?? '保存失败'); setBusy(false); return; }
       setNeedsKey(false);
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
@@ -51,18 +49,18 @@ export function FirstRunSetup() {
   return (
     <div style={overlay}>
       <div style={card}>
-        <h2 style={{ margin: '0 0 8px', fontSize: 18 }}>{t('firstRun.title')}</h2>
+        <h2 style={{ margin: '0 0 8px', fontSize: 18 }}>欢迎使用 ForgeaX Studio</h2>
         <p style={{ opacity: 0.7, margin: '0 0 16px', fontSize: 13 }}>
-          {t('firstRun.introBefore')} <code>~/ForgeaxProjects/.env</code>{t('firstRun.introAfter')}
+          首次使用,请填入 Anthropic API Key。仅写入本机 <code>~/ForgeaxProjects/.env</code>,不上传任何地方。
         </p>
         <input style={input} type="password" placeholder="sk-ant-..." value={key}
           onChange={(e) => setKey(e.target.value)} autoFocus
           onKeyDown={(e) => { if (e.key === 'Enter') void save(); }} />
-        <input style={input} type="text" placeholder={t('firstRun.baseUrlPlaceholder')} value={baseUrl}
+        <input style={input} type="text" placeholder="ANTHROPIC_BASE_URL(可选代理,留空走官方)" value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)} />
         {err && <div style={{ color: '#ff8a8a', fontSize: 12, marginBottom: 8 }}>{err}</div>}
         <button style={btn} disabled={busy} onClick={() => void save()}>
-          {busy ? t('firstRun.saving') : t('firstRun.saveAndStart')}
+          {busy ? '保存中…' : '保存并开始'}
         </button>
       </div>
     </div>

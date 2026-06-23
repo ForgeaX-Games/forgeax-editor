@@ -6,7 +6,6 @@
 
 import { useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-import { useTranslation } from '@/i18n';
 import { STRONG_REFLECTION_RE, SOFT_REFLECTION_RE, STRONG_CORR_RE } from './reflection-i18n';
 
 // Copy-on-hover button for fenced code blocks. Tries the async clipboard
@@ -269,7 +268,6 @@ function renderInline(text: string, keyPrefix = ''): (string | ReactElement)[] {
 }
 
 export function MarkdownView({ text }: { text: string }) {
-  const { t } = useTranslation();
   const blocks = useMemo(() => parseBlocks(text), [text]);
   return (
     <div className="md">
@@ -306,8 +304,8 @@ export function MarkdownView({ text }: { text: string }) {
                           className="md-task-box"
                           role="img"
                           aria-disabled="true"
-                          aria-label={checked ? t('markdownView.taskDoneReadonly') : t('markdownView.taskTodoReadonly')}
-                          title={t('markdownView.taskStatusReadonly')}
+                          aria-label={checked ? '已完成（只读）' : '未完成（只读）'}
+                          title="任务状态只读 — 这是消息内容的一部分，不能点击切换"
                         >{checked ? '✓' : ' '}</span>
                         {renderInline(m[2])}
                       </li>

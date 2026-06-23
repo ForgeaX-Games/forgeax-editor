@@ -5,32 +5,7 @@
 // CollidingEntities is the runtime set-query component for continuous
 // collision status (started/stopped model, no 'continued' event).
 
-import type { EntityHandle } from '@forgeax/engine-ecs';
 import { defineComponent } from '@forgeax/engine-ecs';
-
-// ─── Collider despawn-cleanup dispatch (plan-strategy D-3) ───
-//
-// The Collider component owns a single `onRemove` lifecycle hook (set at
-// definition time, then frozen). Physics backends cannot mutate the frozen
-// token, so the hook fans out to a mutable listener set instead: backends
-// subscribe via `registerColliderRemoveListener` and are notified when any
-// entity's Collider is removed (despawn / removeComponent). This is the SSOT
-// for "Collider removed -> physics cleanup" — the backend wires removeEntity
-// (body + KCC cache) onto it (feat-20260617 D-3).
-
-type ColliderRemoveListener = (entity: EntityHandle) => void;
-
-const colliderRemoveListeners = new Set<ColliderRemoveListener>();
-
-/**
- * Subscribe to Collider removal (fired by `Collider.onRemove` on despawn /
- * removeComponent). Returns an unsubscribe function. Idempotent — registering
- * the same listener twice is a no-op (Set semantics).
- */
-export function registerColliderRemoveListener(listener: ColliderRemoveListener): () => void {
-  colliderRemoveListeners.add(listener);
-  return () => colliderRemoveListeners.delete(listener);
-}
 
 /**
  * RigidBody motion type — 3-state discriminant mirroring Rapier's
@@ -147,66 +122,19 @@ export function colliderShapeFromF32(n: number): ColliderShape {
  * | `collisionGroups` | `u32` | `0x0001_FFFF` | 32-bit packed membership/filter |
  * | `solverGroups` | `u32` | `0xFFFF_FFFF` | 32-bit packed constraint groups |
  */
-export const Collider = defineComponent(
-  'Collider',
-  {
-    shape: { type: 'enum', default: 0 },
-    halfExtentsX: { type: 'f32', default: 0.5 },
-    halfExtentsY: { type: 'f32', default: 0.5 },
-    halfExtentsZ: { type: 'f32', default: 0.5 },
-    radius: { type: 'f32', default: 0.5 },
-    halfHeight: { type: 'f32', default: 0.5 },
-    friction: { type: 'f32', default: 0.5 },
-    restitution: { type: 'f32', default: 0 },
-    density: { type: 'f32', default: 1 },
-    isSensor: { type: 'bool', default: false },
-    collisionGroups: { type: 'u32', default: 0x0001_ffff },
-    solverGroups: { type: 'u32', default: 0xffff_ffff },
-  },
-  {
-    // D-3: fan removal out to subscribed physics backends so despawn /
-    // removeComponent triggers body + KCC cache cleanup.
-    onRemove: (entity) => {
-      for (const listener of colliderRemoveListeners) listener(entity);
-    },
-  },
-);
-
-/**
- * ECS Component: kinematic character controller tuning + output state.
- *
- * Spawn alongside a `RigidBody({ type: 'kinematic' })` + `Collider` to opt an
- * entity into collision-aware movement via `PhysicsWorld.moveAndSlide`. The
- * tuning fields are stable character properties; `grounded` is written back by
- * the engine after each `moveAndSlide` (game code reads it, never writes it).
- *
- * All fields are flat scalars in engine units (degrees, world-space distance) —
- * no Rapier types leak through. Slope angles use the `Deg` suffix to make the
- * unit explicit; the backend translates degrees to radians. A single field
- * carries both the on/off switch and the value: `autoStepMaxHeight === 0`
- * disables auto-step, `snapToGroundDist === 0` disables snap-to-ground.
- *
- * 2D and 3D reuse this same component (plan-strategy D-9): every field is a
- * dimension-agnostic scalar, so no separate 2D component is needed.
- *
- * | Field | Type | Default | Purpose |
- * |:--|:--|:--|:--|
- * | `offset` | `f32` | `0.01` | Skin thickness, prevents penetration |
- * | `maxSlopeClimbDeg` | `f32` | `45` | Max climbable slope angle (degrees) |
- * | `minSlopeSlideDeg` | `f32` | `30` | Slope angle past which sliding starts (degrees) |
- * | `autoStepMaxHeight` | `f32` | `0.3` | Max auto-step height (0 = off) |
- * | `autoStepMinWidth` | `f32` | `0.2` | Min step width to be steppable |
- * | `snapToGroundDist` | `f32` | `0.2` | Downhill ground-snap distance (0 = off) |
- * | `grounded` | `bool` | `false` | Engine-written: grounded after last move |
- */
-export const CharacterController = defineComponent('CharacterController', {
-  offset: { type: 'f32', default: 0.01 },
-  maxSlopeClimbDeg: { type: 'f32', default: 45 },
-  minSlopeSlideDeg: { type: 'f32', default: 30 },
-  autoStepMaxHeight: { type: 'f32', default: 0.3 },
-  autoStepMinWidth: { type: 'f32', default: 0.2 },
-  snapToGroundDist: { type: 'f32', default: 0.2 },
-  grounded: { type: 'bool', default: false },
+export const Collider = defineComponent('Collider', {
+  shape: { type: 'enum', default: 0 },
+  halfExtentsX: { type: 'f32', default: 0.5 },
+  halfExtentsY: { type: 'f32', default: 0.5 },
+  halfExtentsZ: { type: 'f32', default: 0.5 },
+  radius: { type: 'f32', default: 0.5 },
+  halfHeight: { type: 'f32', default: 0.5 },
+  friction: { type: 'f32', default: 0.5 },
+  restitution: { type: 'f32', default: 0 },
+  density: { type: 'f32', default: 1 },
+  isSensor: { type: 'bool', default: false },
+  collisionGroups: { type: 'u32', default: 0x0001_ffff },
+  solverGroups: { type: 'u32', default: 0xffff_ffff },
 });
 
 /**

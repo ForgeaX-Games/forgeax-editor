@@ -68,8 +68,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   const shader = renderer.shader;
-  if (shader === null) {
-    console.error('[shadow-opt-out] renderer.shader is null');
+  const assets = renderer.assets;
+  if (shader === null || assets === null) {
+    console.error('[shadow-opt-out] renderer.shader or renderer.assets is null');
     return;
   }
 
@@ -147,10 +148,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // because `debugSampleShadowFactor` reads the shadow map directly,
   // bypassing the forward fragment shader entirely
   // ([[m4-structural-smoke-masks-pso-variant-mismatch]]).
-  const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const floorMatResult = assets.register<MaterialAsset>(
     Materials.standard({ baseColor: [0.85, 0.85, 0.85, 1] }),
   );
+  if (!floorMatResult.ok) throw new Error(`floor material: ${floorMatResult.error.code}`);
+  const floorMatHandle = floorMatResult.value;
   world.spawn(
     {
       component: Transform,
@@ -172,10 +174,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
 
   // ── Cube A: red, casts shadow (default) ───────────────────────────────
-  const matAHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }),
-  );
+  const matAResult = assets.register<MaterialAsset>(Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
+  if (!matAResult.ok) throw new Error(`material A: ${matAResult.error.code}`);
+  const matAHandle = matAResult.value;
   world.spawn(
     {
       component: Transform,
@@ -186,10 +187,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
 
   // ── Cube B: green, castShadow: false ──────────────────────────────────
-  const matBHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const matBResult = assets.register<MaterialAsset>(
     Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }),
   );
+  if (!matBResult.ok) throw new Error(`material B: ${matBResult.error.code}`);
+  const matBHandle = matBResult.value;
   world.spawn(
     {
       component: Transform,
@@ -200,7 +202,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
 
   // ── Cube C: custom cutout shadow shader ───────────────────────────────
-  const matCHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const matCResult = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -220,7 +222,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       metallic: 0,
       roughness: 0.5,
     },
-  } as MaterialAsset);
+  });
+  if (!matCResult.ok) throw new Error(`material C: ${matCResult.error.code}`);
+  const matCHandle = matCResult.value;
   world.spawn(
     {
       component: Transform,

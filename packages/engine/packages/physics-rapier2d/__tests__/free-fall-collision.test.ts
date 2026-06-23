@@ -264,7 +264,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     expect(dynPosYBefore).toBeCloseTo(5, 1);
 
     // Register physics systems.
-    registerPhysicsSystems2D(world);
+    registerPhysicsSystems2D(world, Transform as never);
 
     // Run 60 frames at 60 fps.
     for (let i = 0; i < 60; i++) {

@@ -204,7 +204,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -584,8 +584,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Camera: unknown;
     DirectionalLight: unknown;
     DirectionalLightShadow: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -640,7 +640,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       MeshRenderer: unknown;
       DirectionalLight: unknown;
       DirectionalLightShadow: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
     },
     options?: { withShadow?: boolean },
   ) {
@@ -830,14 +830,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  function registerMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
     // Minimal mesh: 1 triangle at origin with AABB
     const vertices = new Float32Array([
       0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
       1, 0, 0, 0, 0,
     ]);
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+    const result = assets.register<MeshAsset>({
       kind: 'mesh',
       vertices,
       indices: new Uint16Array([0, 1, 2]),
@@ -852,10 +852,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
+    if (!result.ok) throw new Error('register failed');
+    return result.value;
   }
 
-  function registerUnlitMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
-    return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  function registerUnlitMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
+    const result = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -867,12 +869,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ],
       paramValues: { baseColor: [1, 1, 1] },
     });
+    if (!result.ok) throw new Error('register failed');
+    return result.value;
   }
 
   function spawnEntity(
     world: World,
-    meshHandle: Handle<'MeshAsset', 'shared'>,
-    matHandle: Handle<'MaterialAsset', 'shared'>,
+    meshHandle: Handle<'MeshAsset', 'unmanaged'>,
+    matHandle: Handle<'MaterialAsset', 'unmanaged'>,
   ) {
     const e = world
       .spawn(
@@ -892,8 +896,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('same entity produces equal entityKey across two consecutive extractFrame calls', () => {
       const world = new World();
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const meshHandle = registerMesh(world);
-      const matHandle = registerUnlitMaterial(world);
+      const meshHandle = registerMesh(assets);
+      const matHandle = registerUnlitMaterial(assets);
 
       spawnEntity(world, meshHandle, matHandle);
 
@@ -916,8 +920,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('two different entities produce different entityKey values', () => {
       const world = new World();
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const meshHandle = registerMesh(world);
-      const matHandle = registerUnlitMaterial(world);
+      const meshHandle = registerMesh(assets);
+      const matHandle = registerUnlitMaterial(assets);
 
       spawnEntity(world, meshHandle, matHandle);
       spawnEntity(world, meshHandle, matHandle);
@@ -938,8 +942,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('despawn + respawn yields different entityKey (generation bump)', () => {
       const world = new World();
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const meshHandle = registerMesh(world);
-      const matHandle = registerUnlitMaterial(world);
+      const meshHandle = registerMesh(assets);
+      const matHandle = registerUnlitMaterial(assets);
 
       const e = spawnEntity(world, meshHandle, matHandle);
       const frame1 = extract(world, assets);
@@ -1154,8 +1158,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Camera: unknown;
     DirectionalLight: unknown;
     Instances: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -1208,7 +1212,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       MeshRenderer: unknown;
       DirectionalLight: unknown;
       Instances: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
     },
     options?: { withInstances?: boolean },
   ) {

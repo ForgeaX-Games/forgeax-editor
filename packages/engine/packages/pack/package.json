@@ -34,10 +34,6 @@
       "types": "./dist/scanner.d.ts",
       "import": "./dist/scanner.mjs"
     },
-    "./name": {
-      "types": "./dist/deriveAssetName.d.ts",
-      "import": "./dist/name.mjs"
-    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

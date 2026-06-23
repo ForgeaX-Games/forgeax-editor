@@ -19,7 +19,6 @@
 import { useState } from 'react';
 import { Section } from '../TopBar/SettingsDrawer';
 import { Download, ShieldAlert, ShieldCheck, AlertTriangle, FileWarning } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 
 interface TrustDescriptor {
   signed: boolean;
@@ -58,7 +57,6 @@ type InstallResult = InstallOk | InstallFail;
 type ConflictPolicy = 'skip' | 'overwrite' | 'rename';
 
 export function TrustPanel(): React.ReactNode {
-  const { t } = useTranslation();
   const [path, setPath] = useState('');
   const [inspecting, setInspecting] = useState(false);
   const [inspect, setInspect] = useState<InspectResult | null>(null);
@@ -124,7 +122,7 @@ export function TrustPanel(): React.ReactNode {
 
   return (
     <>
-      <Section icon={<Download size={14} />} title={t('trust.import.title')} hint={t('trust.import.hint')}>
+      <Section icon={<Download size={14} />} title="导入 .fxpack" hint="本机绝对路径 — 浏览器侧暂不上传二进制">
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             type="text"
@@ -140,16 +138,16 @@ export function TrustPanel(): React.ReactNode {
             onClick={() => void doInspect()}
             disabled={inspecting || !path.trim()}
           >
-            {inspecting ? t('trust.inspect.inProgress') : t('trust.inspect.button')}
+            {inspecting ? '检查中…' : '检查'}
           </button>
         </div>
         <div className="settings-help" style={{ marginTop: 6 }}>
-          {t('trust.inspect.help')}
+          ADR-0014 默认拒绝 · 未签名包在确认前不能 install。Inspect 不写盘,只读 manifest 和权限。
         </div>
       </Section>
 
       {inspect && !inspect.ok && (
-        <Section icon={<AlertTriangle size={14} />} title={t('trust.inspect.failed')} hint={inspect.code}>
+        <Section icon={<AlertTriangle size={14} />} title="检查失败" hint={inspect.code}>
           <div className="err-pill" style={{ display: 'inline-block', maxWidth: '100%', whiteSpace: 'normal' }}>
             {inspect.error}
           </div>
@@ -160,12 +158,12 @@ export function TrustPanel(): React.ReactNode {
         <>
           <Section
             icon={inspect.trust.signed ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
-            title={t('trust.panel.title')}
-            hint={inspect.trust.signed ? t('trust.panel.signed') : t('trust.panel.unsigned')}
+            title="信任面板"
+            hint={inspect.trust.signed ? '已签名' : '未签名 · 请确认来源'}
           >
             <div className="settings-info">
               <div><span className="dim">id:</span> <code>{inspect.manifest.id}</code> · v{inspect.manifest.version}</div>
-              <div><span className="dim">title:</span> {pickTitle(inspect.manifest.title, t)}</div>
+              <div><span className="dim">title:</span> {pickTitle(inspect.manifest.title)}</div>
               {inspect.manifest.author && (
                 <div><span className="dim">author:</span> {inspect.manifest.author.name}</div>
               )}
@@ -186,9 +184,9 @@ export function TrustPanel(): React.ReactNode {
             </div>
           </Section>
 
-          <Section icon={<ShieldAlert size={14} />} title={t('trust.permissions.title')} hint={t('trust.permissions.hint')}>
+          <Section icon={<ShieldAlert size={14} />} title="权限声明" hint="manifest.permissions[] · 安装后由 host 信任,运行时强制将在后续版本接入">
             {Object.keys(inspect.trust.permissions).length === 0 ? (
-              <div className="settings-help">{t('trust.permissions.none')}</div>
+              <div className="settings-help">无权限声明 — 这个包不会主动访问 fs / net。</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {Object.entries(inspect.trust.permissions).map(([id, perms]) => (
@@ -197,7 +195,7 @@ export function TrustPanel(): React.ReactNode {
                       <code>{id}</code>
                     </div>
                     {perms.length === 0 ? (
-                      <div className="dim" style={{ fontSize: 11 }}>{t('trust.permissions.empty')}</div>
+                      <div className="dim" style={{ fontSize: 11 }}>(无)</div>
                     ) : (
                       <ul style={{ margin: '2px 0 0 18px' }}>
                         {perms.map((p) => (
@@ -212,11 +210,11 @@ export function TrustPanel(): React.ReactNode {
           </Section>
 
           {inspect.trust.conflicts.length > 0 && (
-            <Section icon={<FileWarning size={14} />} title={t('trust.conflicts.title')} hint={t('trust.conflicts.hint')}>
+            <Section icon={<FileWarning size={14} />} title="冲突" hint="本机已存在同 id">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {inspect.trust.conflicts.map((c) => (
                   <div key={c.id} className="settings-info">
-                    <code>{c.id}</code> · {t('trust.conflicts.entry', { layer: c.existingLayer, oldVersion: c.existingVersion, newVersion: c.newVersion })}
+                    <code>{c.id}</code> · 已在 {c.existingLayer} v{c.existingVersion} → 新包 v{c.newVersion}
                   </div>
                 ))}
               </div>
@@ -224,7 +222,7 @@ export function TrustPanel(): React.ReactNode {
                 {(['skip', 'overwrite', 'rename'] as const).map((p) => (
                   <label key={p} style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <input type="radio" name="conflict-policy" checked={policy === p} onChange={() => setPolicy(p)} />
-                    {policyLabel(p, t)}
+                    {policyLabel(p)}
                   </label>
                 ))}
               </div>
@@ -232,7 +230,7 @@ export function TrustPanel(): React.ReactNode {
           )}
 
           {inspect.trust.warnings.length > 0 && (
-            <Section icon={<AlertTriangle size={14} />} title={t('trust.warnings.title')} hint={t('trust.warnings.count', { count: inspect.trust.warnings.length })}>
+            <Section icon={<AlertTriangle size={14} />} title="警告" hint={`${inspect.trust.warnings.length} 条`}>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {inspect.trust.warnings.map((w, i) => (
                   <li key={i} style={{ fontSize: 12, color: 'var(--text-primary)' }}>{w}</li>
@@ -241,12 +239,12 @@ export function TrustPanel(): React.ReactNode {
             </Section>
           )}
 
-          <Section icon={<Download size={14} />} title={t('trust.install.title')} hint={t('trust.install.hint')}>
+          <Section icon={<Download size={14} />} title="安装" hint="复制到 destRoot/.forgeax/plugins/<id>/ · 自动 reload">
             <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
               <label className="settings-label">destRoot</label>
               <input
                 type="text"
-                placeholder={destLayer === 'L1' ? t('trust.install.destRootL1Placeholder') : t('trust.install.destRootL2Placeholder')}
+                placeholder={destLayer === 'L1' ? '通常: ~ (写入 ~/.forgeax/plugins/)' : '当前 project root'}
                 value={destRoot}
                 onChange={(e) => setDestRoot(e.target.value)}
                 disabled={installing}
@@ -257,7 +255,7 @@ export function TrustPanel(): React.ReactNode {
                 {(['L1', 'L2'] as const).map((l) => (
                   <label key={l} style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     <input type="radio" name="dest-layer" checked={destLayer === l} onChange={() => setDestLayer(l)} />
-                    {l === 'L1' ? t('trust.install.layerL1') : t('trust.install.layerL2')}
+                    {l === 'L1' ? 'L1 · 用户级' : 'L2 · 项目级'}
                   </label>
                 ))}
               </div>
@@ -265,7 +263,7 @@ export function TrustPanel(): React.ReactNode {
             {!inspect.trust.signed && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12 }}>
                 <input type="checkbox" checked={unsignedAck} onChange={(e) => setUnsignedAck(e.target.checked)} />
-                <span>{t('trust.install.unsignedAck')}</span>
+                <span>我了解此包未签名,来源由我自己负责</span>
               </label>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -275,7 +273,7 @@ export function TrustPanel(): React.ReactNode {
                 onClick={() => void doInstall()}
                 disabled={!installEnabled}
               >
-                {installing ? t('trust.install.inProgress') : t('trust.install.button')}
+                {installing ? '安装中…' : '安装'}
               </button>
             </div>
           </Section>
@@ -283,12 +281,12 @@ export function TrustPanel(): React.ReactNode {
           {install && (
             <Section
               icon={install.ok ? <ShieldCheck size={14} /> : <AlertTriangle size={14} />}
-              title={t('trust.result.title')}
-              hint={install.ok ? t('trust.result.reloadTriggered') : install.code}
+              title="安装结果"
+              hint={install.ok ? 'reload 已触发' : install.code}
             >
               {install.ok ? (
                 <div className="settings-info">
-                  <div><span className="dim">installed:</span> {install.installed.join(', ') || t('trust.result.empty')}</div>
+                  <div><span className="dim">installed:</span> {install.installed.join(', ') || '(无)'}</div>
                   {install.skipped.length > 0 && (
                     <div><span className="dim">skipped (conflict):</span> {install.skipped.join(', ')}</div>
                   )}
@@ -312,14 +310,14 @@ export function TrustPanel(): React.ReactNode {
   );
 }
 
-function policyLabel(p: ConflictPolicy, t: (key: string) => string): string {
-  if (p === 'skip') return t('trust.policy.skip');
-  if (p === 'overwrite') return t('trust.policy.overwrite');
-  return t('trust.policy.rename');
+function policyLabel(p: ConflictPolicy): string {
+  if (p === 'skip') return 'skip · 保留旧版(默认)';
+  if (p === 'overwrite') return 'overwrite · 覆盖旧版';
+  return 'rename · 新版改名 <id>-<ts>';
 }
 
-function pickTitle(title: { zh?: string; en?: string }, t: (key: string) => string): string {
-  return title.zh ?? title.en ?? t('trust.untitled');
+function pickTitle(t: { zh?: string; en?: string }): string {
+  return t.zh ?? t.en ?? '(无标题)';
 }
 
 function shortKey(k: string): string {

@@ -9,7 +9,6 @@ import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { pluginRendersInMainArea, pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
 import { KeepAlivePluginIframes } from '../MainArea/KeepAlivePluginIframes';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
-import { useTranslation, getLocale } from '@/i18n';
 import './Sidebar.css';
 
 // Phase B4 — the static `PLUGIN_PANEL_LOADERS` import map is gone. Plugins
@@ -60,7 +59,7 @@ interface BusEntry {
 type Entry = BuiltinEntry | BusEntry;
 
 const BUILTINS: BuiltinEntry[] = [
-  { kind: 'builtin', id: 'agents', label: 'Agents', Icon: Bot },
+  { kind: 'builtin', id: 'agents', label: 'Agents (产物)', Icon: Bot },
   { kind: 'builtin', id: 'files', label: 'Files', Icon: Files },
 ];
 
@@ -68,10 +67,10 @@ const BUILTINS: BuiltinEntry[] = [
 // or a regression in scan). Keeps the legacy 5 placeholder tabs labeled in zh
 // so the UI never collapses to just Agents/Files.
 const FALLBACK_WBS: Array<Pick<BusPluginInfo, 'id' | 'icon' | 'displayName'> & { workbench: NonNullable<BusPluginInfo['workbench']> }> = [
-  { id: 'fallback-character', icon: undefined, displayName: { en: 'Character / Narrative', zh: '角色叙事' }, workbench: { id: 'character', icon: '👤', position: 110 } },
-  { id: 'fallback-scene', icon: undefined, displayName: { en: 'Scene / PCG', zh: '场景 / PCG' }, workbench: { id: 'scene', icon: '🗺️', position: 180 } },
-  { id: 'fallback-skill', icon: undefined, displayName: { en: 'Skill / VFX', zh: '技能 / VFX' }, workbench: { id: 'skill', icon: '⚡', position: 140 } },
-  { id: 'fallback-look', icon: undefined, displayName: { en: 'Color / Look', zh: '色彩 / Look' }, workbench: { id: 'look', icon: '🎨', position: 120 } },
+  { id: 'fallback-character', icon: undefined, displayName: { zh: '角色叙事' }, workbench: { id: 'character', icon: '👤', position: 110 } },
+  { id: 'fallback-scene', icon: undefined, displayName: { zh: '场景 / PCG' }, workbench: { id: 'scene', icon: '🗺️', position: 180 } },
+  { id: 'fallback-skill', icon: undefined, displayName: { zh: '技能 / VFX' }, workbench: { id: 'skill', icon: '⚡', position: 140 } },
+  { id: 'fallback-look', icon: undefined, displayName: { zh: '色彩 / Look' }, workbench: { id: 'look', icon: '🎨', position: 120 } },
   { id: 'fallback-library', icon: undefined, displayName: { zh: 'Library' }, workbench: { id: 'library', icon: '🖼️', position: 200 } },
 ];
 
@@ -107,7 +106,6 @@ interface HostSidebarSnapshot {
 }
 
 export function Sidebar() {
-  const { t } = useTranslation();
   const { workbenchTab, setWorkbenchTab } = useAppStore();
   const mode = useAppStore((s) => s.mode);
   const setMode = useAppStore((s) => s.setMode);
@@ -170,7 +168,7 @@ export function Sidebar() {
       .map<BusEntry>((m) => ({
         kind: 'bus',
         id: `wb:${m.workbench?.id ?? m.id}`,
-        label: pickLang(m.displayName, getLocale(), m.workbench?.id ?? m.id),
+        label: pickLang(m.displayName, 'zh', m.workbench?.id ?? m.id),
         emoji: m.workbench?.icon ?? m.icon ?? '🧩',
         manifest: m,
       }));
@@ -296,7 +294,7 @@ export function Sidebar() {
     return (
       <aside className="sidebar sidebar-collapsed">
         <div className="sb-toolbar-collapsed">
-          <button className="sb-icon-btn" onClick={toggleSidebar} title={t('sidebar.expandSidebar')} aria-label={t('sidebar.expandSidebar')}>
+          <button className="sb-icon-btn" onClick={toggleSidebar} title="展开侧栏" aria-label="展开侧栏">
             <PanelLeftOpen size={16} />
           </button>
           <div className="sb-nav-divider" />
@@ -356,7 +354,7 @@ export function Sidebar() {
             <Wrench size={16} />
           </button>
         </div>
-        <button className="sb-icon-btn" onClick={toggleSidebar} title={t('sidebar.collapseSidebar')} aria-label={t('sidebar.collapseSidebar')}>
+        <button className="sb-icon-btn" onClick={toggleSidebar} title="折叠侧栏" aria-label="折叠侧栏">
           <PanelLeftClose size={16} />
         </button>
       </div>
@@ -372,7 +370,7 @@ export function Sidebar() {
               className="ws-icons-pill"
               role="tablist"
               aria-orientation="horizontal"
-              title={t('sidebar.workbenchPluginsHint')}
+              title="Workbench 插件 (bus-sourced · ←→ 切换)"
             >
             {busEntries.map((e, i) => {
               const globalIdx = i + BUILTINS.length;
@@ -387,7 +385,7 @@ export function Sidebar() {
                   role="tab"
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
-                  title={t('sidebar.tabTooltip', { label: e.label, id: e.manifest.id })}
+                  title={`${e.label} · ${e.manifest.id} · ←→ 切换 tab`}
                   aria-label={e.label}
                   data-plugin-id={e.manifest.id}
                 >
@@ -410,8 +408,8 @@ export function Sidebar() {
               if (floating) {
                 return (
                   <div className="ws-pane-floating">
-                    <span>{t('sidebar.inSeparateWindow')}</span>
-                    <button className="ws-pane-window-toggle" onClick={() => void redockSurface(desc)} title={t('sidebar.redockToMainWindow')}>
+                    <span>已在独立窗口</span>
+                    <button className="ws-pane-window-toggle" onClick={() => void redockSurface(desc)} title="收回主窗">
                       <PictureInPicture2 size={12} />
                     </button>
                   </div>
@@ -423,7 +421,7 @@ export function Sidebar() {
                     <button
                       className="ws-pane-window-toggle floating-trigger"
                       onClick={() => void detachSurface(desc, { title: activeEntry.label })}
-                      title={t('sidebar.popOutToSeparateWindow')}
+                      title="弹出为独立窗口"
                     >
                       <ExternalLink size={12} />
                     </button>
@@ -456,11 +454,11 @@ export function Sidebar() {
               if (!leftPaneActivePlugin || !getWindowManager().canDetach()) return null;
               const desc: SurfaceDescriptor = { kind: 'plugin', id: leftPaneActivePlugin.id, pane: 'left' };
               const floating = !!floatingSurfaces[surfaceKey(desc)];
-              const label = pickLang(leftPaneActivePlugin.displayName, getLocale(), leftPaneActivePlugin.id);
+              const label = pickLang(leftPaneActivePlugin.displayName, 'zh', leftPaneActivePlugin.id);
               return floating ? (
                 <div className="ws-pane-floating">
-                  <span>{t('sidebar.inSeparateWindow')}</span>
-                  <button className="ws-pane-window-toggle" onClick={() => void redockSurface(desc)} title={t('sidebar.redockToMainWindow')}>
+                  <span>已在独立窗口</span>
+                  <button className="ws-pane-window-toggle" onClick={() => void redockSurface(desc)} title="收回主窗">
                     <PictureInPicture2 size={12} />
                   </button>
                 </div>
@@ -468,7 +466,7 @@ export function Sidebar() {
                 <button
                   className="ws-pane-window-toggle floating-trigger"
                   onClick={() => void detachSurface(desc, { title: label })}
-                  title={t('sidebar.popOutToSeparateWindow')}
+                  title="弹出为独立窗口"
                 >
                   <ExternalLink size={12} />
                 </button>
@@ -476,7 +474,7 @@ export function Sidebar() {
             })()}
             {leftPaneActivePlugin && dockedPlugins.has(leftPaneActivePlugin.id) ? (
               <div className="ws-pane-floating">
-                <span>{t('sidebar.inDockPanel')}</span>
+                <span>已在 Dock 面板</span>
               </div>
             ) : (
               <KeepAlivePluginIframes pane="left" activePlugin={leftPaneActivePlugin} floatingKeys={floatingSurfaces} />
@@ -502,7 +500,6 @@ export function Sidebar() {
 // promoted to default-visible mini-strips. i18n readers (en) no longer have
 // to read the Chinese line first.
 function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblingCount: number }) {
-  const { t } = useTranslation();
   const m = entry.manifest;
   const description = pickLang(m.description, 'zh', '');
   const descriptionEn = pickLang(m.description, 'en', '');
@@ -584,32 +581,32 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
           {(m.tools?.length ?? 0) > 0 ? (
             <span
               className="bus-tool-prov k-tool"
-              title={t('sidebar.providesToolsTooltip', { count: m.tools!.length, list: m.tools!.map((tool) => tool.id).join(' · ') })}
+              title={`${m.tools!.length} tools · AI agent 可调用：${m.tools!.map((t) => t.id).join(' · ')}`}
             >
               T<b>{m.tools!.length}</b> tools
             </span>
           ) : (
-            <span className="bus-tool-prov k-tool muted" title={t('sidebar.providesNoTools')}>T0 tools</span>
+            <span className="bus-tool-prov k-tool muted" title="此插件未向 AI agent 暴露 tools">T0 tools</span>
           )}
           {(m.events?.length ?? 0) > 0 ? (
             <span
               className="bus-tool-prov k-event"
-              title={t('sidebar.providesEventsTooltip', { count: m.events!.length, list: m.events!.map((e) => e.name).join(' · ') })}
+              title={`${m.events!.length} events · bus 上 emit：${m.events!.map((e) => e.name).join(' · ')}`}
             >
               E<b>{m.events!.length}</b> events
             </span>
           ) : (
-            <span className="bus-tool-prov k-event muted" title={t('sidebar.providesNoEvents')}>E0 events</span>
+            <span className="bus-tool-prov k-event muted" title="此插件未向 bus emit events">E0 events</span>
           )}
           {(m.skills?.length ?? 0) > 0 ? (
             <span
               className="bus-tool-prov k-skill"
-              title={t('sidebar.providesSkillsTooltip', { count: m.skills!.length, list: m.skills!.map((s) => s.id).join(' · ') })}
+              title={`${m.skills!.length} skills · 注入 chat composer：${m.skills!.map((s) => s.id).join(' · ')}`}
             >
               S<b>{m.skills!.length}</b> skills
             </span>
           ) : (
-            <span className="bus-tool-prov k-skill muted" title={t('sidebar.providesNoSkills')}>S0 skills</span>
+            <span className="bus-tool-prov k-skill muted" title="此插件未声明 skills">S0 skills</span>
           )}
         </div>
       </div>
@@ -629,7 +626,7 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
         type="button"
         className="bus-tool-family"
         onClick={openSiblings}
-        title={t('sidebar.familyTooltip', { count: siblingCount })}
+        title={`Bus 上共 ${siblingCount} 个 workbench 插件 — 单击在 Bus 详情按 kind=workbench 过滤 →`}
       >
         <span className="bus-tool-family-icon" aria-hidden>🧩</span>
         <span className="bus-tool-family-label">family</span>
@@ -648,9 +645,9 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
         type="button"
         className="bus-tool-open"
         onClick={openInBus}
-        title={t('sidebar.openInBusTooltip', { id: m.id })}
+        title={`切换到 Bus tab (⌘3) 并自动展开 ${m.id} 详情行`}
       >
-        {t('sidebar.openInBusDetail')}
+        在 Bus 详情查看 →
       </button>
     </div>
   );

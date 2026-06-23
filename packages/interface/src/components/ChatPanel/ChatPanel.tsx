@@ -9,7 +9,6 @@ import { useAppStore, type ChatMessage } from '../../store';
 import { parseSegments } from '../Composer/pill';
 import { PillChip } from '../Composer/PillChip';
 import { getWindowManager, decodeSurfaceFromLocation } from '../../lib/platform';
-import { useTranslation, t } from '@/i18n';
 import './ChatPanel.css';
 
 // True when THIS window is itself a detached surface (so we don't show a
@@ -92,8 +91,8 @@ const capFirst = (s: string): string => (s.length ? s.charAt(0).toUpperCase() + 
 // reduces eye-load in long sessions), then degrade to MM-DD same-year, then
 // full YYYY-MM-DD for old archives. Mirrors formatTs's progressive disclosure.
 function dayLabel(ms: number, now: number = Date.now()): string {
-  if (sameDay(ms, now)) return RTF ? capFirst(RTF.format(0, 'day')) : t('common.today');
-  if (sameDay(ms, now - 86400000)) return RTF ? capFirst(RTF.format(-1, 'day')) : t('common.yesterday');
+  if (sameDay(ms, now)) return RTF ? capFirst(RTF.format(0, 'day')) : '今天';
+  if (sameDay(ms, now - 86400000)) return RTF ? capFirst(RTF.format(-1, 'day')) : '昨天';
   const d = new Date(ms);
   const pad = (x: number) => String(x).padStart(2, '0');
   if (d.getFullYear() === new Date(now).getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -127,7 +126,6 @@ function formatTs(ms: number, now: number = Date.now()): string {
  *  "[展开]" toggle — mirrors ink-renderer's SystemLine.Collapsible behavior. */
 const SYS_COLLAPSE_THRESHOLD = 180;
 function SystemLine({ m }: { m: ChatMessage }) {
-  const { t } = useTranslation();
   const isError = m.level === 'error';
   const isWarning = m.level === 'warning';
   const isIncoming = m.direction === 'incoming';
@@ -162,9 +160,9 @@ function SystemLine({ m }: { m: ChatMessage }) {
               type="button"
               className="sys-toggle"
               onClick={() => setOpen((v) => !v)}
-              title={open ? t('chat.systemLine.collapse') : t('chat.systemLine.expandAll')}
+              title={open ? '收起' : '展开全部'}
             >
-              {open ? t('chat.systemLine.collapse') : t('chat.systemLine.expand')}
+              {open ? '收起' : '展开'}
             </button>
           </>
         ) : (
@@ -182,7 +180,6 @@ function SystemLine({ m }: { m: ChatMessage }) {
 }
 
 export function ChatPanel() {
-  const { t } = useTranslation();
   const messages = useAppStore((s) => s.messages);
   const threadRef = useRef<HTMLDivElement>(null);
   // Auto-scroll / "jump to latest" 状态机。
@@ -418,10 +415,10 @@ export function ChatPanel() {
           onClick={() =>
             void useAppStore.getState().detachSurface(
               { kind: 'panel', id: 'chat' },
-              { title: t('chat.windowTitle') },
+              { title: '对话 Chat' },
             )
           }
-          title={t('chat.popOut')}
+          title="把对话弹出为独立窗口"
         >
           <ExternalLink size={12} />
         </button>
@@ -432,9 +429,9 @@ export function ChatPanel() {
         <div className="cp-thread thin-scrollbar" ref={threadRef} onScroll={handleScroll}>
         {messages.length === 0 && (
           <div className="cp-empty">
-            <div className="cp-empty-title">{t('chat.empty.title')}</div>
+            <div className="cp-empty-title">开始对话</div>
             <div className="cp-empty-sub">
-              {t('chat.empty.subtitle')}
+              告诉 FORGE 你想做什么游戏 —— 例如 "在 games/gta-2.5d/main.ts 里写一个旋转立方体"。
             </div>
             {/* 2026-05-17 — EmptyBusReadout / EmptySurfacesReadout /
                EmptyEventsTicker 3 张卡片删除。bus host 总数 / kind 拆分 /
@@ -451,9 +448,9 @@ export function ChatPanel() {
               if (el) topAnchorRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
               setRenderLimit((n) => Math.min(messages.length, n + MEMLEAK_CASE02_RENDER_WINDOW));
             }}
-            title={t('chat.loadEarlier.tooltip')}
+            title="上滑到顶部会自动加载更早的消息;也可点此加载"
           >
-            ↑ {t('chat.loadEarlier.label', { count: messages.length - renderLimit })}
+            ↑ 上滑加载更早的 {messages.length - renderLimit} 条消息
           </button>
         )}
 
@@ -509,15 +506,15 @@ export function ChatPanel() {
                     onClick={canRewindHere && !pendingRewind && !chatStreaming
                       ? () => setEditingMsgId(m.msgId!)
                       : undefined}
-                    title={canRewindHere && !pendingRewind && !chatStreaming ? t('chat.editMessage') : undefined}
+                    title={canRewindHere && !pendingRewind && !chatStreaming ? '点击编辑这条消息' : undefined}
                   >
                     <PillText text={m.text} />
                     {canRewindHere && (
                       <button
                         type="button"
                         className="rw-here-btn"
-                        title={t('chat.rewindHere.tooltip')}
-                        aria-label={t('chat.rewindHere.label')}
+                        title="回到这里(checkpoint 回退)"
+                        aria-label="回到这里"
                         onClick={(e) => { e.stopPropagation(); setRewindConfirm(m.msgId!); }}
                       ><Undo2 size={13} strokeWidth={2} /></button>
                     )}
@@ -570,10 +567,10 @@ export function ChatPanel() {
           <button
             className="cp-jump-latest"
             onClick={() => scrollToBottom()}
-            title={t('chat.jumpLatest.tooltip')}
+            title="滚动到最新消息"
           >
             <ArrowDown size={13} strokeWidth={2.4} />
-            <span>{t('chat.jumpLatest.unread', { count: unread })}</span>
+            <span>{unread} 条新消息</span>
           </button>
         )}
       </div>

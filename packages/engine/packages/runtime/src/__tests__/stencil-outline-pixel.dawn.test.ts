@@ -172,12 +172,10 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
     const assets = renderer.assets;
     if (assets === null) throw new Error('renderer.assets is null');
 
-    const world = new World();
-
     // Cube material (writes stencil ref=1). Use unlit grayscale so the
     // cube body never produces G/B>R pixels and cannot be confused with
     // the outline pass under the assertion's color signature.
-    const cubeMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const cubeMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -195,12 +193,14 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       paramValues: {
         baseColor: [0.5, 0.5, 0.5, 1.0],
       },
-    } as MaterialAsset);
+    });
+    expect(cubeMatRes.ok).toBe(true);
+    if (!cubeMatRes.ok) return;
 
     // Outline material (stencil-test only, unlit cyan-green).
     // Tag MUST be LightMode='Forward' to be picked by URP main pass selector;
     // pre-fix the demo set 'ForwardOutline' which silently dropped the pass.
-    const outlineMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const outlineMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -219,7 +219,11 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       paramValues: {
         baseColor: OUTLINE_COLOR as readonly number[],
       },
-    } as MaterialAsset);
+    });
+    expect(outlineMatRes.ok).toBe(true);
+    if (!outlineMatRes.ok) return;
+
+    const world = new World();
 
     // Cube at origin.
     world.spawn(
@@ -239,7 +243,7 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
+      { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
     );
 
     // Outline cube at origin, scale 1.1.
@@ -260,7 +264,7 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [outlineMatHandle] } },
+      { component: MeshRenderer, data: { materials: [outlineMatRes.value] } },
     );
 
     // Camera at z=3 looking at origin.

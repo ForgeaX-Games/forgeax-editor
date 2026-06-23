@@ -28,11 +28,11 @@ import { type ComponentSchema, type ScalarFieldType, TYPE_METADATA } from './com
  * Read-only access shape for the 4 managed-vocab column keywords --
  * `'string'` / `` `ref<T>` `` / variable `'buffer'` / variable `` `array<T>` ``.
  *
- * The column carries u32 slot ids (`UniqueRefStore` / `BufferPool`); direct
+ * The column carries u32 slot ids (`ManagedRefStore` / `BufferPool`); direct
  * index assignment would corrupt the slot table. The reader exposes
  * `.length` + `.get(i): number` so consumers can walk row indices and
  * retrieve slot ids, then route through the public dispatch (`world.set`,
- * `world.push`, `world.allocUniqueRef`, etc.) for any mutation.
+ * `world.push`, `world.allocManagedRef`, etc.) for any mutation.
  *
  * Phantom brand `__managed` (D-7 / requirements-decisions q2): the
  * double-underscore + semantic-word pattern matches `Handle.__handle`. The
@@ -176,7 +176,7 @@ export function growColumn(col: Column, newCapacity: number): Column {
  *
  * Schema-vocab keywords (`buffer:<N>` / `ref<T>` / `handle<T>` / `entity` /
  * `array<T,N>` / `array<T>`) are explicitly cold — their storage is owned by
- * separate subsystems (UniqueRefStore / BufferPool), not the column SoA path. The keyword check uses an unsafe narrowing because
+ * separate subsystems (ManagedRefStore / BufferPool), not the column SoA path. The keyword check uses an unsafe narrowing because
  * `SchemaFieldType` is wider than the set's `ScalarFieldType` element type;
  * the `has` test is the runtime gate.
  */

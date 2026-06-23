@@ -1,37 +1,31 @@
 // asset-registry-mesh-pack-payload.dawn.test.ts - bug-20260523-mesh-upload-floats-per-vertex-fail-fast-and-cascadi
 // M3 / t9 (dawn integration): pack deserialization non-12F mesh gate trigger.
 //
-// Exercises the catalog entrance point (catalog + parseAssetPayload)
+// Exercises the loadByGuid entrance point (registerWithGuid + parseAssetPayload)
 // with a deliberately non-12F vertices payload. Verifies that the registerGate
 // mesh-vertex-stride-mismatch gate fires in the dawn runtime context (dawn.node
 // GPU device available), not just the node unit-test context.
 //
-// feat-20260614 M8 (D-17): the registry catalogues GUID -> payload via
-// `catalog`, which returns Result and validates stride BEFORE storing; it
-// never throws and never mints a handle.
-//
 // Cases covered:
-// (a) catalog() non-12F mesh -> Result.err mesh-vertex-stride-mismatch
+// (a) register() non-12F mesh -> Result.err mesh-vertex-stride-mismatch
 //     (dawn context; gate already exercised by t4 unit; dawn here adds
 //     GPU device wiring awareness)
-// (b) catalog() non-12F mesh -> Result.err with
+// (b) registerWithGuid() non-12F mesh -> throws AssetError with
 //     code='mesh-vertex-stride-mismatch' (the loadByGuid entrance point;
-//     parseAssetPayload produces the MeshAsset, catalog validates stride
-//     before storing)
-// (c) after catalog() returns err, lookup returns undefined
-//     (AC-03 no-intermediate-state for GUID path)
-// (d) AC-08 narrowing: read err.detail.floatsPerVertex off the Result.err
+//     parseAssetPayload produces the MeshAsset, registerWithGuid stores
+//     it, and registerWithGuid now validates stride before storing)
+// (c) after registerWithGuid throws, resolveGuid returns
+//     asset-not-found (AC-03 no-intermediate-state for GUID path)
+// (d) AC-08 narrowing: catch AssetError, access detail.floatsPerVertex
 //
-// Anchors: plan-strategy D-2 (catalog covered by gate);
+// Anchors: plan-strategy D-2 (registerWithGuid covered by gate);
 //          plan-strategy D-4 (parseAssetPayload not front-loading check,
-//            catalog gate is the enforcement point);
+//            registerWithGuid gate is the enforcement point);
 //          plan-strategy R-3 (pack-payload non-12F regression safety);
 //          requirements AC-06 (cascading exhaustive);
 //          charter P3 (structured failure: .code / .expected / .hint / .detail).
 
-import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { ok } from '@forgeax/engine-rhi';
 import type { CubeTextureAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
@@ -40,7 +34,7 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
 // feat-20260601-gpu-resource-store-extraction M1: configureGpuDevice moved to
 // GpuResourceStore (D-3 registerCube relay). These tests exercise registry-side
-// catalog + the stride gate; they wire the device onto the store
+// register / loadByGuid + the stride gate; they wire the device onto the store
 // to keep the dawn device-acquisition path covered.
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -86,7 +80,7 @@ function makeNon12FAsset(): TypesMeshAsset {
 
 describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
   it.skipIf(!dawnReady)(
-    '(a) catalog() non-12F mesh returns mesh-vertex-stride-mismatch (dawn context with GPU device)',
+    '(a) register() non-12F mesh returns mesh-vertex-stride-mismatch (dawn context with GPU device)',
     async () => {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter === null) return;
@@ -98,11 +92,11 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (world: World, pod: CubeTextureAsset) => ok(world.allocSharedRef('CubeTextureAsset', pod)),
+        (pod: CubeTextureAsset) => reg.register(pod),
         mockCaps,
       );
 
-      const result = reg.catalog<TypesMeshAsset>(GUID_PACK_TEST, makeNon12FAsset());
+      const result = reg.register(makeNon12FAsset());
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('mesh-vertex-stride-mismatch');
@@ -114,35 +108,45 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
     },
   );
 
-  it('(b) catalog() non-12F mesh returns Result.err mesh-vertex-stride-mismatch', () => {
+  it('(b) registerWithGuid() non-12F mesh throws AssetError mesh-vertex-stride-mismatch', () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_PACK_TEST);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
 
-    const result = reg.catalog<TypesMeshAsset>(guid, makeNon12FAsset());
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('mesh-vertex-stride-mismatch');
-      const d = result.error.detail as { floatsPerVertex: number };
-      expect(d.floatsPerVertex).toBe(0.75);
+    let thrownCode: string | undefined;
+    let thrownFloatsPerVertex: number | undefined;
+    try {
+      reg.registerWithGuid<TypesMeshAsset>(guid, makeNon12FAsset());
+    } catch (e: unknown) {
+      const ae = e as { code?: string; detail?: Record<string, unknown> };
+      thrownCode = ae.code;
+      thrownFloatsPerVertex = ae.detail?.floatsPerVertex as number | undefined;
+    }
+    expect(thrownCode).toBe('mesh-vertex-stride-mismatch');
+    expect(thrownFloatsPerVertex).toBe(0.75);
+  });
+
+  it('(c) after registerWithGuid throws, resolveGuid returns asset-not-found (no intermediate state)', () => {
+    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const parseResult = AssetGuid.parse(GUID_PACK_TEST);
+    if (!parseResult.ok) throw new Error('expected ok');
+    const guid = parseResult.value;
+
+    try {
+      reg.registerWithGuid<TypesMeshAsset>(guid, makeNon12FAsset());
+    } catch {
+      // Expected -- gate fired, GUID not registered.
+    }
+
+    const resolved = reg.resolveGuid<TypesMeshAsset>(guid);
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.error.code).toBe('asset-not-found');
     }
   });
 
-  it('(c) after catalog() returns err, lookup returns undefined (no intermediate state)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-    const parseResult = AssetGuid.parse(GUID_PACK_TEST);
-    if (!parseResult.ok) throw new Error('expected ok');
-    const guid = parseResult.value;
-
-    const result = reg.catalog<TypesMeshAsset>(guid, makeNon12FAsset());
-    expect(result.ok).toBe(false);
-
-    // The stride gate fired before storing, so the GUID is not catalogued.
-    expect(reg.lookup(guid)).toBeUndefined();
-  });
-
-  it('(d) AC-08 narrowing: read err.detail.floatsPerVertex off the Result.err', () => {
+  it('(d) AC-08 narrowing: catch thrown AssetError and access detail.floatsPerVertex', () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_PACK_TEST);
     if (!parseResult.ok) throw new Error('expected ok');
@@ -164,19 +168,23 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
       ],
     };
 
-    const result = reg.catalog<TypesMeshAsset>(guid, nonDivisibleAsset);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('mesh-vertex-stride-mismatch');
-      const d = result.error.detail as { vertexCount: number; floatsPerVertex: number };
+    let caught = false;
+    try {
+      reg.registerWithGuid<TypesMeshAsset>(guid, nonDivisibleAsset);
+    } catch (e: unknown) {
+      caught = true;
+      const ae = e as { code: string; detail?: Record<string, unknown> };
+      expect(ae.code).toBe('mesh-vertex-stride-mismatch');
+      const d = ae.detail as { vertexCount: number; floatsPerVertex: number };
       expect(typeof d.vertexCount).toBe('number');
       expect(typeof d.floatsPerVertex).toBe('number');
       expect(d.floatsPerVertex).not.toBe(12);
     }
+    expect(caught).toBe(true);
   });
 
   it.skipIf(!dawnReady)(
-    '(e) compliant 12F mesh catalog + loadByGuid in dawn context returns the payload',
+    '(e) compliant 12F mesh registerWithGuid + loadByGuid in dawn context returns ok',
     async () => {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter === null) return;
@@ -188,7 +196,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (world: World, pod: CubeTextureAsset) => ok(world.allocSharedRef('CubeTextureAsset', pod)),
+        (pod: CubeTextureAsset) => reg.register(pod),
         mockCaps,
       );
 
@@ -210,12 +218,12 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
           },
         ],
       };
-      reg.catalog<TypesMeshAsset>(guid, validAsset);
+      reg.registerWithGuid<TypesMeshAsset>(guid, validAsset);
 
       const res = await reg.loadByGuid<TypesMeshAsset>(guid);
       expect(res.ok).toBe(true);
       if (!res.ok) return;
-      expect(res.value.kind).toBe('mesh');
+      expect(typeof res.value).toBe('number');
     },
   );
 });

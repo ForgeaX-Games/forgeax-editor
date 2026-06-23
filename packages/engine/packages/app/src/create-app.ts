@@ -30,24 +30,12 @@ import {
 } from '@forgeax/engine-audio';
 import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import {
-  createQueryState,
-  Entity,
-  type EntityHandle,
-  err,
-  ok,
-  queryRun,
-  type Result,
-  World,
-} from '@forgeax/engine-ecs';
+import { err, ok, type Result, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
 import {
-  ANIMATION_ASSET_RESOLVER_KEY,
-  CAMERA_PROJECTION_PERSPECTIVE,
-  Camera,
   createAnimationAssetResolver,
   createRenderer,
   EngineEnvironmentError,
@@ -56,17 +44,15 @@ import {
   type RuntimeError,
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
+  Transform,
 } from '@forgeax/engine-runtime';
 import { createDebugDrawOnReady } from '@forgeax/engine-runtime/debug-draw-glue';
-import { registerStatesPlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
 import { makeCleanupFunnel } from './internal/cleanup';
 import { ErrorFanoutRegistry } from './internal/error-fanout';
 import { createFrameLoop } from './internal/frame-loop';
-import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
 import { attachInputAuto, type InputAttachHandle } from './internal/input-attach';
-import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
 import type {
   App,
   AppAssembleArgs,
@@ -99,13 +85,6 @@ function makeAppError<C extends AppErrorCode>(
  * M3 ships the path needed by AC-05 (auto input-attach + scan system +
  * cleanup on stop). M4 finalises the canvas-detached guard +
  * EngineEnvironmentError try/catch + onError default fallback.
- *
- * The host-engine contract defines the boundary between host (DOM, canvas, UI)
- * and engine (renderer, world, frame loop). Only the `createApp(canvas)` path
- * auto-wires the aspect-sync sidecar; the assemble form and bare
- * `createRenderer` path do not.
- *
- * @see {@link https://github.com/Forgeax/forgeax-engine/blob/main/docs/how-to/2026-06-18-host-engine-contract.md | Host-engine contract SSOT}
  */
 export function createApp(
   canvas: HTMLCanvasElement,
@@ -196,25 +175,12 @@ async function createAppFromCanvas(
   // adapter/device/shader calls. The wrap happens BEFORE createRenderer;
   // _onFrameEnd hookup happens AFTER (needs the renderer object).
   let _debugInst: DebugRhiInstance | undefined;
-  // Read FORGEAX_ENGINE_RHI_DEBUG from two sources (plan-strategy D-4):
-  //   - browser: import.meta.env, statically replaced by the
-  //     vite-plugin-rhi-debug `define` hook. The `typeof import.meta !==
-  //     'undefined'` prefix short-circuits under dawn-node, where import.meta
-  //     itself can be undefined (C5).
-  //   - dawn-node: globalThis.process.env (no vite define on the native path).
-  // resolveRhiDebugFlag (internal/rhi-debug-flag) is the SSOT for the `??`
-  // precedence; the source bags are computed inline here so the
-  // typeof-import.meta prefix stays at the call site. Keeps this file
-  // @types/node-free (engine-app ships ESM into both browser + dawn-node;
-  // same pattern as runtime/src/render-system-record.ts:isMeshSsboDevMode).
-  const importMetaEnv =
-    typeof import.meta !== 'undefined'
-      ? (import.meta as { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } }).env
-      : undefined;
-  const processEnv = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } })
-    .process?.env;
-  const rhiDebugFlag = resolveRhiDebugFlag(importMetaEnv, processEnv);
-  if (rhiDebugFlag === '1') {
+  // Read FORGEAX_ENGINE_RHI_DEBUG via globalThis to keep this file @types/node-free
+  // (engine-app ships ESM into both browser + dawn-node; same pattern as
+  // runtime/src/render-system-record.ts:isMeshSsboDevMode).
+  const proc = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } })
+    .process;
+  if (proc?.env?.FORGEAX_ENGINE_RHI_DEBUG === '1') {
     // Select backend: same auto-detect logic as createRenderer's loadBackendPack.
     const nav: { gpu?: unknown } | undefined =
       typeof globalThis !== 'undefined'
@@ -223,21 +189,11 @@ async function createAppFromCanvas(
     const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
 
     let realBackend: Record<string, unknown>;
-    // Literal import specifiers per branch (not a computed `backendPkg`
-    // variable). vite's import-analysis can only resolve a string-literal
-    // specifier to a served module URL; a variable specifier left
-    // `globalThis.__forgeax.captureFrame` unreachable in the browser dev path
-    // (`Failed to resolve module specifier '@forgeax/engine-rhi-webgpu'`).
-    // Mirrors createRenderer's loadBackendPack (static rhiWebgpu namespace +
-    // literal `import('@forgeax/engine-rhi-wgpu')`). NO @vite-ignore here: vite
-    // must transform the literal so the browser receives a resolvable URL; the
-    // consuming demo declares both backend packages as deps. dawn-node (no vite)
-    // runs the literal through the node ESM resolver unchanged. Surfaced by the
-    // hello-cube RHI-debug browser e2e (feat-20260617 M4 / w22), the first
-    // FORGEAX_ENGINE_RHI_DEBUG=1 browser run through this guard.
-    realBackend = (hasWebGPU
-      ? await import('@forgeax/engine-rhi-webgpu')
-      : await import('@forgeax/engine-rhi-wgpu')) as unknown as Record<string, unknown>;
+    // Use a computed import path to avoid TS2307 on rhi-webgpu/rhi-wgpu
+    // (createApp does not have them as direct dependencies; the dynamic
+    // import() is resolved at runtime by the bundler).
+    const backendPkg = hasWebGPU ? '@forgeax/engine-rhi-webgpu' : '@forgeax/engine-rhi-wgpu';
+    realBackend = (await import(backendPkg)) as unknown as Record<string, unknown>;
     // rhi-wgpu requires wasm initialisation before use.
     if (!hasWebGPU && 'ensureReady' in realBackend) {
       await (realBackend.ensureReady as () => Promise<unknown>)();
@@ -265,66 +221,11 @@ async function createAppFromCanvas(
     if ('_internal_getRawDevice' in realBackend) {
       extras._internal_getRawDevice = realBackend._internal_getRawDevice;
     }
-    // Forward acquireCanvasContext: createRenderer's Channel-1 escape hatch
-    // calls `pack.rhi.acquireCanvasContext(canvas)` (createRenderer.ts:711), but
-    // recorder.wrap() returns an explicit debug surface that does NOT carry it,
-    // so without this the wrapped-rhi injection threw a TypeError ("engine init
-    // failed (TypeError)") before any frame rendered -- the
-    // FORGEAX_ENGINE_RHI_DEBUG=1 browser path was never exercised end-to-end
-    // before the hello-cube RHI-debug browser e2e (feat-20260617 M4 / w22).
-    // acquireCanvasContext only calls canvas.getContext('webgpu') (no recorded
-    // RHI calls), so forwarding the real instance's bound method is safe and
-    // keeps the recorder proxy out of the swap-chain config path.
-    const realRhiRec = realRhi as unknown as Record<string, unknown>;
-    if (typeof realRhiRec.acquireCanvasContext === 'function') {
-      extras.acquireCanvasContext = (
-        realRhiRec.acquireCanvasContext as (c: unknown) => unknown
-      ).bind(realRhi);
-    }
 
     // Inject the wrapped RHI instance via the explicit rhi escape hatch.
     // createRenderer's Channel 1 uses it verbatim; the proxied
     // requestAdapter -> requestDevice chain intercepts all device calls.
     Object.assign(rendererOpts, { rhi: debugInst as RhiInstance });
-
-    // w18: expose globalThis.__forgeax.captureFrame for the DevTools trigger
-    // (OOS-1/2: DevTools-only). The capture-browser subpath is imported
-    // dynamically so the FORGEAX_ENGINE_RHI_DEBUG=0 tree-shake gate stays
-    // intact (AC-03/AC-10) -- it is reached only when the flag is '1'. When the
-    // flag is unset this assignment never runs, so globalThis.__forgeax does
-    // not exist and a DevTools caller hits a TypeError (charter P3 explicit
-    // failure -- F-3 zero-injection).
-    (globalThis as { __forgeax?: { captureFrame(n: number): Promise<unknown> } }).__forgeax = {
-      captureFrame(n: number): Promise<unknown> {
-        return import('@forgeax/engine-rhi-debug/capture-browser').then((m) =>
-          m.captureAndUpload(debugInst, n),
-        );
-      },
-    };
-
-    // M2 / t7 (W3): register HMR listener for external CLI trigger.
-    // The vite-plugin-rhi-debug trigger middleware broadcasts
-    // 'forgeax-debug:capture' custom events via server.ws.send; this
-    // handler receives them and calls captureAndUpload directly (three
-    // args: debugInst, frames, label) rather than the DevTools
-    // globalThis.__forgeax.captureFrame (which only takes n, losing
-    // the label). Dynamic import mirrors the globalThis pattern above
-    // so the FORGEAX_ENGINE_RHI_DEBUG=0 tree-shake gate stays intact.
-    // prod: import.meta.hot -> undefined -> entire block DCE'd;
-    // dawn-node: import.meta.hot undefined, guard short-circuits.
-    // research Finding 2: cb is single-param payload (NOT double-param).
-    // plan-strategy D-5: handler calls captureAndUpload directly.
-    //
-    // The handler registration is extracted into
-    // internal/hmr-capture-listener.ts so the test (create-app-hmr.test.ts)
-    // shares the SSR handler, not a copied shadow (per PR1
-    // resolveRhiDebugFlag SSOT pattern).
-    const hotMeta = import.meta as {
-      hot?: { on(event: string, cb: (payload: { frames?: number; label?: string }) => void): void };
-    };
-    if (hotMeta.hot) {
-      registerCaptureHmrListener(hotMeta.hot, debugInst);
-    }
   }
 
   let renderer: Renderer;
@@ -419,12 +320,8 @@ async function createAppFromCanvas(
   // never see parent transforms cascade to children. Every Transform-bearing
   // entity carries the world column, so the pass is a cheap identity recompose
   // for flat scenes with no ChildOf.
-  // M2 (full resource-ification): the AnimationAssetResolver is supplied via
-  // a World resource. Insert it BEFORE registering the system so the system's
-  // ParamValidation finds the resource on the first tick (D-2).
   const animResolver = createAnimationAssetResolver(renderer.assets);
-  world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, animResolver);
-  registerAdvanceAnimationPlayer(world);
+  registerAdvanceAnimationPlayer(world, animResolver);
   registerPropagateTransforms(world);
 
   // Step 4: delegate to the assemble form. Forward optional input/maxDt
@@ -471,65 +368,7 @@ async function createAppFromCanvas(
   if (debugDraw !== undefined) {
     Object.assign(buildArgs, { debugDraw });
   }
-
-  // feat-20260617-host-engine-contract-and-video-cutscene / M3 / w13 + D-6:
-  // the aspect-sync sidecar lives ONLY on the createApp(canvas) path -- the
-  // canvas is the host-owned DOM surface this path knows about, and the bare
-  // createRenderer / assemble paths intentionally never receive it (host-engine
-  // contract clause #3 / OOS-9). Registered through app.registerUpdate (the
-  // public per-frame seam) so buildApp's signature stays untouched. The
-  // closure captures the live canvas; syncCameraAspect reads its
-  // width / height each frame and writes Camera.aspect for perspective +
-  // autoAspect=true cameras (D-5: world.get, not the query bundle).
-  const built = await buildApp(buildArgs);
-  if (built.ok) {
-    built.value.registerUpdate(() => {
-      syncCameraAspect(world, canvas.width, canvas.height);
-    });
-  }
-  return built;
-}
-
-/**
- * Per-frame aspect-sync body for the createApp(canvas) path (feat-20260617
- * M3 / w13). Walks every Camera entity and, for perspective cameras with
- * `autoAspect === true`, writes `canvasW / canvasH` into `Camera.aspect`.
- *
- * Read discipline (D-5 / research Finding 2): `autoAspect` is read through
- * `world.get` (the readRow path narrows the bool column to a JS boolean).
- * The query bundle is used only to enumerate the entity handles -- reading
- * the bool column off the bundle would return a raw 0/1 number, so a
- * `!== 0` test is always true (the
- * bool-field-compared-with-not-equal-zero-always-true trap).
- *
- * Best-effort + side-effect-isolated:
- *   - canvas size 0 (detached / display:none) -> skip entirely so `aspect`
- *     never becomes NaN / 0.
- *   - orthographic cameras and `autoAspect === false` cameras are left
- *     untouched.
- *
- * @see {@link https://github.com/Forgeax/forgeax-engine/blob/main/docs/how-to/2026-06-18-host-engine-contract.md | Host-engine contract SSOT}
- */
-export function syncCameraAspect(world: World, canvasW: number, canvasH: number): void {
-  // Guard against detached / zero-sized canvases: a 0 width or height would
-  // write NaN (0 / 0) or 0 into aspect and corrupt the projection matrix.
-  if (canvasW <= 0 || canvasH <= 0) return;
-  const aspect = canvasW / canvasH;
-
-  const query = createQueryState({ with: [Camera, Entity] });
-  queryRun(query, world, (bundle) => {
-    const entitySelf = bundle.Entity.self;
-    for (let i = 0; i < entitySelf.length; i++) {
-      const entity = (entitySelf[i] ?? 0) as EntityHandle;
-      const r = world.get(entity, Camera);
-      if (!r.ok) continue;
-      // world.get narrows the bool column to a real boolean (D-5); the
-      // perspective discriminator is the numeric column value.
-      if (r.value.autoAspect !== true) continue;
-      if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
-      world.set(entity, Camera, { aspect });
-    }
-  });
+  return buildApp(buildArgs);
 }
 
 async function createAppFromAssemble(
@@ -603,10 +442,6 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
   }
 
-  // Register state-machine plugin (feat-20260616 M2 / m2w5).
-  // Idempotent: safe to call even if the host manually registered first.
-  registerStatesPlugin(world);
-
   // Inject renderer.assets as World Resource so audioTickSystem's
   // createClipResolver can resolve clip handles -> AudioBuffer (D-1).
   if (renderer.assets !== undefined) {
@@ -632,22 +467,16 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
           );
           const rapier = await loadRapier3D();
           const pw = createRapier3DPhysicsWorld(rapier);
-          // Insert the resource BEFORE registering systems: registerPhysicsSystems
-          // wires moveAndSlide's moveContext by reading the 'PhysicsWorld'
-          // resource and silently no-ops (try/catch) if it is absent. Inserting
-          // first guarantees setMoveContext runs, so moveAndSlide writes back
-          // Transform + CharacterController.grounded (feat-20260617 G-2).
+          registerPhysicsSystems(world, Transform);
           world.insertResource('PhysicsWorld', pw);
-          registerPhysicsSystems(world);
           physicsRef.current = pw;
         } else {
           const { loadRapier2D, createRapier2DPhysicsWorld, registerPhysicsSystems2D } =
             await import('@forgeax/engine-physics-rapier2d');
           const rapier = await loadRapier2D();
           const pw = createRapier2DPhysicsWorld(rapier);
-          // Same ordering rationale as the 3D arm above.
+          registerPhysicsSystems2D(world, Transform);
           world.insertResource('PhysicsWorld', pw);
-          registerPhysicsSystems2D(world);
           physicsRef.current = pw;
         }
       } catch {

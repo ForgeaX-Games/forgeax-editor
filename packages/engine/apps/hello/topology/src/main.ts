@@ -22,8 +22,8 @@
 //
 // Recipe (charter P1 progressive disclosure):
 //   (1) createApp(canvas, {}, { shaderManifestUrl }) + spawn Camera with clear* fields
-//   (2) world.allocSharedRef('MeshAsset', { kind: 'mesh', ... }) -> meshHandle
-//   (3) world.allocSharedRef('MaterialAsset', unlit material) -> materialHandle
+//   (2) assets.register({ kind: 'mesh', vertices, attributes, submeshes }) -> meshHandle
+//   (3) assets.register(unlit material) -> materialHandle
 //   (4) world.spawn Transform + MeshFilter + MeshRenderer
 //   (5) world.spawn Camera (no light needed for unlit)
 //   (6) app.start()
@@ -149,19 +149,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[topology] AssetRegistry is null (renderer construction failed)');
     return;
   }
-  const world = app.world;
 
-  // Step 2: mint the vertex-only line-list mesh as a shared ref.
-  const meshHandle: Handle<'MeshAsset', 'shared'> = world.allocSharedRef(
-    'MeshAsset',
-    buildWireframeBoxLineList(),
-  );
+  // Step 2: register the vertex-only line-list mesh.
+  const meshRes = assets.register<MeshAsset>(buildWireframeBoxLineList());
+  if (!meshRes.ok) {
+    console.error('[topology] mesh register failed:', meshRes.error.code, meshRes.error.hint);
+    return;
+  }
+  const meshHandle: Handle<'MeshAsset', 'unmanaged'> = meshRes.value;
 
-  // Step 3: mint the unlit material (bright cyan -- ignores lighting).
-  const materialHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef<
-    'MaterialAsset',
-    MaterialAsset
-  >('MaterialAsset', {
+  // Step 3: register the unlit material (bright cyan -- ignores lighting).
+  const materialRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -175,8 +173,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: [0.1, 0.9, 1.0],
     },
   });
+  if (!materialRes.ok) {
+    console.error('[topology] material register failed:', materialRes.error.code);
+    return;
+  }
+  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = materialRes.value;
 
   // Step 4: spawn the wireframe box.
+  const world = app.world;
   world.spawn(
     {
       component: Transform,

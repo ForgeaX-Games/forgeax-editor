@@ -1,19 +1,18 @@
 // pick.ts — screen-to-entity raycast (feat-20260529-picking-raycasting-screen-to-entity M3 / w13).
 //
-// `pick(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`
+// `pick(world, assets, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`
 // is a free function (NOT `world.pick()`; requirements hard constraint): it unprojects
 // a viewport-relative screen coordinate into a world-space ray through the supplied
 // camera, walks every renderable archetype, ray-AABB tests each pickable mesh's
 // world-space bounding box, and returns the NEAREST `PickHit` (or `undefined` on miss).
 //
-// Mesh AABB source (feat-20260614 M8, D-15/D-18): the ray-AABB test needs each
-// mesh's local-space `MeshAsset.aabb`, resolved from the entity's `MeshFilter`
-// handle via `resolveAssetHandle<MeshAsset>(world, handle)` (two-tier builtin /
-// world.sharedRefs dispatch). The registry no longer holds handles, so `pick`
-// takes no `AssetRegistry` -- it resolves entirely World-side. Keeping `pick` a
-// free function (rather than a `World` method) preserves the layering: `World`
-// (engine-ecs) stays asset-free; the picking glue lives in the runtime package
-// alongside the renderer.
+// Why a free function with an explicit `assets` param (2026-05-29 replan / user
+// adjudication): the ray-AABB test needs each mesh's local-space `MeshAsset.aabb`, which
+// lives ONLY in the `AssetRegistry` and is never mirrored onto a world column. `pick`
+// therefore takes the registry as its second parameter and resolves AABBs via
+// `assets.get<MeshAsset>(meshFilter.assetHandle)`. Keeping `pick` a free function (rather
+// than a `World` method) preserves the layering: `World` (engine-ecs) stays asset-free;
+// the picking glue lives in the runtime package alongside the renderer.
 //
 // Error channel split (charter P3): the single unrecoverable precondition —
 // `cameraEntity` carries no `Camera` — throws a structured `PickError`
@@ -36,11 +35,11 @@ import type { Component, EntityHandle, FieldView, World } from '@forgeax/engine-
 import { Entity } from '@forgeax/engine-ecs';
 import { box3, mat4, ray, type Vec3Like, vec3 } from '@forgeax/engine-math';
 import type { MeshAsset } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
+import type { AssetRegistry } from './asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Transform } from './components';
 import { cameraProjectionFromF32 } from './components/camera';
 import { PickError } from './pick-errors';
-import { resolveAssetHandle } from './resolve-asset-handle';
 
 /**
  * Result of a successful screen-to-entity pick.
@@ -93,8 +92,8 @@ function readWorldMatrix(world: WorldInternalView, entity: EntityHandle): Float3
  * Raycast from a viewport-relative screen coordinate into the world and return the
  * nearest pickable mesh entity whose world-space AABB the ray enters.
  *
- * @param world The ECS world holding the camera + candidate mesh entities (and the
- *   per-World SharedRefStore that owns each `MeshAsset` and its local-space `aabb`).
+ * @param world The ECS world holding the camera + candidate mesh entities.
+ * @param assets The asset registry owning each `MeshAsset` (and its local-space `aabb`).
  * @param cameraEntity The entity carrying the `Camera` component (and a Transform).
  * @param screenX Horizontal pixel coordinate relative to the viewport top-left (y-down).
  * @param screenY Vertical pixel coordinate.
@@ -105,6 +104,7 @@ function readWorldMatrix(world: WorldInternalView, entity: EntityHandle): Float3
  */
 export function pick(
   world: World,
+  assets: AssetRegistry,
   cameraEntity: EntityHandle,
   screenX: number,
   screenY: number,
@@ -178,7 +178,7 @@ export function pick(
 
       const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
       if (assetHandleRaw === 0) continue;
-      const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
+      const meshRes = assets.get<MeshAsset>(toUnmanaged<'MeshAsset'>(assetHandleRaw));
       if (!meshRes.ok) continue;
       const localAabb = meshRes.value.aabb;
       if (localAabb === undefined) continue;

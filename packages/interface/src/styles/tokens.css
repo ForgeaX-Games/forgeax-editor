@@ -175,19 +175,18 @@
   --z-dropdown:       100;    /* in-flow dropdown anchored to its trigger     */
   --z-dock-float:     200;    /* dock pop-out affordance / toolbar menu       */
   --z-popover:        1000;   /* portalled anchored popover                   */
+  --z-app-modal:      1500;   /* modal scrim + dialog                         */
+  --z-app-modal-top:  2000;   /* content layered above its own scrim          */
+  --z-toast:          1600;   /* transient toast (above modal scrim)          */
   --z-surface:        9000;   /* detached-surface overlay layer               */
-  /* The shell topbar is --z-top (9999). App modals (Settings / Dashboard) are
-     full-screen overlays that MUST cover the topbar — so the modal tier sits
-     just ABOVE 9999. Menus / selects / dropdowns / tooltips can open from
-     INSIDE a modal, so they sit above the modal-content tier. Radix
-     popover/select/dropdown are pinned to --z-menu (see ui/*.tsx) so EVERY
-     menu — hand-rolled or Radix — shares one tier above modals + chrome.    */
-  --z-app-modal:      10000;  /* modal scrim (Settings / Dashboard)           */
-  --z-app-modal-top:  10010;  /* modal content above its own scrim            */
-  --z-menu-backdrop:  10090;  /* click-catcher behind a floating menu         */
-  --z-menu:           10100;  /* context / select / dropdown / popover content */
-  --z-toast:          10150;  /* transient toast (above modal + menus)        */
-  --z-tooltip:        10200;  /* hover tooltip, composer pill chip            */
+  /* The shell topbar is --z-top (9999); context/popover menus must float
+     ABOVE it (they open from topbar triggers and overlap it), so the whole
+     floating-menu tier sits above 9999. Radix popover/dropdown are pinned to
+     --z-menu too (see ui/popover.tsx, ui/dropdown-menu.tsx) so EVERY menu —
+     hand-rolled or Radix — shares one tier above the chrome.               */
+  --z-menu-backdrop:  10000;  /* click-catcher behind a floating menu         */
+  --z-menu:           10001;  /* portalled context / workspace / layout menu  */
+  --z-tooltip:        10020;  /* hover tooltip, composer pill chip            */
   --z-toplevel:       99999;  /* last resort: error boundary, first-run gate  */
 
   /* ── motion ─────────────────────────────────────────────────────────────

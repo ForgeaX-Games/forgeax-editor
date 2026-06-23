@@ -35,7 +35,6 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -151,8 +150,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     return;
   }
-  const metalTex = unwrapHandle(world.allocSharedRef('TextureAsset', metalHandleRes.value));
-  const marbleTex = unwrapHandle(world.allocSharedRef('TextureAsset', marbleHandleRes.value));
+  const metalTex = metalHandleRes.value;
+  const marbleTex = marbleHandleRes.value;
 
   // Create materials. When USE_DEPTH_VIZ is true, all entities share the
   // depth-viz shader material (single grayscale output). When false, PBR
@@ -160,7 +159,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   let floorMat;
   let cubeMat;
   if (USE_DEPTH_VIZ) {
-    const vizMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const vizMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -175,12 +174,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         roughness: 1.0,
       },
     });
-    floorMat = vizMat;
-    cubeMat = vizMat;
+    if (!vizMatRes.ok) {
+      console.error('[learn-render 4.1 depth-testing] depth-viz material register failed:', vizMatRes.error);
+      return;
+    }
+    floorMat = vizMatRes.value;
+    cubeMat = vizMatRes.value;
   } else {
     // Normal path: PBR materials with LO textures (raw MaterialAsset POJO
     // because Materials.standard factory does not expose baseColorTexture).
-    const metalFloorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const metalFloorMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -196,7 +199,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         baseColorTexture: metalTex,
       },
     });
-    const marbleCubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const marbleCubeMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -212,8 +215,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         baseColorTexture: marbleTex,
       },
     });
-    floorMat = metalFloorMat;
-    cubeMat = marbleCubeMat;
+    if (!metalFloorMatRes.ok || !marbleCubeMatRes.ok) {
+      console.error('[learn-render 4.1 depth-testing] PBR material register failed');
+      return;
+    }
+    floorMat = metalFloorMatRes.value;
+    cubeMat = marbleCubeMatRes.value;
   }
 
   // Spawn floor: HANDLE_QUAD is 1x1 in XY plane, rotated -90 deg around X

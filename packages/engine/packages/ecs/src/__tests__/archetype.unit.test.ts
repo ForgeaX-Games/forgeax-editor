@@ -1052,50 +1052,6 @@ import { World } from '../world';
           expect(read[i]).toBe(values[i]);
         }
       });
-
-      // Regression (downstream template integration #2): the plain-JS-array
-      // convenience path used to pack elements by byte SIZE, so a 4-byte f32
-      // went through setUint32 -- storing `1` as the integer bits 0x00000001
-      // (reads back ~1.4e-45 ~ 0). AnimationPlayer.speeds=[1] froze on frame 0.
-      // Packing must dispatch on the declared element TYPE, not byte size.
-      it('plain-JS-array write to array<f32,4> stores f32 VALUES, not u32 bits', () => {
-        const C = defineComponent('PlainF32Fixed', { v: 'array<f32, 4>' });
-        const world = new World();
-        const e = world.spawn({ component: C, data: { v: [1, 0.5, -2, 3.25] } }).unwrap();
-
-        const read = world.get(e, C).unwrap().v;
-        expect(read).toBeInstanceOf(Float32Array);
-        expect(read[0]).toBe(1);
-        expect(read[1]).toBe(0.5);
-        expect(read[2]).toBe(-2);
-        expect(read[3]).toBe(3.25);
-      });
-
-      it('plain-JS-array write to variable array<f32> stores f32 VALUES', () => {
-        const C = defineComponent('PlainF32Var', { v: 'array<f32>' });
-        const world = new World();
-        const e = world.spawn({ component: C, data: { v: [1, 2.5] } }).unwrap();
-
-        const read = world.get(e, C).unwrap().v;
-        expect(read).toBeInstanceOf(Float32Array);
-        expect(read.length).toBe(2);
-        expect(read[0]).toBe(1);
-        expect(read[1]).toBe(2.5);
-      });
-
-      // Control: u32 elements are genuinely integers -- the type-keyed packer
-      // must keep storing them verbatim (no regression in the handle/u32 path).
-      it('plain-JS-array write to array<u32,3> still stores integer values verbatim', () => {
-        const C = defineComponent('PlainU32Fixed', { v: 'array<u32, 3>' });
-        const world = new World();
-        const e = world.spawn({ component: C, data: { v: [7, 42, 1000] } }).unwrap();
-
-        const read = world.get(e, C).unwrap().v;
-        expect(read).toBeInstanceOf(Uint32Array);
-        expect(read[0]).toBe(7);
-        expect(read[1]).toBe(42);
-        expect(read[2]).toBe(1000);
-      });
     });
 
     describe('fixed buffer<64> inline column (AC-03 / w6)', () => {
@@ -2881,11 +2837,11 @@ import { World } from '../world';
   //   1. Every TYPE_METADATA row has an `isManaged` boolean column.
   //   2. The 4 `isXxxField` predicates produce the same boolean result as the
   //      new TYPE_METADATA[].isXxx single-column lookups.
-  //   3. `isManagedField` recognizes `'string'` and `'unique<T>'` (both isManaged).
+  //   3. `isManagedField` recognizes `'string'` and `'ref<T>'` (both isManaged).
   //
-  // tweak-20260612-ecs-concept-compression dropped the redundant per-vocab
-  // managed-ref predicate column (100% identical to `isManaged`); the
-  // equivalence assertion below now reads `isManaged` directly.
+  // tweak-20260612-ecs-concept-compression dropped the redundant
+  // `isManagedRef` column (100% identical to `isManaged`); the equivalence
+  // assertion below now reads `isManaged` directly.
   //
   // Plan-strategy D-3 (approach A): TYPE_METADATA gains an `isManaged` column;
   // 4 predicates are 1:1 derivations from TYPE_METADATA columns, zero OR.
@@ -2909,15 +2865,10 @@ import { World } from '../world';
         }
       });
 
-      it('isManaged === true exactly for the managed-ref vocab + scalar rows ("string" + "ref" + "shared")', () => {
-        // feat-20260614-ecs-shared-component-and-unique-rename M3 (D-3): the
-        // independent `'shared'` TYPE_METADATA row joins the managed-ref tier
-        // alongside `'string'` (UniqueRefStore-backed) and `'ref'` (the
-        // post-M2 `'unique<T>'` family). Each meta key carries its own
-        // release-semantics dispatch (M4 wires the sub-branches).
+      it('isManaged === true exactly for the managed-ref vocab + scalar rows ("string" + "ref")', () => {
         for (const [key, row] of Object.entries(TYPE_METADATA)) {
           const im = (row as unknown as Record<string, unknown>).isManaged as boolean;
-          const expected = key === 'string' || key === 'ref' || key === 'shared';
+          const expected = key === 'string' || key === 'ref';
           expect(im, `TYPE_METADATA['${key}'].isManaged`).toBe(expected);
         }
       });
@@ -2936,10 +2887,11 @@ import { World } from '../world';
         expect(im).toBe(true);
       });
 
-      it('non-managed rows (entity, buffer, array, scalars) have isManaged === false', () => {
+      it('non-managed rows (entity, buffer, handle, array, scalars) have isManaged === false', () => {
         const nonManagedKeys = [
           'entity',
           'buffer',
+          'handle',
           'array',
           'f32',
           'f64',
@@ -2989,13 +2941,13 @@ import { World } from '../world';
         'string',
         'buffer',
         'buffer<64>',
-        'unique<MaterialAsset>',
-        'shared<MaterialAsset>',
+        'ref<MaterialAsset>',
+        'handle<MaterialAsset>',
         'array<f32>',
         'array<f32, 16>',
         'array<entity>',
         'array<entity, 4>',
-        'array<shared<MaterialAsset>>',
+        'array<handle<MaterialAsset>>',
         'unknown-field-type',
       ];
 
@@ -3066,18 +3018,15 @@ import { World } from '../world';
         expect(isManagedField('string')).toBe(true);
       });
 
-      it("returns true for 'unique<Foo>' template", () => {
-        expect(isManagedField('unique<Foo>')).toBe(true);
+      it("returns true for 'ref<Foo>' template", () => {
+        expect(isManagedField('ref<Foo>')).toBe(true);
       });
 
-      it("returns true for 'shared<X>' (rc-tracked managed scalar)", () => {
-        expect(isManagedField('shared<X>')).toBe(true);
-      });
-
-      it("returns false for 'entity', 'buffer', 'array<T>', and bare scalars", () => {
+      it("returns false for 'entity', 'buffer', 'handle<X>', 'array<T>'", () => {
         expect(isManagedField('entity')).toBe(false);
         expect(isManagedField('buffer')).toBe(false);
         expect(isManagedField('buffer<64>')).toBe(false);
+        expect(isManagedField('handle<X>')).toBe(false);
         expect(isManagedField('array<f32>')).toBe(false);
         expect(isManagedField('f32')).toBe(false);
       });

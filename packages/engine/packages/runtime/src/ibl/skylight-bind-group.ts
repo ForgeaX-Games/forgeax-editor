@@ -324,20 +324,15 @@ export function assembleMaterialWithSkylightEntries(
 // ─── Fallback constructor (createRenderer wires this into pipelineState) ────
 
 /**
- * Allocate the fallback Skylight resource bundle: 1x1 WHITE rgba16float
- * irradiance texture_cube + 1x1 all-zero rgba16float prefilter texture_cube +
- * 1x1 all-zero rg16float brdfLut + a 16-byte uniform buffer + a single
- * linear / clamp-to-edge sampler reused across all three texture slots.
+ * Allocate the fallback Skylight resource bundle: 1x1 all-zero rgba16float
+ * texture_cube * 2 (irradiance + prefilter) + 1x1 all-zero rg16float
+ * brdfLut + intensity=0 16-byte uniform buffer + a single linear /
+ * clamp-to-edge sampler reused across all three texture slots.
  *
- * Two regimes share this bundle (the per-frame Skylight uniform selects):
- *   - No Skylight entity: render-system-record writes intensity=0, so
- *       ambient = whiteIrradiance * kD * albedo * color * 0 == 0
- *     -- physically black, no `if (hasSkylight)` shader branch (D-5 round-4).
- *   - Skylight with NO cubemap (downstream integration #4): record writes the
- *     user's intensity + color, so the WHITE irradiance gives an instant
- *     solid-color diffuse ambient with no async precompute. Specular stays 0
- *     (zero prefilter + brdfLut). A real cubemap swaps in the IBL views and
- *     this bundle is bypassed.
+ * D-5 round-4 fallback shape: zero data + intensity=0 makes
+ *   sampleIblDiffuse * kD * albedo == 0 + sampleIblSpecular * 0 == 0
+ * physically (no `if (hasSkylight)` shader branch). AI users get a
+ * sensible "no skylight" render with zero additional code (charter F1).
  *
  * No stand-alone BindGroupLayout / BindGroup is created here -- those
  * roles moved into the PBR material BGL factory (D-5 round-4). The
@@ -414,38 +409,21 @@ export function createSkylightFallback(
   if (!brdfLutTexResult.ok) throw brdfLutTexResult.error;
   const brdfLutTexture = brdfLutTexResult.value;
 
-  // 1x1 rgba16float = 8 bytes per pixel; 1x1 rg16float = 4 bytes per pixel.
-  // The shim requires bytesPerRow % 256 === 0, so we pad each row to 256 bytes
-  // (matches the fallback-white pattern in createRenderer.ts). Destination
-  // stays 1x1; only the row stride is padded.
-  //
-  // downstream integration #4: the IRRADIANCE fallback is WHITE (half-float
-  // 1.0 = 0x3c00 per RGBA channel), not zero. A Skylight with no cubemap then
-  // samples flat white irradiance, so `ambient = kD * albedo * color *
-  // intensity` -- an instant solid-color ambient with no async precompute. The
-  // prefilter + brdfLut fallbacks stay ZERO (solid-color ambient is
-  // diffuse-only; no specular term). Crucially this does NOT light scenes that
-  // lack a Skylight: the per-frame Skylight uniform writes intensity 0 when no
-  // Skylight entity exists (render-system-record), and intensity 0 muzzles the
-  // white irradiance back to ambient 0.
-  const whitePixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-  {
-    const dv = new DataView(whitePixel.buffer);
-    // RGBA half-float 1.0 = 0x3c00 (little-endian) at byte offsets 0,2,4,6.
-    dv.setUint16(0, 0x3c00, true);
-    dv.setUint16(2, 0x3c00, true);
-    dv.setUint16(4, 0x3c00, true);
-    dv.setUint16(6, 0x3c00, true);
-  }
+  // Zero-pixel uploads. 1x1 rgba16float = 8 bytes per pixel; 1x1 rg16float
+  // = 4 bytes per pixel. The shim requires bytesPerRow % 256 === 0, so we
+  // pad each row to 256 bytes (matches the fallback-white pattern in
+  // createRenderer.ts). The destination size stays 1x1; only the row
+  // stride is padded. The Uint8Array buffer is zero-initialized by the JS
+  // runtime, so the "all zero" assertion holds without explicit fill.
   for (const face of [0, 1, 2, 3, 4, 5]) {
-    const zeroData = new Uint8Array(FALLBACK_BYTES_PER_ROW);
+    const data = new Uint8Array(FALLBACK_BYTES_PER_ROW);
     queue.writeTexture(
       {
         texture: irradianceTexture as unknown,
         mipLevel: 0,
         origin: { x: 0, y: 0, z: face },
       },
-      whitePixel,
+      data,
       { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
       { width: 1, height: 1, depthOrArrayLayers: 1 },
     );
@@ -455,7 +433,7 @@ export function createSkylightFallback(
         mipLevel: 0,
         origin: { x: 0, y: 0, z: face },
       },
-      zeroData,
+      data,
       { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
       { width: 1, height: 1, depthOrArrayLayers: 1 },
     );

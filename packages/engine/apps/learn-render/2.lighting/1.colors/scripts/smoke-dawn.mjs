@@ -124,7 +124,6 @@ const {
   createRenderer,
   DirectionalLight,
   HANDLE_CUBE,
-  Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -167,14 +166,21 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const world = new World();
+// Register materials (mirrors src/index.ts scene setup).
+const objectMatHandle = assets.register({
+  kind: 'material',
+  shadingModel: 'standard',
+  baseColor: [1.0, 0.5, 0.31, 1.0],
+  metallic: 0.0,
+  roughness: 0.5,
+});
+const lampMatHandle = assets.register({
+  kind: 'material',
+  shadingModel: 'unlit',
+  baseColor: [1.0, 1.0, 1.0, 1.0],
+});
 
-// Mint material column handles (mirrors src/index.ts scene setup; M8 D-17).
-const objectMatHandle = world.allocSharedRef(
-  'MaterialAsset',
-  Materials.standard({ baseColor: [1.0, 0.5, 0.31, 1.0], metallic: 0.0, roughness: 0.5 }),
-);
-const lampMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 1.0, 1.0, 1.0]));
+const world = new World();
 
 // Spawn colored cube at origin.
 world

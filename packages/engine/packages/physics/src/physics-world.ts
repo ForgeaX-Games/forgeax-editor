@@ -68,49 +68,11 @@ export interface PhysicsWorld {
    */
   teleport(entity: number, position: Vec3): void;
 
-  /**
-   * Move a kinematic character with collision response, slope handling,
-   * auto-step, and ground-snap, then write the resolved position back to the
-   * entity's `Transform` and `CharacterController.grounded`.
-   *
-   * This is the engine's unopinionated movement primitive (modeled on Unity
-   * `CharacterController.Move`): the game layer computes `desiredDelta` from
-   * input + gravity + jump, and `moveAndSlide` resolves it against the world
-   * geometry. The entity must carry a `RigidBody({ type: 'kinematic' })`, a
-   * `Collider`, and a `CharacterController` component.
-   *
-   * Tuning (offset / slope / auto-step / ground-snap) is read from the
-   * `CharacterController` component each call; there is no per-call options
-   * object and no `dt` parameter (the delta already encodes elapsed time).
-   *
-   * @param entity       the character entity (kinematic RigidBody + Collider + CharacterController).
-   * @param desiredDelta the requested world-space displacement for this step.
-   * @returns the actual displacement applied after collision resolution.
-   * @throws PhysicsError `body-not-found` if the entity has no Rapier body,
-   *   `collider-not-found` if the body has no collider,
-   *   `controller-requires-kinematic` if the body is not kinematic.
-   */
-  moveAndSlide(entity: number, desiredDelta: Vec3): Vec3;
-
   /** Advance the physics simulation by one timestep. */
   step(deltaTime: number): void;
 
   /** Return the number of active rigid bodies in the physics world. */
   getBodyCount(): number;
-
-  /**
-   * Check whether a Rapier body exists for `entity`.
-   *
-   * Returns `true` after `ensureBody` has created a Rapier body for the entity
-   * (which happens asynchronously via WASM fire-and-forget load + tick pipeline).
-   * Always returns `false` for entities that have no `RigidBody` + `Collider`.
-   *
-   * AI-user contract: before calling `moveAndSlide` inside a per-frame driver,
-   * guard with `if (!pw.hasBody(entity)) return;` to avoid `body-not-found`
-   * errors during the window between `app.start()` and the first
-   * `physicsSyncBackend` tick that builds the body.
-   */
-  hasBody(entity: number): boolean;
 }
 
 /** 2D raycast hit result. */
@@ -132,30 +94,6 @@ export interface PhysicsWorld2D {
     filterMask?: number,
   ): RaycastHit2D | undefined;
   teleport(entity: number, position: Vec2, rotation: number): void;
-  /**
-   * Move a kinematic character with collision response, slope handling,
-   * auto-step, and ground-snap (2D variant of {@link PhysicsWorld.moveAndSlide}).
-   *
-   * Resolves `desiredDelta` against the world geometry, writes the resolved
-   * position back to the entity's `Transform` and `CharacterController.grounded`,
-   * and returns the actual 2D displacement. The entity must carry a
-   * `RigidBody({ type: 'kinematic' })`, a `Collider`, and a `CharacterController`.
-   *
-   * @param entity       the character entity (kinematic RigidBody + Collider + CharacterController).
-   * @param desiredDelta the requested world-space 2D displacement for this step.
-   * @returns the actual 2D displacement applied after collision resolution.
-   * @throws PhysicsError `body-not-found`, `collider-not-found`, or
-   *   `controller-requires-kinematic` (same contract as the 3D primitive).
-   */
-  moveAndSlide(entity: number, desiredDelta: Vec2): Vec2;
   step(deltaTime: number): void;
   getBodyCount(): number;
-
-  /**
-   * Check whether a Rapier 2D body exists for `entity`.
-   *
-   * See {@link PhysicsWorld.hasBody} for the full contract — the 2D variant
-   * follows the same semantics.
-   */
-  hasBody(entity: number): boolean;
 }

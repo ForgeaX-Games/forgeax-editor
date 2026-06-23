@@ -59,14 +59,13 @@ import {
   type Archetype,
   type Component,
   type ComponentId,
-  defineSystem,
   Entity,
   type EntityHandle,
   err,
   type FieldView,
   ok,
+  type QueryDescriptor,
   type Result,
-  type SystemHandle,
   type World,
 } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
@@ -350,32 +349,6 @@ function resolveEntity(
 }
 
 /**
- * The `propagateTransforms` system token (M2 — full resource-ification, D-4).
- *
- * Module-level `defineSystem` with the real fn body — no closure, no
- * placeholder. The fn reads `world` from its first parameter (the M1
- * world-first signature) and delegates to {@link propagateTransforms}; the
- * returned `Result<void, RhiError>` is converted to an unwrap-style throw so
- * the ECS Layer 3 `ErrorHandler` can route the failure (world.setErrorHandler).
- *
- * Labelled `'transform'` (spec §6.2 label-anchor map).
- */
-export const PropagateTransforms: SystemHandle<readonly []> = defineSystem({
-  name: PROPAGATE_TRANSFORMS_SYSTEM,
-  queries: [],
-  labels: ['transform'],
-  fn: (world) => {
-    const r = propagateTransforms(world);
-    if (!r.ok) {
-      // Forward to the Layer 3 ErrorHandler -- this throw is intentional per
-      // ECS Layer 1/3 contract (world.ts §Result propagation warning:
-      // systems that need to surface err branch either unwrap or throw).
-      throw r.error;
-    }
-  },
-});
-
-/**
  * Register `propagateTransforms` into the ECS schedule as the
  * 'pre-render' system (plan-strategy §D-P2).
  *
@@ -390,6 +363,10 @@ export const PropagateTransforms: SystemHandle<readonly []> = defineSystem({
  *     ensures ordering by calling `world.update()` (which runs the
  *     schedule) before `renderer.draw(world)`.
  *
+ * The system body delegates to `propagateTransforms(world)`; the returned
+ * `Result<void, RhiError>` is converted to an unwrap-style throw so the
+ * ECS Layer 3 `ErrorHandler` can route the failure (world.setErrorHandler).
+ *
  * @example Driver registers once per World:
  *   const world = new World();
  *   registerPropagateTransforms(world);
@@ -401,18 +378,20 @@ export function registerPropagateTransforms(
   world: World,
   options: { beforeSystemName?: string } = {},
 ): void {
-  if (options.beforeSystemName !== undefined) {
-    // Optional ordering edge: register a descriptor carrying the same name/fn
-    // plus a `before` edge. The `before` (not `fn`) overlay keeps the real fn
-    // intact (D-4: no spread-over-fn).
-    world.addSystem({
-      name: PROPAGATE_TRANSFORMS_SYSTEM,
-      queries: [],
-      labels: ['transform'],
-      fn: PropagateTransforms.fn,
-      before: [options.beforeSystemName],
-    });
-    return;
-  }
-  world.addSystem(PropagateTransforms);
+  const queries: ReadonlyArray<QueryDescriptor> = [];
+  const descriptor = {
+    name: PROPAGATE_TRANSFORMS_SYSTEM,
+    queries,
+    fn: () => {
+      const r = propagateTransforms(world);
+      if (!r.ok) {
+        // Forward to the Layer 3 ErrorHandler -- this throw is intentional
+        // per ECS Layer 1/3 contract (world.ts §Result propagation warning:
+        // systems that need to surface err branch either unwrap or throw).
+        throw r.error;
+      }
+    },
+    ...(options.beforeSystemName !== undefined ? { before: [options.beforeSystemName] } : {}),
+  };
+  world.addSystem(descriptor);
 }

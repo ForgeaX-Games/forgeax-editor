@@ -296,22 +296,11 @@ export const Camera = defineComponent('Camera', {
   clearG: { type: 'f32', default: 0 },
   clearB: { type: 'f32', default: 0 },
   clearA: { type: 'f32', default: 1 },
-  // feat-20260617-host-engine-contract-and-video-cutscene / M3 / D-4: the
-  // aspect-sync sidecar on the createApp(canvas) path writes
-  // canvas.width / canvas.height into `aspect` every frame when this flag is
-  // true. Reuses the existing `bool` column tier (AnimationPlayer.paused /
-  // AudioSource.playing precedent) -- zero ECS infrastructure change. Default
-  // true so demos that never touch aspect track the canvas automatically
-  // (charter P1 default-is-correct); set false for render-to-texture /
-  // split-screen cameras that drive aspect themselves. Read it via
-  // world.get (readRow narrows bool -> JS boolean); the query-bundle path
-  // returns a raw 0/1 number (the `!== 0` always-true trap).
-  autoAspect: { type: 'bool', default: true },
 });
 
 // ─── Camera POD type (derived from Camera token — single source, AC-07) ─────
 //
-// ShapeOf<typeof Camera.schema> resolves the 22-field POD from the Camera
+// ShapeOf<typeof Camera.schema> resolves the 21-field POD from the Camera
 // token's schema, which is itself derived from Camera.fields[k].type (D-A7).
 // This replaces the hand-maintained CameraDataPod interface — the field set
 // lives exclusively in the Camera component definition above.
@@ -319,7 +308,7 @@ type CameraPod = ShapeOf<typeof Camera.schema>;
 
 // ─── Camera factory functions (w13 SSOT refactoring) ─────────────────────
 //
-// Standalone factory functions that return 22-field CameraPod objects
+// Standalone factory functions that return 21-field CameraPod objects
 // matching the Camera component column shape. Not static methods because
 // TypeScript const-namespace merge is not supported, and Object.assign
 // would break the Camera token's reference identity (archetype columns /
@@ -347,16 +336,6 @@ interface CameraPerspectiveOpts {
   aspect: number;
   near?: number;
   far?: number;
-  /**
-   * feat-20260617-host-engine-contract-and-video-cutscene / M3: when true
-   * (the schema default), the aspect-sync sidecar on the createApp(canvas)
-   * path overwrites `aspect` with `canvas.width / canvas.height` every frame.
-   * Omit it for the default-correct behaviour; set `false` to opt out (the
-   * factory then leaves `aspect` under your control -- render-to-texture,
-   * split-screen). Cameras built on the bare `createRenderer` path never
-   * receive aspect-sync regardless of this flag.
-   */
-  autoAspect?: boolean;
 }
 
 interface CameraOrthographicOpts {
@@ -391,14 +370,6 @@ function cameraPodFromDefaults(): CameraPod {
  * Orthographic quartet defaults to [-1, 1]x[-1, 1]; tonemap defaults to
  * TONEMAP_NONE (0-overhead path).
  *
- * When `autoAspect` is `true` (the default once shipped in M3), the
- * aspect-sync sidecar on the `createApp(canvas)` path automatically writes
- * `canvas.width / canvas.height` into `Camera.aspect` every frame. Set
- * `autoAspect = false` to opt out (render-to-texture, split-screen).
- * Cameras on the `createRenderer` path do not receive aspect-sync.
- *
- * @see {@link https://github.com/Forgeax/forgeax-engine/blob/main/docs/how-to/2026-06-18-host-engine-contract.md | Host-engine contract SSOT}
- *
  * @example
  * ```ts
  * import { Camera, perspective } from '@forgeax/engine-runtime';
@@ -425,16 +396,12 @@ function cameraPodFromDefaults(): CameraPod {
  */
 export function perspective(opts: CameraPerspectiveOpts): CameraPod {
   return {
-    // cameraPodFromDefaults() reads autoAspect's schema default (true), so an
-    // omitted opts.autoAspect lands the default-correct value; an explicit
-    // false overrides it below (D-4: factory one-step opt-out, charter P1).
     ...cameraPodFromDefaults(),
     fov: opts.fov,
     aspect: opts.aspect,
     near: opts.near ?? 0.1,
     far: opts.far ?? 100,
     projection: CAMERA_PROJECTION_PERSPECTIVE,
-    ...(opts.autoAspect !== undefined ? { autoAspect: opts.autoAspect } : {}),
   };
 }
 

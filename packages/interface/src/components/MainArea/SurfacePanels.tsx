@@ -6,13 +6,7 @@
 // Consumed by panelRegistry (dockview 'edit'/'preview' panels), MainArea
 // (mode tabs) and DetachedSurface (popped-out OS windows) — all three used
 // to import EditMode/PreviewMode directly; now they go through context.
-//
-// Each wrapper also overlays the region's FatalBanner (reason + Reload) when
-// the engine reports a region-fatal failure, so the user isn't left staring at
-// a black viewport. The banner is absolutely positioned, so the wrapper is the
-// positioning context (`.surface-region` → position: relative).
 import { usePanelRenderers } from '../DockShell/panelRenderers';
-import { FatalBanner } from '../StatusBar/FatalBanner';
 
 export function EditPanel({ viewportOnly }: { viewportOnly?: boolean } = {}) {
   const { renderEdit } = usePanelRenderers();
@@ -23,12 +17,7 @@ export function EditPanel({ viewportOnly }: { viewportOnly?: boolean } = {}) {
       </div>
     );
   }
-  return (
-    <div className="surface-region">
-      <FatalBanner source="edit" />
-      {renderEdit({ viewportOnly })}
-    </div>
-  );
+  return <>{renderEdit({ viewportOnly })}</>;
 }
 
 export function PreviewPanel() {
@@ -40,10 +29,5 @@ export function PreviewPanel() {
       </div>
     );
   }
-  return (
-    <div className="surface-region">
-      <FatalBanner source="play" />
-      {renderPreview()}
-    </div>
-  );
+  return <>{renderPreview()}</>;
 }

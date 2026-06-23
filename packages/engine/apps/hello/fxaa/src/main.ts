@@ -46,7 +46,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 
-import type { Handle } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -80,12 +80,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const world = app.world;
+  const assets = app.renderer.assets;
+  if (assets === null) {
+    console.error(
+      '[fxaa] AssetRegistry is null (renderer construction did not complete successfully)',
+    );
+    return;
+  }
 
-  // Step 2: alloc the standard PBR material as a user-tier shared ref on the
-  // World, shared across all 4 geometries (D-19: engine-built payloads live on
-  // world.sharedRefs, not the AssetRegistry).
-  const materialHandle = world.allocSharedRef('MaterialAsset', {
+  // Step 2: register the standard PBR material shared across all 4 geometries.
+  const materialRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -101,15 +105,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       roughness: 0.4,
     },
   });
+  if (!materialRes.ok) {
+    console.error('[fxaa] material register failed:', materialRes.error.code);
+    return;
+  }
+  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = materialRes.value;
 
   // Step 3: register the 5 standard components.
+  const world = app.world;
 
   // Step 4: spawn 4 static geometries (triangle + cube + quad + sphere).
   // Layout: 4 bodies spread horizontally so edges stay visible and
   // aliasing is obvious in the ANTIALIAS_NONE state (PI-3). Each
   // body is scaled to 0.5 to fit all 4 in view without overlap.
   const LAYOUT: readonly {
-    readonly handle: Handle<'MeshAsset', 'shared'>;
+    readonly handle: Handle<'MeshAsset', 'unmanaged'>;
     readonly posX: number;
   }[] = [
     { handle: HANDLE_TRIANGLE, posX: -1.05 },

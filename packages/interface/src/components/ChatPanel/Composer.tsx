@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 
 
 import { AtSign, SquareChartGantt, Upload, ChevronDown, ArrowUp, Unplug, Square, Zap, Pencil, Trash2 } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { useModelLabel } from '../../lib/model';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
@@ -83,7 +82,7 @@ interface BusCliEntry {
 // known provider ids in server/src/cli-providers/.
 const PROVIDER_DISPLAY_FALLBACK: Record<string, string> = {
   'forgeax': 'ForgeaX CLI',
-  'claude-code': 'Claude Code',
+  'claude-code': 'the reference agent CLI',
   'codex': 'OpenAI Codex',
   'cursor-agent': 'Cursor',
 };
@@ -115,7 +114,6 @@ function compactProviderLabel(label: string, providerId: string | null): string 
 }
 
 export function Composer() {
-  const { t } = useTranslation();
   const [text, setText] = useState('');
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelStream = useAppStore((s) => s.cancelStream);
@@ -468,10 +466,10 @@ export function Composer() {
   const cliButtonTitle = isStreaming
     ? 'Streaming — provider locked for this turn (Esc/Stop to cancel)'
     : overrideDown
-      ? t('composer.cliButtonOverrideDown', { provider: providerOverride ?? '' })
+      ? `⚠ ${providerOverride} is currently 不可用 — pick 'forgeax' or another healthy provider, or turns will error.`
       : providerOverride
         ? `All turns route via ${providerOverride}. Pick 'forgeax' for the native EventBus path.`
-        : t('composer.cliButtonForgeaxNative');
+        : "Provider — forgeax (原生 · 消息直发 Session/EventBus)";
   // @ / slash / image icons are placeholders for upcoming features. Title-tooltip
   // alone is hover-only + touch-unfriendly. Same click-hint pattern as iter-55
   // AgentSwitcher: aria-disabled lets clicks reach the handler, a brand-yellow
@@ -765,14 +763,14 @@ export function Composer() {
         {queued.length > 0 && (
           <div className="composer-queue" role="list" aria-label="Queued messages">
             <div className="composer-queue-head">
-              <span className="composer-queue-tag">{t('composer.queuedCount', { count: queued.length })}</span>
-              <span className="composer-queue-sub">{t('composer.queueSub')}</span>
+              <span className="composer-queue-tag">已排队 {queued.length}</span>
+              <span className="composer-queue-sub">当前回复结束后依次发送</span>
               <button
                 type="button"
                 className="composer-queue-clear"
-                title={t('composer.clearQueueTitle')}
+                title="清空队列"
                 onClick={() => clearQueue()}
-              >{t('composer.clearQueue')}</button>
+              >清空</button>
             </div>
             {queued.map((q, i) => (
               <div key={q.id} className="composer-queue-chip" role="listitem" title={q.text}>
@@ -781,8 +779,8 @@ export function Composer() {
                 <button
                   type="button"
                   className="composer-queue-act"
-                  aria-label={t('composer.queueEditAria')}
-                  title={t('composer.queueEditTitle')}
+                  aria-label="编辑这条排队消息"
+                  title="编辑 — 取回到输入框"
                   onClick={() => onQueuedEdit(q)}
                 >
                   <Pencil size={13} />
@@ -790,8 +788,8 @@ export function Composer() {
                 <button
                   type="button"
                   className="composer-queue-act composer-queue-now"
-                  aria-label={t('composer.queueSendNowAria')}
-                  title={isStreaming ? t('composer.queueSendNowStreamingTitle') : t('composer.queueSendNowTitle')}
+                  aria-label="立即发送这条排队消息"
+                  title={isStreaming ? '立即发送 — 打断当前回复，优先处理这条' : '立即发送这条'}
                   onClick={() => onQueuedSendNow(q)}
                 >
                   <ArrowUp size={13} />
@@ -799,8 +797,8 @@ export function Composer() {
                 <button
                   type="button"
                   className="composer-queue-act composer-queue-x"
-                  aria-label={t('composer.queueRemoveAria')}
-                  title={t('composer.queueRemoveTitle')}
+                  aria-label="移除这条排队消息"
+                  title="移除"
                   onClick={() => dequeueMessage(q.id)}
                 >
                   <Trash2 size={13} />
@@ -814,9 +812,9 @@ export function Composer() {
         className="composer-input"
         placeholder={
           isStreaming
-            ? t('composer.placeholderStreaming') + (canInterrupt ? t('composer.placeholderStreamingInterrupt') : '')
+            ? '回复进行中 — 可继续输入,[Enter] 排队,当前回复结束后依次发送' + (canInterrupt ? ' · ⚡ 打断并立即发送' : '')
             : providerOverride
-              ? `Type your game idea... [Enter] to send · [Ctrl/Shift+Enter] newline  →  via ${currentLabel}${overrideDown ? t('composer.placeholderOverrideDownSuffix') : ''}`
+              ? `Type your game idea... [Enter] to send · [Ctrl/Shift+Enter] newline  →  via ${currentLabel}${overrideDown ? ' ⚠ (不可用)' : ''}`
               : 'Type your game idea... [Enter] to send · [Ctrl/Shift+Enter] for a new line.'
         }
         value={text}
@@ -825,17 +823,17 @@ export function Composer() {
       />
       <div className="composer-bar">
         <div className="cb-left-group">
-          <button className="cb-btn cb-soon" title={t('composer.imageUploadSoon')} aria-disabled="true" type="button" onClick={() => setHintFor(CB_HINT.IMG)}>
+          <button className="cb-btn cb-soon" title="图片上传 — 即将上线" aria-disabled="true" type="button" onClick={() => setHintFor(CB_HINT.IMG)}>
             <Upload size={16} />
-            {hintFor === CB_HINT.IMG && <span className="cb-hint" role="status">{t('composer.comingSoon')}</span>}
+            {hintFor === CB_HINT.IMG && <span className="cb-hint" role="status">即将上线</span>}
           </button>
           <div className="cb-at">
             <button
               className={`cb-btn ${atHasMentions ? 'cb-at-btn' : 'cb-soon'}${atOpen ? ' is-open' : ''}`}
               title={
                 atHasMentions
-                  ? t('composer.mentionAgentTitle', { count: agentMentions!.length })
-                  : t('composer.mentionSoon')
+                  ? `Mention agent (${agentMentions!.length}) — 单击插入 @<agent> 到输入框`
+                  : '@ 提示 — 即将上线'
               }
               aria-disabled={atHasMentions ? undefined : true}
               aria-expanded={atHasMentions ? atOpen : undefined}
@@ -847,7 +845,7 @@ export function Composer() {
               }}
             >
               <AtSign size={16} />
-              {!atHasMentions && hintFor === CB_HINT.AT && <span className="cb-hint" role="status">{t('composer.comingSoon')}</span>}
+              {!atHasMentions && hintFor === CB_HINT.AT && <span className="cb-hint" role="status">即将上线</span>}
             </button>
             {atOpen && atHasMentions && (
               <div className="cb-at-menu" role="menu" aria-label="Agent mentions">
@@ -865,8 +863,8 @@ export function Composer() {
                     onMouseEnter={() => setAtFocused(i)}
                     title={
                       a.inBus
-                        ? t('composer.agentItemInBusTitle', { name: a.name, role: a.role, id: a.id })
-                        : t('composer.agentItemTitle', { name: a.name, role: a.role, id: a.id })
+                        ? `${a.name} · ${a.role} · 同时位于 bus host — 单击插入 @${a.id}`
+                        : `${a.name} · ${a.role} — 单击插入 @${a.id}`
                     }
                     onClick={() => insertAgentMention(a.id)}
                   >
@@ -880,15 +878,15 @@ export function Composer() {
                         className="cb-at-arrow"
                         role="button"
                         tabIndex={0}
-                        aria-label={t('composer.viewInBusAria', { plugin: a.busPluginId })}
-                        title={t('composer.viewInBusTitle', { plugin: a.busPluginId })}
+                        aria-label={`在 Bus 详情查看 ${a.busPluginId}`}
+                        title={`在 Bus 详情查看 ${a.busPluginId} →`}
                         onClick={(e) => { e.stopPropagation(); e.preventDefault(); openInBusAdmin(a.busPluginId!); }}
                         onKeyDown={(e) => onArrowKey(e, a.busPluginId!)}
                       >→</span>
                     )}
                   </button>
                 ))}
-                <div className="cb-at-foot">{t('composer.atFoot')}</div>
+                <div className="cb-at-foot">↑↓ 选 · ⏎ 插入 @&lt;id&gt; · → 跳 Bus 详情 · Esc 关闭</div>
               </div>
             )}
           </div>
@@ -897,8 +895,8 @@ export function Composer() {
               className={`cb-btn ${slashHasSkills ? 'cb-slash-btn' : 'cb-soon'}${slashOpen ? ' is-open' : ''}`}
               title={
                 slashHasSkills
-                  ? t('composer.busSkillsTitle', { count: busSkills!.length })
-                  : t('composer.slashSoon')
+                  ? `Bus skills (${busSkills!.length}) — 单击选触发命令插入到输入框`
+                  : '斜杠命令 — 即将上线'
               }
               aria-disabled={slashHasSkills ? undefined : true}
               aria-expanded={slashHasSkills ? slashOpen : undefined}
@@ -910,7 +908,7 @@ export function Composer() {
               }}
             >
               <SquareChartGantt size={16} />
-              {!slashHasSkills && hintFor === CB_HINT.SLASH && <span className="cb-hint" role="status">{t('composer.comingSoon')}</span>}
+              {!slashHasSkills && hintFor === CB_HINT.SLASH && <span className="cb-hint" role="status">即将上线</span>}
             </button>
             {slashOpen && slashHasSkills && filteredSkills.length > 0 && (
               <div className="cb-slash-menu" role="menu" aria-label="Bus skills">
@@ -928,8 +926,8 @@ export function Composer() {
                     onMouseEnter={() => setSlashFocused(i)}
                     title={
                       s.descZh
-                        ? t('composer.slashItemDescTitle', { name: s.displayName, plugin: s.pluginId, desc: s.descZh, trigger: s.trigger })
-                        : t('composer.slashItemTitle', { name: s.displayName, plugin: s.pluginId, trigger: s.trigger })
+                        ? `${s.displayName} · ${s.pluginId}\n${s.descZh}\n— 单击插入 ${s.trigger}`
+                        : `${s.displayName} · ${s.pluginId} — 单击插入 ${s.trigger}`
                     }
                     onClick={() => insertSkillTrigger(s.trigger)}
                   >
@@ -944,14 +942,14 @@ export function Composer() {
                       className="cb-slash-arrow"
                       role="button"
                       tabIndex={0}
-                      aria-label={t('composer.viewInBusAria', { plugin: s.pluginId })}
-                      title={t('composer.viewInBusTitle', { plugin: s.pluginId })}
+                      aria-label={`在 Bus 详情查看 ${s.pluginId}`}
+                      title={`在 Bus 详情查看 ${s.pluginId} →`}
                       onClick={(e) => { e.stopPropagation(); e.preventDefault(); openInBusAdmin(s.pluginId); }}
                       onKeyDown={(e) => onArrowKey(e, s.pluginId)}
                     >→</span>
                   </button>
                 ))}
-                <div className="cb-slash-foot">{t('composer.slashFoot')}</div>
+                <div className="cb-slash-foot">↑↓ 选 · ⏎ 插入触发 · → 跳 Bus 详情 · Esc 关闭</div>
               </div>
             )}
           </div>
@@ -987,16 +985,16 @@ export function Composer() {
             disabled={!canSwitchModel || !activeAgent || !forgeaxSid}
             disabledReason={
               !canSwitchModel
-                ? t('composer.modelDisabledProvider', { provider: providerOverride })
+                ? `当前走 ${providerOverride} 渠道,该 provider 自己决定模型;切到 forgeax 或 claude-code 渠道才能改 agent.json::models.model`
                 : !activeAgent
-                  ? t('composer.modelDisabledNoAgent')
+                  ? '还没选 agent — 无法读 agent.json'
                   : !forgeaxSid
-                    ? t('composer.modelDisabledBooting')
+                    ? 'forgeax session 还在 boot'
                     : undefined
             }
             triggerTitle={
               activeAgent
-                ? t('composer.modelTriggerTitle', { agent: activeAgent })
+                ? `当前 agent (${activeAgent}) → agent.json::models.model`
                 : 'Model selector'
             }
           />
@@ -1026,7 +1024,7 @@ export function Composer() {
                 >
                   <span className="cb-cli-id">forgeax</span>
                   <span className="cb-cli-hint">
-                    {t('composer.cliForgeaxHint')}
+                    原生 · 消息直发 Session/EventBus（默认）
                     {activeAgent && <span style={{ opacity: 0.6 }}> ({activeAgent})</span>}
                   </span>
                 </button>
@@ -1058,7 +1056,7 @@ export function Composer() {
                           role="button"
                           tabIndex={0}
                           className="cb-cli-bus-pill is-link"
-                          title={t('composer.cliBusPillTitle', { plugin: `${BUS_CLI_ID_PREFIX}${p.id}` })}
+                          title={`bus plugin: ${BUS_CLI_ID_PREFIX}${p.id} · 单击在 Bus 详情查看 →`}
                           onClick={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
@@ -1101,7 +1099,7 @@ export function Composer() {
               {text.trim() && canInterrupt && (
                 <button
                   className="cb-send cb-interrupt"
-                  title={t('composer.interruptTitle')}
+                  title="打断当前回复并立即发送（steer）"
                   type="button"
                   onClick={onInterrupt}
                 >
@@ -1111,7 +1109,7 @@ export function Composer() {
               {text.trim() && (
                 <button
                   className="cb-send cb-queue"
-                  title={t('composer.queueSendTitle')}
+                  title="排队发送 — 当前回复结束后依次执行（[Enter]）"
                   type="button"
                   onClick={() => void onSubmit()}
                 >
@@ -1120,7 +1118,7 @@ export function Composer() {
               )}
               <button
                 className="cb-send cb-stop"
-                title={t('composer.stopTitle')}
+                title="停止当前回复（不影响已排队消息）"
                 type="button"
                 onClick={() => cancelStream()}
               >
@@ -1132,10 +1130,10 @@ export function Composer() {
               className="cb-send"
               title={
                 !activeSid
-                  ? t('composer.sendNoSession')
+                  ? 'session 还在加载 — 稍等一秒；如果一直卡住，看右下角 server 是否 down'
                   : !activeAgent
-                  ? t('composer.sendNoAgent')
-                  : t('composer.send')
+                  ? '还没选 agent — 等 AgentSwitcher 列表加载（通常 <1s），或手动点上方 agent 头像'
+                  : 'Send'
               }
               type="button"
               disabled={!text.trim() || !activeAgent || !activeSid}

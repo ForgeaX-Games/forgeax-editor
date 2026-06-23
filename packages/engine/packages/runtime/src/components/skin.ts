@@ -1,6 +1,6 @@
 // @forgeax/engine-runtime - Skin component (skeleton handle + joint Entity slots).
 //
-// Schema: { skeleton: 'shared<SkeletonAsset>', joints: 'array<entity>' }.
+// Schema: { skeleton: 'handle<SkeletonAsset>', joints: 'array<entity>' }.
 //
 // `skeleton` carries the immutable SkeletonAsset handle (IBM + jointCount);
 // `joints` carries the live Entity[] resolved at post-spawn time from the
@@ -22,7 +22,7 @@
 //   - requirements AC-37 (no Component suffix)
 //   - plan-strategy D-10 (SkinPaletteSlice naming + Skin x Instances fail-fast)
 //   - charter P3 (explicit failure: joint despawn fail-fast)
-//   - schema vocab 'shared<SkeletonAsset>' v1 missing item #4 alignment
+//   - schema vocab 'handle<SkeletonAsset>' v1 missing item #4 alignment
 //
 // ## Transform contract (post-bug-20260615 fix)
 //
@@ -61,6 +61,6 @@
 import { defineComponent } from '@forgeax/engine-ecs';
 
 export const Skin = defineComponent('Skin', {
-  skeleton: { type: 'shared<SkeletonAsset>' },
+  skeleton: { type: 'handle<SkeletonAsset>' },
   joints: { type: 'array<entity>' },
 });

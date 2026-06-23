@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import { useAppStore, type SubAgentRun } from '../../store';
 import { ProviderBadgePill } from '../../lib/provider-badge';
 import { ForgeText } from './message-parts/ForgeText';
@@ -8,28 +7,27 @@ import { ToolChipRow } from './message-parts/ToolChipRow';
 import { KcCopyBtn } from './message-parts/KcCopyBtn';
 import { buildInterleavedSegments, partitionToolCalls } from './message-parts/interleave';
 
-const ROSTER: Record<string, { displayName: string; roleKey: string; color: string; emoji: string }> = {
-  iori: { displayName: 'Iori', roleKey: 'subAgent.role.iori', color: 'var(--color-role-art)', emoji: '🏛️' },
-  suzu: { displayName: 'Suzu', roleKey: 'subAgent.role.suzu', color: 'var(--color-role-orchestrator)', emoji: '📐' },
-  kotone: { displayName: 'Kotone', roleKey: 'subAgent.role.kotone', color: 'var(--color-role-narrative)', emoji: '💬' },
-  iro: { displayName: 'Iro', roleKey: 'subAgent.role.iro', color: 'var(--accent-mint)', emoji: '🎨' },
-  tsumugi: { displayName: 'Tsumugi', roleKey: 'subAgent.role.tsumugi', color: 'var(--color-role-design)', emoji: '🛠️' },
-  'cc-coder': { displayName: 'CC Coder', roleKey: 'subAgent.role.ccCoder', color: 'var(--color-role-orchestrator)', emoji: '🧠' },
+const ROSTER: Record<string, { displayName: string; role: string; color: string; emoji: string }> = {
+  iori: { displayName: 'Iori', role: '核心玩法师', color: 'var(--color-role-art)', emoji: '🏛️' },
+  suzu: { displayName: 'Suzu', role: '体验设计师', color: 'var(--color-role-orchestrator)', emoji: '📐' },
+  kotone: { displayName: 'Kotone', role: '剧情师', color: 'var(--color-role-narrative)', emoji: '💬' },
+  iro: { displayName: 'Iro', role: '美术师', color: 'var(--accent-mint)', emoji: '🎨' },
+  tsumugi: { displayName: 'Tsumugi', role: '工程师', color: 'var(--color-role-design)', emoji: '🛠️' },
+  'cc-coder': { displayName: 'CC Coder', role: 'the reference agent CLI 工程师', color: 'var(--color-role-orchestrator)', emoji: '🧠' },
 };
 
-function profileFor(emitterId: string): { displayName: string; roleKey: string; color: string; emoji: string } {
+function profileFor(emitterId: string): { displayName: string; role: string; color: string; emoji: string } {
   const idLower = emitterId.toLowerCase();
   for (const key of Object.keys(ROSTER)) {
     if (idLower.includes(key)) return ROSTER[key];
   }
-  return { displayName: emitterId, roleKey: 'subAgent.role.fallback', color: 'var(--prim-color-neutral-450)', emoji: '🤖' };
+  return { displayName: emitterId, role: 'sub-agent', color: 'var(--prim-color-neutral-450)', emoji: '🤖' };
 }
 
 export function SubAgentCard({ run }: { run: SubAgentRun }) {
   // Default collapsed for completed runs (replay history + finished live)
   // so long chat scrollbacks aren't dominated by sub-agent walls of text.
   // Streaming sub-agents stay expanded so the user can watch progress.
-  const { t } = useTranslation();
   const [open, setOpen] = useState(run.status === 'streaming');
   // P3.77 — mirror ForgeCard's provider-pill deep-link. SubAgentCard header
   // is also a <button>, so the pill renders as span-with-role inside.
@@ -55,7 +53,7 @@ export function SubAgentCard({ run }: { run: SubAgentRun }) {
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         <span className="sac-emoji">{prof.emoji}</span>
         <span className="sac-name" style={{ color: prof.color }}>{prof.displayName}</span>
-        <span className="sac-role">{t(prof.roleKey)}</span>
+        <span className="sac-role">{prof.role}</span>
         {run.providerId && (
           <ProviderBadgePill
             providerId={run.providerId}
@@ -64,7 +62,7 @@ export function SubAgentCard({ run }: { run: SubAgentRun }) {
           />
         )}
         <span className={`sac-status ${run.status}`}>
-          {isStreaming ? t('subAgent.status.running') : run.status === 'error' ? t('subAgent.status.error') : t('subAgent.status.done')}
+          {isStreaming ? '运行中…' : run.status === 'error' ? '失败' : '完成'}
         </span>
         <span className="sac-tools">{run.toolCalls.length} tool calls</span>
       </button>

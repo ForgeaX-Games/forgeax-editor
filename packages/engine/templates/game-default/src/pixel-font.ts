@@ -11,17 +11,8 @@
 // We register the atlas TextureAsset + a SamplerAsset + the FontAsset and
 // return the FontAsset handle for GlyphText.fontHandle.
 
-import type { World } from '@forgeax/engine-ecs';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetRegistry } from '@forgeax/engine-runtime';
 import type { FontAsset, GlyphMetric, Handle } from '@forgeax/engine-types';
-
-// Stable GUIDs for the procedural atlas + sampler sub-assets. The FontAsset
-// stores these (D-19: payload-internal sub-asset refs are AssetGuid strings,
-// not handles); glyph-text-layout resolves GUID -> column handle at read time
-// via assets.lookup, so the atlas + sampler must be catalogued under them.
-const PIXEL_FONT_ATLAS_GUID = 'b0b1b2b3-0000-7000-8000-000000000010';
-const PIXEL_FONT_SAMPLER_GUID = 'b0b1b2b3-0000-7000-8000-000000000011';
 
 // ── 5x7 bitmap glyphs ('#' = ink, anything else = empty). Each glyph is
 //    exactly 7 rows of 5 columns. ──────────────────────────────────────────
@@ -76,7 +67,7 @@ const COLS = 16; // glyphs per atlas row
  * Build the bitmap atlas + glyph metrics and register a FontAsset.
  * Returns its handle for GlyphText.fontHandle. Charset: 0-9 A-Z space : + -
  */
-export function registerPixelFont(world: World, assets: AssetRegistry): Handle<'FontAsset', 'shared'> {
+export function registerPixelFont(assets: AssetRegistry): Handle<'FontAsset', 'unmanaged'> {
   const chars = Object.keys(GLYPHS);
   const rows = Math.ceil(chars.length / COLS);
   const atlasWidth = COLS * CELL;
@@ -113,34 +104,34 @@ export function registerPixelFont(world: World, assets: AssetRegistry): Handle<'
   // Space: no atlas cell, advances the cursor only.
   glyphs[32] = { advance: 4, bearingX: 0, bearingY: 0, size: { w: 0, h: 0 }, region: { x: 0, y: 0, w: 0, h: 0 } };
 
-  const atlasGuid = AssetGuid.parse(PIXEL_FONT_ATLAS_GUID);
-  if (!atlasGuid.ok) throw new Error(`[pixel-font] atlas GUID parse failed: ${atlasGuid.error.code}`);
-  assets.catalog(atlasGuid.value, {
-    kind: 'texture',
-    width: atlasWidth,
-    height: atlasHeight,
-    format: 'rgba8unorm',
-    data,
-    colorSpace: 'linear',
-    mipmap: false,
-  });
+  const atlas = assets
+    .register({
+      kind: 'texture',
+      width: atlasWidth,
+      height: atlasHeight,
+      format: 'rgba8unorm',
+      data,
+      colorSpace: 'linear',
+      mipmap: false,
+    })
+    .unwrap();
 
-  const samplerGuid = AssetGuid.parse(PIXEL_FONT_SAMPLER_GUID);
-  if (!samplerGuid.ok) throw new Error(`[pixel-font] sampler GUID parse failed: ${samplerGuid.error.code}`);
-  assets.catalog(samplerGuid.value, {
-    kind: 'sampler',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    addressModeW: 'clamp-to-edge',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    mipmapFilter: 'nearest',
-  });
+  const sampler = assets
+    .register({
+      kind: 'sampler',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      addressModeW: 'clamp-to-edge',
+      magFilter: 'linear',
+      minFilter: 'linear',
+      mipmapFilter: 'nearest',
+    })
+    .unwrap();
 
   const font: FontAsset = {
     kind: 'font',
-    atlas: atlasGuid.value,
-    sampler: samplerGuid.value,
+    atlas: atlas as unknown as Handle<'TextureAsset', 'managed'>,
+    sampler: sampler as unknown as Handle<'SamplerAsset', 'managed'>,
     glyphs,
     common: {
       lineHeight: GH + 2,
@@ -151,5 +142,5 @@ export function registerPixelFont(world: World, assets: AssetRegistry): Handle<'
       atlasHeight,
     },
   };
-  return world.allocSharedRef('FontAsset', font) as Handle<'FontAsset', 'shared'>;
+  return assets.register(font).unwrap() as Handle<'FontAsset', 'unmanaged'>;
 }

@@ -12,7 +12,6 @@ import {
   File as FileIcon,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
-import { useTranslation } from '@/i18n';
 
 // P4.1 — FilesPanel fp-types ext-distribution mini-strip.
 // Sibling to P4.0 AgentsPanel ap-tribes: a one-row legend above the tree
@@ -228,7 +227,6 @@ interface ViewProps {
 }
 
 function FilesPanelView({ loading, error, tree, activeSlug, expanded, setExpanded, previewPath, openFile }: ViewProps) {
-  const { t } = useTranslation();
   const [flashPath, setFlashPath] = useState<string | null>(null);
   const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null);
   const flashTimerRef = useRef<number | null>(null);
@@ -273,7 +271,7 @@ function FilesPanelView({ loading, error, tree, activeSlug, expanded, setExpande
         <div className="fp-header">
           <span className="fp-slug">.forgeax/games / {activeSlug ?? '…'}</span>
         </div>
-        <div className="fp-empty">{t('common.loading')}</div>
+        <div className="fp-empty">加载中...</div>
       </div>
     );
   }
@@ -302,7 +300,7 @@ function FilesPanelView({ loading, error, tree, activeSlug, expanded, setExpande
             className={`fp-type-chip fam-${f.key}`}
             onClick={() => onTypeClick(f)}
             disabled={!f.firstPath}
-            title={`${f.label} · ${t('filesPanel.fileCount', { count: f.count })}${f.firstPath ? ` · ${t('filesPanel.jumpToFile', { name: f.firstPath.split('/').pop() ?? '' })}` : ''}`}
+            title={`${f.label} · ${f.count} 个文件${f.firstPath ? ` · 跳转到 ${f.firstPath.split('/').pop()}` : ''}`}
             aria-label={`${f.label} ${f.count} files — jump to first`}
           >
             <span className={`fp-type-dot fam-${f.key}`} aria-hidden="true" />
@@ -313,7 +311,7 @@ function FilesPanelView({ loading, error, tree, activeSlug, expanded, setExpande
         {total > 0 && (
           <span
             className="fp-types-total"
-            title={`Σ ${t('filesPanel.fileCount', { count: total })} · ${t('filesPanel.splitByFamily')}`}
+            title={`Σ ${total} 个文件 · 按 6 个 family 拆分`}
             aria-label={`${total} files total across all families`}
           >
             <span className="fp-types-vsep" aria-hidden="true" />
@@ -348,7 +346,6 @@ interface RowProps {
 }
 
 function TreeRow({ node, depth, expanded, setExpanded, activeFile, flashPath, onOpen }: RowProps) {
-  const { t } = useTranslation();
   if (node.type === 'dir') {
     const isOpen = expanded.has(node.path);
     const FolderGlyph = isOpen ? FolderOpen : Folder;
@@ -364,7 +361,7 @@ function TreeRow({ node, depth, expanded, setExpanded, activeFile, flashPath, on
           className="fp-row dir"
           style={{ paddingLeft: 6 + depth * 12 }}
           onClick={toggle}
-          title={`${node.name} · ${t('filesPanel.fileCount', { count: fileCount })} · ${isOpen ? t('filesPanel.clickToCollapse') : t('filesPanel.clickToExpand')}`}
+          title={`${node.name} · ${fileCount} 个文件 · 单击 ${isOpen ? '折叠' : '展开'}`}
         >
           <span className="fp-chev">{isOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
           <FolderGlyph size={13} className="fp-folder-ico" />

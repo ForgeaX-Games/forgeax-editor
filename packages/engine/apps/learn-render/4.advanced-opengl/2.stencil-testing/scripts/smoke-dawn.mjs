@@ -239,7 +239,6 @@ const {
   perspective,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const metalDecodeRes = await decodeImageFromFile(METAL_SRC_PATH);
@@ -316,9 +315,6 @@ if (!metalGuidRes.ok || !marbleGuidRes.ok) {
   process.exit(1);
 }
 
-// World must exist before allocSharedRef mints any column handle.
-const world = new World();
-
 const metalTexAsset = {
   kind: 'texture',
   width: metalDecoded.width,
@@ -337,13 +333,13 @@ const marbleTexAsset = {
   colorSpace: marbleDecoded.colorSpace,
   mipmap: marbleDecoded.mipmap,
 };
-const metalHandle = unwrapHandle(world.allocSharedRef('TextureAsset', metalTexAsset));
-const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', marbleTexAsset));
+const metalHandle = assets.registerWithGuid(metalGuidRes.value, metalTexAsset);
+const marbleHandle = assets.registerWithGuid(marbleGuidRes.value, marbleTexAsset);
 console.log(`[learn-render-2-stencil-testing] registered metal handle id=${metalHandle}`);
 
 // Register materials with pass-based MaterialAsset shape.
 // ── Floor material: PBR with stencilWriteMask=0x00 ────────────────
-const floorMatHandle = world.allocSharedRef('MaterialAsset', {
+const floorMatHandle = assets.register({
   kind: 'material',
   passes: [
     {
@@ -364,7 +360,7 @@ const floorMatHandle = world.allocSharedRef('MaterialAsset', {
 });
 
 // ── Cube material: PBR with stencil write (ref=1, mask=0xFF) ─────
-const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
+const cubeMatHandle = assets.register({
   kind: 'material',
   passes: [
     {
@@ -388,7 +384,7 @@ const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
 
 // ── Outline material: unlit solid color, stencil test only ───────
 const OUTLINE_COLOR = [0.04, 0.28, 0.26, 1.0];
-const outlineMatHandle = world.allocSharedRef('MaterialAsset', {
+const outlineMatHandle = assets.register({
   kind: 'material',
   passes: [
     {
@@ -411,6 +407,8 @@ const outlineMatHandle = world.allocSharedRef('MaterialAsset', {
     baseColor: OUTLINE_COLOR,
   },
 });
+
+const world = new World();
 
 // Floor: HANDLE_QUAD is 1x1 in XY, rotated -90 deg around X to lie flat.
 const SIN_NEG_90 = Math.sin(-Math.PI / 4);

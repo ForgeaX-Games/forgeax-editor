@@ -19,7 +19,7 @@
 //   - struct round-up           : totalBytes is rounded up to 16-byte alignment
 
 import { describe, expect, it } from 'vitest';
-import { derive, findUndeclaredSampledTextures } from '../derive-paramschema';
+import { derive } from '../derive-paramschema';
 import type { ParamSchemaEntry } from '../index';
 import { MATERIAL_PARAM_TYPES } from '../index';
 
@@ -335,68 +335,5 @@ describe('derive(schema) — bgl visibility = FRAGMENT', () => {
     // bglEntries[0] is the auto-paired sampler, bglEntries[1] is the texture
     expect(out.bglEntries[0]?.visibility).toBe(FRAGMENT);
     expect(out.bglEntries[1]?.visibility).toBe(FRAGMENT);
-  });
-});
-
-// bug-20260619: register-time texture-declaration consistency. The runtime
-// counterpart of the build-time superset gate -- a user shader that samples a
-// user-region material texture (baseColorTexture / metallicRoughnessTexture /
-// normalTexture) but omits it from paramSchema would let extract silently drop
-// the handle and bind the default white texture (LO 4.3 blending demo grass +
-// windows turned opaque white). See docs/handover/2026-06-19-blending-
-// transparency-regression-bisect.md.
-describe('findUndeclaredSampledTextures', () => {
-  const sampleWgsl = (...texs: string[]): string =>
-    texs.map((t) => `let s = textureSample(${t}, ${t}Sampler, in.uv);`).join('\n');
-
-  it('flags baseColorTexture sampled but not declared', () => {
-    const schema: ParamSchemaEntry[] = [{ name: 'baseColor', type: 'color' }];
-    expect(findUndeclaredSampledTextures(sampleWgsl('baseColorTexture'), schema)).toEqual([
-      'baseColorTexture',
-    ]);
-  });
-
-  it('passes when the sampled texture is declared as texture2d', () => {
-    const schema: ParamSchemaEntry[] = [
-      { name: 'baseColor', type: 'color' },
-      { name: 'baseColorTexture', type: 'texture2d' },
-    ];
-    expect(findUndeclaredSampledTextures(sampleWgsl('baseColorTexture'), schema)).toEqual([]);
-  });
-
-  it('flags all three user-region textures when all sampled-but-undeclared', () => {
-    const wgsl = sampleWgsl('baseColorTexture', 'metallicRoughnessTexture', 'normalTexture');
-    expect(findUndeclaredSampledTextures(wgsl, [])).toEqual([
-      'baseColorTexture',
-      'metallicRoughnessTexture',
-      'normalTexture',
-    ]);
-  });
-
-  it('does NOT flag a texture that is declared but never sampled (outline / depth-viz reuse)', () => {
-    // WGSL declares the standard binding layout but the fragment never samples
-    // baseColorTexture -- dropping the (absent) handle is harmless.
-    const wgsl =
-      '@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;\n@fragment fn fs() {}';
-    expect(findUndeclaredSampledTextures(wgsl, [])).toEqual([]);
-  });
-
-  it('ignores commented-out textureSample calls (line + block comments)', () => {
-    const lineComment = '// let s = textureSample(baseColorTexture, smp, uv);';
-    expect(findUndeclaredSampledTextures(lineComment, [])).toEqual([]);
-    const blockComment = '/* textureSample(baseColorTexture, smp, uv) */';
-    expect(findUndeclaredSampledTextures(blockComment, [])).toEqual([]);
-  });
-
-  it('does NOT flag engine-injected textures (emissive / occlusion) absent from schema', () => {
-    // These live in the appendInjection lightmap region, not the user region;
-    // default-standard-pbr samples them without a schema entry by design.
-    const wgsl = sampleWgsl('emissiveTexture', 'occlusionTexture');
-    expect(findUndeclaredSampledTextures(wgsl, [])).toEqual([]);
-  });
-
-  it('matches textureSampleLevel / textureSampleCompareLevel variants', () => {
-    const wgsl = 'let a = textureSampleLevel(baseColorTexture, smp, uv, 0.0);';
-    expect(findUndeclaredSampledTextures(wgsl, [])).toEqual(['baseColorTexture']);
   });
 });

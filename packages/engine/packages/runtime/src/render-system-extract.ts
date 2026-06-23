@@ -114,7 +114,7 @@ import type {
   MeshAsset,
   SkeletonAsset,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, toShared } from '@forgeax/engine-types';
+import { ASSET_ERROR_HINTS, AssetError, toUnmanaged } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
 import {
   Camera,
@@ -151,7 +151,6 @@ import {
   SkinMaterialMismatchError,
 } from './errors';
 import { computeInvRangeSquared, degToCos } from './light-helpers';
-import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 
@@ -435,7 +434,7 @@ export interface ExtractedLights {
  * (feat-20260520-skylight-ibl-cubemap M4 / t26).
  *
  * `cubemapHandle` carries the packed u32 handle for
- * `Handle<CubeTextureAsset, 'shared'>`; the record stage resolves this
+ * `Handle<CubeTextureAsset, 'unmanaged'>`; the record stage resolves this
  * to GPU resources via `AssetRegistry.getCubemapGpuView(...)` and related
  * helpers (t13 asset-registry cubemapGpuHandles).
  *
@@ -444,10 +443,7 @@ export interface ExtractedLights {
  * pipeline; no independent ECS system).
  */
 export interface SkylightSnapshot {
-  // 0 = no cubemap supplied -> solid-color ambient via the white fallback
-  // cube (record falls to fallback resources when no IBL views are cached).
   readonly cubemapHandle: number;
-  readonly color: readonly [number, number, number];
   readonly intensity: number;
 }
 
@@ -456,7 +452,7 @@ export interface SkylightSnapshot {
  * (feat-20260531-skybox-env-background M2 / w5).
  *
  * `cubemapHandle` carries the packed u32 handle for
- * `Handle<CubeTextureAsset, 'shared'>`; the record stage resolves this
+ * `Handle<CubeTextureAsset, 'unmanaged'>`; the record stage resolves this
  * to GPU resources via `AssetRegistry.getCubemapGpuView(...)`.
  *
  * `mode` carries the raw `f32` column value (`SKYBOX_MODE_CUBEMAP = 0`).
@@ -646,8 +642,8 @@ export interface MaterialSnapshot {
    * vec/color params, string (GUID) for texture2d/sampler params.
    */
   readonly paramSnapshot?: Readonly<Record<string, number | number[] | string>> | undefined;
-  readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
-  readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
+  readonly baseColorTexture?: Handle<'TextureAsset', 'unmanaged'> | undefined;
+  readonly sampler?: Handle<'SamplerAsset', 'unmanaged'> | undefined;
   /**
    * PBR metallic-roughness texture handle (standard shadingModel only).
    * Undefined for `'unlit'` / `'sprite'` shading models. The record stage
@@ -659,7 +655,7 @@ export interface MaterialSnapshot {
    * textures from Sponza glTF materials (M3 writes the handle into
    * SchemaDrivenMaterialAsset paramValues; M4 extract carries it through to the snapshot).
    */
-  readonly metallicRoughnessTexture?: Handle<'TextureAsset', 'shared'> | undefined;
+  readonly metallicRoughnessTexture?: Handle<'TextureAsset', 'unmanaged'> | undefined;
   /**
    * PBR tangent-space normal texture handle (standard shadingModel only).
    * Undefined for `'unlit'` / `'sprite'` shading models. The record stage
@@ -670,11 +666,11 @@ export interface MaterialSnapshot {
    * field added symmetrically with metallicRoughnessTexture so the record
    * stage can wire real normal textures from Sponza glTF materials.
    */
-  readonly normalTexture?: Handle<'TextureAsset', 'shared'> | undefined;
+  readonly normalTexture?: Handle<'TextureAsset', 'unmanaged'> | undefined;
   readonly emissive?: readonly [number, number, number] | undefined;
   readonly emissiveIntensity?: number | undefined;
-  readonly emissiveTexture?: Handle<'TextureAsset', 'shared'> | undefined;
-  readonly occlusionTexture?: Handle<'TextureAsset', 'shared'> | undefined;
+  readonly emissiveTexture?: Handle<'TextureAsset', 'unmanaged'> | undefined;
+  readonly occlusionTexture?: Handle<'TextureAsset', 'unmanaged'> | undefined;
   readonly occlusionStrength?: number | undefined;
   /**
    * Sprite-only POD fields the record stage needs to write the sprite
@@ -904,18 +900,14 @@ type WorldInternalView = World & {
  * the resolvable submeshes; the count-mismatch validator already filtered
  * the count-disagreement case earlier).
  */
-function resolveMaterialSnapshot(
-  handleRaw: number,
-  world: World,
-  assetsRef: AssetRegistry,
-): MaterialSnapshot {
+function resolveMaterialSnapshot(handleRaw: number, assetsRef: AssetRegistry): MaterialSnapshot {
   if (handleRaw === 0) return defaultMaterialSnapshot();
-  const tagged = toShared<'MaterialAsset'>(handleRaw);
-  const res = resolveAssetHandle(world, tagged);
+  const tagged = toUnmanaged<'MaterialAsset'>(handleRaw);
+  const res = assetsRef.get<MaterialAsset>(tagged);
   if (!res.ok) return defaultMaterialSnapshot();
   const asset = res.value;
   if (asset.kind !== 'material') return defaultMaterialSnapshot();
-  const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assetsRef);
+  const resolvedResult = assetsRef._materialWalk(tagged);
   if (!resolvedResult.ok) return defaultMaterialSnapshot();
   const resolved = resolvedResult.value;
   const pv = resolved.paramValues as Readonly<
@@ -942,32 +934,30 @@ function resolveMaterialSnapshot(
   const firstPassShader = allPasses.length > 0 ? allPasses[0]?.shader : undefined;
   const inferredShadingModel: 'unlit' | undefined =
     firstPassShader === 'forgeax::default-unlit' ? 'unlit' : undefined;
-  // feat-20260614 M8 (D-19): texture / sampler paramValues are embedded GUIDs
-  // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
-  // handle by looking up the catalogued payload and minting via
-  // world.allocSharedRef; a numeric value (already a column handle from a
-  // directly-minted material) passes through unchanged.
-  const resolveTexLike = <B extends string>(
-    value: unknown,
-    brand: B,
-  ): Handle<B, 'shared'> | undefined => {
-    if (typeof value === 'number') return value as unknown as Handle<B, 'shared'>;
-    if (typeof value === 'string') {
-      const payload = assetsRef.lookup(value);
-      if (payload === undefined) return undefined;
-      return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
-    }
-    return undefined;
-  };
-  const baseColorTextureHandle = resolveTexLike(pv.baseColorTexture, 'TextureAsset');
-  const metallicRoughnessTextureHandle = resolveTexLike(
-    pv.metallicRoughnessTexture,
-    'TextureAsset',
-  );
-  const normalTextureHandle = resolveTexLike(pv.normalTexture, 'TextureAsset');
-  const samplerHandle = resolveTexLike(pv.sampler, 'SamplerAsset');
-  const emissiveTextureHandle = resolveTexLike(pv.emissiveTexture, 'TextureAsset');
-  const occlusionTextureHandle = resolveTexLike(pv.occlusionTexture, 'TextureAsset');
+  const baseColorTextureHandle =
+    typeof pv.baseColorTexture === 'number'
+      ? (pv.baseColorTexture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+      : undefined;
+  const metallicRoughnessTextureHandle =
+    typeof pv.metallicRoughnessTexture === 'number'
+      ? (pv.metallicRoughnessTexture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+      : undefined;
+  const normalTextureHandle =
+    typeof pv.normalTexture === 'number'
+      ? (pv.normalTexture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+      : undefined;
+  const samplerHandle =
+    typeof pv.sampler === 'number'
+      ? (pv.sampler as unknown as Handle<'SamplerAsset', 'unmanaged'>)
+      : undefined;
+  const emissiveTextureHandle =
+    typeof pv.emissiveTexture === 'number'
+      ? (pv.emissiveTexture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+      : undefined;
+  const occlusionTextureHandle =
+    typeof pv.occlusionTexture === 'number'
+      ? (pv.occlusionTexture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+      : undefined;
   const emissivePv = pv.emissive as readonly number[] | undefined;
   return {
     baseColor,
@@ -1533,36 +1523,6 @@ export function extractFrame(
 
       const resultLightViewProjs: Float32Array[] = [];
 
-      // bug-20260619 RC-2 (AC-05): toward-light Z reach. A per-cascade ortho
-      // whose near/far is fit to ONLY that cascade's visible slice corners
-      // clips out any caster sitting BETWEEN the light and the slice (it lands
-      // in front of the ortho near plane -> z < 0 -> never written to the
-      // depth tile -> the ground it should shadow reads "unoccluded"). The N=4
-      // case is worse than N=1 because thinner near slices give a tighter Z.
-      // Fix: extend the near (toward-light) bound of EVERY cascade to the
-      // toward-light extreme of the WHOLE shadow frustum (sNear..sFar), so any
-      // caster within the shadowed depth range is admitted; X/Y stays per
-      // cascade tight (no resolution loss) and the PSSM split is untouched.
-      // In this RH light view, larger light-space z == closer to the light (see
-      // lookAt forward = eye-target), so the full-frustum max-z is the toward-
-      // light reach used as -maxZ (the ortho near plane) for each cascade.
-      let lightSpaceMaxZFull = -Infinity;
-      if (cameraVP !== undefined && cameraData !== undefined) {
-        const fullCorners = computeFrustumCorners(
-          cameraVP,
-          cameraData.near,
-          cameraData.far,
-          sNear,
-          sFar,
-          cameraData.projection,
-        );
-        for (const ws of fullCorners) {
-          const ls = vec3.create();
-          mat4.transformVec3(ls, lightView, ws);
-          if ((ls[2] ?? 0) > lightSpaceMaxZFull) lightSpaceMaxZFull = ls[2] ?? 0;
-        }
-      }
-
       // Pre-allocate 4-cascade array; fill in the effective cascades.
       for (let cIdx = 0; cIdx < 4; cIdx++) {
         if (cIdx >= cascadeCount || cameraVP === undefined || cameraData === undefined) {
@@ -1606,13 +1566,9 @@ export function extractFrame(
           if ((ls[2] ?? 0) > maxZ) maxZ = ls[2] ?? 0;
         }
 
-        // Orthographic projection from light-space AABB. RC-2 (AC-05): use the
-        // whole-frustum toward-light extreme for the near (toward-light) bound
-        // so casters between the light and this slice are captured; keep the
-        // per-cascade far (minZ) and X/Y for tight depth precision/resolution.
-        const nearZ = Math.max(maxZ, lightSpaceMaxZFull);
+        // Orthographic projection from light-space AABB.
         const orthoProj = mat4.create();
-        mat4.orthographic(orthoProj, minX, maxX, minY, maxY, -nearZ, -minZ);
+        mat4.orthographic(orthoProj, minX, maxX, minY, maxY, -maxZ, -minZ);
 
         // lightViewProj = orthoProj * lightView -- pure clip-space [-1,1]
         // matrix. The atlas tile placement is handled by the per-cascade
@@ -1773,21 +1729,12 @@ export function extractFrame(
   queryRun(skylightQuery, world, (bundle) => {
     const s = bundle.Skylight;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
-      // cubemap is OPTIONAL: an omitted field zero-inits to handle 0, which
-      // record treats as "no cubemap" -> solid-color ambient via the white
-      // fallback cube. A Skylight WITHOUT a cubemap is still a valid snapshot
-      // (the prior `cubemapRaw !== undefined` gate dropped color-only
-      // skylights, leaving the scene black -- the downstream gap #4).
-      const cubemapRaw = s.cubemap?.get(i);
+      const cubemapRaw = s.cubemap?.[i];
       const intensity = s.intensity?.[i] ?? 1.0;
-      const colorR = s.colorR?.[i] ?? 1.0;
-      const colorG = s.colorG?.[i] ?? 1.0;
-      const colorB = s.colorB?.[i] ?? 1.0;
       skylightCount += 1;
-      if (skylight === undefined) {
+      if (skylight === undefined && cubemapRaw !== undefined) {
         skylight = {
-          cubemapHandle: cubemapRaw !== undefined ? Math.round(cubemapRaw) : 0,
-          color: [colorR, colorG, colorB],
+          cubemapHandle: Math.round(cubemapRaw),
           intensity,
         };
       }
@@ -1803,7 +1750,7 @@ export function extractFrame(
   queryRun(skyboxQuery, world, (bundle) => {
     const s = bundle.SkyboxBackground;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const cubemapRaw = s.cubemap?.get(i);
+      const cubemapRaw = s.cubemap?.[i];
       const modeRaw = s.mode?.[i] ?? 0;
       skyboxCount += 1;
       if (skybox === undefined && cubemapRaw !== undefined) {
@@ -1908,7 +1855,7 @@ export function extractFrame(
     // feat-20260608 M2 / w11: `materials` is the slot-id u32 column; the
     // actual handle list is resolved per-entity via `_getArrayView` below.
     // feat-20260614 M4 / D-4: bundle exposes ManagedColumnReader for the
-    // variable `array<shared<MaterialAsset>>` column -- read slot ids via
+    // variable `array<handle<MaterialAsset>>` column -- read slot ids via
     // .get(i); mutation flows through world.set / world.push.
     const mMaterials = mr.materials;
     const mFrustumCulled = mr.frustumCulled;
@@ -1983,15 +1930,15 @@ export function extractFrame(
 
       // count-mismatch validation: materials.length must equal submeshes.length
       // (plan-strategy §2 D-3 read-side interception)
-      const fAssetHandleVal = fAssetHandle?.get(i);
+      const fAssetHandleVal = fAssetHandle?.[i];
       if (
         fAssetHandleVal !== undefined &&
         fAssetHandleVal !== 0 &&
         assets !== undefined &&
         assets !== null
       ) {
-        const meshHandle = toShared<'MeshAsset'>(fAssetHandleVal);
-        const meshRes = resolveAssetHandle<Asset>(world, meshHandle);
+        const meshHandle = toUnmanaged<'MeshAsset'>(fAssetHandleVal);
+        const meshRes = assets.get<Asset>(meshHandle);
         if (meshRes.ok && meshRes.value.kind === 'mesh') {
           const meshAsset = meshRes.value as { submeshes: { length: number } };
           const submeshCount = meshAsset.submeshes?.length ?? 0;
@@ -2035,14 +1982,14 @@ export function extractFrame(
         // case B: missing-spec sentinel -> mid-grey defaultMaterialSnapshot.
         materialSnap = defaultMaterialSnapshot();
       } else {
-        const tagged = toShared<'MaterialAsset'>(handleRaw);
-        const res = resolveAssetHandle(world, tagged);
+        const tagged = toUnmanaged<'MaterialAsset'>(handleRaw);
+        const res = assets.get<MaterialAsset>(tagged);
         if (!res.ok) {
           if (isRenderable) {
             const rhiErr = new RhiError({
               code: 'asset-not-registered',
               expected: 'MeshRenderer.material in AssetRegistry',
-              hint: 'catalog the material via assetRegistry.catalog(guid, asset) + world.allocSharedRef before spawn, or remove the material field to fall back to default',
+              hint: 'register material via assetRegistry.register(asset) before spawn, or remove the material field to fall back to default',
               detail: { assetHandle: handleRaw },
             });
             worldInternal._routeError(rhiErr as unknown as Error, {
@@ -2060,7 +2007,7 @@ export function extractFrame(
           // read-through _materialWalk accessor (plan-strategy D-6).
           // The old direct asset.passes / asset.paramValues read never
           // walked the parent chain, causing broken-inheritance (root cause).
-          const resolvedResult = walkMaterialPassesOverSharedRefs(world, tagged, assets);
+          const resolvedResult = assets._materialWalk(tagged);
           if (!resolvedResult.ok) {
             // AC-09 / S-7 / q8=A: passes-empty or cycle must fire structured
             // error through _routeError (same routing as asset-not-registered
@@ -2132,8 +2079,8 @@ export function extractFrame(
             const hasSkinSkel =
               hasSkin &&
               skinSkeletonView !== undefined &&
-              skinSkeletonView.get(i) !== undefined &&
-              skinSkeletonView.get(i) !== 0;
+              skinSkeletonView[i] !== undefined &&
+              skinSkeletonView[i] !== 0;
             const isPbrSkinMaterial = firstPassShader === 'forgeax::pbr-skin';
             if (hasSkinSkel && !isPbrSkinMaterial) {
               worldInternal._routeError(
@@ -2149,11 +2096,8 @@ export function extractFrame(
               continue;
             }
             if (isPbrSkinMaterial && fAssetHandleVal !== undefined && fAssetHandleVal !== 0) {
-              const meshHandleForSkinCheck = toShared<'MeshAsset'>(fAssetHandleVal);
-              const meshResForSkinCheck = resolveAssetHandle<MeshAsset>(
-                world,
-                meshHandleForSkinCheck,
-              );
+              const meshHandleForSkinCheck = toUnmanaged<'MeshAsset'>(fAssetHandleVal);
+              const meshResForSkinCheck = assets.get<MeshAsset>(meshHandleForSkinCheck);
               if (meshResForSkinCheck.ok) {
                 const meshAttrs = meshResForSkinCheck.value.attributes;
                 const hasSkinIdx = meshAttrs.skinIndex !== undefined;
@@ -2196,21 +2140,9 @@ export function extractFrame(
           const validateTextureHandle = (
             fieldName: string,
             raw: unknown,
-          ): Handle<'TextureAsset', 'shared'> | undefined => {
-            // feat-20260614 M8 (D-19): a string value is an embedded texture
-            // GUID; resolve it to a column handle via catalog + allocSharedRef
-            // before validation. A number is an already-minted column handle.
-            let handle: Handle<'TextureAsset', 'shared'>;
-            if (typeof raw === 'string') {
-              if (assets === null || assets === undefined) return undefined;
-              const payload = assets.lookup(raw);
-              if (payload === undefined) return undefined;
-              handle = world.allocSharedRef('TextureAsset', payload);
-            } else if (typeof raw === 'number') {
-              handle = raw as unknown as Handle<'TextureAsset', 'shared'>;
-            } else {
-              return undefined;
-            }
+          ): Handle<'TextureAsset', 'unmanaged'> | undefined => {
+            if (typeof raw !== 'number') return undefined;
+            const handle = raw as unknown as Handle<'TextureAsset', 'unmanaged'>;
             if (assets === null || assets === undefined) return handle;
             const declaredFields =
               firstPassShader !== undefined
@@ -2225,27 +2157,9 @@ export function extractFrame(
             // drop the slot so the record stage uses the default white.
             if (!declaredFields.has(fieldName)) return undefined;
             // Field declared as texture: verify the handle's asset kind.
-            const assetRes = resolveAssetHandle(world, handle);
-            if (!assetRes.ok) return undefined;
-            const kind = (assetRes.value as { kind?: string }).kind;
+            const kind = assets.kindOf(handle);
             if (kind !== 'texture') return undefined;
             return handle;
-          };
-          // feat-20260614 M8 (D-19): resolve a sampler / texture paramValue
-          // that may be an embedded GUID string (catalog + allocSharedRef) or
-          // an already-minted column handle (number passthrough).
-          const resolveParamHandle = <B extends string>(
-            raw: unknown,
-            brand: B,
-          ): Handle<B, 'shared'> | undefined => {
-            if (typeof raw === 'number') return raw as unknown as Handle<B, 'shared'>;
-            if (typeof raw === 'string') {
-              if (assets === null || assets === undefined) return undefined;
-              const payload = assets.lookup(raw);
-              if (payload === undefined) return undefined;
-              return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
-            }
-            return undefined;
           };
           const baseColorTextureHandle = validateTextureHandle(
             'baseColorTexture',
@@ -2256,7 +2170,10 @@ export function extractFrame(
             pv.metallicRoughnessTexture,
           );
           const normalTextureHandle = validateTextureHandle('normalTexture', pv.normalTexture);
-          const samplerHandle = resolveParamHandle(pv.sampler, 'SamplerAsset');
+          const samplerHandle =
+            typeof pv.sampler === 'number'
+              ? (pv.sampler as unknown as Handle<'SamplerAsset', 'unmanaged'>)
+              : undefined;
           const emissiveTextureHandle = validateTextureHandle(
             'emissiveTexture',
             pv.emissiveTexture,
@@ -2271,8 +2188,14 @@ export function extractFrame(
             // Sprite pass-based material: read spriteFields from paramValues
             // (plan-strategy D-3/D-7). Record stage still routes on
             // shadingModel='sprite' and reads spriteFields for UBO layout.
-            const tex = resolveParamHandle(pv.texture, 'TextureAsset');
-            const smp = resolveParamHandle(pv.sampler, 'SamplerAsset');
+            const tex =
+              typeof pv.texture === 'number'
+                ? (pv.texture as unknown as Handle<'TextureAsset', 'unmanaged'>)
+                : undefined;
+            const smp =
+              typeof pv.sampler === 'number'
+                ? (pv.sampler as unknown as Handle<'SamplerAsset', 'unmanaged'>)
+                : undefined;
             // feat-20260527-sprite-nineslice M4 / w17 (AC-14): per-entity
             // SpriteRegionOverride displaces the asset-side region. Read the
             // 4 floats via `_getArrayView` for the row-window slice (the
@@ -2472,7 +2395,7 @@ export function extractFrame(
         // extractFrame entry; per-entity allocate + writeJointPalette here).
         let skinSlice: SkinPaletteSlice | undefined;
         if (hasSkin) {
-          const skeletonHandleRaw = skinSkeletonView?.get(i);
+          const skeletonHandleRaw = skinSkeletonView?.[i];
           if (
             skeletonHandleRaw !== undefined &&
             skeletonHandleRaw !== 0 &&
@@ -2494,8 +2417,8 @@ export function extractFrame(
               continue;
             }
             // (a) Resolve skeleton asset; on failure -> skeleton-resolve-failed.
-            const skeletonHandle = toShared<'SkeletonAsset'>(skeletonHandleRaw);
-            const skeletonRes = resolveAssetHandle<SkeletonAsset>(world, skeletonHandle);
+            const skeletonHandle = toUnmanaged<'SkeletonAsset'>(skeletonHandleRaw);
+            const skeletonRes = assets.get<SkeletonAsset>(skeletonHandle);
             if (!skeletonRes.ok || skeletonRes.value.kind !== 'skeleton') {
               worldInternal._routeError(
                 new SkeletonResolveFailedError(
@@ -2608,11 +2531,11 @@ export function extractFrame(
         if (assets !== undefined && assets !== null && materialsView !== undefined) {
           for (let mi = 1; mi < materialsView.length; mi++) {
             const subHandle = materialsView[mi] ?? 0;
-            materialsArr.push(resolveMaterialSnapshot(subHandle, world, assets));
+            materialsArr.push(resolveMaterialSnapshot(subHandle, assets));
           }
         }
         const baseRenderable: RenderableSnapshot = {
-          assetHandle: Math.round(fAssetHandle?.get(i) ?? 0),
+          assetHandle: Math.round(fAssetHandle?.[i] ?? 0),
           transform: transformSnap,
           material: materialSnap,
           materials: materialsArr,
@@ -2627,14 +2550,10 @@ export function extractFrame(
         // AABB are always visible.
         const frustumCulledVal = mFrustumCulled?.[i] ?? 1;
         if (frustumCulledVal !== 0) {
-          const assetHandleRaw = Math.round(fAssetHandle?.get(i) ?? 0);
-          // feat-20260614 M8 (D-15/D-19): the mesh AABB resolves entirely
-          // through `resolveAssetHandle(world, ...)` (builtin slots + world
-          // sharedRefs); it no longer touches AssetRegistry, so the cull gate
-          // must not require `assets` to be present.
-          if (assetHandleRaw !== 0) {
-            const taggedMesh = toShared<'MeshAsset'>(assetHandleRaw);
-            const meshRes = resolveAssetHandle(world, taggedMesh);
+          const assetHandleRaw = Math.round(fAssetHandle?.[i] ?? 0);
+          if (assetHandleRaw !== 0 && assets !== undefined && assets !== null) {
+            const taggedMesh = toUnmanaged<'MeshAsset'>(assetHandleRaw);
+            const meshRes = assets.get<MeshAsset>(taggedMesh);
             if (meshRes.ok) {
               const localAabb = (meshRes.value as MeshAsset).aabb;
               if (localAabb !== undefined) {

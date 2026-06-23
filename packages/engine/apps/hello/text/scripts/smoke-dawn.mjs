@@ -210,17 +210,21 @@ if (FALSIFY === 'atlas-empty') {
   fontHandle = 0;
 } else {
   await registerSharedSampler(assets);
-  fontHandle = await registerBakedFont(world, assets);
+  fontHandle = await registerBakedFont(assets);
 }
 
 const textEntities = spawnTextScenes(world, fontHandle).map((e) => e);
 
 // Occluder cube (AC-11) + light + camera mirror the demo.
-const cubeMat = world.allocSharedRef('MaterialAsset', {
+const cubeMat = assets.register({
   kind: 'material',
   passes: [{ name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 }],
   paramValues: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
 });
+if (!cubeMat.ok) {
+  originalConsoleError(`[smoke] FAIL - cube material register: ${cubeMat.error.code}`);
+  process.exit(1);
+}
 world.spawn(
   { component: Transform, data: { posX: 2.2, posY: -1.0, posZ: 1.5, quatW: 1, scaleX: 0.5, scaleY: 0.5, scaleZ: 0.5 } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -383,9 +387,7 @@ async function registerSharedSampler(assets) {
   const { AssetGuid } = await import('@forgeax/engine-pack/guid');
   const guidParsed = AssetGuid.parse(SAMPLER_GUID);
   if (!guidParsed.ok) throw new Error(`SAMPLER_GUID parse failed: ${guidParsed.error.code}`);
-  // D-19: catalog the sampler under its GUID so the FontAsset's samplerGuid
-  // resolves via assets.lookup at glyph-layout time. catalog stores payload.
-  assets.catalog(guidParsed.value, {
+  return assets.registerWithGuid(guidParsed.value, {
     kind: 'sampler',
     addressModeU: 'clamp-to-edge',
     addressModeV: 'clamp-to-edge',
@@ -412,11 +414,11 @@ function spawnTextScenes(world, fontHandle) {
   return out;
 }
 
-async function registerBakedFont(world, assets) {
+async function registerBakedFont(assets) {
   // Read pre-baked DejaVu Sans Mono atlas + payload from forgeax-engine-assets.
   // The .font.pack.json shape is what loadFontAsset expects (atlasGuid +
   // samplerGuid + glyphs + common); we just need to register the same POD
-  // directly through world.allocSharedRef('FontAsset', ...). The atlas PNG is
+  // directly through assets.register({kind:'font'...}). The atlas PNG is
   // decoded to RGBA via @forgeax/engine-image (loadUpng).
   const repoRoot = resolve(here, '..', '..', '..', '..');
   const fontDir = resolve(repoRoot, 'forgeax-engine-assets', 'dejavu-fonts');
@@ -427,16 +429,7 @@ async function registerBakedFont(world, assets) {
   const upng = await loadUpng();
   const decoded = upng.decode(atlasPngBytes, { useTArray: true, formatAsRGBA: true });
 
-  // D-19: FontAsset.atlas / .sampler are GUID strings (resolved via
-  // assets.lookup at glyph-layout time), so catalog the atlas texture under
-  // the pack payload's atlasGuid and reuse the payload's GUID fields directly.
-  const fontPayload = packJson.assets[0].payload;
-  const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-  const atlasGuidParsed = AssetGuid.parse(fontPayload.atlasGuid);
-  if (!atlasGuidParsed.ok) throw new Error(`atlasGuid parse failed: ${atlasGuidParsed.error.code}`);
-  const samplerGuidParsed = AssetGuid.parse(fontPayload.samplerGuid);
-  if (!samplerGuidParsed.ok) throw new Error(`samplerGuid parse failed: ${samplerGuidParsed.error.code}`);
-  assets.catalog(atlasGuidParsed.value, {
+  const atlasHandle = assets.register({
     kind: 'texture',
     width: decoded.width,
     height: decoded.height,
@@ -444,15 +437,29 @@ async function registerBakedFont(world, assets) {
     data: decoded.data,
     colorSpace: 'linear',
     mipmap: false,
-  });
+  }).unwrap();
 
-  return world.allocSharedRef('FontAsset', {
+  // The shared sampler is registered with SAMPLER_GUID via registerSharedSampler.
+  // We re-resolve it from the registry by re-registering (idempotent through
+  // registerWithGuid -- already wired in registerSharedSampler caller above).
+  // For the FontAsset payload we need the live sampler Handle, which we have
+  // already registered. Look it up by GUID.
+  const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+  const samplerGuidParsed = AssetGuid.parse(SAMPLER_GUID);
+  if (!samplerGuidParsed.ok) throw new Error(`SAMPLER_GUID parse failed: ${samplerGuidParsed.error.code}`);
+  const samplerHandleRes = await assets.loadByGuid(samplerGuidParsed.value);
+  if (!samplerHandleRes.ok) {
+    throw new Error(`sampler loadByGuid failed: ${samplerHandleRes.error.code}`);
+  }
+
+  const fontPayload = packJson.assets[0].payload;
+  return assets.register({
     kind: 'font',
-    atlas: atlasGuidParsed.value,
-    sampler: samplerGuidParsed.value,
+    atlas: atlasHandle,
+    sampler: samplerHandleRes.value,
     glyphs: fontPayload.glyphs,
     common: fontPayload.common,
-  });
+  }).unwrap();
 }
 
 // Count "text" pixels across the whole frame: bright pixels that are NOT the

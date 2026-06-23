@@ -36,7 +36,7 @@ import {
   PointLight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, RenderPipelineAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // 2. scene constants — parity with 5.8 deferred-shading + 5.9 SSAO config
@@ -165,14 +165,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
   }
 
-  const world = app.world;
-
-  // AC-01: install HDRP with config.ssao. feat-20260614 M8 (D-19):
-  // installPipeline takes the RenderPipelineAsset POD directly (no register
-  // round-trip; the AssetRegistry holds no handle concept). Type narrowing
-  // from pipelineId, no `as` assertion.
+  // AC-01: register HDRP with config.ssao — no `as` assertion, type narrowing from pipelineId.
   const ssaoEnabled = FALSIFY !== 'ssao-off';
-  const installRes = app.renderer.installPipeline({
+  const hdrpAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: HDRP_PIPELINE_ID,
     config: {
@@ -180,6 +175,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       ssao: ssaoEnabled ? { ...SSAO_CONFIG } : { enabled: false },
     },
   });
+  if (!hdrpAssetRes.ok) {
+    console.error('[learn-render 5.9 ssao] HDRP asset register failed:', hdrpAssetRes.error.code);
+    return;
+  }
+  const hdrpHandle = hdrpAssetRes.value;
+
+  const installRes = app.renderer.installPipeline(hdrpHandle);
   if (!installRes.ok) {
     console.error(
       '[learn-render 5.9 ssao] installPipeline failed:',
@@ -189,12 +191,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Floor material. feat-20260614 M8 (D-17): mint a user-tier column handle
-  // directly via world.allocSharedRef (returns a bare Handle, not a Result).
-  const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
+  const world = app.world;
+
+  // Floor material.
+  const floorMatRes = assets.register<MaterialAsset>(
     Materials.standard({ baseColor: FLOOR_COLOR }),
   );
+  if (!floorMatRes.ok) {
+    console.error('[learn-render 5.9 ssao] floor material register failed:', floorMatRes.error.code);
+    return;
+  }
+  const floorMatHandle = floorMatRes.value;
 
   // Floor: large thin slab below the cube grid. Distinct from 5.8 scene —
   // 5.9 needs explicit ground plane so AO at object-floor contact is visible.
@@ -223,7 +230,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   ];
 
   // Spawn 9 cubes in 3x3 grid at y=-0.5, spacing 3.0 (parity with 5.8).
-  const cubeHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+  const cubeHandles: Handle<'MaterialAsset', 'unmanaged'>[] = [];
   let idx = 0;
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 3; col++) {
@@ -231,11 +238,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const cz = (row - 1) * CUBE_SPACING;
       const [r, g, b] = cubeColors[idx]!;
 
-      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-        'MaterialAsset',
+      const matRes = assets.register<MaterialAsset>(
         Materials.standard({ baseColor: [r, g, b, 1] }),
       );
-      cubeHandles.push(matHandle);
+      if (!matRes.ok) {
+        console.error('[learn-render 5.9 ssao] cube material register failed:', matRes.error.code);
+        return;
+      }
+      cubeHandles.push(matRes.value);
 
       world.spawn(
         {
@@ -247,7 +257,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matHandle] } },
+        { component: MeshRenderer, data: { materials: [matRes.value] } },
       ).unwrap();
       idx++;
     }

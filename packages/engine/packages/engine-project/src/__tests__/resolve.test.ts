@@ -1,5 +1,5 @@
 // resolve.test.ts — w5: resolveDefaultScene double-injection tests
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { resolveDefaultScene } from '../loader.js';
 
 // ── helpers ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CheckCircle2, Copy } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 
 // Strip markdown syntax to plain text for clipboard. Users paste into
 // Slack/Notion/editors that don't auto-parse markdown — `**bold**` showing
@@ -43,7 +42,6 @@ function stripMarkdown(s: string): string {
  *   size — visual variant ('md' default; 'sm' uses .mp-sm-* CSS variants)
  */
 export function KcCopyBtn({ text, size = 'md' }: { text: string; size?: 'sm' | 'md' }) {
-  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const onCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -60,7 +58,7 @@ export function KcCopyBtn({ text, size = 'md' }: { text: string; size?: 'sm' | '
   };
   const smCls = size === 'sm' ? ' mp-sm' : '';
   return (
-    <button type="button" className={`kc-copy-btn${smCls}`} onClick={onCopy} title={t('kcCopyBtn.copyMessage')}>
+    <button type="button" className={`kc-copy-btn${smCls}`} onClick={onCopy} title="复制整段消息">
       {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
       <span>{copied ? 'Copied' : 'Copy'}</span>
     </button>

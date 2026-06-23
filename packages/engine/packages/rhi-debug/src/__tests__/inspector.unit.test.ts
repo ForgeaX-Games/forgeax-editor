@@ -201,8 +201,8 @@ describe('inspectAt fields cropping', () => {
     if (result.ok) {
       const report = result.value;
       expect(report.drawCall).toBeDefined();
-      expect(report.drawCall?.pipelineKind).toBe('render');
-      expect(report.drawCall?.vertexCount).toBe(6);
+      expect(report.drawCall.pipelineKind).toBe('render');
+      expect(report.drawCall.vertexCount).toBe(6);
       // bindings should NOT be present
       expect((report as unknown as Record<string, unknown>).bindings).toBeUndefined();
       // rt should NOT be present
@@ -698,10 +698,10 @@ describe('compute pass inspect', () => {
     if (result.ok) {
       const report = result.value;
       expect(report.drawCall).toBeDefined();
-      expect(report.drawCall?.pipelineKind).toBe('compute');
-      expect(report.drawCall?.dispatchX).toBe(8);
-      expect(report.drawCall?.dispatchY).toBe(4);
-      expect(report.drawCall?.dispatchZ).toBe(2);
+      expect(report.drawCall.pipelineKind).toBe('compute');
+      expect(report.drawCall.dispatchX).toBe(8);
+      expect(report.drawCall.dispatchY).toBe(4);
+      expect(report.drawCall.dispatchZ).toBe(2);
     }
   });
 });
@@ -927,10 +927,6 @@ describe('I-7: RT readback resolves real attachment dimensions (round 1 fix)', (
   it('resolves 800x600 (hello-cube canvas) from createTexture event', async () => {
     const events = makeAttachmentEvents(800, 600);
     const handleMap = new Map<string, unknown>();
-    // RT readback walks createTextureView (tv:rt) back to its source texture
-    // (tex:rt) and reads that -- copyTextureToBuffer needs the GPUTexture, not
-    // the view (m4 / w20 fix in readbackAndEncodePng). Register the source.
-    handleMap.set('tex:rt', { __brand: 'Texture' });
     handleMap.set('tv:rt', { __brand: 'TextureView' });
     const replay = makeStubReplayWithMocks({ events, handleMap });
     const device = makeSizedMockDevice(800, 600);
@@ -951,8 +947,6 @@ describe('I-7: RT readback resolves real attachment dimensions (round 1 fix)', (
   it('resolves 1920x1080 (Sponza canvas) from createTexture event', async () => {
     const events = makeAttachmentEvents(1920, 1080);
     const handleMap = new Map<string, unknown>();
-    // See 800x600 case: walk resolves tv:rt -> tex:rt; register the source.
-    handleMap.set('tex:rt', { __brand: 'Texture' });
     handleMap.set('tv:rt', { __brand: 'TextureView' });
     const replay = makeStubReplayWithMocks({ events, handleMap });
     const device = makeSizedMockDevice(1920, 1080);

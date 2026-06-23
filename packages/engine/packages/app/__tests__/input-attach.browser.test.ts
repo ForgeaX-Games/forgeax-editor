@@ -26,8 +26,7 @@
 // Anchors:
 //   - AC-05 four-step input ergonomics + removeSystem err path:
 //       1. createApp(canvas) auto attachBrowserInputBackend(canvas)
-//       2. createApp(canvas) auto insertResource(INPUT_BACKEND_KEY, backend) +
-//          addSystem(InputFrameStartScan)
+//       2. createApp(canvas) auto addSystem(createFrameStartScanSystem(backend, world))
 //       3. app.start drives one frame; world.getResource('InputSnapshot') is non-null
 //       4. app.stop calls detach() (DOM listener count returns to 0) +
 //          world.removeSystem(FRAME_START_SCAN_SYSTEM_NAME)
@@ -38,9 +37,9 @@
 //     app.input === undefined.
 //   - plan-strategy D-4 + R-4: removeSystem failure goes through the same
 //     cleanup() funnel as device-lost (M4 reuses the same internal helper).
-//   - research engine-input-public-contract.md: the InputFrameStartScan token
-//     reads INPUT_BACKEND_KEY; FRAME_START_SCAN_SYSTEM_NAME literal ==
-//     'input-frame-start-scan'.
+//   - research engine-input-public-contract.md §createFrameStartScanSystem
+//     signature SSOT: double-arg (backend, world); FRAME_START_SCAN_SYSTEM_NAME
+//     literal == 'input-frame-start-scan'.
 //
 // charter awareness:
 //   - P3 explicit failure: removeSystem err is observable via onError fan-out
