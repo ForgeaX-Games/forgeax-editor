@@ -8,9 +8,24 @@ import { AssetCard } from './AssetCard';
 import { Breadcrumb } from './Breadcrumb';
 
 type ViewMode = 'list' | 'grid';
-type KindFilter = 'all' | 'level' | 'character' | 'material' | 'mesh' | 'texture' | 'scene' | 'animation';
 
-const FILTER_KINDS: KindFilter[] = ['all', 'level', 'material', 'mesh', 'texture'];
+const ALL_ASSET_KINDS = [
+  'mesh', 'texture', 'cube-texture', 'sampler', 'material', 'scene',
+  'shader', 'skeleton', 'skin', 'animation-clip', 'audio', 'font',
+  'render-pipeline', 'tileset',
+] as const;
+
+type AssetKind = (typeof ALL_ASSET_KINDS)[number];
+type KindFilter = 'all' | AssetKind;
+
+const KIND_LABELS: Record<string, string> = {
+  all: '⊕ All',
+  mesh: '◫ Mesh', texture: '🖼 Texture', 'cube-texture': '🧊 Cube Texture',
+  sampler: '⚙ Sampler', material: '🎨 Material', scene: '🗺 Scene',
+  shader: '📜 Shader', skeleton: '🦴 Skeleton', skin: '🩻 Skin',
+  'animation-clip': '🎬 Animation Clip', audio: '🔊 Audio', font: '🔤 Font',
+  'render-pipeline': '🔧 Render Pipeline', tileset: '🧱 Tileset',
+};
 
 export function AssetsPanel() {
   const { t } = useTranslation();
@@ -163,13 +178,13 @@ export function AssetsPanel() {
             <input className="cb-search" placeholder={t('editor.assets.searchPlaceholder')}
               value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             <div className="cb-filters">
-              {FILTER_KINDS.map(k => (
-                <button key={k} type="button"
-                  className={`cb-filter-btn${kindFilter === k ? ' on' : ''}`}
-                  onClick={() => setKindFilter(k)}>
-                  {t(`editor.assets.filter.${k}`)}
-                </button>
-              ))}
+              <select className="cb-kind-select" value={kindFilter}
+                onChange={e => setKindFilter(e.target.value as KindFilter)}>
+                <option value="all">{KIND_LABELS.all}</option>
+                {ALL_ASSET_KINDS.map(k => (
+                  <option key={k} value={k}>{KIND_LABELS[k] ?? k}</option>
+                ))}
+              </select>
               <span className="cb-view-sep" />
               <button type="button" className={`cb-view-btn${viewMode === 'list' ? ' on' : ''}`}
                 onClick={() => setViewMode('list')} title="List">≡</button>
@@ -178,7 +193,7 @@ export function AssetsPanel() {
             </div>
           </div>
 
-          <div className="cb-content">
+          <div className="cb-content" onClick={(e) => { if (e.target === e.currentTarget) setAssetSelection(null); }}>
             {loading ? (
               <div className="muted" style={{ padding: '8px 10px' }}>loading…</div>
             ) : showingLevels ? (
@@ -207,7 +222,7 @@ export function AssetsPanel() {
                 {packs.length === 0 ? t('editor.assets.emptyPacks') : t('editor.assets.noResults')}
               </div>
             ) : viewMode === 'grid' ? (
-              <div className="cb-grid">
+              <div className="cb-grid" onClick={(e) => { if (e.target === e.currentTarget) setAssetSelection(null); }}>
                 {filtered.map(a => (
                   <AssetCard key={a.guid} asset={a}
                     selected={assetSel?.guid === a.guid}

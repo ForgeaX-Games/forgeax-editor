@@ -11,6 +11,7 @@ import {
   TimelinePanel,
   MaterialGraphPanel,
   LauncherPanel,
+  AssetInspectorPanel,
 } from '@forgeax/editor-panels';
 import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
@@ -33,6 +34,7 @@ const TITLE: Record<SyncPanelId, string> = {
   timeline: 'Timeline',
   matgraph: 'Mat Graph',
   launcher: 'Launcher',
+  'asset-inspector': 'Asset Inspector',
 };
 const BODY: Record<SyncPanelId, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
@@ -44,6 +46,7 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
   launcher: () => <LauncherPanel />,
   timeline: () => <TimelinePanel />,
   matgraph: () => <MaterialGraphPanel />,
+  'asset-inspector': () => <AssetInspectorPanel />,
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
