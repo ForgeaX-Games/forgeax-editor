@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { docToPack, packToDoc, isScenePack } from './scene-pack';
+import { docToPack, packToDoc, isScenePack, stableGuid } from './scene-pack';
 import { EditorBus } from './bus';
 import type { CommandOrigin, HistoryStep } from './bus';
 import { createDocument } from './document';
@@ -370,6 +370,12 @@ export function getSceneId(): string { return currentSceneId; }
 export interface SceneFileEntry { id: string; name?: string; pack: string; group?: 'scene' | 'asset' }
 let currentSceneFile: string | null = null;
 let sceneList: SceneFileEntry[] = [];
+// The active scene asset's STABLE GUID, captured from disk on load. A scene's
+// GUID is its identity (forge.json defaultScene / sibling level packs reference
+// it, ▶ Play's catalog resolves it) and must survive edits — moving an entity
+// must not mint a new GUID. Saving re-uses this so the pack on disk keeps the
+// GUID forge.json points at. Reset on every load attempt; null until known.
+let currentSceneGuid: string | null = null;
 const sceneListListeners = new Set<() => void>();
 function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
 function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${currentSceneId}`; }
@@ -642,12 +648,16 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
   const sourceDoc = duplicateCurrent ? bus.doc : createDocument();
-  const packContent = JSON.stringify(docToPack(sourceDoc), null, 2) + '\n';
+  const newPath = `.forgeax/games/${currentSceneId}/scenes/${slug}.pack.json`;
+  // A NEW level gets its own stable, path-derived GUID — never the source
+  // scene's GUID (duplicate must be a distinct asset) and never an order-derived
+  // one (which would drift on the first edit).
+  const packContent = JSON.stringify(docToPack(sourceDoc, stableGuid('scene|' + newPath)), null, 2) + '\n';
   try {
     const w1 = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: `.forgeax/games/${currentSceneId}/scenes/${slug}.pack.json`, content: packContent }),
+      body: JSON.stringify({ path: newPath, content: packContent }),
     });
     if (!w1.ok) return false;
   } catch { return false; }
@@ -712,10 +722,22 @@ function scenePath(): string | null {
 function legacyScenePath(): string | null {
   return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.json`;
 }
+/** The scene asset GUID to persist for the active scene. Prefers the GUID we
+ *  read from disk (the scene's stable identity, e.g. the one forge.json's
+ *  defaultScene points at); for a brand-new scene with no file yet, derives a
+ *  STABLE GUID from the scene path (NOT from doc.order, which churns on every
+ *  add/delete). Never returns the order-derived fallback for an existing scene —
+ *  that drift is exactly what broke ▶ Play resolution after an edit. */
+function sceneGuidForSave(): string | undefined {
+  if (currentSceneGuid) return currentSceneGuid;
+  const p = scenePath();
+  return p ? stableGuid('scene|' + p) : undefined;
+}
+
 /** The exact byte content saveDocToDisk would write for the current doc (used by
  *  the disk watcher to recognise its own echo). */
 function serializedPack(): string {
-  return JSON.stringify(docToPack(bus.doc), null, 2) + '\n';
+  return JSON.stringify(docToPack(bus.doc, sceneGuidForSave()), null, 2) + '\n';
 }
 
 /** Load the active game's scene from disk (native pack preferred, legacy
@@ -723,6 +745,10 @@ function serializedPack(): string {
 export async function loadDocFromDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
+  // Forget the previous scene's identity before loading a new one, so a failed
+  // load can't make us save under a stale GUID (sceneGuidForSave falls back to a
+  // path-derived stable GUID when this stays null).
+  currentSceneGuid = null;
   try {
     const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
     if (r.ok) {
@@ -730,6 +756,9 @@ export async function loadDocFromDisk(): Promise<boolean> {
       if (j.content) {
         const parsed = JSON.parse(j.content);
         if (isScenePack(parsed)) {
+          // Preserve the scene asset's GUID across edits (its stable identity).
+          const sceneAsset = parsed.assets.find((a) => a.kind === 'scene');
+          if (sceneAsset?.guid) currentSceneGuid = sceneAsset.guid;
           bus.doc = packToDoc(parsed);
           docVersion++;
           for (const fn of docListeners) fn();

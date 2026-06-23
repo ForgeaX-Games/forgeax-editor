@@ -137,8 +137,16 @@ function eulerToQuat(rx: number, ry: number, rz: number): [number, number, numbe
   ];
 }
 
-/** SceneDocument → native scene pack JSON. */
-export function docToPack(doc: SceneDocument): ScenePack {
+/** SceneDocument → native scene pack JSON.
+ *
+ *  `sceneGuid` pins the scene asset's identity. The scene's GUID is a STABLE
+ *  identity (referenced by `forge.json defaultScene`, by sibling level packs,
+ *  and resolved by ▶ Play's catalog) — it must NOT change when you move/add/
+ *  delete an entity. Callers pass the scene's existing on-disk GUID (or a
+ *  path-derived stable GUID for a brand-new scene). Only when no GUID is given
+ *  do we fall back to an order-derived value, which is unstable across edits and
+ *  must never be persisted for a scene that something else references. */
+export function docToPack(doc: SceneDocument, sceneGuid?: string): ScenePack {
   const matAssets = new Map<string, PackAsset>(); // guid → asset
   const matGuidByKey = new Map<string, string>();
   const sceneRefs: string[] = [];
@@ -179,7 +187,14 @@ export function docToPack(doc: SceneDocument): ScenePack {
       const key = matKey(material);
       let mg = matGuidByKey.get(key);
       if (mg === undefined) { mg = stableGuid('mat|' + key); matGuidByKey.set(key, mg); matAssets.set(mg, { guid: mg, kind: 'material', payload: matToPayload(material), refs: [] }); }
-      c.MeshRenderer = { material: refIdx(mg) };
+      // Engine #317 renamed MeshRenderer.material (single ref-int) ->
+      // MeshRenderer.materials ([ref-int]). ▶ Play instantiates the SAVED pack
+      // verbatim through the engine's strict component-schema validator, which
+      // rejects the obsolete singular `material` field (the
+      // MeshRenderer-field-unknown error → whole-scene instantiate aborts →
+      // FALLBACK). Persist the plural array form the engine expects (matches the
+      // working cow-survivor packs). packToDoc reads both for back-compat.
+      c.MeshRenderer = { materials: [refIdx(mg)] };
     }
     if (collider?.shape && collider.shape !== 'none') c.Collider = { shape: collider.shape, ...(collider.radius !== undefined ? { radius: collider.radius } : {}) };
     if (isLight) {
@@ -210,11 +225,13 @@ export function docToPack(doc: SceneDocument): ScenePack {
     }
   }
 
-  const sceneGuid = stableGuid('scene|' + (doc.order.join(',')));
+  // Stable identity wins; order-derived is the last-resort fallback for a scene
+  // nothing references yet (see doc comment above).
+  const guid = sceneGuid ?? stableGuid('scene|' + (doc.order.join(',')));
   // Engine #316 renamed SceneAsset.nodes -> entities (SceneNode -> SceneEntity).
   // The pack scanner schema (`packages/pack/src/schema-compiled.ts`) requires
   // `entities` on `kind: 'scene'` payloads.
-  const sceneAsset: PackAsset = { guid: sceneGuid, kind: 'scene', payload: { kind: 'scene', entities: nodes }, refs: sceneRefs };
+  const sceneAsset: PackAsset = { guid, kind: 'scene', payload: { kind: 'scene', entities: nodes }, refs: sceneRefs };
   return { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [sceneAsset, ...matAssets.values()] };
 }
 

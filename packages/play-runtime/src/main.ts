@@ -4,7 +4,7 @@ import {
   isLoadGameError,
   type GameEntry,
 } from '@forgeax/engine-app';
-import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
+import { perspective, Camera, Transform, createCylinderGeometry } from '@forgeax/engine-runtime';
 import {
   sendVagMessage,
   onVagMessage,
@@ -147,6 +147,28 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+
+// ── Studio cylinder mesh (host-side registration) ─────────────────────────
+// The editor offers cube/sphere/cylinder primitives. cube + sphere are engine
+// builtins that createApp auto-registers under their GUIDs, but the cylinder is
+// a Studio addition with no builtin — a scene that uses one carries the fixed
+// CYLINDER_GUID (scene-pack.ts) in its refs[]. The ENGINE TEMPLATE game
+// registers it itself before instantiating, but a game that relies on the
+// host's asset-first startup (ctx.defaultSceneRoot) never gets the chance: the
+// host resolves + instantiates defaultScene BEFORE the game's entry() runs, so
+// loadByGuid(scene) recurses into the cylinder ref, finds it absent (and
+// /__import is sidecar-only → 404), and fails with `asset-not-imported` →
+// resolveDefaultScene fails → the game falls back to a bare ground (cow-level's
+// "只剩几个灯光"). Register the cylinder HERE, right after createApp and before
+// any scene resolves, so every host-startup game with a cylinder resolves.
+const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
+{
+  const cylG = AssetGuid.parse(CYLINDER_GUID);
+  const cylGeo = createCylinderGeometry(0.5, 0.5, 1, 18);
+  if (cylG.ok && cylGeo.ok) {
+    (renderer.assets as unknown as { catalog: (g: unknown, p: unknown) => unknown }).catalog(cylG.value, cylGeo.value);
+  }
+}
 
 // ── Pack index (prod loadByGuid path) ──
 // Per-game index URL: /preview/pack-index/<gameId>.json
