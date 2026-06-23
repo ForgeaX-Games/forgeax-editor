@@ -614,7 +614,10 @@ export async function readPlayConfig(): Promise<PlayConfig> {
   const p = playConfigPath();
   if (!p) return { mode: 'campaign' };
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+    // optional=1: play-config.json is per-developer launcher state that may not
+    // exist yet (default = campaign). The flag makes the server return 200
+    // { exists:false } instead of 404, so an absent config logs no red error.
+    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
     if (r.ok) {
       const j = (await r.json()) as { content?: string };
       if (j.content) {
