@@ -13,4 +13,5 @@
 //
 // Re-exported for AppKit / standalone consumers.
 
-export type { GameContext } from './types';
+export type { BootstrapContext, GameContext } from './types';
+export type { BootstrapEntry, BootstrapEntry as EngineGameEntry } from './types';
