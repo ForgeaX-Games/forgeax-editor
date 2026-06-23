@@ -53,7 +53,7 @@ export function deleteManyCascade(ids: EntityId[]): void {
 // transaction can target it.
 export function groupSelected(ids: EntityId[]): void {
   if (ids.length < 1) return;
-  const newId = bus.doc.nextId;
+  const newId = bus.doc.nextLocalId;
   const primary = ids[ids.length - 1]!;
   const parent = bus.doc.entities[primary]?.parent ?? null;
   const commands: EditorCommand[] = [
@@ -106,7 +106,7 @@ export function hasClipboard(): boolean {
 function spawnClipboard(label: string, translate: (t: { x: number; z: number }) => { x: number; z: number }): void {
   const commands: EditorCommand[] = [];
   const ids: EntityId[] = [];
-  let next = bus.doc.nextId;
+  let next = bus.doc.nextLocalId;
   for (const c of clipboard) {
     const comps = structuredClone(c.components);
     const t = comps.Transform as { x?: number; y?: number; z?: number } | undefined;

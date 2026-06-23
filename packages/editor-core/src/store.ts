@@ -336,7 +336,7 @@ export function useMainConnected(): boolean {
 export function dispatch(cmd: EditorCommand): void {
   // In a popout the bus is a read-only mirror: forward the command to the main
   // window (the authority), which applies it and broadcasts the new snapshot
-  // back. We ids-allocated in ops.ts off the synced bus.doc.nextId, so they line
+  // back. We ids-allocated in ops.ts off the synced bus.doc.nextLocalId, so they line
   // up with the main doc at dispatch time.
   if (IS_POPOUT) { postSync({ t: 'cmd', cmd, origin: 'human' }); return; }
   bus.dispatch(cmd);
