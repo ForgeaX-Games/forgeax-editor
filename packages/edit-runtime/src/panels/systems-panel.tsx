@@ -18,6 +18,16 @@ import type { World } from '@forgeax/engine-ecs';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+/** Lightweight broken-module error shape (matches DiscoverError from
+ *  editor-core discoverer-errors.ts). Uses structural typing so any object
+ *  with .code / .expected / .hint is accepted — no deep import needed. */
+export interface BrokenModuleError {
+  readonly code: string;
+  readonly expected: string;
+  readonly hint: string;
+  readonly relPath?: string;
+}
+
 interface SystemEntry {
   name: string;
   active: boolean;
@@ -44,9 +54,15 @@ export interface SystemsPanelProps {
   world: World | null;
   /** Scene identifier for scoping the BroadcastChannel. */
   sceneId: string;
+  /**
+   * Broken module errors from the discoverer (w22). Each entry has .code,
+   * .expected, .hint, and optional .relPath for identifying the failing
+   * module. Null / empty = no broken modules.
+   */
+  brokenModules?: BrokenModuleError[] | null;
 }
 
-export function SystemsPanel({ world, sceneId }: SystemsPanelProps): ReactNode {
+export function SystemsPanel({ world, sceneId, brokenModules }: SystemsPanelProps): ReactNode {
   const [systems, setSystems] = useState<SystemEntry[]>([]);
   const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
 
@@ -140,6 +156,7 @@ export function SystemsPanel({ world, sceneId }: SystemsPanelProps): ReactNode {
 
   // ── Render ──
   const hasWorld = world !== null;
+  const hasBroken = brokenModules && brokenModules.length > 0;
 
   return (
     <div className="panel" data-testid="panel-systems">
@@ -190,6 +207,49 @@ export function SystemsPanel({ world, sceneId }: SystemsPanelProps): ReactNode {
           </div>
         );
       })}
+
+      {/* ── Broken module indicator (w27) ── */}
+      {hasBroken && (
+        <div
+          data-testid="broken-modules-section"
+          style={{
+            marginTop: 12,
+            borderTop: '1px solid var(--border, #444)',
+            paddingTop: 8,
+          }}
+        >
+          <h4 style={{ color: 'var(--accent-warn, #f90)' }}>
+            Broken Modules ({brokenModules!.length})
+          </h4>
+          {brokenModules!.map((err, i) => {
+            const rel = (err as { relPath?: string }).relPath ?? `#${i + 1}`;
+            const code = err.code ?? 'UNKNOWN';
+            return (
+              <div
+                key={i}
+                className="field broken-module"
+                data-testid={`broken-module-${i}`}
+                style={{
+                  padding: '4px 8px',
+                  marginBottom: 4,
+                  background: 'rgba(255,153,0,.08)',
+                  borderLeft: '3px solid var(--accent-warn, #f90)',
+                  borderRadius: 3,
+                  fontSize: 12,
+                }}
+              >
+                <div style={{ fontWeight: 600, color: 'var(--accent-warn, #f90)' }}>
+                  {rel}
+                </div>
+                <div style={{ opacity: 0.7 }}>Code: {code}</div>
+                {err.hint && (
+                  <div style={{ opacity: 0.6, fontStyle: 'italic' }}>{err.hint}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
