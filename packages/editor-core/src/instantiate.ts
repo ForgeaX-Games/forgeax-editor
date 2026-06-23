@@ -1,5 +1,6 @@
-// doc → world instantiator. Projects a SceneDocument onto a real forgeax world
-// using the SAME engine the game plays on. Called by:
+// session → world instantiator. Projects an EditSession (its authored entity
+// map) onto a real forgeax world using the SAME engine the game plays on.
+// Called by:
 //   • editor-runtime/engine/sync.ts  (rebuild on every doc edit — WYSIWYG)
 //   • games' main.ts                 (▶ Play: fetch scene.json → instantiate)
 // One mapping, two callers ⇒ what you edit is what plays.
@@ -25,7 +26,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { getLoadedGltf } from './gltf-runtime';
 import type {
-  SceneDocument,
+  EditSession,
   EntityId,
   TransformData,
   MeshData,
@@ -98,7 +99,7 @@ const DEG2RAD = Math.PI / 180;
  * Build the forgeax world from `doc`. Mesh geometries + materials are registered
  * on demand and cached for the call (identical materials share one handle).
  */
-export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): InstantiateResult {
+export function instantiateScene(doc: EditSession, ctx: InstantiateCtx): InstantiateResult {
   const { world } = ctx;
   const entities = new Map<EntityId, Entity>();
   const all: Entity[] = [];
@@ -287,7 +288,7 @@ function rgbIntensity(l: LightData): { colorR: number; colorG: number; colorB: n
 }
 
 // ── Native engine SceneAsset path ────────────────────────────────────────────
-// `buildNativeScene` projects a SceneDocument onto the engine's NATIVE scene
+// `buildNativeScene` projects an EditSession onto the engine's NATIVE scene
 // pipeline: it registers MeshAsset/MaterialAsset handles, builds a `SceneAsset`
 // POD ({kind:'scene', nodes:[{localId, components}]}) using the engine's own
 // component schemas (Transform posX.. / MeshFilter / MeshRenderer / DirectionalLight
@@ -331,7 +332,7 @@ export interface SceneEntitiesResult { entities: SceneEntity[]; colliders: Colli
  * handles via `caches` (persistent across calls → unchanged content keeps its
  * handle). Pure data: does NOT touch the world.
  */
-export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: SceneCaches = makeSceneCaches()): SceneEntitiesResult {
+export function sceneEntities(doc: EditSession, ctx: InstantiateCtx, caches: SceneCaches = makeSceneCaches()): SceneEntitiesResult {
   const { world } = ctx;
   const colliders: Collider[] = [];
   const entities: SceneEntity[] = [];
@@ -513,7 +514,7 @@ export interface NativeSceneResult {
 }
 
 /** Project `doc` into a registered native `SceneAsset` (localId = list index). */
-export function buildNativeScene(doc: SceneDocument, ctx: InstantiateCtx, caches?: SceneCaches): NativeSceneResult {
+export function buildNativeScene(doc: EditSession, ctx: InstantiateCtx, caches?: SceneCaches): NativeSceneResult {
   const { entities, colliders } = sceneEntities(doc, ctx, caches);
   const nodes = entities.map((e, i) => ({ localId: i, components: e.components }));
   const docIdByLocalId = new Map<number, EntityId>(entities.map((e, i) => [i, e.docId]));
@@ -598,7 +599,7 @@ function instantiateEntityList(entities: SceneEntity[], ctx: InstantiateCtx): { 
  * Used by games (▶ Play). The editor (✎ Edit) uses `sceneEntities` +
  * `instantiateSceneEntities` directly for incremental diff-patch.
  */
-export function instantiateNative(doc: SceneDocument, ctx: InstantiateCtx, caches?: SceneCaches): NativeInstance | null {
+export function instantiateNative(doc: EditSession, ctx: InstantiateCtx, caches?: SceneCaches): NativeInstance | null {
   const { entities, colliders } = sceneEntities(doc, ctx, caches);
   const r = instantiateEntityList(entities, ctx);
   return r ? { byDoc: r.byDoc, instanceRoot: r.instanceRoot, colliders } : null;

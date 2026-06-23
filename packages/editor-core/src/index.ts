@@ -2,7 +2,7 @@
 //
 // Re-exports:
 //   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
-//   Scene pack (docToPack, packToDoc, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
+//   Scene pack (sessionToPack, packToSession, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
 //   Instantiate (instantiateScene, buildNativeScene, etc.)
 //   glTF runtime (loadGltfRuntime, LoadedGltf, etc.)
 //   EditorCommand & types
@@ -28,8 +28,8 @@ export type { EditorCommand, CommandError, ApplyResult } from './types';
 
 // ── Scene pack ──
 export {
-  docToPack,
-  packToDoc,
+  sessionToPack,
+  packToSession,
   isScenePack,
   stableGuid,
   CUBE_GUID,
