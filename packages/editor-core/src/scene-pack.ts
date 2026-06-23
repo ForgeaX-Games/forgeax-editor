@@ -191,7 +191,7 @@ export function docToPack(doc: SceneDocument): ScenePack {
         // match instantiate.ts (Edit render) — saving the obsolete field made
         // ▶ Play's strict instantiate fail-fast (spawn-data-unknown-field),
         // aborting the WHOLE scene → empty Play (only ground).
-        if (light!.castShadow) c.DirectionalLightShadow = { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 };
+        if (light!.castShadow) Object.assign(c.DirectionalLight, { castShadow: true, cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 });
       } else {
         c.PointLight = { colorR: r, colorG: g, colorB: b, intensity, range: num(light!.range, 0) };
       }
@@ -257,7 +257,7 @@ export function packToDoc(pack: ScenePack): SceneDocument {
     const dl = cc.DirectionalLight as Record<string, number> | undefined;
     const pl = cc.PointLight as Record<string, number> | undefined;
     if (dl) {
-      docComps.Light = { type: 'directional', color: rgbaToHex([dl.colorR, dl.colorG, dl.colorB]), intensity: num(dl.intensity, 1), directionX: num(dl.directionX, -0.4), directionY: num(dl.directionY, -1), directionZ: num(dl.directionZ, -0.3), ...(cc.DirectionalLightShadow ? { castShadow: true } : {}) };
+      docComps.Light = { type: 'directional', color: rgbaToHex([dl.colorR, dl.colorG, dl.colorB]), intensity: num(dl.intensity, 1), directionX: num(dl.directionX, -0.4), directionY: num(dl.directionY, -1), directionZ: num(dl.directionZ, -0.3), ...(dl.castShadow ? { castShadow: true } : {}) };
     } else if (pl) {
       docComps.Light = { type: 'point', color: rgbaToHex([pl.colorR, pl.colorG, pl.colorB]), intensity: num(pl.intensity, 1), range: num(pl.range, 0) };
     }

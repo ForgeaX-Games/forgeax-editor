@@ -14,7 +14,6 @@ import {
   MeshFilter,
   MeshRenderer,
   DirectionalLight,
-  DirectionalLightShadow,
   PointLight,
   Materials,
   HANDLE_CUBE,
@@ -261,22 +260,10 @@ export function instantiateScene(doc: SceneDocument, ctx: InstantiateCtx): Insta
             directionY: num(light!.directionY, -1),
             directionZ: num(light!.directionZ, -0.3),
             ...rgbIntensity(light!),
+            castShadow: !!light!.castShadow,
+            ...(light!.castShadow ? { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 } : {}),
           },
         });
-        // Shadows require DirectionalLightShadow on the SAME entity as the
-        // DirectionalLight (else the engine warns "shadows disabled"). Opt-in
-        // via Light.castShadow. Engine feat-20260613-csm removed `orthoHalfExtent`
-        // (per-cascade AABB now auto-fits the visible scene) and added cascade
-        // fields. Engine 81dfc5297 fail-fast on unknown spawn-data fields, so
-        // a stray `orthoHalfExtent:16` rejects the WHOLE scene instantiate
-        // (every editor open went grey/empty until this was removed). 1 cascade
-        // keeps mapSize×1 atlas under Chrome's maxTextureDimension2D=8192 cap.
-        if (light!.castShadow) {
-          parts.push({
-            component: DirectionalLightShadow,
-            data: { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 },
-          });
-        }
       } else {
         parts.push({
           component: PointLight,
@@ -304,7 +291,7 @@ function rgbIntensity(l: LightData): { colorR: number; colorG: number; colorB: n
 // pipeline: it registers MeshAsset/MaterialAsset handles, builds a `SceneAsset`
 // POD ({kind:'scene', nodes:[{localId, components}]}) using the engine's own
 // component schemas (Transform posX.. / MeshFilter / MeshRenderer / DirectionalLight
-// / DirectionalLightShadow / PointLight), registers it, and returns the handle.
+// / PointLight), registers it, and returns the handle.
 // The caller (editor sync / game boot) then uses the ENGINE-NATIVE
 // `assets.instantiate(handle, world)` + `world.sceneInstances` API instead of a
 // hand-rolled `world.spawn` loop — so Edit and Play render through the same
@@ -320,7 +307,7 @@ export interface SceneEntity {
   /** doc entity id (the node's localId in the built SceneAsset = its array index). */
   docId: EntityId;
   /** engine component name → POD data (Transform posX.. / MeshFilter / MeshRenderer /
-   *  DirectionalLight / DirectionalLightShadow / PointLight). */
+   *  DirectionalLight / PointLight). */
   components: Record<string, Record<string, unknown>>;
 }
 
@@ -333,7 +320,7 @@ export function makeSceneCaches(): SceneCaches { return { mesh: new Map(), mat: 
 /** Engine component tokens keyed by name — for `world.set(entity, token, data)`
  *  incremental patching (the editor maps a changed component name → its token). */
 export const SCENE_COMPONENT_TOKENS: Readonly<Record<string, unknown>> = {
-  Transform, MeshFilter, MeshRenderer, DirectionalLight, DirectionalLightShadow, PointLight,
+  Transform, MeshFilter, MeshRenderer, DirectionalLight, PointLight,
 };
 
 export interface SceneEntitiesResult { entities: SceneEntity[]; colliders: Collider[]; }
@@ -492,8 +479,9 @@ export function sceneEntities(doc: SceneDocument, ctx: InstantiateCtx, caches: S
           directionY: num(light!.directionY, -1),
           directionZ: num(light!.directionZ, -0.3),
           ...rgbIntensity(light!),
+          castShadow: !!light!.castShadow,
+          ...(light!.castShadow ? { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 } : {}),
         };
-        if (light!.castShadow) components.DirectionalLightShadow = { cascadeCount: 1, mapSize: 2048, farPlane: 60, nearPlane: 0.1 };
       } else {
         components.PointLight = { ...rgbIntensity(light!), range: num(light!.range, 0) };
       }
