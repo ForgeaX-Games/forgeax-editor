@@ -261,3 +261,7 @@ export type { MenuItemDef } from './contextMenuService';
 
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './dock-bridge';
+
+// ── Project authoring (M3) ──
+export { openProject, type OpenProjectResult } from './open-project';
+export { createFetchReader } from './fetch-reader';

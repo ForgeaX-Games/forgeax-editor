@@ -34,6 +34,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave } from '@forgeax/editor-shared';
+import { openProject, createFetchReader } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -273,6 +274,24 @@ const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
 renderer.assets.configurePackIndex(packIndexUrl);
 
 (window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile };
+
+  // ── openProject proof-of-life (M3 w15): call openProject with fetch reader ──
+  // This call path is an ADDITION (does not replace the existing SceneDocument
+  // flow). It proves the openProject contract works end-to-end. M6 will unify
+  // both paths under SceneAsset. The result world is exposed on the window
+  // object for manual verification (AC-06 human part).
+  if (sceneSlug && sceneSlug !== 'default') {
+    openProject(sceneSlug, createFetchReader(sceneSlug)).then((projectResult) => {
+      if (projectResult.sceneRoot !== null) {
+        console.log(`[editor] openProject: scene instantiated (${projectResult.world.inspect().entityCount} entities, root=${projectResult.sceneRoot})`);
+      } else {
+        console.log('[editor] openProject: no defaultScene, graceful skip');
+      }
+      (window as unknown as Record<string, unknown>).__forgeax_project = projectResult;
+    }).catch((err: unknown) => {
+      console.warn('[editor] openProject failed:', err);
+    });
+  }
 void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
   if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
 });
