@@ -490,7 +490,7 @@ interface AppState {
    * events go to `.forgeax/runs/<runId>.jsonl` (AG-UI format), NOT to the
    * forgeax-cli `team/sessions/` ledger that `loadSession` reads.
    *
-   * Without this, refreshing the studio while talking to Claude Code wipes the
+   * Without this, refreshing the studio while talking to the reference agent CLI wipes the
    * conversation from the UI even though the run continues on the server
    * (visible in Dashboard).  See `forgeax-dev-diary/2026-05-17/` for the
    * root-cause report.

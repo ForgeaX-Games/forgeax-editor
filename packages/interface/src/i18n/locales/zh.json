@@ -880,7 +880,7 @@
       "kotone": "剧情师",
       "iro": "美术师",
       "tsumugi": "工程师",
-      "ccCoder": "Claude Code 工程师",
+      "ccCoder": "the reference agent CLI 工程师",
       "fallback": "sub-agent"
     }
   },

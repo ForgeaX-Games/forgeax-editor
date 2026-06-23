@@ -83,7 +83,7 @@ interface BusCliEntry {
 // known provider ids in server/src/cli-providers/.
 const PROVIDER_DISPLAY_FALLBACK: Record<string, string> = {
   'forgeax': 'ForgeaX CLI',
-  'claude-code': 'Claude Code',
+  'claude-code': 'the reference agent CLI',
   'codex': 'OpenAI Codex',
   'cursor-agent': 'Cursor',
 };
