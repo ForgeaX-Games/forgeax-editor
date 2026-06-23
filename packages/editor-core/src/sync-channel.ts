@@ -25,7 +25,7 @@ import type { EditorCommand, EntityId, SceneDocument } from './types';
 // major editor feature work), and the runtime cost of a second source
 // for an 8-element const array is negligible.
 
-/** The 10 dockable business panels of the forgeax editor. */
+/** The 11 dockable business panels of the forgeax editor. */
 const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -37,6 +37,7 @@ const EDITOR_PANELS = [
   'matgraph',
   'launcher',
   'asset-inspector',
+  'systems',
 ] as const;
 
 /** Union type of all editor panel IDs. */
