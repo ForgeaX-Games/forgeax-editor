@@ -26,8 +26,7 @@ function el(html: string): HTMLElement {
 
 describe('referenceRegistry — label', () => {
   it('has the canonical single label', () => {
-    // i18n: REFERENCE_LABEL is now t('reference.send_to_chat'), English by default.
-    expect(REFERENCE_LABEL).toBe('Reference in Chat');
+    expect(REFERENCE_LABEL).toBe('引用到 Chat');
   });
 });
 

@@ -4,9 +4,9 @@
 //   The 4 learn-render examples (4.textures / 5.transformations /
 //   6.coordinate-systems / 7.camera) historically bound `MeshFilter.assetHandle`
 //   to the engine-builtin `HANDLE_CUBE` literal even after staging a
-//   user-tier cube MeshAsset alias --
-//   user-handle ids (>= BUILTIN_BASE=1024 minted by the SharedRefStore) used to
-//   miss the `pipelineState.meshes` map (legacy `[HANDLE_CUBE, HANDLE_TRIANGLE]`-only
+//   `registerWithGuid<MeshAsset>(cubeGuid, cubeAsset)` alias call --
+//   user-handle ids (>=1024 minted by `nextHandle++`) used to miss the
+//   `pipelineState.meshes` map (legacy `[HANDLE_CUBE, HANDLE_TRIANGLE]`-only
 //   loop in `createRenderer` step 3) so the render-system fired
 //   `asset-not-registered` RhiError once per renderable per frame and the
 //   cube was silently culled (charter P3 explicit failure: the structured
@@ -25,13 +25,13 @@
 //   This dawn test is the regression lock for that engine surface (D-3
 //   "engine path already works"). M-2 of feat-20260519 retracts the V-3
 //   punt at the demo layer: the 4 examples switch their `MeshFilter.assetHandle`
-//   from `HANDLE_CUBE` to a user-tier handle minted via `world.allocSharedRef`.
-//   If anything in the engine regresses the user-handle
+//   from `HANDLE_CUBE` to `cubeHandleRes.value` (the user-handle minted by
+//   `registerWithGuid`). If anything in the engine regresses the user-handle
 //   render path, this test fires before the demo smoke does.
 //
 // AC scope:
-//   AC-10 / AC-11 (V-3 punt retraction): a user-tier MeshAsset minted via
-//   `world.allocSharedRef` produces a non-empty rendered frame. The test asserts
+//   AC-10 / AC-11 (V-3 punt retraction): a user-registered MeshAsset spawned
+//   via `registerWithGuid` produces a non-empty rendered frame. The test asserts
 //   the center pixel is NOT clear-color (i.e. the cube actually drew).
 //
 // Trigger: root vitest.config.ts `dawn` project (`*.dawn.test.ts` glob).
@@ -89,7 +89,7 @@ const ENGINE_MANIFEST_URL = `data:application/json,${encodeURIComponent(
 )}`;
 
 describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () => {
-  it('allocSharedRef user-handle (>=1024) renders non-clear-color center pixel', async () => {
+  it('registerWithGuid user-handle (>=1024) renders non-clear-color center pixel', async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable) {
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
@@ -164,34 +164,31 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
     expect(ready.ok).toBe(true);
     if (!ready.ok) return;
 
-    // 1. Mint a procedural cube MeshAsset, catalogue it under a fresh UUIDv7
-    //    GUID in the AssetRegistry (GUID->payload SSOT, no handle), then mint a
-    //    user-tier column handle via `world.allocSharedRef`. The minted slot id
-    //    is >= BUILTIN_BASE (1024), so the builtin `pipelineState.meshes` alias
-    //    map (HANDLE_CUBE / HANDLE_TRIANGLE only) misses; the engine path under
-    //    test pulls the user mesh through `gpuStore.ensureResident(handle, pod)`
-    //    + `gpuStore.getMeshGpuHandles(handle)` on first draw access.
+    // 1. Mint a procedural cube MeshAsset and register it under a fresh
+    //    UUIDv7 GUID via `registerWithGuid`. The returned handle id is
+    //    >= 1024 (FIRST_USER_HANDLE in asset-registry.ts), so the legacy
+    //    `pipelineState.meshes` alias map (HANDLE_CUBE / HANDLE_TRIANGLE
+    //    only) misses; the engine path under test is
+    //    `getMeshGpuHandles(handle)` populated by the auto-uploadMesh
+    //    code on `registerWithGuid` (asset-registry.ts:946-948).
     const meshRes = createBoxGeometry(1, 1, 1);
     expect(meshRes.ok).toBe(true);
     if (!meshRes.ok) return;
     const cubeAsset: MeshAsset = meshRes.value;
 
-    const world = new World();
-
     const cubeGuid = AssetGuid.random();
-    assets.catalog(cubeGuid, cubeAsset);
-    const cubeHandle = world.allocSharedRef('MeshAsset', cubeAsset);
+    const cubeHandle = assets.registerWithGuid<MeshAsset>(cubeGuid, cubeAsset);
 
-    // The handle MUST be a user-tier handle (>= 1024 = BUILTIN_BASE). If this
-    // assertion fails the SharedRefStore base shifted; the regression lock is
-    // moot until the BUILTIN_BASE invariant is re-established.
+    // The handle MUST be a user-handle (>= 1024). If this assertion fails
+    // the registry's nextHandle base shifted; the regression lock is moot
+    // until the FIRST_USER_HANDLE invariant is re-established.
     expect(unwrapHandle(cubeHandle)).toBeGreaterThanOrEqual(1024);
 
     // 2. Build a solid-color unlit material so the assertion is purely
     //    about "did the cube draw" -- no texture decode, no mip path,
     //    no UV variance. Bright red baseColor (visible against the
     //    clear-color teal).
-    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const matRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -203,8 +200,12 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
       ],
       paramValues: { baseColor: [1, 0, 0, 1] },
     });
+    expect(matRes.ok).toBe(true);
+    if (!matRes.ok) return;
+    const matHandle = matRes.value;
 
     // 3. Spawn cube + camera (axis-aligned, camera 3 units in front).
+    const world = new World();
     world.spawn(
       {
         component: Transform,
@@ -295,7 +296,7 @@ describe('T-M2-1 user-handle mesh render regression (AC-10 / AC-11, dawn)', () =
     const [centerR, centerG, centerB] = readRgba(cx, cy);
     expect(
       isClearColour(centerR, centerG, centerB),
-      `center pixel should NOT be clear-color (~${CLEAR_RGB_SRGB[0]},${CLEAR_RGB_SRGB[1]},${CLEAR_RGB_SRGB[2]}); got rgb(${centerR},${centerG},${centerB}). If this fails, the user-handle render path regressed -- check render-system-record.ts:304-306 + gpuStore.ensureResident pull on the user-tier (allocSharedRef) handle.`,
+      `center pixel should NOT be clear-color (~${CLEAR_RGB_SRGB[0]},${CLEAR_RGB_SRGB[1]},${CLEAR_RGB_SRGB[2]}); got rgb(${centerR},${centerG},${centerB}). If this fails, the user-handle render path regressed -- check render-system-record.ts:304-306 + asset-registry.ts uploadMeshById on registerWithGuid.`,
     ).toBe(false);
     // Sanity: center pixel must also not be all-zero (transparent /
     // pre-clear black) -- charter P3 explicit failure: silent skip

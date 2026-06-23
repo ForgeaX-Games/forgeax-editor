@@ -9,7 +9,7 @@
 //
 // Four-step recipe (same as hello-cube / hello-culling):
 //   (1) await renderer.ready
-//   (2) register a custom box mesh (createBoxGeometry -> world.allocSharedRef(...)) so the
+//   (2) register a custom box mesh (createBoxGeometry -> assets.register) so the
 //       AABB the ray-AABB test needs is present, plus two unlit materials
 //   (3) spawn the cube + a perspective camera entity
 //   (4) rAF draw loop + a `click` listener that calls `pick(...)` and highlights
@@ -27,6 +27,7 @@ import {
   createRenderer,
   DirectionalLight,
   EngineEnvironmentError,
+  type Handle,
   type MaterialAsset,
   Materials,
   type MeshAsset,
@@ -85,17 +86,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[picking] createBoxGeometry failed:', boxResult.error.code);
     return;
   }
-  const cubeHandle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', boxResult.value);
+  const cubeHandle = renderer.assets.register<MeshAsset>(boxResult.value).unwrap();
 
   // Two unlit materials: default grey + bright highlight (swapped on a pick hit).
-  const defaultHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.unlit([0.55, 0.55, 0.6, 1]),
-  );
-  const highlightHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.unlit([1, 0.85, 0.1, 1]),
-  );
+  const defaultHandle: Handle<'MaterialAsset', 'unmanaged'> = renderer.assets
+    .register<MaterialAsset>(Materials.unlit([0.55, 0.55, 0.6, 1]))
+    .unwrap();
+  const highlightHandle: Handle<'MaterialAsset', 'unmanaged'> = renderer.assets
+    .register<MaterialAsset>(Materials.unlit([1, 0.85, 0.1, 1]))
+    .unwrap();
 
   // Cube at the origin, bound to the default material.
   const cubeEntity = world.spawn(
@@ -121,6 +120,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const rect = target.getBoundingClientRect();
     const hit = pick(
       world,
+      renderer.assets,
       cameraEntity,
       e.clientX - rect.left,
       e.clientY - rect.top,

@@ -102,28 +102,24 @@ describe('bug-20260519 AC-03 dawn mirror: mesh + zero manifest -> render-time fa
 
     // feat-20260528-material-shader-registration-unification: placeholder
     // pre-registration deleted. In the zero-manifest path, no materialShaders
-    // are registered by buildReadyWebGPU. Therefore assets.catalog<MaterialAsset>
+    // are registered by buildReadyWebGPU. Therefore assets.register<MaterialAsset>
     // now fails at validation time with 'asset-invalid-value' (shader not
     // registered) rather than succeeding and failing later at draw time with
     // 'shader-compile-failed'. The AC-03 contract (mesh + zero-manifest →
     // structured error) still holds — the error surfaces earlier and more
-    // explicitly (charter P4 fail-fast). feat-20260614 M8 (D-17): material
-    // validation moved from the deleted register() to catalog(guid, asset).
-    const matRes = assets.catalog<MaterialAsset>(
-      assets.parseGuid('00000000-0000-4000-8000-000000000a01'),
-      {
-        kind: 'material',
-        passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::default-unlit',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
-          },
-        ],
-        paramValues: { baseColor: [1, 0, 0, 1] },
-      } as MaterialAsset,
-    );
+    // explicitly (charter P4 fail-fast).
+    const matRes = assets.register<MaterialAsset>({
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-unlit',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      ],
+      paramValues: { baseColor: [1, 0, 0, 1] },
+    });
     expect(matRes.ok).toBe(false);
     if (matRes.ok) return;
     expect(matRes.error.code).toBe('asset-invalid-value');

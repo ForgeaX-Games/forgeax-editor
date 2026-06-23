@@ -96,9 +96,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // feat-20260614 M8 (D-17): loadByGuid returns the payload; mint a user-tier
-  // column handle per clip via world.allocSharedRef.
-  type ClipHandle = Handle<'AnimationClip', 'shared'>;
+  type ClipHandle = Handle<'AnimationClip', 'unmanaged'>;
   const clipHandles: { name: string; handle: ClipHandle }[] = [];
   for (const c of CLIPS) {
     const gRes = AssetGuid.parse(c.guid);
@@ -108,20 +106,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       console.warn(`[fbx-skin] clip '${c.name}' loadByGuid failed:`, res.error.code);
       continue;
     }
-    const handle = world.allocSharedRef<'AnimationClip', AnimationClip>('AnimationClip', res.value);
-    clipHandles.push({ name: c.name, handle });
+    clipHandles.push({ name: c.name, handle: res.value as ClipHandle });
   }
-
-  // feat-20260614 M8 (D-17): mint the SceneAsset payload into a user-tier
-  // column handle once; instantiate dedups per GUID across the 3 copies.
-  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
 
   // Instantiate 3 copies at distinct world positions; assign different clips.
   const playerEnts: EntityHandle[] = [];
   for (let i = 0; i < 3; i++) {
     const pos = INSTANCE_POSITIONS[i];
     if (pos === undefined) continue;
-    const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+    const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
     if (!instRes.ok) {
       console.error(`[fbx-skin] instantiate[${i}] failed:`, instRes.error);
       continue;

@@ -139,7 +139,7 @@ const mockCanvas = {
 
 import { readFileSync as readFileSyncFs } from 'node:fs';
 
-const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
@@ -203,7 +203,7 @@ if (!stdMatGuidResult.ok) {
   console.error(`[smoke] FAIL - standard material GUID parse: ${stdMatGuidResult.error.code}`);
   process.exit(1);
 }
-assets.catalog(stdMatGuidResult.value, {
+assets.registerWithGuid(stdMatGuidResult.value, {
   kind: 'material',
   passes: [
     {
@@ -229,7 +229,7 @@ if (!unlitMatGuidResult.ok) {
 // apps/hello/room/src/index.ts). The legacy hand-written unlit-discriminant
 // shape carried no `passes` array and resolved to empty passes at draw time,
 // firing `material-resolved-empty-passes` through renderer.onError.
-assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
+assets.registerWithGuid(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
 
 // feat-20260528-scene-asset-guid-refs-and-post-instantiate M4 / w11:
 // construct the SceneAsset POD from the pack JSON with GUID strings in
@@ -237,7 +237,7 @@ assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
 // array maps index->GUID; each handle field value N becomes refs[N].
 // resolveSceneGuids (called inside instantiate) resolves GUID strings
 // to Handle numbers via the guidToHandle index populated by
-// catalog calls above.
+// registerWithGuid calls above.
 const roomPack = JSON.parse(readFileSyncFs(ROOM_PACK_PATH, 'utf8'));
 const sceneEntry = roomPack.assets.find((a) => a.kind === 'scene');
 if (!sceneEntry) {
@@ -306,12 +306,18 @@ const sceneAsset = {
 
 const world = new World();
 
+world._setSceneAssetResolver((h) => {
+  const got = assets.get(h);
+  if (!got.ok) return got;
+  return okResult(got.value);
+});
+
 const sceneGuid = AssetGuid.parse(ROOM_SCENE_GUID);
 if (!sceneGuid.ok) {
   console.error(`[smoke] FAIL - scene GUID parse: ${sceneGuid.error.code}`);
   process.exit(1);
 }
-assets.catalog(sceneGuid.value, sceneAsset);
+assets.registerWithGuid(sceneGuid.value, sceneAsset);
 const sceneHandleRes = await assets.loadByGuid(sceneGuid.value);
 if (!sceneHandleRes.ok) {
   console.error(`[smoke] FAIL - loadByGuid: ${sceneHandleRes.error.code}`);
@@ -320,9 +326,7 @@ if (!sceneHandleRes.ok) {
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
-// loadByGuid returns the payload (D-17); mint a user-tier column handle.
-const sceneHandle = world.allocSharedRef('SceneAsset', sceneHandleRes.value);
-const instanceRes = assets.instantiate(sceneHandle, world);
+const instanceRes = assets.instantiate(sceneHandleRes.value, world);
 if (!instanceRes.ok) {
   console.error(`[smoke] FAIL - instantiate: ${instanceRes.error.code}`);
   process.exit(1);

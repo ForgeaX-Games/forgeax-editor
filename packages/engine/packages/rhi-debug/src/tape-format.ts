@@ -14,6 +14,7 @@
 /// <reference types="@webgpu/types" />
 
 import { DebugError } from './errors';
+import { TAPE_FORMAT_VERSION } from './recorder';
 import type {
   HandleId,
   RhiCallEvent,
@@ -51,8 +52,6 @@ import type {
   RhiCapsRecorded,
   Tape,
 } from './types';
-
-export const TAPE_FORMAT_VERSION = 1 as const;
 
 // ============================================================================
 // Local Result factories (mirrors recorder.ts pattern)
@@ -518,60 +517,33 @@ export interface PassOffset {
   readonly passIdx: number;
   readonly startDrawIdx: number;
   readonly endDrawIdx: number;
-  readonly kind: 'render' | 'compute';
 }
 
 /**
  * Compute pass offsets from events array.
  *
- * Scans events and finds beginRenderPass/endRenderPass and
- * beginComputePass/endComputePass pairs, then counts draw/drawIndexed and
- * dispatchWorkgroups calls within each pass to compute start/end draw indices.
+ * Scans events and finds beginRenderPass/endRenderPass pairs, then counts
+ * draw/drawIndexed calls within each pass to compute start/end draw indices.
  *
- * `startDrawIdx` is the global draw index of the first draw/dispatch call within this pass.
- * `endDrawIdx` is the global draw index of the last draw/dispatch call within this pass.
- * Empty passes (no draw/dispatch) produce `endDrawIdx < startDrawIdx` (empty range).
- * `kind` discriminates render passes from compute passes.
+ * `startDrawIdx` is the global draw index of the first draw call within this pass.
+ * `endDrawIdx` is the global draw index of the last draw call within this pass.
  */
 export function computePassOffsets(events: readonly RhiCallEvent[]): PassOffset[] {
   const offsets: PassOffset[] = [];
   let passIdx = 0;
   let globalDrawIdx = 0;
   let inPass = false;
-  let passKind: 'render' | 'compute' = 'render';
   let passStartDrawIdx = -1;
   let passEndDrawIdx = -1;
 
   for (const event of events) {
     if (event.kind === 'beginRenderPass') {
       inPass = true;
-      passKind = 'render';
       passStartDrawIdx = globalDrawIdx;
-      passEndDrawIdx = globalDrawIdx - 1;
+      passEndDrawIdx = globalDrawIdx;
     } else if (event.kind === 'endRenderPass') {
       if (inPass) {
-        offsets.push({
-          passIdx,
-          startDrawIdx: passStartDrawIdx,
-          endDrawIdx: passEndDrawIdx,
-          kind: passKind,
-        });
-        passIdx++;
-      }
-      inPass = false;
-    } else if (event.kind === 'beginComputePass') {
-      inPass = true;
-      passKind = 'compute';
-      passStartDrawIdx = globalDrawIdx;
-      passEndDrawIdx = globalDrawIdx - 1;
-    } else if (event.kind === 'endComputePass') {
-      if (inPass) {
-        offsets.push({
-          passIdx,
-          startDrawIdx: passStartDrawIdx,
-          endDrawIdx: passEndDrawIdx,
-          kind: passKind,
-        });
+        offsets.push({ passIdx, startDrawIdx: passStartDrawIdx, endDrawIdx: passEndDrawIdx });
         passIdx++;
       }
       inPass = false;

@@ -290,12 +290,9 @@ if (!assets) {
   process.exit(1);
 }
 
-// Synthetic texture POD shared as data across matrix runs; the texture /
-// sampler / material handles are minted INSIDE each draw World below, because
-// D-15 makes SharedRefStore per-World -- a handle minted in one World is not
-// resolvable from another (the engine rejects the cross-World retain). The GPU
-// upload is renderer.store-keyed by handle id; each fresh World's first user
-// alloc is deterministic, so re-uploading per case overwrites the same slot.
+// Register the synthetic texture + default sampler once; both handles
+// survive across matrix runs (the AssetRegistry is per-Renderer, not
+// per-World, so the texture upload + sampler are shared).
 const synth = buildSyntheticRgba();
 const synthPod = {
   kind: 'texture',
@@ -306,6 +303,41 @@ const synthPod = {
   colorSpace: 'srgb',
   mipmap: false,
 };
+const texHandleRes = assets.register(synthPod);
+if (!texHandleRes.ok) {
+  console.error(`[smoke] FAIL - synthetic texture register: ${texHandleRes.error.code}`);
+  process.exit(1);
+}
+const textureHandle = texHandleRes.value;
+
+// feat-20260601-gpu-resource-store-extraction M1: texture GPU upload moved to
+// renderer.store (pass POD + decoded; D-2). configureGpuDevice ran inside
+// createRenderer before the renderer was returned, so the device is wired here.
+const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
+  bytes: synth.data,
+  width: synth.width,
+  height: synth.height,
+  mime: 'image/png',
+  colorSpace: 'srgb',
+  mipmap: false,
+});
+if (!uploadRes.ok) {
+  console.error(`[smoke] FAIL - synthetic texture upload: ${uploadRes.error.code}`);
+  process.exit(1);
+}
+
+const samplerHandleRes = assets.register({
+  kind: 'sampler',
+  magFilter: 'linear',
+  minFilter: 'linear',
+  addressModeU: 'repeat',
+  addressModeV: 'repeat',
+});
+if (!samplerHandleRes.ok) {
+  console.error(`[smoke] FAIL - sampler register: ${samplerHandleRes.error.code}`);
+  process.exit(1);
+}
+const samplerHandle = samplerHandleRes.value;
 
 const ready = await renderer.ready;
 if (!ready.ok) {
@@ -313,49 +345,33 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Mints the texture (with GPU upload), default repeat sampler, and the 3
-// per-scene sprite materials into `world`. Returns the material handle array.
-async function mintSpriteAssets(world, layout) {
-  const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
-  // feat-20260601-gpu-resource-store-extraction M1: texture GPU upload via
-  // renderer.store (pass POD + decoded; D-2).
-  const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
-    bytes: synth.data,
-    width: synth.width,
-    height: synth.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!uploadRes.ok) {
-    return { ok: false, error: uploadRes.error };
-  }
-  const samplerHandle = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    addressModeU: 'repeat',
-    addressModeV: 'repeat',
-  });
-  const materialHandles = [];
+// 6 sprite materials (3 colors x 2 pivots) -- the matrix uses sceneId
+// to pick the [0..2] slot.
+const materialHandlesByScene = { A: [], B: [] };
+for (const sceneId of ['A', 'B']) {
+  const layout = SCENE_LAYOUTS[sceneId];
   for (let i = 0; i < 3; i++) {
-    materialHandles.push(
-      world.allocSharedRef('MaterialAsset', {
-        kind: 'material',
-        passes: [
-          { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
-        ],
-        paramValues: {
-          baseColor: SPRITE_COLOR_TINTS[i],
-          texture: textureHandle,
-          sampler: samplerHandle,
-          region: [0, 0, 1, 1],
-          pivot: layout.pivot,
-        },
-      }),
-    );
+    const matRes = assets.register({
+      kind: 'material',
+      passes: [
+        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+      ],
+      paramValues: {
+        baseColor: SPRITE_COLOR_TINTS[i],
+        texture: textureHandle,
+        sampler: samplerHandle,
+        region: [0, 0, 1, 1],
+        pivot: layout.pivot,
+      },
+    });
+    if (!matRes.ok) {
+      console.error(
+        `[smoke] FAIL - sprite material register scene=${sceneId} i=${i}: ${matRes.error.code}`,
+      );
+      process.exit(1);
+    }
+    materialHandlesByScene[sceneId].push(matRes.value);
   }
-  return { ok: true, textureHandle, samplerHandle, materialHandles };
 }
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
@@ -365,12 +381,6 @@ for (const matrixCase of MATRIX) {
   const { scene, tonemap, refFile } = matrixCase;
   const layout = SCENE_LAYOUTS[scene];
   const world = new World();
-  const mint = await mintSpriteAssets(world, layout);
-  if (!mint.ok) {
-    failures.push(`case ${scene}/${tonemap}: synthetic texture upload: ${mint.error.code}`);
-    continue;
-  }
-  const materialHandles = mint.materialHandles;
 
   // Configure transparent sort mode (mode=0 for A / mode=1 for B).
   const sortCfgRes = setTransparentSortConfig(world, {
@@ -387,7 +397,7 @@ for (const matrixCase of MATRIX) {
   // Spawn 3 sprite entities for the current scene.
   for (let i = 0; i < layout.sprites.length; i++) {
     const slot = layout.sprites[i];
-    const matHandle = materialHandles[i];
+    const matHandle = materialHandlesByScene[scene][i];
     okResult(
       world.spawn(
         {
@@ -617,105 +627,67 @@ if (ninesliceHandleId !== 5) {
 
 // Assertion #2 + #3: D-9 soft-warn path. Build a fresh world + register a
 // sliceMode=1 material with addressMode='clamp-to-edge' sampler so the D-9
-// branch fires. All handles are minted into this World (D-15 per-World refs).
+// branch fires.
+const ninesliceMetricsBefore = renderer.metrics.snapshot();
+const beforeCount = ninesliceMetricsBefore['nineslice.tile-needs-repeat-sampler'] ?? 0;
+const clampSamplerRes = assets.register({
+  kind: 'sampler',
+  magFilter: 'linear',
+  minFilter: 'linear',
+  addressModeU: 'clamp-to-edge',
+  addressModeV: 'clamp-to-edge',
+});
+if (!clampSamplerRes.ok) {
+  failures.push(`nineslice: clamp sampler register failed: ${clampSamplerRes.error.code}`);
+}
+const ninesliceSlices = FALSIFY_NINESLICE_ANCHOR
+  ? [0, 0, 0, 0] // falsifier: degenerate sentinel; soft-warn should still fire on sliceMode=1
+  : [0.25, 0.25, 0.25, 0.25];
+const ninesliceMatRes = assets.register({
+  kind: 'material',
+  passes: [
+    { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+  ],
+  paramValues: {
+    baseColor: [1, 1, 1, 1],
+    texture: textureHandle,
+    sampler: clampSamplerRes.ok ? clampSamplerRes.value : samplerHandle,
+    region: [0, 0, 1, 1],
+    pivot: [0.5, 0.5],
+    slices: ninesliceSlices,
+    sliceMode: 1, // tile
+  },
+});
+if (!ninesliceMatRes.ok) {
+  failures.push(`nineslice: tile material register failed: ${ninesliceMatRes.error.code}`);
+}
+const ninesliceMetricsAfter = renderer.metrics.snapshot();
+const afterCount = ninesliceMetricsAfter['nineslice.tile-needs-repeat-sampler'] ?? 0;
+const softWarnDelta = afterCount - beforeCount;
+console.log(
+  `[smoke] nineslice tile-needs-repeat-sampler delta=${softWarnDelta} (before=${beforeCount} after=${afterCount})`,
+);
+if (softWarnDelta < 1) {
+  failures.push(
+    `nineslice: D-9 soft-warn did not fire (delta=${softWarnDelta}); sliceMode=1 + clamp-sampler must increment 'nineslice.tile-needs-repeat-sampler' counter`,
+  );
+}
+
+// Assertion #4: render a fresh World containing 1 nineslice entity for >=30
+// frames; assert no draw errors. We reuse the activeRenderTarget mock canvas
+// machinery already wired above -- a new World rebuilds the camera + entity
+// graph without touching the renderer's per-Scene state.
 let ninesliceDrawErrors = 0;
-let softWarnDelta = 0;
 const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
 {
   const world = new World();
-  const ninesliceTextureHandle = world.allocSharedRef('TextureAsset', synthPod);
-  const ninesliceUpload = await renderer.store.uploadTexture(ninesliceTextureHandle, synthPod, {
-    bytes: synth.data,
-    width: synth.width,
-    height: synth.height,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: false,
-  });
-  if (!ninesliceUpload.ok) {
-    failures.push(`nineslice: synthetic texture upload: ${ninesliceUpload.error.code}`);
-  }
-  const ninesliceMetricsBefore = renderer.metrics.snapshot();
-  const beforeCount = ninesliceMetricsBefore['nineslice.tile-needs-repeat-sampler'] ?? 0;
-  // D-9 soft-warn fires at AssetRegistry.catalog time: it reads paramValues.sampler
-  // as an embedded GUID string (D-19) and resolves it against the catalogue. So
-  // catalog the clamp sampler under a GUID, then catalog the sliceMode=1 material
-  // referencing that GUID -- allocSharedRef stores the POD verbatim and never runs
-  // detectTileNeedsRepeatSampler, so the column handle alone would not fire it.
-  const clampSamplerGuid = '00000000-0000-4000-8000-0000000000c1';
-  okResult(
-    assets.catalog(clampSamplerGuid, {
-      kind: 'sampler',
-      magFilter: 'linear',
-      minFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-    }),
-  );
-  const clampSamplerHandle = world.allocSharedRef('SamplerAsset', {
-    kind: 'sampler',
-    magFilter: 'linear',
-    minFilter: 'linear',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-  });
-  const ninesliceSlices = FALSIFY_NINESLICE_ANCHOR
-    ? [0, 0, 0, 0] // falsifier: degenerate sentinel; soft-warn should still fire on sliceMode=1
-    : [0.25, 0.25, 0.25, 0.25];
-  // Catalog a material whose sampler is the clamp GUID string -> trips the D-9
-  // soft-warn counter. The rendered entity below uses the column-handle variant.
-  okResult(
-    assets.catalog('00000000-0000-4000-8000-0000000000c2', {
-      kind: 'material',
-      passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
-      ],
-      paramValues: {
-        baseColor: [1, 1, 1, 1],
-        sampler: clampSamplerGuid,
-        slices: ninesliceSlices,
-        sliceMode: 1, // tile
-      },
-    }),
-  );
-  const ninesliceMatHandle = world.allocSharedRef('MaterialAsset', {
-    kind: 'material',
-    passes: [
-      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
-    ],
-    paramValues: {
-      baseColor: [1, 1, 1, 1],
-      texture: ninesliceTextureHandle,
-      sampler: clampSamplerHandle,
-      region: [0, 0, 1, 1],
-      pivot: [0.5, 0.5],
-      slices: ninesliceSlices,
-      sliceMode: 1, // tile
-    },
-  });
-  const ninesliceMetricsAfter = renderer.metrics.snapshot();
-  const afterCount = ninesliceMetricsAfter['nineslice.tile-needs-repeat-sampler'] ?? 0;
-  softWarnDelta = afterCount - beforeCount;
-  console.log(
-    `[smoke] nineslice tile-needs-repeat-sampler delta=${softWarnDelta} (before=${beforeCount} after=${afterCount})`,
-  );
-  if (softWarnDelta < 1) {
-    failures.push(
-      `nineslice: D-9 soft-warn did not fire (delta=${softWarnDelta}); sliceMode=1 + clamp-sampler must increment 'nineslice.tile-needs-repeat-sampler' counter`,
-    );
-  }
-
-  // Assertion #4: render a fresh World containing 1 nineslice entity for >=30
-  // frames; assert no draw errors. We reuse the activeRenderTarget mock canvas
-  // machinery already wired above -- a new World rebuilds the camera + entity
-  // graph without touching the renderer's per-Scene state.
   okResult(
     setTransparentSortConfig(world, {
       mode: TRANSPARENT_SORT_MODE_LAYER_Z,
       yzAlpha: 1.0,
     }),
   );
-  {
+  if (ninesliceMatRes.ok) {
     okResult(
       world.spawn(
         {
@@ -734,7 +706,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_NINESLICE_QUAD } },
-        { component: MeshRenderer, data: { materials: [ninesliceMatHandle] } },
+        { component: MeshRenderer, data: { materials: [ninesliceMatRes.value] } },
         { component: Layer, data: { value: 0 } },
       ),
     );

@@ -14,7 +14,6 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
-  resolveAssetHandle,
   SpotLight,
   Transform,
 } from '@forgeax/engine-runtime';
@@ -23,7 +22,6 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container2.pack.json';
 import {
@@ -156,23 +154,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
 
-  const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
-  if (!cubeAssetRes.ok) {
+  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
+  if (!cubeAsset.ok) {
     console.error('[learn-render 2.6 multiple-lights] HANDLE_CUBE asset unavailable');
     return;
   }
-  assets.catalog<MeshAsset>(cubeGuid, cubeAssetRes.value);
+  assets.registerWithGuid<MeshAsset>(cubeGuid, cubeAsset.value);
 
   const materialEntry = readMaterialPackEntry(materialPackJson);
   if (materialEntry === null) {
     return;
   }
-  // feat-20260523 M8-T03: the pack stores texture slots as GUID strings, but
-  // the render-system extract stage binds a texture only when the slot is a
-  // resolved numeric Handle. loadByGuid returns the texture PAYLOAD (M8 D-17);
-  // mint a user-tier column handle via allocSharedRef for the diffuse/specular
-  // slots; drop the slot on texture-load failure so the schema-driven path
-  // falls back to placeholders.
+  // feat-20260523 M8-T03: schema-driven register entry. The pack stores
+  // texture slots as GUID strings, but the render-system extract stage
+  // binds a texture only when the slot is a resolved numeric Handle (string
+  // GUIDs fall through to the 1x1 white placeholder). Substitute the
+  // loadByGuid handles for the diffuse/specular slots; drop the slot on
+  // texture-load failure so the schema-driven path falls back to placeholders.
   const paramValuesIn = materialEntry.payload.paramValues as Readonly<
     Record<string, unknown>
   >;
@@ -180,16 +178,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   for (const [k, v] of Object.entries(paramValuesIn)) {
     if (k === 'baseColorTexture') {
       if (!diffuseTextureRes.ok) continue;
-      filteredValues[k] = unwrapHandle(
-        world.allocSharedRef('TextureAsset', diffuseTextureRes.value),
-      );
+      filteredValues[k] = diffuseTextureRes.value;
       continue;
     }
     if (k === 'metallicRoughnessTexture') {
       if (!specularTextureRes.ok) continue;
-      filteredValues[k] = unwrapHandle(
-        world.allocSharedRef('TextureAsset', specularTextureRes.value),
-      );
+      filteredValues[k] = specularTextureRes.value;
       continue;
     }
     filteredValues[k] = v;
@@ -199,10 +193,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     passes: materialEntry.payload.passes ?? [],
     paramValues: filteredValues,
   };
-  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    materialAsset,
-  );
+  const materialHandleRes = assets.register<MaterialAsset>(materialAsset);
+  if (!materialHandleRes.ok) {
+    console.error(
+      '[learn-render 2.6 multiple-lights] register<MaterialAsset> failed:',
+      materialHandleRes.error.code,
+      materialHandleRes.error.hint,
+    );
+    return;
+  }
   void materialGuid;
   const cubeHandleRes = await assets.loadByGuid<MeshAsset>(cubeGuid);
   if (!cubeHandleRes.ok) {
@@ -212,8 +211,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
-  // loadByGuid returns the payload (M8 D-17); mint a user-tier column handle.
-  const cubeHandle = world.allocSharedRef('MeshAsset', cubeHandleRes.value);
   void useTextures;
 
   for (let i = 0; i < CUBE_POSITIONS.length; i++) {
@@ -240,8 +237,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             scaleZ: 1,
           },
         },
-        { component: MeshFilter, data: { assetHandle: cubeHandle } },
-        { component: MeshRenderer, data: { materials: [materialHandle] } },
+        { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
+        { component: MeshRenderer, data: { materials: [materialHandleRes.value] } },
       )
       .unwrap();
   }
@@ -295,11 +292,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const plPos = POINT_LIGHT_POSITIONS[i];
     const plColor = POINT_LIGHT_COLORS[i];
     if (plPos === undefined || plColor === undefined) continue;
-    const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const lampMatRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
       paramValues: { baseColor: [plColor[0], plColor[1], plColor[2], 1.0] },
     });
+    if (!lampMatRes.ok) {
+      console.error(
+        '[learn-render 2.6 multiple-lights] lamp material register failed:',
+        lampMatRes.error.code,
+        lampMatRes.error.hint,
+      );
+      return;
+    }
     world.spawn(
       {
         component: Transform,
@@ -317,7 +322,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [lampMatHandle] } },
+      { component: MeshRenderer, data: { materials: [lampMatRes.value] } },
       {
         component: PointLight,
         data: {
@@ -393,7 +398,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
     name: 'learn-render-multiple-lights-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
-    fn: (world, queryResults) => {
+    fn: (queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) {
         return;

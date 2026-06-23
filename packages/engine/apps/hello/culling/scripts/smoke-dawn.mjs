@@ -217,7 +217,7 @@ if (!boxResult.ok) {
   console.error(`[smoke] FAIL - createBoxGeometry failed: ${boxResult.error.code}`);
   process.exit(1);
 }
-const customCubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
+const customCubeHandle = renderer.assets.register(boxResult.value).unwrap();
 
 // Spawn cubes AFTER the renderer is ready (assets must be registered
 // so AABB lookup succeeds). Half opt out of culling (frustumCulled=0) so

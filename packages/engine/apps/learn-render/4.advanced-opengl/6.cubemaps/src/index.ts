@@ -96,14 +96,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // loadByGuid returns the TextureAsset PAYLOAD (M8 D-17); mint a user-tier
-  // column handle for the equirect source, then upload the cubemap via
-  // renderer.store (the store holds no registry reference).
-  const srcHandle = world.allocSharedRef('TextureAsset', hdrHandleRes.value);
+  // Fetch source POD from registry, then upload cubemap via renderer.store
+  // (feat-20260601 store extraction — the store holds no registry reference).
+  const srcPodRes = assets.get<TextureAsset>(hdrHandleRes.value);
+  if (!srcPodRes.ok) {
+    console.error(`[learn-render 4.6 cubemaps] source POD fetch failed: ${srcPodRes.error.code}`);
+    return;
+  }
   const cubemapRes = await renderer.store.uploadCubemapFromEquirect(
-    world,
-    srcHandle,
     hdrHandleRes.value,
+    srcPodRes.value,
   );
   if (!cubemapRes.ok) {
     console.error(
@@ -127,14 +129,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn('[learn-render 4.6 cubemaps] Skylight + SkyboxBackground active: equirect HDR skybox visible, PBR IBL reflections active');
 
   // Reflective cube (metallic=1, roughness=0) at left — mirrors IBL environment.
-  const reflectiveMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({
-      baseColor: [0.8, 0.8, 0.8, 1],
-      metallic: 1,
-      roughness: 0,
-    }),
-  );
+  const reflectiveMatHandle = assets
+    .register<MaterialAsset>(
+      Materials.standard({
+        baseColor: [0.8, 0.8, 0.8, 1],
+        metallic: 1,
+        roughness: 0,
+      }),
+    )
+    .unwrap();
   world
     .spawn(
       {
@@ -147,14 +150,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .unwrap();
 
   // Non-reflective cube (metallic=0) at right — matte surface, no IBL mirror.
-  const nonReflectiveMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({
-      baseColor: [0.8, 0.8, 0.8, 1],
-      metallic: 0,
-      roughness: 0.5,
-    }),
-  );
+  const nonReflectiveMatHandle = assets
+    .register<MaterialAsset>(
+      Materials.standard({
+        baseColor: [0.8, 0.8, 0.8, 1],
+        metallic: 0,
+        roughness: 0.5,
+      }),
+    )
+    .unwrap();
   world
     .spawn(
       {

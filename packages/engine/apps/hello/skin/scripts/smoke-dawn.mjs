@@ -296,15 +296,12 @@ if (!skeletonRec) {
   console.error('[smoke] FAIL - Fox.glb GltfDoc.skeletons[0] missing');
   process.exit(1);
 }
-// w64: World holds the SharedRefStore minted handles need; create it before
-// any allocSharedRef. catalog stores GUID->payload for instantiate resolution.
-const world = new World();
-assets.catalog(skeletonGuid, {
+const skeletonHandle = assets.registerWithGuid(skeletonGuid, {
   kind: 'skeleton',
   inverseBindMatrices: skeletonRec.inverseBindMatrices,
   jointCount: skeletonRec.jointCount,
 });
-assets.catalog(skinGuid, {
+assets.registerWithGuid(skinGuid, {
   kind: 'skin',
   skeletonGuid: AssetGuid.format(skeletonGuid),
   jointPaths: skeletonRec.jointPaths,
@@ -332,28 +329,21 @@ function recToClip(rec) {
   return { kind: 'animation-clip', duration, channels };
 }
 
-const surveyClip = recToClip(doc.animationClips[0]);
-const walkClip = recToClip(doc.animationClips[1]);
-const runClip = recToClip(doc.animationClips[2]);
-assets.catalog(surveyGuid, surveyClip);
-assets.catalog(walkGuid, walkClip);
-assets.catalog(runGuid, runClip);
-const surveyHandle = world.allocSharedRef('AnimationClip', surveyClip);
-const walkHandle = world.allocSharedRef('AnimationClip', walkClip);
-const runHandle = world.allocSharedRef('AnimationClip', runClip);
+const surveyHandle = assets.registerWithGuid(surveyGuid, recToClip(doc.animationClips[0]));
+const walkHandle = assets.registerWithGuid(walkGuid, recToClip(doc.animationClips[1]));
+const runHandle = assets.registerWithGuid(runGuid, recToClip(doc.animationClips[2]));
 
 const meshIrs = doc.meshes.filter((m) => m.meshIndex === 0);
-const meshAsset = meshIrToMeshAsset(meshIrs);
-assets.catalog(meshGuid, meshAsset);
-const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
+const meshHandle = assets.registerWithGuid(meshGuid, meshIrToMeshAsset(meshIrs));
 // feat-20260611 w17-a: smoke-dawn parallels the gltf-importer cooker by
 // passing { skinned: true } so toMaterialAsset routes the emitted
 // MaterialAsset to `forgeax::pbr-skin`. Fox.glb's only material is consumed
 // exclusively by skinned primitives; main.ts (browser path) gets this for
 // free via the cooker's auto-detection in gltf-importer.ts.
-const matAsset = toMaterialAsset(doc.materials[0], { skinned: true });
-assets.catalog(materialGuid, matAsset);
-const matHandle = world.allocSharedRef('MaterialAsset', matAsset);
+const matHandle = assets.registerWithGuid(
+  materialGuid,
+  toMaterialAsset(doc.materials[0], { skinned: true }),
+);
 
 // tweak-20260611 M6: bridge auto-emits Skin { skeleton: <guid-string> } on
 // every NodeIr with skinIndex set, so the demo no longer post-patches the
@@ -370,18 +360,16 @@ const bridgeCtx = {
     : { skeletonGuidBySkinIndex: new Map([[0, AssetGuid.format(skeletonGuid)]]) }),
 };
 const scene = gltfDocToSceneAsset(doc, bridgeCtx);
-assets.catalog(sceneGuid, scene);
+assets.registerWithGuid(sceneGuid, scene);
 
 // --- 4. Build world: 3 instances + camera + light ------------------------------
 
+const world = new World();
 const sceneRes = await assets.loadByGuid(sceneGuid);
 if (!sceneRes.ok) {
   console.error('[smoke] FAIL - loadByGuid<SceneAsset> failed:', sceneRes.error);
   process.exit(1);
 }
-// loadByGuid returns the payload (D-17); mint a user-tier column handle reused
-// across the 3 instantiate calls below.
-const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
 
 // FALSIFY=clip-fixed: collapse the lineup to a single clip handle so the
 // AC-03 distinct-poses assertion below trips. The smoke checks all three
@@ -421,7 +409,7 @@ if (!parentRigRes.ok) {
 const parentRig = parentRigRes.value;
 
 for (const { x, clip, label } of lineup) {
-  const instRes = assets.instantiate(sceneHandle, world);
+  const instRes = assets.instantiate(sceneRes.value, world);
   if (!instRes.ok) {
     console.error(`[smoke] FAIL - instantiate ${label}:`, instRes.error.code);
     process.exit(1);

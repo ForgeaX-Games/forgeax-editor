@@ -840,7 +840,6 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-os",
  "tauri-plugin-shell",
- "tokio",
 ]
 
 [[package]]

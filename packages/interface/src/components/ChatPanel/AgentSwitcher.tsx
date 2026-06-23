@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import {
   AgentAvatar,
   accentForRoleTribe,
@@ -77,7 +76,6 @@ function initialFor(id: string): string {
 }
 
 export function AgentSwitcher() {
-  const { t } = useTranslation();
   const isStreaming = useAppStore((s) => s.isStreaming);
   const setActiveEmitter = useAppStore((s) => s.setActiveEmitter);
   const setTabAgent = useAppStore((s) => s.setTabAgent);
@@ -384,7 +382,7 @@ export function AgentSwitcher() {
               id: a.id,
               left: rect.left + rect.width / 2,
               top: rect.top,
-              text: a.busPluginId ? t('agentSwitcher.hintBusExpand') : t('agentSwitcher.hintBusList'),
+              text: a.busPluginId ? 'cli 未启动 · ⌘+click → Bus' : 'cli 未启动 · ⌘+click → Bus 列表',
             });
           };
           return (
@@ -411,8 +409,8 @@ export function AgentSwitcher() {
                     void setActiveEmitter(a.id);
                   }}
               title={a.placeholder
-                ? `${t('agentSwitcher.titlePlaceholder', { id: a.id, role: a.role })}${a.busPluginId ? t('agentSwitcher.titlePlaceholderExpand', { busPluginId: a.busPluginId }) : t('agentSwitcher.titlePlaceholderAgentKind')}`
-                : t('agentSwitcher.titleAgent', { id: a.id, role: a.role })}
+                ? `${a.id} (${a.role}) · marketplace 占位 · cli daemon 未启动则不可切换 · ⌘/Ctrl+click → Bus${a.busPluginId ? ` · expand ${a.busPluginId}` : ' (agent kind)'}`
+                : `${a.id} (${a.role}) · 单击=切换为主对话目标 · 双击=本 thread 下条消息发给它`}
               aria-label={a.id}
             >
               {(() => {
@@ -453,7 +451,7 @@ export function AgentSwitcher() {
           role="status"
           style={{ position: 'fixed', left: hint.left, top: hint.top - 22 }}
         >
-          {hint.text ?? t('agentSwitcher.hintNotInitialized')}
+          {hint.text ?? '未初始化'}
         </span>
       )}
     </div>

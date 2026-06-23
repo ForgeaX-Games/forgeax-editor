@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { bus, dispatch, setAnimPreview, useDocVersion, useMainConnected, useSelection } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { type Clip, type Interp, type Track, emptyClip, sampleClip, setKey, removeKey } from '@forgeax/editor-core';
 
 // Timeline panel (design EDITOR-MODE P2/P3) — keyframe animation for the selected
@@ -16,7 +15,6 @@ const numv = (v: unknown, d: number): number => (typeof v === 'number' && Number
 const round = (x: number): number => Math.round(x * 100) / 100;
 
 export function TimelinePanel() {
-  const { t } = useTranslation();
   useDocVersion();
   const connected = useMainConnected(); // false = no Edit viewport answering yet
   const sel = useSelection();
@@ -48,10 +46,10 @@ export function TimelinePanel() {
   }, [playing, dur]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!connected) {
-    return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty" data-testid="tl-disconnected">{t('editor.timeline.waitingViewport')}</div></div>;
+    return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty" data-testid="tl-disconnected">等待 Edit 视口… 打开「Edit」面板后，选中实体即可编辑动画。</div></div>;
   }
   if (sel === null || !node) {
-    return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty">{t('editor.timeline.selectEntity')}</div></div>;
+    return <div className="panel ed-timeline" data-testid="panel-timeline"><h3>Timeline</h3><div className="muted tl-empty">选中一个实体以编辑动画。</div></div>;
   }
 
   const writeClip = (c: Clip): void => {
@@ -60,9 +58,9 @@ export function TimelinePanel() {
     else dispatch({ kind: 'addComponent', entity: sel, component: 'Anim', value: data });
   };
   const capture = (): void => {
-    const xform = (node.components.Transform as Record<string, number> | undefined) ?? {};
+    const t = (node.components.Transform as Record<string, number> | undefined) ?? {};
     let c = clip;
-    for (const k of CAPTURE) c = setKey(c, `Transform.${k}`, { t: round(time), v: numv(xform[k], k.startsWith('scale') ? 1 : 0), interp });
+    for (const k of CAPTURE) c = setKey(c, `Transform.${k}`, { t: round(time), v: numv(t[k], k.startsWith('scale') ? 1 : 0), interp });
     writeClip(c);
   };
   const removeAt = (): void => { let c = clip; for (const tr of clip.tracks) c = removeKey(c, tr.channel, round(time)); writeClip(c); };
@@ -87,16 +85,16 @@ export function TimelinePanel() {
     <div className="panel ed-timeline" data-testid="panel-timeline">
       <h3>Timeline · {node.name}</h3>
       <div className="tl-toolbar">
-        <button type="button" className="tl-btn" data-testid="tl-play" onClick={() => setPlaying((p) => !p)} title={playing ? t('editor.timeline.pause') : t('editor.timeline.playPreview')}>{playing ? '⏸' : '▶'}</button>
-        <button type="button" className="tl-btn" data-testid="tl-key" onClick={capture} title={t('editor.timeline.captureKey')}>● K</button>
-        <button type="button" className="tl-btn" onClick={removeAt} title={t('editor.timeline.removeKey')}>✖ K</button>
-        <select className="tl-interp" value={interp} onChange={(e) => setInterp(e.target.value as Interp)} title={t('editor.timeline.interpMode')}>
+        <button type="button" className="tl-btn" data-testid="tl-play" onClick={() => setPlaying((p) => !p)} title={playing ? '暂停' : '播放预览'}>{playing ? '⏸' : '▶'}</button>
+        <button type="button" className="tl-btn" data-testid="tl-key" onClick={capture} title="在播放头记录当前 Transform 关键帧">● K</button>
+        <button type="button" className="tl-btn" onClick={removeAt} title="删除播放头处的关键帧">✖ K</button>
+        <select className="tl-interp" value={interp} onChange={(e) => setInterp(e.target.value as Interp)} title="新关键帧的插值方式">
           <option value="linear">linear</option>
           <option value="step">step</option>
           <option value="smooth">smooth</option>
         </select>
         <span className="tl-sp" />
-        <label className="tl-dur">{t('editor.timeline.duration')}
+        <label className="tl-dur">时长
           <input type="number" min={0.1} step={0.1} value={clip.duration} onChange={(e) => writeClip({ ...clip, duration: Math.max(0.1, Number(e.target.value) || 0.1) })} />s
         </label>
         <span className="tl-time">{time.toFixed(2)}s</span>
@@ -107,14 +105,14 @@ export function TimelinePanel() {
           <div className="tl-playhead" style={{ left: pct(time) }} />
         </div>
         {clip.tracks.length === 0 ? (
-          <div className="muted tl-hint">{t('editor.timeline.hint')}</div>
+          <div className="muted tl-hint">移动实体到某帧 → 按「● K」记录关键帧；多帧之间自动插值。</div>
         ) : (
           clip.tracks.map((tr) => (
             <div className="tl-track" key={tr.channel}>
               <span className="tl-ch" title={tr.channel}>{tr.channel.replace('Transform.', '')}</span>
               <div className="tl-keys">
                 {tr.keys.map((k) => (
-                  <span key={k.t} className={`tl-key i-${k.interp ?? 'linear'}`} style={{ left: pct(k.t) }} title={t('editor.timeline.keyTooltip', { t: k.t, v: k.v, interp: k.interp ?? 'linear' })}
+                  <span key={k.t} className={`tl-key i-${k.interp ?? 'linear'}`} style={{ left: pct(k.t) }} title={`t=${k.t}s v=${k.v} (${k.interp ?? 'linear'}) — 单击跳到此帧`}
                     onClick={() => { setPlaying(false); setTime(k.t); }} />
                 ))}
                 <div className="tl-playhead thin" style={{ left: pct(time) }} />

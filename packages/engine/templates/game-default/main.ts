@@ -21,7 +21,7 @@ import {
   type MaterialAsset, type Handle,
 } from '@forgeax/engine-runtime';
 
-type MatHandle = Handle<'MaterialAsset', 'shared'>;
+type MatHandle = Handle<'MaterialAsset', 'unmanaged'>;
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EntityHandle } from '@forgeax/engine-ecs';
@@ -61,28 +61,13 @@ interface PackNode { localId: number; components: Record<string, Record<string, 
 interface PackAsset { guid: string; kind: string; payload: unknown; refs?: string[] }
 interface ScenePack { assets: PackAsset[] }
 
-// Environment lighting. ALWAYS spawn a solid-color Skylight first: the forgeax
-// PBR shader computes ambient=0 without a Skylight, so a lone DirectionalLight
-// leaves every shaded face black. A cubemap-less Skylight binds the engine's
-// 1x1 white irradiance cube -- ambient is live on the FIRST frame with zero
-// async GPU work, and it renders on WebKit/WKWebView (the Tauri desktop app)
-// whose WebGPU lacks the rgba16float render-attachment the IBL precompute needs.
-// Then, on Chromium/Dawn only, upgrade that Skylight to full image-based
-// lighting from sky.hdr + add the visible SkyboxBackground.
+// Load sky.hdr -> IBL Skylight + visible SkyboxBackground via the engine's
+// asset pipeline (same path as learn-render 6.pbr/3.ibl-specular). Runs on both
+// Chromium/Dawn (web) and WebKit/WKWebView (Tauri): the engine's rgba16float
+// caps-guard skips the IBL upload where unsupported, and every step below
+// degrades gracefully (any failure leaves the directional sun as the sole
+// light) -- so no browser UA gate is needed.
 async function installHdrSky(ctx: Parameters<GameEntry>[0]): Promise<void> {
-  const skylight = ctx.world.spawn(
-    { component: Skylight, data: { colorR: 0.9, colorG: 0.95, colorB: 1.0, intensity: 0.35 } },
-  ).unwrap();
-
-  // WebKit/WKWebView guard -- calling uploadCubemapFromEquirect there poisons
-  // the WebGPU device (first frame never renders -> Play sticks on "Loading
-  // game"). Keep the solid ambient above and stop. Negative allowlist (NOT
-  // Chrome/Chromium/Edg) is robust against Playwright's "HeadlessChrome" UA.
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  if (!/Chrome|Chromium|Edg/.test(ua)) {
-    console.info('[game] non-Chromium WebGPU (WebKit/WKWebView): solid-color skylight only (no IBL/skybox)');
-    return;
-  }
   const renderer = (ctx.app as unknown as { renderer?: { store?: { uploadCubemapFromEquirect?: unknown } } })?.renderer;
   const store = renderer?.store;
   if (!store || typeof store.uploadCubemapFromEquirect !== 'function') return;
@@ -92,23 +77,23 @@ async function installHdrSky(ctx: Parameters<GameEntry>[0]): Promise<void> {
     console.warn(`[game] sky GUID parse failed: ${guidRes.error.code}`);
     return;
   }
-  // loadByGuid returns the payload (D-17); mint a user-tier source handle and
-  // pass world + handle + pod to uploadCubemapFromEquirect.
-  const podRes = await ctx.assets.loadByGuid<TextureAsset>(guidRes.value);
-  if (!podRes.ok) {
-    console.warn(`[game] sky.hdr loadByGuid failed: ${podRes.error.code}`);
+  const handleRes = await ctx.assets.loadByGuid<TextureAsset>(guidRes.value);
+  if (!handleRes.ok) {
+    console.warn(`[game] sky.hdr loadByGuid failed: ${handleRes.error.code}`);
     return;
   }
-  const srcHandle = ctx.world.allocSharedRef('TextureAsset', podRes.value);
-  const upload = store.uploadCubemapFromEquirect as (world: unknown, h: unknown, p: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
-  const cubemapRes = await upload.call(store, ctx.world, srcHandle, podRes.value);
+  const podRes = ctx.assets.get<TextureAsset>(handleRes.value);
+  if (!podRes.ok) {
+    console.warn(`[game] sky.hdr POD fetch failed: ${podRes.error.code}`);
+    return;
+  }
+  const upload = store.uploadCubemapFromEquirect as (h: unknown, p: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
+  const cubemapRes = await upload.call(store, handleRes.value, podRes.value);
   if (!cubemapRes.ok || cubemapRes.value === undefined) {
     console.warn(`[game] sky.hdr equirect->cubemap upload failed: ${cubemapRes.error?.code ?? '<unknown>'}`);
     return;
   }
-  // Upgrade the existing Skylight to image-based lighting (neutral tint lets the
-  // HDR drive the color).
-  ctx.world.set(skylight, Skylight, { cubemap: cubemapRes.value, colorR: 1, colorG: 1, colorB: 1, intensity: 0.2 });
+  ctx.world.spawn({ component: Skylight, data: { cubemap: cubemapRes.value, intensity: 0.2 } });
   ctx.world.spawn({ component: SkyboxBackground, data: { cubemap: cubemapRes.value, mode: SKYBOX_MODE_CUBEMAP } });
 }
 
@@ -128,66 +113,19 @@ async function instantiateScenePack(
   // leaves `.nodes` undefined, instantiate throws, and Play falls back to the
   // lightless fallback scene (PBR with no light = a black screen).
   const scenePayload = sceneEntry.payload as { kind: 'scene'; entities?: PackNode[]; nodes?: PackNode[] };
-  const rawNodes = scenePayload.entities ?? scenePayload.nodes ?? [];
+  const packNodes = scenePayload.entities ?? scenePayload.nodes ?? [];
   const refs = sceneEntry.refs ?? [];
-
-  // ── localId COMPACTION (engine-bug workaround; see ENGINE-ISSUES-for-ubpa.md) ──
-  // The editor deletes entities by removing the node, leaving HOLES in the localId
-  // sequence (e.g. 0..6,14..27 here — the default pack itself has the gap). But the
-  // engine's `SceneInstance.mapping` is a Uint32Array sized to the entity COUNT
-  // (world.ts: `totalSlots = ownEntities.length + …`), then written positionally as
-  // `mapping[authoredLocalId] = entity`. When a localId exceeds count-1 (Player here
-  // is localId 21 with count 21 → valid indices 0..20), the write `mapping[21]=…`
-  // is a SILENT out-of-bounds no-op on the fixed-size typed array → Player is lost
-  // from the table → `mapping.get(21)` is undefined → WASD finds no Player → the
-  // character can't move. Renumber localIds to a dense 0..N-1 (array order) so every
-  // authored id is < count and lands inside the mapping window.
-  //
-  // The engine REMAPS every `entity`/`array<entity>`-typed component field through the
-  // same mapping (`_buildSceneEntityComponentDatas`: `mapping[value]`), so any
-  // authored cross-reference between entities (ChildOf.parent, Children.entities,
-  // Skin.joints, Entity.self) is a localId that MUST be rewritten through the same
-  // old→new map, or it would resolve against the wrong (or an out-of-window) slot.
-  // refs[] indices (MeshFilter.assetHandle / MeshRenderer.material) are ASSET refs,
-  // not entity ids — they are NOT touched here.
-  const ENTITY_REF_FIELDS: Record<string, string> = {
-    ChildOf: 'parent',
-    Entity: 'self',
-  };
-  const ENTITY_REF_ARRAY_FIELDS: Record<string, string> = {
-    Children: 'entities',
-    Skin: 'joints',
-  };
-  const oldToNew = new Map<number, number>();
-  rawNodes.forEach((n, i) => oldToNew.set(n.localId, i));
-  const remapId = (v: unknown): unknown =>
-    typeof v === 'number' && oldToNew.has(v) ? oldToNew.get(v)! : v;
-  const packNodes: PackNode[] = rawNodes.map((n, i) => {
-    const components: Record<string, Record<string, unknown>> = {};
-    for (const [name, data] of Object.entries(n.components)) {
-      const single = ENTITY_REF_FIELDS[name];
-      const arr = ENTITY_REF_ARRAY_FIELDS[name];
-      if (single !== undefined && single in data) {
-        components[name] = { ...data, [single]: remapId(data[single]) };
-      } else if (arr !== undefined && Array.isArray((data as Record<string, unknown>)[arr])) {
-        components[name] = { ...data, [arr]: ((data as Record<string, unknown>)[arr] as unknown[]).map(remapId) };
-      } else {
-        components[name] = data;
-      }
-    }
-    return { localId: i, components };
-  });
 
   // Materials: register each by its declared GUID so the scene's refs[] resolve.
   for (const a of pack.assets) {
     if (a.kind !== 'material') continue;
     const g = AssetGuid.parse(a.guid);
-    if (g.ok) assets.catalog<MaterialAsset>(g.value, a.payload as MaterialAsset);
+    if (g.ok) assets.registerWithGuid<MaterialAsset>(g.value, a.payload as MaterialAsset);
   }
   // Cylinder mesh (cube/sphere are builtins, auto-registered under their GUIDs).
   const cylG = AssetGuid.parse(CYLINDER_GUID);
   const cylGeo = createCylinderGeometry(0.5, 0.5, 1, 18);
-  if (cylG.ok && cylGeo.ok) assets.catalog(cylG.value, cylGeo.value);
+  if (cylG.ok && cylGeo.ok) assets.registerWithGuid(cylG.value, cylGeo.value);
 
   // Build the SceneAsset POD: rewrite handle fields refs-index -> GUID, strip
   // non-render components (Collider). Also migrate engine #317 schema:
@@ -232,12 +170,10 @@ async function instantiateScenePack(
   // localId → Entity table by reading the new `SceneInstance` ECS component
   // on the synthetic root: `mapping` is a Uint32Array indexed positionally
   // by the authored localId.
-  assets.catalog<SceneAsset>(sceneGuid.value, sceneAsset);
+  assets.registerWithGuid<SceneAsset>(sceneGuid.value, sceneAsset);
   const handleRes = await assets.loadByGuid<SceneAsset>(sceneGuid.value);
   if (!handleRes.ok) { console.error('[game] scene loadByGuid failed:', handleRes.error); return null; }
-  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
-  const sceneHandle = world.allocSharedRef('SceneAsset', handleRes.value);
-  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+  const instRes = assets.instantiate<SceneAsset>(handleRes.value, world);
   if (!instRes.ok) { console.error('[game] scene instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
   const root = instRes.value;
   const sceneInst = world.get(root, SceneInstance);
@@ -256,7 +192,7 @@ async function instantiateScenePack(
 // missing/unreadable. The editor authors the real one.
 function spawnFallbackScene(ctx: Parameters<GameEntry>[0]): void {
   const { world, assets } = ctx;
-  const ground = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0 }));
+  const ground = assets.register<MaterialAsset>(Materials.standard({ baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0 })).unwrap();
   world.spawn(
     { component: Transform, data: { posY: -0.1, scaleX: 24, scaleY: 0.2, scaleZ: 24 } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -460,12 +396,7 @@ const start: GameEntry = async (ctx) => {
   let camX = initX, camZ = initZ + TOP_DZ;
   const camera = world.spawn(
     { component: Transform, data: { posX: camX, posY: TOP_DY, posZ: camZ, quatX: topQ[0]!, quatY: topQ[1]!, quatZ: topQ[2]!, quatW: topQ[3]! } },
-    // clearR/G/B = visible sky background. WebKit/WKWebView (the desktop app)
-    // can't render the cubemap SkyboxBackground (needs rgba16float render targets
-    // it lacks), so without this the background clears to black. The Camera clear
-    // color needs no GPU feature; a daytime blue reads as sky. Linear/pre-tonemap.
-    // On Chromium the cubemap skybox draws over it (harmless).
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearR: 0.4, clearG: 0.6, clearB: 1.0 } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA } },
   ).unwrap();
 
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
@@ -697,7 +628,7 @@ const start: GameEntry = async (ctx) => {
     const sx = (e.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
     const sy = (e.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
     let aimX: number, aimZ: number;
-    const hit = pick(world, camera, sx, sy, canvas.width, canvas.height);
+    const hit = pick(world, ctx.assets, camera, sx, sy, canvas.width, canvas.height);
     if (hit) {
       const tr = world.get(hit.entity, Transform);
       if (tr.ok) { aimX = tr.value.posX; aimZ = tr.value.posZ; }
@@ -717,7 +648,7 @@ const start: GameEntry = async (ctx) => {
 
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.
-  const bulletMat = ctx.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 0.85, 0.3, 1], roughness: 0.4, metallic: 0, emissive: [1, 0.7, 0.15], emissiveIntensity: 5 }));
+  const bulletMat = ctx.assets.register<MaterialAsset>(Materials.standard({ baseColor: [1, 0.85, 0.3, 1], roughness: 0.4, metallic: 0, emissive: [1, 0.7, 0.15], emissiveIntensity: 5 })).unwrap();
   // Bullet mesh — a 0.2-radius sphere baked AT the visual size (Transform.scale
   // stays 1). The default HANDLE_SPHERE is a UNIT sphere; using `scale 0.2` to
   // shrink it produced a large round ground shadow on every shot — a code path
@@ -725,10 +656,10 @@ const start: GameEntry = async (ctx) => {
   // before Transform.scale is folded in. Baking the geometry at the final
   // radius removes the scale dependency and the shadow now matches the bullet.
   const bulletMeshRes = createSphereGeometry(0.2, 12, 8);
-  const bulletMesh = bulletMeshRes.ok ? ctx.world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
+  const bulletMesh = bulletMeshRes.ok ? ctx.assets.register(bulletMeshRes.value).unwrap() : HANDLE_SPHERE;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
-  const flashMat = ctx.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 1, 0.9, 1], roughness: 0.5, metallic: 0, emissive: [1, 1, 0.6], emissiveIntensity: 6 }));
+  const flashMat = ctx.assets.register<MaterialAsset>(Materials.standard({ baseColor: [1, 1, 0.9, 1], roughness: 0.5, metallic: 0, emissive: [1, 1, 0.6], emissiveIntensity: 6 })).unwrap();
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
   // squared hit radius for bullet→prop scoring. Aligned with the bullet's
   // 0.5-radius collider — proximity fires the same moment the physics contact

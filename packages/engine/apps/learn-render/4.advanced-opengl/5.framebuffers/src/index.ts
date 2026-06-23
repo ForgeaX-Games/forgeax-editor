@@ -43,11 +43,11 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type {
+  Handle,
   MaterialAsset,
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -235,13 +235,16 @@ function makeEffectPipeline(shaderId: string): RenderPipeline {
 
 // Module-level mutable closure so the named installPipelineByKey export
 // (called by both M5 dawn smoke and the keydown handler in section 3) can
-// install one of the 6 RenderPipelineAsset PODs registered inside
-// bootstrap. Populated after bootstrap runs registerPipeline.
-let pipelineAssetsByKey: ReadonlyMap<EffectKey, RenderPipelineAsset> | null = null;
+// install one of the 6 RenderPipelineAsset handles registered inside
+// bootstrap. Populated after bootstrap runs registerPipeline + assets.register.
+let pipelineHandlesByKey: ReadonlyMap<
+  EffectKey,
+  Handle<'RenderPipelineAsset', 'unmanaged'>
+> | null = null;
 let activeRendererForInstall:
   | {
       installPipeline(
-        asset: RenderPipelineAsset,
+        handle: Handle<'RenderPipelineAsset', 'unmanaged'>,
       ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
     }
   | null = null;
@@ -258,7 +261,7 @@ let activeRendererForInstall:
 export function installPipelineByKey(
   key: string,
 ): { ok: true } | { ok: false; error: { code: string; hint: string } } {
-  if (pipelineAssetsByKey === null || activeRendererForInstall === null) {
+  if (pipelineHandlesByKey === null || activeRendererForInstall === null) {
     return {
       ok: false,
       error: {
@@ -267,8 +270,8 @@ export function installPipelineByKey(
       },
     };
   }
-  const asset = pipelineAssetsByKey.get(key as EffectKey);
-  if (asset === undefined) {
+  const handle = pipelineHandlesByKey.get(key as EffectKey);
+  if (handle === undefined) {
     return {
       ok: false,
       error: {
@@ -277,7 +280,7 @@ export function installPipelineByKey(
       },
     };
   }
-  const installRes = activeRendererForInstall.installPipeline(asset);
+  const installRes = activeRendererForInstall.installPipeline(handle);
   if (!installRes.ok) {
     return {
       ok: false,
@@ -372,16 +375,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
-  // loadByGuid returns texture PAYLOADs (M8 D-17); mint user-tier column
-  // handles for the baseColorTexture slots below.
-  const containerTex = unwrapHandle(world.allocSharedRef('TextureAsset', containerHandleRes.value));
-  const metalTex = unwrapHandle(world.allocSharedRef('TextureAsset', metalHandleRes.value));
+  const containerTex = containerHandleRes.value;
+  const metalTex = metalHandleRes.value;
 
   // Cube material: unlit container.jpg. The 4.5 chapter teaches off-screen
   // RT + post-process; the scene shading is intentionally trivial (unlit) so
   // the visual delta between effects is dominated by the post-process pass,
   // not by per-cube lighting.
-  const cubeMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const cubeMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -395,13 +396,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: containerTex,
     },
   });
+  if (!cubeMatRes.ok) {
+    console.error(
+      '[learn-render 4.5 framebuffers] cube material register failed:',
+      cubeMatRes.error,
+    );
+    return;
+  }
 
   // Floor material: unlit metal.png. HANDLE_QUAD is a 1x1 quad with a
   // single-tile UV; the 5x5 scale stretches that one tile across the floor
   // (research F-A3 known-difference: unlit has no tiling/offset, so a single
   // wide-tile sample stands in for the LearnOpenGL 25x25 metal-texture floor
   // tiling -- the post-process effect demonstration is unaffected).
-  const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const floorMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -415,6 +423,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: metalTex,
     },
   });
+  if (!floorMatRes.ok) {
+    console.error(
+      '[learn-render 4.5 framebuffers] floor material register failed:',
+      floorMatRes.error,
+    );
+    return;
+  }
 
   // Spawn cube #1 at (-1, 0, -1).
   world
@@ -424,7 +439,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         data: { posX: CUBE1_POS[0], posY: CUBE1_POS[1], posZ: CUBE1_POS[2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
+      { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
     )
     .unwrap();
 
@@ -436,7 +451,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         data: { posX: CUBE2_POS[0], posY: CUBE2_POS[1], posZ: CUBE2_POS[2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
+      { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
     )
     .unwrap();
 
@@ -457,7 +472,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      { component: MeshRenderer, data: { materials: [floorMatHandle] } },
+      { component: MeshRenderer, data: { materials: [floorMatRes.value] } },
     )
     .unwrap();
 
@@ -535,41 +550,65 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Six RenderPipelineAsset PODs: each `pipelineId` matches the
-  // `renderer.registerPipeline(...)` id above. installPipeline takes the POD
-  // directly (no shared-ref allocation).
-  const passthroughAsset: RenderPipelineAsset = {
+  // Six RenderPipelineAsset handles: each `pipelineId` matches the
+  // `renderer.registerPipeline(...)` id above. Explicit `if (!result.ok)`
+  // checks per R-9 (every Result consumer reads .ok before .value).
+  const passthroughAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::passthrough',
-  };
-  const inversionAsset: RenderPipelineAsset = {
+  });
+  if (!passthroughAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] passthrough asset failed:', passthroughAssetRes.error);
+    return;
+  }
+  const inversionAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::inversion',
-  };
-  const grayscaleAsset: RenderPipelineAsset = {
+  });
+  if (!inversionAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] inversion asset failed:', inversionAssetRes.error);
+    return;
+  }
+  const grayscaleAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::grayscale',
-  };
-  const sharpenAsset: RenderPipelineAsset = {
+  });
+  if (!grayscaleAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] grayscale asset failed:', grayscaleAssetRes.error);
+    return;
+  }
+  const sharpenAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::sharpen',
-  };
-  const blurAsset: RenderPipelineAsset = {
+  });
+  if (!sharpenAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] sharpen asset failed:', sharpenAssetRes.error);
+    return;
+  }
+  const blurAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::blur',
-  };
-  const edgeAsset: RenderPipelineAsset = {
+  });
+  if (!blurAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] blur asset failed:', blurAssetRes.error);
+    return;
+  }
+  const edgeAssetRes = assets.register<RenderPipelineAsset>({
     kind: 'render-pipeline',
     pipelineId: 'learn-render-5-pipeline::edge-detection',
-  };
+  });
+  if (!edgeAssetRes.ok) {
+    console.error('[learn-render 4.5 framebuffers] edge asset failed:', edgeAssetRes.error);
+    return;
+  }
 
-  pipelineAssetsByKey = new Map<EffectKey, RenderPipelineAsset>([
-    ['1', passthroughAsset],
-    ['2', inversionAsset],
-    ['3', grayscaleAsset],
-    ['4', sharpenAsset],
-    ['5', blurAsset],
-    ['6', edgeAsset],
+  pipelineHandlesByKey = new Map<EffectKey, Handle<'RenderPipelineAsset', 'unmanaged'>>([
+    ['1', passthroughAssetRes.value],
+    ['2', inversionAssetRes.value],
+    ['3', grayscaleAssetRes.value],
+    ['4', sharpenAssetRes.value],
+    ['5', blurAssetRes.value],
+    ['6', edgeAssetRes.value],
   ]);
   activeRendererForInstall = renderer;
 

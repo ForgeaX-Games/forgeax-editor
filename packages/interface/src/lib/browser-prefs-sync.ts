@@ -62,14 +62,6 @@ async function pushBrowserPrefs(): Promise<void> {
   }
 }
 
-/** Push the current localStorage snapshot to the server immediately (no debounce).
- *  Call after a same-tab pref change that must survive a quick reload — the
- *  `storage` event only fires in OTHER tabs, so same-tab writes are otherwise
- *  only flushed on the 30s interval / beforeunload (unreliable). */
-export function flushBrowserPrefs(): void {
-  void pushBrowserPrefs();
-}
-
 /** Pull server snapshot into localStorage (server wins on first boot after import). */
 export async function syncBrowserPrefsFromServer(): Promise<number> {
   try {

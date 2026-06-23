@@ -16,13 +16,13 @@
 //      `world.set`; the TypedArray itself is a read-only snapshot.
 //
 //   3. Element-type (AC-03): T must be scalar + entity. Schema strings
-//      `'array<ref<X>>' / 'array<shared<X>>' / 'array<buffer<8>>' /
+//      `'array<ref<X>>' / 'array<handle<X>>' / 'array<buffer<8>>' /
 //      'array<array<f32,4>>'` are TS compile-time errors when used as a
 //      schema field value.
 //
 //   4. Cross-brand (AC-04): the value returned by `snap[i]` for an
 //      `'array<entity>'` field is the underlying `number` packed Entity bit
-//      pattern; assigning it directly to a `Handle<Mesh, 'unique'>`
+//      pattern; assigning it directly to a `Handle<Mesh, 'managed'>`
 //      parameter is a TS compile-time error.
 
 import type { Handle } from '@forgeax/engine-types';
@@ -106,7 +106,7 @@ describe('array vocab - element-type rejection (w12, AC-03)', () => {
   });
 
   it('array<handle<X>> is now a recognised schema field type (feat-20260608 M2 D-1)', () => {
-    const valid: SchemaFieldType = 'array<shared<MeshAsset>>';
+    const valid: SchemaFieldType = 'array<handle<MeshAsset>>';
     void valid;
   });
 
@@ -124,13 +124,13 @@ describe('array vocab - element-type rejection (w12, AC-03)', () => {
 });
 
 describe('array vocab - cross-brand rejection (w12, AC-04)', () => {
-  it("snap[i] is number; not assignable to Handle<Mesh, 'unique'>", () => {
-    const takesMeshHandle = (h: Handle<'Mesh', 'unique'>): void => {
+  it('snap[i] is number; not assignable to Handle<Mesh, "managed">', () => {
+    const takesMeshHandle = (h: Handle<'Mesh', 'managed'>): void => {
       void h;
     };
     const view: TypedArrayFor<'u32'> = new Uint32Array(1);
     const elem: number = view[0] ?? 0;
-    // @ts-expect-error number is not assignable to Handle<'Mesh','unique'> (AC-04 cross-brand).
+    // @ts-expect-error number is not assignable to Handle<'Mesh','managed'> (AC-04 cross-brand).
     takesMeshHandle(elem);
   });
 });

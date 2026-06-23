@@ -23,7 +23,6 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
-  resolveAssetHandle,
   Transform,
 } from '@forgeax/engine-runtime';
 import type {
@@ -31,7 +30,6 @@ import type {
   MeshAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container2.pack.json';
 import {
@@ -132,23 +130,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
 
-  const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
-  if (!cubeAssetRes.ok) {
+  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
+  if (!cubeAsset.ok) {
     console.error('[learn-render 2.4 lighting-maps] HANDLE_CUBE asset unavailable');
     return;
   }
-  assets.catalog<MeshAsset>(cubeGuid, cubeAssetRes.value);
+  assets.registerWithGuid<MeshAsset>(cubeGuid, cubeAsset.value);
 
   const materialEntry = readMaterialPackEntry(materialPackJson);
   if (materialEntry === null) {
     return;
   }
-  // feat-20260527 M1 / w4: pack payload is already pass-based MaterialAsset
-  // shape. The pack stores texture slots as GUID strings; the render-system
-  // extract stage only binds a texture when paramValues.<slot> is a resolved
-  // numeric Handle (string GUIDs fall through to the 1x1 white placeholder).
-  // loadByGuid returns the texture PAYLOAD (M8 D-17); mint a user-tier column
-  // handle via allocSharedRef for the diffuse/specular slots. On texture-load
+  // feat-20260527 M1 / w4: register<MaterialAsset> — pack payload is
+  // already pass-based MaterialAsset shape. The pack stores texture
+  // slots as GUID strings; the render-system extract stage only binds a
+  // texture when paramValues.<slot> is a resolved numeric Handle (string
+  // GUIDs fall through to the 1x1 white placeholder). Substitute the
+  // loadByGuid handles for the diffuse/specular slots; on texture-load
   // failure drop the slot so the shader falls back to the placeholder.
   const paramValuesIn = materialEntry.payload.paramValues as Readonly<
     Record<string, unknown>
@@ -157,16 +155,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   for (const [k, v] of Object.entries(paramValuesIn)) {
     if (k === 'baseColorTexture') {
       if (!diffuseTextureRes.ok) continue;
-      filteredValues[k] = unwrapHandle(
-        world.allocSharedRef('TextureAsset', diffuseTextureRes.value),
-      );
+      filteredValues[k] = diffuseTextureRes.value;
       continue;
     }
     if (k === 'metallicRoughnessTexture') {
       if (!specularTextureRes.ok) continue;
-      filteredValues[k] = unwrapHandle(
-        world.allocSharedRef('TextureAsset', specularTextureRes.value),
-      );
+      filteredValues[k] = specularTextureRes.value;
       continue;
     }
     filteredValues[k] = v;
@@ -176,12 +170,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     passes: materialEntry.payload.passes ?? [],
     paramValues: filteredValues,
   };
-  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    materialAsset,
-  );
+  const materialHandleRes = assets.register<MaterialAsset>(materialAsset);
+  if (!materialHandleRes.ok) {
+    console.error(
+      '[learn-render 2.4 lighting-maps] register<MaterialAsset> failed:',
+      materialHandleRes.error.code,
+      materialHandleRes.error.hint,
+    );
+    return;
+  }
   // The materialGuid round-trip is no longer needed — the demo uses the
-  // minted handle directly.
+  // returned handle directly. (M8 retires registerWithGuid + loadByGuid
+  // for materials; mesh / texture round-trips remain GUID-keyed.)
   void materialGuid;
   const cubeHandleRes = await assets.loadByGuid<MeshAsset>(cubeGuid);
   if (!cubeHandleRes.ok) {
@@ -191,8 +191,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
-  // loadByGuid returns the payload (M8 D-17); mint a user-tier column handle.
-  const cubeHandle = world.allocSharedRef('MeshAsset', cubeHandleRes.value);
   void useTextures;
 
   world
@@ -212,8 +210,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           scaleZ: 1,
         },
       },
-      { component: MeshFilter, data: { assetHandle: cubeHandle } },
-      { component: MeshRenderer, data: { materials: [materialHandle] } },
+      { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
+      { component: MeshRenderer, data: { materials: [materialHandleRes.value] } },
     )
     .unwrap();
 
@@ -253,11 +251,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // renders a small white cube at lightPos via lightCubeShader; here the
   // unlit baseColor=(1,1,1) cube fills the same role, while the PointLight
   // on the same entity reads its position from the companion Transform.
-  const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
-    kind: 'material',
-    passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-    paramValues: { baseColor: [1, 1, 1, 1] },
-  });
+  const lampMatHandle = assets
+    .register<MaterialAsset>({
+      kind: 'material',
+      passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
+      paramValues: { baseColor: [1, 1, 1, 1] },
+    })
+    .unwrap();
 
   world
     .spawn(
@@ -333,7 +333,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
     name: 'learn-render-lighting-maps-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
-    fn: (world, queryResults) => {
+    fn: (queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) {
         return;

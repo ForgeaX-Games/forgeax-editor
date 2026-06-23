@@ -2,21 +2,19 @@
 //
 // feat-20260608-mesh-multi-section-primitive-multi-material-slot M2 / w7:
 // the single `material` field is replaced with `materials` — an
-// `array<shared<MaterialAsset>>` indexed by submesh. Each submesh gets one
+// `array<handle<MaterialAsset>>` indexed by submesh. Each submesh gets one
 // material slot; `materials.length` must equal `MeshAsset.submeshes.length`.
 // The previous single-material path is unified into the array: AI users
 // always write `materials: [handle]`, even for single-prim meshes.
 //
-// The schema-vocab keyword `'array<shared<MaterialAsset>>'` (feat-20260614
-// M5 -- migrated from `'array<handle<MaterialAsset>>'`) stores as a u32
-// column slot array; the brand prevents cross-asset assignment at compile
-// time. The `'shared<T>'` arm routes element retain/release through
-// SharedRefStore (M4 / w13) on overwrite / archetype migration.
+// The schema-vocab keyword `'array<handle<MaterialAsset>>'` (feat-20260608
+// M2 / w5 D-1 extension) stores as a u32 column slot array; the brand
+// prevents cross-asset assignment at compile time.
 //
 // charter mapping: proposition 1 (single import — `MeshRenderer` is the
 // only material-binding component AI users see); proposition 3
 // (machine-readable schema > prose); proposition 4 (explicit failure: the
-// TS brand on `Handle<'MaterialAsset','shared'>` rejects cross-variant
+// TS brand on `Handle<'MaterialAsset','unmanaged'>` rejects cross-variant
 // assignment at compile time); proposition 5 (consistent abstraction:
 // shading model classification (`'unlit'` / `'standard'`) lives ONLY on
 // the asset discriminant, NOT on the component name).
@@ -30,7 +28,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
 /**
  * Mesh renderer (ECS component, multi-material array).
  *
- * Stores `materials: readonly Handle<'MaterialAsset','shared'>[]`
+ * Stores `materials: readonly Handle<'MaterialAsset','unmanaged'>[]`
  * (u32-stored array, indexed by submesh). The asset's `shadingModel`
  * (`'unlit'` | `'standard'`) is the SSOT for which pipeline RenderSystem
  * routes the entity to.
@@ -57,7 +55,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({ component: MeshRenderer, data: { materials: [rock] } });
  */
 export const MeshRenderer = defineComponent('MeshRenderer', {
-  materials: { type: 'array<shared<MaterialAsset>>', default: [] },
+  materials: { type: 'array<handle<MaterialAsset>>', default: [] },
   frustumCulled: { type: 'u8', default: 1 },
   pickable: { type: 'u8', default: 1 },
 });

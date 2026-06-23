@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
 import { openSourcePanel } from '@forgeax/editor-shared';
@@ -192,7 +191,6 @@ function Row({
 }
 
 export function HierarchyPanel() {
-  const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
   const selList = useSelectionList();
@@ -215,16 +213,16 @@ export function HierarchyPanel() {
     const multi = getSelectionList().length > 1;
     const items: MenuItemDef[] = [];
     if (multi) {
-      items.push({ label: t('editor.hierarchy.menu.group', { n: getSelectionList().length }), onClick: () => groupSelected(getSelectionList()) });
-      items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: getSelectionList().length }), onClick: () => deleteManyCascade(getSelectionList()) });
+      items.push({ label: `成组 (${getSelectionList().length})`, onClick: () => groupSelected(getSelectionList()) });
+      items.push({ label: `删除选中 (${getSelectionList().length})`, onClick: () => deleteManyCascade(getSelectionList()) });
       items.push({ sep: true });
     }
-    items.push({ label: node?.source ? t('editor.hierarchy.menu.editSource', { plugin: node.source.plugin }) : t('editor.hierarchy.menu.editSourceNone'), disabled: !node?.source, onClick: () => { if (node?.source) openSourcePanel(node.source.plugin, node.source.docId); } });
-    items.push({ label: t('editor.hierarchy.menu.duplicate'), onClick: () => duplicateEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { const n = bus.doc.entities[m.id]; if (n) void navigator.clipboard?.writeText(JSON.stringify({ name: n.name, components: n.components }, null, 2)); } });
-    items.push({ label: t('editor.hierarchy.menu.refToChat'), onClick: () => requestRefEntity(m.id) });
-    if (childrenOf(bus.doc, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), onClick: () => ungroupEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.delete'), danger: true, onClick: () => deleteEntity(m.id) });
+    items.push({ label: `⤴ 编辑源${node?.source ? ` (${node.source.plugin})` : ' (无来源)'}`, disabled: !node?.source, onClick: () => { if (node?.source) openSourcePanel(node.source.plugin, node.source.docId); } });
+    items.push({ label: '复制', onClick: () => duplicateEntity(m.id) });
+    items.push({ label: '复制 JSON', onClick: () => { const n = bus.doc.entities[m.id]; if (n) void navigator.clipboard?.writeText(JSON.stringify({ name: n.name, components: n.components }, null, 2)); } });
+    items.push({ label: '引用到 Chat', onClick: () => requestRefEntity(m.id) });
+    if (childrenOf(bus.doc, m.id).length > 0) items.push({ label: '解组', onClick: () => ungroupEntity(m.id) });
+    items.push({ label: '删除', danger: true, onClick: () => deleteEntity(m.id) });
     showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
   };
   const q = query.trim().toLowerCase();

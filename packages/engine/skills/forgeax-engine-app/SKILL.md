@@ -3,15 +3,14 @@ name: forgeax-engine-app
 description: >-
   forgeax-engine 启动与主循环：把 canvas 引导成可跑的 Renderer + World，驱动 rAF 游戏循环，
   在系统里消费帧起始输入快照。聚合 app · input · runtime（引导面）。
-  Use when bootstrapping a game, wiring the rAF loop, reading per-frame input,
-  or wiring animation/physics plugins via resource keys.
+  Use when bootstrapping a game, wiring the rAF loop, or reading per-frame keyboard/mouse input.
 ---
 
 # forgeax-engine-app
 
 > 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`358592eb`](../../commit/358592eb) (2026-06-09)
 
-> 把"一块 canvas"变成"一个在跑的游戏"。引导 + 主循环 + 输入 + 动画/物理接线，四件事一个 skill。聚合 `@forgeax/engine-app` · `@forgeax/engine-input` · `@forgeax/engine-runtime`（引导面）。
+> 把"一块 canvas"变成"一个在跑的游戏"。引导 + 主循环 + 输入，三件事一个 skill。聚合 `@forgeax/engine-app` · `@forgeax/engine-input` · `@forgeax/engine-runtime`（引导面）。
 
 ## 心智模型
 
@@ -36,15 +35,7 @@ description: >-
 | `Engine.create(canvas, opts?, bundler?)` | `createRenderer` 的命名空间别名 | 与 `createRenderer` 同一函数，喜欢 `Engine.create({...})` 写法时用 |
 | `forgeaxBundlerAdapter()` | `() => BundlerOptions` | 由 `virtual:forgeax/bundler` 虚拟模块导出，标准第三参数——聚合 `shaderManifestUrl` + `importTransport` |
 | `App.start() / stop() / pause() / resume()` | `() => Result<void, AppError>` | 主循环状态机；返回结构化 `Result` |
-| `world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)` | `=> InputSnapshot` | 在系统里取帧起始输入快照（推荐 import 常量 `INPUT_SNAPSHOT_RESOURCE_KEY` 而非裸字符串 `'InputSnapshot'`） |
-| `world.insertResource(INPUT_BACKEND_KEY, backend)` | 资源注入 | 插入 `InputBackend` 实例到 World（由 `createApp` 自动完成）；系统 token `InputFrameStartScan` 经 `resources: [INPUT_BACKEND_KEY]` 声明依赖，ParamValidation 校验缺失 |
-| `world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, resolver)` | 资源注入 | 插入 `AnimationAssetResolver` 到 World（由 `createApp` 自动完成）；系统 token `AdvanceAnimationPlayer` 经 `resources: [ANIMATION_ASSET_RESOLVER_KEY]` 声明依赖 |
-| `world.addSystem(InputFrameStartScan)` | 注册 token | 激活帧起始输入扫描系统（替代已删除的 `createFrameStartScanSystem` 工厂） |
-| `world.addSystem(AdvanceAnimationPlayer)` | 注册 token | 激活动画推进系统（替代旧的闭包注册形态） |
-| `registerPropagateTransforms(world, opts?)` | 接线函数 | 注册 `PropagateTransforms` token；opts 可选 `beforeSystemName` |
-| `registerAdvanceAnimationPlayer(world)` | 接线函数 | 注册 `AdvanceAnimationPlayer` token + `insertResource(ANIMATION_ASSET_RESOLVER_KEY, ...)` |
-| `registerPhysicsSystems(world)` | 接线函数 | 注册 3D 物理三系统 token（第二参已删除；系统 fn 内 `resolveComponent('Transform')` 自取组件 token） |
-| `registerPhysicsSystems2D(world)` | 接线函数 | 注册 2D 物理三系统 token（同理） |
+| `world.getResource<InputSnapshot>('InputSnapshot')` | `=> InputSnapshot` | 在系统里取帧起始输入快照 |
 | `createInputSnapshot()` | `() => InputSnapshot` | headless 测试 / 预启动的空快照（held/edge 全 `false`） |
 
 > [!IMPORTANT]
@@ -69,9 +60,7 @@ flowchart TD
 ```ts
 import { createApp } from '@forgeax/engine-app';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
-import { defineSystem } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import type { InputSnapshot } from '@forgeax/engine-input';
 
 const res = await createApp(canvas, {}, forgeaxBundlerAdapter());
 if (!res.ok) {
@@ -89,11 +78,11 @@ world.spawn(
   })
 );
 
-const MovePlayer = defineSystem({
+world.addSystem({
   name: 'move-player',
   queries: [{ with: [Transform] }],
-  fn: (world, queryResults) => {
-    const input = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+  fn: (queryResults) => {
+    const input = world.getResource<InputSnapshot>('InputSnapshot');
     const dx = (input.keyboard.down('d') ? 1 : 0) - (input.keyboard.down('a') ? 1 : 0);
     for (const bundle of queryResults[0]) {
       const xs = bundle.Transform.posX;
@@ -101,7 +90,6 @@ const MovePlayer = defineSystem({
     }
   },
 });
-world.addSystem(MovePlayer);
 
 app.start();   // arms the rAF loop
 // app.pause(); app.resume(); app.stop();
@@ -117,55 +105,13 @@ app.start();   // arms the rAF loop
 - **`shaderManifestUrl` 不在 `opts` 里**：已搬到第三参数 `BundlerOptions`。零配置场景省略第三参数即可（引擎 fallback `'/shaders/manifest.json'`）；显式注入用 `forgeaxBundlerAdapter()`（`virtual:forgeax/bundler`）。
 - **内置网格不需要 `registerWithGuid`**：`cube` / `triangle` / `quad` / `sphere` 四种内置网格的 GUID→handle 映射已在 `AssetRegistry` 构造时预注册（Tier 0, feat-20260604）。手动再 `registerWithGuid` 会抛 GUID 碰撞错误。自定义资产仍需显式注册。
 - **渲染 / 循环类症状**（白屏、demo 不动、CI 断言全过却 exit 1）先查 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) 的症状索引，再回溯引擎层；别在 app 里塞手动 rAF mutation 绕过。
-- **`createApp` auto-registers the state-machine plugin**（feat-20260616-engine-state-and-state-scoped-entities）：both canvas and assemble forms call `registerStatesPlugin(world)` internally. State tokens defined with `defineState` at module level have their Resources auto-inserted and the `transitionStates` system auto-registered. Manual `createRenderer` users must call `registerStatesPlugin(world)` themselves before `setNextState`. See [`forgeax-engine-state`](../forgeax-engine-state/SKILL.md).
-- **系统 fn 首参是 `world`**：`defineSystem({ fn: (world, queryResults, commands) => {...} })`——旧签名 `(queryResults, commands)` 已废弃。`createApp` 自动接线的 input/anim/physics/state 系统全部已迁到新签名。自定义系统须跟上：形参加 `world`，体内 `world.getResource(KEY)` 取资源，不走闭包捕获。
-- **输入接线已资源化**：`createFrameStartScanSystem` 工厂已删除。`createApp` 内部自动 `world.insertResource(INPUT_BACKEND_KEY, backend)` + `world.addSystem(InputFrameStartScan)`。headless/manual 用户：`import { INPUT_BACKEND_KEY, InputFrameStartScan } from '@forgeax/engine-input'` → `world.insertResource(INPUT_BACKEND_KEY, mockBackend)` → `world.addSystem(InputFrameStartScan)`。
-- **动画接线已资源化**：`registerAdvanceAnimationPlayer` 内部 `insertResource(ANIMATION_ASSET_RESOLVER_KEY, resolver)` 后 `addSystem(AdvanceAnimationPlayer)`。`AdvanceAnimationPlayer` 是模块顶层 `defineSystem` token，`resources: [ANIMATION_ASSET_RESOLVER_KEY]` 声明依赖——缺失时走 ParamValidation `'invalid'` 路径（不裸 throw）。
-- **physics register 第二参已删除**：`registerPhysicsSystems(world)` / `registerPhysicsSystems2D(world)` 不再接受 `transformComponent` 第二参。系统 fn 内 `resolveComponent('Transform')` 自取组件 token。
-
-## Camera.autoAspect 与 aspect-sync sidecar
-
-`Camera.autoAspect`（默认 `true`）让引擎自动跟随画布尺寸调整宽高比——你只负责 resize canvas，aspect 引擎搞定。
-
-- **`CreateAppOpts` 不提供**：`autoAspect` 在 `Camera` 组件上，不是 createApp 参数
-- **默认即对（charter P1）**：`perspective()` 工厂不传 `autoAspect` → 默认 `true`，现有 demo 零改动自然启用
-- **opt-out**：`perspective({ autoAspect: false })` 一步关闭——用于 render-to-texture / 分屏相机，由宿主自行驱动 aspect
-- **仅 createApp 路径**：aspect-sync sidecar 只在 `createApp(canvas)` 内注册；`createRenderer` / assemble 形态不获此行为（host↔engine 契约 clause #3）
-
-sidecar 每帧做：
-1. 读 `canvas.width / canvas.height`，尺寸为 0（detached / `display:none`）静默跳过，aspect 不变为 NaN
-2. 遍历所有 `Camera` 实体：只写 `autoAspect === true` 且 `projection === perspective` 的相机
-3. 通过 `world.get` 读 `autoAspect` bool 列（readRow 窄化为 JS boolean），非 query-bundle 路径
-
-> [!NOTE]
-> host↔engine 契约 SSOT：`docs/how-to/2026-06-18-host-engine-contract.md`——6 接触面归属表、createApp vs createRenderer 两路径差异、9 条范围外边界条款、3 项标准样板代码。引擎技能只放指针，不复制正文。
-
-## 视频过场：pause → overlay → resume（worked example）
-
-`apps/hello/video-cutscene/` 演示如何用 `app.pause()` / `app.resume()` 驱动视频过场，全程零引擎 video 代码——`<video>` DOM overlay 由宿主管理，引擎只提供暂停/恢复能力。
-
-```text
-app.pause() → 引擎冻结（渲染继续，模拟不动）
-  ↓ video overlay 出现（DOM CSS，引擎不知其存在）
-  ↓ video.play() → video.onended
-  ↓ overlay display:none
-  ↓ app.resume() → 引擎恢复（dt 基线重置，首帧 dt ≤ 16ms）
-app.stop() → 宿主同时在 DOM 清除 overlay
-```
-
-- **dt 基线重置**：`app.resume()` 后首帧 dt 不膨胀（frame-loop 内部已 onResume 时 flush lastTick）
-- **幂等 pause**：已暂停再 `pause()` 无副作用（状态机 guard）
-- **overlay 清理归宿主**：`app.stop()` 时引擎不碰 DOM——demo 内部自己清理 overlay
-
-参见 `apps/hello/video-cutscene/src/main.ts`（≤ 200 LoC，完整端到端示例）。
 
 ## 深入
 
-- 引导 / 主循环状态机 / AppError 5 成员 / onError fan-out / 资源化接线：见 `packages/app/README.md` §One-screen takeoff · §AppError 5-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`
+- 引导 / 主循环状态机 / AppError 5 成员 / onError fan-out：见 `packages/app/README.md` §One-screen takeoff · §AppError 5-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`
 - 低层渲染器 / `Renderer.draw` / `Renderer.ready` 屏障：见 `packages/runtime/README.md` §API 索引；源码 `packages/runtime/src/createRenderer.ts`
-- 输入 4 步 recipe / 形态铁律 / PointerLock 后端 / `InputFrameStartScan` token + `INPUT_BACKEND_KEY` 资源化接线：见 `packages/input/README.md` §4 步 recipe · §4 方法表面；源码 `packages/input/src/input-snapshot.ts` + `packages/input/src/frame-start-scan-system.ts`
-- 蒙皮 / 动画 4 步 recipe（`createApp` + `configurePackIndex` + `loadByGuid<SceneAsset>` + 多实例 instantiate + 每实例独立 `AnimationPlayer`）+ `AdvanceAnimationPlayer` token + `ANIMATION_ASSET_RESOLVER_KEY` 资源化接线：参考 `apps/hello/skin/src/main.ts`；底层 SkinAsset / SkeletonAsset / AnimationClip POD 由 gltfImporter 自动 emit，bridge 自动挂 `Skin` 组件；多实例关节隔离由 postSpawnResolveJoints 子树作用域兜底；源码 `packages/runtime/src/systems/advance-animation-player.ts`
-- 物理 3D/2D 接线（`registerPhysicsSystems(world)` / `registerPhysicsSystems2D(world)`，第二参已删除）：源码 `packages/physics-rapier3d/src/rapier-physics-world-3d.ts` + `packages/physics-rapier2d/src/rapier-physics-world-2d.ts`
+- 输入 4 步 recipe / 形态铁律 / PointerLock 后端：见 `packages/input/README.md` §4 步 recipe · §4 方法表面；源码 `packages/input/src/input-snapshot.ts`
+- 蒙皮 / 动画 4 步 recipe（`createApp` + `configurePackIndex` + `loadByGuid<SceneAsset>` + 多实例 instantiate + 每实例独立 `AnimationPlayer`）：参考 `apps/hello/skin/src/main.ts`；底层 SkinAsset / SkeletonAsset / AnimationClip POD 由 gltfImporter 自动 emit，bridge 自动挂 `Skin` 组件；多实例关节隔离由 postSpawnResolveJoints 子树作用域兜底
 
 ## AnimationPlayer：N-way SoA 槽位 + 用户每帧驱权重
 

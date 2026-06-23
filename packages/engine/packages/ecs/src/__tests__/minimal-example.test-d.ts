@@ -26,7 +26,7 @@ describe('[w14] AC-4 — 30-second onboarding minimal example', () => {
     world.addSystem({
       name: 'movement',
       queries: [{ with: [Position, Velocity, Entity] }],
-      fn: (_world, queryResults, _commands) => {
+      fn: (queryResults, _commands) => {
         for (const bundles of queryResults[0]) {
           // Compile-time inference: xs / dxs are Float32Array — no `as` cast.
           const xs = bundles.Position.x;

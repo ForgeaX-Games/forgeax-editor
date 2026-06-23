@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Eye, EyeOff, Loader2, Search } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import type { ModelCatalogEntry } from '../../lib/model-config';
 import { setAgentModels, setModelHidden } from '../../lib/model-config';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -74,7 +73,6 @@ function ModelRowBadges({ m }: { m: ModelCatalogEntry }) {
 }
 
 export function ModelPicker(props: ModelPickerProps) {
-  const { t } = useTranslation();
   const {
     variant = 'button',
     writeToAgent = null,
@@ -241,7 +239,7 @@ export function ModelPicker(props: ModelPickerProps) {
             <button
               type="button"
               className="mp-eye"
-              title={m.hidden ? t('modelPicker.showInComposer') : t('modelPicker.hideFromComposer')}
+              title={m.hidden ? '在 Composer picker 里显示这个模型' : '从 Composer picker 隐藏这个模型(Settings/ModelLab 仍可见)'}
               aria-label={m.hidden ? 'show in picker' : 'hide from picker'}
               data-testid={`model-picker-eye-${m.id}`}
               disabled={inflight}

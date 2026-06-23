@@ -181,10 +181,8 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Standard PBR material POD (same as demo main.ts). Minted into each pass's
-// World below: allocSharedRef is per-World, and the two comparison passes use
-// independent Worlds, so the material must be minted in each.
-const MATERIAL_POD = {
+// Register standard PBR material (same as demo main.ts).
+const materialRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -199,7 +197,16 @@ const MATERIAL_POD = {
     metallic: 0.0,
     roughness: 0.4,
   },
-};
+});
+if (!materialRes.ok) {
+  console.error(
+    `[smoke] FAIL - material register: ${materialRes.error.code}` +
+      ` hint=${materialRes.error.hint}` +
+      ` detail=${JSON.stringify(materialRes.error.detail)}`,
+  );
+  process.exit(1);
+}
+const materialHandle = materialRes.value;
 
 const device = sharedDevice;
 if (!device) {
@@ -227,8 +234,7 @@ const GEOMETRY_LAYOUT = [
  * registering components on the World before calling this.
  */
 function spawnScene(world, antialias) {
-  // 4 static geometries sharing a per-World material handle.
-  const materialHandle = world.allocSharedRef('MaterialAsset', MATERIAL_POD);
+  // 4 static geometries with shared material.
   for (const slot of GEOMETRY_LAYOUT) {
     world.spawn(
       {

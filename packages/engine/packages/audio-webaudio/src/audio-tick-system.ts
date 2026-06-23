@@ -21,7 +21,7 @@
 // - F1 limited context: single function export, discoverable from barrel
 
 import type { AudioBackend, AudioPlayOptions, BusName } from '@forgeax/engine-audio';
-import { AudioSource } from '@forgeax/engine-audio';
+import { ASSET_REGISTRY_RESOURCE_KEY, AudioSource } from '@forgeax/engine-audio';
 import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
 import { Entity as EntityComponent } from '@forgeax/engine-ecs';
 
@@ -232,17 +232,28 @@ function cleanupDespawnedEntities(currentEntityIds: number[], backend: AudioBack
  * not yet loaded (E-4 silent skip).
  */
 export function createClipResolver(world: World): (clipHandle: number) => AudioBuffer | undefined {
-  // feat-20260614 M8 (D-15): audio clips are user-tier column handles resolved
-  // through the per-World SharedRefStore. The AssetRegistry no longer holds a
-  // handle->payload map (its by-handle `get(handle)` entry point was deleted),
-  // so resolve directly via `world.sharedRefs.resolve` -- still no import of
-  // @forgeax/engine-runtime (sharedRefs is an ECS-layer surface).
-  return (clipHandle: number): AudioBuffer | undefined => {
-    const res = world.sharedRefs.resolve<string, { kind?: string; buffer?: AudioBuffer }>(
-      clipHandle as unknown as Parameters<typeof world.sharedRefs.resolve>[0],
-    );
-    if (res.ok && res.value.kind === 'audio' && res.value.buffer !== undefined) {
-      return res.value.buffer;
+  // D-1 bridge (a): read AssetRegistry from world as ECS Resource KV
+  // using duck-typed interface -- no import of @forgeax/engine-runtime.
+  if (!world.hasResource(ASSET_REGISTRY_RESOURCE_KEY)) {
+    return (_clipHandle: number): AudioBuffer | undefined => undefined;
+  }
+
+  // Duck-type: { get(handle): Result<{ kind, buffer }, ...> }
+  const assets = world.getResource(ASSET_REGISTRY_RESOURCE_KEY) as {
+    get(
+      handle: number,
+    ):
+      | { ok: boolean; value?: { kind: string; buffer: AudioBuffer } }
+      | { ok: boolean; error: unknown };
+  };
+
+  return (_clipHandle: number): AudioBuffer | undefined => {
+    const res = assets.get(_clipHandle);
+    if (
+      res.ok &&
+      (res as { value?: { kind?: string; buffer?: AudioBuffer } }).value?.kind === 'audio'
+    ) {
+      return (res as { value: { buffer: AudioBuffer } }).value.buffer;
     }
     return undefined;
   };

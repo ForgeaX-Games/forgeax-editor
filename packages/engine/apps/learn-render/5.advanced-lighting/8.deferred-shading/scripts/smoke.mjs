@@ -188,15 +188,22 @@ if (assets === null) {
   process.exit(1);
 }
 
+// Register HDRP RenderPipelineAsset.
+const hdrpAssetRes = assets.register({
+  kind: 'render-pipeline',
+  pipelineId: HDRP_PIPELINE_ID,
+  config: { clusterGrid: CLUSTER_GRID },
+});
+if (!hdrpAssetRes.ok) {
+  console.error(`[smoke] FAIL - HDRP asset register: ${hdrpAssetRes.error.code}`);
+  process.exit(1);
+}
+
 let installSuccess = false;
 if (FALSIFY === 'force-urp') {
   console.log('[smoke] FALSIFY=force-urp -- skipping installPipeline(hdrpHandle)');
 } else {
-  const installRes = app.renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: CLUSTER_GRID },
-  });
+  const installRes = app.renderer.installPipeline(hdrpAssetRes.value);
   if (!installRes.ok) {
     console.error(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
     process.exit(1);
@@ -222,8 +229,12 @@ for (let row = 0; row < 3; row++) {
     const [r, g, b] = cubeColors[idx];
 
     const mat = Materials.standard({ baseColor: [r, g, b, 1] });
-    const matHandle = world.allocSharedRef('MaterialAsset', mat);
-    cubeHandles.push(matHandle);
+    const matRes = assets.register(mat);
+    if (!matRes.ok) {
+      console.error(`[smoke] FAIL - material register: ${matRes.error.code}`);
+      process.exit(1);
+    }
+    cubeHandles.push(matRes.value);
 
     world.spawn(
       {
@@ -235,7 +246,7 @@ for (let row = 0; row < 3; row++) {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matHandle] } },
+      { component: MeshRenderer, data: { materials: [matRes.value] } },
     ).unwrap();
     idx++;
   }

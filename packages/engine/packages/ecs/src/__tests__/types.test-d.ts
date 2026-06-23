@@ -142,7 +142,7 @@ describe('SystemDescriptor type', () => {
     const desc: SystemDescriptor = {
       name: 'test',
       queries: [],
-      fn: (_world, queryResults, commands) => {
+      fn: (queryResults, commands) => {
         const sample = queryResults[0]?.[0];
         if (sample) {
           // Default-shape bundle: with the `with` tuple defaulted to
@@ -334,8 +334,7 @@ describe('[w11] T-2 — SystemDescriptor.fn first param maps over Qs', () => {
     type Qs = readonly [QueryDescriptor<readonly [typeof Position]>];
     type Desc = SystemDescriptor<Qs>;
     type Fn = Desc['fn'];
-    // Parameters<Fn>[0] is `world`; [1] is the mapped query-results tuple.
-    type FirstQueryBundles = Parameters<Fn>[1][0];
+    type FirstQueryBundles = Parameters<Fn>[0][0];
     type FirstBundle = FirstQueryBundles[number];
 
     // queryResults[0] is an array of NestedColumnBundle<readonly [typeof Position]>
@@ -368,9 +367,8 @@ describe('[w12] T-3 — multi-query Qs tuple independence', () => {
     ];
     type Desc = SystemDescriptor<Qs>;
     type Fn = Desc['fn'];
-    // Parameters<Fn>[0] is `world`; [1] is the mapped query-results tuple.
-    type Q0Bundle = Parameters<Fn>[1][0][number];
-    type Q1Bundle = Parameters<Fn>[1][1][number];
+    type Q0Bundle = Parameters<Fn>[0][0][number];
+    type Q1Bundle = Parameters<Fn>[0][1][number];
 
     // Forward: Position is reachable through Q0, Velocity through Q1.
     expectTypeOf<Q0Bundle['Position']['x']>().toEqualTypeOf<Float32Array>();
@@ -445,7 +443,7 @@ describe('[w15] AC-5 — world.addSystem<const Qs> boundary inference', () => {
     world.addSystem({
       name: 'ac5-probe',
       queries: [{ with: [Position, Velocity] }],
-      fn: (_world, queryResults, _commands) => {
+      fn: (queryResults, _commands) => {
         const sample = queryResults[0]?.[0];
         if (sample) {
           expectTypeOf(sample.Position.x).toEqualTypeOf<Float32Array>();

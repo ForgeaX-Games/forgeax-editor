@@ -5,27 +5,23 @@
 //   Middle: GameProjectSchema (self-introspection, charter P2) + GameProject type
 //   Bottom: FORGE_JSON constant + resolveDefaultScene + GameProjectError types
 
-export type {
-  ForgeGuidMalformedDetail,
-  ForgeMissingDetail,
-  ForgeParseFailedDetail,
-  ForgeSceneUnresolvedDetail,
-  ForgeSchemaInvalidDetail,
-  ForgeUnknownFieldDetail,
-  GameProjectErrorCode,
-  GameProjectErrorDetail,
-} from './errors.js';
-export { GameProjectError } from './errors.js';
-export type { ResolvedScene } from './loader.js';
 // ── Top tier: primary entry points ──────────────────────────────────────────
-export {
-  loadGameProject,
-  loadGameProjectSync,
-  resolveDefaultScene,
-  validateGameProject,
-} from './loader.js';
-// ── Bottom tier: constants + error types ────────────────────────────────────
-export { FORGE_JSON } from './paths.js';
-export type { GameProject } from './schema.js';
+export { loadGameProject, resolveDefaultScene } from './loader.js';
+export type { ResolvedScene } from './loader.js';
+
 // ── Middle tier: schema self-introspection + types ──────────────────────────
 export { GameProjectSchema } from './schema.js';
+export type { GameProject } from './schema.js';
+
+// ── Bottom tier: constants + error types ────────────────────────────────────
+export { FORGE_JSON } from './paths.js';
+export { GameProjectError } from './errors.js';
+export type { GameProjectErrorCode, GameProjectErrorDetail } from './errors.js';
+export type {
+  ForgeMissingDetail,
+  ForgeParseFailedDetail,
+  ForgeSchemaInvalidDetail,
+  ForgeUnknownFieldDetail,
+  ForgeGuidMalformedDetail,
+  ForgeSceneUnresolvedDetail,
+} from './errors.js';

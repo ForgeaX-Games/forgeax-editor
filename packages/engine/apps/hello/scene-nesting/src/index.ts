@@ -34,12 +34,12 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // Register built-in materials.
   const unlitMatGuid = AssetGuid.parse('008e4f75-e7a3-4715-b05b-b93a9ec12074');
   if (!unlitMatGuid.ok) throw new Error('unlit material GUID parse failed');
-  assets.catalog(unlitMatGuid.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
+  assets.registerWithGuid(unlitMatGuid.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
 
-  // Catalog standard material GUID.
+  // Register standard material GUID.
   const stdMatGuid = AssetGuid.parse('f6af7007-158f-4d92-9e47-93bf2f213e1f');
   if (!stdMatGuid.ok) throw new Error('standard material GUID parse failed');
-  assets.catalog(stdMatGuid.value, {
+  assets.registerWithGuid(stdMatGuid.value, {
     kind: 'material',
     passes: [
       { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
@@ -71,15 +71,11 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     },
   });
 
-  const innerSceneRes = await assets.loadByGuid<SceneAsset>(innerCubeGuid.value);
-  if (!innerSceneRes.ok) throw new Error(`inner scene loadByGuid failed: ${innerSceneRes.error.code}`);
+  const innerSceneHandleRes = await assets.loadByGuid<SceneAsset>(innerCubeGuid.value);
+  if (!innerSceneHandleRes.ok) throw new Error(`inner scene loadByGuid failed: ${innerSceneHandleRes.error.code}`);
 
-  const outerSceneRes = await assets.loadByGuid<SceneAsset>(outerSceneGuid.value);
-  if (!outerSceneRes.ok) throw new Error(`outer scene loadByGuid failed: ${outerSceneRes.error.code}`);
-
-  // loadByGuid returns payloads (D-17); mint user-tier column handles.
-  const innerSceneHandle = world.allocSharedRef('SceneAsset', innerSceneRes.value);
-  const outerSceneHandle = world.allocSharedRef('SceneAsset', outerSceneRes.value);
+  const outerSceneHandleRes = await assets.loadByGuid<SceneAsset>(outerSceneGuid.value);
+  if (!outerSceneHandleRes.ok) throw new Error(`outer scene loadByGuid failed: ${outerSceneHandleRes.error.code}`);
 
   // Wire the sceneAssetResolver so mount.source can resolve the inner scene.
   // R2/F-3: _setSceneAssetResolver is @internal — AI users normally never
@@ -91,13 +87,13 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // (loadByGuid is recursive over scene refs[] per
   // tweak-20260609-asset-registry-instantiate-scene-by-guid).
   world._setSceneAssetResolver(
-    (sourceIndex: number, _parentHandle: Handle<'SceneAsset', 'shared'>) => {
+    (sourceIndex: number, _parentHandle: Handle<'SceneAsset', 'unmanaged'>) => {
       void sourceIndex;
-      return ok(innerSceneHandle);
+      return ok(innerSceneHandleRes.value as unknown as Handle<'SceneAsset', 'unmanaged'>);
     },
   );
 
-  const instRes = assets.instantiate<SceneAsset>(outerSceneHandle, world);
+  const instRes = assets.instantiate<SceneAsset>(outerSceneHandleRes.value, world);
   if (!instRes.ok) {
     console.error(`[hello-scene-nesting] instantiate failed: ${instRes.error.code}`);
     throw new Error(instRes.error.hint ?? 'instantiate failed');

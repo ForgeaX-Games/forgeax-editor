@@ -1,6 +1,7 @@
 // SceneInstance detachSceneMember / reattachSceneMember + despawnScene tests (w30 M4 rewrite).
 
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
 import type { EntityHandle } from '../entity-handle';
@@ -14,9 +15,9 @@ const Transform = defineComponent('Transform', {
   posZ: { type: 'f32' },
 });
 defineComponent('SceneInstance', {
-  source: { type: 'shared<SceneAsset>' },
+  source: { type: 'handle<SceneAsset>' },
   mapping: { type: 'array<entity>' },
-  state: { type: 'unique<SceneInstanceState>' },
+  state: { type: 'ref<SceneInstanceState>' },
 });
 
 function localId(n: number): LocalEntityId {
@@ -27,8 +28,9 @@ function buildScene(nodes: readonly SceneEntity[]): SceneAsset {
   return { kind: 'scene', entities: nodes };
 }
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
-  return world.allocSharedRef('SceneAsset', asset);
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
+  const managed = world.allocManagedRef('SceneAsset', asset);
+  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
 }
 
 function isLiveWithTransform(world: World, e: number): boolean {

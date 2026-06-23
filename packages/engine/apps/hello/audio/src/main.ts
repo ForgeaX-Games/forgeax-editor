@@ -47,6 +47,8 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { Handle } from '@forgeax/engine-types';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { PackError } from '@forgeax/engine-pack/errors';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -76,6 +78,7 @@ if (!ready.ok) {
 // Step 2: load the SFX asset through the pack-index pipeline.
 // D-7: Dev path resolves via vite-plugin-pack /__pack/lookup/:guid;
 // build path resolves via pack-index.json emitted at build time.
+const assets = app.renderer.assets;
 
 // Resolve GUID -> relativeUrl via the pack-index.
 let sfxRelativeUrl: string | undefined;
@@ -143,7 +146,7 @@ world
 
 // Sentry value: a Handle strong enough to compile when AudioSource.clip
 // is `handle<AudioClipAsset>` (branded number), yet semantically "none".
-const HANDLE_NONE = 0 as unknown as Handle<'AudioClipAsset', 'shared'>;
+const HANDLE_NONE = 0 as unknown as Handle<'AudioClipAsset', 'unmanaged'>;
 
 // Emitter: marker cube at origin.
 const emitterEntity = world
@@ -159,21 +162,27 @@ const emitterEntity = world
   .unwrap();
 
 // Step 2b: load the audio clip and register with the emitter.
-let sfxClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
+let sfxClipHandle: Handle<'AudioClipAsset', 'unmanaged'> = HANDLE_NONE;
 if (sfxRelativeUrl) {
   const loadRes = await loadAudioClipByGuid(SFX_GUID, sfxRelativeUrl);
   if (loadRes.ok) {
     const clip = loadRes.value;
-    // Mint a user-tier shared ref for the loaded clip payload.
-    sfxClipHandle = world.allocSharedRef('AudioClipAsset', clip);
-    // Install the clip handle on the emitter's AudioSource.
-    world.set(emitterEntity, AudioSource, {
-      clip: sfxClipHandle,
-      playing: false,
-      spatialBlend: 1.0,
-      bus: 'sfx',
-    });
-    console.warn('[hello-audio] SFX loaded and registered');
+    const guidRes = AssetGuid.parse(SFX_GUID);
+    if (!guidRes.ok) {
+      const pe: PackError = guidRes.error;
+      console.error('[hello-audio] AssetGuid.parse failed:', pe.code, pe.hint);
+    } else {
+      // registerWithGuid returns Handle directly (throws on duplicate GUID).
+      sfxClipHandle = assets.registerWithGuid(guidRes.value, clip);
+      // Install the clip handle on the emitter's AudioSource.
+      world.set(emitterEntity, AudioSource, {
+        clip: sfxClipHandle,
+        playing: false,
+        spatialBlend: 1.0,
+        bus: 'sfx',
+      });
+      console.warn('[hello-audio] SFX loaded and registered');
+    }
   } else {
     console.error(
       '[hello-audio] loadAudioClipByGuid failed:',

@@ -18,7 +18,7 @@
 // - plain `number` does not extend Handle<...> (untagged u32 rejection)
 // - AssetTagMap interface - 13 closed members aligned with Asset.kind 13 tags
 // - TagOf<T extends Asset> distributive conditional - 13 tag mappings + 1 never tail
-// - toUnique / toShared / unwrapHandle factory return type assertions
+// - toManaged / toUnmanaged / unwrapHandle factory return type assertions
 //
 // Charter mapping: F1 (single-entry IDE autocomplete from
 // `@forgeax/engine-types`) + P3 (cross-mode rejection is a TS compile-time
@@ -29,11 +29,11 @@ import { describe, expectTypeOf, it } from 'vitest';
 import {
   type AssetTagMap,
   type Handle,
-  type SharedHandle,
+  type ManagedHandle,
   type TagOf,
-  toShared,
-  toUnique,
-  type UniqueHandle,
+  toManaged,
+  toUnmanaged,
+  type UnmanagedHandle,
   unwrapHandle,
 } from '../handle';
 import type {
@@ -55,39 +55,39 @@ import type {
 
 describe('Handle<T extends string, M> double-axis brand identity', () => {
   it('Handle<MeshAsset, unmanaged> is not equal to Handle<TextureAsset, unmanaged> (cross-tag rejection)', () => {
-    expectTypeOf<Handle<'MeshAsset', 'shared'>>().not.toEqualTypeOf<
-      Handle<'TextureAsset', 'shared'>
+    expectTypeOf<Handle<'MeshAsset', 'unmanaged'>>().not.toEqualTypeOf<
+      Handle<'TextureAsset', 'unmanaged'>
     >();
   });
 
   it('Handle<MaterialAsset, unmanaged> is not equal to Handle<SamplerAsset, unmanaged>', () => {
-    expectTypeOf<Handle<'MaterialAsset', 'shared'>>().not.toEqualTypeOf<
-      Handle<'SamplerAsset', 'shared'>
+    expectTypeOf<Handle<'MaterialAsset', 'unmanaged'>>().not.toEqualTypeOf<
+      Handle<'SamplerAsset', 'unmanaged'>
     >();
   });
 
   it('Handle<MeshAsset, managed> is not equal to Handle<MeshAsset, unmanaged> (cross-mode rejection)', () => {
-    expectTypeOf<Handle<'MeshAsset', 'unique'>>().not.toEqualTypeOf<
-      Handle<'MeshAsset', 'shared'>
+    expectTypeOf<Handle<'MeshAsset', 'managed'>>().not.toEqualTypeOf<
+      Handle<'MeshAsset', 'unmanaged'>
     >();
   });
 
   it('Handle<String, managed> is distinct from Handle<MeshAsset, managed>', () => {
-    expectTypeOf<Handle<'String', 'unique'>>().not.toEqualTypeOf<Handle<'MeshAsset', 'unique'>>();
+    expectTypeOf<Handle<'String', 'managed'>>().not.toEqualTypeOf<Handle<'MeshAsset', 'managed'>>();
   });
 
   it('Handle<T, M> extends number (u32 runtime storage)', () => {
-    expectTypeOf<Handle<'MeshAsset', 'shared'>>().toExtend<number>();
-    expectTypeOf<Handle<'TextureAsset', 'shared'>>().toExtend<number>();
-    expectTypeOf<Handle<'SamplerAsset', 'shared'>>().toExtend<number>();
-    expectTypeOf<Handle<'MaterialAsset', 'shared'>>().toExtend<number>();
-    expectTypeOf<Handle<'SceneAsset', 'shared'>>().toExtend<number>();
-    expectTypeOf<Handle<'String', 'unique'>>().toExtend<number>();
+    expectTypeOf<Handle<'MeshAsset', 'unmanaged'>>().toExtend<number>();
+    expectTypeOf<Handle<'TextureAsset', 'unmanaged'>>().toExtend<number>();
+    expectTypeOf<Handle<'SamplerAsset', 'unmanaged'>>().toExtend<number>();
+    expectTypeOf<Handle<'MaterialAsset', 'unmanaged'>>().toExtend<number>();
+    expectTypeOf<Handle<'SceneAsset', 'unmanaged'>>().toExtend<number>();
+    expectTypeOf<Handle<'String', 'managed'>>().toExtend<number>();
   });
 
   it('plain `number` does not extend Handle<T,M> (brand guards against untagged u32)', () => {
-    expectTypeOf<number>().not.toExtend<Handle<'MeshAsset', 'shared'>>();
-    expectTypeOf<number>().not.toExtend<Handle<'String', 'unique'>>();
+    expectTypeOf<number>().not.toExtend<Handle<'MeshAsset', 'unmanaged'>>();
+    expectTypeOf<number>().not.toExtend<Handle<'String', 'managed'>>();
   });
 });
 
@@ -213,21 +213,21 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
   });
 });
 
-describe('Factory helpers — toUnique / toShared / unwrapHandle return-type narrow', () => {
-  it('toUnique<T>(raw) returns Handle<T, managed>', () => {
-    const h = toUnique<'String'>(0);
-    expectTypeOf(h).toEqualTypeOf<Handle<'String', 'unique'>>();
-    expectTypeOf(h).toEqualTypeOf<UniqueHandle<'String'>>();
+describe('Factory helpers — toManaged / toUnmanaged / unwrapHandle return-type narrow', () => {
+  it('toManaged<T>(raw) returns Handle<T, managed>', () => {
+    const h = toManaged<'String'>(0);
+    expectTypeOf(h).toEqualTypeOf<Handle<'String', 'managed'>>();
+    expectTypeOf(h).toEqualTypeOf<ManagedHandle<'String'>>();
   });
 
-  it('toShared<T>(raw) returns Handle<T, unmanaged>', () => {
-    const h = toShared<'MeshAsset'>(0);
-    expectTypeOf(h).toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();
-    expectTypeOf(h).toEqualTypeOf<SharedHandle<'MeshAsset'>>();
+  it('toUnmanaged<T>(raw) returns Handle<T, unmanaged>', () => {
+    const h = toUnmanaged<'MeshAsset'>(0);
+    expectTypeOf(h).toEqualTypeOf<Handle<'MeshAsset', 'unmanaged'>>();
+    expectTypeOf(h).toEqualTypeOf<UnmanagedHandle<'MeshAsset'>>();
   });
 
   it('unwrapHandle<T,M>(h) returns plain number (brand erased)', () => {
-    const h = toShared<'MeshAsset'>(7);
+    const h = toUnmanaged<'MeshAsset'>(7);
     const raw = unwrapHandle(h);
     expectTypeOf(raw).toEqualTypeOf<number>();
   });

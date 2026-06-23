@@ -224,8 +224,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     DirectionalLight: unknown;
     DirectionalLightShadow: unknown;
     Skylight: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -284,7 +284,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       MeshFilter: unknown;
       MeshRenderer: unknown;
       DirectionalLight: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
     },
     options?: { entityCount?: number },
   ) {
@@ -962,8 +962,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     Camera: unknown;
     DirectionalLight: unknown;
     DirectionalLightShadow: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -1015,7 +1015,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       MeshFilter: unknown;
       MeshRenderer: unknown;
       DirectionalLight: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
     },
   ) {
     const w = world as {
@@ -1340,8 +1340,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     Camera: unknown;
     DirectionalLight: unknown;
     DirectionalLightShadow: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -1793,7 +1793,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -1845,7 +1845,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       MeshFilter: unknown;
       MeshRenderer: unknown;
       DirectionalLight: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
     },
     options?: { entityCount?: number },
   ) {

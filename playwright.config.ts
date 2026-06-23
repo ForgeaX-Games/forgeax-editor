@@ -34,7 +34,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: 'list',
-  timeout: 120_000,
+  timeout: 30_000,
   expect: {
     // Ten-second poll budget covers cold-start dev server + first VAG_*
     // emission (plan-strategy 4 R-AC-08 fallback). expect.poll uses
@@ -77,32 +77,11 @@ export default defineConfig({
       stdout: 'pipe',
       stderr: 'pipe',
     },
-    {
-      // engine vite dev server on :15173 — serves play-runtime preview
-      // at /preview/?game=<slug> for M5 e2e smoke tests (AC-08/09).
-      // Port 15173 is the play-runtime vite.config.ts default.
-      command: 'bunx vite --port 15173 --strictPort',
-      cwd: './packages/play-runtime',
-      env: { ...process.env, FORGEAX_ENGINE_PORT: '15173' },
-      url: 'http://127.0.0.1:15173/preview/',
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-    },
   ],
   projects: [
     {
       name: 'chromium',
-      use: {
-        browserName: 'chromium',
-        launchOptions: {
-          args: [
-            '--enable-unsafe-webgpu',
-            '--enable-webgpu-developer-features',
-            '--use-gl=angle',
-            '--use-angle=swiftshader',
-          ],
-        },
-      },
+      use: { browserName: 'chromium' },
     },
   ],
 });

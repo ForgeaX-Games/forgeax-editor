@@ -12,20 +12,19 @@
 //   - R-4  shader-late-register risk: material loaded before its shader is
 //          registered. The graceful fallback keeps the load path live.
 //
-// Four scenarios (plan-strategy section 5.3 acceptance), updated for
-// feat-20260614 M8 (D-19): the loader no longer resolves a texture-typed
-// paramValue to a runtime handle. It maps the refs[] index to the embedded
-// sub-asset GUID string; the ECS/render side resolves GUID -> column handle
-// at use time (world.allocSharedRef). `LoadContext.resolveRefSync` is gone.
-//   (1) shader registered + texture-typed paramValue + valid refs[] index
-//       -> loader rewrites the field to the refs[] GUID string.
-//   (2) shader registered + texture-typed paramValue + index out of range
-//       -> loader drops the field; record stage falls back to MISSING_TEXTURE_HANDLE.
+// Four scenarios (plan-strategy section 5.3 acceptance):
+//   (1) shader registered + texture-typed paramValue + valid texture handle
+//       -> loader resolves, extract keeps the handle (passthrough).
+//   (2) shader registered + texture-typed paramValue + refs unresolved
+//       -> loader drops the field, extract reads undefined, record stage
+//          falls back to MISSING_TEXTURE_HANDLE (default white).
 //   (3) shader NOT registered yet (cross-worktree R-4) + int paramValue
-//       -> graceful fallback resolves every in-range int to its refs[] GUID.
+//       -> loader's graceful fallback resolves every int in [0, refs.length)
+//          to a handle.
 //   (4) shader registered + scalar-typed paramValue (metallic = 0) whose
-//       value happens to land in [0, refs.length) -> paramSchema-aware path
-//       skips it; the field stays as the original int.
+//       value happens to land in [0, refs.length) -> loader's
+//       paramSchema-aware path skips it (only declared texture fields are
+//       resolved); the field stays as the original int.
 
 import type { LoadContext, ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
@@ -33,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 import { materialLoader } from '../asset-registry';
 
 function makeCtx(opts: {
+  resolveRefSync?: (guid: string) => number | undefined;
   shaderTextureFieldNames?: (shaderId: string) => ReadonlySet<string> | undefined;
 }): LoadContext {
   const ctx: LoadContext = {
@@ -41,6 +41,7 @@ function makeCtx(opts: {
     device: undefined,
     reportParseError: () => {},
   };
+  if (opts.resolveRefSync) ctx.resolveRefSync = opts.resolveRefSync;
   if (opts.shaderTextureFieldNames) {
     ctx.getMaterialShaderTextureFieldNames = opts.shaderTextureFieldNames;
   }
@@ -56,9 +57,10 @@ const standardPbrSchema: readonly ParamSchemaEntry[] = [
 ];
 
 describe('loader-extract graceful handoff (M4 w24)', () => {
-  it('(1) shader registered + valid texture refs[] index resolves to GUID string', () => {
+  it('(1) shader registered + valid texture refs[] index resolves to handle', () => {
     const textureFields = derive(standardPbrSchema).textureFieldNames;
     const ctx = makeCtx({
+      resolveRefSync: (guid) => (guid === 'tex-bc-guid' ? 100 : undefined),
       shaderTextureFieldNames: (id) =>
         id === 'forgeax::default-standard-pbr' ? textureFields : undefined,
     });
@@ -72,23 +74,23 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
-    // D-19: texture field rewritten to the refs[] GUID string (not a handle).
-    expect(pv.baseColorTexture).toBe('tex-bc-guid');
+    // Texture field resolved to handle 100.
+    expect(pv.baseColorTexture).toBe(100);
     // Scalar field unchanged.
     expect(pv.metallic).toBe(0.5);
   });
 
-  it('(2) shader registered + texture refs[] index out of range -> field dropped', () => {
+  it('(2) shader registered + texture refs[] entry not registered -> field dropped', () => {
     const textureFields = derive(standardPbrSchema).textureFieldNames;
     const ctx = makeCtx({
+      resolveRefSync: () => undefined, // texture sub-asset not registered
       shaderTextureFieldNames: (id) =>
         id === 'forgeax::default-standard-pbr' ? textureFields : undefined,
     });
     const out = materialLoader.load(
       {
         passes: [{ shader: 'forgeax::default-standard-pbr' }],
-        // index 5 is out of range for refs.length=1 -> dropped.
-        paramValues: { baseColorTexture: 5 },
+        paramValues: { baseColorTexture: 0 },
       },
       ['tex-bc-guid'],
       ctx,
@@ -103,6 +105,7 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     // No paramSchema lookup available -> getMaterialShaderTextureFieldNames
     // returns undefined for every shader id.
     const ctx = makeCtx({
+      resolveRefSync: (guid) => (guid === 'tex-guid' ? 200 : undefined),
       shaderTextureFieldNames: () => undefined,
     });
     const out = materialLoader.load(
@@ -115,13 +118,14 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
-    // Graceful fallback resolves any in-range int to its refs[] GUID string.
-    expect(pv.customTexture).toBe('tex-guid');
+    // Graceful fallback resolves any int in [0, refs.length).
+    expect(pv.customTexture).toBe(200);
   });
 
   it('(4) shader registered + scalar paramValue with refs[] index in range -> NOT misclassified', () => {
     const textureFields = derive(standardPbrSchema).textureFieldNames;
     const ctx = makeCtx({
+      resolveRefSync: () => 999, // would resolve if attempted
       shaderTextureFieldNames: (id) =>
         id === 'forgeax::default-standard-pbr' ? textureFields : undefined,
     });
@@ -138,9 +142,9 @@ describe('loader-extract graceful handoff (M4 w24)', () => {
     );
     expect(out).toMatchObject({ kind: 'material' });
     const pv = (out as { paramValues: Record<string, unknown> }).paramValues;
-    // Texture field still resolves to the refs[] GUID string.
-    expect(pv.baseColorTexture).toBe('tex-bc-guid');
-    // Scalar field unchanged: metallic stays 0.
+    // Texture field still resolves.
+    expect(pv.baseColorTexture).toBe(999);
+    // Scalar field unchanged: metallic stays 0, NOT 999.
     expect(pv.metallic).toBe(0);
   });
 });

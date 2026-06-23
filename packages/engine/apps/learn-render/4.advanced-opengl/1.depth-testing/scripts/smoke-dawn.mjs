@@ -151,7 +151,6 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const metalDecodeRes = await decodeImageFromFile(METAL_SRC_PATH);
@@ -234,18 +233,12 @@ const marbleTexAsset = {
   colorSpace: marbleDecoded.colorSpace,
   mipmap: marbleDecoded.mipmap,
 };
-const world = new World();
-
-// feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
-// allocSharedRef; GUIDs are catalogued for loadByGuid parity.
-const metalHandle = unwrapHandle(world.allocSharedRef('TextureAsset', metalTexAsset));
-const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', marbleTexAsset));
-assets.catalog(metalGuidRes.value, metalTexAsset);
-assets.catalog(marbleGuidRes.value, marbleTexAsset);
+const metalHandle = assets.registerWithGuid(metalGuidRes.value, metalTexAsset);
+const marbleHandle = assets.registerWithGuid(marbleGuidRes.value, marbleTexAsset);
 console.log(`[learn-render-1-depth-testing] registered metal handle id=${metalHandle}`);
 
 // Register materials with pass-based MaterialAsset shape.
-const floorMatHandle = world.allocSharedRef('MaterialAsset', {
+const floorMatHandle = assets.register({
   kind: 'material',
   passes: [
     {
@@ -261,7 +254,7 @@ const floorMatHandle = world.allocSharedRef('MaterialAsset', {
     baseColorTexture: metalHandle,
   },
 });
-const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
+const cubeMatHandle = assets.register({
   kind: 'material',
   passes: [
     {
@@ -277,6 +270,8 @@ const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
     baseColorTexture: marbleHandle,
   },
 });
+
+const world = new World();
 
 // Floor: HANDLE_QUAD is 1x1 in XY, rotated -90 deg around X to lie flat.
 const SIN_NEG_90 = Math.sin(-Math.PI / 4);

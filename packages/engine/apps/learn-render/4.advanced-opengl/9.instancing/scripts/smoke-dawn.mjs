@@ -175,12 +175,10 @@ const {
   createRenderer,
   DirectionalLight,
   Instances,
-  Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { meshIrToMeshAsset } = await import('@forgeax/engine-gltf');
 const { parseGltfFromFile } = await import('@forgeax/engine-gltf/node');
@@ -258,36 +256,34 @@ const mkTex = (decoded) => ({
   colorSpace: decoded.colorSpace,
   mipmap: decoded.mipmap,
 });
-// World must exist before allocSharedRef mints any column handle.
-const world = new World();
+const marsHandle = assets.registerWithGuid(marsGuidRes.value, mkTex(marsDecoded));
+const rockTexHandle = assets.registerWithGuid(rockTexGuidRes.value, mkTex(rockTexDecoded));
 
-// Texture handles feed material baseColorTexture fields (numeric slot ->
-// unwrapHandle); mesh handles feed MeshFilter.assetHandle (branded handle).
-const marsHandle = unwrapHandle(world.allocSharedRef('TextureAsset', mkTex(marsDecoded)));
-const rockTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', mkTex(rockTexDecoded)));
-
-// Bridge planet/rock mesh IRs to MeshAsset.
+// Bridge planet/rock mesh IRs to MeshAsset and register under the
+// vendored GUIDs.
 const planetMeshIrs = planetDoc.meshes.filter((m) => m.meshIndex === 0);
 const rockMeshIrs = rockDoc.meshes.filter((m) => m.meshIndex === 0);
 const planetMeshAsset = meshIrToMeshAsset(planetMeshIrs);
 const rockMeshAsset = meshIrToMeshAsset(rockMeshIrs);
-const planetMeshHandle = world.allocSharedRef('MeshAsset', planetMeshAsset);
-const rockMeshHandle = world.allocSharedRef('MeshAsset', rockMeshAsset);
+const planetMeshHandle = assets.registerWithGuid(PLANET_MESH_GUID.value, planetMeshAsset);
+const rockMeshHandle = assets.registerWithGuid(ROCK_MESH_GUID.value, rockMeshAsset);
 
-// Materials: planet uses mars.png, asteroid uses rock.png. PBR standard
-// (Materials.standard mirrors src/index.ts; emits a passes-based payload).
-const planetMaterial = world.allocSharedRef('MaterialAsset', Materials.standard({
+// Materials: planet uses mars.png, asteroid uses rock.png. Both unlit
+// for the dawn-node smoke (deferred upload falls back to white view).
+const planetMaterial = assets.register({
+  kind: 'material',
+  shadingModel: 'unlit',
   baseColor: [0.7, 0.7, 0.7, 1],
-  metallic: 0.1,
-  roughness: 0.8,
   baseColorTexture: marsHandle,
-}));
-const rockMaterial = world.allocSharedRef('MaterialAsset', Materials.standard({
+});
+const rockMaterial = assets.register({
+  kind: 'material',
+  shadingModel: 'unlit',
   baseColor: [0.7, 0.7, 0.7, 1],
-  metallic: 0.05,
-  roughness: 0.9,
   baseColorTexture: rockTexHandle,
-}));
+});
+
+const world = new World();
 
 // LO 4.9 central planet (non-instanced) at origin.
 world.spawn(

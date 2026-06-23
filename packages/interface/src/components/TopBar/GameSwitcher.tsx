@@ -5,7 +5,6 @@ import { Gamepad2, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAppStore } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
-import { useTranslation } from '@/i18n';
 import './TopBar.css';
 
 interface GameRow {
@@ -16,7 +15,6 @@ interface GameRow {
 }
 
 export function GameSwitcher() {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<null | 'game'>(null);
   const [games, setGames] = useState<GameRow[]>([]);
@@ -38,8 +36,8 @@ export function GameSwitcher() {
 
   useEffect(() => {
     reload();
-    const timer = setInterval(reload, 6000);
-    return () => clearInterval(timer);
+    const t = setInterval(reload, 6000);
+    return () => clearInterval(t);
   }, []);
 
   // Picking a game pins it client-side (preview / agents scoping) AND tells the
@@ -58,20 +56,20 @@ export function GameSwitcher() {
       // may still point at the previous game. Surface it instead of silently
       // leaving that mismatch in place.
       void alertDialog({
-        title: t('gameSwitcher.activateFailedTitle'),
-        body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
+        title: '切换游戏未完全生效',
+        body: `预览已切到 ${slug}，但服务端激活失败（${(e as Error).message}）。Agent 的工作目录与产出物可能仍指向旧游戏，可重试或刷新。`,
       });
     }
   };
 
   const onDelete = async (slug: string) => {
-    if (!(await confirmDialog({ body: t('gameSwitcher.deleteConfirm', { slug }), danger: true }))) return;
+    if (!(await confirmDialog({ body: `确认删除 games/${slug}/ ？此操作不可撤销。`, danger: true }))) return;
     try {
       await fetch(`/api/workbench/games/${slug}`, { method: 'DELETE' });
       if (pinnedSlug === slug) setPinnedSlug(null);
       await reload();
     } catch (e) {
-      void alertDialog({ title: t('gameSwitcher.deleteFailedTitle'), body: (e as Error).message });
+      void alertDialog({ title: '删除失败', body: (e as Error).message });
     }
   };
 
@@ -81,7 +79,7 @@ export function GameSwitcher() {
       <PopoverTrigger asChild>
         <button
           className="tb-game-btn"
-          title={t('gameSwitcher.switchTooltip')}
+          title="切换游戏（每个游戏 = 一个 game）"
         >
           <Gamepad2 size={16} />
           <span className="tb-game-label">{currentGame?.name ?? currentSlug ?? '_template'}</span>
@@ -105,28 +103,28 @@ export function GameSwitcher() {
               background: 'var(--bg-2)',
               zIndex: 1,
             }}
-            title={t('gameSwitcher.newGameTooltip')}
+            title="在当前 workspace 下新建一个 .forgeax/games/<slug>/（Iori/Suzu 设计 + Forge 写代码）"
           >
             <Plus size={12} style={{ marginRight: 4 }} />
-            <span className="tb-game-name">{t('gameSwitcher.newGame')}</span>
+            <span className="tb-game-name">新建 game</span>
           </button>
           {games.length === 0 && (
-            <div className="tb-game-empty">{t('gameSwitcher.empty')}</div>
+            <div className="tb-game-empty">暂无 game · 点上方 + 新建</div>
           )}
           {games.map((g) => (
             <div key={g.slug} className={`tb-game-row ${g.slug === currentSlug ? 'active' : ''}`} data-game-slug={g.slug}>
               <button
                 className="tb-game-pick"
                 onClick={() => void onPick(g.slug)}
-                title={t('gameSwitcher.switchToTooltip', { slug: g.slug })}
+                title={`切到 games/${g.slug}/`}
               >
                 <span className="tb-game-name">{g.name}</span>
-                <span className="tb-game-meta">{t('gameSwitcher.gameMeta', { count: g.fileCount, time: timeSince(g.mtime) })}</span>
+                <span className="tb-game-meta">{g.fileCount} files · {timeSince(g.mtime)}</span>
               </button>
               <button
                 className="tb-game-del"
                 onClick={() => void onDelete(g.slug)}
-                title={t('gameSwitcher.deleteTooltip')}
+                title="删除 game"
               >
                 <Trash2 size={11} />
               </button>
@@ -134,7 +132,7 @@ export function GameSwitcher() {
           ))}
           {pinnedSlug && (
             <button className="tb-game-row reset" onClick={() => { setPinnedSlug(null); setOpen(false); }}>
-              <span style={{ flex: 1, textAlign: 'left' }}>{t('gameSwitcher.unpin')}</span>
+              <span style={{ flex: 1, textAlign: 'left' }}>取消固定 — 跟随最新</span>
             </button>
           )}
         </div>
@@ -157,7 +155,6 @@ function timeSince(ms: number): string {
 
 
 function NewGameModal({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [brief, setBrief] = useState('');
@@ -169,7 +166,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
     if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(cleaned)) {
-      setErr(t('gameSwitcher.slugError'));
+      setErr('slug: 2-41 字符 / 小写 ASCII / 数字 / 连字符');
       return;
     }
     setBusy(true);
@@ -192,7 +189,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
       onClose();
       // Kick Forge with the brief so the design pipeline starts immediately.
       if (brief.trim()) {
-        void sendMessage(t('gameSwitcher.kickoffMessage', { slug: cleaned, brief: brief.trim() }));
+        void sendMessage(`刚创建了 games/${cleaned}/，brief：${brief.trim()}。请走完 Iori → Suzu → 你自己写代码的流水线。`);
       }
     } catch (e) {
       setErr((e as Error).message);
@@ -203,8 +200,8 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="tb-modal-overlay" onClick={onClose}>
       <div className="tb-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="tb-modal-title">{t('gameSwitcher.modalTitle')}</div>
-        <label className="tb-modal-label">{t('gameSwitcher.slugLabel')}</label>
+        <div className="tb-modal-title">新建项目</div>
+        <label className="tb-modal-label">slug (项目目录名)</label>
         <input
           autoFocus
           className="tb-modal-input"
@@ -212,26 +209,26 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
         />
-        <label className="tb-modal-label">{t('gameSwitcher.nameLabel')}</label>
+        <label className="tb-modal-label">显示名（可选）</label>
         <input
           className="tb-modal-input"
-          placeholder={t('gameSwitcher.namePlaceholder')}
+          placeholder="留空用 slug"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <label className="tb-modal-label">{t('gameSwitcher.briefLabel')}</label>
+        <label className="tb-modal-label">brief（可选 — 留下 Forge 立刻派 Iori 立柱）</label>
         <textarea
           className="tb-modal-textarea"
-          placeholder={t('gameSwitcher.briefPlaceholder')}
+          placeholder="e.g. 2D 卡牌肉鸽，每局 5-10 分钟，攒套牌轰爽快感"
           rows={3}
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
         />
         {err && <div className="tb-modal-error">{err}</div>}
         <div className="tb-modal-actions">
-          <button className="tb-modal-btn" onClick={onClose} disabled={busy}>{t('common.cancel')}</button>
+          <button className="tb-modal-btn" onClick={onClose} disabled={busy}>取消</button>
           <button className="tb-modal-btn primary" onClick={submit} disabled={busy}>
-            {busy ? t('gameSwitcher.creating') : t('gameSwitcher.create')}
+            {busy ? '创建中...' : '创建'}
           </button>
         </div>
       </div>

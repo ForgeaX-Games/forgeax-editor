@@ -217,29 +217,33 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       const world = buildWorld();
 
       // Cube A: casts shadow (default)
-      const matA = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
+      const matA = assets.register(Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
+      expect(matA.ok).toBe(true);
+      if (!matA.ok) return;
       world.spawn(
         {
           component: Transform,
           data: { posX: -3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matA] } },
+        { component: MeshRenderer, data: { materials: [matA.value] } },
       );
 
       // Cube B: no shadow (castShadow: false)
-      const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
+      const matB = assets.register(Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
+      expect(matB.ok).toBe(true);
+      if (!matB.ok) return;
       world.spawn(
         {
           component: Transform,
           data: { posX: 0, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matB] } },
+        { component: MeshRenderer, data: { materials: [matB.value] } },
       );
 
       // Cube C: cutout shadow shader
-      const matC = world.allocSharedRef('MaterialAsset', {
+      const matC = assets.register({
         kind: 'material',
         passes: [
           { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
@@ -247,13 +251,15 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
         ],
         paramValues: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
       });
+      expect(matC.ok).toBe(true);
+      if (!matC.ok) return;
       world.spawn(
         {
           component: Transform,
           data: { posX: 3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matC] } },
+        { component: MeshRenderer, data: { materials: [matC.value] } },
       );
 
       // Render one frame to populate shadow map

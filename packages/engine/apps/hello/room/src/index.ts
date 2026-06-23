@@ -78,13 +78,13 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       return;
     }
 
-    // Step 1: catalogue the scene's non-builtin materials under the same GUIDs
-    // declared in room.pack.json refs. `catalog` stores GUID->payload so the
-    // D-19 embedded-GUID resolution (inside instantiate) can resolve the GUID
-    // strings to payloads.
+    // Step 1: register the scene's non-builtin materials with the same GUIDs
+    // declared in room.pack.json refs. `registerWithGuid` populates the
+    // guidToHandle index so resolveSceneGuids (called inside instantiate) can
+    // resolve GUID strings to Handle numbers.
     // The cube mesh GUID (cbe42beb-...) is a builtin: the AssetRegistry
-    // constructor pre-catalogues HANDLE_CUBE under it (feat-20260603 Tier 0),
-    // so it resolves natively -- no manual registration needed (cataloguing
+    // constructor pre-registers HANDLE_CUBE under it (feat-20260603 Tier 0),
+    // so it resolves natively -- no manual registration needed (registering
     // createBoxGeometry(1,1,1) under it would now collide).
 
     // Schema-driven register for the standard PBR material. Passes through
@@ -96,7 +96,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       console.error('[room] standard material GUID parse failed:', stdMatGuidResult.error);
       return;
     }
-    assets.catalog(stdMatGuidResult.value, {
+    assets.registerWithGuid(stdMatGuidResult.value, {
       kind: 'material',
       passes: [
         {
@@ -124,7 +124,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // legacy hand-written unlit-discriminant shape carried no `passes` array
     // and resolved to empty passes at draw time, firing
     // `material-resolved-empty-passes` through renderer.onError.
-    assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
+    assets.registerWithGuid(unlitMatGuidResult.value, Materials.unlit([0.2, 0.3, 0.9, 1]));
 
     // Step 2: prepare World + register every component the SceneAsset
     // references. The SceneInstanceContainer resolver looks tokens up by
@@ -135,8 +135,8 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // in handle fields (post-parseScenePayload intermediate state). The refs
     // array maps index->GUID; each handle field value N becomes refs[N].
     // resolveSceneGuids (called inside instantiate) resolves these GUID
-    // strings to column handles by looking the payloads up in the catalogue
-    // populated by the catalog() calls above.
+    // strings back to Handle numbers via the guidToHandle index populated
+    // by registerWithGuid calls above.
     const sceneGuid = AssetGuid.parse(ROOM_SCENE_GUID);
     if (!sceneGuid.ok) {
       console.error('[room] room scene GUID parse failed:', sceneGuid.error);
@@ -221,19 +221,17 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         };
       }),
     };
-    // The SceneAsset is catalogued under the scene GUID so loadByGuid
+    // The SceneAsset is pre-registered with the scene GUID so loadByGuid
     // resolves through the dev / fallback path (synchronous Map lookup).
-    assets.catalog<SceneAsset>(sceneGuid.value, sceneAsset);
-    const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuid.value);
-    if (!sceneRes.ok) {
-      console.error('[room] room scene loadByGuid failed:', sceneRes.error);
+    assets.registerWithGuid<SceneAsset>(sceneGuid.value, sceneAsset);
+    const sceneHandleRes = await assets.loadByGuid<SceneAsset>(sceneGuid.value);
+    if (!sceneHandleRes.ok) {
+      console.error('[room] room scene loadByGuid failed:', sceneHandleRes.error);
       return;
     }
-    // loadByGuid returns the payload (D-17); mint a user-tier column handle.
     // instantiate resolves GUID strings in handle fields to Handle numbers
     // via resolveSceneGuids (plan-strategy D-1; feat-20260528 M2 / w6).
-    const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
-    const instanceRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+    const instanceRes = assets.instantiate<SceneAsset>(sceneHandleRes.value, world);
     if (!instanceRes.ok) {
       const e = instanceRes.error as { code: string };
       console.error('[room] scene instantiate failed:', e.code);

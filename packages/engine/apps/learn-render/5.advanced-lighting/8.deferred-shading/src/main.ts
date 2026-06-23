@@ -38,7 +38,7 @@ import {
   PointLight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, RenderPipelineAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // 2. scene constants
@@ -133,12 +133,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   const app = appRes.value;
-  const world = app.world;
   console.warn(`[learn-render 5.8 deferred] backend=${app.renderer.backend}`);
 
   const ready = await app.renderer.ready;
   if (!ready.ok) {
     console.error('[learn-render 5.8 deferred] renderer.ready failed:', ready.error.code, ready.error.hint);
+    return;
+  }
+
+  const assets = app.renderer.assets;
+  if (assets === null) {
+    console.error('[learn-render 5.8 deferred] AssetRegistry is null');
     return;
   }
 
@@ -150,16 +155,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     });
   }
 
-  // Install the HDRP pipeline (D-19: installPipeline takes the POD directly --
-  // RenderPipelineAsset is not a user-tier shared ref).
+  // Register the HDRP RenderPipelineAsset.
+  const hdrpAssetRes = assets.register<RenderPipelineAsset>({
+    kind: 'render-pipeline',
+    pipelineId: HDRP_PIPELINE_ID,
+    config: { clusterGrid: CLUSTER_GRID },
+  });
+  if (!hdrpAssetRes.ok) {
+    console.error('[learn-render 5.8 deferred] HDRP asset register failed:', hdrpAssetRes.error.code);
+    return;
+  }
+  const hdrpHandle = hdrpAssetRes.value;
+
   if (FALSIFY === 'force-urp') {
     console.warn('[learn-render 5.8 deferred] FALSIFY=force-urp -- skipping installPipeline(hdrpAsset)');
   } else {
-    const installRes = app.renderer.installPipeline({
-      kind: 'render-pipeline',
-      pipelineId: HDRP_PIPELINE_ID,
-      config: { clusterGrid: CLUSTER_GRID },
-    });
+    const installRes = app.renderer.installPipeline(hdrpHandle);
     if (!installRes.ok) {
       console.error(
         '[learn-render 5.8 deferred] installPipeline failed:',
@@ -170,6 +181,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
   }
 
+  const world = app.world;
+
   // CUbe base color variants: 9 distinct colors for the 3x3 grid.
   const cubeColors: Array<[number, number, number]> = [
     [1.0, 0.3, 0.3], [0.3, 1.0, 0.3], [0.3, 0.3, 1.0],
@@ -178,7 +191,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   ];
 
   // Spawn 9 cubes in 3x3 grid at y=-0.5, spacing 3.0.
-  const cubeHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+  const cubeHandles: Handle<'MaterialAsset', 'unmanaged'>[] = [];
   let idx = 0;
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 3; col++) {
@@ -188,8 +201,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
       // Register material for this cube (distinct baseColor for visual differentiation).
       const mat = Materials.standard({ baseColor: [r, g, b, 1] });
-      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', mat);
-      cubeHandles.push(matHandle);
+      const matRes = assets.register<MaterialAsset>(mat);
+      if (!matRes.ok) {
+        console.error('[learn-render 5.8 deferred] material register failed:', matRes.error.code);
+        return;
+      }
+      cubeHandles.push(matRes.value);
 
       world.spawn(
         {
@@ -201,7 +218,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matHandle] } },
+        { component: MeshRenderer, data: { materials: [matRes.value] } },
       ).unwrap();
       idx++;
     }

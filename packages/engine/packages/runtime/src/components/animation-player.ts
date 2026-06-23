@@ -1,7 +1,7 @@
 // @forgeax/engine-runtime - AnimationPlayer component (N-way animation SoA slots).
 //
 // Schema (6 fields, SoA inline arrays):
-//   clips:   'array<shared<AnimationClip>, 4>'   (layer-3 zero — all-NULL handles, no slot active)
+//   clips:   'array<handle<AnimationClip>, 4>'   (layer-3 zero — all-NULL handles, no slot active)
 //   times:   'array<f32, 4>'                      (layer-3 zero — all-zero Float32Array(4))
 //   weights: 'array<f32, 4>'                      (layer-3 zero — all-zero Float32Array(4))
 //   speeds:  'array<f32, 4>'                      (layer-2 [1,1,1,1] — every active slot plays at 1x)
@@ -37,7 +37,7 @@
 import { defineComponent } from '@forgeax/engine-ecs';
 
 export const AnimationPlayer = defineComponent('AnimationPlayer', {
-  clips: { type: 'array<shared<AnimationClip>, 4>' },
+  clips: { type: 'array<handle<AnimationClip>, 4>' },
   times: { type: 'array<f32, 4>' },
   weights: { type: 'array<f32, 4>' },
   speeds: { type: 'array<f32, 4>', default: new Float32Array([1, 1, 1, 1]) },

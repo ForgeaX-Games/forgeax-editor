@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { useTranslation } from '@/i18n';
 import { TypewriterText } from '../TypewriterText';
 
 /**
@@ -85,7 +84,6 @@ export function ForgeText({
   animated: boolean;
   size?: 'sm' | 'md';
 }) {
-  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const threshold = useFoldThreshold();
   // Adjust per-text: pure English text (cjkR=0) gets threshold × 2.5; pure
@@ -121,7 +119,7 @@ export function ForgeText({
           className="kc-fold-toggle"
           onClick={onToggle}
         >
-          {expanded ? t('forgeText.collapse') : t('forgeText.expand', { count: text.length })}
+          {expanded ? '▲ 折叠' : `▼ 展开 (${text.length} 字)`}
         </button>
       )}
     </div>

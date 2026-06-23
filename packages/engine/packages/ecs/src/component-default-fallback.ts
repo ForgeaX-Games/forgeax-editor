@@ -18,11 +18,11 @@
 //     all schema keys present).
 //
 //   layer-4 (silent fallback inside writeRow / write{Buffer,Array,
-//            UniqueRef}Field)
+//            ManagedRef}Field)
 //     "column-store value fallback" — when raw === 0 hits a managed-
-//     family arm (string / unique<T> / buffer / buffer<N> / array<T> for
+//     family arm (string / ref<T> / buffer / buffer<N> / array<T> for
 //     T != entity), the column store routes 0 to "empty slot" semantics
-//     (UniqueRefStore handle 0 / BufferPool slot 0 / array slot
+//     (ManagedRefStore handle 0 / BufferPool slot 0 / array slot
 //     length === 0). The two layers are NEVER merged — layer-3 stays
 //     pure / unaware of column physics; layer-4 stays inside writeRow
 //     where the column instance is in scope.
@@ -38,7 +38,7 @@
 //   SchemaVocabKeyword (8 arms; one "buffer" + one "buffer<N>"; one
 //   "ref<T>" + one "handle<T>"; one "entity" + one "string"; two array
 //   variants — array<T,N> / array<T> — collapse to two table arms:
-//     'string'                  -> 0  (uniqueRefs handle slot;
+//     'string'                  -> 0  (managedRefs handle slot;
 //                                       resolved payload '' on read)
 //     'entity'                  -> ENTITY_NULL_RAW (NULL_ENTITY u32
 //                                       = 0xffffffff)
@@ -59,7 +59,7 @@
 //     'buffer<N>'               -> 0  (inline stride-N u8 column,
 //                                       feat-20260602; fallback writes the
 //                                       zeroed row, not a slot id)
-//     'unique<T>'                  -> 0  (UniqueRefStore handle slot)
+//     'ref<T>'                  -> 0  (ManagedRefStore handle slot)
 //     'handle<T>'               -> 0  (unmanaged handle phantom u32;
 //                                       schema-level nullable -> NULL
 //                                       sentinel 0)
@@ -67,7 +67,7 @@
 // Brand-class semantics (AC-10 / requirements §A-3 reframe round 2):
 // `handle<T>` and `ref<T>` are SCHEMA-LEVEL nullable. Spawn `data: {}`
 // is legal; layer-3 fills 0 (NULL sentinel for unmanaged handles) /
-// 0 (uniqueRefs handle slot, '' payload). SceneAsset.instantiate
+// 0 (managedRefs handle slot, '' payload). SceneAsset.instantiate
 // produces byte-equivalent column state.
 //
 // Anchors:
@@ -90,11 +90,11 @@ import { SpawnDataUnknownFieldError } from './errors';
  * map (layer 2) both omit a known schema field.
  *
  * Pure function — runs once per missing field per (component, spawn /
- * instantiate) call. No `BufferPool` / `UniqueRefStore` / `World`
+ * instantiate) call. No `BufferPool` / `ManagedRefStore` / `World`
  * dependency: the helper hands back raw column-shape values (u32 / bool
  * / number array literal); the layer-4 silent fallback inside
- * `writeRow` / `write{Buffer,Array,UniqueRef}Field` turns raw `0` into
- * the live column-store value (unique-ref handle 0 / BufferPool slot
+ * `writeRow` / `write{Buffer,Array,ManagedRef}Field` turns raw `0` into
+ * the live column-store value (managed-ref handle 0 / BufferPool slot
  * id 0 / array slot length 0).
  *
  * Mapping is the same closed table the head-JSDoc table documents.
@@ -110,7 +110,7 @@ function typeDefault(fieldType: string): unknown {
   // JS array literal — entity[] runtime shape is a JS Array<Entity>,
   // not a BufferPool slot id (D-2 asymmetric pivot).
   if (fieldType === 'array<entity>') return [];
-  // every other vocab keyword (incl. 'string' / 'unique<T>' / 'handle<T>'
+  // every other vocab keyword (incl. 'string' / 'ref<T>' / 'handle<T>'
   // / 'buffer' / 'buffer<N>' / 'array<T>' (T!=entity) / 'array<T, N>')
   // and every remaining ScalarFieldType (f* / i* / u* / enum / ref)
   // defaults to numeric 0 at the spawn-data raw surface. Layer-4

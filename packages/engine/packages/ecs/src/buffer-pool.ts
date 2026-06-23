@@ -16,7 +16,7 @@
 //   time) + packages/ecs/README.md §"Managed handles are operational, not
 //   persistent" (AI-user-facing). Should a future feat introduce a public
 //   Handle<Buffer> surface, this design (no gen tag) MUST be re-debated —
-//   the silent-resolve contract that UniqueRefStore tolerates relies on
+//   the silent-resolve contract that ManagedRefStore tolerates relies on
 //   the holder being a single ECS field, not a free-floating cache; a
 //   public Handle<Buffer> changes that calculus.
 //
@@ -39,7 +39,7 @@
 //
 // The pool is a `class` rather than a frozen module-level singleton because
 // World owns one BufferPool per instance; M2 wires it into the release loop
-// alongside UniqueRefStore (D-2 - per-World lifecycle).
+// alongside ManagedRefStore (D-2 - per-World lifecycle).
 
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { ManagedBufferOutOfBoundsError, ManagedBufferShrinkNotSupportedError } from './errors';

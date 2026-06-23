@@ -65,12 +65,8 @@ export {
   writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
-  cancelPendingDiskSave,
-  setAssetSelection,
-  getAssetSelection,
-  useAssetSelection,
 } from '@forgeax/editor-core';
-export type { SceneFileEntry, PlayConfig, SelectedAsset } from '@forgeax/editor-core';
+export type { SceneFileEntry, PlayConfig } from '@forgeax/editor-core';
 
 // ── Entity operations ──
 export {

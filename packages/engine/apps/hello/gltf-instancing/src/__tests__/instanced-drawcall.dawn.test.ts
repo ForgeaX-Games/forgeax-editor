@@ -231,16 +231,11 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     expect(ready.ok).toBe(true);
     if (!ready.ok) return;
 
-    const world = new World();
-
-    // feat-20260614 M8: registerWithGuid deleted. catalog(guid, payload) feeds
-    // loadByGuid; world.allocSharedRef mints the column handle the bridge needs.
-    assets.catalog<MeshAsset>(meshGuid, meshAsset);
-    assets.catalog<MaterialAsset>(matGuid, materialAsset);
-    const matHandle: Handle<'MaterialAsset', 'shared'> = world.allocSharedRef<
-      'MaterialAsset',
-      MaterialAsset
-    >('MaterialAsset', materialAsset);
+    assets.registerWithGuid<MeshAsset>(meshGuid, meshAsset);
+    const matHandle: Handle<'MaterialAsset', 'unmanaged'> = assets.registerWithGuid<MaterialAsset>(
+      matGuid,
+      materialAsset,
+    );
 
     // Build SceneAsset via the bridge SSOT (feat-20260518 M3) so the
     // EXT_mesh_gpu_instancing decode path is exercised end-to-end. Mesh
@@ -264,14 +259,14 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
     // AC-06: Name component pinned on the InstancedBox node.
     expect(instancedNode.components.Name).toEqual({ value: 'InstancedBox' });
 
-    assets.catalog<SceneAsset>(sceneGuid, sceneAsset);
+    assets.registerWithGuid<SceneAsset>(sceneGuid, sceneAsset);
+
+    const world = new World();
 
     const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuid);
     expect(sceneRes.ok).toBe(true);
     if (!sceneRes.ok) return;
-    // loadByGuid returns the payload (D-17); mint a user-tier column handle.
-    const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
-    const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+    const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
 

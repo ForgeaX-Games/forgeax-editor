@@ -98,7 +98,6 @@ export interface DdcPack {
   readonly assets: ReadonlyArray<{
     readonly guid: string;
     readonly kind: string;
-    readonly name?: string;
     readonly payload: Record<string, unknown>;
     readonly refs: readonly string[];
   }>;
@@ -356,7 +355,6 @@ export async function runImport(
       return {
         guid: a.guid,
         kind: a.kind,
-        ...(a.name !== undefined ? { name: a.name } : {}),
         payload: { ...auxNormalised, data: new Uint8Array(0) },
         refs: a.refs,
       };
@@ -375,7 +373,6 @@ export async function runImport(
       return {
         guid: a.guid,
         kind: a.kind,
-        ...(a.name !== undefined ? { name: a.name } : {}),
         payload: {
           vertices: [],
           indices: [],
@@ -387,7 +384,6 @@ export async function runImport(
     return {
       guid: a.guid,
       kind: a.kind,
-      ...(a.name !== undefined ? { name: a.name } : {}),
       // bug-20260610: mesh / scene / animation-clip payloads carry Float32Array
       // / Uint16Array / Uint32Array fields. JSON.stringify on a typed array
       // serialises to `{ "0": v0, "1": v1, ... }` (a plain object), which the

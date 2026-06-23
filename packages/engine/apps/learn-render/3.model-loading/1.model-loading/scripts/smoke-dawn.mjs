@@ -134,7 +134,7 @@ const mockCanvas = {
 // gltfDocToSceneAsset) the runtime AssetRegistry consumes after a successful
 // loadByGuid<SceneAsset>. Any regression in those bridges surfaces here.
 
-const { World } = await import('@forgeax/engine-ecs');
+const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
@@ -142,11 +142,9 @@ const {
   DirectionalLight,
   DirectionalLightShadow,
   PointLight,
-  resolveAssetHandle,
   Skylight,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const {
   toMaterialAsset,
@@ -175,11 +173,6 @@ if (!assets) {
   console.error('[smoke] FAIL - AssetRegistry is null');
   process.exit(1);
 }
-
-// feat-20260614 M8 (D-15/D-17): the World owns the user-tier sharedRefs store
-// that mesh / texture / sampler / material / scene handles are minted into;
-// it must exist before any allocSharedRef call.
-const world = new World();
 
 // --- 3a. Parse Sponza glTF + externalLoader for flat-directory textures --
 
@@ -212,8 +205,12 @@ for (const m of doc.meshes) {
   seenMeshIndices.add(m.meshIndex);
   const prims = doc.meshes.filter((p) => p && p.meshIndex === m.meshIndex);
   const meshAsset = meshIrToMeshAsset(prims);
-  const h = world.allocSharedRef('MeshAsset', meshAsset);
-  meshHandles.set(m.meshIndex, h);
+  const h = assets.register(meshAsset);
+  if (!h.ok) {
+    console.error(`[smoke] FAIL - register MeshAsset[gltfMesh=${m.meshIndex}]: ${h.error.code}`);
+    process.exit(1);
+  }
+  meshHandles.set(m.meshIndex, h.value);
 }
 
 // --- 3c. Register TextureAssets (flat-directory load + parseImage) -------
@@ -253,10 +250,7 @@ if (doc.textures && doc.images) {
     const guid = `00000000-0000-7000-8000-0000000${String(ti).padStart(5, '0')}`;
     const guidRes = AssetGuid.parse(guid);
     if (!guidRes.ok) continue;
-    // Mint a user-tier column handle; toMaterialAsset copies the numeric
-    // handle into paramValues for the render-system extract to bind.
-    const h = unwrapHandle(world.allocSharedRef('TextureAsset', texAsset));
-    assets.catalog(guidRes.value, texAsset);
+    const h = assets.registerWithGuid(guidRes.value, texAsset);
     textureHandles.set(ti, h);
   }
 }
@@ -284,8 +278,7 @@ if (doc.samplers) {
     const guid = `00000000-0000-7000-8000-00000001${String(si).padStart(4, '0')}`;
     const guidRes = AssetGuid.parse(guid);
     if (!guidRes.ok) continue;
-    const h = unwrapHandle(world.allocSharedRef('SamplerAsset', samplerAsset));
-    assets.catalog(guidRes.value, samplerAsset);
+    const h = assets.registerWithGuid(guidRes.value, samplerAsset);
     samplerHandles.set(si, h);
   }
 }
@@ -309,25 +302,33 @@ for (let i = 0; i < doc.materials.length; i++) {
   const matAsset = FALSIFY_MISSING_BRIDGE
     ? { kind: 'material', passes: [], paramValues: {} }
     : toMaterialAsset(matIr, { textureHandles, samplerHandles });
-  // FALSIFY=missing-bridge: allocSharedRef does not validate the empty-passes
-  // shape (it holds any payload); the wrong shape instead trips
-  // RenderSystem.extract's `material-resolved-empty-passes` console.error
-  // every frame, which criterion (d) below catches.
-  const h = world.allocSharedRef('MaterialAsset', matAsset);
-  materialHandles.set(i, h);
+  const h = assets.register(matAsset);
+  if (!h.ok) {
+    console.error(`[smoke] FAIL - register MaterialAsset[${i}]: ${h.error.code}`);
+    process.exit(1);
+  }
+  materialHandles.set(i, h.value);
 }
 
 // --- 3f. Build SceneAsset via bridge SSOT --------------------------------
 
 const sceneAsset = gltfDocToSceneAsset(doc, { meshHandles, materialHandles });
+const sceneHandle = assets.register(sceneAsset);
+if (!sceneHandle.ok) {
+  console.error(`[smoke] FAIL - scene register: ${sceneHandle.error.code}`);
+  process.exit(1);
+}
 
-// --- 3g. Instantiate the scene -------------------------------------------
-// feat-20260614 M8 (D-15/D-17): mint a user-tier SceneAsset handle and pass it
-// to instantiate, which resolves the payload + cross-refs via the two-tier
-// resolveAssetHandle (no SceneAssetResolver wiring needed).
+// --- 3g. Setup world + instantiate --------------------------------------
 
-const sceneHandle = world.allocSharedRef('SceneAsset', sceneAsset);
-const instRes = assets.instantiate(sceneHandle, world);
+const world = new World();
+world._setSceneAssetResolver((h) => {
+  const got = assets.get(h);
+  if (!got.ok) return got;
+  return okResult(got.value);
+});
+
+const instRes = assets.instantiate(sceneHandle.value, world);
 if (!instRes.ok) {
   console.error(`[smoke] FAIL - instantiate: ${instRes.error.code}`);
   process.exit(1);
@@ -378,17 +379,19 @@ if (!hdrGuidRes.ok) {
   process.exit(1);
 }
 
-// loadByGuid returns the TextureAsset PAYLOAD (M8 D-17); mint a user-tier
-// source handle and pass world + handle + pod to uploadCubemapFromEquirect.
-const hdrPodRes = await assets.loadByGuid(hdrGuidRes.value);
-if (!hdrPodRes.ok) {
-  console.error(`[smoke] FAIL - loadByGuid(HDR): ${hdrPodRes.error.code} - ${hdrPodRes.error.hint}`);
+const hdrHandleRes = await assets.loadByGuid(hdrGuidRes.value);
+if (!hdrHandleRes.ok) {
+  console.error(`[smoke] FAIL - loadByGuid(HDR): ${hdrHandleRes.error.code} - ${hdrHandleRes.error.hint}`);
   process.exit(1);
 }
-const hdrPod = hdrPodRes.value;
-const hdrSrcHandle = world.allocSharedRef('TextureAsset', hdrPod);
 
-const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, hdrSrcHandle, hdrPod);
+const srcPodRes = assets.get(hdrHandleRes.value);
+if (!srcPodRes.ok) {
+  console.error(`[smoke] FAIL - assets.get(HDR handle): ${srcPodRes.error.code}`);
+  process.exit(1);
+}
+
+const cubemapRes = await renderer.store.uploadCubemapFromEquirect(hdrHandleRes.value, { ...srcPodRes.value });
 if (!cubemapRes.ok) {
   console.error(`[smoke] FAIL - uploadCubemapFromEquirect: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`);
   process.exit(1);
@@ -398,7 +401,7 @@ world.spawn({
   component: Skylight,
   data: { cubemap: cubemapRes.value, intensity: 1.0 },
 });
-console.log(`[smoke] HDR loadByGuid + Skylight spawn OK (format=${hdrPod.format} ${hdrPod.width}x${hdrPod.height})`);
+console.log(`[smoke] HDR loadByGuid + Skylight spawn OK (format=${srcPodRes.value.format} ${srcPodRes.value.width}x${srcPodRes.value.height})`);
 
 // Restore native fetch so subsequent renders / readback are clean.
 globalThis.fetch = originalFetch;

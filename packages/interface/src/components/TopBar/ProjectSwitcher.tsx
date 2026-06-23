@@ -4,7 +4,6 @@
 import { useState, useEffect } from 'react';
 import { FolderTree, FolderOpen, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -26,7 +25,6 @@ interface ProjectRow {
 type ModalTab = 'new' | 'open';
 
 export function ProjectSwitcher() {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [current, setCurrent] = useState<string>('');
@@ -43,14 +41,14 @@ export function ProjectSwitcher() {
 
   useEffect(() => {
     reload();
-    const timer = setInterval(reload, 8000);
-    return () => clearInterval(timer);
+    const t = setInterval(reload, 8000);
+    return () => clearInterval(t);
   }, []);
 
   const onDelete = async (row: ProjectRow) => {
     const confirmMsg = row.source === 'registered'
-      ? t('projectSwitcher.removeRegisteredConfirm', { name: row.displayName, path: row.path })
-      : t('projectSwitcher.deleteProjectConfirm', { id: row.id });
+      ? `从已知列表中移除 "${row.displayName}"？\n\n仅会从 ~/.forgeax/known-projects.json 中摘除条目，磁盘上的目录 ${row.path} 不会被删除。`
+      : `确认删除 project ${row.id}/ ？此操作会删除整个工作目录（games + .forgeax）。`;
     if (!(await confirmDialog({ body: confirmMsg, danger: row.source !== 'registered' }))) return;
     try {
       const url = row.source === 'registered'
@@ -100,10 +98,10 @@ export function ProjectSwitcher() {
         <button
           className="tb-game-btn"
           disabled={switching}
-          title={t('projectSwitcher.triggerTooltip')}
+          title="workspace（agentic 工作目录）· 切换会热重启 engine + cli"
         >
           <FolderTree size={16} />
-          <span className="tb-game-label">{switching ? t('projectSwitcher.switching') : (currentProject?.displayName ?? current ?? '?')}</span>
+          <span className="tb-game-label">{switching ? '切换中…' : (currentProject?.displayName ?? current ?? '?')}</span>
           <ChevronDown size={16} />
         </button>
       </PopoverTrigger>
@@ -124,32 +122,32 @@ export function ProjectSwitcher() {
               background: 'var(--bg-2)',
               zIndex: 1,
             }}
-            title={t('projectSwitcher.newWorkspaceTooltip')}
+            title="新建一个 workspace（agentic 工作目录）"
           >
             <Plus size={12} style={{ marginRight: 4 }} />
-            <span className="tb-game-name">{t('projectSwitcher.newWorkspace')}</span>
+            <span className="tb-game-name">新建 workspace</span>
           </button>
-          {projects.length === 0 && <div className="tb-game-empty">{t('projectSwitcher.empty')}</div>}
+          {projects.length === 0 && <div className="tb-game-empty">暂无 project</div>}
           {projects.map((p) => (
             <div key={`${p.source}:${p.absPath}`} className={`tb-game-row ${p.isCurrent ? 'active' : ''}`}>
               <button className="tb-game-pick" onClick={() => onSwitch(p.id)} title={p.absPath}>
                 <span className="tb-game-name">
-                  {p.displayName} {p.isCurrent && t('projectSwitcher.currentSuffix')}
+                  {p.displayName} {p.isCurrent && '· 当前'}
                   {p.source === 'registered' && (
-                    <span className="tb-game-source" title={t('projectSwitcher.extSourceTooltip')}>EXT</span>
+                    <span className="tb-game-source" title="来自 ~/.forgeax/known-projects.json">EXT</span>
                   )}
                 </span>
                 <span className="tb-game-meta">{p.hasGames ? 'games ✓ ' : ''}{p.hasState ? '.forgeax ✓' : ''}</span>
               </button>
               {p.isCurrent ? (
-                <button className="tb-game-del" disabled title={t('projectSwitcher.deleteCurrentDisabledTooltip')}>
+                <button className="tb-game-del" disabled title="无法删除当前项目（先切换到其他项目）">
                   <Trash2 size={11} style={{ color: 'var(--color-icon-disabled)' }} />
                 </button>
               ) : (
                 <button
                   className="tb-game-del"
                   onClick={() => void onDelete(p)}
-                  title={p.source === 'registered' ? t('projectSwitcher.removeFromListTooltip') : t('projectSwitcher.deleteProjectTooltip')}
+                  title={p.source === 'registered' ? '从已知列表移除（不删目录）' : '删除项目'}
                 >
                   <Trash2 size={11} />
                 </button>
@@ -157,7 +155,7 @@ export function ProjectSwitcher() {
             </div>
           ))}
           <button className="tb-game-row reset" onClick={() => openModal('open')}>
-            <FolderOpen size={11} style={{ marginRight: 6 }} /> {t('projectSwitcher.openExisting')}
+            <FolderOpen size={11} style={{ marginRight: 6 }} /> 打开已有目录
           </button>
         </div>
       </PopoverContent>
@@ -205,7 +203,6 @@ async function activateWorkspace(absPath: string, initIfMissing: boolean) {
 }
 
 function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps) {
-  const { t } = useTranslation();
   const [tab, setTab] = useState<ModalTab>(initialTab);
   const [id, setId] = useState('');
   const [name, setName] = useState('');
@@ -215,7 +212,7 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
   const submitNew = async () => {
     const cleaned = id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     if (!/^[a-z0-9][a-z0-9-_]{1,40}$/.test(cleaned)) {
-      setErr(t('projectSwitcher.idError'));
+      setErr('id: 2-41 字符 / lowercase ascii / 数字 / -_');
       return;
     }
     setBusy(true);
@@ -256,16 +253,16 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
           <button
             className={`tb-modal-tab ${tab === 'new' ? 'active' : ''}`}
             onClick={() => { setTab('new'); setErr(null); }}
-          >{t('projectSwitcher.tabNew')}</button>
+          >新建项目</button>
           <button
             className={`tb-modal-tab ${tab === 'open' ? 'active' : ''}`}
             onClick={() => { setTab('open'); setErr(null); }}
-          >{t('projectSwitcher.tabOpen')}</button>
+          >打开已有目录</button>
         </div>
 
         {tab === 'new' && (
           <>
-            <label className="tb-modal-label">{t('projectSwitcher.idLabel')}</label>
+            <label className="tb-modal-label">id (工作目录名)</label>
             <input
               autoFocus
               className="tb-modal-input"
@@ -273,18 +270,18 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
               value={id}
               onChange={(e) => setId(e.target.value)}
             />
-            <label className="tb-modal-label">{t('projectSwitcher.displayNameLabel')}</label>
+            <label className="tb-modal-label">显示名（可选）</label>
             <input
               className="tb-modal-input"
-              placeholder={t('projectSwitcher.displayNamePlaceholder')}
+              placeholder="留空用 id"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             {err && <div className="tb-modal-error">{err}</div>}
             <div className="tb-modal-actions">
-              <button className="tb-modal-btn" onClick={onClose} disabled={busy}>{t('common.cancel')}</button>
+              <button className="tb-modal-btn" onClick={onClose} disabled={busy}>取消</button>
               <button className="tb-modal-btn primary" onClick={submitNew} disabled={busy}>
-                {busy ? t('projectSwitcher.creating') : t('projectSwitcher.create')}
+                {busy ? '创建中...' : '创建'}
               </button>
             </div>
           </>

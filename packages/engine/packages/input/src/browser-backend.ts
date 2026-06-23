@@ -52,8 +52,7 @@ export interface BrowserInputBackendOptions {
  *   - drops every internal accumulator
  *
  * The returned object also implements the `InputBackend` protocol -- the
- * runtime inserts it under `INPUT_BACKEND_KEY` and adds the
- * `InputFrameStartScan` system, which reads it back each tick.
+ * runtime hands it to `createFrameStartScanSystem(backend, world)`.
  * Calling `detach()` and the protocol's `detach()` are equivalent
  * (idempotent; double-detach is safe -- charter P3).
  */

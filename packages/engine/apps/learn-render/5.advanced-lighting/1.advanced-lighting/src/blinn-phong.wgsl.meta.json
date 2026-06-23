@@ -18,10 +18,6 @@
       "name": "baseColor",
       "type": "color",
       "default": [1.0, 1.0, 1.0, 1.0]
-    },
-    {
-      "name": "baseColorTexture",
-      "type": "texture2d"
     }
   ]
 }

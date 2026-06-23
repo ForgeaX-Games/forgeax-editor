@@ -42,7 +42,6 @@ import {
 } from '../store';
 import { onSessionEvent, type SessionEvent } from './forgeax-bridge';
 import { ratioFromUsage } from './event-engine/turn-accumulator';
-import { t } from '@/i18n';
 
 // ─── server event payload shapes ─────────────────────────────────────────
 
@@ -350,8 +349,8 @@ function readableSummary(payload: Record<string, unknown>): string {
     for (const p of content as Array<Record<string, unknown>>) {
       if (p && typeof p === 'object') {
         if (p.type === 'text' && typeof p.text === 'string') parts.push(p.text);
-        else if (p.type === 'image_file' && typeof p.path === 'string') parts.push(t('sessionStream.imageRef', { path: p.path }));
-        else if ((p.type === 'file' || p.type === 'text_file') && typeof p.path === 'string') parts.push(t('sessionStream.fileRef', { path: p.path }));
+        else if (p.type === 'image_file' && typeof p.path === 'string') parts.push(`[图片: ${p.path}]`);
+        else if ((p.type === 'file' || p.type === 'text_file') && typeof p.path === 'string') parts.push(`[文件: ${p.path}]`);
       }
     }
     if (parts.length) return parts.join(' ');
@@ -462,7 +461,7 @@ function dispatch(evt: SessionEvent): void {
         pushSystemMessage(sid, target, {
           text: content,
           direction: 'incoming',
-          source: t('sessionStream.narrativeWorkshop'),
+          source: '叙事工坊',
           to: target,
           ts: evtTs,
         });

@@ -4,27 +4,14 @@ import {
   isLoadGameError,
   type GameEntry,
 } from '@forgeax/engine-app';
-import { perspective, Camera, Transform, createCylinderGeometry } from '@forgeax/engine-runtime';
+import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
 import {
   sendVagMessage,
-  onVagMessage,
-  allowedParentOrigins,
   VagConsoleSchema,
-  VagNetworkSchema,
   VagFpsStatsSchema,
-  VagDeviceLostSchema,
 } from '@forgeax/editor-core/protocol';
-import {
-  loadGameProject,
-  resolveDefaultScene,
-  FORGE_JSON,
-} from '@forgeax/engine-project';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { SceneAsset, AssetError } from '@forgeax/engine-types';
-import type { ImageError } from '@forgeax/engine-types';
-import type { EntityHandle } from '@forgeax/engine-ecs';
+import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import type { GameContext } from './types';
-import { createResolveGuidAdapter } from './resolve-guid-adapter';
 
 const root = document.getElementById('app') ?? document.body;
 
@@ -148,28 +135,6 @@ if (!app.ok) {
 
 const { world, renderer } = app.value;
 
-// ── Studio cylinder mesh (host-side registration) ─────────────────────────
-// The editor offers cube/sphere/cylinder primitives. cube + sphere are engine
-// builtins that createApp auto-registers under their GUIDs, but the cylinder is
-// a Studio addition with no builtin — a scene that uses one carries the fixed
-// CYLINDER_GUID (scene-pack.ts) in its refs[]. The ENGINE TEMPLATE game
-// registers it itself before instantiating, but a game that relies on the
-// host's asset-first startup (ctx.defaultSceneRoot) never gets the chance: the
-// host resolves + instantiates defaultScene BEFORE the game's entry() runs, so
-// loadByGuid(scene) recurses into the cylinder ref, finds it absent (and
-// /__import is sidecar-only → 404), and fails with `asset-not-imported` →
-// resolveDefaultScene fails → the game falls back to a bare ground (cow-level's
-// "只剩几个灯光"). Register the cylinder HERE, right after createApp and before
-// any scene resolves, so every host-startup game with a cylinder resolves.
-const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
-{
-  const cylG = AssetGuid.parse(CYLINDER_GUID);
-  const cylGeo = createCylinderGeometry(0.5, 0.5, 1, 18);
-  if (cylG.ok && cylGeo.ok) {
-    (renderer.assets as unknown as { catalog: (g: unknown, p: unknown) => unknown }).catalog(cylG.value, cylGeo.value);
-  }
-}
-
 // ── Pack index (prod loadByGuid path) ──
 // Per-game index URL: /preview/pack-index/<gameId>.json
 // Falls back to global /pack-index.json when the per-game index 404s
@@ -267,90 +232,15 @@ if (wantsPointerLock) {
   canvas.addEventListener('mousedown', () => { try { window.focus(); canvas.focus(); } catch { /* ignore */ } });
   canvas.addEventListener('click', () => setCaptured(true));
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && captured) setCaptured(false); });
-  // Release the native cursor grab if Play loses focus / is torn down (app switch,
-  // Play→Edit unmount). Without this the OS cursor stays frozen → whole window
-  // uninteractable. (Esc-only release was insufficient — the shell also releases
-  // on PlaySurface unmount; this is the in-game belt-and-suspenders.)
-  const releaseOnLeave = () => { if (captured) setCaptured(false); };
-  window.addEventListener('blur', releaseOnLeave);
-  window.addEventListener('pagehide', releaseOnLeave);
 }
 
-// ── Capture variables for ctx assembly (D-2 / R3) ──────────────────────────
-// ctx assembly is deferred until after the defaultScene instantiate block so
-// the readonly GameContext can be populated with the instantiated root +
-// SceneAsset in a single object literal — no write-back or temporal coupling.
-let defaultSceneRoot: EntityHandle | undefined;
-let defaultScene: SceneAsset | undefined;
-
-// ── resolveGuid adapter (D-2 / C3) ─────────────────────────────────────────
-// Defined in ./resolve-guid-adapter.ts and imported above so the unit test
-// (w3/w4) can import it without pulling in DOM-heavy main.ts top-level code.
-
-// ── Default Scene instantiate (asset-first startup — D-2 / AC-01) ──────────
-// Read defaultScene from the single gpResult loaded at L82 (AC-01 single-load
-// invariant — no second fetch of forge.json). When present, resolve the scene
-// GUID via the adapter + resolveDefaultScene, then instantiate the scene into
-// the live world BEFORE entry() runs, so the game module receives a world that
-// already contains the default scene entities.
-// When defaultScene is absent (spin-cube, shoot-opt): graceful skip, no error
-// (AC-06). If resolveDefaultScene fails, log the structured error
-// (charter P3) but DO NOT abort — entry() still fires after (AC-10).
-//
-// CAUTION (D-2 / OQ1): resolveDefaultScene (engine loader.ts:261-268)
-// discards the adapter-passed error.kind on the GuidResult error branch,
-// unifying all failures as forge-scene-unresolved. The host does NOT
-// bypass resolveDefaultScene with a direct loadByGuid query (charter P4
-// consistent abstraction — AI users see a single resolution path).
-// End-to-end error.kind differentiation is deferred to a future engine feat.
-if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.value.defaultScene.length > 0) {
-  const defaultSceneGuidStr = gpResult.value.defaultScene;
-  const parsed = AssetGuid.parse(defaultSceneGuidStr);
-  if (parsed.ok) {
-    const adapter = createResolveGuidAdapter(async (guid: string) => {
-      const parsedG = AssetGuid.parse(guid);
-      if (!parsedG.ok) return { ok: false as const, error: parsedG.error };
-      // loadByGuid returns the asset payload directly (D-17); SceneAsset
-      // carries .kind so the adapter can extract it and backfill guid.
-      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsedG.value);
-      return assetRes;
-    });
-    const resolved = await resolveDefaultScene({ read: fetchRead, resolveGuid: adapter });
-    if (resolved.ok) {
-      // Success: loadByGuid returns the SceneAsset payload (D-17).
-      // Mint a shared handle via world.allocSharedRef then instantiate.
-      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsed.value);
-      if (assetRes.ok) {
-        defaultScene = assetRes.value; // capture loaded SceneAsset (D-4)
-        const handle = world.allocSharedRef('SceneAsset', assetRes.value);
-        const instantiateRes = renderer.assets.instantiate(handle, world);
-        if (instantiateRes.ok) {
-          defaultSceneRoot = instantiateRes.value; // capture synthetic root (D-2)
-        } else {
-          console.error('[engine] defaultScene instantiate failed:', instantiateRes.error);
-        }
-      } else {
-        console.error('[engine] defaultScene loadByGuid (re-fetch for instantiate) failed:', assetRes.error);
-      }
-    } else {
-      console.error('[engine] resolveDefaultScene failed:', resolved.error);
-    }
-  } else {
-    console.error('[engine] defaultScene GUID malformed:', defaultSceneGuidStr, parsed.error);
-  }
-}
-// No else-branch needed — absent defaultScene = graceful skip (AC-06).
-
-// ── GameContext (D-2: assembled after instantiate, so defaultSceneRoot +
-// defaultScene are captured in a single readonly literal — no write-back) ──
+// ── GameContext (superset: includes both legacy `renderer` and new `app` fields) ──
 const ctx: GameContext = {
   world,
   renderer,
   assets: renderer.assets,
   app: app.value,
   registerUpdate(fn) { app.value.registerUpdate(fn); },
-  ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
-  ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
 
 // ── loadGame ──
@@ -403,12 +293,6 @@ async function resolveGame(id: string): Promise<GameEntry | null> {
   return result.value;
 }
 
-// ── entry bootstrap hook (D-3: semantic downgrade — host instantiates
-// defaultScene before this point, so the game module receives a world that
-// already contains the default scene entities. entry is no longer the "total
-// entry" that fetches + instantiates the scene itself; it is a bootstrap hook
-// whose job is wiring HUD / inputs / custom systems onto the live world.
-// Signature unchanged: export default start (C4 / OOS-3).
 const entry = await resolveGame(gameId);
 if (entry) {
   await entry(ctx);
@@ -422,19 +306,6 @@ if (entry) {
 
 // ── Start the frame loop ──
 app.value.start();
-
-// ── Device-lost → ask the shell to self-heal (reload this iframe) ──
-// The engine's onError fan-out carries the RhiError 'device-lost'/'context-lost'
-// arms. PlaySurface listens for VAG_DEVICE_LOST and reloads. Previously NOTHING
-// emitted it, so a real GPU loss left a dead canvas with no recovery. Send once
-// (device-lost is terminal — the engine runs its cleanup funnel).
-let deviceLostSent = false;
-app.value.onError((err) => {
-  if ((err.code === 'device-lost' || err.code === 'context-lost') && !deviceLostSent) {
-    deviceLostSent = true;
-    sendVagMessage(window.parent, VagDeviceLostSchema, {});
-  }
-});
 
 // ── FPS reporting + throttled liveness heartbeat ──
 // Studio's PreviewMode treats every VAG_FPS_STATS message as "still rendering"
@@ -568,13 +439,8 @@ window.addEventListener('unhandledrejection', (ev) => {
 // Surfacing them as VAG_CONSOLE errors makes the Studio Console (hence the
 // agent) aware the Preview is broken even when nothing executed.
 if (import.meta.hot) {
-  // Narrow via ...args because the generic inference on ViteHotContext.on is
-  // fragile — the cb parameter resolves to () => void under strict mode even
-  // though 'vite:error' maps to ErrorPayload in CustomEventMap. Runtime
-  // behaviour is unchanged.
-  import.meta.hot.on('vite:error', (...args: unknown[]) => {
+  import.meta.hot.on('vite:error', (payload: { err?: { message?: string; id?: string; loc?: { file?: string; line?: number } } }) => {
     try {
-      const payload = args[0] as { err?: { message?: string; id?: string; loc?: { file?: string; line?: number } } } | undefined;
       const err = payload?.err;
       const where = err?.loc?.file ? ` (${err.loc.file}${err.loc.line ? `:${err.loc.line}` : ''})` : err?.id ? ` (${err.id})` : '';
       sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `[vite build] ${err?.message ?? 'build error'}${where}`, ts: Date.now() });
@@ -582,93 +448,21 @@ if (import.meta.hot) {
   });
 }
 
-// ── Network bridge (VAG_NETWORK postMessage) ──
-// Mirror the console bridge for fetch / XHR / WebSocket so the Studio Network
-// panel can show the game's HTTP/WS activity (asset loads, /__import 404s,
-// plugin backend 503s, …). Best-effort + swallow all errors so it never breaks
-// the game. Each request → one VAG_NETWORK summary forwarded up to the shell.
-(() => {
-  const send = (kind: 'fetch' | 'xhr' | 'ws', method: string, url: string, status: number, ms: number, ok: boolean): void => {
-    try {
-      sendVagMessage(window.parent, VagNetworkSchema, {
-        kind, method, url: String(url).slice(0, 2048), status, ms: Math.round(ms), ok, ts: Date.now(),
-      });
-    } catch { /* cross-origin / detached */ }
-  };
-  // fetch
-  const origFetch = window.fetch?.bind(window);
-  if (origFetch) {
-    const wrappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const t0 = performance.now();
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
-      const method = (init?.method ?? (input instanceof Request ? input.method : 'GET') ?? 'GET').toUpperCase();
-      try {
-        const res = await origFetch(input as RequestInfo, init);
-        send('fetch', method, url, res.status, performance.now() - t0, res.ok);
-        return res;
-      } catch (e) {
-        send('fetch', method, url, 0, performance.now() - t0, false);
-        throw e;
-      }
-    };
-    // Preserve preconnect (if present) to satisfy typeof fetch at the cost of a
-    // local cast — tsconfig strict prevents a direct assignment without it.
-    if (origFetch.preconnect) (wrappedFetch as unknown as Record<string, unknown>)['preconnect'] = origFetch.preconnect.bind(window);
-    window.fetch = wrappedFetch as unknown as typeof fetch;
-  }
-  // XHR
-  const XHR = window.XMLHttpRequest;
-  if (XHR) {
-    const origOpen = XHR.prototype.open;
-    const origSend = XHR.prototype.send;
-    XHR.prototype.open = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, method: string, url: string, ...rest: unknown[]) {
-      this.__fxN = { m: String(method).toUpperCase(), u: String(url), t0: 0 };
-      // @ts-expect-error variadic passthrough
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XHR.prototype.send = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, body?: Document | XMLHttpRequestBodyInit | null) {
-      const n = this.__fxN;
-      if (n) {
-        n.t0 = performance.now();
-        this.addEventListener('loadend', () => {
-          send('xhr', n.m, n.u, this.status, performance.now() - n.t0, this.status >= 200 && this.status < 400);
-        });
-      }
-      return origSend.call(this, body as Document);
-    };
-  }
-  // WebSocket
-  const OrigWS = window.WebSocket;
-  if (OrigWS) {
-    const WSProxy = function (this: unknown, url: string | URL, protocols?: string | string[]) {
-      const t0 = performance.now();
-      const ws = protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
-      const u = typeof url === 'string' ? url : url.href;
-      ws.addEventListener('open', () => send('ws', 'WS', u, 101, performance.now() - t0, true));
-      ws.addEventListener('error', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
-      ws.addEventListener('close', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
-      return ws;
-    } as unknown as typeof WebSocket;
-    WSProxy.prototype = OrigWS.prototype;
-    Object.defineProperty(WSProxy, 'CONNECTING', { value: OrigWS.CONNECTING });
-    Object.defineProperty(WSProxy, 'OPEN', { value: OrigWS.OPEN });
-    Object.defineProperty(WSProxy, 'CLOSING', { value: OrigWS.CLOSING });
-    Object.defineProperty(WSProxy, 'CLOSED', { value: OrigWS.CLOSED });
-    window.WebSocket = WSProxy;
-  }
-})();
-
 // ── Pause / Play / Reload (VAG_PREVIEW_* postMessage protocol) ──
-// Origin-gated via onVagMessage: ONLY the embedding shell may drive the engine.
-// Previously this accepted these commands from ANY window with no origin/source
-// check — any embedder could pause/reload the running game.
-onVagMessage(window, {
-  allowedOrigins: allowedParentOrigins(),
-  handlers: {
-    VAG_PREVIEW_PAUSE: () => app.value.pause(),
-    VAG_PREVIEW_PLAY: () => app.value.resume(),
-    VAG_PREVIEW_RELOAD: () => location.reload(),
-  },
+window.addEventListener('message', (ev) => {
+  const data = ev?.data as { type?: string } | undefined;
+  if (!data || typeof data.type !== 'string') return;
+  switch (data.type) {
+    case 'VAG_PREVIEW_PAUSE':
+      app.value.pause();
+      break;
+    case 'VAG_PREVIEW_PLAY':
+      app.value.resume();
+      break;
+    case 'VAG_PREVIEW_RELOAD':
+      location.reload();
+      break;
+  }
 });
 
 // ── Vite HMR ──

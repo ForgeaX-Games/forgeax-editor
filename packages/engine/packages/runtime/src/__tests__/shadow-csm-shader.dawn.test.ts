@@ -67,15 +67,13 @@ struct Inputs {
 @group(0) @binding(0) var<uniform> inputs : Inputs;
 @group(0) @binding(1) var<storage, read_write> out : array<vec4<f32>>;
 
-fn pickLayer(viewDepth: f32, splits: vec4<f32>, count: u32) -> u32 {
-  // Walk splits in order; return first split the positive view-space depth
-  // falls into. Last layer = count - 1 catches everything beyond
-  // splits[count-2]. viewDepth = -viewZ (the VS emits negative viewZ;
-  // splitPlanes are positive) -- see lighting-directional.wgsl.
+fn pickLayer(viewZ: f32, splits: vec4<f32>, count: u32) -> u32 {
+  // Walk splits in order; return first split that viewZ falls into.
+  // Last layer = count - 1 catches everything beyond splits[count-2].
   var layer : u32 = count - 1u;
   for (var i : u32 = 0u; i < count - 1u; i = i + 1u) {
     let sp = splits[i];
-    if (viewDepth < sp) {
+    if (viewZ < sp) {
       layer = i;
       break;
     }
@@ -93,11 +91,7 @@ fn tileOrigin(layer: u32) -> vec2<f32> {
 @compute @workgroup_size(1)
 fn cs_main() {
   let count = u32(inputs.cascadeCount);
-  // viewZ is negative in front of the camera; splitPlanes are positive.
-  // Convert once so selection + blend are positive-vs-positive (the real
-  // lighting-directional.wgsl does the same). (downstream integration #1.)
-  let viewDepth = -inputs.viewZ;
-  let layer = pickLayer(viewDepth, inputs.splitPlanes, count);
+  let layer = pickLayer(inputs.viewZ, inputs.splitPlanes, count);
   let origin = tileOrigin(layer);
 
   // Blend computation: when blend > 0 and we are within blendFactor of the
@@ -112,7 +106,7 @@ fn cs_main() {
     // = sp_curr * cascadeBlend.
     let blendWidth = sp_curr * inputs.cascadeBlend;
     if (blendWidth > 0.0) {
-      let dist = sp_curr - viewDepth;
+      let dist = sp_curr - inputs.viewZ;
       let t = clamp(1.0 - dist / blendWidth, 0.0, 1.0);
       let s_next = inputs.shadowPerCascade[layer + 1u];
       blended = mix(s_curr, s_next, t);
@@ -234,7 +228,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0,
-        viewZ: -5,
+        viewZ: 5,
         shadowPerCascade: [0.1, 0.2, 0.3, 0.4],
       });
       expect(r.layer).toBe(0);
@@ -248,7 +242,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0,
-        viewZ: -15,
+        viewZ: 15,
         shadowPerCascade: [0.1, 0.2, 0.3, 0.4],
       });
       expect(r.layer).toBe(1);
@@ -262,7 +256,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0,
-        viewZ: -30,
+        viewZ: 30,
         shadowPerCascade: [0.1, 0.2, 0.3, 0.4],
       });
       expect(r.layer).toBe(2);
@@ -276,7 +270,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0,
-        viewZ: -100,
+        viewZ: 100,
         shadowPerCascade: [0.1, 0.2, 0.3, 0.4],
       });
       expect(r.layer).toBe(3);
@@ -292,7 +286,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0,
-        viewZ: -9.9, // just inside layer 0, near boundary
+        viewZ: 9.9, // just inside layer 0, near boundary
         shadowPerCascade: [0.1, 0.9, 0.5, 0.5],
       });
       expect(r.layer).toBe(0);
@@ -307,7 +301,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0.2,
-        viewZ: -9,
+        viewZ: 9,
         shadowPerCascade: [0.1, 0.9, 0.5, 0.5],
       });
       expect(r.layer).toBe(0);
@@ -320,7 +314,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 20, 40, 80],
         cascadeCount: 4,
         cascadeBlend: 0.2,
-        viewZ: -5,
+        viewZ: 5,
         shadowPerCascade: [0.1, 0.9, 0.5, 0.5],
       });
       expect(r.layer).toBe(0);
@@ -334,7 +328,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 0, 0, 0],
         cascadeCount: 1,
         cascadeBlend: 0,
-        viewZ: -5,
+        viewZ: 5,
         shadowPerCascade: [0.7, 0, 0, 0],
       });
       expect(r.layer).toBe(0);
@@ -348,7 +342,7 @@ describe('CSM shader cascade selection + atlas UV + blend (M5/w17)', () => {
         splitPlanes: [10, 0, 0, 0],
         cascadeCount: 1,
         cascadeBlend: 0.5,
-        viewZ: -5,
+        viewZ: 5,
         shadowPerCascade: [0.7, 0, 0, 0],
       });
       expect(r.layer).toBe(0);

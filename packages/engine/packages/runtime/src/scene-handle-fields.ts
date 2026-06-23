@@ -14,8 +14,8 @@ import { resolveComponent } from '@forgeax/engine-ecs';
  * A single handle-field reference extracted from a SceneAsset entity.
  *
  * `entityLocalId` is the `node.localId`; `componentName` and `fieldName`
- * identify the schema field whose `fieldType` starts with `shared\<` or
- * `array\<shared\<`. `guidString` is the raw GUID string value from the
+ * identify the schema field whose `fieldType` starts with `'handle<'` or
+ * `'array<handle<'`. `guidString` is the raw GUID string value from the
  * entity's component data (NOT a parsed `AssetGuid` — callers parse or
  * resolve as needed).
  *
@@ -79,7 +79,7 @@ export function extractSceneEntityHandleGuids(
         const fieldType = comp.schema[fieldName];
         if (fieldType === undefined || typeof fieldType !== 'string') continue;
 
-        if (fieldType.startsWith('shared<')) {
+        if (fieldType.startsWith('handle<')) {
           if (typeof value !== 'string') continue;
           entries.push({
             entityLocalId: node.localId,
@@ -87,7 +87,7 @@ export function extractSceneEntityHandleGuids(
             fieldName,
             guidString: value,
           });
-        } else if (fieldType.startsWith('array<shared<') && Array.isArray(value)) {
+        } else if (fieldType.startsWith('array<handle<') && Array.isArray(value)) {
           for (let elemIdx = 0; elemIdx < value.length; elemIdx++) {
             const elem = value[elemIdx];
             if (typeof elem !== 'string') continue;

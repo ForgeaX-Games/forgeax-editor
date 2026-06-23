@@ -14,7 +14,6 @@
 
 import { useState } from 'react';
 import { Check, CheckSquare, Square, Circle, CheckCircle2, Loader2 } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import type { ToolCall } from '../../../store';
 
 interface AskOption {
@@ -63,9 +62,8 @@ export function AskUserCard({
   sid: string;
   agentId: string;
 }) {
-  const { t } = useTranslation();
   const args = (tc.args ?? {}) as AskUserArgs;
-  const question = typeof args.question === 'string' ? args.question : t('askUser.noQuestion');
+  const question = typeof args.question === 'string' ? args.question : '(无问题)';
   const header = typeof args.header === 'string' ? args.header : '';
   const multi = args.multiSelect === true;
   const options = normalizeOptions(args.options);
@@ -79,8 +77,8 @@ export function AskUserCard({
   const [sending, setSending] = useState(false);
 
   // 任何状态变化都写穿到 module 缓存(显式传全量快照,不依赖异步 state)。
-  const persist = (s: string[], c: boolean, txt: string, sub: boolean) =>
-    askState.set(cacheKey, { selected: s, customOn: c, customText: txt, submitted: sub });
+  const persist = (s: string[], c: boolean, t: string, sub: boolean) =>
+    askState.set(cacheKey, { selected: s, customOn: c, customText: t, submitted: sub });
 
   // tool 段一旦 done/error,说明 server 已 resolve(可能来自本端或超时),锁卡片。
   const resolved = submitted || tc.status === 'done' || tc.status === 'error';
@@ -131,10 +129,10 @@ export function AskUserCard({
     }
   };
 
-  const editCustom = (txt: string) => {
+  const editCustom = (t: string) => {
     if (resolved) return;
-    setCustomText(txt);
-    persist(selected, customOn, txt, submitted);
+    setCustomText(t);
+    persist(selected, customOn, t, submitted);
   };
 
   const submit = async () => {
@@ -161,7 +159,7 @@ export function AskUserCard({
     return (
       <div className="ask-user-card ask-user-preparing" data-testid="ask-user-card" data-ready="0">
         <Loader2 size={14} className="ask-user-spin" />
-        <span>{t('askUser.preparing')}</span>
+        <span>正在准备选项…</span>
       </div>
     );
   }
@@ -170,7 +168,7 @@ export function AskUserCard({
     return (
       <div className="ask-user-card" data-testid="ask-user-card" data-ready="1">
         <div className="ask-user-q">{question}</div>
-        <div className="ask-user-empty">{t('askUser.noOptions')}</div>
+        <div className="ask-user-empty">（ask_user 缺少有效选项）</div>
       </div>
     );
   }
@@ -184,7 +182,7 @@ export function AskUserCard({
     <div className="ask-user-card" data-testid="ask-user-card" data-ready="1" data-multi={multi ? '1' : '0'}>
       <div className="ask-user-head">
         {header && <span className="ask-user-chip">{header}</span>}
-        <span className="ask-user-mode">{multi ? t('askUser.multiSelect') : t('askUser.singleSelect')}</span>
+        <span className="ask-user-mode">{multi ? '多选' : '单选'}</span>
       </div>
       <div className="ask-user-q">{question}</div>
 
@@ -222,8 +220,8 @@ export function AskUserCard({
         >
           <OptIcon on={customOn} />
           <span className="ask-user-opt-body">
-            <span className="ask-user-opt-label">{t('askUser.other')}</span>
-            <span className="ask-user-opt-desc">{t('askUser.otherDesc')}</span>
+            <span className="ask-user-opt-label">其他…</span>
+            <span className="ask-user-opt-desc">自己填一个答案</span>
           </span>
         </button>
         {customOn && (
@@ -231,7 +229,7 @@ export function AskUserCard({
             type="text"
             className="ask-user-custom-input"
             data-testid="ask-user-custom-input"
-            placeholder={t('askUser.customPlaceholder')}
+            placeholder="输入你的答案…"
             value={customText}
             disabled={resolved}
             autoFocus
@@ -248,7 +246,7 @@ export function AskUserCard({
 
       {resolved ? (
         <div className="ask-user-resolved">
-          <Check size={13} /> {t('askUser.selected', { values: shownVals.length > 0 ? shownVals.join('、') : t('askUser.none') })}
+          <Check size={13} /> 已选择：{shownVals.length > 0 ? shownVals.join('、') : '（无）'}
         </div>
       ) : (
         <button
@@ -258,7 +256,7 @@ export function AskUserCard({
           disabled={effective.length === 0 || sending}
           onClick={submit}
         >
-          {sending ? t('askUser.submitting') : t('askUser.confirm')}
+          {sending ? '提交中…' : '确认'}
         </button>
       )}
     </div>

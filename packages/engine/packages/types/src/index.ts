@@ -30,10 +30,12 @@
 // === Handle SSOT barrel re-export (feat-20260517-handle-type-unify M2 / D-2) ====
 //
 // `./handle` carries the unique double-axis Handle<T extends string, M> brand
-// + AssetTagMap + TagOf + 3 factories (toUnique / toShared / unwrapHandle).
+// + AssetTagMap + TagOf + 3 factories (toManaged / toUnmanaged / unwrapHandle).
 // The legacy 1-arg form that lived here at M1 has been physically deleted
 // (M2 t10) so the package surface exposes a single Handle shape (charter F1
 // single-entry indexability; AC-03 grep gate).
+import type { Handle } from './handle';
+
 export * from './handle';
 
 // === Result<T, E> SSOT (tweak-20260612-result-into-types) ======================
@@ -464,27 +466,15 @@ export interface SamplerAsset {
  * with the parent's (child overrides parent keys).
  *
  * AI-user surface: register via `assetRegistry.register<MaterialAsset>(asset)`
- * → returns `Handle<'MaterialAsset', 'shared'>`.
+ * → returns `Handle<'MaterialAsset', 'unmanaged'>`.
  */
 export interface MaterialAsset {
   readonly kind: 'material';
   /** Array of pass descriptors for this material. Omit to inherit from parent. */
   readonly passes?: readonly MaterialPassDescriptor[];
-  /**
-   * Parent material GUID for lazy-resolve inheritance (D-8 / D-19). Payload-
-   * internal sub-asset refs are GUID identities, not column handles: the
-   * AssetRegistry holds no World and cannot mint a handle during the loadByGuid
-   * recursion, so it stores the parent's AssetGuid verbatim. The World-holding
-   * consumer (render extract / material-walk) resolves the GUID to a handle via
-   * loadByGuid -> world.allocSharedRef once at read time.
-   */
-  readonly parent?: AssetGuid;
-  /**
-   * Material parameter values — passed through to material uniform binding.
-   * Shallow-merged with parent on resolve. Texture-typed entries (detected via
-   * the shader paramSchema textureFieldNames) carry an AssetGuid (D-19), not a
-   * handle; the consumer resolves them the same way as `parent`.
-   */
+  /** Handle to parent material for lazy-resolve inheritance (D-8). */
+  readonly parent?: Handle<'MaterialAsset', 'unmanaged'>;
+  /** Material parameter values — passed through to material uniform binding. Shallow-merged with parent on resolve. */
   readonly paramValues?: Readonly<Record<string, unknown>>;
 }
 
@@ -598,7 +588,7 @@ export interface StorageBindingParamSchemaEntry {
 // type union so all downstream consumers (runtime / vite-plugin-shader /
 // shader-compiler) reach the SSOT through a single import surface (D-2).
 export type { DeriveOutput, UboFieldLayout, UboLayout } from './derive-paramschema.js';
-export { derive, findUndeclaredSampledTextures } from './derive-paramschema.js';
+export { derive } from './derive-paramschema.js';
 
 /**
  * Single material parameter schema entry — discriminated union over the
@@ -879,7 +869,7 @@ export type PassSelector = Record<string, readonly string[]>;
  * | `paramSchema` | Material parameter schema (ParamSchemaEntry[]), the SSOT for material-shader param validation AND BGL derivation (M3 / D-1 / D-2 — `derive(paramSchema).bglEntries` is the binding-slot layout source) |
  *
  * When registered via `AssetRegistry.register<ShaderAsset>(asset)`, returns
- * `Handle<'ShaderAsset', 'shared'>`. AI users retrieve via
+ * `Handle<'ShaderAsset', 'unmanaged'>`. AI users retrieve via
  * `assets.getByGuid<ShaderAsset>(guid)` for runtime shader introspection.
  *
  * @example AI-user consumption path
@@ -959,14 +949,8 @@ export interface GlyphMetric {
  */
 export interface FontAsset {
   readonly kind: 'font';
-  /**
-   * Atlas texture GUID (D-19). Payload-internal sub-asset ref stored as an
-   * AssetGuid, not a handle — the loadByGuid recursion mints no handle; the
-   * World-holding consumer (glyph-text-layout) resolves it once at read time.
-   */
-  readonly atlas: AssetGuid;
-  /** Sampler GUID (D-19). Same GUID-identity contract as `atlas`. */
-  readonly sampler: AssetGuid;
+  readonly atlas: Handle<'TextureAsset', 'managed'>;
+  readonly sampler: Handle<'SamplerAsset', 'managed'>;
   readonly glyphs: Record<number, GlyphMetric>;
   readonly common: {
     readonly lineHeight: number;
@@ -1085,64 +1069,6 @@ export type Asset =
   | AudioClipAsset
   | FontAsset
   | RenderPipelineAsset;
-
-/**
- * Runtime brand label per {@link Asset.kind} discriminant -- one string literal
- * per Asset union member. Consumers narrow with `switch (entry.brand)` or
- * `if (entry.brand === 'TextureAsset')`.
- *
- * Mirrors the 13 Asset union kinds 1:1. The label differs from `Asset.kind`
- * string discriminate where the kind-string does not match the TS type name
- * (e.g. `'cube-texture'` maps to `'CubeTextureAsset'`, `'audio'` to
- * `'AudioClipAsset'`).
- */
-export type AssetBrand =
-  | 'MeshAsset'
-  | 'TextureAsset'
-  | 'CubeTextureAsset'
-  | 'SamplerAsset'
-  | 'MaterialAsset'
-  | 'SceneAsset'
-  | 'ShaderAsset'
-  | 'SkeletonAsset'
-  | 'SkinAsset'
-  | 'AnimationClip'
-  | 'AudioClipAsset'
-  | 'FontAsset'
-  | 'RenderPipelineAsset';
-
-// === Package interface (feat-20260618-asset-and-pack-name-fields M1 / w2) ======
-//
-// Decision anchors:
-//   - plan-strategy D-7 (Package interface in @forgeax/engine-types, same layer
-//     as Asset union, for multi-package consumer discoverability per charter F1)
-//   - architecture-principles #2 (Derive, Don't Duplicate): assetCount is
-//     derived from assetGuids.size, never stored independently
-//   - plan-strategy D-5 (builtin assets -> null Package, not a synthetic path)
-//   - Package does not carry a `name` field — resolved names flow through
-//     resolveName (D-6), not stored on Package
-//
-// AI users discover Package via IDE autocomplete on @forgeax/engine-types;
-// the runtime AssetRegistry.packageOf Map carries Package | null per guid.
-
-/**
- * Runtime view of one import-source package -- the grouping unit for
- * the two-segment asset identity (`<packagePath>.<name>`).
- *
- * `path` is the import file path (e.g. `'assets/hero.glb'`).  Multiple
- * assets imported from the same source file share one `Package`.
- *
- * `assetGuids` lists every GUID that belongs to this package.  The
- * runtime keeps it in sync with `registerPackage` insertions.
- *
- * `assetCount` is a derived view (`assetGuids.size`); it is **not**
- * stored as a standalone field (Derive axiom #2).
- */
-export interface Package {
-  readonly path: string;
-  readonly assetGuids: ReadonlySet<string>;
-  readonly assetCount: number;
-}
 
 // === Scene asset POD shape (feat-20260514-scene-as-world-blueprint w2) ==========
 //
@@ -1380,7 +1306,7 @@ export interface AnimationClip {
  * the single heavy resource).
  *
  * Consumers spawn `AudioSource` components with a
- * `Handle<'AudioClipAsset', 'shared'>` referring to this asset;
+ * `Handle<'AudioClipAsset', 'unmanaged'>` referring to this asset;
  * the `audioTickSystem` creates fresh `AudioBufferSourceNode` instances
  * per play edge.
  */
@@ -2511,24 +2437,24 @@ export const AUDIO_ERROR_HINTS: Readonly<Record<AudioErrorCode, string>> = {
     "use 'sfx' or 'music' bus literal; custom bus names are not supported in v1 (OOS-2)",
 };
 
-// === PhysicsErrorCode / PhysicsError / PhysicsErrorDetail -- physics error SSOT (feat-20260528-rapier-physics-2d-3d M1 / t6; extended feat-20260617-kinematic M1) ===
+// === PhysicsErrorCode / PhysicsError / PhysicsErrorDetail -- physics error SSOT (feat-20260528-rapier-physics-2d-3d M1 / t6) ===
 //
 // Decision anchors:
 //   - requirements AC-11 (PhysicsErrorCode closed union registration + AGENTS.md update)
-//   - plan-strategy D-5 (PhysicsErrorCode 9 members / PhysicsError 4-field surface / PhysicsErrorDetail discriminated)
+//   - plan-strategy D-5 (PhysicsErrorCode 8 members / PhysicsError 4-field surface / PhysicsErrorDetail discriminated)
 //   - charter P3 (explicit failure: exhaustive switch without default; .hint provides recovery)
 //   - charter P4 (consistent abstraction: structurally parallel to AssetError / AudioError / GltfError)
-//   - architecture-principles #1 SSOT (the 9 literals + class + hints table live here once;
+//   - architecture-principles #1 SSOT (the 8 literals + class + hints table live here once;
 //     engine-physics package re-exports from here)
 
 /**
- * Closed `PhysicsErrorCode` union -- 9 members (plan-strategy D-5;
+ * Closed `PhysicsErrorCode` union -- 8 members (plan-strategy D-5;
  * requirements AC-11). Exhaustive `switch (err.code)` needs no default
  * fallback -- TypeScript guards union completeness at compile time
  * (charter P3 explicit failure).
  *
  * Domain-separated from `AssetErrorCode` (runtime registry, 13 members)
- * and `AudioErrorCode` (audio engine, 5 members). AI users face these 9
+ * and `AudioErrorCode` (audio engine, 5 members). AI users face these 8
  * alternatives at the physics engine surface.
  *
  * | code | trigger |
@@ -2541,7 +2467,6 @@ export const AUDIO_ERROR_HINTS: Readonly<Record<AudioErrorCode, string>> = {
  * | `'collider-not-found'` | entity handle resolved to no Rapier collider (no Collider spawned or handle was freed). |
  * | `'backend-not-registered'` | PhysicsWorld resource missing from World; use createApp({ physics: ... }) or manual registration. |
  * | `'teleport-invalid-body-type'` | teleport() called on a static or kinematic body (only dynamic allowed). |
- * | `'controller-requires-kinematic'` | moveAndSlide() called on a non-kinematic body. |
  */
 export type PhysicsErrorCode =
   | 'wasm-load-failed'
@@ -2551,8 +2476,7 @@ export type PhysicsErrorCode =
   | 'body-not-found'
   | 'collider-not-found'
   | 'backend-not-registered'
-  | 'teleport-invalid-body-type'
-  | 'controller-requires-kinematic';
+  | 'teleport-invalid-body-type';
 
 /**
  * Per-code `PhysicsError` detail shapes -- discriminated payloads narrowed
@@ -2610,13 +2534,6 @@ export interface PhysicsTeleportInvalidBodyTypeDetail {
   readonly bodyType: string;
 }
 
-/** `controller-requires-kinematic` payload: carries the entity + actual body type. */
-export interface PhysicsControllerRequiresKinematicDetail {
-  readonly code: 'controller-requires-kinematic';
-  readonly entity: number;
-  readonly bodyType: string;
-}
-
 /**
  * Discriminated detail union for `PhysicsError`, narrowed per `PhysicsError.code`.
  * AI users obtain the concrete detail shape via `switch (err.code)` without
@@ -2630,8 +2547,7 @@ export type PhysicsErrorDetail =
   | PhysicsBodyNotFoundDetail
   | PhysicsColliderNotFoundDetail
   | PhysicsBackendNotRegisteredDetail
-  | PhysicsTeleportInvalidBodyTypeDetail
-  | PhysicsControllerRequiresKinematicDetail;
+  | PhysicsTeleportInvalidBodyTypeDetail;
 
 /**
  * Structured physics error -- four-field surface (`.code` / `.expected` /
@@ -2642,21 +2558,20 @@ export type PhysicsErrorDetail =
  * `switch (err.code) { case 'wasm-load-failed': ... err.hint ... }`
  * -- never by parsing `.message` (charter P3 explicit failure red line).
  *
- * @example AI-user exhaustive switch on the 9 members (no default fallback)
+ * @example AI-user exhaustive switch on the 8 members (no default fallback)
  * ```ts
  * import { PhysicsError, type PhysicsErrorCode } from '@forgeax/engine-types';
  *
  * function recover(code: PhysicsErrorCode): string {
  *   switch (code) {
- *     case 'wasm-load-failed':            return 'check network and @dimforge/rapier3d-compat';
- *     case 'wasm-simd-unsupported':       return 'check browser supports WASM SIMD';
- *     case 'step-failed':                 return 'check for NaN values in transforms';
- *     case 'invalid-body-config':         return 'ensure mass > 0 for dynamic bodies';
- *     case 'body-not-found':              return 'ensure RigidBody was spawned before use';
- *     case 'collider-not-found':          return 'ensure Collider was spawned before use';
- *     case 'backend-not-registered':      return 'use createApp({ physics: ... })';
- *     case 'teleport-invalid-body-type':   return 'only dynamic bodies can be teleported';
- *     case 'controller-requires-kinematic': return 'set RigidBody.type to kinematic';
+ *     case 'wasm-load-failed':          return 'check network and @dimforge/rapier3d-compat';
+ *     case 'wasm-simd-unsupported':     return 'check browser supports WASM SIMD';
+ *     case 'step-failed':               return 'check for NaN values in transforms';
+ *     case 'invalid-body-config':       return 'ensure mass > 0 for dynamic bodies';
+ *     case 'body-not-found':            return 'ensure RigidBody was spawned before use';
+ *     case 'collider-not-found':        return 'ensure Collider was spawned before use';
+ *     case 'backend-not-registered':    return 'use createApp({ physics: ... })';
+ *     case 'teleport-invalid-body-type': return 'only dynamic bodies can be teleported';
  *   }
  * }
  * ```
@@ -2709,8 +2624,6 @@ export const PHYSICS_ERROR_HINTS: Readonly<Record<PhysicsErrorCode, string>> = {
     "PhysicsWorld resource not found; use createApp({ physics: 'rapier-3d' }) or manually register a backend",
   'teleport-invalid-body-type':
     'teleport is only valid for dynamic bodies; static and kinematic bodies have their position managed differently',
-  'controller-requires-kinematic':
-    "moveAndSlide requires a kinematic RigidBody; set the entity's RigidBody.type to 'kinematic'",
 };
 
 // === RuntimeErrorCode - runtime-layer error code SSOT (feat-20260523-skin-skeleton-animation M0) ===
@@ -3958,34 +3871,7 @@ export interface PackIndexEntry {
   readonly relativeUrl: string;
   readonly kind: string;
   readonly sourcePath: string;
-  /** Optional display name from .pack.json assets[].name or derived basename (D-6 add-only). */
-  readonly name?: string;
   readonly metadata?: ImageMetadata | CubeTextureMetadata | undefined;
-}
-
-// === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
-//
-// Decision anchors:
-//   - plan-strategy D-9 (InspectEntry.name: string via resolveName, non-optional
-//     with empty string as legal value; relocated from runtime private to types
-//     for single-entry discoverability per charter F1)
-//   - requirements AC-12 (inspector assets root carries resolved name per entry)
-//
-// These types were originally private interfaces in asset-registry.ts.
-// They are promoted to @forgeax/engine-types so console + future inspector
-// consumers import them from a single entry point (charter F1).
-
-/** One row in the inspector's `assets[]` snapshot (JSON-RPC over WS). */
-export interface InspectEntry {
-  readonly guid: string;
-  readonly brand: AssetBrand;
-  /** Display name resolved by resolveName (empty string is legal). */
-  readonly name: string;
-}
-
-/** Snapshot returned by `AssetRegistry.inspect()` -- the inspector root. */
-export interface InspectSnapshot {
-  readonly assets: ReadonlyArray<InspectEntry>;
 }
 
 // === Loader contract SSOT (feat-20260603-asset-import-loader-injection M1 / w3) ===
@@ -4082,6 +3968,14 @@ export interface LoadContext {
   ): Promise<
     { readonly ok: true; readonly value: number } | { readonly ok: false; readonly error: unknown }
   >;
+  /**
+   * bug-20260610: synchronous variant of {@link LoadContext.resolveRef} for
+   * inline (non-async) loader bodies that need to translate refs[] entries
+   * into already-registered handle numbers. Returns `undefined` if the GUID
+   * has not been registered yet — the loader must decide whether to drop the
+   * field (texture-paramValues fallback) or fail.
+   */
+  resolveRefSync?(guid: string): number | undefined;
   /**
    * feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
    * derive(paramSchema).textureFieldNames for the given material-shader id,
@@ -4269,7 +4163,6 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
 export interface ImportedAsset {
   readonly guid: string;
   readonly kind: string;
-  readonly name?: string;
   readonly payload: Asset;
   readonly refs: readonly string[];
 }

@@ -19,13 +19,11 @@ import type {
   SceneInstanceMount,
 } from '@forgeax/engine-types';
 import {
-  BUILTIN_BASE,
   err,
   ok,
   PACK_ERROR_HINTS,
   type Result,
-  toShared,
-  toUnique,
+  toManaged,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { type Archetype, appendEntity, removeEntity } from './archetype';
@@ -83,6 +81,8 @@ import {
   type ManagedArrayErrorEnvelope,
   type ManagedBufferOutOfBoundsError,
   type ManagedBufferShrinkNotSupportedError,
+  type ManagedRefDoubleReleaseError,
+  type ManagedRefReleasedError,
   RelationshipDetachMismatchError,
   type RelationshipMirrorComponentNotRegisteredError,
   type RelationshipMirrorFieldTypeMismatchError,
@@ -91,9 +91,8 @@ import {
   type ScheduleMutationError,
   type SpawnLightInvalidBoundsError,
   StaleEntityError,
-  type UniqueRefDoubleReleaseError,
-  type UniqueRefReleasedError,
 } from './errors';
+import { ManagedRefStore } from './managed-ref-store';
 import type { QueryDescriptor } from './query';
 import {
   createResourceStore,
@@ -116,8 +115,6 @@ import {
   removeSystem as scheduleRemoveSystem,
   replaceSystem as scheduleReplaceSystem,
 } from './schedule';
-import { SharedRefStore } from './shared-ref-store';
-import { UniqueRefStore } from './unique-ref-store';
 
 /**
  * Union of all EcsError types that World methods can return via Result.
@@ -127,8 +124,8 @@ export type EcsError =
   | StaleEntityError
   | ComponentNotPresentError
   | ComponentAlreadyPresentError
-  | UniqueRefReleasedError
-  | UniqueRefDoubleReleaseError
+  | ManagedRefReleasedError
+  | ManagedRefDoubleReleaseError
   | ManagedBufferOutOfBoundsError
   | ManagedBufferShrinkNotSupportedError
   | FixedArrayOverflowError
@@ -280,30 +277,15 @@ export class World {
   /**
    * ECS-managed handle store (M1). Owned by the World - constructed eagerly
    * so every spawn / despawn / set path can dispatch managed-ref releases
-   * without caller-side wiring. AI users obtain `Handle<T,'unique'>` values
+   * without caller-side wiring. AI users obtain `Handle<T,'managed'>` values
    * by accessing the store through internal channels (the surface is
    * private; managed-ref-bearing fields read through `world.get`).
    */
-  // UniqueRefStore is type-erased at the storage layer (alloc/resolve are
+  // ManagedRefStore is type-erased at the storage layer (alloc/resolve are
   // method-generic over `T`); World holds the single per-instance store and
   // routes payload-agnostic release calls. Typed access flows through
-  // `UniqueRefStore.resolve<T>` at the consumer layer.
-  private uniqueRefs: UniqueRefStore = new UniqueRefStore();
-  /**
-   * Per-World `SharedRefStore` (feat-20260614 M3). Backs every `shared<T>`
-   * schema field + the `world.allocSharedRef` facade. Public read-only so AI
-   * users can `retain` / `release` / `resolve` user-tier handles directly off
-   * the world (the surface is small enough that hiding it behind another
-   * facade would be a phantom indirection - charter F1 single-entry
-   * indexability).
-   *
-   * M6 D-10: the release signal is the per-handle `onLastRelease` deleter
-   * passed as the third argument to `allocSharedRef` — there is no global
-   * listener. M6 D-15: the store manages only user-tier slots
-   * (`>= BUILTIN_BASE`); builtin handles are process-static in
-   * `BuiltinAssetRegistry` and never reference-counted.
-   */
-  readonly sharedRefs: SharedRefStore = new SharedRefStore();
+  // `ManagedRefStore.resolve<T>` at the consumer layer.
+  private managedRefs: ManagedRefStore = new ManagedRefStore();
   /**
    * BufferPool backing every `buffer:<N>` schema-vocab field (M2). Eagerly
    * constructed (per-World, D-2). `spawn` allocs slots for buffer fields and
@@ -357,7 +339,7 @@ export class World {
    * world.addSystem({
    *   name: 'read-pos',
    *   queries: [{ with: [Position] }],
-   *   fn: (world, queryResults) => { void world; for (const _b of queryResults[0]) { void _b; } },
+   *   fn: (queryResults) => { for (const _b of queryResults[0]) { void _b; } },
    * });
    * ```
    */
@@ -406,7 +388,7 @@ export class World {
    * const r = world.replaceSystem('movement', {
    *   name: 'movement',
    *   queries: [{ with: [Position] }],
-   *   fn: (world, queryResults) => { ... },
+   *   fn: (queryResults) => { ... },
    * });
    * ```
    */
@@ -558,9 +540,9 @@ export class World {
 
   /**
    * Allocate a standalone managed reference handle with an optional release
-   * callback. Returns a branded {@link Handle}<Target, 'unique'> that can be
+   * callback. Returns a branded {@link Handle}<Target, 'managed'> that can be
    * stored in schema-vocab `ref<T>` fields or resolved through
-   * {@link UniqueRefStore.resolve} (via `world.get` on a component with
+   * {@link ManagedRefStore.resolve} (via `world.get` on a component with
    * `ref<T>` fields).
    *
    * When the handle is released (despawn / removeComponent / set-overwrite),
@@ -568,7 +550,7 @@ export class World {
    * by then the slot's bookkeeping (callback table, payload map, freelist) is
    * already cleared, so a *throwing* `onRelease` re-propagates from the first
    * `release` call without leaving the store inconsistent — a second `release`
-   * of the same handle returns `UniqueRefDoubleReleaseError` as expected. RAII
+   * of the same handle returns `ManagedRefDoubleReleaseError` as expected. RAII
    * cleanup semantics preserved (plan-strategy D-5; throw-safety AC-01/02).
    *
    * Handles are *operational, not persistent*: caching them across release
@@ -583,71 +565,27 @@ export class World {
    * @param target - phantom target string (type-level discriminant).
    * @param payload - the value to store. Identity-stable until release.
    * @param onRelease - optional cleanup hook called with the payload on release.
-   * @returns a branded `Handle<Target, 'unique'>` u32.
+   * @returns a branded `Handle<Target, 'managed'>` u32.
    *
    * @example
    * ```ts
    * const world = new World();
-   * const handle = world.allocUniqueRef<'PhysicsBody', RigidBodyHandle>(
+   * const handle = world.allocManagedRef<'PhysicsBody', RigidBodyHandle>(
    *   'PhysicsBody',
    *   rapierHandle,
    *   (h) => rapierWorld.removeRigidBody(h),
    * );
-   * const Holder = defineComponent('Holder', { body: 'unique<PhysicsBody>' });
+   * const Holder = defineComponent('Holder', { body: 'ref<PhysicsBody>' });
    * world.spawn(Holder, { body: handle });
    * // Despawn triggers onRelease -> Rapier body is cleaned up.
    * ```
    */
-  allocUniqueRef<Target extends string, T>(
+  allocManagedRef<Target extends string, T>(
     target: Target,
     payload: T,
     onRelease?: (payload: T) => void,
-  ): Handle<Target, 'unique'> {
-    return this.uniqueRefs.alloc(target, payload, onRelease);
-  }
-
-  /**
-   * Allocate a shared (refcount-tracked) handle through the per-World
-   * {@link SharedRefStore}. Returns a `Handle<Target, 'shared'>` u32 with
-   * rc=1 (the alloc-grant). Consumers retain/release via `world.sharedRefs`.
-   *
-   * D-10: pass `onLastRelease` as the third argument — a per-handle deleter
-   * that fires once when this handle's rc transitions 1 -> 0 (mirrors
-   * {@link World.allocUniqueRef}'s `onRelease`). There is no global release
-   * listener; the signal is per-handle. Phase-1 producers (AssetRegistry)
-   * pass no deleter (the alloc-grant rc never reaches 0 during normal use).
-   *
-   * Intended for asset-registry-style producers — anything whose lifecycle
-   * is shared across multiple holders (ECS components + external systems).
-   * The single-holder one-shot release pattern stays on
-   * {@link World.allocUniqueRef} (`Handle<T, 'unique'>`).
-   *
-   * @typeParam Target - phantom string branding the handle (type-level only).
-   * @typeParam T - the payload type stored alongside the handle.
-   * @param target - phantom target string (type-level discriminant).
-   * @param payload - the value to store. Identity-stable until final release.
-   * @param onLastRelease - optional per-handle deleter fired once at rc 1 -> 0.
-   * @returns a branded `Handle<Target, 'shared'>` u32 with rc=1.
-   *
-   * @example
-   * ```ts
-   * const world = new World();
-   * const handle = world.allocSharedRef<'MaterialAsset', MaterialPayload>(
-   *   'MaterialAsset',
-   *   payload,
-   *   (p) => releaseGpuResources(p),
-   * );
-   * const M = defineComponent('M', { asset: 'shared<MaterialAsset>' });
-   * world.spawn({ component: M, data: { asset: handle } });
-   * // The write-barrier dispatch retains/releases automatically on spawn / despawn.
-   * ```
-   */
-  allocSharedRef<Target extends string, T>(
-    target: Target,
-    payload: T,
-    onLastRelease?: (payload: T) => void,
-  ): Handle<Target, 'shared'> {
-    return this.sharedRefs.alloc(target, payload, onLastRelease);
+  ): Handle<Target, 'managed'> {
+    return this.managedRefs.alloc(target, payload, onRelease);
   }
 
   /**
@@ -1337,11 +1275,11 @@ export class World {
         // already released by the unified `isManagedField` pre-write block
         // above (D-R3) -- here we just alloc the new handle and store the
         // u32. Mirrors the array<T> release-then-alloc pattern (D-5) so AI
-        // users observe the UniqueRefStore _liveCount net-zero invariant
+        // users observe the ManagedRefStore _liveCount net-zero invariant
         // on field overwrite. Missing / non-string raw -> '' fallback
         // (AC-06).
         const text = typeof raw === 'string' ? raw : '';
-        const handle = this.uniqueRefs.alloc<'String'>('String', text);
+        const handle = this.managedRefs.alloc<'String'>('String', text);
         col.view[rec.row] = unwrapHandle(handle);
       } else {
         const arrayMeta = component.fields[fieldName]?.arrayMeta;
@@ -1356,14 +1294,7 @@ export class World {
           this.releaseManagedFieldOnRow(arch, component, rec.row, fieldName);
           this.writeArrayField(arch, component, rec.row, fieldName, fieldType, arrayMeta, raw);
         } else {
-          // The pre-write `releaseManagedFieldOnRow` block above already
-          // released the prior `'shared<T>'` rc via SharedRefStore.release;
-          // here we retain the new value so net rc delta is +1 / 0 / -1 per
-          // M4 invariant (set: -1+1=0; spawn: 0+1=+1; despawn: -1).
           col.view[rec.row] = raw as number;
-          if (fieldType.startsWith('shared<') && (raw as number) !== 0) {
-            this.retainSharedScalarHandle(raw as number, component.name, fieldName);
-          }
         }
       }
     }
@@ -2551,15 +2482,15 @@ export class World {
         }
       } else if (fieldType === 'string') {
         // M1 string-field read path (AC-03 / AC-09): resolve the column
-        // u32 handle through UniqueRefStore -- same dispatch arm as the
-        // 'unique<T>' read (D-R3). Returns the native JS string payload by
+        // u32 handle through ManagedRefStore -- same dispatch arm as the
+        // 'ref<T>' read (D-R3). Returns the native JS string payload by
         // strong reference; identity is stable across reads until the
         // next set or release (AC-03 read-side identity contract).
-        // Released / sentinel handles surface as unique-ref-released via
+        // Released / sentinel handles surface as managed-ref-released via
         // resolve; we fall back to '' rather than propagate the error so
         // the read shape (`out.value: string`) stays total -- AI users
         // never see undefined or wrapper objects.
-        const resolveR = this.uniqueRefs.resolve<'String'>(toUnique<'String'>(raw as number));
+        const resolveR = this.managedRefs.resolve<'String'>(toManaged<'String'>(raw as number));
         (out as Record<string, unknown>)[fieldName] = resolveR.ok ? resolveR.value : '';
       } else {
         const arrayMeta = component.fields[fieldName]?.arrayMeta;
@@ -2666,14 +2597,14 @@ export class World {
         }
       } else if (fieldType === 'string') {
         // M1 string-field spawn path (AC-04 / AC-06): route the JS string
-        // payload through `uniqueRefs.alloc('String', text)` -- the same
-        // UniqueRefStore the `ref<T>` arm uses (D-R3 single-arm dispatch).
+        // payload through `managedRefs.alloc('String', text)` -- the same
+        // ManagedRefStore the `ref<T>` arm uses (D-R3 single-arm dispatch).
         // The store holds the immutable string by strong reference so
         // identity is stable across reads (AC-03). Missing / non-string raw
         // falls back to '' so AI users always see a readable string on
         // get (no nullable handling).
         const text = typeof raw === 'string' ? raw : '';
-        const handle = this.uniqueRefs.alloc<'String'>('String', text);
+        const handle = this.managedRefs.alloc<'String'>('String', text);
         col.view[row] = unwrapHandle(handle);
       } else {
         const arrayMeta = component.fields[fieldName]?.arrayMeta;
@@ -2686,13 +2617,6 @@ export class World {
           this.writeArrayField(arch, component, row, fieldName, fieldType, arrayMeta, raw);
         } else {
           col.view[row] = raw as number;
-          // feat-20260614 M5 / D-5: scalar 'shared<T>' spawn retain. The
-          // alloc-grant rc=1 stays held by the producer (e.g. AssetRegistry);
-          // each ECS holder bumps rc via this retain so despawn / overwrite
-          // releases bring rc back symmetrically. Sentinel slot 0 is a no-op.
-          if (fieldType.startsWith('shared<') && (raw as number) !== 0) {
-            this.retainSharedScalarHandle(raw as number, component.name, fieldName);
-          }
         }
       }
     }
@@ -2707,16 +2631,6 @@ export class World {
    * `row` in `arch`. Walks the schema once and delegates each field to
    * `releaseManagedFieldOnRow` (feat-20260614 M2 SSOT). Family coverage
    * (per-field) lives in that helper's JSDoc.
-   *
-   * Naming note (D-6 whitelist): the prefix `managed` here means
-   * `managed = ECS-tracked` — i.e. fields whose lifecycle the ECS
-   * actively releases on despawn / overwrite / removeComponent. It does
-   * NOT refer to the retired `'managed' | 'unmanaged'` Handle brand
-   * (renamed to `'unique' | 'shared'` in feat-20260614 M1). The helper
-   * walks BOTH `'unique<T>'` and `'shared<T>'` fields because both are
-   * ECS-tracked from the column's perspective; the per-field dispatch
-   * inside `releaseManagedFieldOnRow` distinguishes drop-on-despawn
-   * (unique) vs ref-counted release (shared).
    *
    * Skips sentinel slots (handle / id 0) and missing stores. Failures
    * (double release / lookup mismatch) route to the Layer 3 ErrorHandler so
@@ -2752,8 +2666,8 @@ export class World {
    * M2 / D-2). Inspects the component schema's field type and routes to the
    * matching release path:
    *
-   *   - `'unique<T>'` / `'string'` (`isManagedField`)         — release the
-   *     UniqueRefStore handle u32 stored in the column.
+   *   - `'ref<T>'` / `'string'` (`isManagedField`)         — release the
+   *     ManagedRefStore handle u32 stored in the column.
    *   - `'buffer'` variable     (`isManagedBufferField`)   — release the
    *     BufferPool slot id stored in the column. Fixed `'buffer<N>'` is
    *     inline stride-N (feat-20260602) and has no slot to release.
@@ -2770,16 +2684,8 @@ export class World {
    * boundary; the chain is total).
    *
    * SceneInstance state alloc/release rollback at world.ts:3494/3522 stays
-   * a direct `uniqueRefs.release(stateRef)` (research Finding 1.8 / D-5):
+   * a direct `managedRefs.release(stateRef)` (research Finding 1.8 / D-5):
    * those two sites are alloc-pair rollback, not schema-field dispatch.
-   *
-   * Naming note (D-6 whitelist): `releaseManagedFieldOnRow` uses
-   * `managed = ECS-tracked` — every field family this dispatcher knows
-   * (`'unique<T>'`, `'shared<T>'`, `'string'`, variable `'buffer'`,
-   * variable `'array<T>'`) is one whose lifecycle the ECS owns. The
-   * `'managed' | 'unmanaged'` Handle brand is gone (M1 renamed to
-   * `'unique' | 'shared'`); the helper name was deliberately kept
-   * because `managed` here is a column-side semantic, not a brand label.
    */
   private releaseManagedFieldOnRow(
     arch: Archetype,
@@ -2793,19 +2699,11 @@ export class World {
     if (!col) return;
     const fieldType = (component.schema as Record<string, string>)[fieldName] ?? '';
     if (isManagedField(fieldType)) {
-      // Sub-dispatch by the schema-vocab keyword (feat-20260614 M4 / AC-08):
-      //   - 'shared<T>' scalar    -> SharedRefStore.release (rc--; drop on rc=0)
-      //   - 'unique<T>' / 'string' -> UniqueRefStore.release (direct slot drop)
-      // Both column shapes are u32 handles; the lookup store differs.
-      // Keeping both arms inside the unified `isManagedField` block is
-      // intentional: meta key (TYPE_METADATA `'shared'` vs `'ref'`) decides
-      // the store, not a separate top-level branch (architecture-principles
-      // §1 SSOT — meta key = release semantics).
+      // Unified isManagedField arm (D-R3 / AC-05): the SAME release call
+      // covers BOTH 'ref<T>' AND 'string' fields. The column carries a
+      // ManagedRefStore handle u32 either way; the store's release method
+      // is keyword-agnostic (the Target phantom is type-erased).
       const handleU32 = col.view[row] as number;
-      if (fieldType.startsWith('shared<')) {
-        this.releaseSharedRefHandle(handleU32, component.name, fieldName);
-        return;
-      }
       this.releaseManagedRefHandle(handleU32, component.name, fieldName);
       return;
     }
@@ -2823,39 +2721,12 @@ export class World {
       // `parseManagedArraySchema` here would violate the parse-free
       // invariant exercised by hierarchy.unit.test.ts §w5 AC-03(a).
       const arrayMeta = component.fields[fieldName]?.arrayMeta;
-      if (arrayMeta === undefined) return;
-      const isSharedElement = arrayMeta.elementType.startsWith('shared<');
-      if (arrayMeta.length === undefined) {
-        // Variable `array<T>`: BufferPool slot id in primary column + live
-        // count in `<fieldName>:count` sidecar. For `array<shared<T>>`,
-        // walk live elements and release each shared handle BEFORE
-        // releasing the slot bytes (feat-20260614 M4 / D-3 — slot bytes
-        // are only valid until the slot is recycled).
+      if (arrayMeta !== undefined && arrayMeta.length === undefined) {
         const slotId = col.view[row] as number;
-        const countCol = fieldCols.get(arrayCountColumnName(fieldName));
-        if (isSharedElement && slotId !== 0) {
-          const liveCount = countCol !== undefined ? (countCol.view[row] as number) : 0;
-          const slotView = liveCount > 0 ? this.bufferPool.view(slotId) : null;
-          if (slotView !== null && slotView.byteLength > 0) {
-            this.releaseSharedArrayElements(slotView, liveCount);
-          }
-        }
         this.releaseManagedBufferSlot(slotId, component.name, fieldName);
         col.view[row] = 0;
+        const countCol = fieldCols.get(arrayCountColumnName(fieldName));
         if (countCol !== undefined) countCol.view[row] = 0;
-        return;
-      }
-      // Fixed `array<T,N>` (feat-20260602): inline stride-N column, no
-      // BufferPool slot to release. For `array<shared<T>,N>`, walk the N
-      // inline elements and release each shared handle. Zero the row
-      // window so subsequent writes do not double-release.
-      if (isSharedElement) {
-        const arity = col.arity;
-        const elementBytes = (TYPE_METADATA.shared?.byteSize ?? 4) as number;
-        const rowByteOffset = col.view.byteOffset + row * arity * elementBytes;
-        const rowBytes = new Uint8Array(col.view.buffer, rowByteOffset, arity * elementBytes);
-        this.releaseSharedArrayElements(rowBytes, arity);
-        rowBytes.fill(0);
       }
     }
   }
@@ -2863,7 +2734,7 @@ export class World {
   /**
    * Release a single managed handle u32. Routes failures through Layer 3.
    * Slot-0 sentinel short-circuits silently (no error); already-released
-   * slots surface `unique-ref-double-release` through the ErrorHandler so
+   * slots surface `managed-ref-double-release` through the ErrorHandler so
    * AI users see the structured payload (`.code` / `.hint` / `.expected` /
    * `.detail`) - charter explicit-failure boundary.
    *
@@ -2876,7 +2747,7 @@ export class World {
     fieldName: string,
   ): void {
     if (handleU32 === 0) return; // sentinel: skip silently.
-    const r = this.uniqueRefs.release(handleU32 as Handle<string, 'unique'>);
+    const r = this.managedRefs.release(handleU32 as Handle<string, 'managed'>);
     if (r.ok) return;
     // Layer 3 routing: surface double-release as a structured error so AI
     // users see {code, hint, expected, detail} on their handler. Severity
@@ -2885,61 +2756,6 @@ export class World {
     const ctx: ErrorContext = {
       severity: Severity.Error,
       systemName: `World.release (${componentName}.${fieldName})`,
-    };
-    this.errorHandler(r.error, ctx);
-  }
-
-  /**
-   * Release a single shared-ref handle u32 (feat-20260614 M4 / AC-08).
-   * Decrements the SharedRefStore refcount; the slot drops on rc 1 -> 0.
-   * Slot-0 sentinel short-circuits silently. Already-released slots route
-   * `shared-ref-double-release` through Layer 3 ErrorHandler so AI users
-   * see structured payloads (charter explicit-failure boundary).
-   *
-   * Mirrors `releaseManagedRefHandle` in shape; the store + error code are
-   * the only differences. Helper-internal — external callers route via
-   * `releaseManagedFieldOnRow` (D-2 SSOT).
-   */
-  private releaseSharedRefHandle(
-    handleU32: number,
-    componentName: string,
-    fieldName: string,
-  ): void {
-    // feat-20260614 M6 D-15 / R-14: builtin slots (< BUILTIN_BASE, including the
-    // sentinel 0) are process-static and never reference-counted -> short-circuit
-    // before touching SharedRefStore. This single guard is the SSOT for both the
-    // scalar arm (here) and the array-element arm (releaseSharedArrayElements).
-    if (handleU32 < BUILTIN_BASE) return;
-    const r = this.sharedRefs.release(toShared<string>(handleU32));
-    if (r.ok) return;
-    const ctx: ErrorContext = {
-      severity: Severity.Error,
-      systemName: `World.release (${componentName}.${fieldName})`,
-    };
-    this.errorHandler(r.error, ctx);
-  }
-
-  /**
-   * Retain a single `shared<T>` scalar slot id (feat-20260614 M5 / D-5).
-   * Mirrors `releaseSharedRefHandle`; called from spawn / set scalar write
-   * paths so each ECS holder participates in the SharedRefStore rc.
-   * Sentinel slot 0 is a no-op. Failures (handle already released) route
-   * via Layer 3 ErrorHandler so the spawn / set chain stays total.
-   */
-  private retainSharedScalarHandle(
-    handleU32: number,
-    componentName: string,
-    fieldName: string,
-  ): void {
-    // feat-20260614 M6 D-15 / R-14: builtin slots (< BUILTIN_BASE, including the
-    // sentinel 0) short-circuit — process-static, never reference-counted. SSOT
-    // guard shared with the array-element arm (retainSharedArrayElements).
-    if (handleU32 < BUILTIN_BASE) return;
-    const r = this.sharedRefs.retain(toShared<string>(handleU32));
-    if (r.ok) return;
-    const ctx: ErrorContext = {
-      severity: Severity.Error,
-      systemName: `World.write (${componentName}.${fieldName} shared scalar retain)`,
     };
     this.errorHandler(r.error, ctx);
   }
@@ -3028,13 +2844,9 @@ export class World {
     if (!col) return;
 
     const elementType = arrayMeta.elementType;
-    // Normalize parametrised element-type template literals to the family
-    // key for TYPE_METADATA lookup; the column stores plain u32 handles
-    // either way:
-    //   - `shared<X>` -> 'shared' (feat-20260614 M4 / D-3 -- element-level
-    //     retain/release semantics route via the dedicated `'shared'` arm
-    //     below)
-    const metaKey = elementType.startsWith('shared<') ? 'shared' : (elementType as string);
+    // Normalize handle<X> template literals to the 'handle' family key for
+    // TYPE_METADATA lookup; the column stores plain u32 handles (feat-20260608 M2 / D-1).
+    const metaKey = elementType.startsWith('handle<') ? 'handle' : (elementType as string);
     const meta = TYPE_METADATA[metaKey];
     /* istanbul ignore next -- arrayMeta.elementType is guaranteed in TYPE_METADATA */
     if (!meta) return;
@@ -3065,21 +2877,31 @@ export class World {
         payloadBytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
       } else if (Array.isArray(raw)) {
         payloadCount = raw.length;
-        // Plain JS array: pack each element through the declared element
-        // type's TypedArray constructor (`meta.viewCtor`) so the numeric
-        // VALUE is encoded, not its integer bit pattern. Dispatching on
-        // `viewCtor` (the type SSOT) rather than byte size is what keeps
-        // `array<f32,N>` distinct from `array<u32,N>` -- both are 4 bytes,
-        // so a size-keyed setter would store an f32 `1.0` as the u32 bits
-        // `0x00000001` (reads back ~1.4e-45). The TypedArray then exposes
-        // its little-endian bytes for the shared copy path below.
-        if (payloadCount > 0 && meta.viewCtor !== undefined) {
-          const typed = new meta.viewCtor(payloadCount);
+        // Plain JS array: convert elements to bytes. Each element is packed
+        // as the declared element type (u32 for handle<X> / entity / scalar).
+        // Numbers are stored in little-endian to match TypedArray layout.
+        if (payloadCount > 0 && elementBytes > 0) {
+          const buf = new ArrayBuffer(payloadCount * elementBytes);
+          const view = new DataView(buf);
           for (let i = 0; i < payloadCount; i++) {
             const val = raw[i];
-            typed[i] = typeof val === 'number' ? val : 0;
+            const num = typeof val === 'number' ? val : 0;
+            switch (elementBytes) {
+              case 8:
+                view.setFloat64(i * 8, num, true);
+                break;
+              case 4:
+                view.setUint32(i * 4, num, true);
+                break;
+              case 2:
+                view.setUint16(i * 2, num, true);
+                break;
+              case 1:
+                view.setUint8(i, num);
+                break;
+            }
           }
-          payloadBytes = new Uint8Array(typed.buffer, typed.byteOffset, typed.byteLength);
+          payloadBytes = new Uint8Array(buf);
         }
       }
     }
@@ -3110,14 +2932,6 @@ export class World {
       // alloc'd a zeroed slot, so unwritten elements read back as 0).
       if (copyLen < rowBytes.byteLength) {
         rowBytes.fill(0, copyLen);
-      }
-      // feat-20260614 M4 / D-3: `array<shared<T>,N>` element-level retain.
-      // Walk the copied prefix as u32 handles and retain each non-sentinel
-      // element. Caller releases priors via `releaseManagedFieldOnRow` on
-      // the set path (D-3 calling convention); the spawn path's fresh row
-      // is zero-initialised so no priors exist.
-      if (metaKey === 'shared' && copyLen > 0) {
-        this.retainSharedArrayElements(rowBytes, copyLen >>> 2);
       }
       return;
     }
@@ -3155,52 +2969,6 @@ export class World {
       const countCol = fieldCols.get(arrayCountColumnName(fieldName));
       /* istanbul ignore else -- count column allocated by createArchetype */
       if (countCol !== undefined) countCol.view[row] = effectiveCount;
-    }
-    // feat-20260614 M4 / D-3: variable `array<shared<T>>` element-level
-    // retain. Walk the live element prefix (effectiveCount u32 handles) and
-    // retain each non-sentinel handle. Prior elements were released by the
-    // caller via `releaseManagedFieldOnRow` on the set path (D-3 calling
-    // convention); the spawn path has no priors.
-    if (metaKey === 'shared' && effectiveCount > 0) {
-      this.retainSharedArrayElements(slot.view, effectiveCount);
-    }
-  }
-
-  /**
-   * Walk the first `count` u32 handles in `bytes` and call
-   * `SharedRefStore.retain` on each non-sentinel slot id (feat-20260614 M4 /
-   * D-3). Failures route via Layer 3 ErrorHandler so the write chain stays
-   * total; charter explicit-failure boundary lets AI users see structured
-   * `shared-ref-released` payloads when retaining a stale handle.
-   *
-   * Helper-internal -- only called from `writeArrayField`'s `'shared'` arm.
-   */
-  private retainSharedArrayElements(bytes: Uint8Array, count: number): void {
-    const view = new Uint32Array(bytes.buffer, bytes.byteOffset, count);
-    for (let i = 0; i < count; i++) {
-      const raw = view[i];
-      if (raw === undefined) continue;
-      // R-14: route through the scalar SSOT helper so the `< BUILTIN_BASE`
-      // short-circuit (builtin slots + sentinel 0) lives in exactly one place.
-      this.retainSharedScalarHandle(raw, 'array<shared<T>>', 'element');
-    }
-  }
-
-  /**
-   * Walk the first `count` u32 handles in `bytes` and call
-   * `SharedRefStore.release` on each non-sentinel slot id (feat-20260614 M4 /
-   * D-3). Mirrors `retainSharedArrayElements`; called from
-   * `releaseManagedFieldOnRow`'s array arm BEFORE the BufferPool slot is
-   * released so the underlying bytes are still valid.
-   */
-  private releaseSharedArrayElements(bytes: Uint8Array, count: number): void {
-    const view = new Uint32Array(bytes.buffer, bytes.byteOffset, count);
-    for (let i = 0; i < count; i++) {
-      const raw = view[i];
-      if (raw === undefined) continue;
-      // R-14: route through the scalar SSOT helper so the `< BUILTIN_BASE`
-      // short-circuit (builtin slots + sentinel 0) lives in exactly one place.
-      this.releaseSharedRefHandle(raw, 'array<shared<T>>', 'element');
     }
   }
 
@@ -3277,7 +3045,7 @@ export class World {
    *
    *   - `ref<T>` field   - the u32 (managed handle = (slot << 8) | gen) is
    *                        bit-equal across migrate, so `Object.is` on the
-   *                        handle holds and `UniqueRefStore.resolve` returns
+   *                        handle holds and `ManagedRefStore.resolve` returns
    *                        the same payload object reference (per-(slot, gen)
    *                        wrapper singleton, D-3).
    *   - `buffer<N>` field - fixed-capacity inline stride-N `u8` column
@@ -3304,7 +3072,7 @@ export class World {
    *                          elementBytes` and is therefore preserved by the
    *                          slot-id carry-over alone (no separate column).
    *
-   * Negative invariant: this routine MUST NOT call UniqueRefStore.release /
+   * Negative invariant: this routine MUST NOT call ManagedRefStore.release /
    * BufferPool.release for surviving components. The pre-migrate release
    * loop lives at `removeComponent` (only for the component being removed)
    * and `despawn` (every component); migrate is only a column copy. The
@@ -3398,8 +3166,8 @@ export class World {
   private sceneAssetResolver:
     | ((
         sourceIndex: number,
-        parentHandle: Handle<'SceneAsset', 'shared'>,
-      ) => Result<Handle<'SceneAsset', 'shared'>, unknown>)
+        parentHandle: Handle<'SceneAsset', 'unmanaged'>,
+      ) => Result<Handle<'SceneAsset', 'unmanaged'>, unknown>)
     | null = null;
 
   /**
@@ -3414,8 +3182,8 @@ export class World {
   _setSceneAssetResolver(
     resolver: (
       sourceIndex: number,
-      parentHandle: Handle<'SceneAsset', 'shared'>,
-    ) => Result<Handle<'SceneAsset', 'shared'>, unknown>,
+      parentHandle: Handle<'SceneAsset', 'unmanaged'>,
+    ) => Result<Handle<'SceneAsset', 'unmanaged'>, unknown>,
   ): void {
     this.sceneAssetResolver = resolver;
   }
@@ -3445,7 +3213,7 @@ export class World {
    *   const member = inst.mapping[0]; // first member entity
    */
   instantiateScene(
-    handle: Handle<'SceneAsset', 'shared'>,
+    handle: Handle<'SceneAsset', 'unmanaged'>,
     parent?: EntityHandle,
   ): Result<EntityHandle, EcsError> {
     const stack = new Set<number>();
@@ -3458,7 +3226,7 @@ export class World {
    * (D-3 / charter P1).
    */
   _instantiateSceneRec(
-    handle: Handle<'SceneAsset', 'shared'>,
+    handle: Handle<'SceneAsset', 'unmanaged'>,
     parent: EntityHandle | undefined,
     stack: Set<number>,
   ): Result<EntityHandle, EcsError> {
@@ -3491,14 +3259,17 @@ export class World {
   }
 
   /**
-   * @internal Resolve a SceneAsset handle through the SharedRefStore.
-   * The handle u32 is the SharedRefStore slot id (`world.allocSharedRef
-   * ('SceneAsset', asset)` is the producer; rc starts at 1, the SceneInstance
-   * spawn retains to rc=2 in M4 / w13). Errors propagate as EcsError so the
-   * instantiateScene chain returns a single closed union.
+   * @internal Resolve a SceneAsset handle. First tries the runtime
+   * SceneAsset resolver (if wired); falls back to the ManagedRefStore
+   * (handle u32 = managed ref slot). The fallback is what makes unit tests
+   * work without a full AssetRegistry — `world.allocManagedRef('SceneAsset',
+   * asset)` returns a managed handle whose payload `resolve()`s to the asset.
    */
-  _resolveSceneAsset(handle: Handle<'SceneAsset', 'shared'>): Result<SceneAsset, EcsError> {
-    const r = this.sharedRefs.resolve(handle);
+  _resolveSceneAsset(handle: Handle<'SceneAsset', 'unmanaged'>): Result<SceneAsset, EcsError> {
+    // Fallback: treat the handle as a managed ref allocated via
+    // world.allocManagedRef.
+    const managed = toManaged<'SceneAsset'>(unwrapHandle(handle));
+    const r = this.managedRefs.resolve(managed);
     if (!r.ok) {
       return err(r.error as unknown as EcsError);
     }
@@ -3510,7 +3281,7 @@ export class World {
    * Caller (`_instantiateSceneRec`) owns cycle bookkeeping.
    */
   _instantiateSceneAsset(
-    handle: Handle<'SceneAsset', 'shared'>,
+    handle: Handle<'SceneAsset', 'unmanaged'>,
     asset: SceneAsset,
     parent: EntityHandle | undefined,
     stack: Set<number>,
@@ -3718,9 +3489,13 @@ export class World {
     // 3. Spawn the synthetic root entity carrying SceneInstance.
     //    First alloc the state ref so the SceneInstance.state column has a
     //    live u32; then attach SceneInstance to a fresh entity.
-    const stateRef = this.uniqueRefs.alloc<'SceneInstanceState'>('SceneInstanceState', null, () => {
-      // released by despawn / despawnScene; no caller-side cleanup needed
-    });
+    const stateRef = this.managedRefs.alloc<'SceneInstanceState'>(
+      'SceneInstanceState',
+      null,
+      () => {
+        // released by despawn / despawnScene; no caller-side cleanup needed
+      },
+    );
     // Spawn the root with SceneInstance component, mapping snapshot, and
     // state ref. The mapping is a Uint32Array (array<entity> field shape).
     // Convert mapping Uint32Array to plain number[] for spawn write — the
@@ -3757,13 +3532,13 @@ export class World {
       ...rootComponents,
     );
     if (!rootSpawn.ok) {
-      this.uniqueRefs.release(stateRef);
+      this.managedRefs.release(stateRef);
       return rootSpawn;
     }
     const rootEntity = rootSpawn.value;
 
-    // 4. Build SceneInstanceState payload + register it in the UniqueRefStore
-    //    under the same handle. We use the public `_setUniqueRefPayload`
+    // 4. Build SceneInstanceState payload + register it in the ManagedRefStore
+    //    under the same handle. We use the public `_setManagedRefPayload`
     //    helper (added below) so the alloc -> populate sequence stays atomic.
     const overrides = new Map<LocalEntityId, Map<string, MountOverride>>();
     for (const mount of ownMounts) {
@@ -3785,7 +3560,7 @@ export class World {
               [ov.field]: ov.value,
             } as never);
             if (!setRes.ok) {
-              this.uniqueRefs.release(stateRef);
+              this.managedRefs.release(stateRef);
               return setRes as Result<EntityHandle, EcsError>;
             }
           }
@@ -3805,10 +3580,10 @@ export class World {
       totalSlots,
       mountTimeOverrides: ownMounts.flatMap((m) => m.overrides ?? []),
     };
-    // Stuff the state into the UniqueRefStore under the existing slot. We
+    // Stuff the state into the ManagedRefStore under the existing slot. We
     // re-use the slot we allocated above by writing directly into the
-    // payloads map via a `_setUniqueRefPayload` shim.
-    this._setUniqueRefPayload(stateRef, state);
+    // payloads map via a `_setManagedRefPayload` shim.
+    this._setManagedRefPayload(stateRef, state);
 
     // 5. Wire ChildOf for every owned root entity (no ChildOf at layer-1)
     //    to the synthetic root.
@@ -4025,8 +3800,8 @@ export class World {
   /** @internal Resolve mount.source through the wired SceneAssetResolver. */
   _resolveMountSource(
     sourceIndex: number,
-    parentHandle: Handle<'SceneAsset', 'shared'>,
-  ): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
+    parentHandle: Handle<'SceneAsset', 'unmanaged'>,
+  ): Result<Handle<'SceneAsset', 'unmanaged'>, EcsError> {
     if (this.sceneAssetResolver === null) {
       return err({
         code: 'stale-entity' as const,
@@ -4065,10 +3840,10 @@ export class World {
   }
 
   /** @internal Set the payload of an already-allocated managed ref slot. */
-  _setUniqueRefPayload<T>(handle: Handle<string, 'unique'>, payload: T): void {
+  _setManagedRefPayload<T>(handle: Handle<string, 'managed'>, payload: T): void {
     const raw = unwrapHandle(handle);
     // biome-ignore lint/suspicious/noExplicitAny: store is erased
-    const store = this.uniqueRefs as unknown as { payloads: Map<number, any> };
+    const store = this.managedRefs as unknown as { payloads: Map<number, any> };
     store.payloads.set(raw, payload);
   }
 
@@ -4087,8 +3862,8 @@ export class World {
     const r = this.get(root, sceneInstanceToken);
     if (!r.ok) return r;
     const stateRefRaw = (r.value as unknown as { state: number }).state;
-    const stateRefHandle = toUnique<'SceneInstanceState'>(stateRefRaw);
-    const payloadRes = this.uniqueRefs.resolve(stateRefHandle);
+    const stateRefHandle = toManaged<'SceneInstanceState'>(stateRefRaw);
+    const payloadRes = this.managedRefs.resolve(stateRefHandle);
     if (!payloadRes.ok) {
       return err(payloadRes.error as unknown as EcsError);
     }
@@ -4150,16 +3925,10 @@ export class World {
     // while iterating.
     const list: EntityHandle[] = [];
     for (const e of this.iterDescendants(root)) list.push(e);
-    const childOfToken = resolveComponent('ChildOf');
     for (const e of list) {
       if (detached !== null) {
         const lid = entityToLocalId?.get(e);
-        if (lid !== undefined && detached.has(lid)) {
-          if (childOfToken !== undefined) {
-            this._removeComponentCore(e, childOfToken, false);
-          }
-          continue;
-        }
+        if (lid !== undefined && detached.has(lid)) continue;
       }
       const r = this.despawn(e);
       if (!r.ok) return r;
@@ -4306,7 +4075,9 @@ export class World {
    * Get the SceneAsset handle a SceneInstance root was instantiated from.
    * Returns Err on a plain entity (no SceneInstance component).
    */
-  getSceneAssetForInstance(root: EntityHandle): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
+  getSceneAssetForInstance(
+    root: EntityHandle,
+  ): Result<Handle<'SceneAsset', 'unmanaged'>, EcsError> {
     const stateRes = this._resolveSceneInstanceStatePayload(root);
     if (!stateRes.ok) return stateRes;
     return ok(stateRes.value.source);
@@ -4321,7 +4092,7 @@ export class World {
 
 /** @internal Structural payload behind `SceneInstance.state` ref column. */
 interface SceneInstanceStatePayload {
-  readonly source: Handle<'SceneAsset', 'shared'>;
+  readonly source: Handle<'SceneAsset', 'unmanaged'>;
   readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
   readonly detachedLocalIds: Set<LocalEntityId>;
   readonly overrides: Map<
@@ -4450,11 +4221,10 @@ function reinterpretSlotBytes(
   | Uint8Array {
   const buf = bytes.buffer;
   const offset = bytes.byteOffset;
-  // shared<X> template literals: column-stored as u32 handles, reinterpret
+  // handle<X> template literals: column-stored as u32 handles, reinterpret
   // as Uint32Array. The brand is applied at the FieldValueType level;
-  // runtime storage is plain u32 (feat-20260614 M5; replaces the retired
-  // 'handle<X>' arm).
-  if (elementType.startsWith('shared<')) {
+  // runtime storage is plain u32 (feat-20260608 M2 / D-1).
+  if (elementType.startsWith('handle<')) {
     return new Uint32Array(buf, offset, elementCount);
   }
   switch (elementType) {
@@ -4480,9 +4250,9 @@ function reinterpretSlotBytes(
       return new Uint8Array(buf, offset, elementCount);
   }
   // Exhaustiveness fallthrough: TypeScript template-literal type
-  // (`shared<${string}>`) is structurally not narrowed away by the
+  // (`handle<${string}>`) is structurally not narrowed away by the
   // `startsWith` guard above, so this branch is unreachable yet TS still
-  // requires a return path.
+  // requires a return path. feat-20260608 M5 / w27 D-1 plumbing closure.
   return new Uint32Array(buf, offset, elementCount);
 }
 
@@ -4546,9 +4316,9 @@ function readArrayElementAt(
   const buf = bytes.buffer;
   const offset = bytes.byteOffset;
   const byteLen = bytes.byteLength;
-  // shared<X> template literals: column-stored as u32 handles, read as
-  // Uint32Array. (feat-20260614 M5; replaces retired 'handle<X>' arm.)
-  if (elementType.startsWith('shared<')) {
+  // handle<X> template literals: column-stored as u32 handles, read as
+  // Uint32Array. (feat-20260608 M5 / w27 D-1 plumbing closure.)
+  if (elementType.startsWith('handle<')) {
     return new Uint32Array(buf, offset, byteLen >>> 2)[idx] ?? 0;
   }
   switch (elementType) {

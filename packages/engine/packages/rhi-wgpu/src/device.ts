@@ -57,7 +57,7 @@ import {
 } from '@forgeax/engine-rhi';
 import { doubleDestroy, makeRhiBuffer, type RawBufferLike, unwrapBuffer } from './buffer';
 import { makeRhiCommandEncoder, type RawCommandEncoderLike } from './command-encoder';
-import { descriptorInvalid, webgpuRuntimeError } from './errors';
+import { webgpuRuntimeError } from './errors';
 import { makeRhiQueue, type RawQueueLike } from './queue';
 
 /**
@@ -265,13 +265,6 @@ class RhiWgpuDeviceImpl implements RhiDevice {
    * forgeax Result form. M4 dawn-node integration tests (w24) narrow the
    * dispatch into feature-not-enabled / limit-exceeded by inspecting the
    * thrown error message (mirrors @forgeax/engine-rhi-webgpu's classification path).
-   *
-   * F3-g (feat-20260619-wasm-fault-isolation M3 w7): exceptions carrying the
-   * stable prefix `[wgpu-wasm] failed to parse` (D-1 contract) are classified
-   * as `rhi-descriptor-invalid` (caller bug — malformed descriptor data);
-   * exceptions without the prefix remain `webgpu-runtime-error` (runtime
-   * condition). This classification applies to all 7 create* entry points that
-   * route through wrap() (D-2 global semantics).
    */
   private wrap<T>(
     method: ((desc: unknown) => unknown) | undefined,
@@ -284,9 +277,6 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       const handle = method.call(this.raw, desc);
       return ok(handle as T);
     } catch (e) {
-      if (e instanceof Error && e.message.includes('[wgpu-wasm] failed to parse')) {
-        return descriptorInvalid(e);
-      }
       return webgpuRuntimeError(e);
     }
   }

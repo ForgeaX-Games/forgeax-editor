@@ -210,7 +210,6 @@ const {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
 
@@ -272,13 +271,9 @@ const woodTexAsset = {
   colorSpace: woodDecoded.colorSpace,
   mipmap: woodDecoded.mipmap,
 };
-const world = new World();
+const woodHandle = assets.registerWithGuid(woodGuidRes.value, woodTexAsset);
 
-// Catalogue the wood texture under its GUID, then mint a shared-ref column handle.
-assets.catalog(woodGuidRes.value, woodTexAsset);
-const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
-
-const tunnelMat = world.allocSharedRef('MaterialAsset', {
+const tunnelMatRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -291,11 +286,15 @@ const tunnelMat = world.allocSharedRef('MaterialAsset', {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.85,
-    baseColorTexture: unwrapHandle(woodHandle),
+    baseColorTexture: woodHandle,
   },
 });
+if (!tunnelMatRes.ok) {
+  console.error(`[smoke] FAIL - tunnel material register: ${tunnelMatRes.error.code}`);
+  process.exit(1);
+}
 
-const strongMat = world.allocSharedRef('MaterialAsset', {
+const strongMatRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -312,6 +311,12 @@ const strongMat = world.allocSharedRef('MaterialAsset', {
     emissiveIntensity: 4.0,
   },
 });
+if (!strongMatRes.ok) {
+  console.error(`[smoke] FAIL - strong material register: ${strongMatRes.error.code}`);
+  process.exit(1);
+}
+
+const world = new World();
 
 // Tunnel
 world
@@ -325,7 +330,7 @@ world
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [tunnelMat] } },
+    { component: MeshRenderer, data: { materials: [tunnelMatRes.value] } },
   )
   .unwrap();
 
@@ -341,7 +346,7 @@ world
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [strongMat] } },
+    { component: MeshRenderer, data: { materials: [strongMatRes.value] } },
   )
   .unwrap();
 world.spawn(
@@ -447,13 +452,23 @@ try {
   process.exit(1);
 }
 
+const hdrAssetRes = assets.register({
+  kind: 'render-pipeline',
+  pipelineId: HDR_PIPELINE_ID,
+});
+const ldrAssetRes = assets.register({
+  kind: 'render-pipeline',
+  pipelineId: LDR_PIPELINE_ID,
+});
+if (!hdrAssetRes.ok || !ldrAssetRes.ok) {
+  console.error('[smoke] FAIL - render-pipeline asset register failed');
+  process.exit(1);
+}
+
 // --- 6. Install HDR pipeline + drive frames; then swap to LDR ---
 
 if (!FALSIFY) {
-  const installHdr = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: HDR_PIPELINE_ID,
-  });
+  const installHdr = renderer.installPipeline(hdrAssetRes.value);
   if (!installHdr.ok) {
     console.error(`[smoke] FAIL - installPipeline(hdr): ${installHdr.error.code}`);
     process.exit(1);
@@ -474,10 +489,7 @@ for (let i = 0; i < PER_MODE_FRAMES; i++) {
 }
 
 if (!FALSIFY) {
-  const installLdr = renderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: LDR_PIPELINE_ID,
-  });
+  const installLdr = renderer.installPipeline(ldrAssetRes.value);
   if (!installLdr.ok) {
     console.error(`[smoke] FAIL - installPipeline(ldr): ${installLdr.error.code}`);
     process.exit(1);

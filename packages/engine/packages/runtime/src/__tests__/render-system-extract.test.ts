@@ -8,7 +8,6 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -107,9 +106,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       .unwrap();
   }
 
-  function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  function registerMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+    const result = assets.register<MeshAsset>({
       kind: 'mesh',
       vertices: new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -127,10 +126,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
+    if (!result.ok) throw new Error('mesh register failed');
+    return result.value;
   }
 
-  function registerMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
-    return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  function registerMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
+    const result = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -142,6 +143,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ],
       paramValues: { baseColor: [1, 1, 1] },
     });
+    if (!result.ok) throw new Error('material register failed');
+    return result.value;
   }
 
   describe('render-system-extract consumer migration (w9, AC-07 / AC-15)', () => {
@@ -156,7 +159,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: Transform, data: { ...identity(), posX: 2, posY: 3, posZ: 0 } },
           { component: ChildOf, data: { parent } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} as never },
         )
         .unwrap();
 
@@ -181,7 +184,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn(
           { component: Transform, data: { ...identity(), posX: 5, posY: 6, posZ: 7, scaleX: 2 } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} as never },
         )
         .unwrap();
 
@@ -281,8 +284,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-05: cull AABB follows the world mat4 (parent off-screen -> child culled; in-screen -> kept)', () => {
       {
         const world = new World();
-        const mesh = registerMesh(world);
-        const mat = registerMaterial(world);
+        const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+        const mesh = registerMesh(assets);
+        const mat = registerMaterial(assets);
         world
           .spawn(
             { component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 5 } },
@@ -301,13 +305,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
         expect(propagateTransforms(world).ok).toBe(true);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, assets);
         expect(frame.renderables).toHaveLength(0);
       }
       {
         const world = new World();
-        const mesh = registerMesh(world);
-        const mat = registerMaterial(world);
+        const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+        const mesh = registerMesh(assets);
+        const mat = registerMaterial(assets);
         world
           .spawn(
             { component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 5 } },
@@ -324,7 +329,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
         expect(propagateTransforms(world).ok).toBe(true);
-        const frame = extractFrame(world);
+        const frame = extractFrame(world, assets);
         expect(frame.renderables).toHaveLength(1);
       }
     });
@@ -336,7 +341,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn(
           { component: Transform, data: { ...identity(), posX: 1, posY: 2, posZ: 3 } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} as never },
         )
         .unwrap();
       expect(propagateTransforms(world).ok).toBe(true);
@@ -401,9 +406,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return world;
   }
 
-  function registerTestMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  function registerTestMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+    const result = assets.register<MeshAsset>({
       kind: 'mesh',
       vertices: new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -421,32 +426,27 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
+    if (!result.ok) throw new Error('register mesh failed');
+    return result.value;
   }
 
-  // D-19: a material's parent is an embedded AssetGuid resolved through the
-  // registry catalogue (registry.lookup), while the material itself is
-  // resolved from a column handle via world.sharedRefs. So a parent material is
-  // catalogued by GUID (lookupable during the walk) and the child references
-  // that GUID; the returned handle is what MeshRenderer.materials carries.
   function registerMaterial(
-    world: World,
     assets: AssetRegistry,
     passes: MaterialPassDescriptor[] | undefined,
-    parentGuid?: AssetGuid,
+    parent?: Handle<'MaterialAsset', 'unmanaged'>,
     paramValues?: Readonly<Record<string, unknown>>,
-  ): { handle: Handle<'MaterialAsset', 'shared'>; guid: AssetGuid } {
+  ): Handle<'MaterialAsset', 'unmanaged'> {
     const asset: MaterialAsset = {
       kind: 'material',
       passes,
       paramValues: paramValues ?? {},
     } as MaterialAsset;
-    if (parentGuid !== undefined) {
-      (asset as { parent: AssetGuid }).parent = parentGuid;
+    if (parent !== undefined) {
+      (asset as { parent: Handle<'MaterialAsset', 'unmanaged'> }).parent = parent;
     }
-    const guid = AssetGuid.random();
-    assets.catalog(guid, asset);
-    const handle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', asset);
-    return { handle, guid };
+    const result = assets.register<MaterialAsset>(asset);
+    if (!result.ok) throw new Error('register material failed');
+    return result.value;
   }
 
   function transformData(
@@ -481,8 +481,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function spawnRenderable(
     world: World,
-    meshHandle: Handle<'MeshAsset', 'shared'>,
-    matHandle: Handle<'MaterialAsset', 'shared'>,
+    meshHandle: Handle<'MeshAsset', 'unmanaged'>,
+    matHandle: Handle<'MaterialAsset', 'unmanaged'>,
     x = 0,
     y = 0,
     z = 0,
@@ -530,12 +530,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = makeWorldWithComponents();
       spawnCamera(world);
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = registerTestMesh(world);
+      const mesh = registerTestMesh(assets);
 
-      const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
-      const childMat = registerMaterial(world, assets, undefined, parentMat.guid);
+      const parentMat = registerMaterial(assets, [FORWARD_PBR_PASS]);
+      const childMat = registerMaterial(assets, undefined, parentMat);
 
-      spawnRenderable(world, mesh, childMat.handle);
+      spawnRenderable(world, mesh, childMat);
 
       propagateTransforms(world);
 
@@ -557,16 +557,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = makeWorldWithComponents();
       spawnCamera(world);
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = registerTestMesh(world);
+      const mesh = registerTestMesh(assets);
 
-      const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
+      const parentMat = registerMaterial(assets, [FORWARD_PBR_PASS]);
 
       const childCount = 76;
       for (let i = 0; i < childCount; i++) {
-        const childMat = registerMaterial(world, assets, undefined, parentMat.guid);
+        const childMat = registerMaterial(assets, undefined, parentMat);
         // Spread across Z axis (0 to -60) so all entities stay within
         // the perspective camera frustum (far=100, fov=PI/4 at (0,0,5)).
-        spawnRenderable(world, mesh, childMat.handle, 0, 0, -i * 0.8);
+        spawnRenderable(world, mesh, childMat, 0, 0, -i * 0.8);
       }
 
       propagateTransforms(world);
@@ -591,17 +591,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = makeWorldWithComponents();
       spawnCamera(world);
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = registerTestMesh(world);
+      const mesh = registerTestMesh(assets);
 
-      const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS], undefined, {
+      const parentMat = registerMaterial(assets, [FORWARD_PBR_PASS], undefined, {
         metallic: 0.3,
         roughness: 0.7,
       });
-      const childMat = registerMaterial(world, assets, undefined, parentMat.guid, {
+      const childMat = registerMaterial(assets, undefined, parentMat, {
         metallic: 0.9,
       });
 
-      spawnRenderable(world, mesh, childMat.handle);
+      spawnRenderable(world, mesh, childMat);
 
       propagateTransforms(world);
 
@@ -624,13 +624,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = makeWorldWithComponents();
       spawnCamera(world);
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = registerTestMesh(world);
+      const mesh = registerTestMesh(assets);
 
-      const mat = registerMaterial(world, assets, [FORWARD_UNLIT_PASS], undefined, {
+      const mat = registerMaterial(assets, [FORWARD_UNLIT_PASS], undefined, {
         baseColor: [0.2, 0.3, 0.4],
       });
 
-      spawnRenderable(world, mesh, mat.handle);
+      spawnRenderable(world, mesh, mat);
 
       propagateTransforms(world);
 
@@ -721,9 +721,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function registerSpriteMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  function registerSpriteMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+    const result = assets.register<MeshAsset>({
       kind: 'mesh',
       vertices: new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -741,6 +741,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
+    if (!result.ok) throw new Error('register sprite mesh failed');
+    return result.value;
   }
 
   function spawnSpriteScene(paramValues: Record<string, unknown>): {
@@ -749,12 +751,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   } {
     const world = new World();
     const assets = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
-    const mesh = registerSpriteMesh(world);
-    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+    const mesh = registerSpriteMesh(assets);
+    const matRes = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [SPRITE_PASS],
       paramValues,
-    } as MaterialAsset);
+    });
+    if (!matRes.ok) throw new Error(`sprite material register failed: ${matRes.error.code}`);
     // Spawn a camera so extract has a viewport.
     world
       .spawn(
@@ -780,7 +783,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       .spawn(
         { component: Transform, data: identity() },
         { component: MeshFilter, data: { assetHandle: mesh } },
-        { component: MeshRenderer, data: { materials: [matHandle] } },
+        { component: MeshRenderer, data: { materials: [matRes.value] } },
       )
       .unwrap();
     propagateTransforms(world);

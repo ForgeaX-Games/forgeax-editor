@@ -33,7 +33,7 @@
 // extraction surfaces as `gltf-image-extract-failed` (D-6).
 
 import type { Handle, ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
 import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from './bridge.js';
 import { gltfErr } from './errors.js';
 import { extractImageBytes } from './extract-image-bytes.js';
@@ -83,10 +83,10 @@ async function parseDoc(source: string, bytes: Uint8Array, ctx: ImportContext): 
 }
 
 interface HandleMaps {
-  readonly meshHandles: Map<number, Handle<'MeshAsset', 'shared'>>;
-  readonly materialHandles: Map<number, Handle<'MaterialAsset', 'shared'>>;
-  readonly textureHandles: Map<number, Handle<'TextureAsset', 'shared'>>;
-  readonly samplerHandles: Map<number, Handle<'SamplerAsset', 'shared'>>;
+  readonly meshHandles: Map<number, Handle<'MeshAsset', 'unmanaged'>>;
+  readonly materialHandles: Map<number, Handle<'MaterialAsset', 'unmanaged'>>;
+  readonly textureHandles: Map<number, Handle<'TextureAsset', 'unmanaged'>>;
+  readonly samplerHandles: Map<number, Handle<'SamplerAsset', 'unmanaged'>>;
   readonly meshGuidByIndex: Map<number, string>;
   readonly materialGuidByIndex: Map<number, string>;
   readonly textureGuidByIndex: Map<number, string>;
@@ -110,10 +110,10 @@ function buildHandleMaps(
   subAssets: readonly { guid: string; sourceIndex: number; kind: string }[],
   doc: GltfDoc,
 ): HandleMaps {
-  const meshHandles = new Map<number, Handle<'MeshAsset', 'shared'>>();
-  const materialHandles = new Map<number, Handle<'MaterialAsset', 'shared'>>();
-  const textureHandles = new Map<number, Handle<'TextureAsset', 'shared'>>();
-  const samplerHandles = new Map<number, Handle<'SamplerAsset', 'shared'>>();
+  const meshHandles = new Map<number, Handle<'MeshAsset', 'unmanaged'>>();
+  const materialHandles = new Map<number, Handle<'MaterialAsset', 'unmanaged'>>();
+  const textureHandles = new Map<number, Handle<'TextureAsset', 'unmanaged'>>();
+  const samplerHandles = new Map<number, Handle<'SamplerAsset', 'unmanaged'>>();
   const meshGuidByIndex = new Map<number, string>();
   const materialGuidByIndex = new Map<number, string>();
   const textureGuidByIndex = new Map<number, string>();
@@ -133,14 +133,14 @@ function buildHandleMaps(
   let materialCursor = 0;
   for (const sub of subAssets) {
     if (sub.kind === 'mesh') {
-      meshHandles.set(sub.sourceIndex, toShared<'MeshAsset'>(meshCursor));
+      meshHandles.set(sub.sourceIndex, toUnmanaged<'MeshAsset'>(meshCursor));
       meshGuidByIndex.set(sub.sourceIndex, sub.guid);
       meshCursor += 1;
     } else if (sub.kind === 'material') {
       // material handles come AFTER all mesh refs in the concat.
       // The actual offset (= meshCount + materialCursor) is back-patched
       // below once we know meshCount.
-      materialHandles.set(sub.sourceIndex, toShared<'MaterialAsset'>(materialCursor));
+      materialHandles.set(sub.sourceIndex, toUnmanaged<'MaterialAsset'>(materialCursor));
       materialGuidByIndex.set(sub.sourceIndex, sub.guid);
       materialCursor += 1;
     } else if (sub.kind === 'texture') {
@@ -151,7 +151,7 @@ function buildHandleMaps(
   if (meshCount > 0) {
     for (const [k, v] of materialHandles) {
       const local = v as unknown as number;
-      materialHandles.set(k, toShared<'MaterialAsset'>(local + meshCount));
+      materialHandles.set(k, toUnmanaged<'MaterialAsset'>(local + meshCount));
     }
   }
   // For material binding (toMaterialAsset / paramValues.<X>Texture) the handle
@@ -166,7 +166,7 @@ function buildHandleMaps(
     const tex = textures[texIndex];
     if (tex === undefined) continue;
     if (textureGuidByIndex.has(tex.source)) {
-      textureHandles.set(texIndex, toShared<'TextureAsset'>(tex.source));
+      textureHandles.set(texIndex, toUnmanaged<'TextureAsset'>(tex.source));
     }
   }
   return {
@@ -260,7 +260,6 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
   }
 
   const out: ImportedAsset[] = [];
-  const isMultiAsset = ctx.subAssets.length > 1;
   for (const sub of ctx.subAssets) {
     if (sub.kind === 'mesh') {
       // sub.sourceIndex now indexes glTF mesh-index (not flat GltfMeshIr index).
@@ -272,14 +271,7 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       // N Submesh entries.
       const prims = doc.meshes.filter((m) => m.meshIndex === sub.sourceIndex);
       if (prims.length === 0) continue;
-      const meshName = isMultiAsset ? prims[0]?.name : undefined;
-      out.push({
-        guid: sub.guid,
-        kind: 'mesh',
-        ...(meshName !== undefined ? { name: meshName } : {}),
-        payload: meshIrToMeshAsset(prims),
-        refs: [],
-      });
+      out.push({ guid: sub.guid, kind: 'mesh', payload: meshIrToMeshAsset(prims), refs: [] });
     } else if (sub.kind === 'material') {
       const mat = doc.materials[sub.sourceIndex];
       if (mat === undefined) continue;
@@ -334,14 +326,7 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
         refsCursor++;
       }
       const rewrittenAsset = { ...matAsset, paramValues: newParamValues };
-      const matName = isMultiAsset ? mat.name : undefined;
-      out.push({
-        guid: sub.guid,
-        kind: 'material',
-        ...(matName !== undefined ? { name: matName } : {}),
-        payload: rewrittenAsset,
-        refs,
-      });
+      out.push({ guid: sub.guid, kind: 'material', payload: rewrittenAsset, refs });
     } else if (sub.kind === 'texture') {
       const imageIndex = sub.sourceIndex;
       const extracted = extraction.extracted.get(imageIndex);
@@ -378,12 +363,9 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
           `gltfImporter: ${error.code} on image ${imageIndex} (${extracted.source}): ${reason}`,
         );
       }
-      const imageItem = (doc.images ?? [])[imageIndex];
-      const texName = isMultiAsset ? imageItem?.name : undefined;
       out.push({
         guid: sub.guid,
         kind: 'texture',
-        ...(texName !== undefined ? { name: texName } : {}),
         payload: decoded.value.texture,
         refs: [],
       });
@@ -425,14 +407,7 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       // resolveSkinGuids accepts both string and refs[]-index shapes.
       const sceneWithSkinGuids =
         skinGuidList.length > 0 ? { ...scene, skinGuids: skinGuidList } : scene;
-      const sceneName = isMultiAsset ? doc.scenes[sub.sourceIndex]?.name : undefined;
-      out.push({
-        guid: sub.guid,
-        kind: 'scene',
-        ...(sceneName !== undefined ? { name: sceneName } : {}),
-        payload: sceneWithSkinGuids,
-        refs,
-      });
+      out.push({ guid: sub.guid, kind: 'scene', payload: sceneWithSkinGuids, refs });
     } else if (sub.kind === 'skeleton') {
       // tweak-20260611 M4: skeleton sub-asset POD emit. GltfSkeletonRecord (the
       // gltf IR shape from parse-skin) carries inverseBindMatrices + jointCount

@@ -6,7 +6,6 @@
 // pack payload's paramValues. Reached through the server's /api/files{,/tree}
 // (same-origin via the interface proxy).
 import { Materials } from '@forgeax/engine-runtime';
-import { fetchWithTimeout } from './net';
 
 export interface PackAsset {
   guid: string;
@@ -22,7 +21,7 @@ interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?
 async function packPaths(slug: string): Promise<string[]> {
   const root = `.forgeax/games/${slug}/assets`;
   try {
-    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
     const out: string[] = [];
@@ -36,58 +35,6 @@ async function packPaths(slug: string): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-/** Every `*.pack.json` under the WHOLE game dir (not just assets/) — needed to
- *  find scene packs that live in `scenes/` or at the game root, which `packPaths`
- *  (assets-only) never sees. */
-async function allGamePackPaths(slug: string): Promise<string[]> {
-  const root = `.forgeax/games/${slug}`;
-  try {
-    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
-    if (!r.ok) return [];
-    const j = (await r.json()) as { tree?: TreeNode };
-    const out: string[] = [];
-    const walk = (n?: TreeNode): void => {
-      if (!n) return;
-      // Skip dirs that never hold authored scene packs (and could be huge).
-      if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git')) return;
-      if (n.type === 'file' && n.name.endsWith('.pack.json')) out.push(n.path);
-      n.children?.forEach(walk);
-    };
-    walk(j.tree);
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Resolve the engine SSOT `forge.json.defaultScene` (a scene GUID) to the
- * game-relative pack path that DECLARES that scene asset (e.g.
- * `scenes/rogue-encampment.pack.json`). This is how the editor opens the SAME
- * scene ▶ Play boots, instead of falling back to a stray legacy `scene.pack.json`.
- * Returns null when the GUID isn't found in any pack (caller keeps legacy mode).
- */
-export async function findScenePackByGuid(
-  slug: string | null | undefined,
-  guid: string | null | undefined,
-): Promise<string | null> {
-  if (!slug || slug === 'default' || !guid) return null;
-  const prefix = `.forgeax/games/${slug}/`;
-  for (const p of await allGamePackPaths(slug)) {
-    try {
-      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
-      if (!r.ok) continue;
-      const j = (await r.json()) as { content?: string };
-      if (!j.content) continue;
-      const parsed = JSON.parse(j.content) as { assets?: Array<{ guid?: string; kind?: string }> };
-      const hit = Array.isArray(parsed.assets)
-        && parsed.assets.some((a) => a?.kind === 'scene' && a?.guid === guid);
-      if (hit) return p.startsWith(prefix) ? p.slice(prefix.length) : p;
-    } catch { /* unparseable pack — skip */ }
-  }
-  return null;
 }
 
 /** A raw imported file (GLB/PNG/audio) that lives in assets/ but hasn't been
@@ -111,7 +58,7 @@ export async function loadRawAssets(slug: string | null | undefined): Promise<Ra
   if (!slug || slug === 'default') return [];
   try {
     const root = `.forgeax/games/${slug}/assets`;
-    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
     const out: RawAsset[] = [];
@@ -138,16 +85,14 @@ export async function loadRawAssets(slug: string | null | undefined): Promise<Ra
   }
 }
 
-/** Load + flatten every asset declared in the game's *.pack.json files.
- *  Scans the ENTIRE game directory (assets/, scenes/, root) so materials
- *  embedded in scene packs are also discovered. */
+/** Load + flatten every asset declared in the game's *.pack.json files. */
 export async function loadGameAssets(slug: string | null | undefined): Promise<PackAsset[]> {
   if (!slug || slug === 'default') return [];
-  const paths = await allGamePackPaths(slug);
+  const paths = await packPaths(slug);
   const out: PackAsset[] = [];
   for (const p of paths) {
     try {
-      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) continue;
       const j = (await r.json()) as { content?: string };
       if (!j.content) continue;
@@ -176,21 +121,6 @@ function shortName(
     : '';
   const tail = a.guid.slice(0, 8);
   return stem ? `${stem} · ${tail}` : `${a.kind} ${tail}`;
-}
-
-/** Extract unique directory paths from pack asset paths, for building a folder tree. */
-export function extractPackDirs(assets: PackAsset[]): string[] {
-  const dirs = new Set<string>();
-  for (const a of assets) {
-    const dir = a.packPath.replace(/\/[^/]+$/, '');
-    let cur = dir;
-    while (cur) {
-      dirs.add(cur);
-      const slash = cur.lastIndexOf('/');
-      cur = slash > 0 ? cur.slice(0, slash) : '';
-    }
-  }
-  return [...dirs].sort();
 }
 
 /** Minimal slice of the engine World used for asset allocation. The engine

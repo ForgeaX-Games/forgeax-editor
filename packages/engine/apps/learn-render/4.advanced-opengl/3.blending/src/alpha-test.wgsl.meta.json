@@ -16,7 +16,6 @@
   "paramSchema": [
     { "name": "baseColor", "type": "color" },
     { "name": "metallic", "type": "f32" },
-    { "name": "roughness", "type": "f32" },
-    { "name": "baseColorTexture", "type": "texture2d" }
+    { "name": "roughness", "type": "f32" }
   ]
 }

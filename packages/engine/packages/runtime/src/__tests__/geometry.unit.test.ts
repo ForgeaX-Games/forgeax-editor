@@ -21,7 +21,6 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { World } from '@forgeax/engine-ecs';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { PipelineLayout, RenderPipeline, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import type {
   AssetErrorDetail,
@@ -61,7 +60,6 @@ import {
   isMeshSsboDevMode,
   setMeshSsboDevModeProbeForTests,
 } from '../render-system-record';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { deriveVertexBufferLayout } from '../vertex-attribute-layout';
 import { createDefaultLoaderRegistry } from '../wire-default-loaders';
@@ -329,20 +327,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   function registerMesh(
-    world: World,
     assets: AssetRegistry,
     aabb: Float32Array,
-  ): Handle<'MeshAsset', 'shared'> {
+  ): Handle<'MeshAsset', 'unmanaged'> {
     // Minimal mesh: 1 triangle at origin with AABB
     const vertices = new Float32Array([
       0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
       1, 0, 0, 0, 0,
     ]);
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    // catalog recomputes the AABB from positions (withMeshAabb), matching the
-    // prior register() behavior; mint the augmented payload on the world so
-    // the extract-stage frustum cull (via resolveAssetHandle) reads .aabb.
-    const result = assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
+    const result = assets.register<MeshAsset>({
       kind: 'mesh',
       vertices,
       indices: new Uint16Array([0, 1, 2]),
@@ -357,15 +351,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
-    if (!result.ok) throw new Error('catalog failed');
-    return world.allocSharedRef('MeshAsset', result.value);
+    if (!result.ok) throw new Error('register failed');
+    return result.value;
   }
 
-  function registerUnlitMaterial(
-    world: World,
-    assets: AssetRegistry,
-  ): Handle<'MaterialAsset', 'shared'> {
-    const result = assets.catalog<MaterialAsset>(AssetGuid.format(AssetGuid.random()), {
+  function registerUnlitMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
+    const result = assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -377,31 +368,31 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ],
       paramValues: { baseColor: [1, 1, 1] },
     });
-    if (!result.ok) throw new Error('catalog failed');
-    return world.allocSharedRef('MaterialAsset', result.value);
+    if (!result.ok) throw new Error('register failed');
+    return result.value;
   }
 
   function makeWorldWithAssets(): {
     world: World;
     assets: AssetRegistry;
-    meshHandle: Handle<'MeshAsset', 'shared'>;
-    matHandle: Handle<'MaterialAsset', 'shared'>;
+    meshHandle: Handle<'MeshAsset', 'unmanaged'>;
+    matHandle: Handle<'MaterialAsset', 'unmanaged'>;
   } {
     const world = new World();
     const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
     // AABB: unit cube [-1,1] in each axis
     const aabb = new Float32Array([-1, -1, -1, 1, 1, 1]);
-    const meshHandle = registerMesh(world, assets, aabb);
-    const matHandle = registerUnlitMaterial(world, assets);
+    const meshHandle = registerMesh(assets, aabb);
+    const matHandle = registerUnlitMaterial(assets);
     return { world, assets, meshHandle, matHandle };
   }
 
   /** Spawn a renderable entity at (x,y,z) with default frustumCulled=1 enabled. */
   function spawnEntity(
     world: World,
-    meshHandle: Handle<'MeshAsset', 'shared'>,
-    matHandle: Handle<'MaterialAsset', 'shared'>,
+    meshHandle: Handle<'MeshAsset', 'unmanaged'>,
+    matHandle: Handle<'MaterialAsset', 'unmanaged'>,
     x = 0,
     y = 0,
     z = 0,
@@ -418,8 +409,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   /** Spawn a renderable entity with explicit frustumCulled value. */
   function spawnEntityWithFrustumCulled(
     world: World,
-    meshHandle: Handle<'MeshAsset', 'shared'>,
-    matHandle: Handle<'MaterialAsset', 'shared'>,
+    meshHandle: Handle<'MeshAsset', 'unmanaged'>,
+    matHandle: Handle<'MaterialAsset', 'unmanaged'>,
     frustumCulled: number,
     x = 0,
     y = 0,
@@ -522,13 +513,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
-      // Catalog a mesh with NO position attribute -> computeAABB returns empty box.
+      // Register a mesh with NO position attribute → computeAABB returns empty box.
       // The entity should be always-visible even far away from camera.
       const vertices = new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
         1, 0, 0, 0, 0,
       ]);
-      const meshResult = assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
+      const meshResult = assets.register<MeshAsset>({
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2]),
@@ -542,15 +533,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           },
         ],
       });
-      if (!meshResult.ok) throw new Error('catalog failed');
-      const meshHandle = world.allocSharedRef('MeshAsset', meshResult.value);
-      const matHandle = registerUnlitMaterial(world, assets);
+      if (!meshResult.ok) throw new Error('register failed');
+      const matHandle = registerUnlitMaterial(assets);
 
       spawnCameraAt(world, 0, 0, 5);
       world
         .spawn(
           { component: Transform, data: translateTransform(100, 100, 100) },
-          { component: MeshFilter, data: { assetHandle: meshHandle } },
+          { component: MeshFilter, data: { assetHandle: meshResult.value } },
           { component: MeshRenderer, data: { materials: [matHandle] } },
         )
         .unwrap();
@@ -563,13 +553,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(4b) entity with inverted-infinity AABB (no position attribute) is always visible', () => {
       const { world, assets, matHandle } = makeWorldWithAssets();
-      // Catalog a mesh with NO position attribute -> computeAABB returns
+      // Register a mesh with NO position attribute → computeAABB returns
       // inverted-infinity empty box, which the culling path treats as always-visible.
       const vertices = new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
         1, 0, 0, 0, 0,
       ]);
-      const meshResult = assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
+      const meshResult = assets.register<MeshAsset>({
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2]),
@@ -583,11 +573,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           },
         ],
       });
-      if (!meshResult.ok) throw new Error('catalog failed');
-      const meshHandle = world.allocSharedRef('MeshAsset', meshResult.value);
+      if (!meshResult.ok) throw new Error('register failed');
 
       spawnCameraAt(world, 0, 0, 5);
-      spawnEntity(world, meshHandle, matHandle, 100, 100, 100);
+      spawnEntity(world, meshResult.value, matHandle, 100, 100, 100);
 
       propagateTransforms(world);
 
@@ -1699,7 +1688,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('(b) vertex-only mesh upload skips the index buffer (indexed=false, indexBuffer=null)', () => {
       const probe: BufferProbe = { createdLabels: [] };
       const device = makeMockDevice(probe);
-      const world = new World();
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const store = new GpuResourceStore();
       store.configureGpuDevice(
         device,
@@ -1713,7 +1702,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // Mint a handle from a valid indexed mesh (register-time index validation
       // relaxation is M5 / w13); feed a vertex-only POD to ensureResident to
       // exercise the M2 upload chain in isolation.
-      const handle = world.allocSharedRef('MeshAsset', makeIndexedMesh());
+      const handle = reg.register<MeshAsset>(makeIndexedMesh()).unwrap();
       const res = store.ensureResident(handle, makeVertexOnlyMesh());
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -1730,7 +1719,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('(c) indexed mesh upload keeps index buffer (indexed=true) + vertexCount correct', () => {
       const probe: BufferProbe = { createdLabels: [] };
       const device = makeMockDevice(probe);
-      const world = new World();
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const store = new GpuResourceStore();
       store.configureGpuDevice(
         device,
@@ -1741,7 +1730,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         }) as any,
         mockCaps,
       );
-      const handle = world.allocSharedRef('MeshAsset', makeIndexedMesh());
+      const handle = reg.register<MeshAsset>(makeIndexedMesh()).unwrap();
       const res = store.ensureResident(handle, makeIndexedMesh());
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -2508,46 +2497,46 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('w12 - updateMesh no-leak + expansion unit', () => {
-    it('(a) 50-frame same-size updateMesh does not grow sharedRefs/meshGpuHandles size', () => {
-      const world = new World();
+    it('(a) 50-frame same-size updateMesh does not grow assets/meshGpuHandles size', () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const mesh = makeQuadMesh();
-      const handle = world.allocSharedRef('MeshAsset', mesh);
+      const handle = reg.register<MeshAsset>(mesh).unwrap();
       const store = new GpuResourceStore();
       void unwrapHandle(handle);
 
-      // Save the initial live shared-ref slot count.
-      const initialAssetsSize = world.sharedRefs._liveCount();
+      // Save initial sizes (minus builtins: CUBE=1, TRIANGLE=2, QUAD=3, SPHERE=4)
+      const initialAssetsSize = reg.inspect().handles.length;
       // meshGpuHandles is only populated after configureGpuDevice.
       // Without a device, updateMeshById is a no-op (guards check device).
       // This test verifies the structural invariant: calling updateMesh does
-      // NOT mint a new shared ref (which would grow the live slot count).
-      // The live slot count is the structural indicator of the AC-08
-      // falsification — if every frame minted a handle, it would grow.
+      // NOT trigger a new register (which would grow assets Map).
+      // The assets Map size is the structural indicator of the AC-08
+      // falsification — if every frame called register(), it would grow.
       if (!(mesh.indices instanceof Uint16Array)) return;
       for (let frame = 0; frame < 50; frame++) {
         store.updateMesh(handle, mesh.vertices, mesh.indices);
       }
-      const finalAssetsSize = world.sharedRefs._liveCount();
+      const finalAssetsSize = reg.inspect().handles.length;
       expect(finalAssetsSize).toBe(initialAssetsSize);
     });
 
-    it('(b) updateMesh on a minted handle does not mint a new shared ref', () => {
-      const world = new World();
+    it('(b) updateMesh on registered handle does not create new registry entry', () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const mesh = makeQuadMesh();
-      const handle = world.allocSharedRef('MeshAsset', mesh);
+      const handle = reg.register<MeshAsset>(mesh).unwrap();
       const store = new GpuResourceStore();
 
-      const before = world.sharedRefs._liveCount();
+      const before = reg.inspect().handles.length;
       if (!(mesh.indices instanceof Uint16Array)) return;
       store.updateMesh(handle, mesh.vertices, mesh.indices);
-      const after = world.sharedRefs._liveCount();
+      const after = reg.inspect().handles.length;
       expect(after).toBe(before);
     });
 
     it('(c) expansion path preserves mesh handle id', () => {
-      const world = new World();
+      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const mesh = makeQuadMesh();
-      const handle = world.allocSharedRef('MeshAsset', mesh);
+      const handle = reg.register<MeshAsset>(mesh).unwrap();
       const store = new GpuResourceStore();
       const id = unwrapHandle(handle);
 
@@ -2555,12 +2544,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const bigger = makeOctMesh();
       if (!(bigger.indices instanceof Uint16Array)) return;
       store.updateMesh(handle, bigger.vertices, bigger.indices);
-      // The id should still be the same — no new mint was performed.
-      const result = resolveAssetHandle<MeshAsset>(world, handle);
+      // The id should still be the same — no new register() was called
+      const result = reg.get<MeshAsset>(handle);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      // The payload behind the handle is unchanged (updateMesh only touches the
-      // GPU side); the handle's numeric id is the same.
+      // The asset in the registry is unchanged (updateMesh only touches GPU side)
+      // But the handle's numeric id is the same
       const lookupId = unwrapHandle(handle);
       expect(lookupId).toBe(id);
     });
@@ -2571,7 +2560,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from validate-mesh-topology.test.ts ---
   // validate-mesh-topology.test - feat-20260604-mesh-topology-debug-draw M5 / w12 (TDD red).
   //
-  // Coverage (AssetRegistry.catalog -> validateMeshPayload topology rules, AC-10):
+  // Coverage (AssetRegistry.register -> validateMeshPayload topology rules, AC-10):
   //   (a) strip topology (line-strip / triangle-strip) with NO indices ->
   //       Result.err code='asset-invalid-value', detail.field='topology' +
   //       detail.value=<topology>, .hint non-empty (strip needs indices to
@@ -2594,7 +2583,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('validateMeshPayload topology rules (M5 w12 - AC-10)', () => {
     it('(a1) line-strip with no indices -> asset-invalid-value + detail.field=topology + non-empty hint', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(2 * 12),
         attributes: {},
@@ -2618,7 +2607,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(a2) triangle-strip with no indices -> asset-invalid-value + detail.value=triangle-strip', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(3 * 12),
         attributes: {},
@@ -2642,7 +2631,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(b) empty geometry with non-default topology -> asset-invalid-value', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(0),
         attributes: {},
@@ -2666,7 +2655,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(b-legal) empty geometry with default/omitted topology stays legal (Result.ok)', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(0),
         attributes: {},
@@ -2683,7 +2672,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(c1) indexed point-list is legal (Result.ok)', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(3 * 12),
         indices: new Uint16Array([0, 1, 2]),
@@ -2701,7 +2690,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(c2) indexed line-list is legal (Result.ok)', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(2 * 12),
         indices: new Uint16Array([0, 1]),
@@ -2719,7 +2708,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('(c3) vertex-only line-list (no indices) is legal (Result.ok)', () => {
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(2 * 12),
         attributes: {},
@@ -2737,7 +2726,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(c4) triangle-strip WITH indices is legal (Result.ok)', () => {
       // 4 verts -> 2 triangles via strip; indices reference all 4 (maxIndex+1===vertexCount)
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(4 * 12),
         indices: new Uint32Array([0, 1, 2, 3]),
@@ -2756,7 +2745,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(e) D-A4: vertex-only triangle-list (no indices) does NOT trip maxIndex invariant', () => {
       // 3 verts, no indices: the :588 maxIndex+1===vertexCount check must be skipped.
-      const result = reg().catalog(AssetGuid.format(AssetGuid.random()), {
+      const result = reg().register({
         kind: 'mesh',
         vertices: new Float32Array(3 * 12),
         attributes: {},
@@ -3116,10 +3105,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   async function importEcs(): Promise<{
-    World: new () => {
-      spawn: (...componentDatas: unknown[]) => unknown;
-      allocSharedRef: (target: string, payload: unknown) => number;
-    };
+    World: new () => { spawn: (...componentDatas: unknown[]) => unknown };
   }> {
     return (await import('@forgeax/engine-ecs')) as never;
   }
@@ -3222,7 +3208,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   async function spawnInstancedScene(
-    _renderer: RendererLike,
+    renderer: RendererLike,
     meshAsset: MeshAsset,
     materialCount: number,
     instanceCount: number,
@@ -3230,25 +3216,21 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const { World } = await importEcs();
     const C = await importComponents();
     const world = new World();
-    const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
-      'MeshAsset',
-      'shared'
-    >;
+    const reg = renderer.assets.register(meshAsset);
+    expect(reg.ok).toBe(true);
+    const meshHandle = reg.value as Handle<'MeshAsset', 'managed'>;
 
-    // Mint N materials (one per submesh).
+    // Register N materials (one per submesh).
     const colors: Array<readonly [number, number, number]> = [
       [1, 0, 0],
       [0, 1, 0],
       [0, 0, 1],
     ];
-    const materialHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+    const materialHandles: Handle<'MaterialAsset', 'managed'>[] = [];
     for (let i = 0; i < materialCount; i++) {
-      materialHandles.push(
-        world.allocSharedRef('MaterialAsset', unlitMaterial(colors[i])) as Handle<
-          'MaterialAsset',
-          'shared'
-        >,
-      );
+      const matReg = renderer.assets.register(unlitMaterial(colors[i]));
+      expect(matReg.ok).toBe(true);
+      materialHandles.push(matReg.value as Handle<'MaterialAsset', 'managed'>);
     }
 
     const transforms = identityTransforms(instanceCount);
@@ -3346,19 +3328,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { World } = await importEcs();
       const C = await importComponents();
       const world = new World();
-      const meshHandle = world.allocSharedRef('MeshAsset', twoSubmeshMesh()) as Handle<
-        'MeshAsset',
-        'shared'
-      >;
+      const meshReg = renderer.assets.register(twoSubmeshMesh());
+      expect(meshReg.ok).toBe(true);
+      const meshHandle = meshReg.value as Handle<'MeshAsset', 'managed'>;
 
-      const matHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+      const matHandles: Handle<'MaterialAsset', 'managed'>[] = [];
       for (let i = 0; i < 2; i++) {
-        matHandles.push(
-          world.allocSharedRef('MaterialAsset', unlitMaterial()) as Handle<
-            'MaterialAsset',
-            'shared'
-          >,
-        );
+        const matReg = renderer.assets.register(unlitMaterial());
+        expect(matReg.ok).toBe(true);
+        matHandles.push(matReg.value as Handle<'MaterialAsset', 'managed'>);
       }
 
       world.spawn(
@@ -3459,7 +3437,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const registry = freshRegistry();
       const payload = makeMeshPayload({ submeshes: [] });
 
-      const result = registry.catalog(AssetGuid.format(AssetGuid.random()), payload as never);
+      const result = registry.register(payload as never);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toBeInstanceOf(AssetError);
@@ -3490,7 +3468,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         ],
       });
 
-      const result = registry.catalog(AssetGuid.format(AssetGuid.random()), payload as never);
+      const result = registry.register(payload as never);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toBeInstanceOf(AssetError);
@@ -3527,7 +3505,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         ],
       });
 
-      const result = registry.catalog(AssetGuid.format(AssetGuid.random()), payload as never);
+      const result = registry.register(payload as never);
       expect(result.ok).toBe(true);
     });
   });

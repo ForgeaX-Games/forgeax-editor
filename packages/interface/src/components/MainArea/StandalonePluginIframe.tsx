@@ -17,10 +17,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { createPluginPort, createWindowTransport } from '@forgeax/host-sdk';
-import { useTranslation } from '@/i18n';
 import type { BusPluginInfo } from '../../lib/bus-api';
 import { upsertSurface, removePluginSurfaces } from '../../lib/surface-store';
-import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
 import { useAppStore } from '../../store';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
@@ -37,12 +35,6 @@ interface Props {
    *  heavy plugins can pause their render loop. Defaults to true (standalone /
    *  non-keep-alive callers keep the old always-visible behavior). */
   active?: boolean;
-  /** Explicit cold-reload counter. The iframe URL embeds this as `fxv`; the URL
-   *  is otherwise STABLE for a given plugin id + version + slug, so keep-alive
-   *  actually works (switching panels / games no longer reloads the iframe and
-   *  drops its WebGPU ctx / WS / scroll). Bump this only when you intend a
-   *  deliberate hard reload (e.g. a recovery "重载" button). Defaults to 0. */
-  reloadNonce?: number;
 }
 
 function buildIframeSrc(
@@ -117,8 +109,7 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
   useAppStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedPluginId: targetPluginId });
 }
 
-export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
-  const { t } = useTranslation();
+export function StandalonePluginIframe({ plugin, pane, active = true }: Props): ReactElement {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Live port handle, so the visibility effect below can push updates after the
@@ -127,16 +118,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   // Mirrors `active` so the (later-invoked) iframe load handler reads the latest
   // value rather than the value captured when the wiring effect first ran.
   const activeRef = useRef(active);
-  // STABLE cache key. Was `${version}-${Date.now()}` which defeated keep-alive:
-  // any iframe remount (re-parent / reconcile) recomputed Date.now() → new URL →
-  // a full cold reload that tore down the WebGPU ctx + WS + scroll on every
-  // panel/game switch. Now keyed only on identity (id + version) + an explicit
-  // reloadNonce, so the URL stays identical across switches and the browser
-  // reuses the live iframe. A deliberate reload bumps reloadNonce.
-  const iframeCacheKey = useMemo(
-    () => `${plugin.version ?? 'dev'}-${reloadNonce}`,
-    [plugin.id, plugin.version, reloadNonce],
-  );
+  const iframeCacheKey = useMemo(() => `${plugin.version ?? 'dev'}-${Date.now().toString(36)}`, [plugin.id, plugin.version]);
   // 当前 game slug（pinnedSlug 由 TopBar 从 /api/workbench/active-slug 同步到 localStorage / store）。
   // 拼到 iframe URL 上，让插件读出后用于 per-game 数据隔离。
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
@@ -156,7 +138,6 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
     // can't hijack the navigation.
     const onRawMessage = (ev: MessageEvent) => {
       if (ev.source !== iframe.contentWindow) return;
-      if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
       const d = ev.data as { type?: string; targetPluginId?: string; payload?: Record<string, unknown> } | null;
       if (!d || d.type !== 'FORGEAX_NAVIGATE' || !d.targetPluginId) return;
       doNavigate(d.targetPluginId, d.payload);
@@ -274,9 +255,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   if (!src) {
     return (
       <div style={{ padding: 20, color: '#888' }}>
-        {t('standalonePlugin.noEntryPrefix')} <code>{plugin.id}</code>{' '}
-        {t('standalonePlugin.noEntryMiddle')} <code>entry.standalone</code>{' '}
-        {t('standalonePlugin.noEntrySuffix')}
+        插件 <code>{plugin.id}</code> 没有 <code>entry.standalone</code> 入口。
       </div>
     );
   }
@@ -297,7 +276,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
       aria-hidden={active ? undefined : true}
     >
       {error ? (
-        <div style={{ padding: 20, color: '#c44' }}>{t('standalonePlugin.iframeLoadFailed', { error })}</div>
+        <div style={{ padding: 20, color: '#c44' }}>iframe 加载失败：{error}</div>
       ) : null}
       <iframe
         ref={iframeRef}

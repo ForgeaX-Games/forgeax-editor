@@ -45,18 +45,12 @@
 
 import { readFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
-import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
 
 interface PackJson {
-  readonly assets?: ReadonlyArray<{
-    readonly guid: string;
-    readonly kind: string;
-    /** Optional display name (D-6 add-only). */
-    readonly name?: string;
-  }>;
+  readonly assets?: ReadonlyArray<{ guid: string; kind: string }>;
 }
 
 // Prefix a root-absolute source path with the Vite `base`. The runtime fetches
@@ -93,8 +87,6 @@ interface ExternalAssetMetaJson {
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
-    /** Optional display name from the source (e.g. glTF image.name / mesh.name). */
-    readonly name?: string;
   }>;
 }
 
@@ -213,21 +205,9 @@ async function processMetaSidecar(
   }
 
   const meta = metaRaw as ExternalAssetMetaJson;
-
-  // Compute the source file path once for deriveAssetName. The source file is
-  // the "package" for the meta.json arm: each subAsset is an artifact produced
-  // from that source (e.g. a glTF file produces mesh/material/scene/texture
-  // sub-assets). deriveAssetName uses this path + the sub-asset count to apply
-  // the same XOR name-resolution rule as the .pack.json arm (D-6 SSOT).
-  const sidecarDir = dirname(rawPath);
-  const sourceAbsPath = resolve(sidecarDir, meta.source);
-  const subAssetCount = meta.subAssets.length;
-
-  function subName(sub: { readonly name?: string }): string {
-    return deriveAssetName(sourceAbsPath, subAssetCount, sub.name);
-  }
-
   if (meta.importer === 'image') {
+    const sidecarDir = dirname(rawPath);
+    const sourceAbsPath = resolve(sidecarDir, meta.source);
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     // Normalize `..` segments so the URL resolves against the Vite
     // root, then prefix the configured base.  Use posix.resolve so Windows
@@ -244,7 +224,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
-          name: subName(sub),
           metadata,
         });
       } else if (sub.kind === 'cube-texture') {
@@ -258,7 +237,6 @@ async function processMetaSidecar(
             relativeUrl: normalizedUrl,
             kind: 'texture',
             sourcePath: sourceRel,
-            name: subName(sub),
             metadata: {
               kind: 'texture',
               format: 'rgba16float',
@@ -283,7 +261,6 @@ async function processMetaSidecar(
             relativeUrl: normalizedUrl,
             kind: 'cube-texture',
             sourcePath: sourceRel,
-            name: subName(sub),
             metadata: cubeMetadata,
           });
         }
@@ -297,6 +274,8 @@ async function processMetaSidecar(
   // (no width/height/format/colorSpace/mipmap per plan-strategy D-8).
   // (feat-20260527-audio-system M4 w32).
   if (meta.importer === 'audio') {
+    const sidecarDir = dirname(rawPath);
+    const sourceAbsPath = resolve(sidecarDir, meta.source);
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     const normalizedUrl = withBase(base, sourceRel);
 
@@ -307,7 +286,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'audio',
           sourcePath: sourceRel,
-          name: subName(sub),
         });
       }
     }
@@ -329,6 +307,8 @@ async function processMetaSidecar(
   //
   // sub.kind values flow through verbatim (no remap) per requirements AC-03.
   if (meta.importer === 'gltf') {
+    const sidecarDir = dirname(rawPath);
+    const sourceAbsPath = resolve(sidecarDir, meta.source);
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     const normalizedUrl = withBase(base, sourceRel);
 
@@ -356,7 +336,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
-          name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
         if (gltfTextureMetadata === undefined) {
@@ -372,7 +351,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
-          name: subName(sub),
           metadata: gltfTextureMetadata,
         });
       }
@@ -387,6 +365,8 @@ async function processMetaSidecar(
   // import runs at build time / dev-server time only — never in browser.
   // (feat-20260615-fbx-importer-via-sdk M3-M5).
   if (meta.importer === 'fbx') {
+    const sidecarDir = dirname(rawPath);
+    const sourceAbsPath = resolve(sidecarDir, meta.source);
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     const normalizedUrl = withBase(base, sourceRel);
 
@@ -406,7 +386,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
-          name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
         if (fbxTextureMetadata === undefined) {
@@ -422,7 +401,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
-          name: subName(sub),
           metadata: fbxTextureMetadata,
         });
       }
@@ -439,6 +417,8 @@ async function processMetaSidecar(
   // metadata=undefined -- the runtime loadByGuid font arm resolves the atlas /
   // sampler handles + glyph metrics at consumption time (plan-strategy D-10).
   if (meta.importer === 'font') {
+    const sidecarDir = dirname(rawPath);
+    const sourceAbsPath = resolve(sidecarDir, meta.source);
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
     const normalizedUrl = posix.resolve('/', sourceRel);
     const atlasMetadata = buildImageMetadata(meta);
@@ -450,7 +430,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
-          name: subName(sub),
           metadata: atlasMetadata,
         });
       } else if (sub.kind === 'font') {
@@ -459,7 +438,6 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'font',
           sourcePath: sourceRel,
-          name: subName(sub),
         });
       }
     }
@@ -469,74 +447,16 @@ async function processMetaSidecar(
 }
 
 /**
- * Fold a flat list of scanned sidecar paths into catalog rows. Shared SSOT
- * for both `buildCatalog` (warns errors to stderr) and `buildCatalogStrict`
- * (returns errors structurally) so the two-arm dispatch + pack.json parse
- * lives in exactly one place.
+ * Build a flat pack-index catalog by scanning roots.
  *
  * Two-arm dispatch on extension:
  *   - `.pack.json` -- legacy 4-field rows from `assets[]`
- *   - `.meta.json` -- 5-field rows (4 core + `metadata`) from `subAssets[]`
- */
-async function foldPaths(
-  paths: readonly string[],
-  cwd: string,
-  base: string,
-): Promise<{ catalog: PackIndexEntry[]; errors: CatalogBuildError[] }> {
-  const catalog: PackIndexEntry[] = [];
-  const errors: CatalogBuildError[] = [];
-  for (const rawPath of paths) {
-    if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
-      const err = await processMetaSidecar(rawPath, cwd, catalog, base);
-      if (err) errors.push(err);
-      continue;
-    }
-    if (!rawPath.endsWith('.pack.json')) continue;
-    try {
-      const content = await readFile(rawPath, 'utf-8');
-      const parsed = JSON.parse(content) as PackJson;
-      const rel = relative(cwd, rawPath).replace(/\\/g, '/');
-      const normalizedUrl = withBase(base, rel);
-      const assetList = parsed.assets ?? [];
-      const packagePath = rawPath;
-      const assetCount = assetList.length;
-      for (const asset of assetList) {
-        catalog.push({
-          guid: asset.guid,
-          relativeUrl: normalizedUrl,
-          kind: asset.kind,
-          sourcePath: rel,
-          name: deriveAssetName(packagePath, assetCount, asset.name),
-        });
-      }
-    } catch (e) {
-      errors.push({
-        code: 'catalog-meta-schema-invalid',
-        path: rawPath,
-        message: `failed to parse pack.json: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    }
-  }
-  return { catalog, errors };
-}
-
-/**
- * Build a flat pack-index catalog by scanning roots.
+ *   - `.meta.json` -- 5-field rows (4 core + `metadata`) from
+ *     `subAssets[]` filtered to `kind: 'image'`
  *
- * Fast path: `scan(roots)` over all roots at once (cross-root GUID collision
- * detection intact).
- *
- * Resilience (downstream template integration #3): `scan` is fail-fast and
- * returns `Err` on the FIRST GUID collision anywhere across all roots.
- * Collapsing the whole catalog to `[]` on that error meant one game's
- * collision blanked EVERY game's assets on a shared dev server (game A's
- * duplicate GUID turned game B's character into the fallback primitive). Two
- * independently-authored games may legitimately reuse a GUID, which a single
- * global index cannot represent. So on scan failure we degrade to per-root
- * scans: each root is scanned alone (intra-root collisions still fail that
- * one root, fail-fast preserved within a game), rows are de-duped by GUID
- * across roots (keep first), and only the offending root drops out instead
- * of the entire catalog.
+ * Returns an empty array on scan error (dev mode: prefer degraded state
+ * over crash; the warning lands on stderr so dev iteration loop sees the
+ * surface immediately).
  */
 export async function buildCatalog(
   roots: readonly string[],
@@ -546,45 +466,43 @@ export async function buildCatalog(
 
   const cwd = process.cwd();
   const result = await scan(roots);
+  if (!result.ok) {
+    console.warn('[forgeax-pack] scan error:', result.error.message);
+    return [];
+  }
 
-  const warnErrors = (errors: readonly CatalogBuildError[]): void => {
+  const catalog: PackIndexEntry[] = [];
+  const errors: CatalogBuildError[] = [];
+  for (const rawPath of result.value) {
+    if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
+      const err = await processMetaSidecar(rawPath, cwd, catalog, base);
+      if (err) errors.push(err);
+      continue;
+    }
+
+    if (!rawPath.endsWith('.pack.json')) continue;
+    try {
+      const content = await readFile(rawPath, 'utf-8');
+      const parsed = JSON.parse(content) as PackJson;
+      const rel = relative(cwd, rawPath).replace(/\\/g, '/');
+      const normalizedUrl = withBase(base, rel);
+      for (const asset of parsed.assets ?? []) {
+        catalog.push({
+          guid: asset.guid,
+          relativeUrl: normalizedUrl,
+          kind: asset.kind,
+          sourcePath: rel,
+        });
+      }
+    } catch {
+      // Skip malformed pack files in dev mode.
+    }
+  }
+  if (errors.length > 0) {
     for (const e of errors) {
       console.warn(`[forgeax-pack] catalog meta error ${e.code} @ ${e.path}: ${e.message}`);
     }
-  };
-
-  if (result.ok) {
-    const { catalog, errors } = await foldPaths(result.value, cwd, base);
-    warnErrors(errors);
-    return catalog;
   }
-
-  // Global scan failed (e.g. cross-root GUID collision). Degrade per-root
-  // instead of collapsing the whole catalog.
-  console.warn(
-    `[forgeax-pack] scan error: ${result.error.message} — falling back to per-root scan`,
-  );
-  const catalog: PackIndexEntry[] = [];
-  const seen = new Set<string>();
-  const errors: CatalogBuildError[] = [];
-  for (const root of roots) {
-    const r = await scan([root]);
-    if (!r.ok) {
-      console.warn(
-        `[forgeax-pack] per-root scan error @ ${root}: ${r.error.message} — dropping this root`,
-      );
-      continue;
-    }
-    const folded = await foldPaths(r.value, cwd, base);
-    errors.push(...folded.errors);
-    for (const row of folded.catalog) {
-      const key = row.guid.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      catalog.push(row);
-    }
-  }
-  warnErrors(errors);
   return catalog;
 }
 
@@ -614,5 +532,35 @@ export async function buildCatalogStrict(
     };
   }
 
-  return foldPaths(result.value, cwd, base);
+  const catalog: PackIndexEntry[] = [];
+  const errors: CatalogBuildError[] = [];
+  for (const rawPath of result.value) {
+    if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
+      const err = await processMetaSidecar(rawPath, cwd, catalog, base);
+      if (err) errors.push(err);
+      continue;
+    }
+    if (!rawPath.endsWith('.pack.json')) continue;
+    try {
+      const content = await readFile(rawPath, 'utf-8');
+      const parsed = JSON.parse(content) as PackJson;
+      const rel = relative(cwd, rawPath).replace(/\\/g, '/');
+      const normalizedUrl = withBase(base, rel);
+      for (const asset of parsed.assets ?? []) {
+        catalog.push({
+          guid: asset.guid,
+          relativeUrl: normalizedUrl,
+          kind: asset.kind,
+          sourcePath: rel,
+        });
+      }
+    } catch (e) {
+      errors.push({
+        code: 'catalog-meta-schema-invalid',
+        path: rawPath,
+        message: `failed to parse pack.json: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+  return { catalog, errors };
 }

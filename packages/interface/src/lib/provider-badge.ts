@@ -26,7 +26,6 @@ import {
   type MouseEvent,
   type KeyboardEvent,
 } from 'react';
-import { t } from '@/i18n';
 
 export interface ProviderBadge {
   label: string;
@@ -134,7 +133,7 @@ export function ProviderBadgePill({
       className: `${className} is-link`,
       role: 'button',
       tabIndex: 0,
-      title: t('providerBadge.clickToBusDetail', { title: badge.title }),
+      title: `${badge.title} · 单击在 Bus 详情查看 →`,
       style: { borderColor: badge.color, color: badge.color },
       onClick: (e: MouseEvent) => {
         e.stopPropagation();

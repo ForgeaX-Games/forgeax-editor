@@ -23,7 +23,6 @@
  */
 
 import { useEffect } from 'react';
-import { t } from '@/i18n';
 import { useAppStore } from '../store';
 
 export interface ShortcutDef {
@@ -79,14 +78,14 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+F',
       group: 'layout',
-      label: t('shortcuts.gameFullscreen'),
+      label: '游戏全屏 · 只隐 Studio 自己的 TopBar / Sidebar / ChatPanel / StatusBar(浏览器边框还在)',
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyF',
       run: () => { store().toggleFullscreen(); return true; },
     },
     {
       combo: 'Ctrl+Shift+Enter',
       group: 'layout',
-      label: t('shortcuts.browserFullscreen'),
+      label: '浏览器全屏(PPT 放映式)· 浏览器原生 fullscreen API(连标签栏 / 地址栏一起消失)',
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Enter' || e.key === 'Enter'),
       run: () => {
         // Browser-native fullscreen toggle. Independent of store.fullscreen
@@ -107,14 +106,14 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+B',
       group: 'layout',
-      label: t('shortcuts.toggleSidebar'),
+      label: '切换左侧 Sidebar(工作台栏)',
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyB',
       run: () => { store().toggleSidebar(); return true; },
     },
     {
       combo: 'Ctrl+Shift+C',
       group: 'layout',
-      label: t('shortcuts.toggleChatPanel'),
+      label: '切换右侧 ChatPanel',
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyC',
       run: () => { store().toggleChatpanel(); return true; },
     },
@@ -123,28 +122,28 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+D',
       group: 'overlay',
-      label: t('shortcuts.toggleDashboard'),
+      label: '切换 Dashboard 总览面板',
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyD',
       run: () => { const s = store(); s.setDashboardOpen(!s.dashboardOpen); return true; },
     },
     {
       combo: 'Ctrl+,',
       group: 'overlay',
-      label: t('shortcuts.toggleSettings'),
+      label: '打开 / 关闭 Settings 浮层',
       match: (e) => mod(e) && !e.shiftKey && (e.key === ',' || e.code === 'Comma'),
       run: () => { const s = store(); s.setSettingsOpen(!s.settingsOpen); return true; },
     },
     {
       combo: 'Ctrl+H',
       group: 'overlay',
-      label: t('shortcuts.openChangelog'),
+      label: 'Settings → Changelog(版本迭代记录)',
       match: (e) => mod(e) && !e.shiftKey && e.code === 'KeyH',
       run: () => { store().openSettings('changelog'); return true; },
     },
     {
       combo: 'Esc',
       group: 'overlay',
-      label: t('shortcuts.closeOverlay'),
+      label: '关闭当前浮层 · 浏览器全屏 → 游戏全屏 → Settings → Dashboard 依次撤回',
       allowInInput: true,
       match: (e) => e.key === 'Escape' && !mod(e) && !e.shiftKey && !e.altKey,
       run: () => {
@@ -167,21 +166,21 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+1',
       group: 'mode',
-      label: t('shortcuts.modePreview'),
+      label: '切到 Preview 模式',
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit1' || e.key === '1' || e.key === '!'),
       run: () => { store().setMode('preview'); return true; },
     },
     {
       combo: 'Ctrl+Shift+2',
       group: 'mode',
-      label: t('shortcuts.modeWorkbench'),
+      label: '切到 Workbench 模式',
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit2' || e.key === '2' || e.key === '@'),
       run: () => { store().setMode('workbench'); return true; },
     },
     {
       combo: 'Ctrl+Shift+3',
       group: 'mode',
-      label: t('shortcuts.openPlugins'),
+      label: 'Settings → Plugins(原 Bus mode tab)',
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit3' || e.key === '3' || e.key === '#'),
       run: () => { store().openSettings('plugins'); return true; },
     },
@@ -190,7 +189,7 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+/',
       group: 'focus',
-      label: t('shortcuts.focusComposer'),
+      label: '聚焦右侧 ChatPanel 输入框',
       allowInInput: true,
       match: (e) => mod(e) && !e.shiftKey && (e.key === '/' || e.code === 'Slash'),
       run: () => {

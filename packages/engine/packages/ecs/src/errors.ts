@@ -45,20 +45,8 @@ export class SchemaUnsupportedFieldError extends Error {
   readonly hint: string;
 
   constructor(fieldName: string, fieldType: string) {
-    let hint = 'Supported types: f32 / f64 / i32 / u32 / i16 / u16 / i8 / u8 / bool / enum / ref.';
-    // feat-20260614 M1 / M5: explicit migration hints for the two
-    // retired schema-vocab keyword families. Both renames preserve brand
-    // and storage layout (u32 column); only the keyword + dispatch arm
-    // changed. AI users hitting either literal land directly on the new
-    // keyword instead of grepping for the rename note (charter F1
-    // single-entry indexability).
-    if (fieldType.startsWith('handle<') && fieldType.endsWith('>')) {
-      const tag = fieldType.slice(7, -1);
-      hint = `'handle<${tag}>' was removed in feat-20260614 M5; use 'shared<${tag}>' instead. The brand and storage layout are unchanged; only the keyword + write-barrier dispatch (SharedRefStore retain/release) is new.`;
-    } else if (fieldType.startsWith('ref<') && fieldType.endsWith('>')) {
-      const tag = fieldType.slice(4, -1);
-      hint = `'ref<${tag}>' was renamed in feat-20260614 M1; use 'unique<${tag}>' instead. The brand and storage layout are unchanged; the dispatch still routes through UniqueRefStore (single-holder direct release).`;
-    }
+    const hint =
+      'Supported types: f32 / f64 / i32 / u32 / i16 / u16 / i8 / u8 / bool / enum / ref.';
     super(
       `Schema field "${fieldName}" has unsupported type "${fieldType}".\n` +
         `  field: ${fieldName}\n` +
@@ -273,7 +261,7 @@ export class ResourceNotFoundError extends Error {
 //
 // Four error classes covering the managed-* family:
 //
-//   managed-*               : UniqueRefStore + BufferPool runtime fail-fast.
+//   managed-*               : ManagedRefStore + BufferPool runtime fail-fast.
 //                             Returned via Result.err from M1 / M2 storage paths.
 //
 // `.code` uses lowercase-kebab literals consistent with `ScheduleMutationErrorCode`
@@ -287,17 +275,17 @@ export class ResourceNotFoundError extends Error {
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Thrown / returned via `Result.err` when UniqueRefStore.alloc encounters a
+ * Thrown / returned via `Result.err` when ManagedRefStore.alloc encounters a
  * slot whose refcount has already dropped to zero (sentinel for a released
  * slot reused without re-init).
  *
- * `.code = 'unique-ref-released'`
+ * `.code = 'managed-ref-released'`
  * `.detail = { handle, target }`
  * `.hint` — recommends checking handle lifetime against owner despawn.
  */
-export class UniqueRefReleasedError extends Error {
-  override readonly name = 'UniqueRefReleasedError';
-  readonly code = 'unique-ref-released' as const;
+export class ManagedRefReleasedError extends Error {
+  override readonly name = 'ManagedRefReleasedError';
+  readonly code = 'managed-ref-released' as const;
   readonly hint: string;
   readonly expected: string;
   readonly detail: { readonly handle: number; readonly target: string };
@@ -306,8 +294,8 @@ export class UniqueRefReleasedError extends Error {
     const hint = `Handle ${handle} (target ${target}) was released before this access. Re-acquire via the producing system or re-spawn the asset before reading.`;
     const expected = 'live (refcount >= 1) managed handle';
     super(
-      `UniqueRefStore: handle is already released.\n` +
-        `  code: unique-ref-released\n` +
+      `ManagedRefStore: handle is already released.\n` +
+        `  code: managed-ref-released\n` +
         `  handle: ${handle}\n` +
         `  target: ${target}\n` +
         `  expected: ${expected}\n` +
@@ -320,16 +308,16 @@ export class UniqueRefReleasedError extends Error {
 }
 
 /**
- * Thrown / returned via `Result.err` when UniqueRefStore.release is called on
+ * Thrown / returned via `Result.err` when ManagedRefStore.release is called on
  * a handle whose refcount is already zero (double-free).
  *
- * `.code = 'unique-ref-double-release'`
+ * `.code = 'managed-ref-double-release'`
  * `.detail = { handle, target }`
  * `.hint` — recommends auditing the release-loop entry points (set / removeComponent / despawn).
  */
-export class UniqueRefDoubleReleaseError extends Error {
-  override readonly name = 'UniqueRefDoubleReleaseError';
-  readonly code = 'unique-ref-double-release' as const;
+export class ManagedRefDoubleReleaseError extends Error {
+  override readonly name = 'ManagedRefDoubleReleaseError';
+  readonly code = 'managed-ref-double-release' as const;
   readonly hint: string;
   readonly expected: string;
   readonly detail: { readonly handle: number; readonly target: string };
@@ -338,8 +326,8 @@ export class UniqueRefDoubleReleaseError extends Error {
     const hint = `Handle ${handle} (target ${target}) was released twice. Only one of {despawn / removeComponent / set} should release a managed handle per lifecycle.`;
     const expected = 'first release of a managed handle (refcount transition 1 -> 0)';
     super(
-      `UniqueRefStore: double release on handle.\n` +
-        `  code: unique-ref-double-release\n` +
+      `ManagedRefStore: double release on handle.\n` +
+        `  code: managed-ref-double-release\n` +
         `  handle: ${handle}\n` +
         `  target: ${target}\n` +
         `  expected: ${expected}\n` +
@@ -348,121 +336,6 @@ export class UniqueRefDoubleReleaseError extends Error {
     this.hint = hint;
     this.expected = expected;
     this.detail = { handle, target };
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260614-ecs-shared-component-and-unique-rename M3 — SharedRefStore
-// closed-union extension (+2). Mirrors the UniqueRef* pair — `'shared-ref-released'`
-// covers resolve-after-release / retain-after-release; `'shared-ref-double-release'`
-// covers release-when-rc-already-zero. Both are Result.err returns (not throws);
-// AI users branch on `.code` and read `.detail.handle` for the offending slot.
-//
-// Detail field shape mirrors UniqueRef* with one addition (`rc`) so AI users
-// debugging a double-release see the exact rc transition that surfaced the
-// failure (charter P3 progressive disclosure). Empty `target` handled the
-// same way as UniqueRef* — runtime-erased phantom, surfaced as '<unknown>'.
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via `Result.err` when SharedRefStore.resolve / .retain is
- * called on a handle whose refcount has already dropped to zero (slot released).
- *
- * `.code = 'shared-ref-released'`
- * `.detail = { handle, target }`
- * `.hint` — recommends checking handle lifetime against owner / consumer release.
- */
-export class SharedRefReleasedError extends Error {
-  override readonly name = 'SharedRefReleasedError';
-  readonly code = 'shared-ref-released' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly handle: number; readonly target: string };
-
-  constructor(handle: number, target: string) {
-    const hint = `Handle ${handle} (target ${target}) was released (refcount reached 0). Re-acquire via the producing system or re-spawn the asset before reading.`;
-    const expected = 'live (refcount >= 1) shared handle';
-    super(
-      `SharedRefStore: handle is already released.\n` +
-        `  code: shared-ref-released\n` +
-        `  handle: ${handle}\n` +
-        `  target: ${target}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { handle, target };
-  }
-}
-
-/**
- * Thrown / returned via `Result.err` when SharedRefStore.release is called on
- * a handle whose refcount is already zero (double-release). Distinct from the
- * UniqueRef family because shared release is rc--, not direct slot drop —
- * AI users debug this by reading `.detail.rc` (always 0 here) alongside the
- * payload-presence signal.
- *
- * `.code = 'shared-ref-double-release'`
- * `.detail = { handle, target, rc }`
- * `.hint` — recommends auditing the producer / consumer release pairs.
- */
-export class SharedRefDoubleReleaseError extends Error {
-  override readonly name = 'SharedRefDoubleReleaseError';
-  readonly code = 'shared-ref-double-release' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly handle: number; readonly target: string; readonly rc: number };
-
-  constructor(handle: number, target: string, rc: number) {
-    const hint = `Handle ${handle} (target ${target}) released with rc=${rc}. Each shared handle must have a matching alloc/retain for every release; audit the producer / consumer release pairs.`;
-    const expected = 'rc >= 1 before release';
-    super(
-      `SharedRefStore: double release on handle.\n` +
-        `  code: shared-ref-double-release\n` +
-        `  handle: ${handle}\n` +
-        `  target: ${target}\n` +
-        `  rc: ${rc}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { handle, target, rc };
-  }
-}
-
-/**
- * Returned via `Result.err` when a builtin-tier slot (`slot < BUILTIN_BASE`)
- * is passed to SharedRefStore.alloc / retain / release / resolve
- * (feat-20260614 M6 D-15). The SharedRefStore manages ONLY user-tier slots
- * (`>= BUILTIN_BASE`); builtin asset payloads are process-static and live in
- * `BuiltinAssetRegistry` (`@forgeax/engine-runtime`), never reference-counted.
- *
- * `.code = 'builtin-slot-not-owned'`
- * `.detail = { slot }`
- * `.hint` — points the caller at BuiltinAssetRegistry.resolve.
- */
-export class BuiltinSlotNotOwnedError extends Error {
-  override readonly name = 'BuiltinSlotNotOwnedError';
-  readonly code = 'builtin-slot-not-owned' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly slot: number };
-
-  constructor(slot: number) {
-    const hint = `Slot ${slot} is a builtin-tier handle (< BUILTIN_BASE). The SharedRefStore manages only user-tier handles (>= BUILTIN_BASE). Resolve builtin payloads through BuiltinAssetRegistry.resolve (@forgeax/engine-runtime); they are process-static and never reference-counted.`;
-    const expected = 'user-tier slot (>= BUILTIN_BASE)';
-    super(
-      `SharedRefStore: builtin slot is not owned by this store.\n` +
-        `  code: builtin-slot-not-owned\n` +
-        `  slot: ${slot}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { slot };
   }
 }
 
@@ -1413,18 +1286,8 @@ export type EcsErrorCode =
   // ScheduleMutationError closed-set kebab codes (3).
   | ScheduleMutationErrorCode
   // w5 managed-* kebab codes (4).
-  | 'unique-ref-released'
-  | 'unique-ref-double-release'
-  // feat-20260614-ecs-shared-component-and-unique-rename M3 — SharedRefStore
-  // closed-union extension (+2). `'shared-ref-released'` covers resolve / retain
-  // on rc=0; `'shared-ref-double-release'` covers release on rc=0.
-  | 'shared-ref-released'
-  | 'shared-ref-double-release'
-  // feat-20260614-ecs-shared-component-and-unique-rename M6 D-15 (+1).
-  // SharedRefStore manages ONLY user-tier slots (>= BUILTIN_BASE); a builtin
-  // slot (< BUILTIN_BASE) passed to alloc/retain/release/resolve is a caller
-  // error -> `'builtin-slot-not-owned'` (hint points at BuiltinAssetRegistry).
-  | 'builtin-slot-not-owned'
+  | 'managed-ref-released'
+  | 'managed-ref-double-release'
   | 'managed-buffer-out-of-bounds'
   | 'managed-buffer-shrink-not-supported'
   // managed-array-* kebab codes — surviving member from feat-20260514;
@@ -1518,22 +1381,12 @@ export type EcsErrorCode =
  * only the w5 family + `cyclic-injection` carry structured payloads today.
  */
 export type EcsErrorDetail =
-  | { readonly code: 'unique-ref-released'; readonly handle: number; readonly target: string }
+  | { readonly code: 'managed-ref-released'; readonly handle: number; readonly target: string }
   | {
-      readonly code: 'unique-ref-double-release';
+      readonly code: 'managed-ref-double-release';
       readonly handle: number;
       readonly target: string;
     }
-  // feat-20260614 M3 — SharedRefStore detail variants (+2).
-  | { readonly code: 'shared-ref-released'; readonly handle: number; readonly target: string }
-  | {
-      readonly code: 'shared-ref-double-release';
-      readonly handle: number;
-      readonly target: string;
-      readonly rc: number;
-    }
-  // feat-20260614 M6 D-15 — builtin-slot fail-fast detail variant (+1).
-  | { readonly code: 'builtin-slot-not-owned'; readonly slot: number }
   | { readonly code: 'managed-buffer-out-of-bounds'; readonly index: number; readonly size: number }
   | {
       readonly code: 'managed-buffer-shrink-not-supported';

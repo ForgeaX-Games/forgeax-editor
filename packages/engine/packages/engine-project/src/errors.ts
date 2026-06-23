@@ -15,8 +15,6 @@
 // }
 // ```
 
-import type { z } from 'zod';
-
 // ── code union (6 members, self-contained within engine-project) ────────────
 export type GameProjectErrorCode =
   | 'forge-missing'
@@ -42,8 +40,7 @@ export interface ForgeParseFailedDetail {
 /** forge.json is valid JSON but fails zod schema validation (missing required fields, wrong types). */
 export interface ForgeSchemaInvalidDetail {
   readonly path: string;
-  /** The zod issues from `safeParse(...).error.issues` — each names the failing path + reason. */
-  readonly zodErrors: readonly z.ZodIssue[];
+  readonly zodErrors: unknown;
 }
 
 /** forge.json has .strict() rejected an unknown field (e.g. scenes[]). */

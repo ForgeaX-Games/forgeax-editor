@@ -11,9 +11,9 @@
 //
 //   2. 4-probe quintet (w4, plan-strategy §2.2 / D-R3 predicate merge):
 //      The legacy string-only + ref-only probes collapse into a single
-//      `isManagedField` arm covering both `'string'` and `'unique<T>'`. The
+//      `isManagedField` arm covering both `'string'` and `'ref<T>'`. The
 //      remaining probes target the other SchemaVocabKeyword tiers:
-//        isManagedField        => 'string' | 'unique<T>'   (NEW unified arm)
+//        isManagedField        => 'string' | 'ref<T>'   (NEW unified arm)
 //        isManagedBufferField  => 'buffer' / 'buffer<N>'
 //        isEntityField         => 'entity'
 //        isManagedArrayField   => 'array<T,N>' / 'array<T>'
@@ -64,15 +64,15 @@ describe('component schema --- 4-probe quintet (w3, AC-09)', () => {
     expectTypeOf(isManagedArrayField).toEqualTypeOf<(s: string) => boolean>();
   });
 
-  it("isManagedField recognises 'string' literal and 'unique<T>' template", () => {
+  it("isManagedField recognises 'string' literal and 'ref<T>' template", () => {
     // Behavioural assertions (AC-09) --- the unified arm must cover both
-    // `'string'` and `'unique<T>'` keywords in a single predicate.
+    // `'string'` and `'ref<T>'` keywords in a single predicate.
     expectTypeOf(isManagedField('string')).toEqualTypeOf<boolean>();
-    expectTypeOf(isManagedField('unique<MeshAsset>')).toEqualTypeOf<boolean>();
+    expectTypeOf(isManagedField('ref<MeshAsset>')).toEqualTypeOf<boolean>();
     // Runtime cases:
     if (!isManagedField('string')) throw new Error("isManagedField('string') must be true");
-    if (!isManagedField('unique<MeshAsset>'))
-      throw new Error("isManagedField('unique<MeshAsset>') must be true");
+    if (!isManagedField('ref<MeshAsset>'))
+      throw new Error("isManagedField('ref<MeshAsset>') must be true");
     if (isManagedField('entity')) throw new Error("isManagedField('entity') must be false");
     if (isManagedField('buffer<128>'))
       throw new Error("isManagedField('buffer<128>') must be false");
@@ -88,15 +88,15 @@ describe('component schema --- 4-probe quintet (w3, AC-09)', () => {
     //   handle<T>          => (no managed probe; ECS treats handles as opaque)
     //   entity             => isEntityField
     //   array<T,N> + array<T> => isManagedArrayField (counts as one)
-    //   string             => isManagedField   (NEW unified arm w/ 'unique<T>')
+    //   string             => isManagedField   (NEW unified arm w/ 'ref<T>')
     //
     // The closed union still has exactly 7 template-literal arms; we lock
     // the union shape so any drift (e.g. removing one arm or adding a
     // sixth probe family) shows up as a type error.
     type Sample =
       | 'buffer<128>'
-      | 'unique<MaterialAsset>'
-      | 'shared<MeshAsset>'
+      | 'ref<MaterialAsset>'
+      | 'handle<MeshAsset>'
       | 'entity'
       | 'array<f32, 16>'
       | 'array<u32>'

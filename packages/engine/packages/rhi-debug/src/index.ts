@@ -17,16 +17,6 @@ export {
   wrap,
   wrapCreateShaderModule,
 } from './recorder';
-// Node-free capture primitives (recorder-core). assembleReport is the D-3
-// single-writer report helper reused by the vite-plugin-rhi-debug HTTP endpoint
-// so browser-uploaded tapes land byte-identical to the Node finalize() tail.
-export {
-  type AssembledReport,
-  assembleReport,
-  type FinalizeToMemoryValue,
-  finalizeToMemory,
-  generateRunId,
-} from './recorder-core';
 // Inspector exports are NOT re-exported from the barrel to avoid pulling
 // pngjs (Node.js dep) into downstream bundles (e.g., the app package).
 // Import from '@forgeax/engine-rhi-debug/inspector' for inspector APIs.

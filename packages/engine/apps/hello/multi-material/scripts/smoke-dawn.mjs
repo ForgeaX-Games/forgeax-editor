@@ -270,12 +270,18 @@ function buildMultiPrimMesh() {
   };
 }
 
-// w64: mint mesh + materials as user-tier shared refs (register/get deleted M8).
-const world = new World();
-const meshHandle = world.allocSharedRef('MeshAsset', buildMultiPrimMesh());
+const meshRes = assets.register(buildMultiPrimMesh());
+if (!meshRes.ok) {
+  console.error(
+    `[smoke] FAIL - mesh register: ${meshRes.error.code} hint=${meshRes.error.hint}` +
+      ` detail=${JSON.stringify(meshRes.error.detail)}`,
+  );
+  process.exit(1);
+}
+const meshHandle = meshRes.value;
 
-function mintUnlit(rgb) {
-  return world.allocSharedRef('MaterialAsset', {
+function registerUnlit(rgb) {
+  return assets.register({
     kind: 'material',
     passes: [
       {
@@ -289,8 +295,19 @@ function mintUnlit(rgb) {
   });
 }
 
-const redHandle = mintUnlit([1.0, 0.15, 0.15]);
-const cyanHandle = mintUnlit([0.1, 0.9, 1.0]);
+const redRes = registerUnlit([1.0, 0.15, 0.15]);
+if (!redRes.ok) {
+  console.error(`[smoke] FAIL - red material register: ${redRes.error.code}`);
+  process.exit(1);
+}
+const redHandle = redRes.value;
+
+const cyanRes = registerUnlit([0.1, 0.9, 1.0]);
+if (!cyanRes.ok) {
+  console.error(`[smoke] FAIL - cyan material register: ${cyanRes.error.code}`);
+  process.exit(1);
+}
+const cyanHandle = cyanRes.value;
 
 const device = sharedDevice;
 if (!device) {
@@ -371,6 +388,7 @@ async function doReadPixels() {
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
+const world = new World();
 spawnScene(world);
 
 // First frame + tiny yield to let the first shader-module compile land.

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useTranslation } from '@/i18n';
 import { dashApi } from '../../lib/dashboard-api';
 import { useAppStore } from '../../store';
 
@@ -35,7 +34,6 @@ function classify(bus: NonNullable<Awaited<ReturnType<typeof dashApi.health>>['b
 // "Σ…" / "Σ down" clutter on loading / down chips. Inline next to the dot,
 // 0 layout shift on width (Σ adds ~6px; chip has flex room).
 export function BusHealthLamp() {
-  const { t } = useTranslation();
   const [state, setState] = useState<BusState>({ kind: 'loading' });
   const setMode = useAppStore((s) => s.setMode);
   const openSettings = useAppStore((s) => s.openSettings);
@@ -94,7 +92,7 @@ export function BusHealthLamp() {
 
   const isLink = state.kind === 'ok';
   const isOnBus = mode === 'bus';
-  const title = isLink ? t('busHealthLamp.linkTitle', { base: baseTitle }) : baseTitle;
+  const title = isLink ? `${baseTitle} — 单击在 Bus 详情查看 →` : baseTitle;
 
   // P4.48 — Σ glyph rendered only in 'ok' state. In loading/down branches
   // the count slot reads '…' / 'down' and a Σ would read as "Σ down" which

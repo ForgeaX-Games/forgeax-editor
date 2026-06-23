@@ -10,7 +10,6 @@ export default defineConfig({
     errors: 'src/errors.ts',
     bridge: 'src/bridge.ts',
     scanner: 'src/scanner.ts',
-    name: 'src/deriveAssetName.ts',
     'cli-asset': 'src/cli-asset.ts',
   },
   external: ['@forgeax/engine-types', 'fast-glob', 'upng-js'],

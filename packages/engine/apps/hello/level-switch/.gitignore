@@ -1,3 +1,0 @@
-# smoke-browser.mjs visual-gate run artefacts (PNGs + stats.json).
-# Regenerated on every `pnpm smoke:browser`; never committed.
-screenshots/

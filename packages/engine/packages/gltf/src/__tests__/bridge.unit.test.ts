@@ -18,16 +18,16 @@ import { describe, expect, it } from 'vitest';
 import { gltfDocToSceneAsset, toMaterialAsset } from '../bridge.js';
 import type { GltfDoc, GltfMaterialIr, GltfMeshIr } from '../parse-gltf.js';
 
-function fakeMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
-  return id as unknown as Handle<'MeshAsset', 'shared'>;
+function fakeMeshHandle(id: number): Handle<'MeshAsset', 'unmanaged'> {
+  return id as unknown as Handle<'MeshAsset', 'unmanaged'>;
 }
 
-function fakeMaterialHandle(id: number): Handle<'MaterialAsset', 'shared'> {
-  return id as unknown as Handle<'MaterialAsset', 'shared'>;
+function fakeMaterialHandle(id: number): Handle<'MaterialAsset', 'unmanaged'> {
+  return id as unknown as Handle<'MaterialAsset', 'unmanaged'>;
 }
 
-const FAKE_TEXTURE_HANDLE = 1 as unknown as Handle<'TextureAsset', 'shared'>;
-const FAKE_SAMPLER_HANDLE = 2 as unknown as Handle<'SamplerAsset', 'shared'>;
+const FAKE_TEXTURE_HANDLE = 1 as unknown as Handle<'TextureAsset', 'unmanaged'>;
+const FAKE_SAMPLER_HANDLE = 2 as unknown as Handle<'SamplerAsset', 'unmanaged'>;
 
 const PBR_FORWARD_SCHEMA: ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
@@ -393,7 +393,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(asset.paramValues?.sampler).toBe(FAKE_SAMPLER_HANDLE);
       });
 
-      it('PBR material validates via catalog with pass-based shape', () => {
+      it('PBR material registers via generic register with pass-based shape', () => {
         const reg = new AssetRegistry(
           // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry with only lookupMaterialShader
           makeBridgeTestShaderRegistry() as any,
@@ -404,15 +404,10 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
           textureHandles: new Map(),
           samplerHandles: new Map([[0, FAKE_SAMPLER_HANDLE]]),
         });
-        // feat-20260614 M8 (D-17): register() deleted; catalog(guid, asset)
-        // runs the same MaterialAsset pass/shader validation.
-        const result = reg.catalog<MaterialAsset>(
-          reg.parseGuid('00000000-0000-4000-8000-000000000a02'),
-          asset,
-        );
+        const result = reg.register<MaterialAsset>(asset);
 
         if (!result.ok) {
-          expect.fail(`catalog failed: ${result.error.expected} — ${result.error.hint}`);
+          expect.fail(`register failed: ${result.error.expected} — ${result.error.hint}`);
         }
       });
 

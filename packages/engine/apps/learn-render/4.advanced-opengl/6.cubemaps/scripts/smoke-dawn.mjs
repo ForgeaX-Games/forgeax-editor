@@ -254,12 +254,20 @@ const equirectPod = {
   mipmap: false,
   mipLevelCount: 1,
 };
-// --- 6. Material descriptors (minted per-world inside spawnScene) ---
-// Handles are minted via world.allocSharedRef (M8 D-19), so each of the two
-// dual-state Worlds gets its own column handles for the equirect cubemap and
-// the two PBR materials. The descriptor payloads below are shared inputs.
+const equirectHandle = assets.registerWithGuid(guidRes.value, equirectPod);
 
-const reflectiveMatPayload = {
+const cubemapRes = await renderer.store.uploadCubemapFromEquirect(equirectHandle, equirectPod);
+if (!cubemapRes.ok) {
+  console.error(
+    `[smoke] FAIL - equirect-to-cubemap upload: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`,
+  );
+  process.exit(1);
+}
+const cubemapHandle = cubemapRes.value;
+
+// --- 6. Materials ---
+
+const reflectiveMatRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -274,9 +282,13 @@ const reflectiveMatPayload = {
     metallic: 1.0,
     roughness: 0.0,
   },
-};
+});
+if (!reflectiveMatRes.ok) {
+  console.error(`[smoke] FAIL - reflective material register: ${reflectiveMatRes.error.code}`);
+  process.exit(1);
+}
 
-const nonReflectiveMatPayload = {
+const nonReflectiveMatRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -291,7 +303,11 @@ const nonReflectiveMatPayload = {
     metallic: 0.0,
     roughness: 0.5,
   },
-};
+});
+if (!nonReflectiveMatRes.ok) {
+  console.error(`[smoke] FAIL - non-reflective material register: ${nonReflectiveMatRes.error.code}`);
+  process.exit(1);
+}
 
 // --- 7. Scene spawn helper ---
 
@@ -307,21 +323,7 @@ const nonReflectiveMatPayload = {
  *   - DirectionalLight
  *   - Camera at posZ=6, tonemap=REINHARD_EXTENDED
  */
-async function spawnScene(world, spawnSkybox) {
-  // Mint this world's column handles (M8 D-19): equirect source + cubemap
-  // upload + two PBR materials. uploadCubemapFromEquirect takes the world.
-  const srcHandle = world.allocSharedRef('TextureAsset', equirectPod);
-  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, srcHandle, equirectPod);
-  if (!cubemapRes.ok) {
-    console.error(
-      `[smoke] FAIL - equirect-to-cubemap upload: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`,
-    );
-    process.exit(1);
-  }
-  const cubemapHandle = cubemapRes.value;
-  const reflectiveMatHandle = world.allocSharedRef('MaterialAsset', reflectiveMatPayload);
-  const nonReflectiveMatHandle = world.allocSharedRef('MaterialAsset', nonReflectiveMatPayload);
-
+function spawnScene(world, spawnSkybox) {
   world.spawn({
     component: Skylight,
     data: { cubemap: cubemapHandle, intensity: 1.0 },
@@ -345,7 +347,7 @@ async function spawnScene(world, spawnSkybox) {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [reflectiveMatHandle] } },
+    { component: MeshRenderer, data: { materials: [reflectiveMatRes.value] } },
   );
 
   // Non-reflective cube (metallic=0) at right.
@@ -359,7 +361,7 @@ async function spawnScene(world, spawnSkybox) {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [nonReflectiveMatHandle] } },
+    { component: MeshRenderer, data: { materials: [nonReflectiveMatRes.value] } },
   );
 
   // DirectionalLight.
@@ -463,7 +465,7 @@ if (!device) {
 
 // State A: skybox-on (full IBL skybox + Skylight + two cubes)
 const worldOn = new World();
-await spawnScene(worldOn, true);
+spawnScene(worldOn, true);
 await drawFrames(worldOn, SMOKE_MIN_FRAMES);
 const pixelsOn = await readbackPixels(device);
 
@@ -481,7 +483,7 @@ if (FALSIFY === 'skybox-reuse-buffer') {
   // We need a fresh draw: destroy old renderTarget so configure creates a new one.
   renderTarget = null;
   const worldOff = new World();
-  await spawnScene(worldOff, false);
+  spawnScene(worldOff, false);
   await drawFrames(worldOff, SMOKE_MIN_FRAMES);
   pixelsOff = await readbackPixels(device);
 }

@@ -243,17 +243,6 @@ export function buildPipelineForMaterialShader(
   // Vertex layout is position-only (12-float stride, shaderLocation 0 vec3)
   // — the shadow_caster.wgsl vs_main reads only @location(0) position.
   if (passKind === 'shadow-caster') {
-    // bug-20260619-csm RC-3 (AC-10): a material may supply a custom
-    // ShadowCaster pass shader that carries a fragment stage (e.g. an
-    // alpha-test cutout that calls `discard` and returns
-    // `@builtin(frag_depth)`). The built-in `forgeax::default-shadow-caster`
-    // is vertex-only — the GPU writes depth from `gl_Position.z` with no
-    // fragment. To run the cutout discard, the PSO MUST include the
-    // fragment stage when the shader declares one; otherwise the fragment
-    // never executes and the shadow comes out solid. The depth pass has no
-    // color attachments, so the fragment stage targets an empty list (it
-    // only writes `@builtin(frag_depth)`).
-    const hasFragmentStage = source.includes('@fragment');
     const shadowPipelineResult = ctx.device.createRenderPipeline({
       label,
       layout: ctx.pipelineLayout as unknown as GPUPipelineLayout,
@@ -267,17 +256,9 @@ export function buildPipelineForMaterialShader(
           },
         ],
       } as unknown as GPUVertexState,
-      // Vertex-only depth pass writes `fragment: undefined` (GPU derives
-      // depth from gl_Position.z). A custom ShadowCaster shader with a
-      // fragment stage (cutout discard) gets the empty-target fragment
-      // stage so its `discard` / `@builtin(frag_depth)` actually run.
-      fragment: hasFragmentStage
-        ? ({
-            module: shaderModule as unknown as GPUShaderModule,
-            entryPoint: fsEntry,
-            targets: [],
-          } as unknown as GPUFragmentState)
-        : undefined,
+      // No fragment stage — depth-only pass; GPU writes depth from
+      // gl_Position.z automatically (shadow_caster.wgsl has no fs_main).
+      fragment: undefined,
       primitive: {
         topology: geometry?.topology ?? 'triangle-list',
         cullMode: renderState?.cullMode ?? 'back',

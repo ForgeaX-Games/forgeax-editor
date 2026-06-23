@@ -29,10 +29,10 @@ import {
 //   2. Schema-vocab keywords: 7 template-literal patterns expressing
 //      ECS-managed types whose storage is owned by separate subsystems:
 //        * `buffer:<bytes>`     — fixed-byte managed Uint8Array, stored by BufferPool
-//        * `ref<T>`             — managed Handle<T,'unique'>, released by UniqueRefStore
-//        * `shared<T>`          — rc-tracked Handle<T,'shared'>, lifecycle owned by SharedRefStore
+//        * `ref<T>`             — managed Handle<T,'managed'>, released by ManagedRefStore
+//        * `handle<T>`          — unmanaged Handle<T,'unmanaged'>, ECS treats as opaque id
 //        * `entity`             — Entity reference (Entity | null)
-//        * `string`             — utf-8 string payload, allocated as a managed handle via UniqueRefStore
+//        * `string`             — utf-8 string payload, allocated as a managed handle via ManagedRefStore
 //        * `array<T,N>`         — fixed-capacity typed view; elements inline in stride-N column (feat-20260602)
 //        * `array<T>`           — variable-capacity typed view over BufferPool slot bytes
 //
@@ -57,28 +57,29 @@ export type ScalarFieldType =
 /**
  * Legal element-type whitelist for the `array<T,N>` / `array<T>` vocab
  * keywords (AC-03). T must be a scalar field type, `entity`, or a
- * `shared\<X\>` template with a non-empty tag; reference / buffer / nested
+ * `handle<X>` template with a non-empty tag; reference / buffer / nested
  * array element types are forbidden (OOS-08 / OOS-03).
  *
- * feat-20260614 M5 / w23: the historical `handle\<X\>` element family was
- * deleted in favor of `shared\<X\>` (rc-tracked, lifecycle owned by
- * SharedRefStore). The `MANAGED_ARRAY_ELEMENT_TYPES` Set remains
- * static-scalar + entity only (D-8); dynamic `shared\<X\>` templates are
+ * feat-20260608-mesh-multi-section-primitive-multi-material-slot M2 / w5
+ * D-1: widened from `ScalarFieldType | 'entity'` to include
+ * \`handle<${string}>\` so `array<handle<MaterialAsset>>` is a legal
+ * schema-vocab keyword. The `MANAGED_ARRAY_ELEMENT_TYPES` Set remains
+ * static-scalar + entity only; the dynamic `handle<X>` templates are
  * validated by `isValidArrayElementType` at parse time.
  *
  * Legal: every member of `ScalarFieldType` plus `entity` plus
- * `shared\<X\>` (non-empty tag). The `ref` legacy scalar keyword (a u32
- * column placeholder) is in the whitelist; the parametric `unique<T>` /
- * `shared<T>` scalars are rejected as array element types by AC-03.
+ * `handle<X>` (non-empty tag). The `ref` legacy scalar keyword (a u32
+ * column placeholder) is in the whitelist; the parametric `ref<T>` form
+ * is rejected by AC-03.
  */
-export type ManagedArrayElementType = ScalarFieldType | 'entity' | `shared<${string}>`;
+export type ManagedArrayElementType = ScalarFieldType | 'entity' | `handle<${string}>`;
 
 /**
  * Schema-vocab keywords beyond the legacy scalar tier (AC-01).
  *
  * Each pattern is a template-literal type so a literal schema like
- * `{ mat: 'unique<MaterialAsset>' }` types the value as
- * `Handle<'MaterialAsset','unique'>` end-to-end. Runtime acceptance is
+ * `{ mat: 'ref<MaterialAsset>' }` types the value as
+ * `Handle<'MaterialAsset','managed'>` end-to-end. Runtime acceptance is
  * gated by the internal `isSchemaVocabKeyword` check — the SSOT for parser fail-fast.
  *
  * The legacy `'buffer:<N>'` literal is retired one-cut by
@@ -92,8 +93,8 @@ export type SchemaVocabKeyword =
   | 'string'
   | 'buffer'
   | `buffer<${number}>`
-  | `unique<${string}>`
-  | `shared<${string}>`
+  | `ref<${string}>`
+  | `handle<${string}>`
   | 'entity'
   | `array<${ManagedArrayElementType}, ${number}>`
   | `array<${ManagedArrayElementType}>`;
@@ -113,7 +114,7 @@ export type SchemaFieldType = ScalarFieldType | SchemaVocabKeyword;
  *
  * The 11 legacy scalars round-trip their own key. The 6 vocab families normalize
  * their parametric shapes to the family key:
- *   - `unique<T>` / `shared<T>` — strip `<T>`    → `'ref'` / `'shared'`
+ *   - `ref<T>` / `handle<T>` — strip `<T>`       → `'ref'` / `'handle'`
  *   - `buffer<N>`             — strip `<N>`       → `'buffer'`
  *   - `array<T>` / `array<T,N>` — strip `<...>`   → `'array'`
  *   - `entity` / `string` / `buffer` are identity.
@@ -125,8 +126,8 @@ export function fieldTypeToMetaKey(fieldType: string): string | null {
   if (fieldType === 'entity' || fieldType === 'string' || fieldType === 'buffer') {
     return fieldType;
   }
-  if (fieldType.startsWith('unique<') && fieldType.endsWith('>')) return 'ref';
-  if (fieldType.startsWith('shared<') && fieldType.endsWith('>')) return 'shared';
+  if (fieldType.startsWith('ref<') && fieldType.endsWith('>')) return 'ref';
+  if (fieldType.startsWith('handle<') && fieldType.endsWith('>')) return 'handle';
   if (fieldType.startsWith('buffer<') && fieldType.endsWith('>')) return 'buffer';
   if (fieldType.startsWith('array<') && fieldType.endsWith('>')) return 'array';
   // Legacy scalar — the 11 types are keys in TYPE_METADATA.
@@ -136,16 +137,8 @@ export function fieldTypeToMetaKey(fieldType: string): string | null {
 
 /**
  * `true` when the schema field type is a managed-store slot - i.e. should be
- * routed through `UniqueRefStore` (or `SharedRefStore` for `'shared<T>'`)
- * for alloc / resolve / release. Derived from TYPE_METADATA[].isManaged
- * column (feat-20260611-ecs-storage-naming-ssot D-3).
- *
- * Naming note (D-6 whitelist): `managed = ECS-tracked`. The prefix here is
- * about column-side lifecycle ownership (the ECS releases the slot on
- * despawn / overwrite), not the retired `'managed' | 'unmanaged'` Handle
- * brand. Both `'unique<T>'` and `'shared<T>'` schema fields satisfy
- * `isManagedField` because both are ECS-tracked; the dispatcher in
- * `releaseManagedFieldOnRow` picks the right store per field type.
+ * routed through `ManagedRefStore` (alloc / resolve / release). Derived from
+ * TYPE_METADATA[].isManaged column (feat-20260611-ecs-storage-naming-ssot D-3).
  */
 export function isManagedField(fieldType: string): boolean {
   return TYPE_METADATA[fieldTypeToMetaKey(fieldType) ?? '']?.isManaged ?? false;
@@ -160,10 +153,6 @@ export function isManagedField(fieldType: string): boolean {
  * (isBuffer=true) while the old regex-based impl rejected the non-integer N.
  * This is a dead path — `defineComponent` rejects `buffer<abc>` via
  * `isSchemaVocabKeyword` before the predicate fires.
- *
- * Naming note (D-6 whitelist): `managed = ECS-tracked`. Same semantic as
- * `isManagedField` — the variable `'buffer'` keyword is one whose
- * BufferPool slot the ECS releases at despawn / overwrite time.
  */
 export function isManagedBufferField(fieldType: string): boolean {
   return TYPE_METADATA[fieldTypeToMetaKey(fieldType) ?? '']?.isBuffer ?? false;
@@ -182,12 +171,6 @@ export function isEntityField(fieldType: string): boolean {
  * `true` when the schema field type is an `array<T,N>` / `array<T>` vocab
  * keyword. Derived from TYPE_METADATA[].isArray column
  * (feat-20260611-ecs-storage-naming-ssot D-3).
- *
- * Naming note (D-6 whitelist): `managed = ECS-tracked`. Variable
- * `array<T>` storage routes through BufferPool (slot lifecycle owned by
- * the ECS); fixed `array<T,N>` is inline stride-N and has no separate
- * slot to release, but both share this predicate as they share the
- * `'array'` meta key.
  */
 export function isManagedArrayField(fieldType: string): boolean {
   return TYPE_METADATA[fieldTypeToMetaKey(fieldType) ?? '']?.isArray ?? false;
@@ -196,13 +179,6 @@ export function isManagedArrayField(fieldType: string): boolean {
 /**
  * Set of legal element types for the `array<T,N>` / `array<T>` keywords
  * (AC-03). Runtime mirror of `ManagedArrayElementType`.
- *
- * Naming note (D-6 whitelist): `MANAGED_ARRAY_ELEMENT_TYPES` keeps the
- * `MANAGED` prefix because `managed = ECS-tracked` here — the Set is the
- * static-whitelist arm of `isValidArrayElementType`, which gates which
- * element types the ECS array dispatch knows how to retain / release.
- * The `'shared<X>'` template family rides the `startsWith('shared<')`
- * special case (D-8) rather than living in this Set.
  */
 export const MANAGED_ARRAY_ELEMENT_TYPES: ReadonlySet<ManagedArrayElementType> =
   new Set<ManagedArrayElementType>([
@@ -222,23 +198,15 @@ export const MANAGED_ARRAY_ELEMENT_TYPES: ReadonlySet<ManagedArrayElementType> =
 
 /**
  * Return `true` when `elementType` is a legal array element type
- * (static-whitelist scalar | entity, or a `shared\<X\>` template with a
- * non-empty tag). The empty-tag form `shared\<\>` is rejected
+ * (static-whitelist scalar | entity, or a handle<X> template with a
+ * non-empty tag). The empty-tag form `'handle<>'` is rejected
  * (plan-strategy §2 D-1 / R-NEW-1).
  *
  * @internal
  */
 function isValidArrayElementType(elementType: string): elementType is ManagedArrayElementType {
   if (MANAGED_ARRAY_ELEMENT_TYPES.has(elementType as ManagedArrayElementType)) return true;
-  // feat-20260614 D-8: `shared<X>` is a legal element-type via the
-  // startsWith special case; `MANAGED_ARRAY_ELEMENT_TYPES` Set deliberately
-  // does NOT carry a `'shared'` entry (D-8 keeps the static-whitelist Set
-  // free of the new family; runtime validation through the special case
-  // here pairs with the independent `'shared'` TYPE_METADATA row that
-  // routes element retain/release semantics in M4).
-  if (elementType.startsWith('shared<') && elementType.endsWith('>') && elementType.length > 9)
-    return true;
-  return false;
+  return elementType.startsWith('handle<') && elementType.endsWith('>') && elementType.length > 9;
 }
 
 /**
@@ -248,17 +216,12 @@ function isValidArrayElementType(elementType: string): elementType is ManagedArr
  * fail-safe).
  *
  * Examples:
- *   parseManagedArraySchema('array<entity>')                => { elementType: 'entity', length: undefined }
- *   parseManagedArraySchema('array<f32, 16>')               => { elementType: 'f32',    length: 16 }
- *   parseManagedArraySchema('array<shared<MaterialAsset>>') => { elementType: 'shared<MaterialAsset>', length: undefined }
- *   parseManagedArraySchema('array<shared<>>')              => null (empty tag rejection)
- *   parseManagedArraySchema('array<unique<X>>')             => null (illegal element)
- *   parseManagedArraySchema('array<array<f32,4>>')          => null (nested rejected)
- *
- * Naming note (D-6 whitelist): `parseManagedArraySchema` keeps the
- * `Managed` infix because `managed = ECS-tracked` — every legal output
- * shape this parser returns is one whose lifecycle the ECS knows how to
- * retain / release on overwrite, despawn, or archetype migration.
+ *   parseManagedArraySchema('array<entity>')              => { elementType: 'entity', length: undefined }
+ *   parseManagedArraySchema('array<f32, 16>')             => { elementType: 'f32',    length: 16 }
+ *   parseManagedArraySchema('array<handle<MaterialAsset>>') => { elementType: 'handle<MaterialAsset>', length: undefined }
+ *   parseManagedArraySchema('array<handle<>>')              => null (empty tag rejection)
+ *   parseManagedArraySchema('array<ref<X>>')              => null (illegal element)
+ *   parseManagedArraySchema('array<array<f32,4>>')         => null (nested rejected)
  */
 export function parseManagedArraySchema(
   fieldType: string,
@@ -306,7 +269,7 @@ export function bufferFieldByteLength(fieldType: string): number {
  * - `'buffer'` is exact-match (variable-byte capacity).
  * - `buffer<N>` requires `N` to be a positive base-10 integer (`/^[1-9]\d*$/`).
  *   Forms like `buffer<abc>` / `buffer<0>` / `buffer<>` are rejected.
- * - `unique<T>` / `shared<T>` require a non-empty target tag (`/^\w+$/`).
+ * - `ref<T>` / `handle<T>` require a non-empty target tag (`/^\w+$/`).
  * - `entity` is exact-match.
  * - `array<T,N>` / `array<T>` accept only the whitelist element types
  *   (`MANAGED_ARRAY_ELEMENT_TYPES`); illegal inner types fall through and
@@ -320,10 +283,10 @@ export function isSchemaVocabKeyword(s: string): s is SchemaVocabKeyword {
     const tail = s.slice(7, -1);
     return /^[1-9]\d*$/.test(tail);
   }
-  if (s.startsWith('unique<') && s.endsWith('>')) {
-    return /^\w+$/.test(s.slice(7, -1));
+  if (s.startsWith('ref<') && s.endsWith('>')) {
+    return /^\w+$/.test(s.slice(4, -1));
   }
-  if (s.startsWith('shared<') && s.endsWith('>')) {
+  if (s.startsWith('handle<') && s.endsWith('>')) {
     return /^\w+$/.test(s.slice(7, -1));
   }
   if (s.startsWith('array<') && s.endsWith('>')) {
@@ -363,7 +326,7 @@ export type ManagedArrayElementValue<T extends ManagedArrayElementType> = T exte
  * not direct assignment to the returned TypedArray.
  *
  * The `'string'` arm resolves to a native JS `string` (D-R1 / AC-13): the
- * dispatch routes the column u32 through `UniqueRefStore.resolve(handle)`
+ * dispatch routes the column u32 through `ManagedRefStore.resolve(handle)`
  * which returns the immutable string payload by reference.
  */
 export type FieldValueType<T extends SchemaFieldType> = T extends 'bool'
@@ -376,18 +339,18 @@ export type FieldValueType<T extends SchemaFieldType> = T extends 'bool'
         ? Uint8Array
         : T extends `buffer<${number}>`
           ? Uint8Array
-          : T extends `array<shared<${infer Target}>, ${number}>`
-            ? readonly Handle<Target, 'shared'>[]
-            : T extends `array<shared<${infer Target}>>`
-              ? readonly Handle<Target, 'shared'>[]
+          : T extends `array<handle<${infer Target}>, ${number}>`
+            ? readonly Handle<Target, 'unmanaged'>[]
+            : T extends `array<handle<${infer Target}>>`
+              ? readonly Handle<Target, 'unmanaged'>[]
               : T extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
                 ? TypedArrayFor<Elem extends 'entity' ? 'u32' : Elem>
                 : T extends `array<${infer Elem extends ManagedArrayElementType}>`
                   ? TypedArrayFor<Elem extends 'entity' ? 'u32' : Elem>
-                  : T extends `unique<${infer Target}>`
-                    ? Handle<Target, 'unique'>
-                    : T extends `shared<${infer Target}>`
-                      ? Handle<Target, 'shared'>
+                  : T extends `ref<${infer Target}>`
+                    ? Handle<Target, 'managed'>
+                    : T extends `handle<${infer Target}>`
+                      ? Handle<Target, 'unmanaged'>
                       : T extends ScalarFieldType
                         ? number
                         : never;
@@ -417,18 +380,18 @@ export type FieldInputType<T extends SchemaFieldType> = T extends 'bool'
         ? Uint8Array
         : T extends `buffer<${number}>`
           ? Uint8Array
-          : T extends `array<shared<${infer Target}>, ${number}>`
-            ? readonly Handle<Target, 'shared'>[]
-            : T extends `array<shared<${infer Target}>>`
-              ? readonly Handle<Target, 'shared'>[]
+          : T extends `array<handle<${infer Target}>, ${number}>`
+            ? readonly Handle<Target, 'unmanaged'>[]
+            : T extends `array<handle<${infer Target}>>`
+              ? readonly Handle<Target, 'unmanaged'>[]
               : T extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
                 ? TypedArrayFor<Elem extends 'entity' ? 'u32' : Elem> | readonly number[]
                 : T extends `array<${infer Elem extends ManagedArrayElementType}>`
                   ? TypedArrayFor<Elem extends 'entity' ? 'u32' : Elem> | readonly number[]
-                  : T extends `unique<${infer Target}>`
-                    ? Handle<Target, 'unique'>
-                    : T extends `shared<${infer Target}>`
-                      ? Handle<Target, 'shared'>
+                  : T extends `ref<${infer Target}>`
+                    ? Handle<Target, 'managed'>
+                    : T extends `handle<${infer Target}>`
+                      ? Handle<Target, 'unmanaged'>
                       : T extends ScalarFieldType
                         ? number
                         : never;
@@ -445,18 +408,17 @@ export type FieldInputType<T extends SchemaFieldType> = T extends 'bool'
  *    `'array<T,N>'` -> the T-typed array). Direct index assignment is
  *    fine -- the column owns the bytes.
  *
- * 2. `shared\<X\>` (rc-tracked AssetRegistry reference) -- the column carries
- *    a u32 handle id; SharedRefStore owns the rc lifecycle. The bundle
- *    entry is a `ManagedColumnReader<T>` (D-4 / D-7) -- read-only, walk
- *    via `.get(i)`. Consumers route through `assets.get(handle)` to
- *    materialise the asset payload.
+ * 2. `'handle<X>'` (unmanaged AssetRegistry reference) -- the column carries
+ *    a u32 handle id; AssetRegistry refcount is OOS for M4 (OOS-5) so the
+ *    bundle exposes the raw `Uint32Array`. Consumers route through
+ *    `assets.get(toUnmanaged(...))` to materialise.
  *
  * 3. The 4 managed-vocab keywords -- `'string'` / `` `ref<T>` `` / variable
  *    `'buffer'` / variable `` `array<T>` `` -- the column carries a u32 slot
- *    id; the payload lives in `UniqueRefStore` / `BufferPool`. The bundle
+ *    id; the payload lives in `ManagedRefStore` / `BufferPool`. The bundle
  *    entry is a `ManagedColumnReader<T>` (D-4 / D-7) -- read-only by
  *    construction, no index signature. Mutation MUST flow through the
- *    public dispatch (`world.set` / `world.push` / `world.allocUniqueRef`).
+ *    public dispatch (`world.set` / `world.push` / `world.allocManagedRef`).
  *
  * The `extends SchemaFieldType` upper bound matches `ComponentSchema[K]`
  * so query bundle types do not have to pre-filter.
@@ -479,21 +441,21 @@ export type TypedArrayFor<T extends SchemaFieldType> = T extends 'f32'
                 ? Uint8Array
                 : T extends 'string'
                   ? ManagedColumnReader<'string'>
-                  : T extends `unique<${string}>`
+                  : T extends `ref<${string}>`
                     ? ManagedColumnReader<T>
-                    : T extends `shared<${string}>`
-                      ? ManagedColumnReader<T>
-                      : T extends 'buffer'
-                        ? ManagedColumnReader<'buffer'>
-                        : T extends `buffer<${number}>`
-                          ? Uint8Array
-                          : T extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
-                            ? TypedArrayFor<
-                                Elem extends 'entity' | `shared<${string}>` ? 'u32' : Elem
-                              >
-                            : T extends `array<${string}>`
-                              ? ManagedColumnReader<T>
-                              : never;
+                    : T extends 'buffer'
+                      ? ManagedColumnReader<'buffer'>
+                      : T extends `buffer<${number}>`
+                        ? Uint8Array
+                        : T extends `array<handle<${string}>, ${number}>`
+                          ? Uint32Array
+                          : T extends `handle<${string}>`
+                            ? Uint32Array
+                            : T extends `array<${infer Elem extends ManagedArrayElementType}, ${number}>`
+                              ? TypedArrayFor<Elem extends 'entity' ? 'u32' : Elem>
+                              : T extends `array<${string}>`
+                                ? ManagedColumnReader<T>
+                                : never;
 
 /**
  * Relationship metadata (feat-20260531 M2 / plan-strategy D-5). Declares this
@@ -578,16 +540,6 @@ const nameToToken = new Map<string, Component>();
  */
 export function resolveComponent(name: string): Component | undefined {
   return nameToToken.get(name);
-}
-
-/**
- * Read-only snapshot of all components defined via {@link defineComponent},
- * keyed by name. Mirrors `getRegisteredSystems` (schedule.ts) and
- * `getRegisteredTokens` (@forgeax/engine-state). Duplicate names silently
- * overwrite, so the map reflects the latest token for each name (OOS-3).
- */
-export function getRegisteredComponents(): ReadonlyMap<string, Component> {
-  return nameToToken;
 }
 
 /**
@@ -796,9 +748,8 @@ const VIEW_CTORS: Readonly<
 // u32 column placeholder and the vocab `ref<T>` form maps to the same
 // managed-ref storage, so one row carries both (isScalar + isManaged both
 // true). tweak-20260612-ecs-concept-compression dropped redundant columns:
-// `isVocabKeyword` (zero production consumers), the per-vocab managed-
-// ref predicate column (100% duplicate of `isManaged`), and the YAGNI
-// `fixedByteLength` placeholder;
+// `isVocabKeyword` (zero production consumers), `isManagedRef` (100%
+// duplicate of `isManaged`), and the YAGNI `fixedByteLength` placeholder;
 // `isLegacyScalar` was renamed `isScalar` (the "legacy" prefix labelled the
 // historical M2-introduction tense; the 11 scalars are first-class).
 // ────────────────────────────────────────────────────────────────────────────
@@ -816,7 +767,7 @@ const VIEW_CTORS: Readonly<
  *   vocab family stores a u32 slot id / handle).
  * - `isScalar` — member of the 11 concrete scalar types
  *   (`f32`/`f64`/`i32`/`u32`/`i16`/`u16`/`i8`/`u8`/`bool`/`enum`/`ref`).
- * - `isManaged` — routed through `UniqueRefStore` (string / ref<T>).
+ * - `isManaged` — routed through `ManagedRefStore` (string / ref<T>).
  * - `isBuffer` — a `buffer` / `buffer<N>` managed-byte slot.
  * - `isEntityRef` — the single-entity `entity` reference keyword.
  * - `isArray` — an `array<T>` / `array<T,N>` keyword.
@@ -908,21 +859,12 @@ export const TYPE_METADATA: Readonly<Record<string, TypeMetadataRow>> = Object.f
     isEntityRef: false,
     isArray: false,
   },
-  // feat-20260614-ecs-shared-component-and-unique-rename M3 (plan-strategy
-  // D-3): independent `'shared'` row, NOT a reuse of the `'ref'` (post-M2:
-  // `'unique<T>'` family) row. `isManaged: true` so write-barrier dispatch
-  // routes shared<T> fields through release on despawn / removeComponent /
-  // set-overwrite, but the M4 sub-dispatch in releaseManagedFieldOnRow will
-  // separate shared (rc--) from unique (direct slot drop) using the
-  // fieldType.startsWith('shared<') predicate. Keeping the meta key
-  // independent preserves the "meta key = release semantics" invariant
-  // (architecture-principles.md #1 SSOT).
-  shared: {
+  handle: {
     byteSize: 4,
     viewCtor: Uint32Array,
     storage: 'u32',
     isScalar: false,
-    isManaged: true,
+    isManaged: false,
     isBuffer: false,
     isEntityRef: false,
     isArray: false,
@@ -964,7 +906,7 @@ export interface ArrayMeta {
  * object aggregating `type` + `default` + field-level `meta`.
  *
  * - `type` — the schema field-type keyword (a parametrized string such as
- *   `'array<f32,3>'` / `'unique<MaterialAsset>'` is used verbatim, D-A2).
+ *   `'array<f32,3>'` / `'ref<MaterialAsset>'` is used verbatim, D-A2).
  * - `default` — layer-2 default value; aggregated into `component.defaults`.
  * - `meta` — field-level open namespace; aggregated into `component.meta`. The
  *   infra gives no key special meaning (open map, OOS-1).
@@ -1217,10 +1159,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
   const relationship =
     options?.relationship === undefined
       ? undefined
-      : (Object.freeze({
-          linkedSpawn: true,
-          ...options.relationship,
-        }) as RelationshipMeta);
+      : (Object.freeze({ ...options.relationship }) as RelationshipMeta);
   if (relationship !== undefined) {
     const mirror = resolveComponent(relationship.mirror);
     if (mirror === undefined) {

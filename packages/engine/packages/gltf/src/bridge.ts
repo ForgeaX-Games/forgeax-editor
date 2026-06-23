@@ -300,9 +300,9 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
 
 export interface GltfBridgeContext {
   /** glTF mesh index -> registry MeshAsset handle (multi-submesh). */
-  readonly meshHandles: ReadonlyMap<number, Handle<'MeshAsset', 'shared'>>;
+  readonly meshHandles: ReadonlyMap<number, Handle<'MeshAsset', 'unmanaged'>>;
   /** glTF material index -> registry MaterialAsset handle. */
-  readonly materialHandles: ReadonlyMap<number, Handle<'MaterialAsset', 'shared'>>;
+  readonly materialHandles: ReadonlyMap<number, Handle<'MaterialAsset', 'unmanaged'>>;
   /**
    * glTF skin index -> SkeletonAsset GUID (string form). When a GltfNodeIr carries
    * a skin reference, the bridge emits `Skin: { skeleton: <guid-string> }` on
@@ -581,9 +581,9 @@ export type _NodeIrAlias = GltfNodeIr;
 
 export interface MaterialBridgeContext {
   /** glTF texture index -> registry TextureAsset handle. */
-  readonly textureHandles?: ReadonlyMap<number, Handle<'TextureAsset', 'shared'>>;
+  readonly textureHandles?: ReadonlyMap<number, Handle<'TextureAsset', 'unmanaged'>>;
   /** glTF sampler index -> registry SamplerAsset handle. */
-  readonly samplerHandles?: ReadonlyMap<number, Handle<'SamplerAsset', 'shared'>>;
+  readonly samplerHandles?: ReadonlyMap<number, Handle<'SamplerAsset', 'unmanaged'>>;
   /**
    * feat-20260611 w17-a: when any primitive consuming this material carries
    * JOINTS_0 + WEIGHTS_0, the cooker passes `skinned: true` so the emitted

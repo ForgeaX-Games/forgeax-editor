@@ -43,7 +43,6 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -111,7 +110,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: marbleHandleRes.error.code, hint: marbleHandleRes.error.hint });
     return;
   }
-  const marbleTex = unwrapHandle(world.allocSharedRef('TextureAsset', marbleHandleRes.value));
+  const marbleTex = marbleHandleRes.value;
 
   // Cube material: unlit marble.jpg texture (LO 4.4 renders the marble cube at
   // full texture brightness with no lighting -- the chapter teaches culling,
@@ -145,7 +144,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // AC-09 demonstration: switch cullMode to 'front' and the inner faces
   // (now CW-appearing and thus front-facing) are culled -- the camera
   // inside sees only clear-color, proving the culling semantics.
-  const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const cubeMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -163,12 +162,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: marbleTex,
     },
   });
+  if (!cubeMatRes.ok) {
+    console.error('[learn-render 4.4 face-culling] cube material register failed:', cubeMatRes.error);
+    return;
+  }
 
   // Single marble cube at origin.
   world.spawn(
     { component: Transform, data: {} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMat] } },
+    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
   ).unwrap();
 
   // Camera inside the cube at (0, 0, 0), looking along -Z via default

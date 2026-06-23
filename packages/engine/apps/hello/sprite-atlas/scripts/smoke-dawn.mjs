@@ -281,9 +281,12 @@ const synthPod = {
   colorSpace: 'srgb',
   mipmap: false,
 };
-// w64: World holds the SharedRefStore minted handles need; create it here.
-const world = new World();
-const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
+const texHandleRes = assets.register(synthPod);
+if (!texHandleRes.ok) {
+  console.error(`[smoke] FAIL - atlas texture register: ${texHandleRes.error.code}`);
+  process.exit(1);
+}
+const textureHandle = texHandleRes.value;
 
 // feat-20260601-gpu-resource-store-extraction M1: texture GPU upload moved to
 // renderer.store (pass POD + decoded; D-2). configureGpuDevice ran inside
@@ -301,13 +304,18 @@ if (!uploadRes.ok) {
   process.exit(1);
 }
 
-const samplerHandle = world.allocSharedRef('SamplerAsset', {
+const samplerHandleRes = assets.register({
   kind: 'sampler',
   magFilter: 'nearest',
   minFilter: 'nearest',
   addressModeU: 'clamp-to-edge',
   addressModeV: 'clamp-to-edge',
 });
+if (!samplerHandleRes.ok) {
+  console.error(`[smoke] FAIL - sampler register: ${samplerHandleRes.error.code}`);
+  process.exit(1);
+}
+const samplerHandle = samplerHandleRes.value;
 
 const ready = await renderer.ready;
 if (!ready.ok) {
@@ -321,21 +329,24 @@ if (!ready.ok) {
 const materialHandles = [];
 for (let i = 0; i < FRAME_COUNT; i++) {
   const region = FRAME_REGIONS[i];
-  materialHandles.push(
-    world.allocSharedRef('MaterialAsset', {
-      kind: 'material',
-      passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
-      ],
-      paramValues: {
-        baseColor: [1, 1, 1, 1],
-        texture: textureHandle,
-        sampler: samplerHandle,
-        region,
-        pivot: [0.5, 0.5],
-      },
-    }),
-  );
+  const matRes = assets.register({
+    kind: 'material',
+    passes: [
+      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+    ],
+    paramValues: {
+      baseColor: [1, 1, 1, 1],
+      texture: textureHandle,
+      sampler: samplerHandle,
+      region,
+      pivot: [0.5, 0.5],
+    },
+  });
+  if (!matRes.ok) {
+    console.error(`[smoke] FAIL - material register frame ${i}: ${matRes.error.code}`);
+    process.exit(1);
+  }
+  materialHandles.push(matRes.value);
 }
 
 // Flat regions array for SpriteAnimation.
@@ -375,6 +386,8 @@ for (let i = 0; i < INSTANCE_COUNT; i++) {
   instanceTransforms[base + 14] = 0;
   instanceTransforms[base + 15] = 1;
 }
+
+const world = new World();
 
 // Ortho camera
 okResult(

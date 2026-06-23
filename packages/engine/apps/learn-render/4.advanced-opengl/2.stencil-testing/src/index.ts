@@ -47,7 +47,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
+import { RenderQueue } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -159,12 +159,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     return;
   }
-  const metalTex = unwrapHandle(world.allocSharedRef('TextureAsset', metalHandleRes.value));
-  const marbleTex = unwrapHandle(world.allocSharedRef('TextureAsset', marbleHandleRes.value));
+  const metalTex = metalHandleRes.value;
+  const marbleTex = marbleHandleRes.value;
 
   // ── Floor material: PBR with stencilWriteMask=0x00 ────────────────
   // AC-01: stencilWriteMask: 0x00 as a top-level literal with no `as`.
-  const floorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const floorMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -184,10 +184,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: metalTex,
     },
   });
+  if (!floorMatRes.ok) {
+    console.error('[learn-render 4.2 stencil-testing] floor material register failed:', floorMatRes.error);
+    return;
+  }
 
   // ── Cube material: PBR with stencil write (ref=1, mask=0xFF) ─────
   // Normal pass writes stencil ref=1 everywhere the cube rasterizes.
-  const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const cubeMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -209,13 +213,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: marbleTex,
     },
   });
+  if (!cubeMatRes.ok) {
+    console.error('[learn-render 4.2 stencil-testing] cube material register failed:', cubeMatRes.error);
+    return;
+  }
 
   // ── Outline material: unlit solid color, stencil test only ───────
   // Outline passes where stencil != 1 (only the band outside the
   // cube interior, since the normal cube pass wrote 1 everywhere and
   // the floor wrote nothing). depthWriteEnabled=false mirrors
   // LO glDisable(GL_DEPTH_TEST) so the outline always draws.
-  const outlineMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+  const outlineMatRes = assets.register<MaterialAsset>({
     kind: 'material',
     passes: [
       {
@@ -242,6 +250,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: OUTLINE_COLOR,
     },
   });
+  if (!outlineMatRes.ok) {
+    console.error('[learn-render 4.2 stencil-testing] outline material register failed:', outlineMatRes.error);
+    return;
+  }
 
   // ── Spawn entities ────────────────────────────────────────────────
 
@@ -259,7 +271,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [floorMat] } },
+    { component: MeshRenderer, data: { materials: [floorMatRes.value] } },
   ).unwrap();
 
   // Spawn cube 1 at (-1, 0, -1).
@@ -273,7 +285,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMat] } },
+    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
   ).unwrap();
 
   // Spawn cube 2 at (2, 0, 0).
@@ -287,7 +299,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMat] } },
+    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
   ).unwrap();
 
   // Spawn outline cube 1 at (-1, 0, -1) with scale 1.1.
@@ -304,7 +316,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [outlineMat] } },
+    { component: MeshRenderer, data: { materials: [outlineMatRes.value] } },
   ).unwrap();
 
   // Spawn outline cube 2 at (2, 0, 0) with scale 1.1.
@@ -321,7 +333,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [outlineMat] } },
+    { component: MeshRenderer, data: { materials: [outlineMatRes.value] } },
   ).unwrap();
 
   // Directional light.

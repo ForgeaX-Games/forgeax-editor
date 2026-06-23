@@ -4,7 +4,6 @@
 import { useState, useEffect } from 'react';
 import { History, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { t, useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { confirmDialog } from '../../lib/dialog';
 import './TopBar.css';
@@ -17,11 +16,11 @@ function formatRelative(ts: number | undefined): string {
   if (!ts || !Number.isFinite(ts)) return '';
   const now = Date.now();
   const deltaMs = now - ts;
-  if (deltaMs < 0) return t('sessionSwitcher.justNow'); // clock skew → treat as just now, not future
+  if (deltaMs < 0) return '刚刚'; // clock skew → treat as just now, not future
   const sec = Math.floor(deltaMs / 1000);
-  if (sec < 60) return t('sessionSwitcher.justNow');
+  if (sec < 60) return '刚刚';
   const min = Math.floor(sec / 60);
-  if (min < 60) return t('sessionSwitcher.minutesAgo', { min });
+  if (min < 60) return `${min} 分钟前`;
   // Compare calendar days using local-time midnight so "昨天" is intuitive
   // across midnight rather than purely a 24-hour rolling window.
   const tsDate = new Date(ts);
@@ -34,8 +33,8 @@ function formatRelative(ts: number | undefined): string {
   const hh = String(tsDate.getHours()).padStart(2, '0');
   const mm = String(tsDate.getMinutes()).padStart(2, '0');
   if (dayDiff === 0) return `${hh}:${mm}`;
-  if (dayDiff === 1) return t('sessionSwitcher.yesterdayTime', { time: `${hh}:${mm}` });
-  if (dayDiff < 7) return t('sessionSwitcher.daysAgo', { dayDiff });
+  if (dayDiff === 1) return `昨天 ${hh}:${mm}`;
+  if (dayDiff < 7) return `${dayDiff} 天前`;
   // Older than a week — yyyy-mm-dd if cross-year, mm-dd otherwise.
   const M = String(tsDate.getMonth() + 1).padStart(2, '0');
   const D = String(tsDate.getDate()).padStart(2, '0');
@@ -55,7 +54,6 @@ function formatRelative(ts: number | undefined): string {
 //   - 切 session   → store.switchToSession(sid)  （+ WS 重 attach + 持久化）
 //   - 删 session   → store.closeSession(sid)     （DELETE + 自动切下一条）
 export function SessionSwitcher() {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const activeSid = useAppStore((s) => s.activeSid);
@@ -73,7 +71,7 @@ export function SessionSwitcher() {
   }, [open, pinnedSlug, refreshSessions]);
 
   const onDelete = async (sid: string) => {
-    if (!(await confirmDialog({ body: t('sessionSwitcher.deleteConfirm'), danger: true }))) return;
+    if (!(await confirmDialog({ body: '确认删除该 session?\nserver 上的 session 目录 + ledger 都会一起 rm。', danger: true }))) return;
     await closeSession(sid);
   };
 
@@ -89,7 +87,7 @@ export function SessionSwitcher() {
 
   const activeTab = tabs.find((t) => t.sid === activeSid);
   const activeLabel = activeTab?.displayName?.trim()
-    || (activeTab ? `session ${activeTab.sid.slice(0, 6)}` : t('common.loading'));
+    || (activeTab ? `session ${activeTab.sid.slice(0, 6)}` : '加载中…');
 
   // Dropdown-only sort by最后对话时间 desc — keep store.tabs in its
   // original order (TabStrip / persisted activeSid still index by it).
@@ -111,7 +109,7 @@ export function SessionSwitcher() {
       <PopoverTrigger asChild>
         <button
           className="tb-game-btn"
-          title={activeTab ? t('sessionSwitcher.triggerActive', { label: activeLabel }) : t('sessionSwitcher.triggerEmpty')}
+          title={activeTab ? `当前 session: ${activeLabel}` : 'session 列表 (boot 中或服务器空)'}
         >
           <History size={16} />
           <span className="tb-game-label">{activeLabel}</span>
@@ -134,38 +132,38 @@ export function SessionSwitcher() {
               background: 'var(--bg-2)',
               zIndex: 1,
             }}
-            title={t('sessionSwitcher.newSessionTitle')}
+            title="新建一个 session（POST /api/sessions · scheduler 自动 start）"
           >
             <Plus size={12} style={{ marginRight: 4 }} />
-            <span className="tb-game-name">{t('sessionSwitcher.newSession')}</span>
-            <span className="tb-game-meta">{pinnedSlug ? t('sessionSwitcher.projectBound', { slug: pinnedSlug }) : t('sessionSwitcher.projectUnbound')}</span>
+            <span className="tb-game-name">新建 session</span>
+            <span className="tb-game-meta">{pinnedSlug ? `项目 ${pinnedSlug}` : '未绑定项目'}</span>
           </button>
           {sortedTabs.length === 0 && (
-            <div className="tb-game-empty">{t('sessionSwitcher.empty')}</div>
+            <div className="tb-game-empty">暂无 session · 点 + 新建</div>
           )}
-          {sortedTabs.map((tab) => {
-            const isActive = tab.sid === activeSid;
-            const label = tab.displayName?.trim() || `session ${tab.sid.slice(0, 6)}`;
-            const rel = formatRelative(tab.lastActivityAt);
+          {sortedTabs.map((t) => {
+            const isActive = t.sid === activeSid;
+            const label = t.displayName?.trim() || `session ${t.sid.slice(0, 6)}`;
+            const rel = formatRelative(t.lastActivityAt);
             return (
-              <div key={tab.sid} className={`tb-game-row ${isActive ? 'is-active' : ''}`} data-session-id={tab.sid} data-session-name={label}>
+              <div key={t.sid} className={`tb-game-row ${isActive ? 'is-active' : ''}`} data-session-id={t.sid} data-session-name={label}>
                 <button
                   className="tb-game-pick"
-                  onClick={() => void onPick(tab.sid)}
-                  title={`sid: ${tab.sid}${tab.agentId ? ` · agent: ${tab.agentId}` : ''}${tab.lastActivityAt ? ` · ${t('sessionSwitcher.lastActive', { time: new Date(tab.lastActivityAt).toLocaleString() })}` : ''}`}
+                  onClick={() => void onPick(t.sid)}
+                  title={`sid: ${t.sid}${t.agentId ? ` · agent: ${t.agentId}` : ''}${t.lastActivityAt ? ` · 最后活跃 ${new Date(t.lastActivityAt).toLocaleString()}` : ''}`}
                 >
                   <span className="tb-game-name">
                     {label}
                     {isActive && <span style={{ marginLeft: 6, color: 'var(--color-role-art)' }}>·</span>}
                   </span>
                   <span className="tb-game-meta">
-                    {tab.sid.slice(0, 8)}{tab.agentId ? ` · ${tab.agentId}` : ''}{tab.isStreaming ? ' · ●' : ''}{rel ? ` · ${rel}` : ''}
+                    {t.sid.slice(0, 8)}{t.agentId ? ` · ${t.agentId}` : ''}{t.isStreaming ? ' · ●' : ''}{rel ? ` · ${rel}` : ''}
                   </span>
                 </button>
                 <button
                   className="tb-game-del"
-                  onClick={() => void onDelete(tab.sid)}
-                  title={t('sessionSwitcher.deleteTitle')}
+                  onClick={() => void onDelete(t.sid)}
+                  title="删除 session（DELETE /api/sessions/:sid · ledger 一起清）"
                 >
                   <Trash2 size={11} />
                 </button>

@@ -17,11 +17,10 @@ import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { attachBrowserInputBackend } from '../src/browser-backend';
 import {
+  createFrameStartScanSystem,
   createInputSnapshot,
-  INPUT_BACKEND_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputBackend,
-  InputFrameStartScan,
   type InputSnapshot,
 } from '../src/index';
 
@@ -404,13 +403,13 @@ interface FakeListenerStore {
   }
 
   describe('frame-start-scan-system.test.ts', () => {
-    describe('InputFrameStartScan (D-5 + plan-strategy section 2.10)', () => {
+    describe('createFrameStartScanSystem (D-5 + plan-strategy section 2.10)', () => {
       it('registers a system named "input-frame-start-scan" so user systems can `after:` it', () => {
         const backend = fixtureBackend({});
         const world = new World();
-        expect(InputFrameStartScan.name).toBe('input-frame-start-scan');
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        const sys = createFrameStartScanSystem(backend, world);
+        expect(sys.name).toBe('input-frame-start-scan');
+        world.addSystem(sys);
         const inspection = world.inspect();
         expect(inspection.systems.map((s) => s.name)).toContain('input-frame-start-scan');
       });
@@ -423,8 +422,7 @@ interface FakeListenerStore {
           movementY: -2,
         });
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         expect(world.hasResource('InputSnapshot')).toBe(false);
         world.update();
@@ -438,8 +436,7 @@ interface FakeListenerStore {
       it('calls backend.sample() exactly once per world.update()', () => {
         const backend = fixtureBackend({});
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         world.update();
         world.update();
@@ -450,8 +447,7 @@ interface FakeListenerStore {
       it('frozen snapshot: methods on the resource do not mutate it', () => {
         const backend = fixtureBackend({ movementX: 9, movementY: 9 });
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         world.update();
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
@@ -538,8 +534,7 @@ interface FakeListenerStore {
       it('keyboard.down returns true while key is held, false otherwise', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         backend.pressKey('w');
         world.update();
@@ -556,8 +551,7 @@ interface FakeListenerStore {
       it('keyboard.up reflects the up-edge in the frame after the release', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         backend.pressKey('space');
         world.update();
@@ -574,8 +568,7 @@ interface FakeListenerStore {
       it('mouse.movementDelta is frozen at frame-start and cleared next frame', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         backend.addMovement(15, -7);
         world.update();
@@ -590,8 +583,7 @@ interface FakeListenerStore {
       it('mouse.button(0|1|2) returns the held state for each W3C button slot', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         backend.pressButton(0);
         backend.pressButton(2);
@@ -605,8 +597,7 @@ interface FakeListenerStore {
       it('snapshot is exposed as a Resource via insertResource("InputSnapshot")', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
         world.update();
         expect(world.hasResource('InputSnapshot')).toBe(true);
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
@@ -629,8 +620,7 @@ interface FakeListenerStore {
       it('document.hasFocus()-equivalent: keyboard down state is preserved when unfocused', () => {
         const backend = createFakeBackend();
         const world = new World();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
 
         backend.pressKey('w');
         world.update();
@@ -697,8 +687,7 @@ interface FakeListenerStore {
       it('frame-start scan writes wheelDelta into the snapshot Resource', () => {
         const world = new World();
         const backend = createWheelFakeBackend();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
         backend.setWheelDelta(1);
         world.update();
         const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
@@ -708,8 +697,7 @@ interface FakeListenerStore {
       it('snapshot reads are stable within a single frame (frame-start freeze)', () => {
         const world = new World();
         const backend = createWheelFakeBackend();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
         backend.setWheelDelta(-2);
         world.update();
         const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
@@ -722,8 +710,7 @@ interface FakeListenerStore {
       it('cross-frame reset: next frame with no wheel event reports zero', () => {
         const world = new World();
         const backend = createWheelFakeBackend();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
         backend.setWheelDelta(3);
         world.update();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(3);
@@ -734,8 +721,7 @@ interface FakeListenerStore {
       it('positive and negative deltas pass through unchanged (sign-preserving)', () => {
         const world = new World();
         const backend = createWheelFakeBackend();
-        world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(createFrameStartScanSystem(backend, world));
         backend.setWheelDelta(7);
         world.update();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(7);

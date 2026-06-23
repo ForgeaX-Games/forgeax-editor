@@ -11,10 +11,8 @@ import {
   TimelinePanel,
   MaterialGraphPanel,
   LauncherPanel,
-  AssetInspectorPanel,
 } from '@forgeax/editor-panels';
 import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
 import type { SyncPanelId } from '@forgeax/editor-core';
 
 // DetachedPanel — the root rendered inside a popped-out OS window (design
@@ -33,8 +31,7 @@ const TITLE: Record<SyncPanelId, string> = {
   material: 'Material',
   timeline: 'Timeline',
   matgraph: 'Mat Graph',
-  launcher: 'Launcher',
-  'asset-inspector': 'Asset Inspector',
+  launcher: '启动器',
 };
 const BODY: Record<SyncPanelId, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
@@ -46,11 +43,9 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
   launcher: () => <LauncherPanel />,
   timeline: () => <TimelinePanel />,
   matgraph: () => <MaterialGraphPanel />,
-  'asset-inspector': () => <AssetInspectorPanel />,
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
-  const { t } = useTranslation();
   // Global keyboard shortcuts — forwarded to the MAIN viewport via BroadcastChannel
   // (bus.undo/redo in panel role call postSync({ t:'undo'/'redo' }) → main acts).
   // This makes Undo/Redo work from any panel even without a visible toolbar.
@@ -116,10 +111,10 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
         <button
           type="button"
           className="ph-redock"
-          title={t('editor.detachedPanel.redockTitle')}
+          title="停靠回主窗"
           onClick={() => window.close()}
         >
-          ⊟ {t('editor.detachedPanel.redock')}
+          ⊟ 停靠
         </button>
       </div>
       <div className="popout-body">{BODY[panel]()}</div>

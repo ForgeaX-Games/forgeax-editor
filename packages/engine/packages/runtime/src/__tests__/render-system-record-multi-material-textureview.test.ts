@@ -212,6 +212,9 @@ interface RendererLike {
   ready: Promise<unknown>;
   draw: (world: unknown) => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
+  assets: {
+    register: <T>(asset: T) => { ok: boolean; value: unknown; unwrap?: () => unknown };
+  };
 }
 
 async function importEngine(): Promise<{
@@ -221,10 +224,7 @@ async function importEngine(): Promise<{
 }
 
 async function importEcs(): Promise<{
-  World: new () => {
-    spawn: (...componentDatas: unknown[]) => unknown;
-    allocSharedRef: <Target extends string, T>(target: Target, payload: T) => number;
-  };
+  World: new () => { spawn: (...componentDatas: unknown[]) => unknown };
 }> {
   return (await import('@forgeax/engine-ecs')) as never;
 }
@@ -237,6 +237,12 @@ async function importComponents(): Promise<{
   DirectionalLight: unknown;
 }> {
   return (await import('../index')) as never;
+}
+
+async function importPackGuid(): Promise<{
+  AssetGuid: { random: () => unknown; format: (g: unknown) => string };
+}> {
+  return (await import('@forgeax/engine-pack/guid')) as never;
 }
 
 function cameraTransform() {
@@ -319,43 +325,47 @@ async function setupRenderer(spies: DeviceSpies): Promise<{ renderer: RendererLi
   return { renderer };
 }
 
-async function spawnPbrMultiMaterialScene(): Promise<unknown> {
+async function spawnPbrMultiMaterialScene(renderer: RendererLike): Promise<unknown> {
   const { World } = await importEcs();
   const C = await importComponents();
+  const { AssetGuid } = await importPackGuid();
   const world = new World();
 
-  // Mint the 3-submesh mesh as a user-tier column handle.
-  const meshHandle = world.allocSharedRef('MeshAsset', threeSubmeshMesh()) as unknown as Handle<
-    'MeshAsset',
-    'shared'
-  >;
+  // Register the 3-submesh mesh.
+  const meshReg = renderer.assets.register<MeshAsset>(threeSubmeshMesh());
+  expect(meshReg.ok).toBe(true);
+  const meshHandle = meshReg.value as Handle<'MeshAsset', 'managed'>;
 
-  // Mint 3 distinct texture assets, each producing a unique GPU textureView
-  // sentinel via the createTexture mock. allocSharedRef returns the bare
-  // handle (a u32 slot id), which the extract stage accepts directly in
-  // paramValues.baseColorTexture.
-  const textureHandles: Handle<'TextureAsset', 'shared'>[] = [];
+  // Register 3 distinct texture assets, each with a fresh GUID. Each will
+  // produce a unique GPU textureView sentinel via the createTexture mock.
+  // registerWithGuid returns the Handle directly (throws on error) -- no
+  // Result wrapper unlike `register`.
+  const textureGuids: string[] = [];
+  const textureHandles: Handle<'TextureAsset', 'unmanaged'>[] = [];
+  const registry = renderer.assets as unknown as {
+    registerWithGuid: <T>(g: unknown, asset: T) => Handle<'TextureAsset', 'unmanaged'>;
+  };
   for (let i = 0; i < 3; i++) {
-    textureHandles.push(
-      world.allocSharedRef('TextureAsset', makeChequerTexture()) as unknown as Handle<
-        'TextureAsset',
-        'shared'
-      >,
-    );
+    const guid = AssetGuid.random();
+    const guidStr = AssetGuid.format(guid);
+    textureGuids.push(guidStr);
+    const handle = registry.registerWithGuid<TextureAsset>(guid, makeChequerTexture());
+    textureHandles.push(handle);
   }
   // Use numeric handles directly in paramValues. Strings are not resolved
-  // by render-system-extract (which gates on
+  // by AssetRegistry.register() nor render-system-extract (which gates on
   // `typeof pv.baseColorTexture === 'number'`); only the disk-pack
   // materialLoader resolves refs[]-index. Tests targeting the in-memory
-  // extract path must pass numeric handles.
+  // register() + extract path must pass numeric handles.
+  void textureGuids;
 
-  // Mint 3 distinct PBR materials, each pointing at a different
-  // baseColorTexture handle. shadingModel is 'standard' so the non-sprite
+  // Register 3 distinct PBR materials, each pointing at a different
+  // baseColorTexture GUID. shadingModel is 'standard' so the non-sprite
   // branch in record fires; this is the branch that builds the BG with
   // label 'pbr-material-skylight-bg'.
-  const materialHandles: Handle<'MaterialAsset', 'shared'>[] = [];
+  const materialHandles: Handle<'MaterialAsset', 'managed'>[] = [];
   for (let i = 0; i < 3; i++) {
-    const matHandle = world.allocSharedRef('MaterialAsset', {
+    const matReg = renderer.assets.register<MaterialAsset>({
       kind: 'material',
       passes: [
         {
@@ -371,8 +381,9 @@ async function spawnPbrMultiMaterialScene(): Promise<unknown> {
         roughness: 0.5,
         baseColorTexture: textureHandles[i] as unknown as number,
       },
-    } as unknown as MaterialAsset) as unknown as Handle<'MaterialAsset', 'shared'>;
-    materialHandles.push(matHandle);
+    } as unknown as MaterialAsset);
+    expect(matReg.ok).toBe(true);
+    materialHandles.push(matReg.value as Handle<'MaterialAsset', 'managed'>);
   }
 
   world.spawn(
@@ -420,7 +431,7 @@ describe('record: per-submesh PBR material BG textureView (bug-20260610 D2 regre
     const errors: string[] = [];
     renderer.onError((e) => errors.push(e.code));
 
-    const world = await spawnPbrMultiMaterialScene();
+    const world = await spawnPbrMultiMaterialScene(renderer);
     renderer.draw(world);
 
     // Filter to the PBR-bucket BG creations only. Sprite / shadow / tonemap

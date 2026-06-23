@@ -18,7 +18,6 @@ import {
 } from '../../lib/dashboard-api';
 import { listBusPlugins } from '../../lib/bus-api';
 import { useAppStore } from '../../store';
-import { useTranslation } from '@/i18n';
 
 function shortCliId(busId: string): string {
   return busId.replace(/^@forgeax-plugin\/cli-/, '');
@@ -68,7 +67,6 @@ interface UiSurfaceWire {
 }
 
 export function Overview() {
-  const { t } = useTranslation();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [summaries, setSummaries] = useState<Map<string, SessionAgentSummary>>(new Map());
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
@@ -234,10 +232,10 @@ export function Overview() {
               const count = kindCounts?.get(kind) ?? 0;
               const tone: 'loading' | 'ok' | 'down' = loading ? 'loading' : count > 0 ? 'ok' : 'down';
               const title = loading
-                ? t('dashboard.busKindRegistering', { kind: KIND_LONG[kind] })
+                ? `${KIND_LONG[kind]} · 插件登记中…`
                 : count > 0
-                  ? `${count} ${KIND_LONG[kind]} plugin${count === 1 ? '' : 's'} · ${t('dashboard.clickToBusAdmin')}`
-                  : `0 ${KIND_LONG[kind]} plugin · ${t('dashboard.clickToBusAdmin')}`;
+                  ? `${count} ${KIND_LONG[kind]} plugin${count === 1 ? '' : 's'} · 单击 → Bus admin →`
+                  : `0 ${KIND_LONG[kind]} plugin · 单击 → Bus admin →`;
               return (
                 <button
                   type="button"
@@ -260,7 +258,7 @@ export function Overview() {
               value={bus.pluginCount}
               tone="ok"
               onClick={goBus}
-              title={`${bus.pluginCount} plugins loaded · ${t('dashboard.clickToBusDetail')}`}
+              title={`${bus.pluginCount} plugins loaded · 单击切到 Bus 详情 →`}
             />
             <StatCard
               label="Broken"
@@ -269,8 +267,8 @@ export function Overview() {
               onClick={goBus}
               title={
                 bus.brokenCount > 0
-                  ? `${bus.brokenCount} broken plugin${bus.brokenCount === 1 ? '' : 's'} · ${t('dashboard.clickToBusDetail')}`
-                  : `0 broken · ${t('dashboard.clickToBusDetail')}`
+                  ? `${bus.brokenCount} broken plugin${bus.brokenCount === 1 ? '' : 's'} · 单击切到 Bus 详情 →`
+                  : `0 broken · 单击切到 Bus 详情 →`
               }
             />
             <StatCard
@@ -278,21 +276,21 @@ export function Overview() {
               value={bus.listenerCount}
               tone={bus.listenerCount > 0 ? 'ok' : 'idle'}
               onClick={goBus}
-              title={`${bus.listenerCount} event listener${bus.listenerCount === 1 ? '' : 's'} · ${t('dashboard.clickToBusDetail')}`}
+              title={`${bus.listenerCount} event listener${bus.listenerCount === 1 ? '' : 's'} · 单击切到 Bus 详情 →`}
             />
             <StatCard
               label="Ring size"
               value={bus.ringSize}
               tone="idle"
               onClick={goBus}
-              title={`ring buffer size ${bus.ringSize} · ${t('dashboard.clickToBusDetail')}`}
+              title={`ring buffer size ${bus.ringSize} · 单击切到 Bus 详情 →`}
             />
             <StatCard
               label="Uptime"
               value={formatDuration(bus.uptimeMs)}
               tone="idle"
               onClick={goBus}
-              title={`bus uptime ${formatDuration(bus.uptimeMs)} · ${t('dashboard.clickToBusDetail')}`}
+              title={`bus uptime ${formatDuration(bus.uptimeMs)} · 单击切到 Bus 详情 →`}
             />
             {surfaces && (
               <StatCard
@@ -302,8 +300,8 @@ export function Overview() {
                 onClick={goBus}
                 title={
                   surfaces.count > 0
-                    ? `${surfaces.count} UI surface${surfaces.count === 1 ? '' : 's'} · ${surfaces.aiActions}/${surfaces.totalActions} AI-exposed actions · ${t('dashboard.clickToBusDetail')}`
-                    : `0 UI surfaces · ${t('dashboard.clickToBusDetail')}`
+                    ? `${surfaces.count} UI surface${surfaces.count === 1 ? '' : 's'} · ${surfaces.aiActions}/${surfaces.totalActions} AI-exposed actions · 单击切到 Bus 详情 →`
+                    : `0 UI surfaces · 单击切到 Bus 详情 →`
                 }
               />
             )}
@@ -335,7 +333,7 @@ export function Overview() {
                     hasBus === null
                       ? `${p.id} · bus plugin registry loading…`
                       : hasBus
-                        ? `${p.id} · wrapped by @forgeax-plugin/cli-${p.id} · ${t('dashboard.clickToBusAdmin')}`
+                        ? `${p.id} · wrapped by @forgeax-plugin/cli-${p.id} · 单击 → Bus admin →`
                         : `${p.id} · no matching cli-provider plugin on bus`
                   }
                 >

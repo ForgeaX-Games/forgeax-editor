@@ -10,7 +10,7 @@ description: >-
 
 > 渲染 / 测试 / CI 排查的症状索引。每条都是踩实过的真坑，给出**判定信号**与**修法落点**，不复述引擎设计（设计见各 package README + AGENTS.md）。
 >
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: studio game-template integration (2026-06-17, CSM viewZ 符号 + Skylight 纯色环境光)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`b5d6c816`](../../commit/b5d6c816) (2026-06-10)
 
 > [!IMPORTANT]
 > **Demo 渲染错 = 引擎暴露了真实 gap，修引擎不修 demo**（AGENTS.md §Change stance）。在 demo 里塞 1×1 占位 / 手动 rAF / ad-hoc fetch 只会冻结 gap 并误导下一个读样例的 AI。先沿调用链回溯到引擎层，再决定修法。
@@ -27,8 +27,6 @@ description: >-
 | 贴图在 **hot-reload 后消失**（dev warm-refresh） | vite-plugin-pack DDC 丢失 sourcePath / 写入源树 | [§vite-plugin-pack-ddc-热更新](#vite-plugin-pack-ddc-热更新) |
 | 测试只在 **Windows** 失败，CRLF 污染 diff | `.gitattributes` 未强制 LF 或 grep/glob 路径分隔符 | [§windows-兼容性](#windows-兼容性) |
 | **天空盒（cubemap）渲染上下颠倒** | skybox.wgsl 含错误的 V-flip | [§天空盒-v-flip](#天空盒-v-flip) |
-| **方向光 CSM 阴影完全无遮挡**（diffuse 正常有明暗，shadow 项恒为 1 全亮；`shadowCascade0-3` pass 都在跑、light matrix 有效） | VS 发 `viewZ=-clipPos.w`（负）与正 `splitPlanes` 比较，cascade 选择全压到 layer 0 近 slab → 远处投影出 tile → 越界门返回 1.0 | [§csm-阴影全亮无遮挡](#csm-阴影全亮无遮挡) |
-| **standard 材质冷启动黑几秒 / 无 IBL 处全黑** | 唯一环境光是异步 IBL cubemap 的 Skylight，cubemap 就绪前 ambient=0 | [§ambient-黑到-ibl-加载](#ambient-黑到-ibl-加载) |
 | **多 glTF mesh 文档材质错乱**（每节点绑了所有 mesh 的材质） | glTF bridge 未按 meshIndex 过滤材质 | [§gltf-bridge-多mesh材质串](#gltf-bridge-多mesh材质串) |
 | **pbr-skin pipeline 创建失败** (`Binding doesn't exist in pbr-mesh-array-bgl` / `Vertex attribute slot 5 not present`) | 标准 PBR pipeline-layout 被 skin shader 错误复用 (L1)；JOINTS_0/WEIGHTS_0 vertex 属性未上传 (L2) | [§pbr-skin-pipeline-build-fail](#pbr-skin-pipeline-build-fail) |
 | **skin browser 全黑而 dawn smoke 全绿**（`cube-vbo size=768` 不是 1152；slot 5 missing） | parse-gltf → bridge → mesh-loader → render-data → buildPipelineContext → extract 6 环节有断点 | [§skin-vertex-attribute-chain](#skin-vertex-attribute-chain) |
@@ -217,43 +215,6 @@ grep -n "ndcY\|uv.y\" packages/shader/src/builtin/skybox.wgsl
 ```
 
 **修法**：用当前最新 `skybox.wgsl`。如果手写自定义 skybox shader,**不要 V-flip 采样方向**——WGSL `textureSample` 的 cubemap 坐标系统与 OpenGL 相反。
-
----
-
-## CSM 阴影全亮无遮挡
-
-**信号**：方向光 + `DirectionalLightShadow` + standard PBR（每材质带 `ShadowCaster` pass）场景**完全没有阴影**——diffuse 明暗正常（受光面/背光面对），唯独 shadow 项死掉。debug 采样所有点 `shadowFactor === 1.000`（全亮），即便正对太阳的遮挡点下方。`r.perFramePassNames` 含 `shadowCascade0-3`（CSM pass 在跑）、`r.directionalShadow.lightSpaceMatrix` 有效。
-
-**根因**：**cascade 选择的 `viewZ` 符号不匹配**。VS 发 `out.viewZ = -clipPos.w`（相机前方为**负**——这是 cluster Z-slice 路径也依赖的故意约定），但 `pssmSplit` host 端产出**正**的 view-space split 深度。`_pickCascadeLayer` / `cascadeBlend` band 数学拿原始负 `viewZ` 跟正 `splitPlanes` 比 → 每个可见 fragment 都落进 cascade 0 的近 slab（约 0.1~1 单位深）→ 几单位外的物体投影出 [0,1] tile → `lighting-directional.wgsl` 的 NaN-safe 越界门返回 `1.0`（全亮）。整个 frame 看起来全受光。
-
-**判定**：
-```bash
-# 看 cascade 选择是否拿带符号的 viewZ 直接跟 splitPlanes 比（未转正深度）
-grep -n "viewZ\|viewDepth\|splitPlanes" packages/shader/src/lighting-directional.wgsl
-# VS 端确认 viewZ 是负的（-clipPos.w）—— 这是对的，别改 VS
-grep -n "out.viewZ" packages/shader/src/default-standard-pbr*.wgsl
-```
-关键陷阱：单测 `shadow-csm-shader.dawn.test.ts` 内嵌的 kernel 若复刻了**正** `viewZ` 直接比较，会复制 bug 并永绿——测试必须喂生产用的**负** `viewZ`。
-
-**修法**：在消费侧转一次 `viewDepth = -viewZ`，让 `_pickCascadeLayer` + blend band 都是正比正（VS 的负 viewZ 约定不动，cluster 路径不受影响）。源码 SSOT `packages/shader/src/lighting-directional.wgsl`；split 计算 `packages/runtime/src/render-system-extract.ts` `pssmSplit`。
-
----
-
-## ambient 黑到 IBL 加载
-
-**信号**：只挂 `DirectionalLight` 的 standard 场景**冷启动黑几秒**后才亮；或在 IBL float-texture 不可用处（如 WKWebView desktop）持续偏黑。新游戏（永远冷启动）必现多秒黑屏。
-
-**根因**：唯一的环境光来源是 `Skylight`，而它过去**强制要 cubemap** 且经 `uploadCubemapFromEquirect` **异步** GPU 预计算（equirect→cube→irradiance 卷积→prefilter→BRDF LUT，冷启动几秒）。cubemap 就绪前 fallback irradiance cube 是全零 → ambient = 0。PBR shader 里**没有**任何常数/纯色环境项。
-
-**判定**：
-```bash
-# PBR ambient 是否纯 IBL 派生（无常数项）
-grep -n "ambient" packages/shader/src/default-standard-pbr.wgsl
-# Skylight 是否支持无 cubemap 的纯色模式（cubemap 字段是否可选）
-grep -n "cubemap\|colorR\|intensity" packages/runtime/src/components/skylight.ts
-```
-
-**修法**（引擎已支持，别在 demo 里塞常亮 PointLight 当 crutch）：spawn **无 cubemap 的 Skylight** 拿即时纯色环境光——`world.spawn({ component: Skylight, data: {} })`（白）或带 `colorR/G/B` + `intensity` 调色调强。引擎绑 1×1 白 fallback irradiance cube，首帧即 `ambient = kD·albedo·color·intensity`，零 async；给了 cubemap 才升级完整 IBL。源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback）。详见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §踩坑。
 
 ---
 

@@ -11,7 +11,6 @@ export type { CollisionEventPayload } from './collision-event';
 export { CollisionEvent } from './collision-event';
 export type { ColliderShape, RigidBodyType } from './components';
 export {
-  CharacterController,
   COLLIDER_SHAPE_CAPSULE,
   COLLIDER_SHAPE_CUBOID,
   COLLIDER_SHAPE_SPHERE,
@@ -24,7 +23,6 @@ export {
   RIGID_BODY_TYPE_STATIC,
   RigidBody,
   RigidBodyTypeValue,
-  registerColliderRemoveListener,
   rigidBodyTypeFromF32,
 } from './components';
 export type { PhysicsErrorCode, PhysicsErrorDetail } from './errors';

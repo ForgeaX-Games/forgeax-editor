@@ -234,11 +234,14 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     });
 
     renderer.registerPipeline('test::trivial', makeTrivialPipeline());
-    const installed = renderer.installPipeline({
-      kind: 'render-pipeline',
-      pipelineId: 'test::trivial',
-      config: { passCount: 1 },
-    });
+    const handle = renderer.assets
+      .register<RenderPipelineAsset>({
+        kind: 'render-pipeline',
+        pipelineId: 'test::trivial',
+        config: { passCount: 1 },
+      })
+      .unwrap();
+    const installed = renderer.installPipeline(handle);
     expect(installed.ok).toBe(true);
 
     const world = new World();
@@ -274,31 +277,35 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     // config.passCount.
     renderer.registerPipeline('test::trivial', makeTrivialPipeline());
 
-    const assetA: RenderPipelineAsset = {
-      kind: 'render-pipeline',
-      pipelineId: 'test::trivial',
-      config: { passCount: 1 },
-    };
-    const assetB: RenderPipelineAsset = {
-      kind: 'render-pipeline',
-      pipelineId: 'test::trivial',
-      config: { passCount: 2 },
-    };
+    const handleA = renderer.assets
+      .register<RenderPipelineAsset>({
+        kind: 'render-pipeline',
+        pipelineId: 'test::trivial',
+        config: { passCount: 1 },
+      })
+      .unwrap();
+    const handleB = renderer.assets
+      .register<RenderPipelineAsset>({
+        kind: 'render-pipeline',
+        pipelineId: 'test::trivial',
+        config: { passCount: 2 },
+      })
+      .unwrap();
 
     const world = new World();
     spawnCubeScene(world);
 
     // Install A (config.passCount=1) + draw -> one custom pass.
-    expect(renderer.installPipeline(assetA).ok).toBe(true);
+    expect(renderer.installPipeline(handleA).ok).toBe(true);
     expect(renderer.draw(world).ok).toBe(true);
     const passesAfterA = [...renderer.perFramePassNames];
 
-    // Install B (same logic id, config.passCount=2) + draw -> the install bumps the
-    // install-epoch brand-number, forcing a rebuild; buildGraph then reads the new
+    // Install B (same logic id, config.passCount=2) + draw -> the install changes the
+    // brand-number (distinct asset handle), forcing a rebuild; buildGraph then reads the new
     // config and declares two passes. This is the falsifiable proof that config is NON-no-op:
     // if installPipeline dropped config (the verify-round-1 defect) passesAfterB would equal
     // passesAfterA and the assertion below would fail.
-    expect(renderer.installPipeline(assetB).ok).toBe(true);
+    expect(renderer.installPipeline(handleB).ok).toBe(true);
     expect(renderer.draw(world).ok).toBe(true);
     const passesAfterB = [...renderer.perFramePassNames];
 

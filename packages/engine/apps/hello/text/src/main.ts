@@ -96,7 +96,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   assets.configurePackIndex(PACK_INDEX_URL);
-  const world = app.world;
 
   registerSharedSampler(assets);
 
@@ -114,28 +113,28 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
-  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
-  const fontHandle: Handle<'FontAsset', 'shared'> = world.allocSharedRef(
-    'FontAsset',
-    fontHandleRes.value,
-  );
+  const fontHandle: Handle<'FontAsset', 'unmanaged'> = fontHandleRes.value;
+
+  const world = app.world;
 
   spawnTextScenes(world, fontHandle);
 
   // A grey cube placed BETWEEN the camera and scene (d)'s text to exercise
   // depth occlusion (AC-11). The cube needs a standard material.
-  const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
-    kind: 'material',
-    passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-        queue: 2000,
-      },
-    ],
-    paramValues: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
-  });
+  const cubeMat = assets
+    .register<MaterialAsset>({
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-standard-pbr',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      ],
+      paramValues: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
+    })
+    .unwrap();
   world
     .spawn(
       {

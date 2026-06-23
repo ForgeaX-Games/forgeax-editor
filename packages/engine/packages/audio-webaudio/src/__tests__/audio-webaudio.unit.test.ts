@@ -549,28 +549,31 @@ import { WebAudioEngine } from '../web-audio-engine';
   }
 
   describe('createClipResolver clip handle resolution (AC-01)', () => {
-    // feat-20260614 M8 (D-15): audio clips resolve through world.sharedRefs
-    // (user-tier SharedRefStore); the AssetRegistry no longer holds handles.
-    it('returns the AudioBuffer when the clip handle resolves in sharedRefs', () => {
+    it('returns the AudioBuffer when the clip handle is registered in AssetRegistry', () => {
       const buffer = makeMockAudioBuffer();
+      const mockRegistry = {
+        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+      };
       const mockWorld = {
-        sharedRefs: {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
-        },
+        hasResource: vi.fn().mockReturnValue(true),
+        getResource: vi.fn().mockReturnValue(mockRegistry),
       };
 
       // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       const resolve = createClipResolver(mockWorld as any);
       const result = resolve(42);
       expect(result).toBe(buffer);
-      expect(mockWorld.sharedRefs.resolve).toHaveBeenCalledWith(42);
+      expect(mockWorld.hasResource).toHaveBeenCalled();
+      expect(mockRegistry.get).toHaveBeenCalledWith(42);
     });
 
-    it('returns undefined when the clip handle does not resolve (E-4 silent retry)', () => {
+    it('returns undefined when the clip handle is not registered (E-4 silent retry)', () => {
+      const mockRegistry = {
+        get: vi.fn().mockReturnValue({ ok: false, error: { code: 'asset-not-found' } }),
+      };
       const mockWorld = {
-        sharedRefs: {
-          resolve: vi.fn().mockReturnValue({ ok: false, error: { code: 'asset-not-found' } }),
-        },
+        hasResource: vi.fn().mockReturnValue(true),
+        getResource: vi.fn().mockReturnValue(mockRegistry),
       };
 
       // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
@@ -579,17 +582,17 @@ import { WebAudioEngine } from '../web-audio-engine';
       expect(result).toBeUndefined();
     });
 
-    it('returns undefined when the resolved payload is not an audio clip', () => {
+    it('returns undefined when world has no AssetRegistry resource', () => {
       const mockWorld = {
-        sharedRefs: {
-          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'mesh' } }),
-        },
+        hasResource: vi.fn().mockReturnValue(false),
+        getResource: vi.fn(),
       };
 
       // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       const resolve = createClipResolver(mockWorld as any);
       const result = resolve(7);
       expect(result).toBeUndefined();
+      expect(mockWorld.getResource).not.toHaveBeenCalled();
     });
   });
 }
@@ -731,9 +734,8 @@ import { WebAudioEngine } from '../web-audio-engine';
     const entityId = (Entity as unknown as Component).id;
     const selfColumn = new Map([['self', { view: new Uint32Array([entity]) }]]);
     return {
-      // feat-20260614 M8 (D-15): clip resolution goes through world.sharedRefs;
-      // delegate to the same mock return value the registry mock produced.
-      sharedRefs: { resolve: mockRegistry.get },
+      hasResource: vi.fn().mockReturnValue(true),
+      getResource: vi.fn().mockReturnValue(mockRegistry),
 
       get(_entity: number, _component: Component) {
         return {

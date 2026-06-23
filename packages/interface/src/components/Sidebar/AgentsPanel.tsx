@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, type ReactNode, type KeyboardEvent, type C
 import { FileCode2, FileJson, FileText, FileImage, FileAudio, File as FileIcon } from 'lucide-react';
 import { useAppStore, type LiveAgent, type AgentFileTouch } from '../../store';
 import { openAgentDetail } from '../../lib/open-agent-detail';
-import { useTranslation } from '@/i18n';
 
 function FileGlyph({ name }: { name: string }): ReactNode {
   const n = name.toLowerCase();
@@ -50,7 +49,6 @@ function dedupeFiles(touches: AgentFileTouch[]): AgentFileTouch[] {
 }
 
 export function AgentsPanel(): ReactNode {
-  const { t } = useTranslation();
   const activeSid = useAppStore((s) => s.activeSid);
   const liveAgents = useAppStore((s) => s.liveAgents[s.activeSid ?? ''] ?? EMPTY_AGENTS);
   const fileActivity = useAppStore((s) => s.agentFileActivity[s.activeSid ?? ''] ?? EMPTY_FILE_ACTIVITY);
@@ -159,13 +157,13 @@ export function AgentsPanel(): ReactNode {
   }, [activeSid]);
 
   if (!activeSid) {
-    return <div className="agents-panel"><div className="ac-empty">{t('agentsPanel.noActiveSession')}</div></div>;
+    return <div className="agents-panel"><div className="ac-empty">无活跃 session</div></div>;
   }
 
   if (liveAgents.length === 0) {
     return (
       <div className="agents-panel">
-        <div className="ac-empty">{loaded ? t('agentsPanel.empty') : t('common.loading')}</div>
+        <div className="ac-empty">{loaded ? '暂无 agent — 发送消息后 Forge 会派遣团队' : '加载中...'}</div>
       </div>
     );
   }
@@ -264,7 +262,6 @@ function LiveAgentCard({
   onFileClick: (path: string) => void;
   buttonRefs: React.MutableRefObject<Map<string, HTMLButtonElement>>;
 }): ReactNode {
-  const { t } = useTranslation();
   const isMain = agent.parent === null;
   const setButtonRef = (el: HTMLButtonElement | null) => {
     if (el) buttonRefs.current.set(agent.path, el);
@@ -290,7 +287,7 @@ function LiveAgentCard({
         <span className="ac-avatar" style={{ background: gradient }}>{initialFor(agent.display)}</span>
         <span className="ac-name-block">
           <span className="ac-name">
-            {isMain && <span className="ac-main-pin" aria-label={t('agentsPanel.mainAgent')}>★</span>}
+            {isMain && <span className="ac-main-pin" aria-label="主 agent">★</span>}
             {agent.display}
           </span>
           <span className="ac-role">

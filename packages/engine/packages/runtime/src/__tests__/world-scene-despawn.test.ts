@@ -12,10 +12,12 @@
 import { World } from '@forgeax/engine-ecs';
 import { ChildOf, SceneInstance, Transform } from '@forgeax/engine-runtime';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
+import { toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
-  return world.allocSharedRef('SceneAsset', asset);
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
+  const managed = world.allocManagedRef('SceneAsset', asset);
+  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
 }
 
 describe('world.despawnScene (w19)', () => {

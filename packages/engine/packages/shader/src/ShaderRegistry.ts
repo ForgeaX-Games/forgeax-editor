@@ -19,7 +19,6 @@
 
 import type { Result, RhiError, ShaderModule } from '@forgeax/engine-rhi';
 import type { ManifestEntry, ParamSchemaEntry } from '@forgeax/engine-types';
-import { findUndeclaredSampledTextures } from '@forgeax/engine-types';
 import {
   err,
   manifestMalformed,
@@ -371,23 +370,6 @@ export class ShaderRegistry {
       throw new Error(
         `ShaderRegistry: material shader identifier '${identifier}' already registered; same-name re-register is forbidden (AGENTS.md "explicit registration" + Inspector "fail-fast no overwrite" pattern). Use lookupMaterialShader to read back the existing entry.`,
       );
-    }
-    // bug-20260619: user shaders registered directly here bypass the build-time
-    // superset gate (vite-plugin-shader's WGSL reflection). A schema that omits
-    // a texture field the WGSL actually samples would let the extract stage's
-    // `validateTextureHandle` silently drop the handle and fall back to the
-    // default white texture (opaque-white grass/windows in the LO 4.3 blending
-    // demo). Fail fast at register time instead (charter P3 explicit failure).
-    // Scoped to user shaders: engine `forgeax::*` shaders go through the
-    // build-time gate and may sample engine-injected textures (emissive /
-    // occlusion) absent from their schema by design.
-    if (!identifier.startsWith(FORGEAX_RESERVED_PATH_PREFIX)) {
-      const undeclared = findUndeclaredSampledTextures(entry.source, entry.paramSchema);
-      if (undeclared.length > 0) {
-        throw new Error(
-          `ShaderRegistry: material shader '${identifier}' samples texture(s) [${undeclared.join(', ')}] in its WGSL but its paramSchema does not declare them as texture entries. Add { name: '${undeclared[0]}', type: 'texture2d' } (and any others listed) to the paramSchema, or the engine would silently bind the default white texture (charter P3 explicit failure; see docs/handover/2026-06-19-blending-transparency-regression-bisect.md).`,
-        );
-      }
     }
     this.#materialShaders.set(identifier, entry);
   }

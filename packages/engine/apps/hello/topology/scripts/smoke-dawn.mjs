@@ -326,11 +326,17 @@ if (useTriangleFalsify) {
   for (let i = 0; i < vertexCount; i++) meshPayload.indices[i] = i;
 }
 
-// w64: mint mesh + material as user-tier shared refs (register/get deleted M8).
-const world = new World();
-const meshHandle = world.allocSharedRef('MeshAsset', meshPayload);
+const meshRes = assets.register(meshPayload);
+if (!meshRes.ok) {
+  console.error(
+    `[smoke] FAIL - mesh register: ${meshRes.error.code} hint=${meshRes.error.hint}` +
+      ` detail=${JSON.stringify(meshRes.error.detail)}`,
+  );
+  process.exit(1);
+}
+const meshHandle = meshRes.value;
 
-const materialHandle = world.allocSharedRef('MaterialAsset', {
+const materialRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -344,6 +350,11 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     baseColor: [0.1, 0.9, 1.0],
   },
 });
+if (!materialRes.ok) {
+  console.error(`[smoke] FAIL - material register: ${materialRes.error.code}`);
+  process.exit(1);
+}
+const materialHandle = materialRes.value;
 
 const device = sharedDevice;
 if (!device) {
@@ -413,6 +424,7 @@ async function doReadPixels() {
 const errors = [];
 renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
+const world = new World();
 spawnScene(world);
 
 // Render FRAMES times to exercise the steady-state path the demo runs under

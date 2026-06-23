@@ -180,12 +180,16 @@ if (!sphereRes.ok) {
   console.error(`[smoke] FAIL - createSphereGeometry: ${sphereRes.error.code}`);
   process.exit(1);
 }
-// w64: mint sphere + material as user-tier shared refs (register deleted M8).
-const world = new World();
-const sphereHandle = world.allocSharedRef('MeshAsset', sphereRes.value);
+const sphereHandleRes = assets.register(sphereRes.value);
+if (!sphereHandleRes.ok) {
+  console.error(`[smoke] FAIL - sphere register: ${sphereHandleRes.error.code}`);
+  process.exit(1);
+}
+const sphereHandle = sphereHandleRes.value;
 
-// feat-20260527 M3 / w12: pass-based MaterialAsset via the unified path.
-const materialHandle = world.allocSharedRef('MaterialAsset', {
+// feat-20260527 M3 / w12: pass-based MaterialAsset via
+// register<MaterialAsset> (unified path).
+const materialRes = assets.register({
   kind: 'material',
   passes: [
     {
@@ -201,6 +205,13 @@ const materialHandle = world.allocSharedRef('MaterialAsset', {
     roughness: 0.4,
   },
 });
+if (!materialRes.ok) {
+  console.error(`[smoke] FAIL - material register: ${materialRes.error.code}`);
+  process.exit(1);
+}
+const materialHandle = materialRes.value;
+
+const world = new World();
 
 void okResult(
   world.spawn(

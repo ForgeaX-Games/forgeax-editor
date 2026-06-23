@@ -17,8 +17,8 @@ const matIr: GltfMaterialIr = {
   roughnessFactor: 0.5,
 };
 
-const textureHandles = new Map<number, Handle<'TextureAsset', 'shared'>>();
-const samplerHandles = new Map<number, Handle<'SamplerAsset', 'shared'>>();
+const textureHandles = new Map<number, Handle<'TextureAsset', 'unmanaged'>>();
+const samplerHandles = new Map<number, Handle<'SamplerAsset', 'unmanaged'>>();
 
 describe('toMaterialAsset — pass-based type-level', () => {
   it('positive: with undefined ctx compiles', () => {

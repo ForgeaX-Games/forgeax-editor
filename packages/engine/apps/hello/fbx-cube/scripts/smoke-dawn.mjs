@@ -123,14 +123,11 @@ if (!meshAsset || !matAsset) {
   process.exit(1);
 }
 
+const meshHandle = assets.registerWithGuid(meshAsset.guid, meshAsset.payload);
+const matHandle = assets.registerWithGuid(matAsset.guid, matAsset.payload);
 console.log(`[smoke] mesh vertices=${meshAsset.payload.vertices.length} submeshes=${meshAsset.payload.submeshes.length}`);
 
 const world = new World();
-
-// feat-20260614 M8: AssetRegistry register* deleted; mint user-tier column
-// handles via world.allocSharedRef (bare Handle, not a Result).
-const meshHandle = world.allocSharedRef('MeshAsset', meshAsset.payload);
-const matHandle = world.allocSharedRef('MaterialAsset', matAsset.payload);
 world.spawn(
   { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
   { component: MeshFilter, data: { assetHandle: meshHandle } },

@@ -17,7 +17,6 @@ import { EyeOff, Play } from 'lucide-react';
 import { listSurfaces, subscribeSurfaces, type SurfaceState, type SurfaceAction } from '../../lib/surface-store';
 import { SchemaForm, type JsonSchema } from '../SchemaForm/SchemaForm';
 import { useStatusBarItem } from '../StatusBar/store';
-import { useTranslation } from '@/i18n';
 import './SurfaceOverlay.css';
 
 interface ToolDescriptorLite {
@@ -43,7 +42,6 @@ export function SurfaceOverlay(): ReactElement | null {
 }
 
 function SurfaceOverlayDev(): ReactElement | null {
-  const { t } = useTranslation();
   const [surfaces, setSurfaces] = useState<SurfaceState[]>(() => listSurfaces());
   const [open, setOpen] = useState(false);
   const [tools, setTools] = useState<ToolDescriptorLite[]>([]);
@@ -58,7 +56,7 @@ function SurfaceOverlayDev(): ReactElement | null {
   // on plugin reload via SSE; cheap, ~1KB payload.
   useEffect(() => {
     let cancelled = false;
-    const reload = () => fetchTools().then((next) => { if (!cancelled) setTools(next); });
+    const reload = () => fetchTools().then((t) => { if (!cancelled) setTools(t); });
     void reload();
     let es: EventSource | null = null;
     try {
@@ -70,7 +68,7 @@ function SurfaceOverlayDev(): ReactElement | null {
 
   const toolsById = useMemo(() => {
     const m = new Map<string, ToolDescriptorLite>();
-    for (const tool of tools) m.set(tool.id, tool);
+    for (const t of tools) m.set(t.id, t);
     return m;
   }, [tools]);
 
@@ -86,7 +84,7 @@ function SurfaceOverlayDev(): ReactElement | null {
         type="button"
         className={`sb-chip fx-surf-chip${open ? ' fx-surf-chip-open' : ''}`}
         onClick={() => setOpen((v) => !v)}
-        title={open ? t('surfaces.chip.close') : t('surfaces.chip.open')}
+        title={open ? '关闭 surface overlay' : '打开 surface overlay (dev)'}
       >
         surfaces · {surfaces.length}
       </button>
@@ -103,14 +101,14 @@ function SurfaceOverlayDev(): ReactElement | null {
           type="button"
           className="fx-surf-overlay-hide"
           onClick={() => setOpen(false)}
-          title={t('common.close')}
+          title="关闭"
         >
           <EyeOff size={12} />
         </button>
       </div>
       <div className="fx-surf-overlay-body">
         {surfaces.length === 0 ? (
-          <div className="fx-surf-overlay-empty">{t('surfaces.overlay.empty')}</div>
+          <div className="fx-surf-overlay-empty">无 plugin 调用 surface.expose</div>
         ) : (
           surfaces.map((s) => (
             <SurfaceCard
@@ -167,7 +165,6 @@ function SurfaceActionRow({
   tool?: ToolDescriptorLite;
   pluginId: string;
 }): ReactElement {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -207,9 +204,9 @@ function SurfaceActionRow({
           type="button"
           className="fx-surf-action-run"
           onClick={() => setOpen((v) => !v)}
-          title={open ? t('surfaces.action.formClose') : t('surfaces.action.formOpen')}
+          title={open ? '关闭表单' : '打开表单运行'}
         >
-          <Play size={10} /> {open ? t('surfaces.action.collapse') : t('surfaces.action.run')}
+          <Play size={10} /> {open ? '收起' : '运行'}
         </button>
       ) : null}
       {!open && action.args ? <pre className="fx-surf-args">{summarizeArgs(action.args)}</pre> : null}
@@ -220,7 +217,7 @@ function SurfaceActionRow({
             initialValue={action.args}
             onSubmit={(v) => void submit(v)}
             onCancel={() => setOpen(false)}
-            submitLabel={tool?.requireConfirm ? t('surfaces.action.runConfirm') : t('surfaces.action.run')}
+            submitLabel={tool?.requireConfirm ? '运行（需确认）' : '运行'}
             layout="inline"
             busy={busy}
           />

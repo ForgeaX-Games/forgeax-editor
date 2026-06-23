@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Key, Cpu, Trash2, RefreshCw, Info, Plug, Eye, EyeOff } from 'lucide-react';
 import { confirmDialog } from '@/lib/dialog';
-import { useTranslation } from '@/i18n';
 
 interface SettingsData {
   env: {
@@ -36,7 +35,6 @@ const MODEL_OPTIONS = [
 ];
 
 export function SettingsDrawer({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
   const [data, setData] = useState<SettingsData | null>(null);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [providersCachedAt, setProvidersCachedAt] = useState<number | null>(null);
@@ -66,8 +64,8 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   // Tick once per second so 'ranAt' relative-time labels update without manual refresh.
   const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
-    const tick = setInterval(() => setNowTick((v) => v + 1), 1000);
-    return () => clearInterval(tick);
+    const t = setInterval(() => setNowTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
   }, []);
   // Format Ns / Nm relative time. Single-line, monotonic.
   const relTime = (at: number | undefined): string => {
@@ -82,10 +80,10 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
     // surrounding "刷新 / 多 cli 后端 / 关于" copy. The Test-result chip below
     // each provider stays English ("✓ ttft Nms · total Nms") since those are
     // technical metrics units that read fine either language.
-    if (s < 5) return t('settings.drawer.relTimeJustNow');
-    if (s < 60) return t('settings.drawer.relTimeSecondsAgo', { seconds: s });
+    if (s < 5) return '刚刚';
+    if (s < 60) return `${s} 秒前`;
     const m = Math.floor(s / 60);
-    return t('settings.drawer.relTimeMinutesAgo', { minutes: m });
+    return `${m} 分钟前`;
   };
 
   const reload = async () => {
@@ -140,7 +138,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
       if (!r.ok || !j.ok) {
         flash('err', j.error ?? `HTTP ${r.status}`);
       } else {
-        flash('ok', t('settings.env.saved', { count: j.touched ?? 0 }));
+        flash('ok', `已写入 ${j.touched} 个变量到 .env（重启 stack 后生效）`);
         await reload();
       }
     } catch (e) {
@@ -155,7 +153,7 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   // Deprecation header，最终被 commands.attach_script_agent 取代）。
   const TEST_TIMEOUT_MS = 30_000;
   const testProvider = async (id: string) => {
-    setTests((prev) => ({ ...prev, [id]: { status: 'running' } }));
+    setTests((t) => ({ ...t, [id]: { status: 'running' } }));
     const started = performance.now();
     let ttft: number | undefined;
     const ac = new AbortController();
@@ -198,14 +196,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
       }
       const total = performance.now() - started;
       const ranAt = Date.now();
-      if (errText) setTests((prev) => ({ ...prev, [id]: { status: 'err', totalMs: total, err: errText, ranAt } }));
-      else setTests((prev) => ({ ...prev, [id]: { status: 'ok', totalMs: total, ttftMs: ttft, sawTool, ranAt } }));
+      if (errText) setTests((t) => ({ ...t, [id]: { status: 'err', totalMs: total, err: errText, ranAt } }));
+      else setTests((t) => ({ ...t, [id]: { status: 'ok', totalMs: total, ttftMs: ttft, sawTool, ranAt } }));
     } catch (e) {
       const errName = (e as Error).name;
       const errMsg = errName === 'AbortError'
         ? `timed out after ${TEST_TIMEOUT_MS / 1000}s`
         : (e as Error).message;
-      setTests((prev) => ({ ...prev, [id]: { status: 'err', err: errMsg, ranAt: Date.now() } }));
+      setTests((t) => ({ ...t, [id]: { status: 'err', err: errMsg, ranAt: Date.now() } }));
     } finally {
       clearTimeout(timer);
       inFlightTests.current.delete(ac);
@@ -213,13 +211,13 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
   };
 
   const resetSessions = async () => {
-    if (!(await confirmDialog({ body: t('settings.drawer.resetSessionsConfirm'), danger: true }))) return;
+    if (!(await confirmDialog({ body: '确认清空所有 session（含 sub-agent 历史）？\n\n会删除 .forgeax/.../team/sessions/* 整个目录。\n下次 chat 会自动新建主 agent session；agent 配置/marketplace/games 都保留。', danger: true }))) return;
     setBusy(true);
     try {
       const r = await fetch('/api/settings/reset-sessions', { method: 'POST' });
       const j = (await r.json()) as { ok?: boolean; error?: string; removed?: number };
       if (!r.ok || !j.ok) flash('err', j.error ?? `HTTP ${r.status}`);
-      else flash('ok', t('settings.drawer.resetSessionsDone', { count: j.removed ?? 0 }));
+      else flash('ok', `已删除 ${j.removed} 个 session 目录`);
     } catch (e) {
       flash('err', (e as Error).message);
     } finally {
@@ -231,39 +229,39 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
     <div className="settings-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Settings">
       <div className="settings-drawer" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
-          <h2>{t('settings.drawer.title')}</h2>
-          <button className="settings-close" onClick={onClose} title={t('settings.drawer.closeTitle')}>
+          <h2>系统设置</h2>
+          <button className="settings-close" onClick={onClose} title="关闭 (Esc)">
             <X size={16} />
           </button>
         </div>
-        {!data && <div className="settings-loading">{t('common.loading')}</div>}
+        {!data && <div className="settings-loading">加载中...</div>}
         {data && (
           <div className="settings-body thin-scrollbar">
-            <Section icon={<Key size={14} />} title={t('settings.drawer.apiKeysTitle')} hint={t('settings.drawer.apiKeysHint')}>
+            <Section icon={<Key size={14} />} title="API Keys（写入 forgeax/.env）" hint="重启 stack 后生效（FORGEAX_PROJECT_ROOT=forgeax bash run.sh）">
               <EnvField
                 label="ANTHROPIC_API_KEY"
                 masked={data.env.ANTHROPIC_API_KEY}
-                placeholder={t('settings.drawer.anthropicKeyPlaceholder')}
+                placeholder="sk-ant-... 或 Azure Cognitive Services key"
                 onSave={(v) => patchEnv({ ANTHROPIC_API_KEY: v })}
                 busy={busy}
               />
               <EnvField
                 label="ANTHROPIC_BASE_URL"
                 masked={data.env.ANTHROPIC_BASE_URL}
-                placeholder={t('settings.drawer.anthropicBaseUrlPlaceholder')}
+                placeholder="https://api.anthropic.com 或 Azure endpoint"
                 onSave={(v) => patchEnv({ ANTHROPIC_BASE_URL: v })}
                 busy={busy}
                 visible
               />
               <EnvField
-                label={t('settings.drawer.openaiKeyLabel')}
+                label="OPENAI_API_KEY (可选)"
                 masked={data.env.OPENAI_API_KEY}
                 placeholder="sk-..."
                 onSave={(v) => patchEnv({ OPENAI_API_KEY: v })}
                 busy={busy}
               />
               <EnvField
-                label={t('settings.drawer.geminiKeyLabel')}
+                label="GEMINI_API_KEY (可选)"
                 masked={data.env.GEMINI_API_KEY}
                 placeholder="AIza..."
                 onSave={(v) => patchEnv({ GEMINI_API_KEY: v })}
@@ -271,9 +269,9 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               />
             </Section>
 
-            <Section icon={<Cpu size={14} />} title={t('settings.drawer.modelTitle')} hint={t('settings.drawer.modelHint')}>
+            <Section icon={<Cpu size={14} />} title="模型" hint="改 FORGEAX_MODEL（重启 stack 后生效）">
               <div className="settings-row">
-                <label className="settings-label">{t('settings.drawer.modelCurrent')}</label>
+                <label className="settings-label">当前</label>
                 <select
                   className="settings-select"
                   value={data.env.FORGEAX_MODEL ?? ''}
@@ -286,28 +284,28 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                 </select>
               </div>
               <div className="settings-help">
-                {t('settings.drawer.modelHelpPrefix')} <code>$ROOT/.env</code> {t('settings.drawer.modelHelpAdapter')}
-                {' '}{t('settings.drawer.modelHelpProxyPrefix')} <code>LITELLM_PROXY_*</code> {t('settings.drawer.modelHelpProxySuffix')}
+                所有 LLM 凭证从 <code>$ROOT/.env</code> 读取；按 model id 模式自动选 adapter。
+                配了 <code>LITELLM_PROXY_*</code> 时全部走代理。
               </div>
             </Section>
 
-            <Section icon={<Plug size={14} />} title="CLI Providers" hint={t('settings.drawer.cliProvidersHint')}>
-              {!providers && <div className="settings-help">{t('common.loading')}</div>}
+            <Section icon={<Plug size={14} />} title="CLI Providers" hint="多 cli 后端 — agent 由 marketplace/manifest.json#agents[].provider 路由">
+              {!providers && <div className="settings-help">加载中…</div>}
               {providers && providers.length === 0 && (
-                <div className="settings-help">{t('settings.drawer.cliProvidersNone')}</div>
+                <div className="settings-help">无注册的 provider — 检查 server 启动日志。</div>
               )}
               {providers?.map((p) => {
                 const caps = Object.entries(p.capabilities)
                   .filter(([, v]) => v)
                   .map(([k]) => k);
-                const tr = tests[p.id];
+                const t = tests[p.id];
                 return (
                   <div key={p.id} className={`settings-provider-row ${!p.health.ok ? 'is-down' : ''}`}>
                     <div className="settings-provider-head">
                       <code className="settings-provider-id">{p.id}</code>
                       <span className="settings-provider-name">{p.displayName}</span>
                       <span className={p.health.ok ? 'ok-pill' : 'err-pill'}>
-                        {p.health.ok ? t('settings.drawer.providerHealthy') : t('settings.drawer.providerUnavailable')}
+                        {p.health.ok ? '健康 ✓' : '不可用 ✗'}
                       </span>
                     </div>
                     {p.health.detail && (
@@ -321,26 +319,26 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
                         type="button"
                         className="settings-edit-btn"
                         onClick={() => void testProvider(p.id)}
-                        disabled={tr?.status === 'running' || !p.health.ok}
+                        disabled={t?.status === 'running' || !p.health.ok}
                         title={
                           p.health.ok
                             ? 'Send "respond with the single word: ok" and measure latency'
                             : `Provider is DOWN — ${p.health.detail ?? 'no detail'}`
                         }
                       >
-                        {tr?.status === 'running' ? t('settings.drawer.providerTesting') : 'Test'}
+                        {t?.status === 'running' ? '测试中…' : 'Test'}
                       </button>
-                      {tr && tr.status !== 'running' && (
+                      {t && t.status !== 'running' && (
                         <span className="settings-help" style={{ display: 'inline', marginLeft: 8 }}>
-                          {tr.status === 'ok'
-                            ? tr.ttftMs !== undefined
-                              ? `✓ ttft ${Math.round(tr.ttftMs)}ms · total ${Math.round(tr.totalMs ?? 0)}ms`
-                              : tr.sawTool
-                                ? `✓ done · ${Math.round(tr.totalMs ?? 0)}ms (tool-only turn — no token stream)`
-                                : `✓ silent done · ${Math.round(tr.totalMs ?? 0)}ms (no token + no tool events)`
-                            : `✗ ${tr.err?.slice(0, 80) ?? 'failed'}`}
-                          {tr.ranAt && (
-                            <span style={{ marginLeft: 6, opacity: 0.65 }}>· {relTime(tr.ranAt)}</span>
+                          {t.status === 'ok'
+                            ? t.ttftMs !== undefined
+                              ? `✓ ttft ${Math.round(t.ttftMs)}ms · total ${Math.round(t.totalMs ?? 0)}ms`
+                              : t.sawTool
+                                ? `✓ done · ${Math.round(t.totalMs ?? 0)}ms (tool-only turn — no token stream)`
+                                : `✓ silent done · ${Math.round(t.totalMs ?? 0)}ms (no token + no tool events)`
+                            : `✗ ${t.err?.slice(0, 80) ?? 'failed'}`}
+                          {t.ranAt && (
+                            <span style={{ marginLeft: 6, opacity: 0.65 }}>· {relTime(t.ranAt)}</span>
                           )}
                         </span>
                       )}
@@ -350,11 +348,11 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               })}
               <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
                 <button className="settings-edit-btn" onClick={() => void reloadProviders(true)} disabled={busy}>
-                  <RefreshCw size={11} /> {t('settings.refresh')}
+                  <RefreshCw size={11} /> 刷新
                 </button>
                 {providersCachedAt && (
                   <span style={{ fontSize: 10, color: 'var(--text-muted, rgba(255,255,255,0.4))', marginLeft: 'auto' }}>
-                    {t('settings.drawer.snapshot')} {relTime(providersCachedAt)}
+                    快照 · {relTime(providersCachedAt)}
                   </span>
                 )}
                 <button
@@ -377,14 +375,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
               </div>
             </Section>
 
-            <Section icon={<Trash2 size={14} />} title={t('settings.drawer.resetSessionsTitle')} hint={t('settings.drawer.resetSessionsHint')}>
+            <Section icon={<Trash2 size={14} />} title="重置 session" hint="清空 .forgeax/.../team/sessions/* — 保留 agent 配置 / marketplace / games">
               <button className="settings-danger-btn" onClick={() => void resetSessions()} disabled={busy}>
-                <RefreshCw size={12} /> {t('settings.drawer.resetSessionsBtn')}
+                <RefreshCw size={12} /> 清空所有 session 历史
               </button>
-              <div className="settings-help">{t('settings.drawer.resetSessionsHelp')}</div>
+              <div className="settings-help">用于「chat 卡了 / 状态混乱时」干净重启；下次发消息会建一个新主 session。</div>
             </Section>
 
-            <Section icon={<Info size={14} />} title={t('settings.drawer.aboutTitle')} hint={t('settings.drawer.aboutHint')}>
+            <Section icon={<Info size={14} />} title="关于" hint="路径 + 版本">
               <div className="settings-info">
                 <div><span className="dim">project root:</span> {data.paths.projectRoot}</div>
                 <div><span className="dim">env file:</span> {data.paths.envPath}</div>
@@ -420,7 +418,6 @@ export function Section({ icon, title, hint, children }: { icon: React.ReactNode
 export function EnvField({ label, masked, placeholder, onSave, busy, visible }: {
   label: string; masked: string | null; placeholder: string; onSave: (v: string) => void; busy: boolean; visible?: boolean;
 }) {
-  const { t } = useTranslation();
   const stored = masked ?? '';
   // visible=true 字段(URL / deployment 名) server 直接回明文,预填到 input 让用户原地改;
   // 打码字段 server 只回 `sk-_...4UdA` 预览,input 保持空,预览塞到 placeholder——
@@ -430,7 +427,7 @@ export function EnvField({ label, masked, placeholder, onSave, busy, visible }: 
   const trimmed = value.trim();
   const dirty = visible ? trimmed !== stored : trimmed.length > 0;
 
-  const slot = visible ? placeholder : (masked ?? t('settings.drawer.envNotSet'));
+  const slot = visible ? placeholder : (masked ?? '未设置');
 
   const commit = () => {
     if (!trimmed || !dirty || busy) return;
@@ -459,7 +456,7 @@ export function EnvField({ label, masked, placeholder, onSave, busy, visible }: 
             type="button"
             className="settings-eye-btn"
             onClick={() => setRevealed((v) => !v)}
-            title={revealed ? t('settings.drawer.hide') : t('settings.drawer.show')}
+            title={revealed ? '隐藏' : '显示'}
             tabIndex={-1}
           >
             {revealed ? <EyeOff size={12} /> : <Eye size={12} />}
@@ -470,8 +467,8 @@ export function EnvField({ label, masked, placeholder, onSave, busy, visible }: 
         className="settings-save-btn"
         onClick={commit}
         disabled={busy || !dirty}
-        title={dirty ? '' : (visible ? t('settings.drawer.noChanges') : t('settings.drawer.enterNewKeyHint'))}
-      >{t('common.save')}</button>
+        title={dirty ? '' : (visible ? '没有改动' : '在上方输入新 key 后保存')}
+      >保存</button>
     </div>
   );
 }

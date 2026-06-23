@@ -25,7 +25,7 @@ import {
   type Handle,
   type MeshAsset,
   type TextureAsset,
-  toShared,
+  toUnmanaged,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -246,9 +246,9 @@ const mockCaps: RhiCaps = {
 
 function makeRegisterCube(): (
   pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'shared'>, never> {
+) => Result<Handle<'CubeTextureAsset', 'unmanaged'>, never> {
   let next = 1000;
-  return () => ok(toShared<'CubeTextureAsset'>(next++));
+  return () => ok(toUnmanaged<'CubeTextureAsset'>(next++));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: shader-module factory shim
@@ -300,7 +300,7 @@ describe('GpuResourceStore handle map narrowing (feat-20260612 M3 / w9, AC-05)',
   it('getMeshGpuHandles returns entry whose vertexBuffer / indexBuffer are GpuBuffer (no `as` cast)', () => {
     const probe = freshProbe();
     const store = configuredStore(probe);
-    const handle = toShared<'MeshAsset'>(1024);
+    const handle = toUnmanaged<'MeshAsset'>(1024);
 
     const res = store.ensureResident(handle, meshPodFixture());
     expect(res.ok).toBe(true);
@@ -327,7 +327,7 @@ describe('GpuResourceStore handle map narrowing (feat-20260612 M3 / w9, AC-05)',
   it('getTextureGpuView returns the underlying view; texture entry holds a GpuTexture (M-3 wrapper)', () => {
     const probe = freshProbe();
     const store = configuredStore(probe);
-    const handle = toShared<'TextureAsset'>(2048);
+    const handle = toUnmanaged<'TextureAsset'>(2048);
 
     const res = store.ensureResident(handle, texturePodFixture());
     expect(res.ok).toBe(true);
@@ -343,8 +343,8 @@ describe('GpuResourceStore.destroyAll (feat-20260612 M3 / w10, AC-06 prereq)', (
   it('walks all 3 handle maps + every entry is destroyed after destroyAll()', async () => {
     const probe = freshProbe();
     const store = configuredStore(probe);
-    const meshHandle = toShared<'MeshAsset'>(1024);
-    const texHandle = toShared<'TextureAsset'>(2048);
+    const meshHandle = toUnmanaged<'MeshAsset'>(1024);
+    const texHandle = toUnmanaged<'TextureAsset'>(2048);
 
     // Populate mesh + texture maps via ensureResident.
     expect(store.ensureResident(meshHandle, meshPodFixture()).ok).toBe(true);
@@ -384,7 +384,7 @@ describe('GpuResourceStore.destroyAll (feat-20260612 M3 / w10, AC-06 prereq)', (
   it('idempotent: second destroyAll() does nothing and does not throw', () => {
     const probe = freshProbe();
     const store = configuredStore(probe);
-    const meshHandle = toShared<'MeshAsset'>(1024);
+    const meshHandle = toUnmanaged<'MeshAsset'>(1024);
 
     expect(store.ensureResident(meshHandle, meshPodFixture()).ok).toBe(true);
 

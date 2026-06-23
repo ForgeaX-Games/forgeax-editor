@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, CheckCircle2, Loader2, AlertCircle, Wrench } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import type { ToolCall } from '../../../store';
 
 const TC_PREVIEW_LIMIT = 2000;
@@ -133,7 +132,6 @@ function fmtBytes(b: number): string {
 const TAIL_LINES = 5;
 
 export function ToolChipRow({ tc, size = 'md' }: { tc: ToolCall; size?: 'sm' | 'md' }) {
-  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const userToggledRef = useRef(false);
@@ -209,8 +207,8 @@ export function ToolChipRow({ tc, size = 'md' }: { tc: ToolCall; size?: 'sm' | '
               onClick={() => setShowAll((v) => !v)}
             >
               {showAll
-                ? t('toolChip.collapse', { chars: fullText.length, lines: totalLines, bytes: fmtBytes(totalBytes) })
-                : t('toolChip.viewAll', { chars: fullText.length - TC_PREVIEW_LIMIT, lines: totalLines, bytes: fmtBytes(totalBytes) })}
+                ? `▲ 收起 (${fullText.length} 字 · ${totalLines} 行 · ${fmtBytes(totalBytes)})`
+                : `▼ 查看全部 (剩 ${fullText.length - TC_PREVIEW_LIMIT} 字 · 共 ${totalLines} 行 · ${fmtBytes(totalBytes)})`}
             </button>
           )}
         </>

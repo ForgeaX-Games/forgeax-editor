@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { ChevronDown, Sparkles } from 'lucide-react';
-import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { listSessionAgents, type ForgeaXAgentNode } from '../../lib/forgeax-bridge';
 
@@ -22,7 +21,6 @@ export function WorkbenchAgentPicker({
 }: {
   preferredAgentPluginId?: string;
 }): ReactElement | null {
-  const { t } = useTranslation();
   const activeSid = useAppStore((s) => s.activeSid);
   const setTabAgent = useAppStore((s) => s.setTabAgent);
   const activeAgentId = useAppStore(
@@ -61,7 +59,7 @@ export function WorkbenchAgentPicker({
     : null;
 
   const active = agents.find((a) => a.path === activeAgentId) ?? null;
-  const label = active?.display ?? t('workbenchAgentPicker.unbound');
+  const label = active?.display ?? '未绑定';
 
   return (
     <div className="wb-agent-picker" ref={rootRef}>
@@ -69,8 +67,8 @@ export function WorkbenchAgentPicker({
         className="wb-agent-picker-btn"
         onClick={() => setOpen((v) => !v)}
         title={preferredMatch
-          ? t('workbenchAgentPicker.targetWithRecommend', { display: preferredMatch.display })
-          : t('workbenchAgentPicker.target')}
+          ? `当前对话目标 · 推荐 ${preferredMatch.display}`
+          : '当前对话目标'}
       >
         <span className="wb-agent-picker-name">{label}</span>
         {preferredMatch && active?.path !== preferredMatch.path && (
@@ -81,7 +79,7 @@ export function WorkbenchAgentPicker({
       {open && (
         <div className="wb-agent-picker-menu" role="listbox">
           {agents.length === 0 && (
-            <div className="wb-agent-picker-empty">{t('workbenchAgentPicker.noAgents')}</div>
+            <div className="wb-agent-picker-empty">无可用 agent</div>
           )}
           {agents.map((a) => {
             const isActive = a.path === activeAgentId;
@@ -104,7 +102,7 @@ export function WorkbenchAgentPicker({
           })}
           {preferredAgentPluginId && !preferredMatch && (
             <div className="wb-agent-picker-empty" style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
-              {t('workbenchAgentPicker.recommendedPrefix')} <code>{preferredAgentPluginId}</code> {t('workbenchAgentPicker.recommendedSuffix')}
+              推荐 <code>{preferredAgentPluginId}</code> 未在当前 session 中
             </div>
           )}
         </div>

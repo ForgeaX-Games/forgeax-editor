@@ -5,10 +5,12 @@
 // feat-20260511-rhi-spec-realign-aggressive w1 (red) -> w6 (green) per
 // plan-strategy D-P4 + requirements AC-04. Three new members map W3C WebGPU
 // 22.2 spec subtypes (device-lost / oom / internal-error) to the forgeax union.
-// Extended to 20 members in feat-20260619-wasm-fault-isolation M3 w7:
-// 'rhi-descriptor-invalid' for wgpu-wasm descriptor parse failures.
+// Extended to 19 members in feat-20260511-asset-system-v1 w4 (D-P2 +
+// requirements §9 row 8 + AC-04 + AC-21): 'hierarchy-broken' for
+// propagateTransforms stale ChildOf ref fail-fast. Minor add-only per AGENTS.md
+// evolution contract.
 //
-// 20 members:
+// 19 members:
 //   1) 'adapter-unavailable'              (Round 1 baseline)
 //   2) 'feature-not-enabled'              (Round 1 baseline)
 //   3) 'limit-exceeded'                   (Round 1 baseline)
@@ -28,7 +30,6 @@
 //  17) 'internal-error'                   (rhi-spec-realign-aggressive D-P4 / R-02 §2.1)
 //  18) 'hierarchy-broken'                 (asset-system-v1 w4 / D-P2 + requirements §9 row 8)
 //  19) 'destroy-after-destroy'            (feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle M1 / D-6 + D-7)
-//  20) 'rhi-descriptor-invalid'           (feat-20260619-wasm-fault-isolation M3 w7 / D-1 + D-2 + D-8)
 //
 // charter mapping: proposition 4 (explicit failure via closed union) +
 // proposition 3 (machine-readable union > prose) — switch (err.code) without
@@ -42,7 +43,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type { RhiError, RhiErrorCode } from '../errors';
 
-describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
+describe('MVP-1.7 — RhiErrorCode closed union 19 members', () => {
   it('contains adapter-unavailable', () => {
     expectTypeOf<'adapter-unavailable'>().toMatchTypeOf<RhiErrorCode>();
   });
@@ -119,17 +120,13 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
     expectTypeOf<'destroy-after-destroy'>().toMatchTypeOf<RhiErrorCode>();
   });
 
-  it('contains rhi-descriptor-invalid (feat-20260619 M3 w7; wgpu-wasm descriptor parse failure)', () => {
-    expectTypeOf<'rhi-descriptor-invalid'>().toMatchTypeOf<RhiErrorCode>();
-  });
-
   it('union remains closed: rejects non-member literal', () => {
     // @ts-expect-error MVP-1.7: union is closed — 'not-a-real-code' is not a member.
     const _bogus: RhiErrorCode = 'not-a-real-code';
     void _bogus;
   });
 
-  it('exhaustive switch with no default fallback for all 20 members (charter proposition 4)', () => {
+  it('exhaustive switch with no default fallback for all 19 members (charter proposition 4)', () => {
     function describeCode(code: RhiErrorCode): string {
       switch (code) {
         case 'adapter-unavailable':
@@ -170,8 +167,6 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
           return 'hierarchy-broken';
         case 'destroy-after-destroy':
           return 'destroy-after-destroy';
-        case 'rhi-descriptor-invalid':
-          return 'descriptor-invalid';
       }
       // No default — TS guards: union drift here triggers compile-time red.
     }

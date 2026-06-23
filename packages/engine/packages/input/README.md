@@ -8,29 +8,25 @@
 import { World } from '@forgeax/engine-ecs';
 import {
   attachBrowserInputBackend,
-  INPUT_BACKEND_KEY,
-  InputFrameStartScan,
+  createFrameStartScanSystem,
   type InputSnapshot,
 } from '@forgeax/engine-input';
 
 // 1. attach browser backend (PointerLock + keyboard/mouse listeners) to a canvas
 const detach = attachBrowserInputBackend(canvas);
 
-// 2. insert the backend as a Resource + add the frame-start scan system token;
-//    it freezes the snapshot into the 'InputSnapshot' Resource before any user
-//    system runs (charter P5 split: backend = producer, scan-system + Resource
-//    = consumer). Insert the backend BEFORE the system so its ParamValidation
-//    finds the resource on the first tick.
+// 2. register the frame-start scan system; it freezes the snapshot into the
+//    'InputSnapshot' Resource before any user system runs (charter P5 split:
+//    backend = producer, scan-system + Resource = consumer)
 const world = new World();
-world.insertResource(INPUT_BACKEND_KEY, detach.backend);
-world.addSystem(InputFrameStartScan);
+world.addSystem(createFrameStartScanSystem());
 
 // 3. user system reads the frozen snapshot via the standard Resource API
 world.addSystem({
   name: 'first-person-camera',
   after: ['input-frame-start-scan'],
   queries: [],
-  fn: (w) => {
+  fn: (_qs, _cmd, w) => {
     const snap = w.getResource<InputSnapshot>('InputSnapshot');
     if (snap.keyboard.down('w')) {/* move forward */}
     const { x, y } = snap.mouse.movementDelta;
@@ -58,7 +54,7 @@ detach();
 
 - **Resource 形态唯一入口** — 用户胶水通过 `world.getResource<InputSnapshot>('InputSnapshot')` 消费；不暴露 `world.input` 平行 API（charter P4 一致抽象）
 - **PointerLock 内部消化** — `requestPointerLock` 用户激活、`pointerlockchange` 状态机、`movementX/Y` 单位陷阱、`firstMouse` flag 全部封装在 `browser-backend.ts`；`InputSnapshot` 表面不暴露这些细节（plan-strategy OOS-1）
-- **帧首扫描后冻结** — `InputFrameStartScan` system token（顶层 `defineSystem`）先于其他用户系统跑（用 `before` 约束），从 `INPUT_BACKEND_KEY` resource 取 backend、扫描累积器后调用 `world.insertResource` 写入冻结快照；当帧内任何系统调 `snap.*` 看到的都是同一份值（architecture-principles #2 Derive）。backend 经 `world.insertResource(INPUT_BACKEND_KEY, backend)` 注入，descriptor 的 `resources:[INPUT_BACKEND_KEY]` 走结构化 ParamValidation（依赖未注入 -> invalid，非裸 throw）
+- **帧首扫描后冻结** — `createFrameStartScanSystem()` 注册的系统先于其他用户系统跑（用 `before` 约束），扫描 backend 累积器后调用 `world.insertResource` 写入冻结快照；当帧内任何系统调 `snap.*` 看到的都是同一份值（architecture-principles #2 Derive）
 - **OOS-1 范围外** — PointerLock 进入/退出事件、`unadjustedMovement` 选项、gamepad、touch、hot-reload 不在本 MVP 内；后续作为独立 feat 拆出
 
 ## 错误模型（charter P3 显式失败）
@@ -72,4 +68,4 @@ detach();
 ## 相关包
 
 - [`@forgeax/engine-ecs`](../ecs) — 提供 `World` + Resource 存储 + Schedule（消费方契约依赖：`world.insertResource('InputSnapshot', frozenSnapshot)`）
-- [`@forgeax/engine-runtime`](../runtime) — 在 `Engine.create({ canvas })` 流水线里调用 `attachBrowserInputBackend(canvas)`、`world.insertResource(INPUT_BACKEND_KEY, backend)` 与 `world.addSystem(InputFrameStartScan)`，对 AI 用户屏蔽组装细节
+- [`@forgeax/engine-runtime`](../runtime) — 在 `Engine.create({ canvas })` 流水线里调用 `attachBrowserInputBackend(canvas)` 与 `createFrameStartScanSystem()`，对 AI 用户屏蔽组装细节
