@@ -333,9 +333,9 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
     };
   }
 
-  function registerSpriteMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
+  function registerSpriteMesh(world: World): Handle<'MeshAsset', 'shared'> {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-    const result = assets.register<MeshAsset>({
+    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
       kind: 'mesh',
       vertices: new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
@@ -353,8 +353,6 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
         },
       ],
     });
-    if (!result.ok) throw new Error('register sprite mesh failed');
-    return result.value;
   }
 
   function spawnCamera(world: World): void {
@@ -386,19 +384,18 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
         makeShaderRegistryWithSprite(),
         createDefaultLoaderRegistry(),
       );
-      const mesh = registerSpriteMesh(assets);
-      const matRes = assets.register<MaterialAsset>({
+      const mesh = registerSpriteMesh(world);
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: { region: [0.1, 0.1, 0.8, 0.8] },
       });
-      if (!matRes.ok) throw new Error('mat register failed');
       spawnCamera(world);
       world
         .spawn(
           { component: Transform, data: identity() },
           { component: MeshFilter, data: { assetHandle: mesh } },
-          { component: MeshRenderer, data: { materials: [matRes.value] } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
         )
         .unwrap();
       propagateTransforms(world);
@@ -414,19 +411,18 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
         makeShaderRegistryWithSprite(),
         createDefaultLoaderRegistry(),
       );
-      const mesh = registerSpriteMesh(assets);
-      const matRes = assets.register<MaterialAsset>({
+      const mesh = registerSpriteMesh(world);
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: { region: [0.0, 0.0, 1.0, 1.0] },
       });
-      if (!matRes.ok) throw new Error('mat register failed');
       spawnCamera(world);
       world
         .spawn(
           { component: Transform, data: identity() },
           { component: MeshFilter, data: { assetHandle: mesh } },
-          { component: MeshRenderer, data: { materials: [matRes.value] } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
           {
             component: SpriteRegionOverride,
             data: { region: new Float32Array([0.0, 0.0, 0.5, 1.0]) },
@@ -449,8 +445,8 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
         makeShaderRegistryWithSprite(),
         createDefaultLoaderRegistry(),
       );
-      const mesh = registerSpriteMesh(assets);
-      const matRes = assets.register<MaterialAsset>({
+      const mesh = registerSpriteMesh(world);
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
@@ -459,14 +455,13 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
           sliceMode: 0,
         },
       });
-      if (!matRes.ok) throw new Error('mat register failed');
       spawnCamera(world);
       // entity A: no override, sees the asset-side region.
       world
         .spawn(
           { component: Transform, data: { ...identity(), posX: -1 } },
           { component: MeshFilter, data: { assetHandle: mesh } },
-          { component: MeshRenderer, data: { materials: [matRes.value] } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
         )
         .unwrap();
       // entity B: half-width override, sees the override region.
@@ -474,7 +469,7 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
         .spawn(
           { component: Transform, data: { ...identity(), posX: 1 } },
           { component: MeshFilter, data: { assetHandle: mesh } },
-          { component: MeshRenderer, data: { materials: [matRes.value] } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
           {
             component: SpriteRegionOverride,
             data: { region: new Float32Array([0.0, 0.0, 0.5, 1.0]) },

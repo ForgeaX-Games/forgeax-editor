@@ -23,6 +23,12 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 button { font-family: inherit; }
+/* Tailwind preflight is off, so native form controls otherwise keep the UA's
+   default (black) text/font instead of the design tokens. Make them inherit so
+   token text colors apply everywhere. Buttons opt in to a text color per
+   component (e.g. ui/select Trigger uses text-foreground) so accent-filled
+   buttons keep their own foreground. */
+input, select, textarea { font: inherit; color: inherit; }
 code {
   font-family: var(--font-mono);
   background: var(--bg-2);

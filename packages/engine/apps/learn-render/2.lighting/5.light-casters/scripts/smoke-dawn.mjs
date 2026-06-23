@@ -192,9 +192,11 @@ const {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  resolveAssetHandle,
   SpotLight,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const diffuseRes = await decodeImageFromFile(DIFFUSE_SRC_PATH);
@@ -258,24 +260,26 @@ const mkTex = (decoded) => ({
   colorSpace: decoded.colorSpace,
   mipmap: decoded.mipmap,
 });
-const diffuseHandle = assets.registerWithGuid(diffuseGuidRes.value, mkTex(diffuseDecoded));
-const specularHandle = assets.registerWithGuid(specularGuidRes.value, mkTex(specularDecoded));
-const cubeAssetRes = assets.get(HANDLE_CUBE);
+const world = new World();
+// feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
+// allocSharedRef; GUIDs are catalogued for loadByGuid parity.
+const diffuseHandle = world.allocSharedRef('TextureAsset', mkTex(diffuseDecoded));
+const specularHandle = world.allocSharedRef('TextureAsset', mkTex(specularDecoded));
+assets.catalog(diffuseGuidRes.value, mkTex(diffuseDecoded));
+assets.catalog(specularGuidRes.value, mkTex(specularDecoded));
+const cubeAssetRes = resolveAssetHandle(world, HANDLE_CUBE);
 if (!cubeAssetRes.ok) {
   console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
   process.exit(1);
 }
-assets.registerWithGuid(cubeGuidRes.value, cubeAssetRes.value);
+assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
-const cubeMaterial = assets.register({
+const cubeMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
-  baseColorTexture: diffuseHandle,
+  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
 });
 void specularHandle;
-
-const world = new World();
 // LO 2.5 10-cube grid (same array as LO 1.6).
 for (let i = 0; i < CUBE_POSITIONS.length; i++) {
   const pos = CUBE_POSITIONS[i];

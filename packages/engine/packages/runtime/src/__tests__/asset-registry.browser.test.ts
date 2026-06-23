@@ -1,11 +1,13 @@
-// w12 - AssetRegistry browser path (loadByGuid + GUID-keyed dual-layer API)
+// w12 - AssetRegistry browser path (loadByGuid + GUID-keyed catalog API)
 //
 // Migration from load(url) to loadByGuid (feat-20260513-guid-asset-package-system w13).
-// Covers registerWithGuid + loadByGuid ok path + resolveGuid idempotency
-// + AC-11 inspect() shape for a GUID-registered asset handle.
+// feat-20260614 M8 (D-17): the registry catalogues GUID -> payload and
+// `loadByGuid` returns the PAYLOAD (no handle). Column minting moved to
+// `world.allocSharedRef`. Covers catalog + loadByGuid ok path + payload
+// idempotency + AC-11 inspect() shape for a GUID-catalogued asset.
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { Handle, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
+import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
@@ -33,30 +35,25 @@ function makeMesh(): TypesMeshAsset {
 }
 
 describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
-  it('loadByGuid() returns Ok(Handle) for a registered GUID', async () => {
+  it('loadByGuid() returns Ok(payload) for a catalogued GUID', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
     const mesh = makeMesh();
-    reg.registerWithGuid<TypesMeshAsset>(guid, mesh);
+    reg.catalog<TypesMeshAsset>(guid, mesh);
     const res = await reg.loadByGuid<TypesMeshAsset>(guid);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const handle: Handle<'MeshAsset', 'unmanaged'> = res.value;
-    expect(typeof handle).toBe('number');
-    const got = reg.get<TypesMeshAsset>(handle);
-    expect(got.ok).toBe(true);
-    if (!got.ok) return;
-    expect(got.value.kind).toBe('mesh');
+    expect(res.value.kind).toBe('mesh');
   });
 
-  it('two loadByGuid(sameGuid) calls return the same Handle', async () => {
+  it('two loadByGuid(sameGuid) calls return the same payload', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
-    reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
+    reg.catalog<TypesMeshAsset>(guid, makeMesh());
     const a = await reg.loadByGuid<TypesMeshAsset>(guid);
     const b = await reg.loadByGuid<TypesMeshAsset>(guid);
     expect(a.ok).toBe(true);
@@ -66,19 +63,18 @@ describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
     }
   });
 
-  it('AC-11: inspect() reports MeshAsset brand after registerWithGuid()', async () => {
+  it('AC-11: inspect() reports MeshAsset brand after catalog()', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-    const before = reg.inspect().handles.length;
+    const before = reg.inspect().assets.length;
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
-    reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
+    reg.catalog<TypesMeshAsset>(guid, makeMesh());
     const snap = reg.inspect();
-    expect(snap.handles.length).toBe(before + 1);
-    const last = snap.handles[snap.handles.length - 1];
+    expect(snap.assets.length).toBe(before + 1);
+    const last = snap.assets[snap.assets.length - 1];
     expect(last).toBeDefined();
     if (last === undefined) return;
     expect(last.brand).toBe('MeshAsset');
-    expect(last.refcount).toBe('immortal');
   });
 });

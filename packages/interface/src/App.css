@@ -11,6 +11,7 @@
    .ctxmenu, .pulse-feeds) must keep their own `position: fixed`. */
 .studio-shell > .topbar,
 .studio-shell > .studio-body,
+.studio-shell > .health-status-bar,
 .studio-shell > .global-status-bar {
   position: relative;
   z-index: 1;

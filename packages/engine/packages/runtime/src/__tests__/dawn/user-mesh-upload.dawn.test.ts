@@ -23,13 +23,14 @@
 // readback ε ≤ 0.05); this dawn-tier gate isolates the host-side derivation
 // + GPU-resource accounting that feeds the record stage.
 
+import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
+import { ok } from '@forgeax/engine-rhi';
 import type { CubeTextureAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry, BUILTIN_FLOATS_PER_VERTEX } from '../../asset-registry';
+import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { createBoxGeometry } from '../../geometry/box';
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { createDefaultLoaderRegistry } from '../../wire-default-loaders';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -76,21 +77,17 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
+      const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
-      const handle = reg.register<MeshAsset>(asset).unwrap();
+      const handle = world.allocSharedRef('MeshAsset', asset);
 
       // Pull-model: explicit ensureResident uploads the GPU buffers; thereafter
       // getMeshGpuHandles returns a non-undefined record.
@@ -131,13 +128,9 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       if (!meshRes.ok) return;
       const asset: MeshAsset = meshRes.value;
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
-      const handle = reg.register<MeshAsset>(asset).unwrap();
+      const world = new World();
+      const handle = world.allocSharedRef('MeshAsset', asset);
       // Before any ensureResident the store has no GPU residency for the handle.
       const before = store.getMeshGpuHandles(handle);
       expect(before).toBeUndefined();
@@ -149,7 +142,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
@@ -168,17 +161,13 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
+      const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
@@ -187,7 +176,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
       for (let i = 0; i < 16; i++) {
         const meshRes = createBoxGeometry(1 + i * 0.1, 1, 1);
         if (!meshRes.ok) continue;
-        const handle = reg.register<MeshAsset>(meshRes.value).unwrap();
+        const handle = world.allocSharedRef('MeshAsset', meshRes.value);
         const residentRes = store.ensureResident(handle, meshRes.value);
         expect(residentRes.ok).toBe(true);
         const gpu = store.getMeshGpuHandles(handle);

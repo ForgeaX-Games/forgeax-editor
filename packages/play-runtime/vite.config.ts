@@ -87,6 +87,18 @@ function sharedAssetRoots(): string[] {
   return existsSync(dir) ? [dir] : [];
 }
 
+// Per-game pack roots: a game's own `assets/` AND `scenes/`. Levels live in
+// scenes/<id>.pack.json (the editor's level discovery scans there — see
+// editor-core store.initSceneList; the game's main.ts loads them by GUID from
+// THIS per-game catalog). Monsters/materials live in assets/. Both dirs are
+// optional; filter to those that exist. Without scenes/ here, asset-first Play
+// can't loadByGuid a level pack that lives in scenes/ (the editor still shows
+// it, but Play 404s the GUID) — keep this in sync with the editor convention.
+function perGamePackRoots(slug: string): string[] {
+  const base = resolve(here, '.forgeax', 'games', slug);
+  return ['assets', 'scenes'].map((d) => join(base, d)).filter((p) => existsSync(p));
+}
+
 // Return slugs for every game directory under .forgeax/games/ that has an
 // assets/ subdirectory. Symlink game directories are included because
 // existsSync follows symlinks. This mirrors gameAssetRoots() and is the
@@ -131,9 +143,11 @@ export function forgeaxPerGamePackIndex() {
         const match = req.url?.match(PER_GAME_ROUTE_RE);
         if (!match) { next(); return; }
         const slug = match[1];
-        const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
+        if (slug === undefined) { next(); return; }
+        const roots = perGamePackRoots(slug);
+        if (roots.length === 0) { next(); return; }
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
+          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(catalog));
@@ -149,9 +163,10 @@ export function forgeaxPerGamePackIndex() {
       // (registered before us) already emits the global /pack-index.json
       // and cooks textures. We add per-game sidecars.
       for (const slug of gameSlugs()) {
-        const assetsRoot = resolve(here, '.forgeax', 'games', slug, 'assets');
+        const roots = perGamePackRoots(slug);
+        if (roots.length === 0) continue;
         try {
-          const catalog = await buildPerGameCatalog(assetsRoot, '/preview', sharedAssetRoots());
+          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           const fileName = `pack-index/${slug}.json`;
           this.emitFile({
             type: 'asset',
@@ -298,7 +313,7 @@ export default defineConfig({
       // `@forgeax/engine-pack/guid` (AssetGuid) + `@forgeax/engine-image/hdr-decoder`
       // (decodeHdr); left in the pre-bundle, vite discovers them lazily on a NEW
       // game's first load → "optimized dependencies changed, reloading" → the
-      // preview reloads a few times (the "新建项目后游戏闪几下" flicker). Exclude
+      // preview reloads a few times (the "new game flicker" after project creation). Exclude
       // them (native ESM, same as the rest of the engine subgraph) so there is no
       // runtime re-optimize and no reload.
       '@forgeax/engine-pack',
@@ -353,5 +368,9 @@ export default defineConfig({
       clientPort: Number(process.env.FORGEAX_INTERFACE_PORT ?? 18920),
     },
   },
-  build: { outDir: resolve(here, 'dist') },
+  // esnext: keep parity with edit-runtime — the engine host entry may use
+  // top-level await; vite's default build target (es2020/chrome87/safari14)
+  // forbids TLA. This runtime only runs in WKWebView/Chrome (TLA-capable) and
+  // dev serve already runs it untranspiled, so esnext is safe.
+  build: { outDir: resolve(here, 'dist'), target: 'esnext' },
 });

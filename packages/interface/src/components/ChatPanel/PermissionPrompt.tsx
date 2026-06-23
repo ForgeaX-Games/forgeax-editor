@@ -10,6 +10,7 @@
 
 import { useEffect, useState, type ReactElement } from 'react';
 import { ShieldAlert, HelpCircle, Check, X, Loader2 } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { usePendingPermission, clearPendingPermission } from '../../lib/permission-stream';
 
@@ -28,6 +29,7 @@ function readQuestions(input: unknown): AskQuestion[] {
 }
 
 export function PermissionPrompt(): ReactElement | null {
+  const { t } = useTranslation();
   const activeSid = useAppStore((s) => s.activeSid);
   const pending = usePendingPermission(activeSid);
   const [busy, setBusy] = useState(false);
@@ -80,7 +82,7 @@ export function PermissionPrompt(): ReactElement | null {
   return (
     <div
       role="alertdialog"
-      aria-label={askable ? 'AI 提问' : '命令权限审批'}
+      aria-label={askable ? t('permission.askAriaLabel') : t('permission.commandAriaLabel')}
       style={{
         margin: '8px 10px', padding: '10px 12px', borderRadius: 10,
         border: `1px solid ${accent}`, background: 'var(--color-bg-elevated, #1c1f24)',
@@ -89,7 +91,7 @@ export function PermissionPrompt(): ReactElement | null {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: accent }}>
         {askable ? <HelpCircle size={15} /> : <ShieldAlert size={15} />}
-        <span style={{ fontWeight: 600 }}>{askable ? 'AI 想问你' : '需要你授权一条命令'}</span>
+        <span style={{ fontWeight: 600 }}>{askable ? t('permission.askTitle') : t('permission.commandTitle')}</span>
         {!askable && <span style={{ opacity: 0.6, fontWeight: 400 }}>· {pending.toolName}</span>}
       </div>
 
@@ -97,7 +99,7 @@ export function PermissionPrompt(): ReactElement | null {
         <>
           {questions.map((q, qi) => (
             <div key={qi} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <div style={{ fontWeight: 500 }}>{q.question}{q.multiSelect ? '（可多选）' : ''}</div>
+              <div style={{ fontWeight: 500 }}>{q.question}{q.multiSelect ? t('permission.multiSelectHint') : ''}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {(q.options ?? []).map((opt) => {
                   const sel = (picks[qi] ?? []).includes(opt.label);
@@ -125,14 +127,14 @@ export function PermissionPrompt(): ReactElement | null {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 2 }}>
             {!allAnswered && (
               <span style={{ marginRight: 'auto', fontSize: 11, opacity: 0.6 }}>
-                ↑ 先选一个选项再提交
+                {t('permission.selectBeforeSubmit')}
               </span>
             )}
             <button onClick={() => reply(false)} disabled={busy} style={btn('ghost')}>
-              {busy ? <Loader2 size={13} className="spin" /> : <X size={13} />} 取消
+              {busy ? <Loader2 size={13} className="spin" /> : <X size={13} />} {t('common.cancel')}
             </button>
             <button onClick={submitAnswers} disabled={busy || !allAnswered} style={btn('primary', accent, !allAnswered)}>
-              {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />} 提交
+              {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />} {t('permission.submit')}
             </button>
           </div>
         </>
@@ -145,10 +147,10 @@ export function PermissionPrompt(): ReactElement | null {
           }}>{pending.command || pending.toolName}</code>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button onClick={() => reply(false)} disabled={busy} style={btn('ghost')}>
-              {busy ? <Loader2 size={13} className="spin" /> : <X size={13} />} 拒绝
+              {busy ? <Loader2 size={13} className="spin" /> : <X size={13} />} {t('permission.deny')}
             </button>
             <button onClick={() => reply(true)} disabled={busy} style={btn('primary', accent)}>
-              {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />} 允许
+              {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />} {t('permission.allow')}
             </button>
           </div>
         </>

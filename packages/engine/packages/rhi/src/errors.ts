@@ -1,7 +1,7 @@
 // @forgeax/engine-rhi/src/errors - RhiError + closed RhiErrorCode union + Result<T, E>.
 //
 // Shape:
-// - RhiErrorCode = closed union 19 members (charter proposition 4: closed-union
+// - RhiErrorCode = closed union 20 members (charter proposition 4: closed-union
 //   exhaustive switch needs no default fallback; tsc strict mode guards
 //   completeness). Extended from 6 to 10 in feat-20260508-rhi-surface-completion
 //   w7 (D-S3): added 'command-encoder-finished' / 'render-pass-not-ended' /
@@ -29,6 +29,16 @@
 //   is idempotent void; F-8 WebGPU spec is also idempotent void; D-7 prefers
 //   fail-fast over silent idempotency because double-destroy is almost always
 //   a lifecycle bug). Minor add-only per AGENTS.md evolution contract.
+//   Extended from 19 to 20 in feat-20260619-wasm-fault-isolation M3 w7:
+//   added 'rhi-descriptor-invalid' for `createRenderPipeline` (and other
+//   create* entries) descriptor parse failures surfaced through the wgpu-wasm
+//   backend (Rust `#[wasm_bindgen(catch)]` Err). The prefix-based
+//   classification (D-1 / D-2) routes wasm exceptions with the stable marker
+//   `[wgpu-wasm] failed to parse` to this code; exceptions without the prefix
+//   remain in 'webgpu-runtime-error'. Semantics: descriptor parse failure =
+//   caller bug (malformed descriptor data passed from TS), distinct from
+//   'webgpu-runtime-error' = runtime condition (valid descriptor rejected by
+//   wgpu backend). Minor add-only per AGENTS.md evolution contract.
 // - RhiError class has readonly .code / .expected / .hint three-field surface
 //   (AGENTS.md "Errors are structured" / D-5); the 'shader-compile-failed' path
 //   exposes .detail = RhiShaderCompileDetail (compilerMessages array);
@@ -77,6 +87,7 @@
  * | `'internal-error'` | spec §22.2 GPUInternalError subtype — driver bug / unrecoverable internal failure that is neither validation nor OOM. `.expected` / `.hint` template: `expected: 'no driver-internal failure during operation dispatch'` / `hint: 'reproduce with a stable adapter; file an issue with @forgeax/engine-runtime + the underlying GPU.message; if the adapter is persistently unstable, display an unsupported-environment message'` (@spec-anchor [W3C WebGPU §22.2 GPUInternalError](https://www.w3.org/TR/webgpu/#gpu-internal-error) / plan-strategy D-P4). |
  * | `'hierarchy-broken'` | `propagateTransforms` system (ECS `'pre-render'` schedule) encountered a `ChildOf` component whose referenced parent entity no longer exists (entity destroyed or ref never registered). The single entity's subtree is skipped (other entities continue; charter proposition 9 graceful degradation + architecture-principles #5 Fail Fast). `.expected` / `.hint` template: `expected: 'ChildOf component references a live entity in the world'` / `hint: 'remove the stale ChildOf via world.removeComponent(entity, ChildOf) before destroying the referenced ancestor, or call engine.assets.inspect() to audit hierarchy'` (feat-20260511-asset-system-v1 D-P2 + requirements §9 row 8). Minor add-only per AGENTS.md evolution contract; `'render-system-*'` / `'hierarchy-*'` share the render-system / schedule semantic domain. |
  * | `'destroy-after-destroy'` | A `RhiDevice.destroyBuffer(buf)` / `RhiDevice.destroyTexture(tex)` call observed the same handle had already been destroyed (per-handle `destroyed: boolean` bookkeeping in the shim layer). The forgeax form prefers fail-fast over the spec idempotent-void path (W3C WebGPU §22 / wgpu wasm both treat double-destroy as a no-op): double-destroy is almost always a lifecycle bug — caching a stale handle, a forgotten registry slot, a race between dispose paths — and surfacing it is more useful than swallowing it (plan-strategy D-7). `.expected` / `.hint` template: `expected: 'GPU buffer/texture handle has not been destroyed yet'` / `hint: 'object already destroyed; track lifecycle in caller or check isDestroyed before re-destroy'` (feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle D-6 + D-7). Minor add-only per AGENTS.md evolution contract. |
+ * | `'rhi-descriptor-invalid'` | A `createRenderPipeline` (or other create* entry) descriptor failed to parse in the wgpu-wasm backend (Rust `#[wasm_bindgen(catch)]` Err with the stable prefix `[wgpu-wasm] failed to parse`). The descriptor data shape passed from TS was malformed — this is a caller bug (the caller passed descriptor data that the wasm deserializer rejected), not a runtime condition. Differs from `'webgpu-runtime-error'`: the latter is a valid descriptor rejected by the wgpu runtime (e.g. binding count exceeds limits); this code means the descriptor never reached the runtime because its shape was unparseable. `.hint` carries the parse-error message including the failing field index (e.g. `fragment.targets[0]`) for human triage. `.expected` / `.hint` template: `expected: 'caller passed well-formed descriptor data matching the wgpu-wasm serialization contract'` / `hint: 'check the descriptor field named in the error message for type mismatch or missing required fields'` (feat-20260619-wasm-fault-isolation D-1/D-2/D-8). Minor add-only per AGENTS.md evolution contract. |
  *
  * @example AI-user exhaustive switch on the 4 command/queue members (no default fallback)
  * ```ts
@@ -113,7 +124,8 @@ export type RhiErrorCode =
   | 'oom'
   | 'internal-error'
   | 'hierarchy-broken'
-  | 'destroy-after-destroy';
+  | 'destroy-after-destroy'
+  | 'rhi-descriptor-invalid';
 
 /**
  * Detail structure exclusive to the `shader-compile-failed` path.

@@ -76,26 +76,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: error.code, hint: error.hint });
   });
-  const assets = renderer.assets;
 
   // Standard PBR material shared by all three cubes.
   // The engine places this material in the Forward pass which reads the
   // View UBO (@group(0)@binding(0)) for camera + light data automatically.
-  const matHandleRes = assets.register<MaterialAsset>(
+  const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    'MaterialAsset',
     Materials.standard({
       baseColor: [0.8, 0.8, 0.8, 1],
       metallic: 0.3,
       roughness: 0.7,
     }),
   );
-  if (!matHandleRes.ok) {
-    console.error(
-      '[learn-render 4.7 advanced-glsl-ubo] material register failed:',
-      matHandleRes.error.code,
-    );
-    return;
-  }
-  const matHandle = matHandleRes.value;
 
   // Three cubes — minimal scene proof that the View UBO is live.
   // No explicit UBO code: Camera + DirectionalLight spawns -> engine extracts

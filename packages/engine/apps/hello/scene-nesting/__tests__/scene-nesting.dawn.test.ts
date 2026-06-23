@@ -23,7 +23,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
-import { toUnmanaged, type LocalEntityId } from '@forgeax/engine-types';
+import { toShared, type LocalEntityId } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,9 +41,8 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-function registerManagedRef(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
-  const managed = world.allocManagedRef('SceneAsset', asset);
-  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
+function registerManagedRef(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  return world.allocSharedRef('SceneAsset', asset);
 }
 
 function distance(
@@ -178,14 +177,14 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
 
     const world = new World();
 
-    // Register a material (unlit) so the cube renders.
+    // Catalog a material (unlit) so the scene's GUID ref resolves.
     const assets = renderer.assets;
     expect(assets).not.toBeNull();
     if (assets === null) return;
 
     const unlitMatGuidResult = AssetGuid.parse('008e4f75-e7a3-4715-b05b-b93a9ec12074');
     if (!unlitMatGuidResult.ok) return;
-    const matHandle = assets.registerWithGuid(unlitMatGuidResult.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
+    assets.catalog(unlitMatGuidResult.value, Materials.unlit([0.8, 0.4, 0.2, 1]));
 
     // Register inner scene as a managed ref so _resolveSceneAsset works.
     const innerHandle = registerManagedRef(world, innerScene);
@@ -194,7 +193,7 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
     // Outer scene is instantiated first; its mount.source=0 resolves to
     // the inner handle.
     let outerHandleVal: number | undefined;
-    world._setSceneAssetResolver?.((sourceIdx: number, parentHandle: Handle<'SceneAsset', 'unmanaged'>) => {
+    world._setSceneAssetResolver?.((sourceIdx: number, parentHandle: Handle<'SceneAsset', 'shared'>) => {
       void sourceIdx;
       const parentRaw = parentHandle as unknown as number;
       if (outerHandleVal !== undefined && parentRaw === outerHandleVal) {

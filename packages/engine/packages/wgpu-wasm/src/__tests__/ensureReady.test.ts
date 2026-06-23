@@ -7,10 +7,10 @@
 //    ensureReady() === ensureReady() — N calls return the same Promise reference.
 // 2. Reference equality across awaits: (await ensureReady()) === (await ensureReady())
 //    — the resolved wasm namespace is the same object, N times.
-// 3. Permanent reject on failure (charter proposition 4 Explicit Failure):
-//    if init rejects, subsequent calls observe the same rejection without re-running
-//    init (partial wasm loads have undefined behaviour, so we surface the original
-//    error every time).
+// 3. Retry on transient failure (charter proposition 4 Explicit Failure):
+//    if init rejects, the cached rejection is cleared (null-reset) and a subsequent
+//    ensureReady() retries _loadWasm(). A second init that succeeds returns the
+//    wasm namespace.
 //
 // The pkg/* imports are mocked because the wasm artefact does not exist until w4
 // runs `bash build.sh`; tests focus on the singleton wrapper logic only — wasm load
@@ -82,15 +82,17 @@ describe('ensureReady singleton wrapper', () => {
     expect(_initCallCount).toBe(1);
   });
 
-  it('keeps the rejected Promise cached after init failure (charter proposition 4 permanent reject)', async () => {
+  it('retries _loadWasm after transient failure (null-reset, charter proposition 4 retry)', async () => {
     _initBehaviour = 'reject';
     const mod = await import('../index.js');
-    const p1 = mod.ensureReady();
-    const p2 = mod.ensureReady();
-    expect(p1).toBe(p2);
-    // Both calls share the same rejection (no retry).
-    await expect(p1).rejects.toThrow('mock init failure');
-    await expect(p2).rejects.toThrow('mock init failure');
+    // First call rejects — init runs once.
+    await expect(mod.ensureReady()).rejects.toThrow('mock init failure');
     expect(_initCallCount).toBe(1);
+    // Switch to success — the cached rejection was null-reset, so the next
+    // ensureReady() retries _loadWasm and succeeds.
+    _initBehaviour = 'success';
+    const ns = await mod.ensureReady();
+    expect(_initCallCount).toBe(2);
+    expect(typeof ns).toBe('object');
   });
 });

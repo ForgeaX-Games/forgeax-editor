@@ -10,5 +10,5 @@ export const WORKBENCH_RAIL_NAV: {
 }[] = [
   { id: 'agents', label: 'Agents', Icon: Bot },
   { id: 'files', label: 'Files', Icon: FolderOpen },
-  { id: 'tools', label: '工具', Icon: LayoutGrid },
+  { id: 'tools', label: 'Tools', Icon: LayoutGrid },
 ];

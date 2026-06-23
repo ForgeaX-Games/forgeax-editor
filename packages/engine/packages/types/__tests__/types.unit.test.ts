@@ -2063,15 +2063,16 @@ describe('AssetErrorDetail discriminated union', () => {
 //
 // TDD red stage: PhysicsErrorCode closed union exhaustiveness.
 // Tests fail until PhysicsErrorCode is registered in engine-types (t6).
+// Extended feat-20260617 M1: 8→9 members (+ controller-requires-kinematic).
 // Covers:
-//   - All 8 members are accessible as a closed union (exhaustiveness check).
+//   - All 9 members are accessible as a closed union (exhaustiveness check).
 //   - PhysicsError class construction with all 4 fields.
 //   - PhysicsErrorDetail discriminated union narrowed per .code.
-//   - PHYSICS_ERROR_HINTS has entries for all 8 codes.
+//   - PHYSICS_ERROR_HINTS has entries for all 9 codes.
 
 
 describe('feat-20260528 M1 t5 PhysicsErrorCode closed union exhaustiveness', () => {
-  it('has 8 member codes: all kebab-case', () => {
+  it('has 9 member codes: all kebab-case', () => {
     const codes: PhysicsErrorCode[] = [
       'wasm-load-failed',
       'wasm-simd-unsupported',
@@ -2081,14 +2082,15 @@ describe('feat-20260528 M1 t5 PhysicsErrorCode closed union exhaustiveness', () 
       'collider-not-found',
       'backend-not-registered',
       'teleport-invalid-body-type',
+      'controller-requires-kinematic',
     ];
-    expect(new Set(codes).size).toBe(8);
+    expect(new Set(codes).size).toBe(9);
     for (const code of codes) {
       expect(code).toMatch(/^[a-z]+(-[a-z]+)*$/);
     }
   });
 
-  it('PhysicsErrorCode is exhaustive — switch covers all 8 members with no default branch', () => {
+  it('PhysicsErrorCode is exhaustive — switch covers all 9 members with no default branch', () => {
     const code: PhysicsErrorCode = 'wasm-load-failed';
     // Exhaustiveness check: if a new member is added, this switch fails
     // to compile because the return type is no longer uniformly string.
@@ -2144,10 +2146,14 @@ describe('feat-20260528 M1 t5 PhysicsErrorCode closed union exhaustiveness', () 
       case 'teleport-invalid-body-type':
         expect(typeof detail.bodyType).toBe('string');
         break;
+      case 'controller-requires-kinematic':
+        expect(typeof detail.entity).toBe('number');
+        expect(typeof detail.bodyType).toBe('string');
+        break;
     }
   });
 
-  it('PHYSICS_ERROR_HINTS has all 8 entries', () => {
+  it('PHYSICS_ERROR_HINTS has all 9 entries', () => {
     const allCodes: PhysicsErrorCode[] = [
       'wasm-load-failed',
       'wasm-simd-unsupported',
@@ -2157,13 +2163,31 @@ describe('feat-20260528 M1 t5 PhysicsErrorCode closed union exhaustiveness', () 
       'collider-not-found',
       'backend-not-registered',
       'teleport-invalid-body-type',
+      'controller-requires-kinematic',
     ];
     for (const code of allCodes) {
       expect(PHYSICS_ERROR_HINTS[code]).toBeDefined();
       expect(PHYSICS_ERROR_HINTS[code].length).toBeGreaterThan(0);
     }
     // TS compile-time: Record<PhysicsErrorCode, string> enforces completeness.
-    expect(Object.keys(PHYSICS_ERROR_HINTS)).toHaveLength(8);
+    expect(Object.keys(PHYSICS_ERROR_HINTS)).toHaveLength(9);
+  });
+
+  it('PhysicsError construction with controller-requires-kinematic carries entity + bodyType detail', () => {
+    const err = new PhysicsError({
+      code: 'controller-requires-kinematic',
+      expected: 'a kinematic RigidBody',
+      hint: "set the entity's RigidBody.type to 'kinematic'",
+      detail: { code: 'controller-requires-kinematic', entity: 42, bodyType: 'dynamic' },
+    });
+    expect(err.code).toBe('controller-requires-kinematic');
+    expect(err.expected).toContain('kinematic');
+    expect(err.hint).toContain('kinematic');
+    if (err.detail && err.detail.code === 'controller-requires-kinematic') {
+      expect(err.detail.entity).toBe(42);
+      expect(err.detail.bodyType).toBe('dynamic');
+    }
+    expect(err.message).toContain('[PhysicsError controller-requires-kinematic]');
   });
 });
 
@@ -2189,6 +2213,8 @@ function exhaustiveSwitchFromCode(code: PhysicsErrorCode): string {
       return 'backend not registered';
     case 'teleport-invalid-body-type':
       return 'teleport invalid body type';
+    case 'controller-requires-kinematic':
+      return 'controller requires kinematic body';
   }
 }
 }

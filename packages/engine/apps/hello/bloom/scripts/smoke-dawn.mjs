@@ -178,7 +178,7 @@ if (assets === null) {
   process.exit(1);
 }
 
-const matRes = assets.register({
+const matHandle = app.world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -194,13 +194,9 @@ const matRes = assets.register({
     roughness: 0.4,
   },
 });
-if (!matRes.ok) {
-  originalConsoleError(`[smoke] FAIL - material register: ${matRes.error.code}`);
-  process.exit(1);
-}
 
-// Register emissive material (emissiveIntensity > 1.0 feeds bloom).
-const emissiveRes = assets.register({
+// Mint emissive material (emissiveIntensity > 1.0 feeds bloom).
+const emissiveHandle = app.world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -218,10 +214,6 @@ const emissiveRes = assets.register({
     emissiveIntensity: 2.0,
   },
 });
-if (!emissiveRes.ok) {
-  originalConsoleError(`[smoke] FAIL - emissive material register: ${emissiveRes.error.code}`);
-  process.exit(1);
-}
 
 // Spawn emissive sphere (left) and non-emissive cube (right).
 app.world.spawn(
@@ -230,7 +222,7 @@ app.world.spawn(
     data: { posX: -0.6, posY: 0.2, posZ: 0, quatW: 1, scaleX: 0.6, scaleY: 0.6, scaleZ: 0.6 },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
-  { component: MeshRenderer, data: { materials: [emissiveRes.value] } },
+  { component: MeshRenderer, data: { materials: [emissiveHandle] } },
 );
 
 app.world.spawn(
@@ -239,7 +231,7 @@ app.world.spawn(
     data: { posX: 0.6, posY: 0, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matRes.value] } },
+  { component: MeshRenderer, data: { materials: [matHandle] } },
 );
 
 // Directional light.

@@ -6,18 +6,14 @@
 // AC-05: zod in dependencies, z.infer used
 // AC-06: no node:fs / fetch imports in source
 
-import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 
 // ── AC-01: package directory exists + package.json name ─────────────────────
 describe('AC-01: package directory', () => {
   it('package directory exists at packages/engine/packages/engine-project/', () => {
-    const pkgDir = path.resolve(
-      import.meta.dirname,
-      '..',
-      '..',
-    );
+    const pkgDir = path.resolve(import.meta.dirname, '..', '..');
     expect(fs.existsSync(pkgDir)).toBe(true);
 
     const pkgJsonPath = path.join(pkgDir, 'package.json');
@@ -84,9 +80,7 @@ describe('AC-02: exports accessible', () => {
 describe('AC-05: zod dependency', () => {
   it('package.json deps includes zod', () => {
     const pkgDir = path.resolve(import.meta.dirname, '..', '..');
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf-8'),
-    );
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf-8'));
     expect(pkg.dependencies).toBeDefined();
     expect(pkg.dependencies.zod).toBeDefined();
   });
@@ -94,7 +88,7 @@ describe('AC-05: zod dependency', () => {
   it('schema.ts imports zod and uses z.infer', () => {
     const schemaPath = path.resolve(import.meta.dirname, '..', 'schema.ts');
     const content = fs.readFileSync(schemaPath, 'utf-8');
-    expect(content).toContain('from \'zod\'');
+    expect(content).toContain("from 'zod'");
     expect(content).toContain('z.infer');
   });
 });
@@ -115,15 +109,15 @@ describe('AC-06: no node:fs / fetch imports in source', () => {
         continue;
       }
       if (
-        trimmed.includes('from \'node:fs\'') ||
+        trimmed.includes("from 'node:fs'") ||
         trimmed.includes('from "node:fs"') ||
-        trimmed.includes('from \'fs\'') ||
+        trimmed.includes("from 'fs'") ||
         trimmed.includes('from "fs"') ||
         trimmed.includes('import fs ') ||
         trimmed.includes('import * as fs ') ||
-        trimmed.includes('require(\'fs\'') ||
+        trimmed.includes("require('fs'") ||
         trimmed.includes('require("fs"') ||
-        trimmed.includes('from \'node:path\'') ||
+        trimmed.includes("from 'node:path'") ||
         trimmed.includes('from "node:path"') ||
         trimmed.includes('globalThis.fetch') ||
         trimmed.includes('window.fetch')

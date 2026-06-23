@@ -1,7 +1,7 @@
 // @forgeax/engine-runtime --- Name component (built-in identifier).
 //
 // Single-field minimal skeleton: { value: 'string' }. Bare 'string' schema
-// vocab keyword routes through ECS ManagedRefStore (D-R3 single-arm managed
+// vocab keyword routes through ECS UniqueRefStore (D-R3 single-arm managed
 // dispatch); the read shape is a native JS string.
 //
 // Lives in `runtime` rather than `ecs` because Name is a built-in *component*,

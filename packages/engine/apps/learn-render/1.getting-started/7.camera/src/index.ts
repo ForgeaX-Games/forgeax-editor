@@ -53,7 +53,12 @@
 import { createApp } from '@forgeax/engine-app';
 import type { App, AppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
-import { createFrameStartScanSystem, type InputBackend, type InputBackendSample } from '@forgeax/engine-input';
+import {
+  INPUT_BACKEND_KEY,
+  type InputBackend,
+  type InputBackendSample,
+  InputFrameStartScan,
+} from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
@@ -66,9 +71,11 @@ import {
   MeshFilter,
   MeshRenderer,
   perspective,
+  resolveAssetHandle,
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-container.pack.json';
 import {
@@ -241,12 +248,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
   }
 
-  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
-  if (!cubeAsset.ok) {
+  const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
+  if (!cubeAssetRes.ok) {
     console.error('[learn-render 1.7 camera] HANDLE_CUBE asset unavailable');
     return;
   }
-  assets.registerWithGuid<MeshAsset>(cubeGuidRes.value, cubeAsset.value);
+  assets.catalog<MeshAsset>(cubeGuidRes.value, cubeAssetRes.value);
 
   const matPack = materialPackJson as unknown as MaterialPackFile;
   const matEntry = matPack.assets.find((a) => a.kind === 'material');
@@ -256,15 +263,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
+  // loadByGuid returns the texture PAYLOAD (M8 D-17); mint a user-tier column
+  // handle so the baseColorTexture slot carries a resolved numeric Handle.
+  const containerTexHandle = containerHandleRes.ok
+    ? unwrapHandle(world.allocSharedRef('TextureAsset', containerHandleRes.value))
+    : undefined;
   const cubeMaterial: MaterialAsset = {
     kind: 'material',
     passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
     paramValues: {
       baseColor: matEntry.payload.paramValues.baseColor,
-      ...(containerHandleRes.ok ? { baseColorTexture: containerHandleRes.value } : {}),
+      ...(containerTexHandle !== undefined ? { baseColorTexture: containerTexHandle } : {}),
     },
   };
-  assets.registerWithGuid<MaterialAsset>(matGuidRes.value, cubeMaterial);
+  assets.catalog<MaterialAsset>(matGuidRes.value, cubeMaterial);
 
   const cubeHandleRes = await assets.loadByGuid<MeshAsset>(cubeGuidRes.value);
   const matHandleRes = await assets.loadByGuid<MaterialAsset>(matGuidRes.value);
@@ -276,6 +288,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
+  // loadByGuid returns payloads (M8 D-17); mint user-tier column handles.
+  const cubeHandle = world.allocSharedRef('MeshAsset', cubeHandleRes.value);
+  const matHandle = world.allocSharedRef('MaterialAsset', matHandleRes.value);
 
   // Spawn the 10 cubes (LO 7.3 cubePositions[i] + per-index axis-angle
   // rotation around (1, 0.3, 0.5)). The axis-angle is baked into the
@@ -304,10 +319,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             quatW: cosH,
           },
         },
-        { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
+        { component: MeshFilter, data: { assetHandle: cubeHandle } },
         {
           component: MeshRenderer,
-          data: { materials: [matHandleRes.value] },
+          data: { materials: [matHandle] },
         },
       )
       .unwrap();
@@ -360,7 +375,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     name: 'learn-render-camera-first-person',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Transform, Camera, Entity] }],
-    fn: (queryResults) => {
+    fn: (world, queryResults) => {
       const snap = renderer.input.snapshot(world);
       if (snap === undefined) return;
       const time = world.getResource<{ readonly dt: number }>('Time');
@@ -426,7 +441,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     name: 'learn-render-camera-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
-    fn: (queryResults) => {
+    fn: (world, queryResults) => {
       const snap = renderer.input.snapshot(world);
       if (snap === undefined) return;
       scrollAcc.apply(snap.mouse.wheelDelta);
@@ -479,7 +494,8 @@ async function createAppForCamera(
   }
   const renderer = await createRenderer(target, {}, bundler);
   const world = new World();
-  world.addSystem(createFrameStartScanSystem(overrideBackend, world));
+  world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
+  world.addSystem(InputFrameStartScan);
   return createApp({ renderer, world, input: overrideBackend });
 }
 

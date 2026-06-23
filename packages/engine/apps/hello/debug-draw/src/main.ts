@@ -356,22 +356,16 @@ async function runHdrpTonemap(): Promise<void> {
 
   if (!app.debugDraw) throw new Error('app.debugDraw missing');
 
-  // Register and install HDRP pipeline
+  // Register and install HDRP pipeline. feat-20260614 M8 (D-19):
+  // installPipeline takes the RenderPipelineAsset POD directly -- the
+  // AssetRegistry holds no handle concept, so there is no register round-trip.
   app.renderer.registerPipeline(HDRP_PIPELINE_ID, hdrpPipeline);
 
-  const hdrpAssetResult = app.renderer.assets.register(
-    // biome-ignore lint/suspicious/noExplicitAny: generic asset registration
-    {
-      kind: 'RenderPipelineAsset' as any,
-      pipelineId: HDRP_PIPELINE_ID,
-      config: { clusterGrid: { x: 8, y: 6, z: 16 } },
-    } as any,
-  );
-  if (!hdrpAssetResult.ok) throw new Error(`register HDRP asset: ${hdrpAssetResult.error.code}`);
-  const installResult = app.renderer.installPipeline(
-    // biome-ignore lint/suspicious/noExplicitAny: Handle generic
-    hdrpAssetResult.value as any,
-  );
+  const installResult = app.renderer.installPipeline({
+    kind: 'render-pipeline',
+    pipelineId: HDRP_PIPELINE_ID,
+    config: { clusterGrid: { x: 8, y: 6, z: 16 } },
+  });
   if (!installResult.ok) {
     throw new Error(
       `HDRP installPipeline failed: ${installResult.error.code} — ${installResult.error.hint ?? ''}`,

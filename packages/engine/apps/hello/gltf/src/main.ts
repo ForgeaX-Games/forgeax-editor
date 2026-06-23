@@ -35,7 +35,6 @@ import {
   type MaterialAsset,
   type MeshAsset,
   type SceneAsset,
-  unwrapHandle,
 } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import boxGltfUrl from '../assets/box.gltf?url';
@@ -88,6 +87,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // (vite-plugin-pack with gltf-aware scan) lives in
   // feat-future-gltf-buildtime-cook.
   assets.configurePackIndex('/box-pack-index.json');
+  const world = new World();
 
   // Parse the gltf source so the IR -> POD adapter can register MeshAsset
   // / MaterialAsset / SceneAsset PODs against the GUIDs the meta sidecar
@@ -119,50 +119,43 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const meshAsset = meshIrToPod(getOrThrow(docResult.value.meshes, 0, 'mesh[0]'));
   const materialAsset = materialIrToPod(getOrThrow(docResult.value.materials, 0, 'material[0]'));
-  // registerWithGuid populates the in-memory GUID -> Handle map; subsequent
-  // loadByGuid<T> hits the fast-path before any prod fetch is attempted.
-  const meshHandle = assets.registerWithGuid<MeshAsset>(meshGuid, meshAsset);
-  const matHandle = assets.registerWithGuid<MaterialAsset>(materialGuid, materialAsset);
+  // catalog stores GUID->payload so loadByGuid<T> hits the fast-path before
+  // any prod fetch; allocSharedRef mints the column handles the bridge needs.
+  assets.catalog<MeshAsset>(meshGuid, meshAsset);
+  assets.catalog<MaterialAsset>(materialGuid, materialAsset);
+  const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
+  const matHandle = world.allocSharedRef('MaterialAsset', materialAsset);
   // Build SceneAsset using the public bridge SSOT (feat-20260518 M3).
   const sceneAssetWithHandles = gltfDocToSceneAsset(docResult.value, {
     meshHandles: new Map([[0, meshHandle]]),
     materialHandles: new Map([[0, matHandle]]),
   });
-  assets.registerWithGuid<SceneAsset>(sceneGuid, sceneAssetWithHandles);
+  assets.catalog<SceneAsset>(sceneGuid, sceneAssetWithHandles);
 
-  // Step (2): loadByGuid<MeshAsset> — fast-path returns the freshly-bound
-  // mesh handle (the importer cube positions + indices uploaded as a
-  // MeshAsset POD).
+  // Step (2): loadByGuid<MeshAsset> confirms the catalogued mesh payload
+  // resolves (the importer cube positions + indices as a MeshAsset POD).
   const meshRes = await assets.loadByGuid<MeshAsset>(meshGuid);
   if (!meshRes.ok) {
     console.error('[gltf] loadByGuid<MeshAsset> failed:', meshRes.error);
     return;
   }
-  if (unwrapHandle(meshRes.value) !== unwrapHandle(meshHandle)) {
-    console.warn(
-      `[gltf] meshHandle drift: load=${unwrapHandle(meshRes.value)} register=${unwrapHandle(meshHandle)}`,
-    );
-  }
 
-  // Step (3): loadByGuid<MaterialAsset> — same fast-path.
+  // Step (3): loadByGuid<MaterialAsset> — same catalogue fast-path.
   const matRes = await assets.loadByGuid<MaterialAsset>(materialGuid);
   if (!matRes.ok) {
     console.error('[gltf] loadByGuid<MaterialAsset> failed:', matRes.error);
     return;
   }
 
-  // Pre-register every component the SceneAsset references so the resolver
-  // in SceneInstanceContainer finds them by name (Transform / MeshFilter /
-  // MeshRenderer / ChildOf / Camera / DirectionalLight).
-  const world = new World();
-
-  // Step (4): loadByGuid<SceneAsset> + assets.instantiate (1 line).
+  // Step (4): loadByGuid<SceneAsset> + assets.instantiate.
   const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuid);
   if (!sceneRes.ok) {
     console.error('[gltf] loadByGuid<SceneAsset> failed:', sceneRes.error);
     return;
   }
-  const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
+  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
   if (!instRes.ok) {
     console.error(
       '[gltf] scene instantiate failed:',

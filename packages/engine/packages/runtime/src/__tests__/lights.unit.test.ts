@@ -1725,8 +1725,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       DirectionalLight: unknown;
       PointLight: unknown;
       SpotLight: unknown;
-      HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
-      HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
+      HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+      HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
     }> {
       return (await import('../index')) as never;
     }

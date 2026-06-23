@@ -73,8 +73,8 @@ function makeAssetRegistry(): AssetRegistry {
   return new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry());
 }
 
-function registerSkinnedMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
-  const result = assets.register<MeshAsset>({
+function registerSkinnedMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
     kind: 'mesh',
     vertices: TRIANGLE_VERTICES_SKINNED,
     indices: new Uint16Array([0, 1, 2]),
@@ -88,12 +88,10 @@ function registerSkinnedMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmana
     aabb: UNIT_AABB,
     submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
   });
-  if (!result.ok) throw new Error('register skinned mesh failed');
-  return result.value;
 }
 
-function registerUnskinnedMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
-  const result = assets.register<MeshAsset>({
+function registerUnskinnedMesh(world: World): Handle<'MeshAsset', 'shared'> {
+  return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
     kind: 'mesh',
     vertices: TRIANGLE_VERTICES,
     indices: new Uint16Array([0, 1, 2]),
@@ -101,12 +99,10 @@ function registerUnskinnedMesh(assets: AssetRegistry): Handle<'MeshAsset', 'unma
     aabb: UNIT_AABB,
     submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
   });
-  if (!result.ok) throw new Error('register unskinned mesh failed');
-  return result.value;
 }
 
-function registerPbrSkinMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
-  const result = assets.register<MaterialAsset>({
+function registerPbrSkinMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
+  return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -118,12 +114,10 @@ function registerPbrSkinMaterial(assets: AssetRegistry): Handle<'MaterialAsset',
     ],
     paramValues: { baseColor: [1, 1, 1] },
   });
-  if (!result.ok) throw new Error('register pbr-skin material failed');
-  return result.value;
 }
 
-function registerUnlitMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
-  const result = assets.register<MaterialAsset>({
+function registerUnlitMaterial(world: World): Handle<'MaterialAsset', 'shared'> {
+  return world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -135,18 +129,14 @@ function registerUnlitMaterial(assets: AssetRegistry): Handle<'MaterialAsset', '
     ],
     paramValues: { baseColor: [1, 1, 1] },
   });
-  if (!result.ok) throw new Error('register unlit material failed');
-  return result.value;
 }
 
-function registerSkeleton(assets: AssetRegistry): Handle<'SkeletonAsset', 'unmanaged'> {
-  const result = assets.register<SkeletonAsset>({
+function registerSkeleton(world: World): Handle<'SkeletonAsset', 'shared'> {
+  return world.allocSharedRef<'SkeletonAsset', SkeletonAsset>('SkeletonAsset', {
     kind: 'skeleton',
     inverseBindMatrices: new Float32Array(16),
     jointCount: 1,
   });
-  if (!result.ok) throw new Error('register skeleton failed');
-  return result.value;
 }
 
 function spawnCamera(world: World): void {
@@ -200,8 +190,8 @@ const IDENTITY_TRANSFORM = {
 
 function spawnRenderable(
   world: World,
-  meshHandle: Handle<'MeshAsset', 'unmanaged'>,
-  matHandle: Handle<'MaterialAsset', 'unmanaged'>,
+  meshHandle: Handle<'MeshAsset', 'shared'>,
+  matHandle: Handle<'MaterialAsset', 'shared'>,
 ): void {
   world
     .spawn(
@@ -214,9 +204,9 @@ function spawnRenderable(
 
 function spawnSkinnedRenderable(
   world: World,
-  meshHandle: Handle<'MeshAsset', 'unmanaged'>,
-  matHandle: Handle<'MaterialAsset', 'unmanaged'>,
-  skeletonHandle: Handle<'SkeletonAsset', 'unmanaged'>,
+  meshHandle: Handle<'MeshAsset', 'shared'>,
+  matHandle: Handle<'MaterialAsset', 'shared'>,
+  skeletonHandle: Handle<'SkeletonAsset', 'shared'>,
 ): void {
   // feat-20260612 M2 / m2-6: Skin.joints[] now validated against
   // SkeletonAsset.jointCount (=1 here) at extract time; spawn one joint
@@ -246,9 +236,9 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
   it('(a) Skin + non-pbr-skin material -> SkinMaterialMismatchError routed + entity skipped', () => {
     const world = new World();
     const assets = makeAssetRegistry();
-    const meshHandle = registerSkinnedMesh(assets);
-    const unlitMatHandle = registerUnlitMaterial(assets);
-    const skeletonHandle = registerSkeleton(assets);
+    const meshHandle = registerSkinnedMesh(world);
+    const unlitMatHandle = registerUnlitMaterial(world);
+    const skeletonHandle = registerSkeleton(world);
     spawnCamera(world);
     spawnSkinnedRenderable(world, meshHandle, unlitMatHandle, skeletonHandle);
     propagateTransforms(world);
@@ -273,8 +263,8 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
   it('(b) pbr-skin material + non-skin mesh -> MaterialSkinAttrMissingError routed + entity skipped', () => {
     const world = new World();
     const assets = makeAssetRegistry();
-    const meshHandle = registerUnskinnedMesh(assets);
-    const skinMatHandle = registerPbrSkinMaterial(assets);
+    const meshHandle = registerUnskinnedMesh(world);
+    const skinMatHandle = registerPbrSkinMaterial(world);
     spawnCamera(world);
     spawnRenderable(world, meshHandle, skinMatHandle);
     propagateTransforms(world);
@@ -297,9 +287,9 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
   it('(c) Skin + pbr-skin material + skinned mesh -> no error routed', () => {
     const world = new World();
     const assets = makeAssetRegistry();
-    const meshHandle = registerSkinnedMesh(assets);
-    const skinMatHandle = registerPbrSkinMaterial(assets);
-    const skeletonHandle = registerSkeleton(assets);
+    const meshHandle = registerSkinnedMesh(world);
+    const skinMatHandle = registerPbrSkinMaterial(world);
+    const skeletonHandle = registerSkeleton(world);
     spawnCamera(world);
     spawnSkinnedRenderable(world, meshHandle, skinMatHandle, skeletonHandle);
     propagateTransforms(world);
@@ -315,10 +305,10 @@ describe('render-system-extract Skin / pbr-skin mismatch (AC-07 / w19)', () => {
   it('(d) D-5 continue semantics: bad-skin entity skipped does NOT abort sibling extract', () => {
     const world = new World();
     const assets = makeAssetRegistry();
-    const skinnedMesh = registerSkinnedMesh(assets);
-    const unskinnedMesh = registerUnskinnedMesh(assets);
-    const unlitMat = registerUnlitMaterial(assets);
-    const skeletonHandle = registerSkeleton(assets);
+    const skinnedMesh = registerSkinnedMesh(world);
+    const unskinnedMesh = registerUnskinnedMesh(world);
+    const unlitMat = registerUnlitMaterial(world);
+    const skeletonHandle = registerSkeleton(world);
     spawnCamera(world);
     // bad-skin entity (Skin + unlit material) -> mismatch -> skipped
     spawnSkinnedRenderable(world, skinnedMesh, unlitMat, skeletonHandle);

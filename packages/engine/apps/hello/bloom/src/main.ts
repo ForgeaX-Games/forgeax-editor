@@ -25,8 +25,8 @@
 // Recipe (charter P1 progressive disclosure):
 //   (1) createApp(canvas, {}, { shaderManifestUrl }) + spawn Camera with clear* fields
 //   (2) define the 5 standard components via defineComponent (globally live)
-//   (3) assets.register<MaterialAsset>(standard PBR) -> materialHandle for non-emissive
-//   (4) assets.register<MaterialAsset>(standard PBR emissive) -> emissiveHandle for emissive
+//   (3) world.allocSharedRef('MaterialAsset', standard PBR) -> materialHandle for non-emissive
+//   (4) world.allocSharedRef('MaterialAsset', standard PBR emissive) -> emissiveHandle for emissive
 //   (5) world.spawn emissive sphere + cube, DirectionalLight, Camera (save entity)
 //   (6) world.addSystem press-edge toggle + HUD sync
 //   (7) app.start()
@@ -49,7 +49,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -83,16 +83,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
-    console.error(
-      '[bloom] AssetRegistry is null (renderer construction did not complete successfully)',
-    );
-    return;
-  }
+  const world = app.world;
 
-  // Step 2: register standard PBR material for non-emissive geometry.
-  const matRes = assets.register<MaterialAsset>({
+  // Step 2: alloc standard PBR material for non-emissive geometry.
+  // feat-20260614 M8 (D-18): material handles are minted per-World via
+  // world.allocSharedRef (the AssetRegistry no longer holds handles).
+  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -107,17 +103,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       metallic: 0.0,
       roughness: 0.4,
     },
-  });
-  if (!matRes.ok) {
-    console.error('[bloom] material register failed:', matRes.error.code);
-    return;
-  }
-  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = matRes.value;
+  } as MaterialAsset);
 
-  // Step 3: register emissive PBR material (emissiveIntensity > 1.0).
+  // Step 3: alloc emissive PBR material (emissiveIntensity > 1.0).
   // The default-standard-pbr emissive factor produces >1.0 HDR values
   // that the bloom bright-pass extracts (threshold 1.0).
-  const emissiveRes = assets.register<MaterialAsset>({
+  const emissiveHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -134,17 +125,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       emissive: [1.0, 0.7, 0.3],
       emissiveIntensity: 2.0,
     },
-  });
-  if (!emissiveRes.ok) {
-    console.error('[bloom] emissive material register failed:', emissiveRes.error.code);
-    return;
-  }
-  const emissiveHandle: Handle<'MaterialAsset', 'unmanaged'> = emissiveRes.value;
+  } as MaterialAsset);
 
-  // Step 4: register the 5 standard components.
-  const world = app.world;
-
-  // Step 5: spawn emissive sphere (left) and non-emissive cube (right).
+  // Step 4: spawn emissive sphere (left) and non-emissive cube (right).
   // The sphere produces HDR-bright pixels for bloom; the cube stays
   // below threshold as a visual reference.
   world.spawn(

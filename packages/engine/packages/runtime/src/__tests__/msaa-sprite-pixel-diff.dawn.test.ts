@@ -100,11 +100,12 @@ function buildSyntheticRgba(): { width: number; height: number; data: Uint8Array
   return { width: w, height: h, data: bytes };
 }
 
-function spawnSpriteScene(
-  world: World,
-  spriteMaterial: ReturnType<World['spawn']> extends never ? never : unknown,
-  antialias: number,
-): void {
+function spawnSpriteScene(world: World, spriteMaterialPayload: unknown, antialias: number): void {
+  // feat-20260614 M8: MeshRenderer.materials holds a per-World column handle
+  // (numeric); mint it from the catalogued material payload on the World the
+  // scene is spawned into. The material's texture/sampler paramValues are GUID
+  // strings the extract stage resolves to per-World handles.
+  const spriteMaterial = world.allocSharedRef('MaterialAsset', spriteMaterialPayload);
   // A rotated quad gives diagonal sprite edges so MSAA has something to
   // smooth (the camera-facing axis-aligned quad would expose almost no
   // edge to antialias).
@@ -230,10 +231,14 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     const assets = renderer.assets;
     if (assets === null) throw new Error('AssetRegistry is null');
 
-    // Register + upload a small sprite texture, a sampler, and a
+    // Catalogue + upload a small sprite texture, a sampler, and a
     // forgeax::sprite material (shadingModel='sprite' is derived from the
     // shader id at extract; that is what trips splitLdrSprite in the
-    // record stage).
+    // record stage). feat-20260614 M8: AssetRegistry holds GUID->payload only
+    // (no handle concept); texture/sampler are referenced from the material
+    // paramValues by GUID string and resolved to per-World column handles at
+    // extract. The explicit uploadTexture call exercises the GPU residency
+    // path via a column handle minted on an upload-only World.
     const synth = buildSyntheticRgba();
     const synthPod = {
       kind: 'texture' as const,
@@ -244,10 +249,15 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
       colorSpace: 'srgb' as const,
       mipmap: false,
     };
-    const texRes = assets.register(synthPod as never);
-    expect(texRes.ok, 'sprite texture register').toBe(true);
-    if (!texRes.ok) return;
-    const textureHandle = texRes.value;
+    const TEX_GUID = '00000000-0000-7000-8000-0000000005a1';
+    const SAMPLER_GUID = '00000000-0000-7000-8000-0000000005a2';
+    const MATERIAL_GUID = '00000000-0000-7000-8000-0000000005a3';
+    const texCatalog = assets.catalog(TEX_GUID, synthPod as never);
+    expect(texCatalog.ok, 'sprite texture catalog').toBe(true);
+    if (!texCatalog.ok) return;
+
+    const uploadWorld = new World();
+    const textureHandle = uploadWorld.allocSharedRef('TextureAsset', synthPod);
     const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod as never, {
       bytes: synth.data,
       width: synth.width,
@@ -259,37 +269,36 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     expect(uploadRes.ok, 'sprite texture upload').toBe(true);
     if (!uploadRes.ok) return;
 
-    const samplerRes = assets.register({
+    const samplerCatalog = assets.catalog(SAMPLER_GUID, {
       kind: 'sampler',
       magFilter: 'linear',
       minFilter: 'linear',
       addressModeU: 'repeat',
       addressModeV: 'repeat',
     } as never);
-    expect(samplerRes.ok, 'sampler register').toBe(true);
-    if (!samplerRes.ok) return;
-    const samplerHandle = samplerRes.value;
+    expect(samplerCatalog.ok, 'sampler catalog').toBe(true);
+    if (!samplerCatalog.ok) return;
 
-    const matRes = assets.register({
-      kind: 'material',
+    const spriteMaterialPayload = {
+      kind: 'material' as const,
       passes: [
         { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
       ],
       paramValues: {
         baseColor: [1.0, 0.4, 0.4, 1.0],
-        texture: textureHandle,
-        sampler: samplerHandle,
+        texture: TEX_GUID,
+        sampler: SAMPLER_GUID,
         region: [0, 0, 1, 1],
         pivot: [0.5, 0.5],
       },
-    } as never);
-    expect(matRes.ok, 'sprite material register').toBe(true);
-    if (!matRes.ok) return;
-    const spriteMaterial = matRes.value;
+    };
+    const matCatalog = assets.catalog(MATERIAL_GUID, spriteMaterialPayload as never);
+    expect(matCatalog.ok, 'sprite material catalog').toBe(true);
+    if (!matCatalog.ok) return;
 
     // Pass 1: antialias=none baseline.
     const worldNone = new World();
-    spawnSpriteScene(worldNone, spriteMaterial, ANTIALIAS_NONE);
+    spawnSpriteScene(worldNone, spriteMaterialPayload, ANTIALIAS_NONE);
     const drawnNone = renderer.draw(worldNone);
     expect(drawnNone.ok, 'LDR sprite none-AA draw').toBe(true);
     await device.queue.onSubmittedWorkDone();
@@ -303,7 +312,7 @@ describe('feat-20260604-msaa M2 w9 [F-1]: LDR sprite + MSAA split sub-pass cover
     const msaaErrors: Array<{ code: string }> = [];
     const unsubscribe = renderer.onError((err) => msaaErrors.push({ code: err.code }));
     const worldMsaa = new World();
-    spawnSpriteScene(worldMsaa, spriteMaterial, ANTIALIAS_MSAA);
+    spawnSpriteScene(worldMsaa, spriteMaterialPayload, ANTIALIAS_MSAA);
     const drawnMsaa = renderer.draw(worldMsaa);
     await device.queue.onSubmittedWorkDone();
     if (typeof unsubscribe === 'function') unsubscribe();

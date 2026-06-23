@@ -14,7 +14,7 @@
 //   4. shader.registerMaterialShader('my-game::pulse-material',
 //      { source: composed wgsl, paramSchema, bindingLayout: [] }).
 //      The composed wgsl is read out of dist/shaders/<hash>.composed.wgsl.
-//   5. assets.register<MaterialAsset>({ kind:'material',
+//   5. world.allocSharedRef('MaterialAsset', { kind:'material',
 //      passes:[{shader:'my-game::pulse-material',...}], paramValues })
 //      with the paramValues object held for per-frame mutation.
 //   6. Spawn cube + camera + DirectionalLight; await renderer.ready.
@@ -241,7 +241,8 @@ const paramValues = {
   metallic: 0,
   roughness: 2,
 };
-const matResult = assets.register({
+const world = new World();
+const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -253,25 +254,13 @@ const matResult = assets.register({
   ],
   paramValues,
 });
-if (!matResult.ok) {
-  console.error(`[smoke] FAIL - register<MaterialAsset>: ${matResult.error.code}`);
-  process.exit(1);
-}
-const materialHandle = matResult.value;
 
 const boxRes = createBoxGeometry(1, 1, 1);
 if (!boxRes.ok) {
   console.error(`[smoke] FAIL - createBoxGeometry: ${boxRes.error.code}`);
   process.exit(1);
 }
-const boxAssetRes = assets.register(boxRes.value);
-if (!boxAssetRes.ok) {
-  console.error(`[smoke] FAIL - register box mesh: ${boxAssetRes.error.code}`);
-  process.exit(1);
-}
-const boxMeshHandle = boxAssetRes.value;
-
-const world = new World();
+const boxMeshHandle = world.allocSharedRef('MeshAsset', boxRes.value);
 
 world
   .spawn(
@@ -461,7 +450,10 @@ const msaaCustomParamValues = {
   metallic: 0,
   roughness: 2,
 };
-const msaaCustomMatResult = assets.register({
+// feat-20260614 M8 (D-17): handles are per-World; mint the custom material into
+// worldMsaaCustom via world.allocSharedRef (bare Handle, not a Result).
+const worldMsaaCustom = new World();
+const msaaCustomMatHandle = worldMsaaCustom.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [{
     name: 'Forward',
@@ -471,17 +463,13 @@ const msaaCustomMatResult = assets.register({
   }],
   paramValues: msaaCustomParamValues,
 });
-if (!msaaCustomMatResult.ok) {
-  console.error(`[smoke] FAIL - Pass-2 register custom material: ${msaaCustomMatResult.error.code}`);
-  process.exit(1);
-}
-const msaaCustomMatHandle = msaaCustomMatResult.value;
+// Mesh handles are per-World too; mint a fresh box handle in this World.
+const msaaCustomMeshHandle = worldMsaaCustom.allocSharedRef('MeshAsset', boxRes.value);
 
-const worldMsaaCustom = new World();
 worldMsaaCustom
   .spawn(
     { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
-    { component: MeshFilter, data: { assetHandle: boxMeshHandle } },
+    { component: MeshFilter, data: { assetHandle: msaaCustomMeshHandle } },
     { component: MeshRenderer, data: { materials: [msaaCustomMatHandle] } },
   )
   .unwrap();
@@ -501,7 +489,10 @@ const msaaPbrParamValues = {
   metallic: 0,
   roughness: 2,
 };
-const msaaPbrMatResult = assets.register({
+// feat-20260614 M8 (D-17): mint the PBR material into worldMsaaPbr (per-World
+// handle) via world.allocSharedRef.
+const worldMsaaPbr = new World();
+const msaaPbrMatHandle = worldMsaaPbr.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [{
     name: 'Forward',
@@ -511,17 +502,13 @@ const msaaPbrMatResult = assets.register({
   }],
   paramValues: msaaPbrParamValues,
 });
-if (!msaaPbrMatResult.ok) {
-  console.error(`[smoke] FAIL - Pass-2 register PBR material: ${msaaPbrMatResult.error.code}`);
-  process.exit(1);
-}
-const msaaPbrMatHandle = msaaPbrMatResult.value;
+// Mesh handles are per-World too; mint a fresh box handle in this World.
+const msaaPbrMeshHandle = worldMsaaPbr.allocSharedRef('MeshAsset', boxRes.value);
 
-const worldMsaaPbr = new World();
 worldMsaaPbr
   .spawn(
     { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
-    { component: MeshFilter, data: { assetHandle: boxMeshHandle } },
+    { component: MeshFilter, data: { assetHandle: msaaPbrMeshHandle } },
     { component: MeshRenderer, data: { materials: [msaaPbrMatHandle] } },
   )
   .unwrap();

@@ -161,11 +161,8 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const got = reg.get<MeshAsset>(result.value);
-    expect(got.ok).toBe(true);
-    if (!got.ok) return;
-
-    const mesh = got.value;
+    // D-17: loadByGuid returns the payload directly (registry holds no handles).
+    const mesh = result.value;
     expect(mesh.kind).toBe('mesh');
     expect(mesh.vertices.length).toBe(vertices.length);
     for (let i = 0; i < vertices.length; i++) {
@@ -224,11 +221,8 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const got = reg.get<MeshAsset>(result.value);
-    expect(got.ok).toBe(true);
-    if (!got.ok) return;
-
-    const mesh = got.value;
+    // D-17: loadByGuid returns the payload directly (registry holds no handles).
+    const mesh = result.value;
     expect(mesh.kind).toBe('mesh');
     expect(mesh.vertices.length).toBe(verticesArr.length);
     expect(mesh.vertices[0]).toBe(0.25);
@@ -258,11 +252,8 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const got = reg.get<MeshAsset>(result.value);
-    expect(got.ok).toBe(true);
-    if (!got.ok) return;
-
-    const mesh = got.value;
+    // D-17: loadByGuid returns the payload directly (registry holds no handles).
+    const mesh = result.value;
     expect(mesh.kind).toBe('mesh');
     expect(mesh.vertices.length).toBe(0);
     expect(mesh.indices === undefined || mesh.indices.length === 0).toBe(true);

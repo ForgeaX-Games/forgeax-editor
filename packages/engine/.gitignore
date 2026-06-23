@@ -76,6 +76,10 @@ apps/**/*.tsbuildinfo
 *.mpg
 *.mpeg
 *.3gp
+# feat-20260617 host-engine-contract: the video-cutscene demo ships one tiny
+# self-contained VP8/WebM as the cutscene source so the browser smoke can play
+# a real video end-to-end (zero external deps, zero npm video lib -- OOS-7).
+!apps/hello/video-cutscene/public/cutscene.webm
 
 .claude/scheduled_tasks.lock
 .claude/worktrees/

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { useTranslation } from '@/i18n';
 import type { PillPayload } from './pill';
 import './PillChip.css';
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function PillChip({ payload, editable = false }: Props) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const chipRef = useRef<HTMLSpanElement | null>(null);
@@ -43,7 +45,7 @@ export function PillChip({ payload, editable = false }: Props) {
           {payload.tooltip.lines.map((l, i) => (
             <span key={i} className="kbl-pill-tip-line">{l}</span>
           ))}
-          <span className="kbl-pill-tip-detail" title="发送给 AI 的展开形式">{payload.detail}</span>
+          <span className="kbl-pill-tip-detail" title={t('pillChip.expandedFormTip')}>{payload.detail}</span>
         </span>
       )}
     </span>

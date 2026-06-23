@@ -1,0 +1,174 @@
+/* InfoPanel — standalone dockable Blender-INFO-style log panel. */
+
+.info-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--color-background-default);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* ── toolbar (filters + copy-all + clear) ─────────────────────────────────── */
+.ip-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--color-background-elevated);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.ip-filters {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.ip-filter-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--color-divider-default);
+  margin: 0 4px;
+}
+.ip-filter {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.5;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ip-filter:hover { opacity: 0.85; background: rgba(255, 255, 255, 0.05); }
+.ip-filter.on { opacity: 1; background: rgba(90, 130, 220, 0.22); box-shadow: inset 0 0 0 1px var(--color-accent, #5a82dc); }
+.ip-filter--info svg    { color: var(--color-text-tertiary); }
+.ip-filter--success svg { color: #5fd17a; }
+.ip-filter--warn svg    { color: #f4c542; }
+.ip-filter--error svg   { color: #ff6a6a; }
+
+.ip-spacer { flex: 1 1 auto; }
+
+.ip-tb-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+.ip-tb-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.06); }
+.ip-tb-btn[disabled] { opacity: 0.3; cursor: default; }
+
+/* ── scrolling list ───────────────────────────────────────────────────────── */
+.ip-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.ip-empty {
+  padding: 14px;
+  opacity: 0.5;
+  font-style: italic;
+}
+
+/* ── one log row ──────────────────────────────────────────────────────────── */
+.ip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 8px;
+  line-height: 18px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.ip-row:hover { background: rgba(255, 255, 255, 0.04); }
+
+.ip-icon { flex-shrink: 0; }
+.ip-row--info    .ip-icon { color: var(--color-text-tertiary); }
+.ip-row--success .ip-icon { color: #5fd17a; }
+.ip-row--warn    .ip-icon { color: #f4c542; }
+.ip-row--error   .ip-icon { color: #ff6a6a; }
+.ip-row--error .ip-msg { color: #ffb3b3; }
+.ip-row--warn  .ip-msg { color: #f6d590; }
+
+.ip-row--latest {
+  background: rgba(80, 130, 220, 0.14);
+  border-left-color: var(--color-accent, #5a82dc);
+}
+
+/* click-to-copy flash */
+.ip-row--copied {
+  background: rgba(95, 209, 122, 0.20) !important;
+  border-left-color: #5fd17a;
+}
+
+.ip-time {
+  flex-shrink: 0;
+  opacity: 0.5;
+  font-size: 11px;
+}
+
+.ip-source {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 5px;
+  border-radius: 3px;
+  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ip-source--play   { color: #7fc7ff; }
+.ip-source--edit   { color: #c79bff; }
+.ip-source--plugin { color: #8ad6a0; }
+.ip-source--engine { color: #ffc27f; }
+.ip-source--shell  { color: var(--color-text-tertiary); }
+
+.ip-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ×N repeat-fold badge */
+.ip-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: #ffcf7a;
+  background: rgba(244, 160, 66, 0.18);
+}
+
+.ip-copy-hint {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0;
+  color: var(--color-text-tertiary);
+}
+.ip-row:hover .ip-copy-hint { opacity: 0.7; }
+.ip-row--copied .ip-copy-hint { opacity: 1; color: #5fd17a; }

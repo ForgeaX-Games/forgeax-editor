@@ -1,7 +1,7 @@
 // feat-20260614-ecs-managed-lifecycle-ssot M1 t-w1: store-unit tests for
-// ManagedRefStore.release order + throw-safety + slot reuse.
+// UniqueRefStore.release order + throw-safety + slot reuse.
 //
-// These tests drive ManagedRefStore directly (no World) per research
+// These tests drive UniqueRefStore directly (no World) per research
 // Finding 1.5: the regression repro path is achievable with a spy callback,
 // no Rapier / World fixture required. Verifies AC-01, AC-02, AC-06, AC-07
 // (requirements §3.1, §5).
@@ -13,12 +13,12 @@
 //     slot). Documented inline so reviewer can correlate the carryover.
 
 import { describe, expect, it, vi } from 'vitest';
-import { ManagedRefDoubleReleaseError } from '../errors';
-import { ManagedRefStore } from '../managed-ref-store';
+import { UniqueRefDoubleReleaseError } from '../errors';
+import { UniqueRefStore } from '../unique-ref-store';
 
-describe('ManagedRefStore release ordering + throw-safety (feat-20260614 M1)', () => {
+describe('UniqueRefStore release ordering + throw-safety (feat-20260614 M1)', () => {
   it('AC-01: releaseCallbacks entry is removed BEFORE onRelease fires', () => {
-    const store = new ManagedRefStore();
+    const store = new UniqueRefStore();
     let observedHasCallback: boolean | null = null;
 
     // Spy reads the private releaseCallbacks Map at the moment cb fires.
@@ -47,7 +47,7 @@ describe('ManagedRefStore release ordering + throw-safety (feat-20260614 M1)', (
   });
 
   it('AC-02 + AC-06: throwing onRelease re-throws once; second release returns DoubleRelease (no gen needed)', () => {
-    const store = new ManagedRefStore();
+    const store = new UniqueRefStore();
     const onRelease = vi.fn((_payload: { id: number }) => {
       throw new Error('intentional cleanup failure');
     });
@@ -59,18 +59,18 @@ describe('ManagedRefStore release ordering + throw-safety (feat-20260614 M1)', (
     expect(onRelease).toHaveBeenCalledTimes(1);
 
     // Second release must NOT re-fire cb (callback table already cleared by w2)
-    // and MUST return ManagedRefDoubleReleaseError detected via payload absence
+    // and MUST return UniqueRefDoubleReleaseError detected via payload absence
     // (no gen tag required - AC-06 explicitly: detection is gen-free).
     const second = store.release(handle);
     expect(second.ok).toBe(false);
     if (!second.ok) {
-      expect(second.error).toBeInstanceOf(ManagedRefDoubleReleaseError);
+      expect(second.error).toBeInstanceOf(UniqueRefDoubleReleaseError);
     }
     expect(onRelease).toHaveBeenCalledTimes(1);
   });
 
   it('AC-07: 1000-iteration alloc/release loop reuses slots (no unbounded growth)', () => {
-    const store = new ManagedRefStore();
+    const store = new UniqueRefStore();
 
     for (let i = 0; i < 1000; i++) {
       const handle = store.alloc('Test', { id: i });

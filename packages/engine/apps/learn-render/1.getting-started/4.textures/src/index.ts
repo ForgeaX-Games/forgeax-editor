@@ -114,6 +114,7 @@ import {
   MeshFilter,
   MeshRenderer,
   perspective,
+  resolveAssetHandle,
   Transform,
 } from '@forgeax/engine-runtime';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -260,17 +261,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // HANDLE_CUBE procedural geometry; alias the GUID onto that asset
     // so the disk-schema reads the same as a regular .pack.json mesh
     // entry while the runtime continues to draw the procedural cube
-    // without re-decoding vertex data. HANDLE_CUBE is the runtime ECS
-    // brand `EcsHandle<'MeshAsset','unmanaged'>`; the AssetRegistry
-    // surface narrows on the typed POD so we cast through `unknown`
-    // once at the boundary (charter P4: the cast lives at the brand
-    // boundary, not inside the recipe steps).
-    const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
-    if (!cubeAsset.ok) {
+    // without re-decoding vertex data. The builtin payload is resolved
+    // off HANDLE_CUBE via the two-tier `resolveAssetHandle` (M8 D-15) and
+    // re-catalogued under the demo GUID via `catalog`.
+    const world = new World();
+    const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
+    if (!cubeAssetRes.ok) {
       console.error('[learn-render 1.4 textures] HANDLE_CUBE asset unavailable');
       return;
     }
-    assets.registerWithGuid<MeshAsset>(cubeGuidRes.value, cubeAsset.value);
+    assets.catalog<MeshAsset>(cubeGuidRes.value, cubeAssetRes.value);
 
     const matPack = materialPackJson as unknown as MaterialPackFile;
     const matEntry = matPack.assets.find((a) => a.kind === 'material');
@@ -278,6 +278,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       console.error('[learn-render 1.4 textures] material-wood.pack.json missing material entry');
       return;
     }
+    // loadByGuid returns the texture PAYLOAD (M8 D-17); mint a user-tier column
+    // handle so the baseColorTexture slot carries a resolved numeric Handle.
+    const containerTexHandle = unwrapHandle(
+      world.allocSharedRef('TextureAsset', containerHandleRes.value),
+    );
     const woodMaterial: MaterialAsset = {
       kind: 'material',
       passes: [
@@ -290,10 +295,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       ],
       paramValues: {
         baseColor: matEntry.payload.paramValues.baseColor,
-        baseColorTexture: containerHandleRes.value,
+        baseColorTexture: containerTexHandle,
       },
     };
-    assets.registerWithGuid<MaterialAsset>(matGuidRes.value, woodMaterial);
+    assets.catalog<MaterialAsset>(matGuidRes.value, woodMaterial);
 
     const cubeHandleRes = await assets.loadByGuid<MeshAsset>(cubeGuidRes.value);
     const matHandleRes = await assets.loadByGuid<MaterialAsset>(matGuidRes.value);
@@ -305,29 +310,28 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       );
       return;
     }
+    // loadByGuid returns payloads (M8 D-17); mint user-tier column handles.
+    const cubeHandle = world.allocSharedRef('MeshAsset', cubeHandleRes.value);
+    const matHandle = world.allocSharedRef('MaterialAsset', matHandleRes.value);
 
     // Step (3): spawn the textured cube + camera onto the world.
     //
-    // `MeshFilter.assetHandle` binds the GUID-derived `cubeHandleRes.value`
-    // -- the user-handle (id >= 1024) minted by `registerWithGuid` above.
-    // The runtime `AssetRegistry` auto-uploads GPU vertex/index buffers on
-    // `register({kind:'mesh'})` / `registerWithGuid({kind:'mesh'})` (asset-
-    // registry.ts uploadMeshById call sites), and the record stage looks
-    // GPU residency up via `getMeshGpuHandles(handle)` (render-system-
-    // record.ts) -- both paths accept user-handle ids transparently, so no
-    // builtin alias map is required (feat-20260519 M-2 retracted the V-3
-    // punt; the regression lock lives in
-    // packages/runtime/src/__tests__/dawn/user-handle-mesh-render.dawn.test.ts).
-    const world = new World();
+    // `MeshFilter.assetHandle` binds the minted user-tier `cubeHandle`. The
+    // runtime auto-uploads GPU vertex/index buffers when the column is first
+    // recorded; the record stage looks GPU residency up via
+    // `getMeshGpuHandles(handle)` (render-system-record.ts) -- user-tier
+    // handle ids are accepted transparently (feat-20260519 M-2; regression
+    // lock in packages/runtime/src/__tests__/dawn/user-handle-mesh-render
+    // .dawn.test.ts).
     world.spawn(
       {
         component: Transform,
         data: {},
       },
-      { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
+      { component: MeshFilter, data: { assetHandle: cubeHandle } },
       {
         component: MeshRenderer,
-        data: { materials: [matHandleRes.value] },
+        data: { materials: [matHandle] },
       },
     ).unwrap();
     world.spawn(
@@ -347,23 +351,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     ).unwrap();
 
-    // ac-09: AI-user TS-inference proof point. The MaterialAsset POD
-    // returned by AssetRegistry.get<MaterialAsset>(handle) carries
-    // paramValues.baseColorTexture: Handle<TextureAsset> | undefined;
-    // assigning it to a typed local needs no `as` cast (charter P4
-    // consistent abstraction). AI users read this block as the single
-    // grep target for AC-09.
-    const matLookup = assets.get<MaterialAsset>(matHandleRes.value);
-    if (matLookup.ok) {
-      const mat = matLookup.value;
-      const slot =
-        (mat.paramValues?.baseColorTexture as Handle<'TextureAsset', 'unmanaged'> | undefined);
-      console.warn(
-        `[learn-render 1.4 textures] baseColorTexture slot=${
-          slot === undefined ? 'undefined' : unwrapHandle(slot).toString()
-        }`,
-      );
-    }
+    // ac-09: AI-user TS-inference proof point. loadByGuid<MaterialAsset>
+    // returns the MaterialAsset POD directly (M8 D-17); its
+    // paramValues.baseColorTexture: Handle<TextureAsset> | undefined assigns
+    // to a typed local with no `as` cast (charter P4 consistent abstraction).
+    // AI users read this block as the single grep target for AC-09.
+    const mat = matHandleRes.value;
+    const slot =
+      (mat.paramValues?.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined);
+    console.warn(
+      `[learn-render 1.4 textures] baseColorTexture slot=${
+        slot === undefined ? 'undefined' : unwrapHandle(slot).toString()
+      }`,
+    );
 
     // Step (4): rAF-driven draw loop. RenderSystem materialBindGroup
     // automatically consumes baseColorTexture via AssetRegistry.get

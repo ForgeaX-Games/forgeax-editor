@@ -9,10 +9,12 @@ import { useEffect, useState } from 'react';
 import {
   getSceneId, useSceneList, useSceneFile, readPlayConfig, writePlayConfig,
 } from '@forgeax/editor-shared';
+import { useTranslation } from '@forgeax/editor-shared/i18n';
 
 const CAMPAIGN = '__campaign__';
 
 export function LauncherPanel() {
+  const { t } = useTranslation();
   const scenes = useSceneList();
   const current = useSceneFile();
   const [value, setValue] = useState<string>(CAMPAIGN);
@@ -27,45 +29,58 @@ export function LauncherPanel() {
   }, []);
 
   if (getSceneId() === 'default') {
-    return <div className="panel ed-launcher"><h3>启动器</h3><div className="muted" style={{ padding: '4px 10px' }}>未打开游戏。</div></div>;
+    return <div className="panel ed-launcher"><h3>{t('editor.launcher.title')}</h3><div className="muted" style={{ padding: '4px 10px' }}>{t('editor.launcher.noGameOpen')}</div></div>;
   }
 
   const pick = (v: string): void => {
     setValue(v);
     void writePlayConfig(v === CAMPAIGN ? { mode: 'campaign' } : { mode: 'level', level: v })
-      .then((ok) => { if (ok) setSavedAt(Date.now()); });
+      .then((ok) => {
+        if (!ok) return;
+        setSavedAt(Date.now());
+        // Switch the running ▶ Play to the picked level LIVE — post VAG_SET_LEVEL
+        // so the game switches in place (unloadLevel+loadLevel) instead of
+        // reloading the Play iframe (a reload re-creates the WebGPU context, which
+        // wedges WKWebView's GPU process). CAMPAIGN → first level. Multi-level
+        // games handle it; single-scene games ignore it (no-op). PlaySurface lives
+        // in the Studio shell (top window) and forwards it to the game iframe.
+        const level = v === CAMPAIGN ? (levels[0]?.id ?? '') : v;
+        if (level) {
+          try { window.top?.postMessage({ type: 'VAG_SET_LEVEL', level }, '*'); } catch { /* cross-origin */ }
+        }
+      });
   };
 
   return (
     <div className="panel ed-launcher" data-testid="panel-launcher">
-      <h3>启动器</h3>
+      <h3>{t('editor.launcher.title')}</h3>
 
       <div className="launcher-section">
-        <div className="launcher-label">本窗口正在编辑</div>
-        <div className="launcher-current" title="从 Assets 面板双击其它关卡/资产可切换（或在新窗口打开）">
+        <div className="launcher-label">{t('editor.launcher.editingInThisWindow')}</div>
+        <div className="launcher-current" title={t('editor.launcher.editingHint')}>
           {currentEntry
             ? `${currentEntry.group === 'asset' ? '✎' : '🗺'} ${currentEntry.name ?? currentEntry.id}`
-            : '主场景'}
+            : t('editor.launcher.mainScene')}
         </div>
       </div>
 
       <div className="launcher-section">
-        <div className="launcher-label">▶ Play 运行</div>
+        <div className="launcher-label">{t('editor.launcher.playRun')}</div>
         <label className="launcher-option">
           <input type="radio" name="play-target" checked={value === CAMPAIGN} onChange={() => pick(CAMPAIGN)} />
-          <span>全局 (main) — 完整战役，从第 1 关开始</span>
+          <span>{t('editor.launcher.campaignOption')}</span>
         </label>
         {levels.map((s) => (
           <label key={s.id} className="launcher-option">
             <input type="radio" name="play-target" checked={value === s.id} onChange={() => pick(s.id)} />
-            <span>仅 {s.name ?? s.id}</span>
+            <span>{t('editor.launcher.levelOnly', { name: s.name ?? s.id })}</span>
           </label>
         ))}
       </div>
 
       <div className="muted launcher-hint">
-        写入 play-config.json（本地启动器状态，不进版本库）；▶ Play 启动时读取。
-        {savedAt > 0 && <span className="launcher-saved"> ✓ 已保存</span>}
+        {t('editor.launcher.configHint')}
+        {savedAt > 0 && <span className="launcher-saved"> {t('editor.launcher.saved')}</span>}
       </div>
     </div>
   );

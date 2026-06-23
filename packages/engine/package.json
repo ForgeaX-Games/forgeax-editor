@@ -8,7 +8,7 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "packageManager": "pnpm@11.5.0",
+  "packageManager": "pnpm@11.7.0",
   "workspaces": [
     "packages/*",
     "apps/*",
@@ -19,10 +19,11 @@
   ],
   "scripts": {
     "build": "pnpm -r build && tsc -b",
-    "typecheck": "tsc -b && pnpm -r --filter './apps/**' --parallel run typecheck",
+    "typecheck": "tsc -b && node scripts/typecheck-apps.mjs",
     "test": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
     "test:unit": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
     "test:browser": "vitest run --project=browser",
+    "test:browser:watch": "vitest --project=browser",
     "test:browser:wgpu-wasm": "vitest run --project=browser packages/engine/__tests__/renderer-wgpu-wasm.browser.test.ts",
     "test:dawn": "pnpm -r build && vitest run --project=dawn",
     "test:browser-no-webgpu": "vitest run --project=browser-no-webgpu",

@@ -36,7 +36,7 @@ import { describe, expect, it } from 'vitest';
 
 
 import { GpuResourceStore } from '@forgeax/engine-runtime';
-import { toUnmanaged } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 
 function makeWoodTexture(format: GPUTextureFormat, colorSpace: 'srgb' | 'linear'): TextureAsset {
   // Hand-crafted 1x1 SaddleBrown stand-in for the consistency-assertion
@@ -73,7 +73,7 @@ describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + A
     // carries the format, the decoded image carries colorSpace (D-2).
     const store = new GpuResourceStore();
     const pod = makeWoodTexture('rgba8unorm-srgb', 'srgb');
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('linear');
     const res = await store.uploadTexture(handle, pod, decoded);
     expect(res.ok).toBe(false);
@@ -90,7 +90,7 @@ describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + A
   it('AC-08 reverse mirror: format=rgba8unorm + decoded colorSpace=srgb emits image-format-unsupported', async () => {
     const store = new GpuResourceStore();
     const pod = makeWoodTexture('rgba8unorm', 'linear');
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('srgb');
     const res = await store.uploadTexture(handle, pod, decoded);
     expect(res.ok).toBe(false);
@@ -106,7 +106,7 @@ describe('learn-render section 1.4 textures sRGB / linear consistency (AC-08 + A
   it('AC-08 happy: format=rgba8unorm-srgb + decoded colorSpace=srgb passes the assertion', async () => {
     const store = new GpuResourceStore();
     const pod = makeWoodTexture('rgba8unorm-srgb', 'srgb');
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = makeDecodedWood('srgb');
     const res = await store.uploadTexture(handle, pod, decoded);
     // No GPU device wired (configureGpuDevice not called), so uploadTexture

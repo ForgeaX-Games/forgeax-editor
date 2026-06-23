@@ -10,12 +10,14 @@
 // or the buffer count would grow across repeated calls. This test
 // validates the structural invariants on a real GPU device.
 
+import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
+import { ok } from '@forgeax/engine-rhi';
 import type { CubeTextureAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry, BUILTIN_FLOATS_PER_VERTEX } from '../../asset-registry';
+import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { createDefaultLoaderRegistry } from '../../wire-default-loaders';
+import { resolveAssetHandle } from '../../resolve-asset-handle';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -92,22 +94,18 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
+      const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
       const mesh = makeSmallMesh();
-      const handle = reg.register<MeshAsset>(mesh).unwrap();
+      const handle = world.allocSharedRef('MeshAsset', mesh);
       // Pull-model: explicit ensureResident uploads the GPU buffers.
       const residentRes = store.ensureResident(handle, mesh);
       expect(residentRes.ok).toBe(true);
@@ -143,22 +141,18 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
+      const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
       const small = makeSmallMesh();
-      const handle = reg.register<MeshAsset>(small).unwrap();
+      const handle = world.allocSharedRef('MeshAsset', small);
       const residentRes = store.ensureResident(handle, small);
       expect(residentRes.ok).toBe(true);
       const before = store.getMeshGpuHandles(handle);
@@ -189,8 +183,8 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       // indexCount should reflect the larger data.
       expect(after.indexCount).toBe(larger.indices.length);
 
-      // The handle id is unchanged — get<MeshAsset> still works.
-      const result = reg.get<MeshAsset>(handle);
+      // The handle id is unchanged — resolveAssetHandle still returns the payload.
+      const result = resolveAssetHandle<MeshAsset>(world, handle);
       expect(result.ok).toBe(true);
     },
   );
@@ -203,22 +197,18 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: ShaderRegistry stub for dawn test
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
       const store = new GpuResourceStore();
+      const world = new World();
       store.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
       const mesh = makeSmallMesh();
-      const handle = reg.register<MeshAsset>(mesh).unwrap();
+      const handle = world.allocSharedRef('MeshAsset', mesh);
       const residentRes = store.ensureResident(handle, mesh);
       expect(residentRes.ok).toBe(true);
       const before = store.getMeshGpuHandles(handle);

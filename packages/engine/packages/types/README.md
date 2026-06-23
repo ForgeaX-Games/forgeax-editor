@@ -266,6 +266,23 @@ channelMap?: {
 - [`@forgeax/engine-rhi-webgpu`](../rhi-webgpu) -- WebGPU thin shim implementation (M2 introduced).
 - [`@forgeax/engine-runtime`](../engine) -- async factory entry (M3 consumes this package indirectly via `@forgeax/engine-rhi-webgpu` injection).
 
+### Name disambiguation (three layers)
+
+The unqualified word "name" appears at three different semantic layers. Confusing them leads to silent bugs -- each layer has a distinct storage location, resolution rule, and consumer.
+
+| Layer | What it is | Where it lives | How to read it | When to use it |
+|:--|:--|:--|:--|:--|
+| **Asset identity `name`** | The human-readable segment in `<packagePath>.<name>` -- a derived identity from the `Package` the asset belongs to, never stored on the POD | `AssetRegistry.resolveName(guid)` calls `deriveAssetName` pure function; the XOR rule (single-asset package -> basename(path), multi-asset -> `.pack.json assets[].name`, no-package -> empty string or stored self-name) is SSOT | `reg.resolveName(guid)` | Inspector display, error messages, debug logs -- anywhere a human (or AI) needs to identify an asset |
+| **Entity `Name` component** | An ECS component (`{ value: string }`) attached to spawned entities | ECS world storage (`world.get(entity, Name)`) | `world.get(e, Name).value` | Scene-graph debugging, joint-path resolution in skinning -- anything keyed off an entity's glTF node name. Unchanged by this feat (OOS-5) |
+| **`ShaderAsset.name`** | Registration identifier of a material shader (e.g. `'forgeax::default-standard-pbr'`) | `ShaderAsset.name` field on the POD -- the only `name` field on any Asset POD that is NOT OOS-2 | `(asset as ShaderAsset).name` in ShaderRegistry code paths; not exposed through `resolveName` | `MaterialPassDescriptor.shader` routing, `ShaderRegistry.lookupMaterialShader` -- the shader-authoring contract between material and pipeline |
+
+> [!TIP]
+> **How to choose**: when displaying an asset to a human, use `resolveName(guid)` (layer 1). When reading a spawned entity's original node name from glTF/FBX, use the `Name` ECS component (layer 2). When registering a custom material shader and binding it to a `MaterialPassDescriptor`, use `ShaderAsset.name` (layer 3). The three layers coexist and do not conflict -- an asset's entity may carry a `Name` component that differs from the asset's resolved identity name.
+
+**Example**: A `Hero.glb` file imports as a single-asset package (path `'hero.glb'`, 1 mesh asset). `resolveName(meshGuid)` returns `'hero.glb'` (basename of the package path; the extension is kept). Entity `Name` components on nodes inside the scene read `'Helmet'`, `'Sword'`, etc. from the glTF node hierarchy. A custom PBR shader registered as `ShaderAsset { name: 'forgeax::custom-stylized-pbr' }` routes through `shader` lookup, not through `resolveName`.
+
+**Identity types** (new in feat-20260618): `Package` (`{ path, assetGuids, assetCount }`), `PackIndexEntry.name?` (add-only optional, build-time resolved), `InspectEntry.name` (non-optional string, runtime resolved). All discoverable via `@forgeax/engine-types` IDE autocomplete. See [`skills/forgeax-engine-assets/SKILL.md`](../../skills/forgeax-engine-assets/SKILL.md) for the full identity model.
+
 ### ShaderModule naming disambiguation
 
 The unqualified name `ShaderModule` collides across two layers -- see [`packages/shader/README.md`](../shader/README.md) for the canonical disambiguation. In short: **wgsl ShaderModule** (from `engine-shader`, importable `.wgsl` file-level unit with `#define_import_path`) is distinct from the **RHI ShaderModule handle** (from `engine-rhi`, GPU-side compiled-shader opaque handle created by `rhi.createShaderModule`). The two are distinguished by module path only.

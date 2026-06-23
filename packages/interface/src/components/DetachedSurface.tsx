@@ -13,6 +13,7 @@
  */
 import type { ReactElement } from 'react';
 import type { SurfaceDescriptor } from '../lib/platform';
+import { useTranslation } from '@/i18n';
 import { usePluginManifest } from '../lib/use-plugin-manifest';
 import { StandalonePluginIframe } from './MainArea/StandalonePluginIframe';
 import { AgentsMainArea, WorkbenchModeDefault } from './MainArea/WorkbenchMode';
@@ -38,6 +39,7 @@ export function DetachedSurface({ surface }: Props): ReactElement {
  *  streams for this window, so they render & stay live like in the main shell.
  *  Wrapped full-bleed since they normally live inside a sized layout slot. */
 function DetachedPanelSurface({ surface }: Props): ReactElement {
+  const { t } = useTranslation();
   let body: ReactElement;
   switch (surface.id) {
     case 'chat':
@@ -72,7 +74,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
     default:
       return (
         <div style={fillCenter}>
-          <span style={{ color: '#888' }}>未知面板 surface「{surface.id}」。</span>
+          <span style={{ color: '#888' }}>{t('detachedSurface.unknownPanel', { id: surface.id })}</span>
         </div>
       );
   }
@@ -84,19 +86,20 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
 }
 
 function DetachedPluginSurface({ surface }: Props): ReactElement {
+  const { t } = useTranslation();
   const manifest = usePluginManifest(surface.id);
 
   if (manifest === 'loading') {
     return (
       <div style={fillCenter}>
-        <span style={{ color: '#888' }}>正在加载插件 {surface.id}…</span>
+        <span style={{ color: '#888' }}>{t('detachedSurface.loadingPlugin', { id: surface.id })}</span>
       </div>
     );
   }
   if (!manifest) {
     return (
       <div style={fillCenter}>
-        <span style={{ color: '#c44' }}>未找到插件 {surface.id}。</span>
+        <span style={{ color: '#c44' }}>{t('detachedSurface.pluginNotFound', { id: surface.id })}</span>
       </div>
     );
   }

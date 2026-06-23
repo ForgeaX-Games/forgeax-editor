@@ -174,8 +174,10 @@ const {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  resolveAssetHandle,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const diffuseRes = await decodeImageFromFile(DIFFUSE_SRC_PATH);
@@ -231,6 +233,8 @@ if (!diffuseGuidRes.ok || !specularGuidRes.ok || !cubeGuidRes.ok || !matGuidRes.
   process.exit(1);
 }
 
+const world = new World();
+
 const mkTex = (decoded) => ({
   kind: 'texture',
   width: decoded.width,
@@ -240,35 +244,36 @@ const mkTex = (decoded) => ({
   colorSpace: decoded.colorSpace,
   mipmap: decoded.mipmap,
 });
-const diffuseHandle = assets.registerWithGuid(diffuseGuidRes.value, mkTex(diffuseDecoded));
-const specularHandle = assets.registerWithGuid(specularGuidRes.value, mkTex(specularDecoded));
+// feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
+// allocSharedRef; GUIDs are catalogued for loadByGuid parity.
+const diffuseHandle = world.allocSharedRef('TextureAsset', mkTex(diffuseDecoded));
+const specularHandle = world.allocSharedRef('TextureAsset', mkTex(specularDecoded));
+assets.catalog(diffuseGuidRes.value, mkTex(diffuseDecoded));
+assets.catalog(specularGuidRes.value, mkTex(specularDecoded));
 
-const cubeAssetRes = assets.get(HANDLE_CUBE);
+const cubeAssetRes = resolveAssetHandle(world, HANDLE_CUBE);
 if (!cubeAssetRes.ok) {
   console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
   process.exit(1);
 }
-assets.registerWithGuid(cubeGuidRes.value, cubeAssetRes.value);
+assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
 // LO 2.4 main lit cube material -- diffuse map drives baseColor; the
 // specular handle is exercised via the loader path even though the
 // dawn-node deferred-upload falls back to a 1x1 white view.
-const cubeMaterial = assets.register({
+const cubeMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
-  baseColorTexture: diffuseHandle,
+  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
 });
 // Lamp marker material (white emissive proxy).
-const lampMaterial = assets.register({
+const lampMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
+  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
 });
 
 void specularHandle;
-
-const world = new World();
 // LO 2.4 single lit container cube at origin.
 world.spawn(
   {

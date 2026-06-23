@@ -90,12 +90,16 @@ struct Material {
 
 struct SkylightUniforms {
   intensity : f32,
-  // bug-20260610: WebGL2 (GLES 3.0) lacks `DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`,
-  // so uniform buffers must be padded to a 16-byte multiple. Host writes
-  // `[intensity, 0, 0, 0]` (16 B) — pad fields read as 0, unused.
-  pad0 : f32,
-  pad1 : f32,
-  pad2 : f32,
+  // 16 B (WebGL2 / GLES 3.0 uniform-buffer 16-byte-multiple rule). The former
+  // pad0/1/2 lanes now carry the linear-space ambient `color` tint
+  // (downstream integration #4). Kept as three scalars (NOT vec3<f32>) so the
+  // struct stays exactly 16 B -- a vec3 has 16-byte std140 alignment and would
+  // grow the UBO to 32 B. Host writes `[intensity, colorR, colorG, colorB]`;
+  // color defaults to white so the multiply is identity for intensity-only
+  // callers.
+  colorR : f32,
+  colorG : f32,
+  colorB : f32,
 };
 @group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
 @group(1) @binding(8)  var irradianceSampler    : sampler;
@@ -235,7 +239,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     n, v, iblRoughness, f0,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
-  let ambient = (kD * irradiance * albedo + specularIbl) * skylight.intensity;
+  let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
+  let ambient = (kD * irradiance * albedo + specularIbl) * skyColor * skylight.intensity;
   var color = ambient;
   color = color + evalDirectional(n, v, albedo, metallic, a, f0, in.worldPos, in.viewZ);
   let pointCount = pointLightsBuffer.count;

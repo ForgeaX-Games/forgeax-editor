@@ -205,6 +205,7 @@ const {
   Transform,
 } = runtimePkg;
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
+const { unwrapHandle } = await import('@forgeax/engine-types');
 
 const containerDecodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
 if (!containerDecodeRes.ok) {
@@ -295,10 +296,10 @@ if (!metalGuidRes.ok) {
   originalConsoleError('[smoke] FAIL - metal GUID parse failed');
   process.exit(1);
 }
-const containerHandle = assets.registerWithGuid(containerGuidRes.value, makeTexAsset(containerDecoded));
-const metalHandle = assets.registerWithGuid(metalGuidRes.value, makeTexAsset(metalDecoded));
+const containerHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(containerDecoded)));
+const metalHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(metalDecoded)));
 
-const cubeMatRes = assets.register({
+const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -309,11 +310,7 @@ const cubeMatRes = assets.register({
   ],
   paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: containerHandle },
 });
-if (!cubeMatRes.ok) {
-  originalConsoleError(`[smoke] FAIL - cube material register: ${cubeMatRes.error.code}`);
-  process.exit(1);
-}
-const floorMatRes = assets.register({
+const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -324,10 +321,6 @@ const floorMatRes = assets.register({
   ],
   paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: metalHandle },
 });
-if (!floorMatRes.ok) {
-  originalConsoleError(`[smoke] FAIL - floor material register: ${floorMatRes.error.code}`);
-  process.exit(1);
-}
 
 const FLOOR_QUAT_X = Math.sin(-Math.PI / 4);
 const FLOOR_QUAT_W = Math.cos(-Math.PI / 4);
@@ -336,14 +329,14 @@ world
   .spawn(
     { component: Transform, data: { posX: -1, posY: 0, posZ: -1 } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
   .unwrap();
 world
   .spawn(
     { component: Transform, data: { posX: 2, posY: 0, posZ: 0 } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
   .unwrap();
 world
@@ -362,7 +355,7 @@ world
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [floorMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [floorMatHandle] } },
   )
   .unwrap();
 world.spawn(
@@ -460,7 +453,7 @@ const PIPELINE_IDS = {
   '6': 'learn-render-5-pipeline::edge-detection',
 };
 
-const pipelineAssetHandles = new Map();
+const pipelineAssets = new Map();
 let registerErrCount = 0;
 for (const key of ['1', '2', '3', '4', '5', '6']) {
   const shaderId = SHADER_IDS[key];
@@ -480,12 +473,7 @@ for (const key of ['1', '2', '3', '4', '5', '6']) {
     registerErrCount++;
     originalConsoleError('[smoke] register threw:', e instanceof Error ? e.message : String(e));
   }
-  const assetRes = assets.register({ kind: 'render-pipeline', pipelineId });
-  if (!assetRes.ok) {
-    originalConsoleError(`[smoke] FAIL - render-pipeline asset register: ${assetRes.error.code ?? assetRes.error}`);
-    process.exit(1);
-  }
-  pipelineAssetHandles.set(key, assetRes.value);
+  pipelineAssets.set(key, { kind: 'render-pipeline', pipelineId });
 }
 
 if (registerErrCount > 0) {
@@ -494,11 +482,11 @@ if (registerErrCount > 0) {
 }
 
 function installPipelineByKey(key) {
-  const handle = pipelineAssetHandles.get(key);
-  if (!handle) {
+  const asset = pipelineAssets.get(key);
+  if (!asset) {
     return { ok: false, error: { code: 'unknown-effect-key', hint: `expected '1'..'6', received ${JSON.stringify(key)}` } };
   }
-  return renderer.installPipeline(handle);
+  return renderer.installPipeline(asset);
 }
 
 let fakeNow = 0;

@@ -206,7 +206,7 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
-const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+const { unwrapHandle } = await import('@forgeax/engine-types');
 
 const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
 if (!decodeRes.ok) {
@@ -279,14 +279,6 @@ if (!ready.ok) {
 // textures.browser.test.ts) where the forgeax RHI wrapper is the
 // renderer-internal device.
 
-// Register wood TextureAsset under its GUID so loadByGuid resolves
-// the handle. The sidecar GUID is the SSOT for cross-feat sub-asset-
-// key alignment (AC-14).
-const woodGuidRes = AssetGuid.parse(woodMeta.guid);
-if (!woodGuidRes.ok) {
-  console.error(`[smoke] FAIL - wood GUID parse: ${woodGuidRes.error.code}`);
-  process.exit(1);
-}
 const woodTexAsset = {
   kind: 'texture',
   width: woodDecoded.width,
@@ -296,22 +288,25 @@ const woodTexAsset = {
   colorSpace: woodDecoded.colorSpace,
   mipmap: woodDecoded.mipmap,
 };
-const woodHandle = assets.registerWithGuid(woodGuidRes.value, woodTexAsset);
-console.log(`[learn-render-textures] registered wood texture handle id=${woodHandle}`);
+
+const world = new World();
+// Mint a user-tier column handle for the wood texture (M8 D-17); the
+// baseColorTexture slot carries the resolved numeric Handle via unwrapHandle.
+const woodTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', woodTexAsset));
+console.log(`[learn-render-textures] minted wood texture handle id=${woodTexHandle}`);
 
 // Build the world: cube + camera + directional light. The cube uses
 // the engine builtin HANDLE_CUBE mesh + an unlit MeshRenderer
 // pointing at a MaterialAsset whose baseColorTexture is the wood
 // handle. RenderSystem materialBindGroup picks up baseColorTexture
 // via AssetRegistry.getTextureGpuView (research F-6 fix).
-const woodMaterial = assets.register({
+const woodMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
-  baseColorTexture: woodHandle,
+  passes: [
+    { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
+  ],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: woodTexHandle },
 });
-
-const world = new World();
 world.spawn(
   {
     component: Transform,

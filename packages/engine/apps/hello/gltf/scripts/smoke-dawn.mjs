@@ -138,7 +138,7 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path through the gltf importer ---------------------
 
-const { ok: okResult, World } = await import('@forgeax/engine-ecs');
+const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { Name } = enginePkg;
 const {
@@ -286,14 +286,32 @@ if (!materialIr) {
   console.error('[smoke] FAIL - gltf has no material[0]');
   process.exit(1);
 }
+// MaterialAsset shape mirrors src/main.ts `materialIrToPod`: the retired
+// `shadingModel` discriminator (feat-20260526 M4) is replaced by an explicit
+// `passes[]` + `paramValues`. allocSharedRef stores the POD verbatim (no
+// register-time normalization), so a bare `{ shadingModel }` material resolves
+// to zero passes and trips MaterialResolvedEmptyPassesError in extract.
 const materialAsset = {
   kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: materialIr.baseColorFactor,
+  passes: [
+    {
+      name: 'Forward',
+      shader: 'forgeax::default-unlit',
+      tags: { LightMode: 'Forward' },
+      queue: 2000,
+    },
+  ],
+  paramValues: {
+    baseColor: materialIr.baseColorFactor,
+  },
 };
 
-const meshHandle = assets.registerWithGuid(meshGuid, meshAsset);
-const materialHandle = assets.registerWithGuid(materialGuid, materialAsset);
+const world = new World();
+assets.catalog(meshGuid, meshAsset);
+// catalog the material payload so loadByGuid<MaterialAsset>(materialGuid) hits
+// the fast-path (parity with src/main.ts); allocSharedRef mints the column handle.
+assets.catalog(materialGuid, materialAsset);
+const materialHandle = world.allocSharedRef('MaterialAsset', materialAsset);
 
 // Build the SceneAsset POD via the public bridge (feat-20260518 M3 SSOT).
 // MeshFilter routes to HANDLE_CUBE (engine builtin GPU buffer) per the
@@ -303,15 +321,7 @@ const sceneAsset = gltfDocToSceneAsset(doc, {
   meshHandles: new Map([[0, HANDLE_CUBE]]),
   materialHandles: new Map([[0, materialHandle]]),
 });
-assets.registerWithGuid(sceneGuid, sceneAsset);
-
-const world = new World();
-
-world._setSceneAssetResolver((h) => {
-  const got = assets.get(h);
-  if (!got.ok) return got;
-  return okResult(got.value);
-});
+assets.catalog(sceneGuid, sceneAsset);
 
 // Step (4) parity with src/main.ts: loadByGuid<SceneAsset> + instantiate.
 const sceneHandleRes = await assets.loadByGuid(sceneGuid);
@@ -329,7 +339,9 @@ if (!matLoadRes.ok) {
   console.error(`[smoke] FAIL - loadByGuid material: ${matLoadRes.error.code}`);
   process.exit(1);
 }
-const instanceRes = assets.instantiate(sceneHandleRes.value, world);
+// loadByGuid returns the payload (D-17); mint a user-tier column handle.
+const sceneHandle = world.allocSharedRef('SceneAsset', sceneHandleRes.value);
+const instanceRes = assets.instantiate(sceneHandle, world);
 if (!instanceRes.ok) {
   console.error(`[smoke] FAIL - instantiate: ${instanceRes.error.code}`);
   process.exit(1);

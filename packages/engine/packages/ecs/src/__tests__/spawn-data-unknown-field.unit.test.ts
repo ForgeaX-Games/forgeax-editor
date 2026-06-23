@@ -12,7 +12,6 @@
 // the offending key + the schema's full whitelist.
 
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createCommandBuffer } from '../commands';
 import { defineComponent } from '../component';
@@ -155,9 +154,9 @@ describe('bug-20260615 — spawn-data unknown-field fail-fast', () => {
         posZ: 'f32',
       });
       defineComponent('SceneInstance', {
-        source: 'handle<SceneAsset>',
+        source: 'shared<SceneAsset>',
         mapping: 'array<entity>',
-        state: 'ref<SceneInstanceState>',
+        state: 'unique<SceneInstanceState>',
       });
       const lid = (n: number) => n as LocalEntityId;
       const nodes: SceneEntity[] = [
@@ -165,13 +164,11 @@ describe('bug-20260615 — spawn-data unknown-field fail-fast', () => {
         { localId: lid(0), components: { TransformLike_scene: { posXX: 0, posY: 0, posZ: 0 } } },
       ];
       const world = new World();
-      const handle = toUnmanaged<'SceneAsset'>(
-        world.allocManagedRef('SceneAsset', {
-          kind: 'scene',
-          entities: nodes,
-        } as SceneAsset) as unknown as number,
-      );
-      const r = world.instantiateScene(handle as Handle<'SceneAsset', 'unmanaged'>);
+      const handle = world.allocSharedRef('SceneAsset', {
+        kind: 'scene',
+        entities: nodes,
+      } as SceneAsset);
+      const r = world.instantiateScene(handle as Handle<'SceneAsset', 'shared'>);
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('spawn-data-unknown-field');

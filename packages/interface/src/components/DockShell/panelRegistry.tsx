@@ -18,7 +18,9 @@ import { ChatPanel } from '../ChatPanel/ChatPanel';
 import { AgentsPanel } from '../Sidebar/AgentsPanel';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
+import { InfoPanel } from '../StatusBar/InfoPanel';
 import { EditorPanelFrame, type EditorPanelId } from './EditorPanelFrame';
+import { RecoveryBoundary } from '../ErrorBoundary';
 // Editor panel ids (ep:*) are injected at runtime via PanelRenderers context
 // so interface stays editor-agnostic (no `@forgeax/editor*` import). The
 // DEFAULT_* list here is the neutral fallback for interface-alone; studio
@@ -57,6 +59,9 @@ export const OPTIONAL_PANELS: PanelDef[] = [
   { id: 'agents', title: 'Agents', group: 'optional', canPopOut: true, render: () => <AgentsPanel /> },
   { id: 'files', title: 'Files', group: 'optional', canPopOut: true, render: () => <FilesPanel /> },
   { id: 'console', title: 'Console', group: 'optional', canPopOut: true, render: () => <ConsolePanel /> },
+  // Blender-INFO-style health/log feed — the same store the bottom HealthStatusBar
+  // peeks at, full-height with click-to-copy + repeat-fold (×N).
+  { id: 'info', title: 'Info', group: 'optional', canPopOut: true, render: () => <InfoPanel /> },
 ];
 
 // ── editor panel family (ep:*) ───────────────────────────────────────────────
@@ -71,11 +76,19 @@ export const EDITOR_PANEL_TITLE: Record<string, string> = DEFAULT_EDITOR_PANEL_T
 // ── derived lookup maps (DockShell consumes these; never edit by hand) ────────
 const ALL_PANELS = [...CORE_PANELS, ...OPTIONAL_PANELS];
 
+/** Wrap a panel renderer in a region-scoped RecoveryBoundary so a render throw
+ *  in ONE dock panel (a bad selector, a plugin panel) shows a retry/reload
+ *  affordance for that panel only — instead of taking down the whole shell. The
+ *  inline (non-fullscreen) variant keeps the surrounding dock layout intact. */
+function withBoundary(scope: string, render: () => ReactNode): () => ReactNode {
+  return () => <RecoveryBoundary scope={scope} fullscreen={false}>{render()}</RecoveryBoundary>;
+}
+
 /** dockview component map: id → renderer (incl. ep:* editor panels). The
  *  wb:<pluginId> dynamic plugin renderers are merged in by DockShell at runtime. */
 export const PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> = {
-  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, p.render])),
-  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, () => <EditorPanelFrame panelId={id} />])),
+  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, withBoundary(`panel:${p.id}`, p.render)])),
+  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, () => <EditorPanelFrame panelId={id} />)])),
 };
 
 /** id → title (incl. ep:* editor panels). */

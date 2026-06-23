@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
 import { Sparkles, RefreshCw } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { Section } from '../components/TopBar/SettingsDrawer';
 import { SPLASH_THEMES, themeById } from './themes';
 import { useSplashConfig } from './store';
@@ -18,6 +19,7 @@ import { DEFAULT_SPLASH, type SplashConfig, type SplashThemeId } from './types';
  * on every save.
  */
 export function BootSplashSection(): ReactNode {
+  const { t } = useTranslation();
   const [cfg, setCfg] = useSplashConfig();
 
   const update = (patch: Partial<SplashConfig>): void => {
@@ -59,23 +61,23 @@ export function BootSplashSection(): ReactNode {
     <>
       <Section
         icon={<Sparkles size={14} />}
-        title="主题"
-        hint="开机动画风格 · 刷新生效"
+        title={t('boot.theme.title')}
+        hint={t('boot.theme.hint')}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {SPLASH_THEMES.map((t) => {
-            const checked = t.id === cfg.theme;
+          {SPLASH_THEMES.map((theme) => {
+            const checked = theme.id === cfg.theme;
             return (
               <label
-                key={t.id}
+                key={theme.id}
                 style={{
                   display: 'flex',
                   alignItems: 'flex-start',
                   gap: 10,
                   padding: '8px 10px',
                   borderRadius: 6,
-                  border: `1px solid ${checked ? t.swatch + '55' : 'rgba(255,255,255,0.06)'}`,
-                  background: checked ? `${t.swatch}0d` : 'transparent',
+                  border: `1px solid ${checked ? theme.swatch + '55' : 'rgba(255,255,255,0.06)'}`,
+                  background: checked ? `${theme.swatch}0d` : 'transparent',
                   cursor: 'pointer',
                 }}
               >
@@ -83,24 +85,24 @@ export function BootSplashSection(): ReactNode {
                   type="radio"
                   name="splash-theme"
                   checked={checked}
-                  onChange={() => update({ theme: t.id as SplashThemeId })}
-                  style={{ marginTop: 3, accentColor: t.swatch }}
+                  onChange={() => update({ theme: theme.id as SplashThemeId })}
+                  style={{ marginTop: 3, accentColor: theme.swatch }}
                 />
                 <span
                   aria-hidden
                   style={{
                     width: 10, height: 10, borderRadius: '50%',
-                    background: t.swatch,
-                    boxShadow: `0 0 6px ${t.swatch}88`,
+                    background: theme.swatch,
+                    boxShadow: `0 0 6px ${theme.swatch}88`,
                     flexShrink: 0,
                     marginTop: 5,
                   }}
                 />
                 <span style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: checked ? t.swatch : 'var(--text-secondary)' }}>
-                    {t.label}
+                  <span style={{ fontSize: 13, fontWeight: 600, color: checked ? theme.swatch : 'var(--text-secondary)' }}>
+                    {t(theme.labelKey)}
                   </span>
-                  <span style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{t.desc}</span>
+                  <span style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>{t(theme.descKey)}</span>
                 </span>
               </label>
             );
@@ -109,9 +111,9 @@ export function BootSplashSection(): ReactNode {
         {preview}
       </Section>
 
-      <Section icon={<Sparkles size={14} />} title="文案" hint="标题 / 副标题 — 留空恢复默认">
+      <Section icon={<Sparkles size={14} />} title={t('boot.copy.title')} hint={t('boot.copy.hint')}>
         <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
-          <label htmlFor="splash-title" style={{ fontSize: 12, opacity: 0.75 }}>标题</label>
+          <label htmlFor="splash-title" style={{ fontSize: 12, opacity: 0.75 }}>{t('boot.copy.titleLabel')}</label>
           <input
             id="splash-title"
             type="text"
@@ -120,7 +122,7 @@ export function BootSplashSection(): ReactNode {
             placeholder={DEFAULT_SPLASH.title}
             style={inputStyle}
           />
-          <label htmlFor="splash-sub" style={{ fontSize: 12, opacity: 0.75 }}>副标题</label>
+          <label htmlFor="splash-sub" style={{ fontSize: 12, opacity: 0.75 }}>{t('boot.copy.subtitleLabel')}</label>
           <input
             id="splash-sub"
             type="text"
@@ -132,16 +134,16 @@ export function BootSplashSection(): ReactNode {
         </div>
       </Section>
 
-      <Section icon={<Sparkles size={14} />} title="组件" hint="单独开关进度条 / bus 库存行">
+      <Section icon={<Sparkles size={14} />} title={t('boot.components.title')} hint={t('boot.components.hint')}>
         <label style={toggleStyle}>
           <input
             type="checkbox"
             checked={cfg.showProgressBar}
             onChange={(e) => update({ showProgressBar: e.target.checked })}
           />
-          <span>显示进度条</span>
+          <span>{t('boot.components.showProgressBar')}</span>
           <span style={{ opacity: 0.5, fontSize: 11, marginLeft: 8 }}>
-            （React 启动进度 · 平时 ~1s 走完）
+            {t('boot.components.showProgressBarHint')}
           </span>
         </label>
         <label style={toggleStyle}>
@@ -150,33 +152,33 @@ export function BootSplashSection(): ReactNode {
             checked={cfg.showBusInventory}
             onChange={(e) => update({ showBusInventory: e.target.checked })}
           />
-          <span>显示 bus 插件总数</span>
+          <span>{t('boot.components.showBusInventory')}</span>
           <span style={{ opacity: 0.5, fontSize: 11, marginLeft: 8 }}>
-            （拉一次 /api/bus/plugins · 调试用）
+            {t('boot.components.showBusInventoryHint')}
           </span>
         </label>
       </Section>
 
-      <Section icon={<RefreshCw size={14} />} title="应用 / 重置">
+      <Section icon={<RefreshCw size={14} />} title={t('boot.apply.title')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             className="settings-edit-btn"
             onClick={() => window.location.reload()}
-            title="刷新页面 · 让 splash 重新渲染"
+            title={t('boot.apply.reloadTooltip')}
           >
-            <RefreshCw size={12} /> 应用并刷新预览
+            <RefreshCw size={12} /> {t('boot.apply.reloadButton')}
           </button>
           <button
             type="button"
             className="settings-edit-btn"
             onClick={() => setCfg({ ...DEFAULT_SPLASH })}
-            title="恢复 classic-lime + 默认文案"
+            title={t('boot.apply.resetTooltip')}
           >
-            恢复默认
+            {t('boot.apply.resetButton')}
           </button>
           <span style={{ fontSize: 11, opacity: 0.5, marginLeft: 'auto' }}>
-            AI 在 ChatPanel 也可以 POST <code style={{ background: 'rgba(255,255,255,0.04)', padding: '1px 4px', borderRadius: 3 }}>/api/boot-splash</code> 修改
+            {t('boot.apply.apiHintBefore')} <code style={{ background: 'rgba(255,255,255,0.04)', padding: '1px 4px', borderRadius: 3 }}>/api/boot-splash</code> {t('boot.apply.apiHintAfter')}
           </span>
         </div>
       </Section>

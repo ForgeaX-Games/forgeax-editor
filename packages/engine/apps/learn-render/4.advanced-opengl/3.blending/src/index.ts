@@ -39,7 +39,7 @@ import {
   TRANSPARENT_SORT_MODE_DISTANCE,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
-import { RenderQueue } from '@forgeax/engine-types';
+import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -139,6 +139,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       { name: 'baseColor', type: 'color' },
       { name: 'metallic', type: 'f32' },
       { name: 'roughness', type: 'f32' },
+      { name: 'baseColorTexture', type: 'texture2d' },
     ],
   });
 
@@ -187,13 +188,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     return;
   }
-  const metalTex = metalHandleRes.value;
-  const marbleTex = marbleHandleRes.value;
-  const grassTex = grassHandleRes.value;
-  const windowTex = windowHandleRes.value;
+  const metalTex = unwrapHandle(world.allocSharedRef('TextureAsset', metalHandleRes.value));
+  const marbleTex = unwrapHandle(world.allocSharedRef('TextureAsset', marbleHandleRes.value));
+  const grassTex = unwrapHandle(world.allocSharedRef('TextureAsset', grassHandleRes.value));
+  const windowTex = unwrapHandle(world.allocSharedRef('TextureAsset', windowHandleRes.value));
 
   // ── Floor material: PBR with metal.png texture ───────────────────
-  const floorMatRes = assets.register<MaterialAsset>({
+  const floorMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -209,13 +210,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: metalTex,
     },
   });
-  if (!floorMatRes.ok) {
-    console.error('[learn-render 4.3 blending] floor material register failed:', floorMatRes.error);
-    return;
-  }
 
   // ── Cube material: PBR with marble.jpg texture ───────────────────
-  const cubeMatRes = assets.register<MaterialAsset>({
+  const cubeMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -231,16 +228,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: marbleTex,
     },
   });
-  if (!cubeMatRes.ok) {
-    console.error('[learn-render 4.3 blending] cube material register failed:', cubeMatRes.error);
-    return;
-  }
 
   // ── Grass material: alpha-test discard shader, Transparent queue ─
   // Reuses existing alpha-test.wgsl (discard fragments where sampled
   // alpha < 0.1). Grass texture uses clamp-to-edge (meta sidecar, w20)
   // to prevent grey border artifacts from bilinear edge sampling.
-  const grassMatRes = assets.register<MaterialAsset>({
+  const grassMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -258,16 +251,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: grassTex,
     },
   });
-  if (!grassMatRes.ok) {
-    console.error('[learn-render 4.3 blending] grass material register failed:', grassMatRes.error);
-    return;
-  }
 
   // ── Window material: semi-transparent blend, Transparent queue ───
   // blend SRC_ALPHA / ONE_MINUS_SRC_ALPHA mirrors LO glBlendFunc. Window
   // texture uses clamp-to-edge (meta sidecar, w20) to prevent border
   // artifacts. depthWriteEnabled=false so farther windows are not occluded.
-  const windowMatRes = assets.register<MaterialAsset>({
+  const windowMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -291,10 +280,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: windowTex,
     },
   });
-  if (!windowMatRes.ok) {
-    console.error('[learn-render 4.3 blending] window material register failed:', windowMatRes.error);
-    return;
-  }
 
   // ── Spawn entities ────────────────────────────────────────────────
 
@@ -312,7 +297,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [floorMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [floorMat] } },
   ).unwrap();
 
   // Spawn single marble cube at (0, 0.5, 0).
@@ -326,7 +311,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [cubeMat] } },
   ).unwrap();
 
   // Spawn 5 grass discard quads at LO 4.3 exact positions.
@@ -337,7 +322,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         data: { posX: p[0], posY: p[1], posZ: p[2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      { component: MeshRenderer, data: { materials: [grassMatRes.value] } },
+      { component: MeshRenderer, data: { materials: [grassMat] } },
     ).unwrap();
   }
 
@@ -352,7 +337,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         data: { posX: p[0], posY: p[1], posZ: p[2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      { component: MeshRenderer, data: { materials: [windowMatRes.value] } },
+      { component: MeshRenderer, data: { materials: [windowMat] } },
     ).unwrap();
   }
 

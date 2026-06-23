@@ -232,31 +232,29 @@ world.spawn(
 );
 
 // Cube A: red, casts shadow (default)
-const matA = assets.register(Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
-if (!matA.ok) throw new Error(`material A: ${matA.error.code}`);
+const matA = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.9, 0.1, 0.1, 1] }));
 world.spawn(
   {
     component: Transform,
     data: { posX: -3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matA.value] } },
+  { component: MeshRenderer, data: { materials: [matA] } },
 );
 
 // Cube B: green, castShadow: false
-const matB = assets.register(Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
-if (!matB.ok) throw new Error(`material B: ${matB.error.code}`);
+const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.1, 0.8, 0.1, 1], castShadow: false }));
 world.spawn(
   {
     component: Transform,
     data: { posX: 0, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matB.value] } },
+  { component: MeshRenderer, data: { materials: [matB] } },
 );
 
 // Cube C: blue, cutout shadow shader
-const matC = assets.register({
+const matC = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     { name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 },
@@ -264,14 +262,13 @@ const matC = assets.register({
   ],
   paramValues: { baseColor: [0.1, 0.1, 0.9, 1], metallic: 0, roughness: 0.5 },
 });
-if (!matC.ok) throw new Error(`material C: ${matC.error.code}`);
 world.spawn(
   {
     component: Transform,
     data: { posX: 3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [matC.value] } },
+  { component: MeshRenderer, data: { materials: [matC] } },
 );
 
 // ── 5. Render loop ──────────────────────────────────────────────────────

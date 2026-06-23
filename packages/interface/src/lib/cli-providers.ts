@@ -24,7 +24,7 @@ export interface CliProviderInfo {
 
 const PROVIDER_DISPLAY: Record<string, string> = {
   "forgeax": "ForgeaX CLI",
-  "claude-code": "the reference agent CLI",
+  "claude-code": "Claude Code",
   "codex": "OpenAI Codex",
   "cursor-agent": "Cursor Agent",
 };

@@ -46,6 +46,7 @@ import { MeshRenderer } from './components/mesh-renderer';
 import { layoutGlyphText, resetFontConcurrency, trackFontConcurrency } from './glyph-layout';
 import { bakeGlyphMesh } from './glyph-mesh-bake';
 import type { GpuResourceStore } from './gpu-resource-store';
+import { resolveAssetHandle } from './resolve-asset-handle';
 
 // Per-entity bake bookkeeping: the baked mesh handle id + the authoring
 // signature it was baked from. Keyed by the entity index slot (stable across
@@ -191,7 +192,7 @@ function processEntity(
     throw e;
   }
 
-  const fontRes = assets.get<FontAsset>(asFontHandle(gt.fontHandle));
+  const fontRes = resolveAssetHandle<FontAsset>(world, asFontHandle(gt.fontHandle));
   if (!fontRes.ok) return null; // font not registered yet -> skip silently
   const font = fontRes.value;
 
@@ -212,7 +213,7 @@ function processEntity(
     // A color change re-keys the per-(font, tint) material; re-resolve and
     // re-bind it in place so the tint follows the authoring edit (the mesh
     // handle stays stable, only MeshRenderer.material is overwritten).
-    const materialId = resolveTextMaterial(assets, gt, font);
+    const materialId = resolveTextMaterial(world, assets, gt, font);
     if (materialId !== cached.materialHandleId) {
       world.set(entity, MeshRenderer, {
         materials: [materialId] as unknown as never,
@@ -233,14 +234,14 @@ function processEntity(
   if (world.get(entity, MeshFilter).ok) return null;
 
   const layout = layoutGlyphText(font, gt.text, gt.fontSize);
-  const bake = bakeGlyphMesh(assets, layout);
+  const bake = bakeGlyphMesh(world, layout);
   if (!bake.ok) return null; // register fail-fast (should not happen for w15 output)
 
   // F-1: resolve (build + cache) the per-(font, tint) MSDF MaterialAsset so the
   // `forgeax::msdf-text` shader + atlas texture + sampler are bound to this
   // text entity (plan D-7). Without this the MeshRenderer would carry material
   // handle 0 -> default mid-grey unlit, and the atlas would never be sampled.
-  const materialId = resolveTextMaterial(assets, gt, font);
+  const materialId = resolveTextMaterial(world, assets, gt, font);
 
   world.addComponent(entity, { component: MeshFilter, data: { assetHandle: bake.value.handle } });
   world.addComponent(entity, {
@@ -263,12 +264,28 @@ function processEntity(
  * the atlas texture + sampler (plan D-7). HDR tint components (>1) flow through
  * unchanged so bloom-enabled cameras pick up bright text (AC-12).
  */
-function resolveTextMaterial(assets: AssetRegistry, gt: GlyphTextData, font: FontAsset): number {
+function resolveTextMaterial(
+  world: World,
+  assets: AssetRegistry,
+  gt: GlyphTextData,
+  font: FontAsset,
+): number {
   const key = `${gt.fontHandle}|${gt.colorR},${gt.colorG},${gt.colorB},${gt.colorA}`;
   const cached = fontMaterialCache.get(key);
   if (cached !== undefined) return cached;
 
-  const reg = assets.register({
+  // feat-20260614 M8 (D-19): font.atlas / font.sampler are embedded GUIDs.
+  // Resolve each to a user-tier column handle by looking up the catalogued
+  // payload and minting via world.allocSharedRef; the material paramValues
+  // carry the column handle ids the render path reads.
+  const atlasPayload = assets.lookup(font.atlas);
+  const samplerPayload = assets.lookup(font.sampler);
+  const atlasHandle =
+    atlasPayload !== undefined ? world.allocSharedRef('TextureAsset', atlasPayload) : undefined;
+  const samplerHandle =
+    samplerPayload !== undefined ? world.allocSharedRef('SamplerAsset', samplerPayload) : undefined;
+
+  const reg = assets.catalog(assets.parseGuid(deriveTextMaterialGuid(key)), {
     kind: 'material',
     passes: [
       {
@@ -294,17 +311,34 @@ function resolveTextMaterial(assets: AssetRegistry, gt: GlyphTextData, font: Fon
     paramValues: {
       tintColor: [gt.colorR, gt.colorG, gt.colorB, gt.colorA],
       distanceRange: font.common.distanceRange,
-      baseColorTexture: font.atlas as unknown as number,
-      sampler: font.sampler as unknown as number,
+      ...(atlasHandle !== undefined ? { baseColorTexture: atlasHandle as unknown as number } : {}),
+      ...(samplerHandle !== undefined ? { sampler: samplerHandle as unknown as number } : {}),
     },
   });
-  // register can only fail on schema validation; the literal passes/paramValues
+  // catalog can only fail on schema validation; the literal passes/paramValues
   // above are schema-valid for forgeax::msdf-text, so a failure here is an
-  // engine-internal invariant break. Fall back to the zero sentinel (default
-  // material) rather than throwing inside the per-frame system.
-  const id = reg.ok ? (reg.value as unknown as number) : 0;
+  // engine-internal invariant break. The material then needs a column handle
+  // for the MeshRenderer; mint it from the catalogued payload.
+  const id = reg.ok ? (world.allocSharedRef('MaterialAsset', reg.value) as unknown as number) : 0;
   fontMaterialCache.set(key, id);
   return id;
+}
+
+// Deterministic per-(font, tint) material GUID derived from the cache key so
+// repeat resolves catalogue the same row (idempotent). The 32-hex-char digest
+// is the key's char codes folded into a UUIDv4-shaped string -- it never
+// collides with a real asset GUID (the registry catalogues by lowercased GUID
+// string; this synthetic key lives only in the runtime text-material space).
+function deriveTextMaterialGuid(key: string): string {
+  let h = 0x811c9dc5;
+  const hex: string[] = [];
+  for (let i = 0; i < key.length; i++) {
+    h = Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0;
+    hex.push((h & 0xff).toString(16).padStart(2, '0'));
+  }
+  while (hex.length < 16) hex.push('00');
+  const h32 = hex.slice(0, 16).join('');
+  return `${h32.slice(0, 8)}-${h32.slice(8, 12)}-4${h32.slice(13, 16)}-8${h32.slice(17, 20)}-${h32.slice(20, 32).padEnd(12, '0')}`;
 }
 
 function signatureOf(gt: GlyphTextData): string {
@@ -314,13 +348,13 @@ function signatureOf(gt: GlyphTextData): string {
 // Handle bridges: GlyphText.fontHandle / cached mesh ids are packed u32 values;
 // AssetRegistry expects branded Handles. The brand is a compile-time phantom
 // (runtime value is the raw number), so a cast is the canonical bridge
-// (mirrors pick.ts toUnmanaged).
-function asFontHandle(raw: number): Handle<'FontAsset', 'unmanaged'> {
-  return raw as unknown as Handle<'FontAsset', 'unmanaged'>;
+// (mirrors pick.ts toShared).
+function asFontHandle(raw: number): Handle<'FontAsset', 'shared'> {
+  return raw as unknown as Handle<'FontAsset', 'shared'>;
 }
-function asMeshHandle(id: number): Handle<'MeshAsset', 'unmanaged'> {
-  return id as unknown as Handle<'MeshAsset', 'unmanaged'>;
+function asMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
+  return id as unknown as Handle<'MeshAsset', 'shared'>;
 }
-function handleId(handle: Handle<'MeshAsset', 'unmanaged'>): number {
+function handleId(handle: Handle<'MeshAsset', 'shared'>): number {
   return handle as unknown as number;
 }

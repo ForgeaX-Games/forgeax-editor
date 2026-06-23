@@ -153,6 +153,7 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const marbleDecodeRes = await decodeImageFromFile(MARBLE_SRC_PATH);
@@ -220,7 +221,10 @@ if (!marbleGuidRes.ok) {
   process.exit(1);
 }
 
-const marbleHandle = assets.registerWithGuid(marbleGuidRes.value, makeTexAsset(marbleDecoded));
+// World must exist before allocSharedRef mints any column handle.
+const world = new World();
+
+const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(marbleDecoded)));
 console.log(`[learn-render-4-face-culling] registered marble handle id=${marbleHandle}`);
 
 // Cube material: unlit marble.jpg texture (matches LO 4.4 -- full-brightness
@@ -230,7 +234,7 @@ console.log(`[learn-render-4-face-culling] registered marble handle id=${marbleH
 // The unlit shader honors renderState via the engine's renderState-aware
 // pipeline cache (the static unlit pipeline's default frontFace='ccw' would
 // back-cull the CW-appearing inner faces).
-const cubeMatHandle = assets.register({
+const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -248,8 +252,6 @@ const cubeMatHandle = assets.register({
     baseColorTexture: marbleHandle,
   },
 });
-
-const world = new World();
 
 // Single marble cube at origin.
 world

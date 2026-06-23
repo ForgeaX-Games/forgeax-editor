@@ -186,16 +186,11 @@ if (hdrpAssets === null) {
   console.error('[smoke-0l] FAIL - HDRP AssetRegistry null');
   process.exit(1);
 }
-const hdrpAssetRes = hdrpAssets.register({
+const installRes = hdrpApp.renderer.installPipeline({
   kind: 'render-pipeline',
   pipelineId: HDRP_PIPELINE_ID,
   config: { clusterGrid: { x: 16, y: 9, z: 24 } },
 });
-if (!hdrpAssetRes.ok) {
-  console.error(`[smoke-0l] FAIL - HDRP register: ${hdrpAssetRes.error.code}`);
-  process.exit(1);
-}
-const installRes = hdrpApp.renderer.installPipeline(hdrpAssetRes.value);
 if (!installRes.ok) {
   console.error(`[smoke-0l] FAIL - HDRP installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
   process.exit(1);
@@ -203,10 +198,9 @@ if (!installRes.ok) {
 
 // Setup both worlds with identical scene minus lights.
 function populateScene(app) {
-  const assets = app.renderer.assets;
   const world = app.world;
 
-  const matRes = assets.register({
+  const matHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -222,11 +216,6 @@ function populateScene(app) {
       roughness: 0.4,
     },
   });
-  if (!matRes.ok) {
-    console.error(`[smoke-0l] FAIL - material register: ${matRes.error.code}`);
-    process.exit(1);
-  }
-  const matHandle = matRes.value;
 
   world.spawn(
     { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1 } },

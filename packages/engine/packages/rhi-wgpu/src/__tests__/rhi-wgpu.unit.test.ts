@@ -847,3 +847,109 @@ function setNavigatorGpu(gpu: unknown): void {
     });
   });
 }
+
+{
+  // --- from F3-g descriptor-invalid classification test ---
+  // feat-20260619-wasm-fault-isolation M3 w6: fake-device message-shaped
+  // classification test. Covers wrap() three-branch classification:
+  //   (a) message with [wgpu-wasm] failed to parse prefix => rhi-descriptor-invalid
+  //   (b) message without prefix                           => webgpu-runtime-error
+  //   (c) no throw                                         => ok(handle)
+  // best-effort: also covers createSampler with same prefix => same classification,
+  //   verifying D-2 global wrap() semantics unify across create* entries.
+
+  describe('F3-g descriptor-invalid classification (feat-20260619-wasm-fault-isolation)', () => {
+    function mockNoop(_desc?: unknown): unknown {
+      return {};
+    }
+
+    function makeThrowRenderPipeline(prefix: boolean): (desc: unknown) => unknown {
+      const msg = prefix
+        ? '[wgpu-wasm] failed to parse fragment.targets[0]: invalid format'
+        : 'Too many bindings of type StorageBuffers: limit is 8, got 16';
+      return (_desc?: unknown): unknown => {
+        throw new Error(msg);
+      };
+    }
+
+    function makeThrowSampler(): (desc?: unknown) => unknown {
+      return (_desc?: unknown): unknown => {
+        throw new Error('[wgpu-wasm] failed to parse sampler descriptor: invalid addressModeU');
+      };
+    }
+
+    function buildRaw(
+      renderPipelineOverride?: (desc: unknown) => unknown,
+      samplerOverride?: (desc: unknown) => unknown,
+    ): RawDeviceLike {
+      const featuresSet = new Set<string>();
+      return {
+        features: featuresSet,
+        limits: { maxStorageBuffersPerShaderStage: 8, maxStorageTexturesPerShaderStage: 4 },
+        createTexture: mockNoop,
+        createSampler: samplerOverride ?? mockNoop,
+        createBindGroupLayout: mockNoop,
+        createBindGroup: mockNoop,
+        createPipelineLayout: mockNoop,
+        createRenderPipeline: renderPipelineOverride ?? mockNoop,
+        createComputePipeline: mockNoop,
+        createShaderModule: mockNoop,
+        queue: {
+          submit() {},
+          writeBuffer() {},
+          writeTexture() {},
+          copyExternalImageToTexture() {},
+          onSubmittedWorkDone: async () => undefined,
+        },
+      } as unknown as RawDeviceLike;
+    }
+
+    it('(a) message with [wgpu-wasm] failed to parse prefix => rhi-descriptor-invalid', () => {
+      const r = makeRhiDevice(buildRaw(makeThrowRenderPipeline(true)));
+      const result = r.device.createRenderPipeline({
+        vertex: { entryPoint: 'vs_main' },
+        fragment: undefined,
+        layout: 'auto',
+      } as unknown as Parameters<typeof r.device.createRenderPipeline>[0]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('rhi-descriptor-invalid');
+      }
+    });
+
+    it('(b) message without prefix => webgpu-runtime-error', () => {
+      const r = makeRhiDevice(buildRaw(makeThrowRenderPipeline(false)));
+      const result = r.device.createRenderPipeline({
+        vertex: { entryPoint: 'vs_main' },
+        fragment: undefined,
+        layout: 'auto',
+      } as unknown as Parameters<typeof r.device.createRenderPipeline>[0]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('webgpu-runtime-error');
+      }
+    });
+
+    it('(c) valid descriptor => ok with handle', () => {
+      const r = makeRhiDevice(buildRaw());
+      const result = r.device.createRenderPipeline({
+        vertex: { entryPoint: 'vs_main' },
+        fragment: undefined,
+        layout: 'auto',
+      } as unknown as Parameters<typeof r.device.createRenderPipeline>[0]);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBeDefined();
+      }
+    });
+
+    it('best-effort: createSampler with same prefix => rhi-descriptor-invalid (D-2 global wrap)', () => {
+      const r = makeRhiDevice(buildRaw(undefined, makeThrowSampler()));
+      const result = r.device.createSampler(undefined);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('rhi-descriptor-invalid');
+      }
+    });
+  });
+}

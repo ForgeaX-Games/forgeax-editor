@@ -182,12 +182,12 @@ async function renderOneFrame(opts: {
   const assets = renderer.assets;
   expect(assets).toBeInstanceOf(AssetRegistry);
 
+  const world = new World();
+
   const texAsset = makeCornerCheckerTexture();
-  const texRes = assets.register<TextureAsset>(texAsset);
-  expect(texRes.ok).toBe(true);
-  if (!texRes.ok) throw new Error('texture register failed');
+  const texHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', texAsset);
   // feat-20260601-gpu-resource-store-extraction M1: explicit texture GPU upload.
-  const texUploadRes = await renderer.store.uploadTexture(texRes.value, texAsset, {
+  const texUploadRes = await renderer.store.uploadTexture(texHandle, texAsset, {
     bytes: texAsset.data as Uint8Array,
     width: texAsset.width,
     height: texAsset.height,
@@ -204,7 +204,7 @@ async function renderOneFrame(opts: {
   // SAME sampler config across both scenes so the only material-level
   // difference is `sliceMode`, and any divergence in rendered pixels can
   // be attributed to the shader's mode-discriminating logic alone.
-  const samplerRes = assets.register<SamplerAsset>({
+  const samplerHandle = world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
     kind: 'sampler',
     addressModeU: 'repeat',
     addressModeV: 'repeat',
@@ -212,30 +212,25 @@ async function renderOneFrame(opts: {
     minFilter: 'linear',
     mipmapFilter: 'nearest',
   });
-  expect(samplerRes.ok).toBe(true);
-  if (!samplerRes.ok) throw new Error('sampler register failed');
 
-  const matRes = assets.register<MaterialAsset>({
+  const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       { name: 'Sprite', shader: 'forgeax::sprite', queue: 3000, tags: { LightMode: 'Forward' } },
     ],
     paramValues: {
-      texture: texRes.value as unknown as string,
-      sampler: samplerRes.value as unknown as string,
+      texture: texHandle as unknown as string,
+      sampler: samplerHandle as unknown as string,
       slices: [0.25, 0.25, 0.25, 0.25],
       sliceMode: opts.sliceMode,
     },
   });
-  expect(matRes.ok).toBe(true);
-  if (!matRes.ok) throw new Error('material register failed');
 
   const errors: unknown[] = [];
   renderer.onError((e) => {
     errors.push(e);
   });
 
-  const world = new World();
   // ASYMMETRIC scale: x=4*y. Under uniform 9-slice mapping the corners stay
   // square so the central band is highly stretched; without 9-slice (legacy
   // path) the entire quad stretches as one. The asymmetry amplifies the
@@ -257,7 +252,7 @@ async function renderOneFrame(opts: {
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [matRes.value] } },
+    { component: MeshRenderer, data: { materials: [matHandle] } },
   );
   world.spawn(
     {

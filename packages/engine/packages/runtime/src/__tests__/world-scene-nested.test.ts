@@ -25,12 +25,10 @@ import {
 } from '@forgeax/engine-ecs';
 import { ChildOf, SceneInstance } from '@forgeax/engine-runtime';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
-  const managed = world.allocManagedRef('SceneAsset', asset);
-  return toUnmanaged<'SceneAsset'>(managed as unknown as number);
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+  return world.allocSharedRef('SceneAsset', asset);
 }
 
 describe('AC-23 double-nested A -> B -> C', () => {
@@ -111,7 +109,7 @@ describe('AC-25 deep nesting >=5 layers — no stack overflow', () => {
     // R2/B-2: mount.memberCount must equal child.totalSlots; recompute
     // bottom-up. L5 has no mounts -> totalSlots=1; each k<5 has
     // 1 entity + 1 mount.localId + memberCount(=child.totalSlots) slots.
-    const handles: Handle<'SceneAsset', 'unmanaged'>[] = [];
+    const handles: Handle<'SceneAsset', 'shared'>[] = [];
     let childTotalSlots = 1; // L5: just one entity
     for (let k = 5; k >= 0; k -= 1) {
       const asset: SceneAsset = {
@@ -146,7 +144,7 @@ describe('AC-25 deep nesting >=5 layers — no stack overflow', () => {
       }
       return err({ code: 'asset-not-found' });
     });
-    const r = world.instantiateScene(handles[0] as Handle<'SceneAsset', 'unmanaged'>);
+    const r = world.instantiateScene(handles[0] as Handle<'SceneAsset', 'shared'>);
     expect(r.ok).toBe(true);
   });
 });

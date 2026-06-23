@@ -10,6 +10,7 @@ import { WorkbenchPluginHost, pluginRendersInMainArea } from './WorkbenchPluginH
 import { WB_PLUGIN_AUTHOR_ID } from '../../../../marketplace/plugins/wb-plugin-author/src/panel';
 import { openAgentDetail } from '../../lib/open-agent-detail';
 import { useFileActivityVersion, useFileLocks } from '../../lib/file-activity-stream';
+import { useTranslation } from '@/i18n';
 
 type PreviewKind = 'text' | 'image' | 'audio' | 'video' | 'model' | 'binary';
 interface PreviewFile {
@@ -68,8 +69,9 @@ interface FileTab {
   dirty?: boolean;
 }
 
-const PLACEHOLDER = `// 点左侧 Agents 卡片下的产物文件 → 这里实时显示内容。
-// 例如：Iori 的 card-roguelike_pillar.md / Suzu 的 *_design.md。`;
+function placeholderText(t: (k: string) => string): string {
+  return t('workbench.editorPlaceholder');
+}
 
 export function WorkbenchMode() {
   const workbenchTab = useAppStore((s) => s.workbenchTab);
@@ -93,13 +95,14 @@ export function WorkbenchMode() {
 }
 
 export function WorkbenchModeDefault({ showGalleryWhenEmpty = true }: { showGalleryWhenEmpty?: boolean }) {
+  const { t } = useTranslation();
   const openFiles = useAppStore((s) => s.openFiles);
   const activeFilePath = useAppStore((s) => s.activeFilePath);
   const activateFile = useAppStore((s) => s.activateFile);
   const closeFile = useAppStore((s) => s.closeFile);
   const updatePreviewContent = useAppStore((s) => s.updatePreviewContent);
   const savePreviewFile = useAppStore((s) => s.savePreviewFile);
-  const [bottomTab, setBottomTab] = useState<'ledger' | 'console' | 'network' | 'tasks'>('ledger');
+  const [bottomTab, setBottomTab] = useState<'ledger' | 'console' | 'network'>('ledger');
   const [bottomH, setBottomH] = useLocalSize('forgeax.layout.wbBottomH', 140, 80, 480);
 
   const activeFile = openFiles.find((f) => f.path === activeFilePath) ?? null;
@@ -184,22 +187,22 @@ export function WorkbenchModeDefault({ showGalleryWhenEmpty = true }: { showGall
                 <button
                   className={`wb-view-btn ${viewMode === 'preview' ? 'active' : ''}`}
                   onClick={() => setViewMode('preview')}
-                  title="预览（渲染 markdown）"
-                ><Eye size={12} /> 预览</button>
+                  title={t('workbench.previewMarkdownTitle')}
+                ><Eye size={12} /> {t('workbench.preview')}</button>
                 <button
                   className={`wb-view-btn ${viewMode === 'source' ? 'active' : ''}`}
                   onClick={() => setViewMode('source')}
-                  title="源码（可编辑）"
-                ><Pencil size={12} /> 源码</button>
+                  title={t('workbench.sourceEditableTitle')}
+                ><Pencil size={12} /> {t('workbench.source')}</button>
               </div>
             )}
             <button
               className="wb-save-btn"
               onClick={() => void handleSave()}
               disabled={!activeFile?.dirty || saving}
-              title={activeFile?.dirty ? 'Cmd/Ctrl+S 保存' : '无未保存改动'}
+              title={activeFile?.dirty ? t('workbench.saveShortcutTitle') : t('workbench.noUnsavedChanges')}
             >
-              <Save size={12} /> {saving ? '保存中…' : '保存'}
+              <Save size={12} /> {saving ? t('workbench.saving') : t('common.save')}
             </button>
           </div>
         )}
@@ -208,10 +211,10 @@ export function WorkbenchModeDefault({ showGalleryWhenEmpty = true }: { showGall
       <div className="wb-editor">
         {!activeFile && (showGalleryWhenEmpty
           ? <WbGallery />
-          : <pre className="cm-mock thin-scrollbar"><code>{PLACEHOLDER}</code></pre>
+          : <pre className="cm-mock thin-scrollbar"><code>{placeholderText(t)}</code></pre>
         )}
         {activeFile && <AssetView previewFile={activeFile} viewMode={viewMode} updateContent={updatePreviewContent} />}
-        {saveErr && <div className="wb-save-err">保存失败: {saveErr}</div>}
+        {saveErr && <div className="wb-save-err">{t('workbench.saveFailed')}: {saveErr}</div>}
       </div>
 
       <div
@@ -222,7 +225,7 @@ export function WorkbenchModeDefault({ showGalleryWhenEmpty = true }: { showGall
         onPointerCancel={onBarFinish}
         role="separator"
         aria-orientation="horizontal"
-        title="拖拽调整底部面板高度"
+        title={t('workbench.resizeBottomPanelTitle')}
       />
       <BottomPanel
         bottomTab={bottomTab}
@@ -248,6 +251,7 @@ function AssetView({
   viewMode: 'source' | 'preview';
   updateContent: (content: string) => void;
 }) {
+  const { t } = useTranslation();
   const { kind, path, mime, bytes, content, error } = previewFile;
   const isMarkdown = kind === 'text' && path.endsWith('.md');
 
@@ -282,7 +286,7 @@ function AssetView({
   if (kind === 'audio') {
     return (
       <div className="wb-asset wb-asset-audio">
-        <audio controls src={rawUrl(path)} preload="metadata" />
+        <audio controls src={rawUrl(path)} preload="auto" />
         <div className="wb-asset-meta">{mime} · {fmtBytes(bytes)}</div>
       </div>
     );
@@ -291,7 +295,7 @@ function AssetView({
   if (kind === 'video') {
     return (
       <div className="wb-asset wb-asset-video">
-        <video controls src={rawUrl(path)} preload="metadata" />
+        <video controls src={rawUrl(path)} preload="auto" />
         <div className="wb-asset-meta">{mime} · {fmtBytes(bytes)}</div>
       </div>
     );
@@ -304,15 +308,16 @@ function AssetView({
   return (
     <div className="wb-asset wb-asset-binary">
       <div className="wb-asset-binary-msg">
-        {error ? `打开失败: ${error}` : '不支持预览的二进制文件'}
+        {error ? `${t('workbench.openFailed')}: ${error}` : t('workbench.binaryNotPreviewable')}
       </div>
       <div className="wb-asset-meta">{mime} · {fmtBytes(bytes)}</div>
-      <a className="wb-asset-download" href={rawUrl(path)} download>下载原文件</a>
+      <a className="wb-asset-download" href={rawUrl(path)} download>{t('workbench.downloadOriginal')}</a>
     </div>
   );
 }
 
 function ModelView({ path, mime, bytes }: { path: string; mime: string; bytes: number }) {
+  const { t } = useTranslation();
   const [ready, setReady] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -328,15 +333,15 @@ function ModelView({ path, mime, bytes }: { path: string; mime: string; bytes: n
   if (err) {
     return (
       <div className="wb-asset wb-asset-binary">
-        <div className="wb-asset-binary-msg">3D 预览加载失败: {err}</div>
-        <a className="wb-asset-download" href={rawUrl(path)} download>下载原文件</a>
+        <div className="wb-asset-binary-msg">{t('workbench.model3dLoadFailed')}: {err}</div>
+        <a className="wb-asset-download" href={rawUrl(path)} download>{t('workbench.downloadOriginal')}</a>
       </div>
     );
   }
   if (!ready) {
     return (
       <div className="wb-asset wb-asset-model">
-        <div className="wb-asset-binary-msg" style={{ opacity: 0.6 }}>加载 3D 预览器…</div>
+        <div className="wb-asset-binary-msg" style={{ opacity: 0.6 }}>{t('workbench.loading3dViewer')}</div>
       </div>
     );
   }
@@ -360,17 +365,20 @@ function ModelView({ path, mime, bytes }: { path: string; mime: string; bytes: n
 function BottomPanel({
   bottomTab, setBottomTab, hasFile, previewFile, openFile, height,
 }: {
-  bottomTab: 'ledger' | 'console' | 'network' | 'tasks';
-  setBottomTab: (t: 'ledger' | 'console' | 'network' | 'tasks') => void;
+  bottomTab: 'ledger' | 'console' | 'network';
+  setBottomTab: (t: 'ledger' | 'console' | 'network') => void;
   hasFile: boolean;
   previewFile: PreviewFile | null;
   openFile: (p: string) => Promise<void>;
   height: number;
 }) {
+  const { t } = useTranslation();
   const [events, setEvents] = useState<RecentEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const consoleLog = useAppStore((s) => s.consoleLog);
   const clearConsole = useAppStore((s) => s.clearConsole);
+  const networkLog = useAppStore((s) => s.networkLog);
+  const clearNetwork = useAppStore((s) => s.clearNetwork);
   const activeSid = useAppStore((s) => s.activeSid);
   // WS-driven invalidation: every file-activity:done bumps the version, which
   // re-runs the fetch effect — replaces the old 4s setInterval below for
@@ -426,24 +434,26 @@ function BottomPanel({
   return (
     <div className="wb-bottom" style={{ height }}>
       <div className="wb-bottom-tabs">
-        {(['ledger', 'console', 'network', 'tasks'] as const).map((t) => {
-          const isPlaceholder = t === 'network' || t === 'tasks';
+        {(['ledger', 'console', 'network'] as const).map((t) => {
           return (
             <button
               key={t}
               className={`wbb-tab ${bottomTab === t ? 'selected' : ''}`}
               onClick={() => setBottomTab(t)}
-              title={isPlaceholder ? '即将上线' : undefined}
             >
               {t === 'ledger' && `Ledger ${events.length ? `(${events.length})` : ''}`}
               {t === 'console' && `Console${consoleLog.length ? ` ${consoleLog.length}` : ''}`}
-              {t === 'network' && 'Network'}
-              {t === 'tasks' && 'Tasks'}
+              {t === 'network' && `Network${networkLog.length ? ` ${networkLog.length}` : ''}`}
             </button>
           );
         })}
         {bottomTab === 'console' && consoleLog.length > 0 && (
-          <button className="wbb-tab" style={{ marginLeft: 'auto', color: 'var(--color-text-tertiary)' }} onClick={() => clearConsole()} title="清空 console">
+          <button className="wbb-tab" style={{ marginLeft: 'auto', color: 'var(--color-text-tertiary)' }} onClick={() => clearConsole()} title={t('workbench.clearConsole')}>
+            clear
+          </button>
+        )}
+        {bottomTab === 'network' && networkLog.length > 0 && (
+          <button className="wbb-tab" style={{ marginLeft: 'auto', color: 'var(--color-text-tertiary)' }} onClick={() => clearNetwork()} title={t('workbench.clearNetwork')}>
             clear
           </button>
         )}
@@ -451,16 +461,16 @@ function BottomPanel({
       <div className="wb-bottom-body thin-scrollbar">
         {bottomTab === 'ledger' && (
           <>
-            {loading && <div className="wbb-row" style={{ opacity: 0.5 }}><span>加载中...</span></div>}
+            {loading && <div className="wbb-row" style={{ opacity: 0.5 }}><span>{t('common.loading')}</span></div>}
             {!loading && events.length === 0 && (
               <div className="wbb-row" style={{ opacity: 0.5 }}>
-                <span>暂无活动 — 让 Forge 派 Iori/Suzu 立柱写设计后这里会显示</span>
+                <span>{t('workbench.ledgerEmpty')}</span>
               </div>
             )}
             {!loading && events.map((e) => {
               const lock = fileLocks.get(e.path);
               const lockTitle = lock
-                ? `\n🔒 正在被 ${lock.agentPath} ${lock.op} 中`
+                ? `\n🔒 ${t('workbench.lockedBy', { agent: lock.agentPath, op: lock.op })}`
                 : '';
               return (
                 <button
@@ -473,7 +483,7 @@ function BottomPanel({
                   <span className="wbb-tag agent">{e.agentName}</span>
                   <span className="wbb-ico">{e.ico ?? '📄'}</span>
                   <span className="wbb-name">{e.name}</span>
-                  {lock && <span className="wbb-lock" aria-label="正在编辑">🔒</span>}
+                  {lock && <span className="wbb-lock" aria-label={t('workbench.editing')}>🔒</span>}
                 </button>
               );
             })}
@@ -483,7 +493,7 @@ function BottomPanel({
           <>
             {consoleLog.length === 0 && (
               <div className="wbb-row" style={{ opacity: 0.5 }}>
-                <span>暂无 console 输出 — 游戏 console.log/warn/error 会在这里实时显示</span>
+                <span>{t('workbench.consoleEmpty')}</span>
               </div>
             )}
             {consoleLog.map((e, i) => {
@@ -499,10 +509,28 @@ function BottomPanel({
             })}
           </>
         )}
-        {(bottomTab === 'network' || bottomTab === 'tasks') && (
-          <div className="wbb-row" style={{ opacity: 0.5 }}>
-            <span>{bottomTab} 即将上线</span>
-          </div>
+        {bottomTab === 'network' && (
+          <>
+            {networkLog.length === 0 && (
+              <div className="wbb-row" style={{ opacity: 0.5 }}>
+                <span>{t('workbench.networkEmpty')}</span>
+              </div>
+            )}
+            {networkLog.map((e, i) => {
+              const d = new Date(e.ts);
+              const stamp = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+              const statusLabel = e.kind === 'ws' ? (e.ok ? 'open' : 'closed') : (e.status || 'ERR');
+              return (
+                <div key={i} className={`wbb-row console-row level-${e.ok ? 'log' : 'error'}`} title={e.url}>
+                  <span className="wbb-time">{stamp}</span>
+                  <span className={`wbb-tag console-${e.ok ? 'info' : 'error'}`}>{statusLabel}</span>
+                  <span className="wbb-tag tool">{e.kind === 'ws' ? 'WS' : e.method}</span>
+                  <span className="console-text">{e.url}</span>
+                  {e.kind !== 'ws' && <span className="wbb-time" style={{ marginLeft: 'auto' }}>{e.ms}ms</span>}
+                </div>
+              );
+            })}
+          </>
         )}
         {bottomTab === 'ledger' && hasFile && previewFile && (
           <div className="wbb-row" style={{ opacity: 0.5, marginTop: 8, borderTop: '1px solid var(--color-divider-subtle)', paddingTop: 6 }}>
@@ -523,6 +551,7 @@ function BottomPanel({
 // empty list → render the original cm-mock placeholder so the editor area is
 // never blank.
 function WbGallery() {
+  const { t } = useTranslation();
   const openWorkbench = useAppStore((s) => s.openWorkbench);
   const [plugins, setPlugins] = useState<BusPluginInfo[] | null>(null);
   const [errored, setErrored] = useState(false);
@@ -542,15 +571,15 @@ function WbGallery() {
 
   // Fail-safe: keep legacy hint when bus is unreachable or returned no items.
   if (errored || (plugins && plugins.length === 0)) {
-    return <pre className="cm-mock thin-scrollbar"><code>{PLACEHOLDER}</code></pre>;
+    return <pre className="cm-mock thin-scrollbar"><code>{placeholderText(t)}</code></pre>;
   }
   // First-paint window (< ~50ms) — render the frame so layout doesn't reflow.
   if (plugins === null) {
     return (
       <div className="wb-gallery thin-scrollbar" aria-busy="true">
         <div className="wbg-header">
-          <span className="wbg-title">Workbench · 工作台</span>
-          <span className="wbg-sub">加载 plugin 列表…</span>
+          <span className="wbg-title">{t('workbench.galleryTitle')}</span>
+          <span className="wbg-sub">{t('workbench.loadingPluginList')}</span>
         </div>
       </div>
     );
@@ -574,14 +603,14 @@ function WbGallery() {
     `${wipCount} experimental(WIP) · ` +
     `${totalTools} tool(s) on bus · ` +
     `${totalEvents} event(s) emitted · ` +
-    `${bumpedCount} bumped (manifest version 非 0.0.x 占位)`;
+    `${bumpedCount} ${t('workbench.bumpedStatsSuffix')}`;
   const statsAria =
     `${plugins.length} workbench plugins total — ` +
     `${wipCount} experimental, ${totalTools} tools, ${totalEvents} events, ${bumpedCount} bumped`;
   return (
     <div className="wb-gallery thin-scrollbar">
       <div className="wbg-header">
-        <span className="wbg-title">Workbench · 工作台</span>
+        <span className="wbg-title">{t('workbench.galleryTitle')}</span>
         <span className="wbg-count">· {plugins.length} plugins</span>
         <span className="wbg-stats" title={statsTitle} aria-label={statsAria} role="group">
           <span className="wbg-stats-pill wbg-stats-total">
@@ -607,7 +636,7 @@ function WbGallery() {
           {bumpedCount > 0 && (
             <span
               className="wbg-stats-pill wbg-stats-bumped"
-              title={`${bumpedCount} workbench plugin${bumpedCount === 1 ? '' : 's'} bumped past 0.0.x · 实装入口数量`}
+              title={`${bumpedCount} workbench plugin${bumpedCount === 1 ? '' : 's'} bumped past 0.0.x · ${t('workbench.implementedEntryCount')}`}
               aria-label={`${bumpedCount} bumped`}
             >
               <span aria-hidden>v</span>
@@ -615,7 +644,7 @@ function WbGallery() {
             </span>
           )}
         </span>
-        <span className="wbg-sub">选一个工作台开始 — 点击 tile 切到 Sidebar 对应 wb-* 选项卡</span>
+        <span className="wbg-sub">{t('workbench.gallerySub')}</span>
       </div>
       <div className="wbg-grid">
         {plugins.map((m, i) => {
@@ -661,7 +690,7 @@ function WbGallery() {
             >
               <span
                 className="wbg-tile-rank"
-                title={`#${rank} of ${plugins.length} · manifest workbench.position 决定排序`}
+                title={`#${rank} of ${plugins.length} · ${t('workbench.positionDecidesOrder')}`}
                 aria-hidden
               >#{rank}</span>
               <span className="wbg-tile-ico" aria-hidden>
@@ -669,7 +698,7 @@ function WbGallery() {
                 {verBumped && (
                   <sup
                     className="wbg-tile-ico-ver"
-                    title={`manifest v${ver} bumped · 已 bump 过 0.0.x 占位语义`}
+                    title={`manifest v${ver} bumped · ${t('workbench.bumpedPastPlaceholder')}`}
                     aria-hidden
                   >v</sup>
                 )}
@@ -683,18 +712,18 @@ function WbGallery() {
                   className={`wbg-tile-tag ver${verBumped ? ' bumped' : ''}`}
                   title={
                     verBumped
-                      ? `manifest version ${ver} · 已 bump · 实装中 (非 0.0.x 占位)`
-                      : `manifest version ${ver} · 占位语义版本 · 后续实装会 bump`
+                      ? `manifest version ${ver} · ${t('workbench.verTagBumped')}`
+                      : `manifest version ${ver} · ${t('workbench.verTagPlaceholder')}`
                   }
                   aria-label={`version ${ver}`}
                 >v{ver}</span>
                 {isWip && (
-                  <span className="wbg-tile-tag wip" title="experimental — manifest 标 experimental:true · 真实现待 Phase 4+">
+                  <span className="wbg-tile-tag wip" title={t('workbench.wipTagTitle')}>
                     WIP
                   </span>
                 )}
                 {toolCount > 0 && (
-                  <span className="wbg-tile-tag tools" title={`${toolCount} tool${toolCount === 1 ? '' : 's'} on bus · 由本 workbench plugin 暴露给 AI`}>
+                  <span className="wbg-tile-tag tools" title={`${toolCount} tool${toolCount === 1 ? '' : 's'} on bus · ${t('workbench.toolsExposedToAi')}`}>
                     🛠 {toolCount}
                   </span>
                 )}
@@ -728,6 +757,7 @@ interface AgentRec {
 }
 
 export function AgentsMainArea() {
+  const { t } = useTranslation();
   const openFile = useAppStore((s) => s.openFile);
   const openWorkbench = useAppStore((s) => s.openWorkbench);
   const activeSid = useAppStore((s) => s.activeSid);
@@ -787,7 +817,7 @@ export function AgentsMainArea() {
   if (err) {
     return (
       <div className="wm-agents-main">
-        <div className="wm-agents-err">加载 agents 失败: {err}</div>
+        <div className="wm-agents-err">{t('workbench.agentsLoadFailed')}: {err}</div>
       </div>
     );
   }
@@ -795,7 +825,7 @@ export function AgentsMainArea() {
   if (agents === null) {
     return (
       <div className="wm-agents-main">
-        <div className="wm-agents-loading">加载中…</div>
+        <div className="wm-agents-loading">{t('common.loading')}</div>
       </div>
     );
   }
@@ -803,12 +833,12 @@ export function AgentsMainArea() {
   return (
     <div className="wm-agents-main thin-scrollbar">
       <div className="wm-agents-header">
-        <span className="wm-agents-title">Agents · 协作团队</span>
+        <span className="wm-agents-title">{t('workbench.agentsTitle')}</span>
         <span className="wm-agents-count">{agents.length} agents</span>
       </div>
       {agents.length === 0 ? (
         <div className="wm-agents-empty">
-          <span>暂无 agents — 发送消息后 Forge 会自动派遣团队成员</span>
+          <span>{t('workbench.agentsEmpty')}</span>
         </div>
       ) : (
         <div className="wm-agents-grid">
@@ -825,8 +855,8 @@ export function AgentsMainArea() {
               onClick={() => openAgentDetail(a.id)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgentDetail(a.id); } }}
               title={off
-                ? `${a.name} · ${a.role} · 已在设置中停用（不参与协作/派遣）`
-                : `${a.name} · ${a.role} · 单击进入 Agent 详情（产出物 / 长期记忆 / Skills）`}
+                ? `${a.name} · ${a.role} · ${t('workbench.agentDisabledTitle')}`
+                : `${a.name} · ${a.role} · ${t('workbench.agentDetailTitle')}`}
             >
               <div className="wm-agent-card-header">
                 <span className="wm-agent-avatar" style={{ background: a.color }}>{a.avatar}</span>
@@ -835,7 +865,7 @@ export function AgentsMainArea() {
                   <span className="wm-agent-role">{a.role}</span>
                 </div>
                 {off
-                  ? <span className="wm-agent-badge">已停用</span>
+                  ? <span className="wm-agent-badge">{t('workbench.disabledBadge')}</span>
                   : a.status === 'active' && <span className="wm-agent-badge active">active</span>}
               </div>
               {a.files.length > 0 && (
@@ -856,7 +886,7 @@ export function AgentsMainArea() {
                 </ul>
               )}
               {a.files.length === 0 && (
-                <div className="wm-agent-no-files">暂无产物文件</div>
+                <div className="wm-agent-no-files">{t('workbench.noProducedFiles')}</div>
               )}
             </div>
             );

@@ -16,7 +16,7 @@
 // (forgeax-engine-assets/learn-opengl/textures/newport_loft.hdr, GUID
 // 019e4a26-3c29-7420-af5d-20f2724a16b0). In feat-20260604-hdr-equirect-cube-
 // importer-loader M5, the smoke walks the REAL production loadByGuid path
-// (configurePackIndex -> loadByGuid -> assets.get -> uploadCubemapFromEquirect)
+// (configurePackIndex -> loadByGuid -> allocSharedRef -> uploadCubemapFromEquirect)
 // using a mock fetch that serves the pre-built pack-index + imported .bin from
 // the vite build dist directory. No decodeHdr / registerWithGuid bypass
 // (AC-07). In FALSIFY=hdr-bin-empty mode the imported .bin payload is zeroed to
@@ -249,23 +249,25 @@ export async function runIblSmoke(opts) {
   if (!guidRes.ok)
     fail(`AssetGuid.parse failed for NEWPORT_LOFT_GUID: ${guidRes.error.code}`);
 
-  const hdrHandleRes = await assets.loadByGuid(guidRes.value);
-  if (!hdrHandleRes.ok)
-    fail(`loadByGuid(newport_loft.hdr) failed: ${hdrHandleRes.error.code} - ${hdrHandleRes.error.hint}`);
+  // loadByGuid returns the TextureAsset PAYLOAD (M8 D-17), not a handle.
+  const hdrPodRes = await assets.loadByGuid(guidRes.value);
+  if (!hdrPodRes.ok)
+    fail(`loadByGuid(newport_loft.hdr) failed: ${hdrPodRes.error.code} - ${hdrPodRes.error.hint}`);
 
-  const srcPodRes = assets.get(hdrHandleRes.value);
-  if (!srcPodRes.ok)
-    fail(`assets.get(hdrHandle) failed: ${srcPodRes.error.code}`);
+  const equirectPod = hdrPodRes.value;
 
-  const equirectPod = { ...srcPodRes.value };
-  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(hdrHandleRes.value, equirectPod);
+  // --- 5. Build scene (3x3 sphere matrix) ---
+  const world = new World();
+
+  // Mint a user-tier source handle for the equirect pod, then pass
+  // world + handle + pod to the cubemap upload (world-first, M8).
+  const srcHandle = world.allocSharedRef('TextureAsset', equirectPod);
+  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, srcHandle, equirectPod);
   if (!cubemapRes.ok)
     fail(`equirect-to-cubemap upload failed: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`);
 
   console.log(`[${demoId}] loadByGuid + uploadCubemapFromEquirect OK (format=${equirectPod.format} ${equirectPod.width}x${equirectPod.height})`);
 
-  // --- 5. Build scene (3x3 sphere matrix) ---
-  const world = new World();
   world.spawn({
     component: Skylight,
     data: { cubemap: cubemapRes.value, intensity: 1.0 },
@@ -273,8 +275,7 @@ export async function runIblSmoke(opts) {
 
   const sphereRes = createSphereGeometry(1.0, 32, 16);
   if (!sphereRes.ok) fail(`createSphereGeometry failed: ${sphereRes.error.code}`);
-  const sphereAssetHandle = assets.register(sphereRes.value);
-  if (!sphereAssetHandle.ok) fail(`register sphere failed: ${sphereAssetHandle.error.code}`);
+  const sphereAssetHandle = world.allocSharedRef('MeshAsset', sphereRes.value);
 
   const baseColor = demoKind === 'specular' ? [0.5, 0.5, 0.5, 1.0] : [0.8, 0.8, 0.8, 1.0];
   const GRID = 3;
@@ -284,9 +285,9 @@ export async function runIblSmoke(opts) {
     for (let col = 0; col < GRID; col++) {
       const roughness = 0.1 + row * 0.4;
       const metallic = col * 0.5;
-      // feat-20260527 M3 / w12: pass-based MaterialAsset via
-      // register<MaterialAsset> (unified path).
-      const matHandle = assets.register({
+      // feat-20260527 M3 / w12: pass-based MaterialAsset minted as a
+      // user-tier shared ref (M8 unified path).
+      const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         passes: [
           {
@@ -302,7 +303,6 @@ export async function runIblSmoke(opts) {
           roughness,
         },
       });
-      if (!matHandle.ok) fail(`register material failed: ${matHandle.error.code}`);
       const cx = (col - (GRID - 1) / 2) * SPACING;
       const cy = ((GRID - 1) / 2 - row) * SPACING;
       world.spawn(
@@ -321,8 +321,8 @@ export async function runIblSmoke(opts) {
             scaleZ: SCALE,
           },
         },
-        { component: MeshFilter, data: { assetHandle: sphereAssetHandle.value } },
-        { component: MeshRenderer, data: { material: matHandle.value } },
+        { component: MeshFilter, data: { assetHandle: sphereAssetHandle } },
+        { component: MeshRenderer, data: { materials: [matHandle] } },
       );
     }
   }

@@ -78,14 +78,14 @@ import {
   FixedArrayOverflowError,
   FixedSizeMismatchError,
   type ManagedArrayElementTypeNotAllowedError,
-  ManagedRefDoubleReleaseError,
-  type ManagedRefReleasedError,
   ResourceNotFoundError,
+  UniqueRefDoubleReleaseError,
+  type UniqueRefReleasedError,
 } from '../errors';
-import { ManagedRefStore } from '../managed-ref-store';
 import { ECS_MUTATING_METHODS } from '../mutating-methods';
 import { registerEcsInspector } from '../register-inspector';
 import { type ErrorContext, matchSeverity, Severity } from '../schedule';
+import { UniqueRefStore } from '../unique-ref-store';
 import { World, type WorldInspection } from '../world';
 import {
   COMPONENTS_SCRIPT,
@@ -147,9 +147,9 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from managed-ref-on-release.test.ts ---
-  describe('feat-20260528 M1 t1 ManagedRefStore onRelease callback', () => {
+  describe('feat-20260528 M1 t1 UniqueRefStore onRelease callback', () => {
     it('alloc with onRelease stores the callback and calls it on release before delete', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       let called = false;
       let releasedPayload: string | undefined;
 
@@ -166,7 +166,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('release with onRelease callback: second release (double-release) does not trigger callback', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       let callCount = 0;
 
       const handle = store.alloc<'Test'>('Test', 'world', () => {
@@ -183,7 +183,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('alloc without onRelease (backward-compatible two-param form) works', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       const handle = store.alloc<'Test'>('Test', 'backward-compat');
       const resolveResult = store.resolve(handle);
       expect(resolveResult.ok).toBe(true);
@@ -200,7 +200,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('onRelease passes the correct payload when multiple handles exist', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       const released: number[] = [];
 
       type Item = { id: number };
@@ -220,7 +220,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('onRelease fires before payload is deleted (resolve after release yields no payload)', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       let payloadDuringCallback: { name: string } | undefined;
 
       const handle = store.alloc<'X', { name: string }>('X', { name: 'payload' }, (p) => {
@@ -238,7 +238,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('onRelease is called per-handle: independent handles do not share callbacks', () => {
-      const store = new ManagedRefStore();
+      const store = new UniqueRefStore();
       const sequence: string[] = [];
 
       const h1 = store.alloc<'A'>('A', 1, () => sequence.push('a'));
@@ -373,11 +373,11 @@ import { handleNumeric } from './utils/handle-numeric';
     readonly albedo: readonly [number, number, number, number];
   }
 
-  // World owns its ManagedRefStore from construction (M1: managedRefs is a
+  // World owns its UniqueRefStore from construction (M1: uniqueRefs is a
   // non-null private field). Tests probe the internal store via a structural
   // cast --- no caller-side wiring step remains.
-  function refsOf(w: World): ManagedRefStore {
-    return (w as unknown as { managedRefs: ManagedRefStore }).managedRefs;
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
   }
 
   describe('AI user sandbox - schema vocab + lifecycle', () => {
@@ -394,7 +394,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('(2) `ref<T>` field stores managed Handle; auto-released on despawn (AC-03 path 1)', () => {
-      const Mat = defineComponent('Mat', { material: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
       const handle = store.alloc<'MaterialAsset', MaterialAsset>('MaterialAsset', {
@@ -413,17 +413,17 @@ import { handleNumeric } from './utils/handle-numeric';
       w.despawn(e).unwrap();
       const after = store.resolve(handle);
       expect(after.ok).toBe(false);
-      if (!after.ok) expect(after.error.code).toBe('managed-ref-released');
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
     });
 
     it('(3) `handle<T>` field stores unmanaged Handle; ECS does NOT release on despawn', () => {
       const MeshFilter = defineComponent('MeshFilter', {
-        assetHandle: { type: 'handle<MeshAsset>' },
+        assetHandle: { type: 'shared<MeshAsset>' },
       });
       const w = new World();
-      const fakeHandle: Handle<'MeshAsset', 'unmanaged'> = 0x1234_5678 as Handle<
+      const fakeHandle: Handle<'MeshAsset', 'shared'> = 0x1234_5678 as Handle<
         'MeshAsset',
-        'unmanaged'
+        'shared'
       >;
       const e = w.spawn({ component: MeshFilter, data: { assetHandle: fakeHandle } }).unwrap();
       const r = w.get(e, MeshFilter).unwrap();
@@ -440,7 +440,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('(5) archetype migrate (addComponent reshuffle): managed handle Object.is preserved', () => {
-      const Mat = defineComponent('Mat', { material: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
       const Tag = defineComponent('Tag', { x: { type: 'u32' } });
       const w = new World();
       const store = refsOf(w);
@@ -465,7 +465,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('(6) `world.set` covering write releases old managed handle (AC-03 path 3)', () => {
-      const Mat = defineComponent('Mat', { material: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
       const oldHandle = store.alloc('MaterialAsset', { albedo: [1, 0, 0, 1] });
@@ -481,7 +481,7 @@ import { handleNumeric } from './utils/handle-numeric';
       }).unwrap();
       const after = store.resolve(oldHandle);
       expect(after.ok).toBe(false);
-      if (!after.ok) expect(after.error.code).toBe('managed-ref-released');
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
       expect(store.resolve(newHandle).ok).toBe(true);
     });
   });
@@ -489,37 +489,47 @@ import { handleNumeric } from './utils/handle-numeric';
 {
   // --- from array-handle-element.test.ts ---
   describe('array<handle<X>> parse (w6, D-1)', () => {
-    it("parseManagedArraySchema('array<handle<MaterialAsset>>') returns { elementType: 'handle<MaterialAsset>', length: undefined }", () => {
-      const result = parseManagedArraySchema('array<handle<MaterialAsset>>');
-      // pre w5: returns null because 'handle<MaterialAsset>' is not in
+    it("parseManagedArraySchema('array<shared<MaterialAsset>>') returns { elementType: 'shared<MaterialAsset>', length: undefined }", () => {
+      const result = parseManagedArraySchema('array<shared<MaterialAsset>>');
+      // pre w5: returns null because 'shared<MaterialAsset>' is not in
       // ManagedArrayElementType — this is the TDD red state
       expect(result).not.toBeNull();
       if (result === null) return;
-      expect(result.elementType).toBe('handle<MaterialAsset>');
+      expect(result.elementType).toBe('shared<MaterialAsset>');
       expect(result.length).toBeUndefined();
     });
 
-    it("parseManagedArraySchema('array<handle<MeshAsset>>') returns { elementType: 'handle<MeshAsset>' }", () => {
-      const result = parseManagedArraySchema('array<handle<MeshAsset>>');
+    it("parseManagedArraySchema('array<shared<MeshAsset>>') returns { elementType: 'shared<MeshAsset>' }", () => {
+      const result = parseManagedArraySchema('array<shared<MeshAsset>>');
       expect(result).not.toBeNull();
       if (result === null) return;
-      expect(result.elementType).toBe('handle<MeshAsset>');
+      expect(result.elementType).toBe('shared<MeshAsset>');
       expect(result.length).toBeUndefined();
     });
 
-    it("parseManagedArraySchema('array<handle<>, 3>') returns null (empty tag rejection)", () => {
-      // R-NEW-1: empty tag inside handle<> is rejected
-      const result = parseManagedArraySchema('array<handle<>, 3>');
+    it("parseManagedArraySchema('array<shared<>, 3>') returns null (empty tag rejection)", () => {
+      // R-NEW-1: empty tag inside shared<> is rejected
+      const result = parseManagedArraySchema('array<shared<>, 3>');
       expect(result).toBeNull();
     });
 
-    it("parseManagedArraySchema('array<handle<>>') returns null (variable-capacity empty tag rejection)", () => {
-      const result = parseManagedArraySchema('array<handle<>>');
+    it("parseManagedArraySchema('array<shared<>>') returns null (variable-capacity empty tag rejection)", () => {
+      const result = parseManagedArraySchema('array<shared<>>');
       expect(result).toBeNull();
     });
 
-    it("isSchemaVocabKeyword('array<handle<MaterialAsset>>') returns true", () => {
-      const result = isSchemaVocabKeyword('array<handle<MaterialAsset>>');
+    it("parseManagedArraySchema('array<handle<X>>') returns null (post-w23 'handle<T>' arm deleted)", () => {
+      // gate-allow:ecs-brand
+      // feat-20260614 w23: the 'handle<T>' parser arm was removed; any
+      // legacy literal flowing through here returns null and the caller
+      // surfaces SchemaUnsupportedFieldError (with migration-hint pointing
+      // at 'shared<T>' -- see schema-vocab.test-d.ts).
+      const result = parseManagedArraySchema('array<handle<MeshAsset>>');
+      expect(result).toBeNull();
+    });
+
+    it("isSchemaVocabKeyword('array<shared<MaterialAsset>>') returns true", () => {
+      const result = isSchemaVocabKeyword('array<shared<MaterialAsset>>');
       expect(result).toBe(true);
     });
   });
@@ -1316,7 +1326,7 @@ import { handleNumeric } from './utils/handle-numeric';
     it('array<handle<X>> with non-empty tag is accepted at runtime (feat-20260608 M2 D-1)', () => {
       expect(() => {
         defineComponent('Good', {
-          good: { type: 'array<handle<MeshAsset>>' as unknown as SchemaFieldType },
+          good: { type: 'array<shared<MeshAsset>>' as unknown as SchemaFieldType },
         });
       }).not.toThrow();
     });
@@ -1529,7 +1539,7 @@ import { handleNumeric } from './utils/handle-numeric';
       if (captured === null) return;
       expect(captured.code).toBe('managed-array-element-type-not-allowed');
       expect(captured.detail.fieldName).toBe('bad');
-      expect(captured.detail.elementType).toBe('ref<X>');
+      expect(captured.detail.elementType).toBe('ref<X>'); // gate-allow:ecs-brand (illegal-element-type-not-allowed parser rejection fixture)
     });
   });
 
@@ -2025,7 +2035,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('array<handle<X>> is now a recognised schema field type (feat-20260608 M2 D-1)', () => {
-      const valid: SchemaFieldType = 'array<handle<MeshAsset>>';
+      const valid: SchemaFieldType = 'array<shared<MeshAsset>>';
       void valid;
     });
 
@@ -2037,13 +2047,13 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 
   describe('array vocab - cross-brand rejection (w12, AC-04)', () => {
-    it('Entity packed u32 is not assignable to Handle<Mesh, "managed">', () => {
-      const takesMeshHandle = (h: Handle<'Mesh', 'managed'>): void => {
+    it("Entity packed u32 is not assignable to Handle<Mesh, 'unique'>", () => {
+      const takesMeshHandle = (h: Handle<'Mesh', 'unique'>): void => {
         void h;
       };
       const view = new Uint32Array(1) as TypedArrayFor<'u32'>;
       const elem: number = view[0] ?? 0;
-      // @ts-expect-error number is not assignable to Handle<'Mesh','managed'> (AC-04).
+      // @ts-expect-error number is not assignable to Handle<'Mesh','unique'> (AC-04).
       takesMeshHandle(elem);
     });
   });
@@ -2104,8 +2114,8 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from managed-carry-over.test.ts ---
-  function refsOf(w: World): ManagedRefStore {
-    return (w as unknown as { managedRefs: ManagedRefStore }).managedRefs;
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
   }
 
   function fillSequential(view: Uint8Array, base: number): void {
@@ -2128,7 +2138,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
   describe('w16 - ref<T> field archetype migrate carry-over (AC-04)', () => {
     it('addComponent triggers migrate; ref<T> handle u32 stays bit-equal', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
@@ -2166,7 +2176,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('removeComponent triggers migrate; surviving ref<T> handle u32 stays bit-equal', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
@@ -2200,7 +2210,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('multi-hop migrate (add then remove) keeps ref<T> handle u32 bit-equal end-to-end', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const Tag = defineComponent('Tag', { v: { type: 'u32' } });
       const w = new World();
@@ -2303,7 +2313,7 @@ import { handleNumeric } from './utils/handle-numeric';
   describe('w16 - combined ref+buffer fields archetype migrate carry-over (AC-04)', () => {
     it('addComponent migrate: ref handle u32 stays bit-equal AND buffer bytes byte-equal', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<256>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
@@ -2344,7 +2354,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('removeComponent migrate: ref+buffer on the surviving component stay carry-over intact', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<128>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
@@ -2382,7 +2392,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('multi-hop migrate keeps ref+buffer carry-over intact end-to-end', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<64>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
@@ -2429,15 +2439,15 @@ import { handleNumeric } from './utils/handle-numeric';
   // ---------------------------------------------------------------------------
 
   describe('w16 - migrate does not release or route errors (AC-04 negative)', () => {
-    it('addComponent migrate does not call ManagedRefStore.release / BufferPool.release', () => {
+    it('addComponent migrate does not call UniqueRefStore.release / BufferPool.release', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<32>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
-      const refReleaseSpy = vi.spyOn(ManagedRefStore.prototype, 'release');
+      const refReleaseSpy = vi.spyOn(UniqueRefStore.prototype, 'release');
       const bufReleaseSpy = vi.spyOn(BufferPool.prototype, 'release');
       const h = store.alloc('MaterialAsset', { id: 1 });
       const seed = new Uint8Array(32);
@@ -2464,7 +2474,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('removeComponent migrate of an unrelated component does not release the survivor managed slots', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<32>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
@@ -2486,7 +2496,7 @@ import { handleNumeric } from './utils/handle-numeric';
         )
         .unwrap();
 
-      const refReleaseSpy = vi.spyOn(ManagedRefStore.prototype, 'release');
+      const refReleaseSpy = vi.spyOn(UniqueRefStore.prototype, 'release');
       const bufReleaseSpy = vi.spyOn(BufferPool.prototype, 'release');
 
       // Remove Anchor (no managed fields). Mesh's material + vertices must NOT
@@ -2506,7 +2516,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('migrate does not route any error through the Layer 3 ErrorHandler', () => {
       const Mesh = defineComponent('Mesh', {
-        material: { type: 'ref<MaterialAsset>' },
+        material: { type: 'unique<MaterialAsset>' },
         vertices: { type: 'buffer<32>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
@@ -2540,15 +2550,15 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from managed-release.test.ts ---
-  function refsOf(w: World): ManagedRefStore {
-    return (w as unknown as { managedRefs: ManagedRefStore }).managedRefs;
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
   }
 
   // ---------------------------------------------------------------------------
-  // (a) ManagedRefStore unit-level invariants (covers w7 acceptance).
+  // (a) UniqueRefStore unit-level invariants (covers w7 acceptance).
   // ---------------------------------------------------------------------------
 
-  describe('w6 - ManagedRefStore unit invariants', () => {
+  describe('w6 - UniqueRefStore unit invariants', () => {
     it('alloc returns a frozen plain-object handle wrapper', () => {
       const w = new World();
       const store = refsOf(w);
@@ -2566,7 +2576,7 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(r.value.id).toBe(42);
     });
 
-    it('resolve(h) after release returns err(managed-ref-released)', () => {
+    it('resolve(h) after release returns err(unique-ref-released)', () => {
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 1 });
@@ -2574,10 +2584,10 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected err');
-      expect(r.error.code).toBe('managed-ref-released');
+      expect(r.error.code).toBe('unique-ref-released');
     });
 
-    it('release(h) twice surfaces managed-ref-double-release', () => {
+    it('release(h) twice surfaces unique-ref-double-release', () => {
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 1 });
@@ -2585,7 +2595,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.release(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected err');
-      expect(r.error.code).toBe('managed-ref-double-release');
+      expect(r.error.code).toBe('unique-ref-double-release');
     });
 
     it('AC-04 prelude: alloc returns per-(slot,gen) singleton identity (Object.is)', () => {
@@ -2622,7 +2632,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
   describe('w6 - World ref<T> field release loop', () => {
     it('world.despawn(e) releases ref<T> field handle (path 1)', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 7 });
@@ -2636,11 +2646,11 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('managed-ref-released');
+      expect(r.error.code).toBe('unique-ref-released');
     });
 
     it('world.removeComponent(e, C) releases ref<T> field handle (path 2)', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
@@ -2658,11 +2668,11 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('managed-ref-released');
+      expect(r.error.code).toBe('unique-ref-released');
     });
 
     it('world.set(e, C, { handle: newHandle }) releases the prior handle (path 3)', () => {
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
       const oldH = store.alloc('MaterialAsset', { id: 1 });
@@ -2679,17 +2689,17 @@ import { handleNumeric } from './utils/handle-numeric';
       const rOld = store.resolve(oldH);
       expect(rOld.ok).toBe(false);
       if (rOld.ok) throw new Error('expected old released');
-      expect(rOld.error.code).toBe('managed-ref-released');
+      expect(rOld.error.code).toBe('unique-ref-released');
       const rNew = store.resolve(newH);
       expect(rNew.ok).toBe(true);
     });
 
     it('null ref<T> field on spawn does not call release on despawn (boundary)', () => {
       // Boundary case: ref<T> field can hold null; despawn must not attempt to
-      // release a null slot (would surface as managed-ref-double-release noise).
+      // release a null slot (would surface as unique-ref-double-release noise).
       // We probe by giving the World an ErrorHandler that throws on any call -
       // a clean despawn means no release happened.
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       let handlerCalls = 0;
       w.setErrorHandler(() => {
@@ -2699,7 +2709,7 @@ import { handleNumeric } from './utils/handle-numeric';
       // store's release path must short-circuit on this sentinel - documented
       // by D-3 (the wrapper for slot 0 is never allocated, so resolve returns
       // err but world's release loop must skip it without escalating).
-      const sentinel = 0 as Handle<'MaterialAsset', 'managed'>;
+      const sentinel = 0 as Handle<'MaterialAsset', 'unique'>;
       const e = w.spawn({ component: Mat, data: { handle: sentinel } }).unwrap();
       w.despawn(e).unwrap();
       expect(handlerCalls).toBe(0);
@@ -2716,12 +2726,12 @@ import { handleNumeric } from './utils/handle-numeric';
   }
 
   describe('w9 - release failure routes through Layer 3 ErrorHandler', () => {
-    it('manual release + World.despawn -> ErrorHandler captures managed-ref-double-release', () => {
+    it('manual release + World.despawn -> ErrorHandler captures unique-ref-double-release', () => {
       // Real World-driven double release: AI user calls store.release(h)
       // themselves, then despawns the holder entity. The column still
       // carries the u32 handle, so World.despawn -> release(h) returns
-      // err(managed-ref-double-release) which routes to Layer 3.
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      // err(unique-ref-double-release) which routes to Layer 3.
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
       const captured: CapturedCall[] = [];
@@ -2743,9 +2753,9 @@ import { handleNumeric } from './utils/handle-numeric';
       const c0 = captured[0];
       if (c0 === undefined) throw new Error('expected captured');
       // {code, hint, expected, detail} contract (AC-05).
-      expect(c0.error).toBeInstanceOf(ManagedRefDoubleReleaseError);
-      const errClass = c0.error as ManagedRefDoubleReleaseError;
-      expect(errClass.code).toBe('managed-ref-double-release');
+      expect(c0.error).toBeInstanceOf(UniqueRefDoubleReleaseError);
+      const errClass = c0.error as UniqueRefDoubleReleaseError;
+      expect(errClass.code).toBe('unique-ref-double-release');
       expect(errClass.hint.length).toBeGreaterThan(0);
       expect(errClass.expected.length).toBeGreaterThan(0);
       expect(errClass.detail.handle).toBe(handleNumeric(h));
@@ -2764,7 +2774,7 @@ import { handleNumeric } from './utils/handle-numeric';
       // manual store.release(h), World.despawn surfaces the err on Mat.handle
       // through the ErrorHandler but continues - the entity is fully
       // removed (Anchor's path runs untouched).
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
@@ -2792,12 +2802,12 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(r.error.code).toBe('stale-entity');
       // One double-release surface for Mat.handle, no extra noise.
       expect(handlerErrors).toHaveLength(1);
-      expect(handlerErrors[0]).toBeInstanceOf(ManagedRefDoubleReleaseError);
+      expect(handlerErrors[0]).toBeInstanceOf(UniqueRefDoubleReleaseError);
     });
 
     it('removeComponent path also routes double-release through ErrorHandler', () => {
       // Mirror of the despawn case but for the removeComponent path.
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
       const store = refsOf(w);
@@ -2820,17 +2830,17 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(captured).toHaveLength(1);
       const c0 = captured[0];
       if (c0 === undefined) throw new Error('expected captured');
-      expect((c0.error as ManagedRefDoubleReleaseError).code).toBe('managed-ref-double-release');
+      expect((c0.error as UniqueRefDoubleReleaseError).code).toBe('unique-ref-double-release');
       // feat-20260614 M2 D-2: SSOT release-dispatch -> uniform systemName.
       expect(c0.context.systemName).toContain('World.release');
       expect(c0.context.systemName).toContain('Mat.handle');
     });
 
-    it('ManagedRefReleasedError carries the {code, hint, expected, detail} contract', () => {
+    it('UniqueRefReleasedError carries the {code, hint, expected, detail} contract', () => {
       // AC-05 shape lock: even though the World M1 release loop does not
-      // surface 'managed-ref-released' (resolve is the read path, not the
+      // surface 'unique-ref-released' (resolve is the read path, not the
       // release path), the error class carries the same structured payload
-      // as 'managed-ref-double-release' so AI users get a uniform exhaustive
+      // as 'unique-ref-double-release' so AI users get a uniform exhaustive
       // switch on the union.
       const w = new World();
       const store = refsOf(w);
@@ -2839,8 +2849,8 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected released');
-      const e: ManagedRefReleasedError = r.error;
-      expect(e.code).toBe('managed-ref-released');
+      const e: UniqueRefReleasedError = r.error;
+      expect(e.code).toBe('unique-ref-released');
       expect(e.hint.length).toBeGreaterThan(0);
       expect(e.expected.length).toBeGreaterThan(0);
       expect(typeof e.detail.handle).toBe('number');
@@ -3173,7 +3183,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'reader',
         queries: [{ with: [Pos, Entity] }],
-        fn: (queryResults, _commands) => {
+        fn: (_world, queryResults, _commands) => {
           // queryResults is an array of callback-based query runners
           for (const result of queryResults) {
             for (const bundle of result) {
@@ -3634,8 +3644,8 @@ import { handleNumeric } from './utils/handle-numeric';
     readonly tint: number;
   }
 
-  function refsOf(w: World): ManagedRefStore {
-    return (w as unknown as { managedRefs: ManagedRefStore }).managedRefs;
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
   }
 
   // ---------------------------------------------------------------------------
@@ -3694,7 +3704,7 @@ import { handleNumeric } from './utils/handle-numeric';
     it('addComponent migrate keeps BOTH string identity and ref<T> handle bit-equal', () => {
       const Mixed = defineComponent('Mixed', {
         label: { type: 'string' },
-        mat: { type: 'ref<MaterialAsset>' },
+        mat: { type: 'unique<MaterialAsset>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
@@ -3783,22 +3793,22 @@ import { handleNumeric } from './utils/handle-numeric';
 {
   // --- from string-managed-dispatch.test.ts ---
   interface WorldInternals {
-    managedRefs: ManagedRefStore;
+    uniqueRefs: UniqueRefStore;
   }
 
-  function getManagedRefs(w: World): ManagedRefStore {
-    return (w as unknown as WorldInternals).managedRefs as ManagedRefStore;
+  function getUniqueRefs(w: World): UniqueRefStore {
+    return (w as unknown as WorldInternals).uniqueRefs as UniqueRefStore;
   }
 
   // Inline `'string'`-field component for the dispatch tests.
   const StrName2 = defineComponent('StrName2', { value: { type: 'string' } });
-  describe("w5 - 'string' dispatch via managedRefs (AC-05 / AC-13)", () => {
+  describe("w5 - 'string' dispatch via uniqueRefs (AC-05 / AC-13)", () => {
     it('spawn { StrName2: "Alice" } -> world.get returns native JS string', () => {
       const w = new World();
       const e = w.spawn({ component: StrName2, data: { value: 'Alice' } }).unwrap();
       const got = w.get(e, StrName2);
       if (!got.ok) throw new Error('expected ok');
-      // After w6 dispatch routes through managedRefs.resolve(handle).unwrap()
+      // After w6 dispatch routes through uniqueRefs.resolve(handle).unwrap()
       // which yields the native JS string payload --- no .get() wrapper.
       expect(typeof got.value.value).toBe('string');
       expect(got.value.value).toBe('Alice');
@@ -3828,7 +3838,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 
-  describe("w5 - mixed 'string' + 'ref<T>' single-arm release (AC-05)", () => {
+  describe("w5 - mixed 'string' + 'unique<T>' single-arm release (AC-05)", () => {
     it('despawn(e) releases BOTH the string handle AND the ref<T> handle', () => {
       // The same isManagedField arm must fan out across BOTH fields. This
       // test is the load-bearing observable for w6's predicate merge: any
@@ -3836,10 +3846,10 @@ import { handleNumeric } from './utils/handle-numeric';
       // leave one of the two handles live after despawn.
       const Mat = defineComponent('Mat', {
         label: { type: 'string' },
-        handle: { type: 'ref<MaterialAsset>' },
+        handle: { type: 'unique<MaterialAsset>' },
       });
       const w = new World();
-      const refs = getManagedRefs(w);
+      const refs = getUniqueRefs(w);
       const matH = refs.alloc('MaterialAsset', { id: 7 });
 
       const e = w
@@ -3862,7 +3872,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const resolveMat = refs.resolve(matH);
       expect(resolveMat.ok).toBe(false);
       if (resolveMat.ok) throw new Error('expected ref handle released');
-      expect(resolveMat.error.code).toBe('managed-ref-released');
+      expect(resolveMat.error.code).toBe('unique-ref-released');
 
       // The 'string' field's underlying handle must also be released by the
       // SAME arm. We cannot cheaply observe the internal string-handle, so
@@ -3876,11 +3886,11 @@ import { handleNumeric } from './utils/handle-numeric';
     it('removeComponent(e, C) releases BOTH handles on the removed component', () => {
       const Mat = defineComponent('Mat', {
         label: { type: 'string' },
-        handle: { type: 'ref<MaterialAsset>' },
+        handle: { type: 'unique<MaterialAsset>' },
       });
       const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
       const w = new World();
-      const refs = getManagedRefs(w);
+      const refs = getUniqueRefs(w);
       const matH = refs.alloc('MaterialAsset', { id: 11 });
 
       const e = w
@@ -3901,7 +3911,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const resolveMat = refs.resolve(matH);
       expect(resolveMat.ok).toBe(false);
       if (resolveMat.ok) throw new Error('expected ref handle released');
-      expect(resolveMat.error.code).toBe('managed-ref-released');
+      expect(resolveMat.error.code).toBe('unique-ref-released');
 
       // Anchor remains; the entity is still alive.
       const got = w.get(e, Anchor);
@@ -3914,7 +3924,7 @@ import { handleNumeric } from './utils/handle-numeric';
       // invariant (D-5 net-zero on same-bucket reuse).
       const StrName3 = defineComponent('StrName3', { value: { type: 'string' } });
       const w = new World();
-      const refs = getManagedRefs(w);
+      const refs = getUniqueRefs(w);
       const before = (refs as unknown as { liveCount?: () => number }).liveCount?.() ?? null;
 
       const e = w.spawn({ component: StrName3, data: { value: 'first' } }).unwrap();
@@ -3928,8 +3938,8 @@ import { handleNumeric } from './utils/handle-numeric';
 }
 {
   // --- from string-release.test.ts ---
-  function refsOf(w: World): ManagedRefStore {
-    return (w as unknown as { managedRefs: ManagedRefStore }).managedRefs;
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
   }
 
   // ---------------------------------------------------------------------------
@@ -3953,7 +3963,7 @@ import { handleNumeric } from './utils/handle-numeric';
     it('despawn drops BOTH slots in the same loop pass; _liveCount delta = 2', () => {
       const Mixed = defineComponent('Mixed', {
         label: { type: 'string' },
-        mat: { type: 'ref<MaterialAsset>' },
+        mat: { type: 'unique<MaterialAsset>' },
       });
       const w = new World();
       const refs = refsOf(w);
@@ -3981,7 +3991,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = refs.resolve(matHandle);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('managed-ref-released');
+      expect(r.error.code).toBe('unique-ref-released');
     });
   });
 

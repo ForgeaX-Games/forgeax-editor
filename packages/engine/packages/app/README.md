@@ -206,6 +206,14 @@ Not subscribing by default is a deliberate charter P3 boundary (host self-decide
 | OOS-8 | `engine-console` integration | Inspector roots exposed by host directly via `wireDefaultInspectors` |
 | OOS-9 | RhiCanvasContext direct configure | `createApp(canvas)` thin wrapper handles WebGPU canvas-context configure internally |
 
+## Host-engine contract
+
+The boundary between host (DOM, canvas, UI) and engine (renderer, world, frame loop) is defined by a single-source contract document. Every host-side decision about canvas ownership, resize, aspect sync, DOM overlay, and lifecycle converges there.
+
+- **Contract SSOT**: [`docs/how-to/2026-06-18-host-engine-contract.md`](../../docs/how-to/2026-06-18-host-engine-contract.md) -- one-page proposition, six contact surfaces with single ownership, `createApp` vs `createRenderer` path differences, scope boundaries, and standard boilerplate (resize + aspect-sync, video cutscene pause -> overlay -> resume, worldToScreen DOM follow).
+- **createApp path**: auto-wires aspect-sync sidecar (canvas size -> `Camera.aspect` every frame) plus six other subsystems. Use this for every new host.
+- **createRenderer path**: no aspect-sync; the host manages `Camera.aspect` itself. The tetris demo (`apps/tetris/src/main.ts`) is the documented counter-example -- new hosts should not copy it.
+
 ## References
 
 - One-screen takeoff exemplar: `apps/hello/app/src/main.ts`
@@ -213,4 +221,4 @@ Not subscribing by default is a deliberate charter P3 boundary (host self-decide
 - AppError 5-member union + APP_ERROR_HINTS / APP_EXPECTED: `packages/app/src/errors.ts`
 - Frame-loop state machine: `packages/app/src/internal/frame-loop.ts`
 - Cleanup triple-funnel (stop / device-lost / exception): `packages/app/src/internal/cleanup.ts`
-- Input attach (D-11 followup-todo): the `@forgeax/engine-input` README documents `createFrameStartScanSystem()` with the legacy 0-arg signature; the actual 2-arg signature `(backend: InputBackend, world: Pick<World, 'insertResource'>)` is captured in this feat's AC-05 wording. Treat this README as the authoritative description until the input package README is updated in a follow-up feat.
+- Input attach: `attachInputAuto` inserts the `InputBackend` under `INPUT_BACKEND_KEY` and adds the `InputFrameStartScan` system token (a top-level `defineSystem`); the legacy per-backend factory is retired. The `@forgeax/engine-input` README is the SSOT for the wiring recipe.

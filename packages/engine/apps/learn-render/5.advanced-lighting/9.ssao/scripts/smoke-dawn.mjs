@@ -237,17 +237,13 @@ if (DISCRIMINATION) {
       return { mean: null, device: sharedDeviceLocal };
     }
 
-    const hdrpRes = assets.register({
+    // feat-20260614 M8 (D-19): installPipeline takes the RenderPipelineAsset
+    // POD directly (no register round-trip; AssetRegistry holds no handle).
+    const installRes = app.renderer.installPipeline({
       kind: 'render-pipeline',
       pipelineId: HDRP_PIPELINE_ID_LOCAL,
       config: { ssao: ssaoConfig },
     });
-    if (!hdrpRes.ok) {
-      console.error(`[smoke-discrimination] FAIL pass=${label} - HDRP register: ${hdrpRes.error.code}`);
-      return { mean: null, device: sharedDeviceLocal };
-    }
-
-    const installRes = app.renderer.installPipeline(hdrpRes.value);
     if (!installRes.ok) {
       console.error(
         `[smoke-discrimination] FAIL pass=${label} - installPipeline: ${installRes.error.code}`,
@@ -257,29 +253,26 @@ if (DISCRIMINATION) {
 
     const world = app.world;
 
-    // Spawn scene.
-    const floorMatRes = assets.register(MaterialsLocal.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
-    const cubeMatRes = assets.register(MaterialsLocal.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
-    const sphereMatRes = assets.register(MaterialsLocal.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
-    if (!floorMatRes.ok || !cubeMatRes.ok || !sphereMatRes.ok) {
-      console.error(`[smoke-discrimination] FAIL pass=${label} - material register`);
-      return { mean: null, device: sharedDeviceLocal };
-    }
+    // Spawn scene. feat-20260614 M8 (D-17): mint user-tier column handles via
+    // world.allocSharedRef (bare Handle, not a Result).
+    const floorMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
+    const cubeMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
+    const sphereMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
 
     world.spawn(
       { component: TransformLocal, data: { posX: 0, posY: FLOOR_Y, posZ: 0, quatW: 1, scaleX: FLOOR_SCALE_XZ, scaleY: FLOOR_SCALE_Y, scaleZ: FLOOR_SCALE_XZ } },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [floorMatRes.value] } },
+      { component: MeshRendererLocal, data: { materials: [floorMatHandle] } },
     ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { posX: -OBJECT_X_OFFSET, posY: CUBE_Y, posZ: 0, quatW: 1, scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7 } },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [cubeMatRes.value] } },
+      { component: MeshRendererLocal, data: { materials: [cubeMatHandle] } },
     ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { posX: OBJECT_X_OFFSET, posY: SPHERE_Y, posZ: 0, quatW: 1, scaleX: 0.6, scaleY: 0.6, scaleZ: 0.6 } },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_SPHERE_LOCAL } },
-      { component: MeshRendererLocal, data: { materials: [sphereMatRes.value] } },
+      { component: MeshRendererLocal, data: { materials: [sphereMatHandle] } },
     ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { posX: 1, posY: 2, posZ: 1, quatW: 1 } },
@@ -500,7 +493,9 @@ if (assets === null) {
 //                                validation path is actually wired, not stubbed).
 const ssaoEnabled = FALSIFY !== 'ssao-off';
 const ssaoWrongInput = FALSIFY === 'ssao-wrong-input';
-const hdrpAssetRes = assets.register({
+// feat-20260614 M8 (D-19): installPipeline takes the RenderPipelineAsset POD
+// directly (no register round-trip; AssetRegistry holds no handle concept).
+const installRes = app.renderer.installPipeline({
   kind: 'render-pipeline',
   pipelineId: HDRP_PIPELINE_ID,
   config: {
@@ -511,12 +506,6 @@ const hdrpAssetRes = assets.register({
       : { enabled: false },
   },
 });
-if (!hdrpAssetRes.ok) {
-  console.error(`[smoke] FAIL - HDRP asset register: ${hdrpAssetRes.error.code}`);
-  process.exit(1);
-}
-
-const installRes = app.renderer.installPipeline(hdrpAssetRes.value);
 if (!installRes.ok) {
   console.error(`[smoke] FAIL - installPipeline: ${installRes.error.code} - ${installRes.error.hint}`);
   process.exit(1);
@@ -526,13 +515,9 @@ const world = app.world;
 
 // --- 5. Spawn scene ---
 
-// Floor.
-const floorMatRes = assets.register(Materials.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
-if (!floorMatRes.ok) {
-  console.error(`[smoke] FAIL - floor material register: ${floorMatRes.error.code}`);
-  process.exit(1);
-}
-const floorMatHandle = floorMatRes.value;
+// Floor. feat-20260614 M8 (D-17): mint a user-tier column handle directly via
+// world.allocSharedRef (returns a bare Handle, not a Result).
+const floorMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
 
 world.spawn(
   {
@@ -547,11 +532,7 @@ world.spawn(
 ).unwrap();
 
 // Cube.
-const cubeMatRes = assets.register(Materials.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
-if (!cubeMatRes.ok) {
-  console.error(`[smoke] FAIL - cube material register: ${cubeMatRes.error.code}`);
-  process.exit(1);
-}
+const cubeMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.9, 0.35, 0.2, 1] }));
 world.spawn(
   {
     component: Transform,
@@ -561,15 +542,11 @@ world.spawn(
     },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-  { component: MeshRenderer, data: { materials: [cubeMatRes.value] } },
+  { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
 ).unwrap();
 
 // Sphere.
-const sphereMatRes = assets.register(Materials.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
-if (!sphereMatRes.ok) {
-  console.error(`[smoke] FAIL - sphere material register: ${sphereMatRes.error.code}`);
-  process.exit(1);
-}
+const sphereMatHandle = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
 world.spawn(
   {
     component: Transform,
@@ -579,7 +556,7 @@ world.spawn(
     },
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
-  { component: MeshRenderer, data: { materials: [sphereMatRes.value] } },
+  { component: MeshRenderer, data: { materials: [sphereMatHandle] } },
 ).unwrap();
 
 // Directional light.

@@ -24,7 +24,7 @@
 //      (c) Build a synthetic InputBackend matching the @forgeax/engine-
 //          input protocol (sample()/detach()) + drive a deterministic
 //          first-person sequence (WASD held + per-frame mouse delta).
-//      (d) addSystem `createFrameStartScanSystem(backend, world)` so each
+//      (d) insertResource INPUT_BACKEND_KEY + addSystem InputFrameStartScan so each
 //          world.update() refreshes the InputSnapshot Resource.
 //      (e) Spawn cube + camera + first-person camera system that reads
 //          InputSnapshot from world.getResource('InputSnapshot') and
@@ -191,17 +191,17 @@ if (!existsSync(CUBE_META_PATH)) {
 const ecsPkg = await import('@forgeax/engine-ecs');
 const { World } = ecsPkg;
 const inputPkg = await import('@forgeax/engine-input');
-const { createFrameStartScanSystem, INPUT_SNAPSHOT_RESOURCE_KEY } = inputPkg;
+const { INPUT_BACKEND_KEY, InputFrameStartScan, INPUT_SNAPSHOT_RESOURCE_KEY } = inputPkg;
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
   HANDLE_CUBE,
+  Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
-const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 // M5-engine-fix: build a real engine manifest carrying pbr.wgsl + unlit.wgsl
 // (post w22.9 the inline fallback was deleted; the engine demands real
@@ -209,16 +209,6 @@ const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
 const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
-
-// Read cube GUID from the sidecar so the smoke + browser test + index.ts
-// share the same disk-side SSOT (charter F1: AI users grep one literal).
-const fs = await import('node:fs/promises');
-const cubeMetaJson = JSON.parse(await fs.readFile(CUBE_META_PATH, 'utf8'));
-const CUBE_MESH_GUID = cubeMetaJson?.subAssets?.[0]?.guid;
-if (typeof CUBE_MESH_GUID !== 'string') {
-  console.error(`[smoke] FAIL - cube-mesh.stub.meta.json missing subAssets[0].guid`);
-  process.exit(1);
-}
 
 let renderer;
 try {
@@ -249,25 +239,9 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Pre-register the cube MeshAsset under its GUID so loadByGuid resolves
-// on the fast Map-lookup path (HANDLE_CUBE is the engine builtin
-// procedural cube; the sidecar GUID aliases the same logical mesh).
-const cubeGuidRes = AssetGuid.parse(CUBE_MESH_GUID);
-if (!cubeGuidRes.ok) {
-  console.error(`[smoke] FAIL - cube GUID parse: ${cubeGuidRes.error.code}`);
-  process.exit(1);
-}
-const cubeAssetRes = assets.get(HANDLE_CUBE);
-if (!cubeAssetRes.ok) {
-  console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
-  process.exit(1);
-}
-assets.registerWithGuid(cubeGuidRes.value, cubeAssetRes.value);
-const matHandle = assets.register({
-  kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 0.5, 0.2, 1.0],
-});
+// The cube enters the world via the engine builtin HANDLE_CUBE directly
+// (no GUID round-trip); matHandle is minted from a user-tier column after
+// the World is created below (M8 D-17 ordering: World before allocSharedRef).
 
 // --- 3b. Synthetic InputBackend pump driving WASD + mouse delta -------------
 
@@ -348,7 +322,11 @@ const cameraSystem = {
 };
 
 const world = new World();
-world.addSystem(createFrameStartScanSystem(syntheticBackend, world));
+// LO 1.7 unlit material: mint a user-tier column handle from the unlit
+// MaterialAsset POD (M8 D-17). orange teaching colour (1, 0.5, 0.2).
+const matHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
+world.insertResource(INPUT_BACKEND_KEY, syntheticBackend);
+world.addSystem(InputFrameStartScan);
 world.addSystem(cameraSystem);
 
 const cubeEntity = world

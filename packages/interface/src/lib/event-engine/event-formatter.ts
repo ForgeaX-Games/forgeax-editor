@@ -22,6 +22,7 @@ import type {
   ToolResultMessage,
 } from './types';
 import { registerSubagentFormatters } from './subagent-events';
+import { t } from '@/i18n';
 
 // ── Minimal LLMMessage shape (matches wire format from forgeax-server) ──
 
@@ -65,9 +66,9 @@ function displayContent(content: unknown): string {
   return (content as Array<Record<string, unknown>>)
     .map((p) => {
       if (p.type === 'text' && p.text) return p.text as string;
-      if (p.type === 'file' || p.type === 'text_file') return `[文件: ${p.path}]`;
-      if (p.type === 'image_file') return `[图片: ${p.path}]`;
-      if (p.type === 'image') return `[图片]`;
+      if (p.type === 'file' || p.type === 'text_file') return t('eventFormatter.filePart', { path: String(p.path) });
+      if (p.type === 'image_file') return t('eventFormatter.imagePart', { path: String(p.path) });
+      if (p.type === 'image') return t('eventFormatter.imageGeneric');
       return '';
     })
     .filter(Boolean)

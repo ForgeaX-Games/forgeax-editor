@@ -220,7 +220,7 @@ import { extractFrame } from '../render-system-extract';
     // entries; seed two minimal stubs (mock device's createShaderModule does
     // not parse WGSL).
     //
-    // w10: materialShaders[] entries are required so renderer.assets.register()
+    // w10: materialShaders[] entries are required so the record/extract path
     // can validate material passes that reference forgeax::default-standard-pbr
     // and forgeax::default-unlit. Each entry carries a minimal composedWgsl
     // stub + empty paramSchema + empty variants.
@@ -298,6 +298,7 @@ import { extractFrame } from '../render-system-extract';
       spawn: (...componentDatas: unknown[]) => unknown;
       update: () => void;
       inspect: () => { systemCount: number };
+      allocSharedRef: (target: string, payload: unknown) => Handle<string, 'shared'>;
     };
   }> {
     return (await import('@forgeax/engine-ecs')) as never;
@@ -315,8 +316,8 @@ import { extractFrame } from '../render-system-extract';
     // at runtime; test code typings reflect the narrow so `tsc -b` catches any
     // cross-brand assignment mistakes (e.g. passing HANDLE_CUBE where a
     // Handle<TextureAsset> is expected).
-    HANDLE_CUBE: Handle<'MeshAsset', 'unmanaged'>;
-    HANDLE_TRIANGLE: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
+    HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return (await import('../index')) as never;
   }
@@ -1007,11 +1008,9 @@ import { extractFrame } from '../render-system-extract';
           },
         ],
       };
-      const regResult = renderer.assets.register(matAsset);
-      if (!regResult.ok) throw new Error(`material register failed: ${JSON.stringify(regResult)}`);
-      const matHandle = regResult.value as unknown;
-
       const world = new World();
+      const matHandle = world.allocSharedRef('MaterialAsset', matAsset) as unknown;
+
       world.spawn(
         {
           component: C.Camera,
@@ -1149,11 +1148,9 @@ import { extractFrame } from '../render-system-extract';
           },
         ],
       };
-      const regResult = renderer.assets.register(matAsset);
-      if (!regResult.ok) throw new Error(`material register failed: ${JSON.stringify(regResult)}`);
-      const matHandle = regResult.value as unknown;
-
       const world = new World();
+      const matHandle = world.allocSharedRef('MaterialAsset', matAsset) as unknown;
+
       world.spawn(
         {
           component: C.Camera,
@@ -1242,11 +1239,9 @@ import { extractFrame } from '../render-system-extract';
           },
         ],
       };
-      const regResult = renderer.assets.register(matAsset);
-      if (!regResult.ok) throw new Error(`material register failed: ${JSON.stringify(regResult)}`);
-      const matHandle = regResult.value as unknown;
-
       const world = new World();
+      const matHandle = world.allocSharedRef('MaterialAsset', matAsset) as unknown;
+
       world.spawn(
         {
           component: C.Camera,

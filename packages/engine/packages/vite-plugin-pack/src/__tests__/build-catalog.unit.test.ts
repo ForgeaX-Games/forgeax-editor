@@ -1,7 +1,7 @@
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 //
-// Source files (N=9):
+// Source files (N=10):
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-base-prefix.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-fail-fast.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-font.test.ts
@@ -9,6 +9,7 @@
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-gltf-texture.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-hdr-equirect.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-catalog-image-arm.test.ts
+//   - packages/vite-plugin-pack/src/__tests__/build-catalog-name.test.ts
 //   - packages/vite-plugin-pack/src/__tests__/build-import-hdr.test.ts
 //   - packages/vite-plugin-pack/test/plugin-build.test.ts
 //
@@ -19,6 +20,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deriveAssetName } from '@forgeax/engine-pack/name';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
@@ -1279,6 +1281,253 @@ console.log('import-hdr-test entry');
       if (!valid) {
         console.error('pack-index schema errors:', validatePackIndex.errors);
       }
+    });
+  });
+}
+
+{
+  // --- from build-catalog-name.test.ts (w23 AC-11) ---
+
+  describe('AC-11 PackIndexEntry.name same-source (w23)', () => {
+    let originalCwd: string;
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-w23-'));
+      process.chdir(tmpRoot);
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('single-asset .pack.json → name === basename(packagePath) per deriveAssetName', async () => {
+      const packPath = join(tmpRoot, 'hero.pack.json');
+      await writeFile(
+        packPath,
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'internal-text-package',
+          assets: [
+            { guid: '01900000-0000-7000-8000-00000000000a', kind: 'mesh', payload: {}, refs: [] },
+          ],
+        }),
+      );
+
+      const entries = await buildCatalog([tmpRoot]);
+      expect(entries).toHaveLength(1);
+      const entry = entries[0];
+      expect(entry).toBeDefined();
+      if (!entry) return;
+      expect(entry.name).toBe(deriveAssetName(packPath, 1));
+      expect(entry.name).toBe('hero.pack.json');
+    });
+
+    it('multi-asset .pack.json with name → name === storedName', async () => {
+      const packPath = join(tmpRoot, 'multi.pack.json');
+      await writeFile(
+        packPath,
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'internal-text-package',
+          assets: [
+            {
+              guid: '01900000-0000-7000-8000-00000000000b',
+              kind: 'mesh',
+              payload: {},
+              refs: [],
+              name: 'Body',
+            },
+            {
+              guid: '01900000-0000-7000-8000-00000000000c',
+              kind: 'material',
+              payload: {},
+              refs: [],
+              name: 'Skin',
+            },
+          ],
+        }),
+      );
+
+      const entries = await buildCatalog([tmpRoot]);
+      expect(entries).toHaveLength(2);
+      const names = entries.map((e) => e.name);
+      expect(names).toEqual([
+        deriveAssetName(packPath, 2, 'Body'),
+        deriveAssetName(packPath, 2, 'Skin'),
+      ]);
+      expect(names).toEqual(['Body', 'Skin']);
+    });
+
+    it('multi-asset .pack.json without name → name === basename(packPath) (AC-15 fallback)', async () => {
+      const packPath = join(tmpRoot, 'multi.pack.json');
+      await writeFile(
+        packPath,
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'internal-text-package',
+          assets: [
+            { guid: '01900000-0000-7000-8000-00000000000d', kind: 'mesh', payload: {}, refs: [] },
+            {
+              guid: '01900000-0000-7000-8000-00000000000e',
+              kind: 'material',
+              payload: {},
+              refs: [],
+            },
+          ],
+        }),
+      );
+
+      const entries = await buildCatalog([tmpRoot]);
+      expect(entries).toHaveLength(2);
+      for (const entry of entries) {
+        expect(entry.name).toBe(deriveAssetName(packPath, 2));
+        expect(entry.name).toBe('multi.pack.json');
+      }
+    });
+
+    it('meta.json gltf arm multi-asset → name per subAssets[].name via deriveAssetName', async () => {
+      const sourcePath = join(tmpRoot, 'soldier.gltf');
+      await writeFile(sourcePath, new Uint8Array([0x00]));
+      const sp = sourcePath;
+
+      await writeFile(
+        join(tmpRoot, 'soldier.gltf.meta.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'external-asset-package',
+          importer: 'gltf',
+          source: 'soldier.gltf',
+          importSettings: { defaultSceneIndex: 0 },
+          subAssets: [
+            {
+              guid: '01900000-0000-7000-8000-00000000000f',
+              sourceIndex: 0,
+              kind: 'mesh',
+              name: 'Soldier_Body',
+            },
+            {
+              guid: '01900000-0000-7000-8000-000000000010',
+              sourceIndex: 1,
+              kind: 'mesh',
+              name: 'Soldier_Head',
+            },
+            { guid: '01900000-0000-7000-8000-000000000011', sourceIndex: 0, kind: 'scene' },
+          ],
+        }),
+      );
+
+      const entries = await buildCatalog([tmpRoot]);
+      expect(entries).toHaveLength(3);
+
+      const meshRows = entries.filter((e) => e.kind === 'mesh');
+      expect(meshRows).toHaveLength(2);
+      expect(meshRows[0]?.name).toBe(deriveAssetName(sp, 3, 'Soldier_Body'));
+      expect(meshRows[0]?.name).toBe('Soldier_Body');
+      expect(meshRows[1]?.name).toBe(deriveAssetName(sp, 3, 'Soldier_Head'));
+      expect(meshRows[1]?.name).toBe('Soldier_Head');
+
+      const sceneRows = entries.filter((e) => e.kind === 'scene');
+      expect(sceneRows).toHaveLength(1);
+      expect(sceneRows[0]?.name).toBe(deriveAssetName(sp, 3));
+      expect(sceneRows[0]?.name).toBe('soldier.gltf');
+    });
+
+    it('meta.json image arm single-asset → name === basename(sourcePath)', async () => {
+      const sourcePath = join(tmpRoot, 'hero.jpg');
+      await writeFile(sourcePath, new Uint8Array([0xff]));
+
+      await writeFile(
+        join(tmpRoot, 'hero.jpg.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'hero.jpg',
+          importSettings: {
+            colorSpace: 'srgb',
+            mipmap: 'auto',
+            addressMode: 'repeat',
+            filterMode: 'linear',
+          },
+          subAssets: [
+            { guid: '019e2cc6-0c86-79da-aa76-000000000000', sourceIndex: 0, kind: 'image' },
+          ],
+        }),
+      );
+
+      const entries = await buildCatalog([tmpRoot]);
+      expect(entries).toHaveLength(1);
+      const entry = entries[0];
+      expect(entry).toBeDefined();
+      if (!entry) return;
+      expect(entry.kind).toBe('texture');
+      expect(entry.name).toBe(deriveAssetName(sourcePath, 1));
+      expect(entry.name).toBe('hero.jpg');
+    });
+  });
+
+  // ─── cross-root GUID collision degradation (downstream template integration #3) ───
+  //
+  // scan(roots) is fail-fast: a single duplicate GUID anywhere across all
+  // roots returns Err(pack-guid-collision). buildCatalog must NOT collapse the
+  // whole catalog to [] on that error -- two independently-authored games may
+  // legitimately reuse a GUID, and one game's collision must not blank every
+  // other game's assets on a shared dev server. It degrades to per-root scans,
+  // dedups by GUID across roots (keep first), and drops only the offending root.
+
+  const GUID_A = '01890000-0000-7000-8000-aaaaaaaaaaaa';
+  const GUID_B = '01890000-0000-7000-8000-bbbbbbbbbbbb';
+  const GUID_SHARED = '01890000-0000-7000-8000-cccccccccccc';
+
+  async function makeGameRoot(prefix: string, guids: string[]): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), `forgeax-vpp-${prefix}-`));
+    const pack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: guids.map((guid) => ({ guid, kind: 'material', payload: {}, refs: [] })),
+    };
+    await writeFile(join(root, `${prefix}.pack.json`), JSON.stringify(pack), 'utf-8');
+    return root;
+  }
+
+  describe('build-catalog-cross-root-collision.test.ts', () => {
+    const roots: string[] = [];
+    afterEach(async () => {
+      await Promise.all(roots.map((r) => rm(r, { recursive: true, force: true })));
+      roots.length = 0;
+    });
+
+    it('cross-root GUID collision degrades per-root instead of collapsing the whole catalog', async () => {
+      // gameA + gameB each declare the same shared GUID (legitimate cross-game
+      // reuse), plus a unique GUID of their own.
+      const gameA = await makeGameRoot('gameA', [GUID_A, GUID_SHARED]);
+      const gameB = await makeGameRoot('gameB', [GUID_B, GUID_SHARED]);
+      roots.push(gameA, gameB);
+
+      const entries = await buildCatalog([gameA, gameB]);
+      const guids = new Set(entries.map((e) => e.guid.toLowerCase()));
+
+      // Each game's UNIQUE asset survives -- the collision is NOT fatal for
+      // unrelated assets (the old behavior returned []).
+      expect(guids.has(GUID_A)).toBe(true);
+      expect(guids.has(GUID_B)).toBe(true);
+      // The shared GUID appears exactly once (dedup keep-first), not zero.
+      expect(entries.filter((e) => e.guid.toLowerCase() === GUID_SHARED)).toHaveLength(1);
+    });
+
+    it('no collision: per-root fast path is unaffected (all rows present)', async () => {
+      const gameA = await makeGameRoot('gameA-clean', [GUID_A]);
+      const gameB = await makeGameRoot('gameB-clean', [GUID_B]);
+      roots.push(gameA, gameB);
+
+      const entries = await buildCatalog([gameA, gameB]);
+      const guids = new Set(entries.map((e) => e.guid.toLowerCase()));
+      expect(guids.has(GUID_A)).toBe(true);
+      expect(guids.has(GUID_B)).toBe(true);
+      expect(entries).toHaveLength(2);
     });
   });
 }

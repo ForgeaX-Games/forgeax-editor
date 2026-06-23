@@ -155,7 +155,15 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     const assets = renderer.assets;
     if (assets === null) throw new Error('AssetRegistry is null');
-    const materialRes = assets.register({
+
+    // Single World wires the consume path: registerPropagateTransforms so the
+    // child's resolved Transform.world mat4 is derived each frame. feat-20260614
+    // M8: the material is a per-World column handle minted via allocSharedRef
+    // (AssetRegistry has no handle concept).
+    const world = new World();
+    registerPropagateTransforms(world);
+
+    const materialHandle = world.allocSharedRef('MaterialAsset', {
       kind: 'material',
       passes: [
         {
@@ -167,14 +175,6 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
       ],
       paramValues: { baseColor: [0.7, 0.7, 0.7], metallic: 0, roughness: 0.4 },
     });
-    expect(materialRes.ok).toBe(true);
-    if (!materialRes.ok) return;
-    const materialHandle = materialRes.value;
-
-    // Single World wires the consume path: registerPropagateTransforms so the
-    // child's resolved Transform.world mat4 is derived each frame.
-    const world = new World();
-    registerPropagateTransforms(world);
 
     const parent = world
       .spawn(

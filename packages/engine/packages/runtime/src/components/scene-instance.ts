@@ -5,9 +5,9 @@
 // old `SceneInstance` + `SceneInstanceContainer` pair (deleted
 // in M3). Schema fits the ECS schema vocab (3 single-identifier fields):
 //
-//   { source:  'handle<SceneAsset>',
+//   { source:  'shared<SceneAsset>',
 //     mapping: 'array<entity>',
-//     state:   'ref<SceneInstanceState>' }
+//     state:   'unique<SceneInstanceState>' }
 //
 // `source` carries the SceneAsset handle the synthetic root entity was
 // instantiated from (Tier-A AssetUnion handle, AGENTS.md §Assets submodule).
@@ -16,10 +16,10 @@
 // us a SoA-friendly read path for query<SceneInstance> scans without
 // touching the dynamic Map/Set state.
 // `state` is a `ref<SceneInstanceState>` slot — World holds the live
-// SceneInstanceState payload in its ManagedRefStore and World despawn
+// SceneInstanceState payload in its UniqueRefStore and World despawn
 // auto-releases the ref u32 (the same path used by audio / physics
 // payloads, plan-strategy §D-2). Each instantiateScene call calls
-// `world.allocManagedRef('SceneInstanceState', state)` once and stores the
+// `world.allocUniqueRef('SceneInstanceState', state)` once and stores the
 // returned u32 in this column.
 //
 // Decision anchors:
@@ -64,14 +64,14 @@ export interface SceneInstanceOverrideRecord {
 
 /**
  * Dynamic state payload for one SceneInstance — held in the World's
- * ManagedRefStore behind a `ref<SceneInstanceState>` slot on the synthetic
+ * UniqueRefStore behind a `ref<SceneInstanceState>` slot on the synthetic
  * root entity. Mirrors the old class-based layout (plan-strategy §D-2 +
  * design doc §11.2 internal-state-table) but flattened into plain JS Maps/Sets so
  * AI users can iterate without indirection.
  *
  * Lifecycle:
  *   - allocated by `world.instantiateScene(handle, parent?)` — the W in
- *     `world.allocManagedRef('SceneInstanceState', state)` returns the u32
+ *     `world.allocUniqueRef('SceneInstanceState', state)` returns the u32
  *     slot id stored in the SceneInstance.state column;
  *   - released by `world.despawn(root)` (the standard `ref<T>` release loop)
  *     or explicitly via `world.despawnScene(root)` / `world.despawnDescendants(root)`.
@@ -87,7 +87,7 @@ export interface SceneInstanceState {
    * SceneInstanceState in hand and want the source handle without a second
    * `world.get` round-trip.
    */
-  readonly source: import('@forgeax/engine-types').Handle<'SceneAsset', 'unmanaged'>;
+  readonly source: import('@forgeax/engine-types').Handle<'SceneAsset', 'shared'>;
 
   /**
    * Reverse mapping (live `Entity` -> source `LocalEntityId`). Used by
@@ -173,7 +173,7 @@ export interface SceneInstanceState {
  *   // rootEntities / totalSlots / mountTimeOverrides.
  */
 export const SceneInstance = defineComponent('SceneInstance', {
-  source: { type: 'handle<SceneAsset>' },
+  source: { type: 'shared<SceneAsset>' },
   mapping: { type: 'array<entity>' },
-  state: { type: 'ref<SceneInstanceState>' },
+  state: { type: 'unique<SceneInstanceState>' },
 });

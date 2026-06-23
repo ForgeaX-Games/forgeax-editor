@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/global.css';
 import { applyTheme } from '@forgeax/design/theme';
+import { initI18n } from './i18n';
 import { App } from './App';
 
 // Dark-only today; dual-marks data-theme + .dark so tokens.css selectors and
@@ -9,9 +10,14 @@ import { App } from './App';
 // token overrides — no .tsx change. index.html already sets these for no-flash;
 // this keeps it correct if the attribute is ever cleared.
 applyTheme('dark');
+
+// Restore the persisted UI language before first paint. English is the default
+// (source of truth); other languages are a user-facing overlay.
+initI18n();
 import { BrandProvider } from './brand';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { bootStageEntry } from './boot/driver';
+import { isTrustedMessageOrigin } from './lib/trustedOrigins';
 import { subscribeSessionStream } from './lib/session-stream';
 import { subscribeNarrativeCopilot } from './lib/narrative-copilot';
 import { subscribeFileActivityStream } from './lib/file-activity-stream';
@@ -20,6 +26,7 @@ import { syncBrowserPrefsFromServer, startBrowserPrefsSync } from './lib/browser
 import { useAppStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
 import { DetachedSurface } from './components/DetachedSurface';
+import { installHealthBridge } from './components/StatusBar/healthBridge';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root missing');
@@ -44,6 +51,7 @@ if (isTauri()) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       window.addEventListener('message', (ev) => {
+        if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
         const data = ev.data as { type?: string; capture?: boolean } | null;
         if (data?.type !== 'fx-pointer-capture') return;
         void invoke('set_pointer_capture', { capture: !!data.capture });
@@ -82,6 +90,9 @@ if (detachedSurface) {
 } else {
   // Restore UI layout prefs from server snapshot (export/import migration path).
   void syncBrowserPrefsFromServer().finally(() => {
+    // The server snapshot may carry a different forgeax.locale than the value
+    // present at first paint — re-apply it now that localStorage is restored.
+    initI18n();
     startBrowserPrefsSync();
   });
   bootStageEntry();
@@ -92,6 +103,10 @@ if (detachedSurface) {
 // attach its onSessionEvent handler BEFORE initSessions → connectForgeaXWs, or
 // the first WS frames have no listener.
 function bootStore() {
+  // Health/INFO bridge — capture shell errors + iframe-forwarded health signals
+  // (Play/Edit/plugin) into the status bar. Must run before any iframe mounts so
+  // early createApp failures are caught. Idempotent.
+  installHealthBridge();
   subscribeSessionStream();
   // 叙事工坊「完成即重唤醒」闭环：监听 Kotone 调 narrative:start-pipeline → 轮询后端
   // 直到管线进终态 → 投系统提示唤醒 Kotone 做完成总结。需在 session-stream 之后挂。

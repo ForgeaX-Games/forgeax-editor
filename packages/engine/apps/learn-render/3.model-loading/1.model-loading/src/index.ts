@@ -118,7 +118,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       });
     return;
   }
-  const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
+  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
   if (!instRes.ok) {
     const errAny = instRes.error as { code: string; hint?: string };
     console.error('[learn-render 3.1] scene instantiate failed:', errAny.code);
@@ -210,7 +212,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           `[learn-render 3.1] debug inspector server on ws://localhost:${srvRes.value.port}/inspector`,
         );
         console.warn(
-          '[learn-render 3.1] try: forgeax-engine-console capture-frame --frames=1 --runId sponza-debug --ws-url ws://localhost:5732',
+          '[learn-render 3.1] try: forgeax-engine-console capture-frame --frames=1 --label sponza-debug --target ws://localhost:5732',
         );
         (window as unknown as Record<string, unknown>).__sponzaDebugCaptureReady = true;
       } else {
@@ -323,15 +325,13 @@ async function spawnSkylight(app: App): Promise<void> {
   }
 
   // feat-20260601-gpu-resource-store-extraction M1: equirect-to-cubemap upload
-  // moved from AssetRegistry to renderer.store; pass the source POD (D-2).
-  const srcPodRes = assets.get<TextureAsset>(hdrHandleRes.value);
-  if (!srcPodRes.ok) {
-    console.error(`[learn-render 3.1] source POD fetch failed: ${srcPodRes.error.code}`);
-    return;
-  }
+  // lives on renderer.store. loadByGuid returns the TextureAsset PAYLOAD (M8
+  // D-17); mint a user-tier source handle and pass world + handle + pod.
+  const srcHandle = app.world.allocSharedRef('TextureAsset', hdrHandleRes.value);
   const cubemapRes = await app.renderer.store.uploadCubemapFromEquirect(
+    app.world,
+    srcHandle,
     hdrHandleRes.value,
-    srcPodRes.value,
   );
   if (!cubemapRes.ok) {
     console.error(

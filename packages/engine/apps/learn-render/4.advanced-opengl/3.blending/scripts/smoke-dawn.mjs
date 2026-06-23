@@ -234,6 +234,7 @@ const {
   TRANSPARENT_SORT_MODE_DISTANCE,
 } = enginePkg;
 const MODE_DISTANCE = TRANSPARENT_SORT_MODE_DISTANCE;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const metalDecodeRes = await decodeImageFromFile(METAL_SRC_PATH);
@@ -313,8 +314,8 @@ shader.registerMaterialShader('learn-render::alpha-test', {
     { name: 'baseColor', type: 'color' },
     { name: 'metallic', type: 'f32' },
     { name: 'roughness', type: 'f32' },
+    { name: 'baseColorTexture', type: 'texture2d' },
   ],
-  bindingLayout: [],
 });
 
 // Register textures under their GUIDs.
@@ -349,15 +350,18 @@ if (
   process.exit(1);
 }
 
-const metalHandle = assets.registerWithGuid(metalGuidRes.value, makeTexAsset(metalDecoded));
-const marbleHandle = assets.registerWithGuid(marbleGuidRes.value, makeTexAsset(marbleDecoded));
-const grassHandle = assets.registerWithGuid(grassGuidRes.value, makeTexAsset(grassDecoded));
-const windowHandle = assets.registerWithGuid(windowGuidRes.value, makeTexAsset(windowDecoded));
+// World must exist before allocSharedRef mints any column handle.
+const world = new World();
+
+const metalHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(metalDecoded)));
+const marbleHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(marbleDecoded)));
+const grassHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(grassDecoded)));
+const windowHandle = unwrapHandle(world.allocSharedRef('TextureAsset', makeTexAsset(windowDecoded)));
 console.log(`[learn-render-3-blending] registered metal handle id=${metalHandle}`);
 
 // Register materials with pass-based MaterialAsset shape.
 // ── Floor material: PBR metal.png ──────────────────────────────────
-const floorMatHandle = assets.register({
+const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -375,7 +379,7 @@ const floorMatHandle = assets.register({
 });
 
 // ── Cube material: PBR marble.jpg ──────────────────────────────────
-const cubeMatHandle = assets.register({
+const cubeMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -393,7 +397,7 @@ const cubeMatHandle = assets.register({
 });
 
 // ── Grass material: alpha-test discard shader, Transparent queue ───
-const grassMatHandle = assets.register({
+const grassMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -413,7 +417,7 @@ const grassMatHandle = assets.register({
 });
 
 // ── Window material: semi-transparent blend, Transparent queue ─────
-const windowMatHandle = assets.register({
+const windowMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -437,8 +441,6 @@ const windowMatHandle = assets.register({
     baseColorTexture: windowHandle,
   },
 });
-
-const world = new World();
 
 // Enable mode=3 distance-based transparent sort.
 const sortCfgRes = setTransparentSortConfig(world, {

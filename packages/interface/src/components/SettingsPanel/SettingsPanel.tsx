@@ -29,21 +29,14 @@ import { useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useAppStore } from '../../store';
+import { useTranslation } from '@/i18n';
 import { useSettingsSections, type SettingsGroup, type SettingsSection } from './store';
 import './SettingsPanel.css';
-
-const GROUP_LABEL: Record<SettingsGroup, string> = {
-  config: 'Config',
-  plugin: 'Plugins',
-  system: 'System',
-  account: 'Account',
-  about: 'About',
-  other: 'Other',
-};
 
 const GROUP_ORDER: SettingsGroup[] = ['config', 'plugin', 'system', 'account', 'about', 'other'];
 
 export function SettingsPanel() {
+  const { t } = useTranslation();
   const open = useAppStore((s) => s.settingsOpen);
   const setOpen = useAppStore((s) => s.setSettingsOpen);
   const activeId = useAppStore((s) => s.settingsSection);
@@ -86,16 +79,16 @@ export function SettingsPanel() {
           aria-label="Settings"
         >
           <header className="sp-header">
-            <DialogPrimitive.Title className="sp-title">设置</DialogPrimitive.Title>
+            <DialogPrimitive.Title className="sp-title">{t('settings.title')}</DialogPrimitive.Title>
             <DialogPrimitive.Description className="sp-subtitle">
-              configure forgeax · plugins · keys · account
+              {t('settings.subtitle')}
             </DialogPrimitive.Description>
             <DialogPrimitive.Close asChild>
               <button
                 type="button"
                 className="sp-close"
-                title="关闭 · Esc"
-                aria-label="close settings"
+                title={t('settings.closeEsc')}
+                aria-label={t('settings.closeAria')}
               >
                 <X size={16} />
               </button>
@@ -106,7 +99,7 @@ export function SettingsPanel() {
           <nav className="sp-nav" aria-label="settings sections">
             {grouped.map(({ group, items }) => (
               <div key={group} className="sp-nav-group">
-                <div className="sp-nav-group-label">{GROUP_LABEL[group]}</div>
+                <div className="sp-nav-group-label">{t(`settings.groups.${group}`)}</div>
                 {items.map((s) => {
                   const Icon = s.icon;
                   const isActive = active && s.id === active.id;
@@ -126,7 +119,7 @@ export function SettingsPanel() {
               </div>
             ))}
             {grouped.length === 0 && (
-              <div className="sp-nav-empty">No sections registered.</div>
+              <div className="sp-nav-empty">{t('settings.noSections')}</div>
             )}
           </nav>
 
@@ -143,8 +136,8 @@ export function SettingsPanel() {
               </>
             ) : (
               <div className="sp-content-empty">
-                <p>没有注册的 settings sections.</p>
-                <p>useSettingsSection({'{ id, label, node }'}) 在任意组件里挂载一项即可。</p>
+                <p>{t('settings.noSectionsHint1')}</p>
+                <p>{t('settings.noSectionsHint2')}</p>
               </div>
             )}
           </section>

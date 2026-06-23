@@ -131,16 +131,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // unlit constant-shading path inside RenderSystem; post-w22.9 the unlit
   // shader source is the manifest unlit entry from
   // @forgeax/engine-shader/src/unlit.wgsl). The material is registered
-  // after createRenderer so AssetRegistry exists; the world.spawn(...
+  // after createRenderer so the renderer exists; the world.spawn(...
   // MeshRenderer { material }) call binds the handle.
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error('[forgeax] AssetRegistry is null (renderer construction did not complete successfully)');
-    return;
-  }
-  const cubeMaterial = assets
-    .register<MaterialAsset>(Materials.unlit([BASE_R, BASE_G, BASE_B, 1]))
-    .unwrap();
+  const cubeMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    'MaterialAsset',
+    Materials.unlit([BASE_R, BASE_G, BASE_B, 1]),
+  );
   world.spawn(
     {
       component: Transform,

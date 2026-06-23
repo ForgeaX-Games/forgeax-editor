@@ -19,17 +19,19 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Command, Cpu, FlaskConical, GitFork, History, Info, Key, Network, Plug, RefreshCw, ShieldCheck, Sparkles, Trash2, User, Users } from 'lucide-react';
+import { Activity, Command, Cpu, FlaskConical, GitFork, Globe, History, Info, Key, Network, Plug, RefreshCw, ShieldCheck, Sparkles, Trash2, User, Users } from 'lucide-react';
 import { buildShortcuts, prettyCombo, type ShortcutDef } from '../../lib/global-shortcuts';
 import { confirmDialog } from '../../lib/dialog';
 import { Section, EnvField } from '../TopBar/SettingsDrawer';
 import { BusAdminPanel } from '../Bus/BusAdminPanel';
 import { useSettingsSection } from './store';
 import { BootSplashSection } from '../../boot/SettingsSection';
+import { LanguageSection } from '../../i18n/LanguageSettingsSection';
 import { ModelPicker } from '../ModelPicker';
 import { TrustPanel } from './TrustPanel';
 import { AuthorPanel } from './AuthorPanel';
 import { useAppStore, seedUninstalledIfFirstRun } from '../../store';
+import { useTranslation } from '@/i18n';
 
 // ── shared state types (kept in sync with /api/settings) ─────────────────
 
@@ -55,8 +57,8 @@ const MODEL_OPTIONS = [
 // trio — surfaced now that wb-character and other multimodal plugins need
 // them visible in the UI. SAFE_ENV_KEYS in api/settings.ts whitelists each of these.
 const MULTIMODAL_KEYS: Array<{ key: string; label: string; placeholder: string; visible?: boolean }> = [
-  { key: 'ARK_IMAGE_KEY',          label: 'ARK_IMAGE_KEY (Seedream 立绘)',          placeholder: 'volcengine ARK image key' },
-  { key: 'ARK_VIDEO_KEY',          label: 'ARK_VIDEO_KEY (Seedance 视频)',          placeholder: 'volcengine ARK video key' },
+  { key: 'ARK_IMAGE_KEY',          label: 'ARK_IMAGE_KEY (Seedream illustration)', placeholder: 'volcengine ARK image key' },
+  { key: 'ARK_VIDEO_KEY',          label: 'ARK_VIDEO_KEY (Seedance video)',         placeholder: 'volcengine ARK video key' },
   { key: 'AZURE_GPT_IMAGE_KEY',    label: 'AZURE_GPT_IMAGE_KEY (gpt-image-2)',      placeholder: 'azure cognitive services key' },
   { key: 'AZURE_GPT_IMAGE_ENDPOINT', label: 'AZURE_GPT_IMAGE_ENDPOINT',             placeholder: 'https://*-swedencentral.cognitiveservices.azure.com', visible: true },
   { key: 'AZURE_GPT_IMAGE_DEPLOYMENT', label: 'AZURE_GPT_IMAGE_DEPLOYMENT',         placeholder: 'gpt-image-2', visible: true },
@@ -65,6 +67,7 @@ const MULTIMODAL_KEYS: Array<{ key: string; label: string; placeholder: string; 
 ];
 
 export function SettingsSectionsRegister() {
+  const { t } = useTranslation();
   const [data, setData] = useState<SettingsData | null>(null);
   const [providers, setProviders] = useState<ProviderRow[] | null>(null);
   const [providersCachedAt, setProvidersCachedAt] = useState<number | null>(null);
@@ -119,7 +122,7 @@ export function SettingsSectionsRegister() {
       });
       const j = (await r.json()) as { ok?: boolean; error?: string; touched?: number };
       if (!r.ok || !j.ok) flash('err', j.error ?? `HTTP ${r.status}`);
-      else { flash('ok', `已写入 ${j.touched} 个变量到 .env（重启 stack 后生效）`); await reload(); }
+      else { flash('ok', t('settings.env.saved', { count: j.touched ?? 0 })); await reload(); }
     } catch (e) {
       flash('err', (e as Error).message);
     } finally { setBusy(false); }
@@ -175,11 +178,32 @@ export function SettingsSectionsRegister() {
     }
   };
 
+  // Both resets are DESTRUCTIVE and target state the running shell points at
+  // (the active session / the open game). The POST alone is not the danger —
+  // it's leaving the UI wired to a now-deleted target. So each handler must,
+  // on success, GRACEFULLY re-home the shell:
+  //   • reset-sessions → the active session was deleted server-side → detach
+  //     its WS and `initSessions()` (re-fetches list, auto-creates a fresh
+  //     main session when empty, re-points active + reconnects WS). Never let
+  //     the chat keep rendering against a dead sid.
+  //   • reset-games   → the open game may be deleted → take the server's
+  //     resolved `activeSlug` survivor, re-pin to it (or null), so Play/Edit
+  //     iframes follow off the dead slug.
+  // Every fetch is bounded by an AbortController timeout: even if the server
+  // hangs (e.g. deadlock deleting the active session), we only flash an error
+  // — the window never freezes.
+  const resetWithTimeout = async (url: string, ms = 30_000): Promise<Response> => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    try { return await fetch(url, { method: 'POST', signal: ac.signal }); }
+    finally { clearTimeout(t); }
+  };
+
   const resetSessions = async () => {
-    if (!(await confirmDialog({ body: '确认清空所有 session（含 sub-agent 历史）?', danger: true }))) return;
+    if (!(await confirmDialog({ body: t('settings.workspace.resetSessionsConfirm'), danger: true }))) return;
     setBusy(true);
     try {
-      const r = await fetch('/api/settings/reset-sessions', { method: 'POST' });
+      const r = await resetWithTimeout('/api/settings/reset-sessions');
       // Server may answer with non-JSON (e.g. nginx 404 HTML, gateway timeout
       // text) — `.json()` would throw SyntaxError and the user sees noise like
       // "Unexpected token '<'" instead of the actual HTTP status.
@@ -188,11 +212,54 @@ export function SettingsSectionsRegister() {
         | null;
       if (!r.ok || !j?.ok) {
         flash('err', j?.error ?? `HTTP ${r.status}${r.statusText ? ` ${r.statusText}` : ''}`);
-      } else {
-        flash('ok', `已删除 ${j.removed} 个 session 目录`);
+        return;
       }
+      // Graceful re-home: the active session is now gone on disk. Detach its WS
+      // so the bridge stops trying to reconnect to a dead sid, then re-init —
+      // this auto-creates a fresh main session and reconnects. Guard so a
+      // failure here still only flashes (never throws into the click handler).
+      try {
+        const { disconnectForgeaXWs } = await import('../../lib/forgeax-bridge');
+        disconnectForgeaXWs();
+        await useAppStore.getState().initSessions();
+      } catch (e) {
+        console.warn('[resetSessions] re-init after reset failed', e);
+      }
+      flash('ok', t('settings.workspace.resetSessionsDone', { count: j.removed ?? 0 }));
     } catch (e) {
-      flash('err', (e as Error).message);
+      const msg = (e as Error).name === 'AbortError' ? t('settings.workspace.resetSessionsTimeout') : (e as Error).message;
+      flash('err', msg);
+    } finally { setBusy(false); }
+  };
+
+  const resetGames = async () => {
+    if (!(await confirmDialog({ body: t('settings.workspace.resetGamesConfirm'), danger: true }))) return;
+    setBusy(true);
+    try {
+      const r = await resetWithTimeout('/api/settings/reset-games');
+      const j = (await r.json().catch(() => null)) as
+        | { ok?: boolean; error?: string; removed?: string[]; kept?: string[]; activeSlug?: string | null }
+        | null;
+      if (!r.ok || !j?.ok) {
+        flash('err', j?.error ?? `HTTP ${r.status}${r.statusText ? ` ${r.statusText}` : ''}`);
+        return;
+      }
+      // Graceful re-home: the open game may have just been deleted. Re-pin to
+      // the survivor the server resolved (cow-survivor / first kept symlink),
+      // or null when nothing remains — either way the pinned slug can no longer
+      // point at a deleted game, so Play/Edit iframes follow to a live game
+      // (or the "Loading..." placeholder) instead of a 404'd iframe.
+      try {
+        useAppStore.getState().setPinnedSlug(j.activeSlug ?? null);
+      } catch (e) {
+        console.warn('[resetGames] re-pin after reset failed', e);
+      }
+      flash('ok', j.activeSlug
+        ? t('settings.workspace.resetGamesDoneSwitched', { count: j.removed?.length ?? 0, slug: j.activeSlug })
+        : t('settings.workspace.resetGamesDone', { count: j.removed?.length ?? 0 }));
+    } catch (e) {
+      const msg = (e as Error).name === 'AbortError' ? t('settings.workspace.resetGamesTimeout') : (e as Error).message;
+      flash('err', msg);
     } finally { setBusy(false); }
   };
 
@@ -207,22 +274,24 @@ export function SettingsSectionsRegister() {
   ), []);
 
   const apiKeysNode = useMemo(() => {
-    if (!data) return <div className="settings-loading">加载中…</div>;
+    if (!data) return <div className="settings-loading">{t('common.loading')}</div>;
     return (
       <>
-        <Section icon={<Key size={14} />} title="LLM / CLI Keys" hint="forgeax/.env;重启 stack 后生效">
-          <EnvField label="ANTHROPIC_API_KEY"  masked={envOf('ANTHROPIC_API_KEY')}  placeholder="sk-ant-... 或 Azure key" onSave={(v) => void patchEnv({ ANTHROPIC_API_KEY: v })} busy={busy} />
+        <Section icon={<Key size={14} />} title="LLM / CLI Keys" hint={t('settings.apiKeys.llmHint')}>
+          <EnvField label="ANTHROPIC_API_KEY"  masked={envOf('ANTHROPIC_API_KEY')}  placeholder={t('settings.apiKeys.anthropicPlaceholder')} onSave={(v) => void patchEnv({ ANTHROPIC_API_KEY: v })} busy={busy} />
           <EnvField label="ANTHROPIC_BASE_URL" masked={envOf('ANTHROPIC_BASE_URL')} placeholder="https://api.anthropic.com" onSave={(v) => void patchEnv({ ANTHROPIC_BASE_URL: v })} busy={busy} visible />
           <EnvField label="OPENAI_API_KEY"     masked={envOf('OPENAI_API_KEY')}     placeholder="sk-..."                  onSave={(v) => void patchEnv({ OPENAI_API_KEY: v })} busy={busy} />
           <EnvField label="OPENAI_BASE_URL"    masked={envOf('OPENAI_BASE_URL')}    placeholder="https://api.openai.com"  onSave={(v) => void patchEnv({ OPENAI_BASE_URL: v })} busy={busy} visible />
           <EnvField label="GEMINI_API_KEY"     masked={envOf('GEMINI_API_KEY')}     placeholder="AIza..."                 onSave={(v) => void patchEnv({ GEMINI_API_KEY: v })} busy={busy} />
         </Section>
 
-        <Section icon={<Key size={14} />} title="多模态 Keys" hint="image-gen / video-gen / 多模代理 · wb-character 等插件用">
+        <Section icon={<Key size={14} />} title={t('settings.apiKeys.multimodalTitle')} hint={t('settings.apiKeys.multimodalHint')}>
           {MULTIMODAL_KEYS.map((k) => (
             <EnvField
               key={k.key}
-              label={k.label}
+              label={k.key === 'ARK_IMAGE_KEY' ? t('settings.apiKeys.arkImageLabel')
+                : k.key === 'ARK_VIDEO_KEY' ? t('settings.apiKeys.arkVideoLabel')
+                : k.label}
               masked={envOf(k.key)}
               placeholder={k.placeholder}
               onSave={(v) => void patchEnv({ [k.key]: v })}
@@ -236,11 +305,11 @@ export function SettingsSectionsRegister() {
   }, [data, busy]);
 
   const modelsNode = useMemo(() => {
-    if (!data) return <div className="settings-loading">加载中…</div>;
+    if (!data) return <div className="settings-loading">{t('common.loading')}</div>;
     return (
-      <Section icon={<Cpu size={14} />} title="模型" hint="改 FORGEAX_MODEL（重启 stack 后生效）">
+      <Section icon={<Cpu size={14} />} title={t('settings.models.title')} hint={t('settings.models.hint')}>
         <div className="settings-row">
-          <label className="settings-label">当前</label>
+          <label className="settings-label">{t('settings.models.current')}</label>
           <select
             className="settings-select"
             value={envOf('FORGEAX_MODEL') ?? ''}
@@ -251,36 +320,36 @@ export function SettingsSectionsRegister() {
           </select>
         </div>
         <div className="settings-help">
-          所有 LLM 凭证从 <code>$ROOT/.env</code> 读取；按 model id 模式自动选 adapter
+          {t('settings.models.helpPrefix')} <code>$ROOT/.env</code> {t('settings.models.helpAdapter')}
           （<code>claude-*</code> → Anthropic / <code>gpt-*</code> → OpenAI / <code>gemini-*</code> → Gemini /
-          <code>deepseek-*</code> → DeepSeek）。配了 <code>LITELLM_PROXY_*</code> 时全部走代理。
+          <code>deepseek-*</code> → DeepSeek）。{t('settings.models.helpProxyPrefix')} <code>LITELLM_PROXY_*</code> {t('settings.models.helpProxySuffix')}
         </div>
       </Section>
     );
   }, [data, busy]);
 
   const modelLabNode = useMemo(() => (
-    <Section icon={<FlaskConical size={14} />} title="Model Lab" hint="一次性测模型 · 调温度 / top_p / max_tokens · 走 /api/llm/test → lib/llm-gateway → LiteLLM 代理">
+    <Section icon={<FlaskConical size={14} />} title="Model Lab" hint={t('settings.modelLab.hint')}>
       <ModelLabBody />
     </Section>
   ), []);
 
   const cliProvidersNode = useMemo(() => (
-    <Section icon={<Plug size={14} />} title="CLI Providers" hint="多 cli 后端 — agent 由 marketplace/manifest.json#agents[].provider 路由">
-      {!providers && <div className="settings-help">加载中…</div>}
+    <Section icon={<Plug size={14} />} title="CLI Providers" hint={t('settings.cliProviders.hint')}>
+      {!providers && <div className="settings-help">{t('common.loading')}</div>}
       {providers && providers.length === 0 && (
-        <div className="settings-help">无注册的 provider — 检查 server 启动日志。</div>
+        <div className="settings-help">{t('settings.cliProviders.none')}</div>
       )}
       {providers?.map((p) => {
         const caps = Object.entries(p.capabilities).filter(([, v]) => v).map(([k]) => k);
-        const t = tests[p.id];
+        const tr = tests[p.id];
         return (
           <div key={p.id} className={`settings-provider-row ${!p.health.ok ? 'is-down' : ''}`}>
             <div className="settings-provider-head">
               <code className="settings-provider-id">{p.id}</code>
               <span className="settings-provider-name">{p.displayName}</span>
               <span className={p.health.ok ? 'ok-pill' : 'err-pill'}>
-                {p.health.ok ? '健康 ✓' : '不可用 ✗'}
+                {p.health.ok ? t('settings.cliProviders.healthy') : t('settings.cliProviders.unavailable')}
               </span>
             </div>
             {p.health.detail && (
@@ -294,19 +363,19 @@ export function SettingsSectionsRegister() {
                 type="button"
                 className="settings-edit-btn"
                 onClick={() => void testProvider(p.id)}
-                disabled={t?.status === 'running' || !p.health.ok}
+                disabled={tr?.status === 'running' || !p.health.ok}
               >
-                {t?.status === 'running' ? '测试中…' : 'Test'}
+                {tr?.status === 'running' ? t('settings.cliProviders.testing') : 'Test'}
               </button>
-              {t && t.status !== 'running' && (
+              {tr && tr.status !== 'running' && (
                 <span className="settings-help" style={{ display: 'inline', marginLeft: 8 }}>
-                  {t.status === 'ok'
-                    ? t.ttftMs !== undefined
-                      ? `✓ ttft ${Math.round(t.ttftMs)}ms · total ${Math.round(t.totalMs ?? 0)}ms`
-                      : t.sawTool
-                        ? `✓ done · ${Math.round(t.totalMs ?? 0)}ms (tool-only turn)`
-                        : `✓ silent done · ${Math.round(t.totalMs ?? 0)}ms`
-                    : `✗ ${t.err?.slice(0, 80) ?? 'failed'}`}
+                  {tr.status === 'ok'
+                    ? tr.ttftMs !== undefined
+                      ? `✓ ttft ${Math.round(tr.ttftMs)}ms · total ${Math.round(tr.totalMs ?? 0)}ms`
+                      : tr.sawTool
+                        ? `✓ done · ${Math.round(tr.totalMs ?? 0)}ms (tool-only turn)`
+                        : `✓ silent done · ${Math.round(tr.totalMs ?? 0)}ms`
+                    : `✗ ${tr.err?.slice(0, 80) ?? 'failed'}`}
                 </span>
               )}
             </div>
@@ -315,11 +384,11 @@ export function SettingsSectionsRegister() {
       })}
       <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
         <button className="settings-edit-btn" onClick={() => void reloadProviders(true)} disabled={busy}>
-          <RefreshCw size={11} /> 刷新
+          <RefreshCw size={11} /> {t('settings.refresh')}
         </button>
         {providersCachedAt && (
           <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginLeft: 'auto' }}>
-            快照 · {Math.round((Date.now() - providersCachedAt) / 1000)}s 前
+            {t('settings.cliProviders.snapshotAge', { seconds: Math.round((Date.now() - providersCachedAt) / 1000) })}
           </span>
         )}
       </div>
@@ -327,15 +396,21 @@ export function SettingsSectionsRegister() {
   ), [providers, providersCachedAt, busy, tests]);
 
   const workspaceNode = useMemo(() => {
-    if (!data) return <div className="settings-loading">加载中…</div>;
+    if (!data) return <div className="settings-loading">{t('common.loading')}</div>;
     return (
       <>
-        <Section icon={<Trash2 size={14} />} title="重置 session" hint="清空 team/sessions/* — 保留 agent 配置 / marketplace / games">
+        <Section icon={<Trash2 size={14} />} title={t('settings.workspace.resetSessionsTitle')} hint={t('settings.workspace.resetSessionsHint')}>
           <button className="settings-danger-btn" onClick={() => void resetSessions()} disabled={busy}>
-            <RefreshCw size={12} /> 清空所有 session 历史
+            <RefreshCw size={12} /> {t('settings.workspace.resetSessionsBtn')}
           </button>
         </Section>
-        <Section icon={<Info size={14} />} title="路径 / 端口" hint="只读">
+        <Section icon={<Trash2 size={14} />} title={t('settings.workspace.resetGamesTitle')} hint={t('settings.workspace.resetGamesHint')}>
+          <button className="settings-danger-btn" onClick={() => void resetGames()} disabled={busy}>
+            <RefreshCw size={12} /> {t('settings.workspace.resetGamesBtn')}
+          </button>
+          <div className="settings-help">{t('settings.workspace.resetGamesHelp')}</div>
+        </Section>
+        <Section icon={<Info size={14} />} title={t('settings.workspace.pathsTitle')} hint={t('settings.readonly')}>
           <div className="settings-info">
             <div><span className="dim">project root:</span> {data.paths.projectRoot}</div>
             <div><span className="dim">env file:</span> {data.paths.envPath}</div>
@@ -347,47 +422,47 @@ export function SettingsSectionsRegister() {
   }, [data, busy]);
 
   const accountNode = useMemo(() => (
-    <Section icon={<User size={14} />} title="账号" hint="云同步 / 订阅 / 分享设置 (规划中)">
+    <Section icon={<User size={14} />} title={t('settings.account.title')} hint={t('settings.account.hint')}>
       <div className="settings-info">
-        <div className="dim">未登录</div>
+        <div className="dim">{t('settings.account.notLoggedIn')}</div>
         <div style={{ marginTop: 8 }}>
-          云端账号体系尚在规划中。本地 forgeax-studio 完全离线可用,云端功能后续解锁:
+          {t('settings.account.intro')}
         </div>
         <ul style={{ margin: '8px 0 0 20px', color: 'var(--text-dim)' }}>
-          <li>多设备同步 game/agent</li>
-          <li>云端 model gateway · 共享 LLM key 池</li>
-          <li>订阅 · token 配额</li>
+          <li>{t('settings.account.feature1')}</li>
+          <li>{t('settings.account.feature2')}</li>
+          <li>{t('settings.account.feature3')}</li>
         </ul>
       </div>
     </Section>
   ), []);
 
   const aboutNode = useMemo(() => (
-    <Section icon={<Info size={14} />} title="forgeax-studio" hint="版本 · 路径 · 链接">
+    <Section icon={<Info size={14} />} title="forgeax-studio" hint={t('settings.about.hint')}>
       <AboutBody />
     </Section>
   ), []);
 
   const changelogNode = useMemo(() => (
-    <Section icon={<History size={14} />} title="Changelog" hint="版本迭代记录 · 来源 CHANGELOG.md">
+    <Section icon={<History size={14} />} title="Changelog" hint={t('settings.changelog.hint')}>
       <ChangelogBody />
     </Section>
   ), []);
 
   const shortcutsNode = useMemo(() => (
-    <Section icon={<Command size={14} />} title="键盘快捷键" hint="只读 · 当前不可自定义">
+    <Section icon={<Command size={14} />} title={t('settings.shortcuts.title')} hint={t('settings.shortcuts.hint')}>
       <ShortcutsBody />
     </Section>
   ), []);
 
   const usageNode = useMemo(() => (
-    <Section icon={<Activity size={14} />} title="用量" hint="基于 ledger hook:assistantMessage 事件聚合 · 仅本机 sessions">
+    <Section icon={<Activity size={14} />} title={t('settings.usage.title')} hint={t('settings.usage.hint')}>
       <UsageBody />
     </Section>
   ), []);
 
   const agentsNode = useMemo(() => (
-    <Section icon={<Users size={14} />} title="Agents" hint="勾掉的 agent 不在主 agent 头像行 / delegate 工具中显示">
+    <Section icon={<Users size={14} />} title="Agents" hint={t('settings.agents.hint')}>
       <AgentsBody />
     </Section>
   ), []);
@@ -396,13 +471,14 @@ export function SettingsSectionsRegister() {
 
   useSettingsSection({ id: 'plugins',       label: 'Plugins',       priority: 95, group: 'plugin',  icon: Network, node: pluginsNode });
   useSettingsSection({ id: 'agents',        label: 'Agents',        priority: 94, group: 'plugin',  icon: Users, node: agentsNode });
-  useSettingsSection({ id: 'fxpack',        label: '.fxpack 导入',  priority: 92, group: 'plugin',  icon: ShieldCheck, node: <TrustPanel /> });
-  useSettingsSection({ id: 'author',        label: 'Fork & 录制',   priority: 91, group: 'plugin',  icon: GitFork, node: <AuthorPanel /> });
+  useSettingsSection({ id: 'fxpack',        label: t('settings.sections.fxpackImport'),  priority: 92, group: 'plugin',  icon: ShieldCheck, node: <TrustPanel /> });
+  useSettingsSection({ id: 'author',        label: t('settings.sections.forkRecord'),   priority: 91, group: 'plugin',  icon: GitFork, node: <AuthorPanel /> });
   useSettingsSection({ id: 'api-keys',      label: 'API Keys',      priority: 90, group: 'config',  icon: Key,     node: apiKeysNode });
   useSettingsSection({ id: 'models',        label: 'Models',        priority: 80, group: 'config',  icon: Cpu,     node: modelsNode });
   useSettingsSection({ id: 'model-lab',     label: 'Model Lab',     priority: 75, group: 'config',  icon: FlaskConical, node: modelLabNode });
   useSettingsSection({ id: 'cli-providers', label: 'CLI Providers', priority: 70, group: 'config',  icon: Plug,    node: cliProvidersNode });
-  useSettingsSection({ id: 'usage',         label: '用量',          priority: 67, group: 'config',  icon: Activity, node: usageNode });
+  useSettingsSection({ id: 'usage',         label: t('settings.usage.title'),          priority: 67, group: 'config',  icon: Activity, node: usageNode });
+  useSettingsSection({ id: 'language',      label: 'Language',      priority: 66, group: 'system',  icon: Globe,   node: <LanguageSection /> });
   useSettingsSection({ id: 'boot-splash',   label: 'Boot Splash',   priority: 65, group: 'system',  icon: Sparkles, node: <BootSplashSection /> });
   useSettingsSection({ id: 'shortcuts',     label: 'Shortcuts',     priority: 62, group: 'system',  icon: Command, node: shortcutsNode });
   useSettingsSection({ id: 'workspace',     label: 'Workspace',     priority: 60, group: 'system',  icon: Trash2,  node: workspaceNode });
@@ -432,6 +508,7 @@ interface VersionInfo {
 }
 
 function AboutBody() {
+  const { t } = useTranslation();
   const [info, setInfo] = useState<VersionInfo | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -452,7 +529,7 @@ function AboutBody() {
         <code>{info?.sha ?? '?'}</code> · {info?.date ?? '?'} · branch <code>{info?.branch ?? '?'}</code>
       </div>
       <div>
-        <span className="dim">累计 commits:</span>{' '}
+        <span className="dim">{t('settings.about.totalCommits')}</span>{' '}
         <code>{info?.totalCommits ?? 0}</code> on <code>main</code>
       </div>
       <div style={{ marginTop: 6 }}>
@@ -462,8 +539,8 @@ function AboutBody() {
         </a>
       </div>
       <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
-        版本号方案 <code>v0.M.D.N</code> — 0 = pre-1.0 epoch · M.D = main 最新 commit 月.日 · N = main 累计 commit。
-        详情见 <code>CHANGELOG.md</code> / <code>scripts/version.sh</code>。
+        {t('settings.about.versionScheme')} <code>v0.M.D.N</code> {t('settings.about.versionSchemeDetail')}
+        {t('settings.about.versionSchemeSee')} <code>CHANGELOG.md</code> / <code>scripts/version.sh</code>。
       </div>
     </div>
   );
@@ -487,6 +564,7 @@ interface WorkbenchAgent {
 }
 
 function AgentsBody() {
+  const { t } = useTranslation();
   const [agents, setAgents] = useState<WorkbenchAgent[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const uninstalledIds = useAppStore((s) => s.uninstalledAgentIds);
@@ -510,9 +588,9 @@ function AgentsBody() {
     return () => { cancelled = true; };
   }, []);
 
-  if (err) return <div className="settings-info"><div style={{ color: 'var(--err)' }}>加载失败: {err}</div></div>;
-  if (!agents) return <div className="settings-info dim">加载中…</div>;
-  if (agents.length === 0) return <div className="settings-info dim">没有可管理的 agent。</div>;
+  if (err) return <div className="settings-info"><div style={{ color: 'var(--err)' }}>{t('settings.agents.loadFailed', { error: err })}</div></div>;
+  if (!agents) return <div className="settings-info dim">{t('common.loading')}</div>;
+  if (agents.length === 0) return <div className="settings-info dim">{t('settings.agents.empty')}</div>;
 
   // 「主 agent」= 新 session 的入口 agent，单一概念。
   //   优先级：用户在下拉框里选的 (defaultBootstrap) → 退化到 manifest 标 isMain
@@ -548,19 +626,19 @@ function AgentsBody() {
   return (
     <div className="settings-info" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ color: 'var(--text-dim)', fontSize: 12, lineHeight: 1.6 }}>
-        共 <code>{subCount}</code> 个 sub-agent · 已安装 <code>{installedCount}</code> ·
-        卸载后将从主 agent 头像行 / delegate 工具列表中隐藏，session 树中已实例化的 agent 不受影响。
+        {t('settings.agents.summaryPrefix')} <code>{subCount}</code> {t('settings.agents.summaryInstalled')} <code>{installedCount}</code> ·
+        {t('settings.agents.summarySuffix')}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'var(--surface-elevated)', borderRadius: 6 }}>
-        <strong style={{ flexShrink: 0 }}>主 agent</strong>
-        <span className="dim" style={{ fontSize: 11, flexShrink: 0 }}>新 session 入口</span>
+        <strong style={{ flexShrink: 0 }}>{t('settings.agents.mainAgent')}</strong>
+        <span className="dim" style={{ fontSize: 11, flexShrink: 0 }}>{t('settings.agents.newSessionEntry')}</span>
         <select
           value={defaultBootstrap ?? ''}
           onChange={(e) => setDefaultBootstrap(e.target.value || null)}
           style={{ flex: 1, padding: '4px 8px', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4 }}
         >
           <option value="">
-            {manifestMain ? `跟随 manifest (${manifestMain.id})` : '跟随 manifest'}
+            {manifestMain ? t('settings.agents.followManifestId', { id: manifestMain.id }) : t('settings.agents.followManifest')}
           </option>
           {bootstrapCandidates.map((a) => (
             <option key={a.id} value={a.id}>
@@ -594,7 +672,7 @@ function AgentsBody() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <strong>{a.name}</strong>
-                  {isMain && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· main · 新 session 入口</span>}
+                  {isMain && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· main · {t('settings.agents.newSessionEntry')}</span>}
                   {!isMain && a.status === 'placeholder' && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· placeholder</span>}
                 </div>
                 <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.role}</div>
@@ -623,6 +701,7 @@ interface ChangelogEntry {
 }
 
 function ChangelogBody() {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<ChangelogEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -641,10 +720,10 @@ function ChangelogBody() {
     return <div className="settings-info"><div className="dim">loading…</div></div>;
   }
   if (err) {
-    return <div className="settings-info"><div style={{ color: 'var(--accent-error)' }}>读取失败:{err}</div></div>;
+    return <div className="settings-info"><div style={{ color: 'var(--accent-error)' }}>{t('settings.readFailed', { error: err })}</div></div>;
   }
   if (entries && entries.length === 0) {
-    return <div className="settings-info"><div className="dim">CHANGELOG.md 还没有版本段落。</div></div>;
+    return <div className="settings-info"><div className="dim">{t('settings.changelog.empty')}</div></div>;
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '70vh', overflowY: 'auto', paddingRight: 8 }}>
@@ -737,16 +816,17 @@ function MdLite({ text }: { text: string }) {
 // reflect them in `buildShortcuts()` via a registry merge.
 
 const GROUP_LABEL: Record<ShortcutDef['group'], string> = {
-  layout:  '布局',
-  mode:    '顶部模式',
-  overlay: '浮层',
-  focus:   '聚焦',
-  general: '通用',
+  layout:  'settings.shortcuts.groups.layout',
+  mode:    'settings.shortcuts.groups.mode',
+  overlay: 'settings.shortcuts.groups.overlay',
+  focus:   'settings.shortcuts.groups.focus',
+  general: 'settings.shortcuts.groups.general',
 };
 
 const GROUP_ORDER: Array<ShortcutDef['group']> = ['layout', 'overlay', 'mode', 'focus', 'general'];
 
 function ShortcutsBody() {
+  const { t } = useTranslation();
   const shortcuts = useMemo(() => buildShortcuts(), []);
   const grouped = useMemo(() => {
     const out = new Map<ShortcutDef['group'], ShortcutDef[]>();
@@ -760,11 +840,11 @@ function ShortcutsBody() {
   return (
     <div className="settings-info" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ color: 'var(--text-dim)', fontSize: 12.5, lineHeight: 1.6 }}>
-        Blender 风的 <strong>Ctrl+Shift+...</strong> 组合 — 避开浏览器 Ctrl+1/2/3 切 tab / Ctrl+J 下载 / Ctrl+B 收藏栏。
+        {t('settings.shortcuts.introBlenderPrefix')} <strong>Ctrl+Shift+...</strong> {t('settings.shortcuts.introBlenderSuffix')}
         <br />
-        <strong>中文输入法安全</strong>:组词状态(<code>isComposing</code>)或 keyCode 229 自动跳过;聚焦在 input/textarea/可编辑元素上时也不触发(Esc / Ctrl+/ 是例外)。
+        <strong>{t('settings.shortcuts.introImeSafe')}</strong>{t('settings.shortcuts.introImePrefix')}(<code>isComposing</code>){t('settings.shortcuts.introImeSuffix')}
         <br />
-        当前为<strong>只读</strong>展示,后续会开放自定义。
+        {t('settings.shortcuts.introReadonlyPrefix')}<strong>{t('settings.readonly')}</strong>{t('settings.shortcuts.introReadonlySuffix')}
       </div>
 
       {GROUP_ORDER.map((g) => {
@@ -776,7 +856,7 @@ function ShortcutsBody() {
               fontSize: 10.5, letterSpacing: '0.08em', textTransform: 'uppercase',
               color: 'var(--accent-violet-light)', marginBottom: 6, fontWeight: 600,
             }}>
-              {GROUP_LABEL[g]}
+              {t(GROUP_LABEL[g])}
             </div>
             <table style={{
               width: '100%', borderCollapse: 'collapse', fontSize: 13,
@@ -917,6 +997,7 @@ interface RowResult {
 const MAX_CONCURRENCY = 16;
 
 function ModelLabBody() {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [prompt, setPrompt] = useState<string>('respond with the single word: ok');
   const [system, setSystem] = useState<string>('');
@@ -1129,7 +1210,7 @@ function ModelLabBody() {
 
       <details>
         <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-dim)' }}>
-          System prompt (可选)
+          {t('settings.modelLab.systemPromptOptional')}
         </summary>
         <textarea
           value={system}
@@ -1159,7 +1240,7 @@ function ModelLabBody() {
 
       <div>
         <label className="settings-label" style={{ display: 'block', marginBottom: 4 }}>
-          Models — 勾选要并行测试的模型(已选 {selected.size})
+          {t('settings.modelLab.modelsLabel', { count: selected.size })}
         </label>
         <ModelPicker
           mode="multi"
@@ -1179,7 +1260,7 @@ function ModelLabBody() {
           disabled={running || selected.size === 0 || !prompt.trim()}
           data-testid="model-lab-run-all"
         >
-          {running ? `运行中… (${rows.size} rows)` : `Run all (${selected.size})`}
+          {running ? t('settings.modelLab.running', { count: rows.size }) : `Run all (${selected.size})`}
         </button>
         <button
           type="button"
@@ -1197,7 +1278,7 @@ function ModelLabBody() {
             className="settings-edit-btn"
             onClick={cancelAll}
           >
-            中止全部
+            {t('settings.modelLab.cancelAll')}
           </button>
         )}
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-dim)' }}>
@@ -1206,25 +1287,25 @@ function ModelLabBody() {
             checked={hideUnavailable}
             onChange={(e) => setHideUnavailable(e.target.checked)}
           />
-          隐藏不可用
+          {t('settings.modelLab.hideUnavailable')}
         </label>
         <button
           type="button"
           className="settings-edit-btn"
           onClick={exportCsv}
           disabled={rows.size === 0}
-          title="导出当前结果为 CSV(同时写到剪贴板)"
+          title={t('settings.modelLab.exportCsvTitle')}
         >
           Export CSV
         </button>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-dim)' }}>
-          /api/llm/test-stream (SSE · TTFT 取首个 chunk)
+          {t('settings.modelLab.streamNote')}
         </span>
       </div>
 
       {visibleRows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-dim)', padding: '8px 0' }}>
-          {rows.size === 0 ? '勾选模型后点 "Run all"。' : '所有 row 已被 "隐藏不可用" 过滤。'}
+          {rows.size === 0 ? t('settings.modelLab.emptyHint') : t('settings.modelLab.allFiltered')}
         </div>
       ) : (
         <div
@@ -1377,6 +1458,7 @@ function fmtNum(n: number): string {
 }
 
 function UsageBody() {
+  const { t } = useTranslation();
   const [report, setReport] = useState<UsageReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
@@ -1392,7 +1474,7 @@ function UsageBody() {
     return () => { cancelled = true; };
   }, [reloadTick]);
 
-  if (err) return <div className="settings-info"><div style={{ color: 'var(--accent-error)' }}>读取失败:{err}</div></div>;
+  if (err) return <div className="settings-info"><div style={{ color: 'var(--accent-error)' }}>{t('settings.readFailed', { error: err })}</div></div>;
   if (!report) return <div className="settings-info"><div className="dim">loading…</div></div>;
 
   const { totals, byModel, byDay, sourcedFrom } = report;
@@ -1401,7 +1483,7 @@ function UsageBody() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-        <Stat label="总调用" value={fmtNum(totals.calls)} />
+        <Stat label={t('settings.usage.totalCalls')} value={fmtNum(totals.calls)} />
         <Stat label="input tokens" value={fmtNum(totals.inputTokens)} />
         <Stat label="output tokens" value={fmtNum(totals.outputTokens)} />
         <Stat label="sessions" value={String(sourcedFrom.sessionsScanned)} />
@@ -1413,13 +1495,13 @@ function UsageBody() {
         className="settings-secondary-btn"
         style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6 }}
       >
-        <RefreshCw size={12} /> 刷新
+        <RefreshCw size={12} /> {t('settings.refresh')}
       </button>
 
       <div>
-        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>按模型</div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>{t('settings.usage.byModel')}</div>
         {byModel.length === 0 ? (
-          <div className="dim" style={{ fontSize: 12 }}>暂无 usage 数据 — assistant 还没回过任何 token。</div>
+          <div className="dim" style={{ fontSize: 12 }}>{t('settings.usage.noData')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {byModel.map((row) => {
@@ -1444,7 +1526,7 @@ function UsageBody() {
       </div>
 
       <div>
-        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>按日期 (UTC)</div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>{t('settings.usage.byDay')}</div>
         {byDay.length === 0 ? (
           <div className="dim" style={{ fontSize: 12 }}>—</div>
         ) : (

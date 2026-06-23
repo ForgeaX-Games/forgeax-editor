@@ -60,7 +60,8 @@ const CAMERA_FAR = 100;
 
 async function setupIblSkylight(
   app: App,
-): Promise<Handle<'CubeTextureAsset', 'unmanaged'> | null> {
+  world: World,
+): Promise<Handle<'CubeTextureAsset', 'shared'> | null> {
   const assets = app.renderer.assets;
   assets.configurePackIndex(PACK_INDEX_URL);
 
@@ -81,16 +82,13 @@ async function setupIblSkylight(
   }
 
   // feat-20260601-gpu-resource-store-extraction M1: equirect-to-cubemap upload
-  // moved from AssetRegistry to renderer.store; the source POD is fetched from
-  // the registry and passed in (D-2: the store holds no registry reference).
-  const srcPodRes = assets.get<TextureAsset>(hdrHandleRes.value);
-  if (!srcPodRes.ok) {
-    console.error(`[ibl-specular skylight] source POD fetch failed: ${srcPodRes.error.code}`);
-    return null;
-  }
+  // lives on renderer.store. loadByGuid returns the TextureAsset PAYLOAD (M8
+  // D-17); mint a user-tier source handle and pass world + handle + pod.
+  const srcHandle = world.allocSharedRef('TextureAsset', hdrHandleRes.value);
   const cubemapRes = await app.renderer.store.uploadCubemapFromEquirect(
+    world,
+    srcHandle,
     hdrHandleRes.value,
-    srcPodRes.value,
   );
   if (!cubemapRes.ok) {
     console.error(
@@ -136,7 +134,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const cubemapHandle = await setupIblSkylight(app);
+  const cubemapHandle = await setupIblSkylight(app, world);
   if (cubemapHandle !== null) {
     world.spawn({
       component: Skylight,
@@ -154,23 +152,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 6.pbr 3.ibl-specular] createSphereGeometry failed:', sphereRes.error);
     return;
   }
-  const assets = renderer.assets;
-  const sphereAssetHandle = assets.register(sphereRes.value).unwrap();
+  const sphereAssetHandle = world.allocSharedRef('MeshAsset', sphereRes.value);
 
   for (let row = 0; row < GRID_ROWS; row++) {
     for (let col = 0; col < GRID_COLS; col++) {
       const roughness = 0.1 + row * 0.4;
       const metallic = col * 0.5;
 
-      const matHandle = assets
-        .register<MaterialAsset>(
-          Materials.standard({
-            baseColor: [0.5, 0.5, 0.5, 1],
-            metallic,
-            roughness,
-          }),
-        )
-        .unwrap();
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        Materials.standard({
+          baseColor: [0.5, 0.5, 0.5, 1],
+          metallic,
+          roughness,
+        }),
+      );
 
       const cx = (col - (GRID_COLS - 1) / 2) * SPACING;
       const cy = ((GRID_ROWS - 1) / 2 - row) * SPACING;

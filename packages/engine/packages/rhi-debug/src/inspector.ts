@@ -16,16 +16,11 @@ import type { RhiDevice } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
-import { readbackTexturePixels, resolveAttachmentSize } from './readback';
+import { inspectDrawJson } from './inspect-core';
+import { readbackDrawRt } from './readback';
 import type { Replay } from './replayer';
 import { computePassOffsets } from './tape-format';
-import type {
-  InspectBindingEntry,
-  InspectDrawCall,
-  InspectFields,
-  InspectReport,
-  RhiCallEvent,
-} from './types';
+import type { InspectFields, InspectReport, RhiCallEvent } from './types';
 
 // ============================================================================
 // Constants
@@ -187,17 +182,6 @@ export class InspectorCache {
 // ============================================================================
 
 /**
- * Result of extractDrawInfo -- information about a draw at a given index.
- */
-interface DrawInfo {
-  frameIdx: number;
-  passIdx: number;
-  bindings: InspectBindingEntry[];
-  drawCall: InspectDrawCall;
-  colorAttachmentHandleId: string | undefined;
-}
-
-/**
  * Inspect a specific drawIdx within a replay session.
  *
  * @param replay - The Replay session that has been stepped to at least drawIdx.
@@ -220,266 +204,35 @@ export async function inspectAt(
   device: RhiDevice,
   outputDir: string,
 ): Promise<Result<InspectReport, DebugError>> {
-  // Compute draw info from events up to drawIdx
-  const drawInfo = extractDrawInfo(events, drawIdx);
-
-  // Get passIdx for this draw
-  const passIdx = findPassIdx(events, drawIdx);
-
   // Determine which fields to include
   const fieldSet = fields !== undefined ? new Set(fields) : undefined;
-  const wantBindings = fieldSet === undefined || fieldSet.has('bindings');
-  const wantDrawCall = fieldSet === undefined || fieldSet.has('drawCall');
   const wantRt = fieldSet === undefined || fieldSet.has('rt');
 
-  // Build report with only requested fields
-  let rtPath: string | undefined;
+  // Derive from inspectDrawJson for bindings/drawCall/passIdx (D-1 single SSOT).
+  // Strip 'rt' from fields for the core call — PNG path is Node-specific.
+  const fieldsWithoutRt: readonly InspectFields[] | undefined =
+    fields !== undefined ? fields.filter((f) => f !== 'rt') : undefined;
+
+  const reportResult = await inspectDrawJson(replay, drawIdx, events, device, fieldsWithoutRt);
+  if (!reportResult.ok) {
+    return err(reportResult.error);
+  }
+  const report = reportResult.value;
+
+  // Patch RT: if rt was requested, call readbackAndEncodePng (Node-specific PNG
+  // encode) and set the rt field to the PNG file path. On the Node CLI path the
+  // InspectRtPayload union resolves to its `string` (PNG path) arm — distinct
+  // from the browser path's {width,height,pixels} arm. Cast only relaxes
+  // `readonly rt`; the assigned string is a valid InspectRtPayload.
   if (wantRt) {
     const pngResult = await readbackAndEncodePng(replay, drawIdx, device, outputDir);
     if (!pngResult.ok) {
       return err(pngResult.error);
     }
-    rtPath = pngResult.value;
+    (report as { rt?: InspectReport['rt'] }).rt = pngResult.value;
   }
 
-  // Build the report object via a mutable record to allow field cropping
-  const result: Record<string, unknown> = {
-    frameIdx: drawInfo.frameIdx,
-    drawIdx,
-    passIdx,
-  };
-  if (wantBindings) {
-    result.bindings = drawInfo.bindings;
-  }
-  if (wantDrawCall) {
-    result.drawCall = drawInfo.drawCall;
-  }
-  if (rtPath !== undefined) {
-    result.rt = rtPath;
-  }
-
-  // biome-ignore lint/suspicious/noExplicitAny: structural compatible with InspectReport
-  return ok(result as any);
-}
-
-/**
- * Project the recorder-side `RhiBindResourceKind` (closed 4 union, mirrors
- * the RHI BindResource kind discriminant) onto the inspector-facing
- * `InspectBindingEntry.kind` set ('buffer' | 'texture' | 'sampler' |
- * 'textureView'). cubemap / 2D / 3D / array textures all flow through
- * `textureView` — the recorder cannot distinguish dimension at this
- * boundary, so AI users discriminate texture dimension via the
- * `createTextureView`/`createTexture` event chain rather than this enum.
- */
-function mapResourceKindToInspectKind(
-  k: 'sampler' | 'buffer' | 'textureView' | 'externalTexture',
-): 'buffer' | 'texture' | 'sampler' | 'textureView' {
-  switch (k) {
-    case 'sampler':
-      return 'sampler';
-    case 'buffer':
-      return 'buffer';
-    case 'textureView':
-      return 'textureView';
-    case 'externalTexture':
-      return 'texture';
-  }
-}
-
-/**
- * Extract draw information from tape events up to a given draw index.
- *
- * Walks events from start, tracking frameMark boundaries, bind group state,
- * and the current render pass setup to produce the InspectReport fields.
- */
-function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: number): DrawInfo {
-  let frameIdx = 0;
-  let currentGlobalDrawIdx = 0;
-  let foundDraw = false;
-
-  // Track bind group state per index (most recent setBindGroup)
-  const bindGroups = new Map<number, InspectBindingEntry[]>();
-
-  // I-8 fix (round 1 implement-review): index createBindGroup events by
-  // handleId so setBindGroup can resolve to the real per-entry kind +
-  // resourceHandleId list (covers cubemap, sampler, multi-buffer mixes;
-  // AC-29 requires Sponza skylight cubemap to surface as a texture/
-  // textureView entry, not a collapsed dummy 'buffer').
-  const bindGroupDefs = new Map<
-    string,
-    {
-      readonly entries: readonly {
-        readonly binding: number;
-        readonly resourceKind: 'sampler' | 'buffer' | 'textureView' | 'externalTexture';
-      }[];
-      readonly resourceHandleIds: readonly string[];
-    }
-  >();
-
-  // Track the last color attachment from beginRenderPass
-  let lastColorAttachmentHandleId: string | undefined;
-  // Track whether we saw a setPipeline event (for draw call kind)
-  const lastSeenPerPass: Map<
-    string,
-    { pipelineKind: 'render' | 'compute'; pipelineHandleId: string }
-  > = new Map();
-  let currentPassHandleId: string | undefined;
-
-  let drawBindings: InspectBindingEntry[] = [];
-  let drawCall: InspectDrawCall | null = null;
-  let drawPassHandleId: string | undefined;
-
-  for (const event of events) {
-    if (event.kind === 'frameMark') {
-      frameIdx = event.frameIdx;
-    }
-
-    // Track pass boundaries
-    if (event.kind === 'beginRenderPass') {
-      currentPassHandleId = event.passHandleId;
-      lastColorAttachmentHandleId = event.colorAttachmentViewHandleIds[0] ?? undefined;
-    } else if (event.kind === 'endRenderPass') {
-      currentPassHandleId = undefined;
-    }
-
-    if (event.kind === 'setPipeline') {
-      if (currentPassHandleId !== undefined) {
-        lastSeenPerPass.set(currentPassHandleId, {
-          pipelineKind: 'render',
-          pipelineHandleId: event.pipelineHandleId,
-        });
-      }
-    } else if (event.kind === 'setComputePipeline') {
-      if (currentPassHandleId !== undefined) {
-        lastSeenPerPass.set(currentPassHandleId, {
-          pipelineKind: 'compute',
-          pipelineHandleId: event.pipelineHandleId,
-        });
-      }
-    }
-
-    // I-8: stash createBindGroup definitions so setBindGroup can resolve
-    // back to the per-entry shape.
-    if (event.kind === 'createBindGroup') {
-      bindGroupDefs.set(event.handleId, {
-        entries: event.entries,
-        resourceHandleIds: event.resourceHandleIds,
-      });
-    }
-
-    if (event.kind === 'setBindGroup') {
-      // I-8: resolve setBindGroup -> createBindGroup definition. Each
-      // tracked entry uses its real resourceKind (cubemap/sampler/buffer)
-      // and the resourceHandleId from the createBindGroup event. If no
-      // matching definition is found (e.g. tape truncation), fall back
-      // to a single placeholder entry pointing at the bindGroup itself
-      // so the contract `bindings[].handleId` stays non-empty.
-      const def = bindGroupDefs.get(event.bindGroupHandleId);
-      if (def !== undefined) {
-        const resolved: InspectBindingEntry[] = def.entries.map((e, idx) => ({
-          groupIndex: event.index,
-          entryIndex: e.binding,
-          handleId: def.resourceHandleIds[idx] ?? event.bindGroupHandleId,
-          kind: mapResourceKindToInspectKind(e.resourceKind),
-        }));
-        bindGroups.set(event.index, resolved);
-      } else {
-        bindGroups.set(event.index, [
-          {
-            groupIndex: event.index,
-            entryIndex: 0,
-            handleId: event.bindGroupHandleId,
-            kind: 'buffer',
-          },
-        ]);
-      }
-    }
-
-    // Check for draw calls
-    if (
-      event.kind === 'draw' ||
-      event.kind === 'drawIndexed' ||
-      event.kind === 'dispatchWorkgroups'
-    ) {
-      if (currentGlobalDrawIdx === targetDrawIdx) {
-        foundDraw = true;
-        drawPassHandleId = currentPassHandleId;
-
-        // Collect all current bind group entries
-        const entries: InspectBindingEntry[] = [];
-        for (const bgEntry of bindGroups.values()) {
-          entries.push(...bgEntry);
-        }
-        drawBindings = entries;
-
-        // Build draw call
-        const pipelineInfo =
-          drawPassHandleId !== undefined ? lastSeenPerPass.get(drawPassHandleId) : undefined;
-
-        if (event.kind === 'draw') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            vertexCount: event.vertexCount,
-            instanceCount: event.instanceCount,
-          };
-        } else if (event.kind === 'drawIndexed') {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            indexCount: event.indexCount,
-            instanceCount: event.instanceCount,
-          };
-        } else {
-          drawCall = {
-            pipelineKind: pipelineInfo?.pipelineKind ?? 'compute',
-            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
-            dispatchX: event.x,
-            dispatchY: event.y,
-            dispatchZ: event.z,
-          };
-        }
-        break;
-      }
-      currentGlobalDrawIdx++;
-    }
-  }
-
-  if (!foundDraw || drawCall === null) {
-    return {
-      frameIdx,
-      passIdx: -1,
-      bindings: [],
-      drawCall: {
-        pipelineKind: 'render',
-        pipelineHandleId: 'unknown',
-      },
-      colorAttachmentHandleId: undefined,
-    };
-  }
-
-  return {
-    frameIdx,
-    passIdx: -1, // Will be computed by findPassIdx
-    bindings: drawBindings,
-    drawCall,
-    colorAttachmentHandleId: lastColorAttachmentHandleId,
-  };
-}
-
-/**
- * Find the pass index for a given draw index.
- *
- * Uses computePassOffsets to find which pass contains the draw.
- */
-function findPassIdx(events: readonly RhiCallEvent[], drawIdx: number): number {
-  const offsets = computePassOffsets(events);
-  for (const offset of offsets) {
-    if (drawIdx >= offset.startDrawIdx && drawIdx <= offset.endDrawIdx) {
-      return offset.passIdx;
-    }
-  }
-  return -1;
+  return ok(report);
 }
 
 // ============================================================================
@@ -517,101 +270,30 @@ async function readbackAndEncodePng(
     // Directory may already exist -- that's fine
   }
 
-  // We need to replay up to the draw, then read back.
-  // The caller should have already stepped the replay to the right position.
-  // For now: create a fresh replay from the tape and step to it.
-
-  // Replay step: need to get events and step to the draw
-  // Since we don't have events here, this function relies on the caller
-  // having arranged the replay to be at the right state.
-
-  // Access the replay's internal handle map to get the color attachment texture.
-  // The Replay interface exposes _resolveHandle for the inspector.
-  const events = (replay as unknown as { _events: readonly RhiCallEvent[] })._events as
-    | readonly RhiCallEvent[]
-    | undefined;
-  if (events === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'replay to expose internal _events for RT readback',
-        hint: 'the Replay implementation must provide _events accessor for the inspector',
-      }),
-    );
+  // Delegate GPU readback to readbackDrawRt (shared SSOT, D-2).
+  // The 530-622 segment moved to readback.ts (w3) — inspector now derives
+  // from a single call and retains only the Node-specific PNG encode +
+  // fs.writeFile path (AC-04).
+  const rtResult = await readbackDrawRt(replay, drawIdx, device);
+  if (!rtResult.ok) {
+    return err(rtResult.error);
   }
-
-  // Find the color attachment texture handle at drawIdx
-  const drawInfo = extractDrawInfo(events, drawIdx);
-  if (drawInfo.colorAttachmentHandleId === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'a color attachment exists at the given drawIdx',
-        hint: `no color attachment found at drawIdx ${drawIdx}; the draw may be in a compute pass or the tape may have no render pass`,
-      }),
-    );
-  }
-
-  // Resolve the texture handle from the replay
-  const resolveHandle = (replay as unknown as { _resolveHandle(id: string): unknown })
-    ._resolveHandle;
-  if (typeof resolveHandle !== 'function') {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'replay to expose _resolveHandle method for RT readback',
-        hint: 'the Replay implementation must provide _resolveHandle accessor for the inspector',
-      }),
-    );
-  }
-
-  const texture = resolveHandle(drawInfo.colorAttachmentHandleId);
-  // biome-ignore lint/suspicious/noExplicitAny: texture is an opaque branded type from RHI
-  const tex = texture as any;
-  if (tex === undefined) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'color attachment texture was recreated by replay',
-        hint: `handleId '${drawInfo.colorAttachmentHandleId}' not found in replay handle map`,
-      }),
-    );
-  }
-
-  // Shared utility (round 2 m5b-1): resolve real texture dimensions by walking
-  // events to find the createTexture/createTextureView chain that produced the
-  // colorAttachment handleId. Avoids hard-coding 512x512.
-  const texSize = resolveAttachmentSize(events, drawInfo.colorAttachmentHandleId);
-  const texWidth = texSize.width;
-  const texHeight = texSize.height;
-
-  // Shared utility (round 2 m5b-1): read back tight-packed RGBA8 pixels from the
-  // GPU texture. This replaces the previous inline copyTextureToBuffer + mapAsync
-  // chain with the shared readbackTexturePixels helper.
-  let pixels: Uint8Array;
-  try {
-    pixels = await readbackTexturePixels(device, tex, texWidth, texHeight);
-  } catch (e) {
-    return err(
-      new DebugError({
-        code: 'rt-readback-failed',
-        expected: 'readbackTexturePixels to succeed',
-        hint: `GPU readback failed: ${String(e)}`,
-      }),
-    );
-  }
+  const { width: texWidth, height: texHeight, pixels } = rtResult.value;
 
   // Encode PNG (use lazy import of pngjs for tree-shake friendliness)
   const pngFilePath = path.join(inspectDir, `d${String(drawIdx).padStart(4, '0')}-rt0.png`);
 
   try {
-    // Use eval-based import to prevent static analysis by esbuild/tsup
-    // when rhi-debug is bundled by downstream packages (e.g., the app).
-    // pngjs is a Node.js library that uses 'util'/'stream' builtins
-    // which are unavailable in browser/neutral platform builds.
-    const { PNG } = (await new Function('specifier', 'return import(specifier)')(
-      'pngjs',
-    )) as typeof import('pngjs');
+    // pngjs is a Node.js library (util/stream builtins). This module is the
+    // node-only `./inspector` subpath -- never in the capture-browser import
+    // closure -- and pngjs is declared `external` in tsup.config.ts, so a
+    // plain dynamic import stays un-bundled in every build while still
+    // resolving under the vitest VM (the prior `new Function(...import...)`
+    // eval-shim threw ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING under vitest,
+    // blocking the offline-inspect dawn e2e; m4 / w20). The capture-browser
+    // tree-shake gate (AC-10) is unaffected -- it greps capture-browser.mjs,
+    // which does not import this module.
+    const { PNG } = (await import('pngjs')) as typeof import('pngjs');
     const png = new PNG({ width: texWidth, height: texHeight });
     // pixels is tight-packed RGBA (readbackTexturePixels already strips alignment padding)
     png.data.set(pixels);
@@ -698,6 +380,18 @@ export async function generatePassPng(
       }),
     );
   }
+
+  // Empty pass has no draw to step to — return a descriptive error.
+  if (passOffset.endDrawIdx < passOffset.startDrawIdx) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: `pass index ${passIdx} to contain at least one draw/dispatch`,
+        hint: `pass ${passIdx} is empty (no draw/dispatch calls); no RT to read back`,
+      }),
+    );
+  }
+
   const drawIdx = passOffset.endDrawIdx;
 
   // Step replay to end of pass

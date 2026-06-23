@@ -1,6 +1,6 @@
-// loader.test.ts — w4: loadGameProject 5 return paths
-import { describe, it, expect } from 'vitest';
-import { loadGameProject } from '../loader.js';
+// loader.test.ts — w4: loadGameProject 5 return paths + sync companion tests
+import { describe, expect, it } from 'vitest';
+import { loadGameProject, loadGameProjectSync, validateGameProject } from '../loader.js';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 function makeRead(content: string): (path: string) => Promise<string> {
@@ -61,11 +61,9 @@ describe('loadGameProject — return path 1: file missing', () => {
   });
 
   it('returns {ok:false} when read rejects', async () => {
-    const result = await loadGameProject(
-      async () => {
-        throw new Error('read failed');
-      },
-    );
+    const result = await loadGameProject(async () => {
+      throw new Error('read failed');
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('forge-missing');
@@ -163,6 +161,99 @@ describe('loadGameProject — missing required fields', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('forge-schema-invalid');
+    }
+  });
+});
+
+// ── validateGameProject: sync pure core ─────────────────────────────────────
+function makeSyncRead(content: string): (path: string) => string {
+  return (_path: string) => content;
+}
+
+function makeSyncReadThrow(err: Error): (path: string) => string {
+  return (_path: string) => {
+    throw err;
+  };
+}
+
+describe('validateGameProject — sync pure core', () => {
+  it('returns {ok:true} for valid forge.json', () => {
+    const result = validateGameProject(VALID_FORGE_JSON);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.id).toBe('test-game');
+      expect(result.value.name).toBe('Test Game');
+    }
+  });
+
+  it('returns {ok:false, code:forge-parse-failed} for invalid JSON', () => {
+    const result = validateGameProject(INVALID_JSON);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-parse-failed');
+    }
+  });
+
+  it('returns {ok:false, code:forge-unknown-field} when scenes[] present', () => {
+    const result = validateGameProject(WITH_SCENES_ARRAY);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-unknown-field');
+    }
+  });
+
+  it('returns {ok:false, code:forge-guid-malformed} for bad GUID', () => {
+    const result = validateGameProject(WITH_BAD_GUID);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-guid-malformed');
+    }
+  });
+
+  it('returns {ok:false, code:forge-schema-invalid} when schemaVersion missing', () => {
+    const noSchemaVersion = JSON.stringify({ id: 'test', name: 'Test' });
+    const result = validateGameProject(noSchemaVersion);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-schema-invalid');
+    }
+  });
+});
+
+// ── loadGameProjectSync: sync companion ─────────────────────────────────────
+describe('loadGameProjectSync — sync companion', () => {
+  it('returns {ok:true} for valid forge.json', () => {
+    const result = loadGameProjectSync(makeSyncRead(VALID_FORGE_JSON));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.id).toBe('test-game');
+      expect(result.value.name).toBe('Test Game');
+    }
+  });
+
+  it('returns {ok:false, code:forge-missing} when read throws', () => {
+    const notFound = new Error('ENOENT: no such file');
+    (notFound as NodeJS.ErrnoException).code = 'ENOENT';
+    const result = loadGameProjectSync(makeSyncReadThrow(notFound));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-missing');
+    }
+  });
+
+  it('returns {ok:false, code:forge-unknown-field} when scenes[] present', () => {
+    const result = loadGameProjectSync(makeSyncRead(WITH_SCENES_ARRAY));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-unknown-field');
+    }
+  });
+
+  it('returns {ok:false, code:forge-guid-malformed} for bad GUID', () => {
+    const result = loadGameProjectSync(makeSyncRead(WITH_BAD_GUID));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forge-guid-malformed');
     }
   });
 });

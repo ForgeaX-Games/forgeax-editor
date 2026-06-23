@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '@forgeax/editor-core';
@@ -116,6 +117,7 @@ function commonComponents(ids: EntityId[]): string[] {
 // Multi-select batch editor: one edit fans out to all selected as a single
 // transaction → one undo. The primary entity supplies the field layout.
 function BatchPanel({ ids }: { ids: EntityId[] }) {
+  const { t } = useTranslation();
   const primary = ids[ids.length - 1]!;
   const common = commonComponents(ids);
 
@@ -136,7 +138,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
   return (
     <div className="panel" data-testid="panel-inspector">
       <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Inspector · 批量 ({ids.length})</span>
+        <span>{t('editor.inspector.batchTitle', { count: ids.length })}</span>
         <button
           type="button"
           className="tbtn"
@@ -154,7 +156,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
         </button>
       </h3>
       <div className="field muted" data-testid="batch-note">
-        编辑下列共有属性将一次性应用到全部选中（单步撤销）。
+        {t('editor.inspector.batchNote')}
       </div>
       <div className="batch-members" data-testid="batch-members">
         {ids.map((id) => (
@@ -176,7 +178,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
       </div>
       {hasTransform && (
         <div className="field" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <label>对齐到 primary</label>
+          <label>{t('editor.inspector.alignToPrimary')}</label>
           {(['x', 'y', 'z'] as const).map((ax) => (
             <button key={ax} type="button" className="tbtn" data-testid={`batch-align-${ax}`} onClick={() => alignAxis(ax)}>
               {ax.toUpperCase()}
@@ -184,7 +186,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
           ))}
         </div>
       )}
-      {common.length === 0 && <div className="field muted">选中项无共有组件。</div>}
+      {common.length === 0 && <div className="field muted">{t('editor.inspector.noCommonComponents')}</div>}
       {common.map((comp) => {
         const value = bus.doc.entities[primary]?.components[comp];
         if (typeof value !== 'object' || value === null) return null;
@@ -255,6 +257,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
 // setComponent command (same path AI would use). Later this becomes
 // schema-driven (number→slider w/ min/max, color→swatch, asset→picker).
 export function InspectorPanel() {
+  const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
   const selList = useSelectionList();
@@ -326,7 +329,7 @@ export function InspectorPanel() {
             data-testid="insp-edit-source"
             onClick={() => node.source && openSourcePanel(node.source.plugin, node.source.docId)}
           >
-            编辑源
+            {t('editor.inspector.editSource')}
           </button>
         </div>
       )}
@@ -355,8 +358,8 @@ export function InspectorPanel() {
             className="compname"
             style={{ display: 'flex', justifyContent: 'space-between' }}
             onContextMenu={(e) => showContextMenu(e, [
-              { label: '引用到 Chat', onClick: () => requestRefComponent(sel, comp, node.components[comp]) },
-              { label: '复制 JSON', onClick: () => { void navigator.clipboard?.writeText(JSON.stringify({ [comp]: node.components[comp] }, null, 2)); } },
+              { label: t('editor.inspector.refToChat'), onClick: () => requestRefComponent(sel, comp, node.components[comp]) },
+              { label: t('editor.inspector.copyJson'), onClick: () => { void navigator.clipboard?.writeText(JSON.stringify({ [comp]: node.components[comp] }, null, 2)); } },
             ])}
           >
             <span style={{ cursor: 'pointer' }} data-testid={`insp-comp-toggle-${comp}`} onClick={() => toggleComp(comp)}>
@@ -504,7 +507,7 @@ export function InspectorPanel() {
                   const extra = Array.isArray(data.tracks) ? (data.tracks as unknown[]).length : 0;
                   out.push(
                     <div className="field muted" key="__tracksummary" data-testid="insp-track-summary" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span>channels: {legacy + extra}（keys/tracks 在 Timeline 编辑）</span>
+                      <span>{t('editor.inspector.trackChannels', { count: legacy + extra })}</span>
                       <button type="button" className="tbtn" data-testid="insp-open-timeline" title="open the Timeline panel to edit keyframes" onClick={() => focusPanel('timeline')}>
                         ⤳ Timeline
                       </button>

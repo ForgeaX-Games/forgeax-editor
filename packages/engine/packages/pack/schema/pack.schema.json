@@ -44,6 +44,11 @@
           "minLength": 1,
           "description": "Asset kind identifier, e.g. 'MaterialAsset'."
         },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional display name for this asset. Add-only field for backward compatibility with old pack files that lack it."
+        },
         "payload": {
           "type": "object",
           "description": "Serialized asset payload. Free-form object."

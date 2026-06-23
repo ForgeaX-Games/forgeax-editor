@@ -88,6 +88,12 @@ export const dashApi = {
       projectRoot: string;
       providers: string[];
       wsClients: number;
+      /** Process resource usage (status-bar RES chip). */
+      mem?: { rss: number; heapUsed: number };
+      /** Legacy event-bus stats — NOT returned by /api/health since the R2 bus
+       *  rewrite, so always undefined at runtime. Kept optional only so the
+       *  remaining `h.bus?.…` readers (Sidebar BusHealthLamp / TopBar / Dashboard)
+       *  compile; those are dead bus indicators outside the bottom status bar. */
       bus?: {
         pluginCount: number;
         brokenCount: number;

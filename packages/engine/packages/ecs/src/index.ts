@@ -132,18 +132,18 @@ export { Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials };
 /**
  * Two-axis phantom-branded handle: `Handle<TargetTag, Mode>`.
  *
- * - `Mode = 'managed'` — released by ECS on despawn / removeComponent / set
+ * - `Mode = 'unique'` — released by ECS on despawn / removeComponent / set
  *   (e.g. derived from schema vocab `ref<T>`).
- * - `Mode = 'unmanaged'` — external owner manages release; ECS treats as
+ * - `Mode = 'shared'` — external owner manages release; ECS treats as
  *   plain id (e.g. derived from schema vocab `handle<T>`,
- *   `MeshFilter.assetHandle: Handle<'MeshAsset','unmanaged'>`).
+ *   `MeshFilter.assetHandle: Handle<'MeshAsset','shared'>`).
  *
  * Cross-mode and cross-target assignment is a TS error (AC-02).
  *
  * Re-exported from `@forgeax/engine-types` (single SSOT physical location,
  * feat-20260517-handle-type-unify D-2 / D-3); the ecs barrel forwards a
  * narrow subset so `import { Handle } from '@forgeax/engine-ecs'` keeps
- * working for existing consumers. The `ManagedHandle<T>` alias + the
+ * working for existing consumers. The `UniqueHandle<T>` alias + the
  * ECS-internal `'String'` tag are deliberately NOT re-exported (AC-15
  * keeps the AI-facing barrel narrow). `TagOf` and `unwrapHandle` are also
  * not on the ecs barrel — they remain available from
@@ -153,12 +153,12 @@ export { Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials };
  * ```ts
  * import type { Handle } from '@forgeax/engine-ecs';
  *
- * declare const mesh: Handle<'MeshAsset', 'unmanaged'>;
- * // const mat: Handle<'MaterialAsset', 'unmanaged'> = mesh; // TS error
+ * declare const mesh: Handle<'MeshAsset', 'shared'>;
+ * // const mat: Handle<'MaterialAsset', 'shared'> = mesh; // TS error
  * ```
  */
-export type { Handle, UnmanagedHandle } from '@forgeax/engine-types';
-export { toManaged, toUnmanaged } from '@forgeax/engine-types';
+export type { Handle, SharedHandle } from '@forgeax/engine-types';
+export { toShared, toUnique } from '@forgeax/engine-types';
 /**
  * Opaque component token carrying name + schema type information.
  *
@@ -205,27 +205,12 @@ export type {
  * `undefined` when the name was never defined. Engine-internal consumers
  * (render extract / pick / glyph layout / asset-registry scene resolve) use
  * this to gate component lookups without a per-World registration ledger.
+ *
+ * {@link getRegisteredComponents} returns the read-only name -> token map for
+ * enumerating every defined component (mirrors `getRegisteredSystems`).
  */
-export { defineComponent, resolveComponent } from './component';
+export { defineComponent, getRegisteredComponents, resolveComponent } from './component';
 export type { ManagedArrayErrorEnvelope } from './errors';
-/**
- * ECS-managed handle store (M1). Owns the lifecycle of every
- * `Handle<T, 'managed'>` derived from `ref<T>` schema fields - World hooks
- * `despawn` / `removeComponent` / `set` into `release(handle)`.
- *
- * `World` owns one `ManagedRefStore` per instance, constructed eagerly in the
- * `World` constructor (always-on since feat-20260515-string-managed-collapse).
- * Production code rarely touches the store directly - schema-vocab `ref<T>`
- * fields make `world.get(e, C).<refField>` the canonical access path.
- *
- * @example
- * ```ts
- * const Material = defineComponent('Material', { handle: 'ref<MaterialPayload>' });
- * const world = new World();
- * // World owns the ManagedRefStore internally; AI users do not wire it.
- * ```
- */
-export { ManagedRefStore } from './managed-ref-store';
 /**
  * Query descriptor for With/Without archetype filtering.
  *
@@ -235,6 +220,52 @@ export { ManagedRefStore } from './managed-ref-store';
  * ```
  */
 export type { ColumnBundle, NestedColumnBundle, QueryDescriptor, QueryState } from './query';
+/**
+ * ECS-aware refcount-tracked handle store (M3). Owns the lifecycle of every
+ * `Handle<T, 'shared'>` derived from `shared<T>` schema fields. The producer
+ * (typically AssetRegistry) calls `alloc` once (alloc-grant rc=1); each
+ * additional holder retains; release decrements; rc 1 -> 0 fires the
+ * per-handle `onLastRelease` deleter (passed as the third `alloc` argument,
+ * mirroring `UniqueRefStore.alloc`) and drops the slot. There is no global
+ * listener — the release signal is per-handle (M6 D-10).
+ *
+ * D-15: the store manages ONLY user-tier slots (`>= BUILTIN_BASE`); builtin
+ * asset payloads are process-static in `BuiltinAssetRegistry`
+ * (@forgeax/engine-runtime) and never reference-counted. Passing a builtin
+ * slot fails fast with `BuiltinSlotNotOwnedError`.
+ *
+ * `World` owns one `SharedRefStore` per instance, exposed as
+ * `world.sharedRefs`. The schema-field write barrier (retain on spawn / set,
+ * release on despawn / removeComponent) short-circuits on builtin slots.
+ *
+ * @example
+ * ```ts
+ * const world = new World();
+ * const handle = world.allocSharedRef('MaterialAsset', payload, (p) => dropGpu(p));
+ * const M = defineComponent('M', { asset: 'shared<MaterialAsset>' });
+ * world.spawn({ component: M, data: { asset: handle } });
+ * // the per-handle deleter fires once when this handle's rc reaches 0.
+ * ```
+ */
+export { SharedRefStore } from './shared-ref-store';
+/**
+ * ECS-managed handle store (M1). Owns the lifecycle of every
+ * `Handle<T, 'unique'>` derived from `ref<T>` schema fields - World hooks
+ * `despawn` / `removeComponent` / `set` into `release(handle)`.
+ *
+ * `World` owns one `UniqueRefStore` per instance, constructed eagerly in the
+ * `World` constructor (always-on since feat-20260515-string-managed-collapse).
+ * Production code rarely touches the store directly - schema-vocab `ref<T>`
+ * fields make `world.get(e, C).<refField>` the canonical access path.
+ *
+ * @example
+ * ```ts
+ * const Material = defineComponent('Material', { handle: 'unique<MaterialPayload>' });
+ * const world = new World();
+ * // World owns the UniqueRefStore internally; AI users do not wire it.
+ * ```
+ */
+export { UniqueRefStore } from './unique-ref-store';
 
 /**
  * Component data bundle for spawn/addComponent: pairs a component token with initial values.
@@ -267,7 +298,7 @@ export { World } from './world';
  *
  * @example
  * ```ts
- * fn: (results, commands) => {
+ * fn: (world, results, commands) => {
  *   const e = commands.spawn({ component: Bullet, data: { dmg: 10 } });
  *   commands.despawn(oldEntity);
  * }
@@ -283,11 +314,29 @@ export type { CommandBuffer } from './commands';
  * world.addSystem({
  *   name: 'movement',
  *   queries: [{ with: [Position, Velocity] }],
- *   fn: (results, commands) => { ... },
+ *   fn: (world, results, commands) => { ... },
  * });
  * ```
  */
-export type { SystemDescriptor } from './schedule';
+export type { SystemDescriptor, SystemHandle } from './schedule';
+
+/**
+ * Define a system at module level + register it globally ("define ==
+ * register"). Returns a {@link SystemHandle} token consumed directly by
+ * `world.addSystem(token)`. {@link getRegisteredSystems} enumerates all
+ * defined systems by name.
+ *
+ * @example
+ * ```ts
+ * const Move = defineSystem({
+ *   name: 'movement',
+ *   queries: [{ with: [Position, Velocity] }],
+ *   fn: (world, results) => { ... },
+ * });
+ * world.addSystem(Move);
+ * ```
+ */
+export { defineSystem, getRegisteredSystems } from './schedule';
 
 /**
  * Type alias for the `fn` field of `SystemDescriptor`. Lets typed console
@@ -298,7 +347,7 @@ export type { SystemDescriptor } from './schedule';
  * @example
  * ```ts
  * import type { SystemFn } from '@forgeax/engine-ecs';
- * const move: SystemFn = (results, commands) => { ... };
+ * const move: SystemFn = (world, results, commands) => { ... };
  * ```
  */
 export type SystemFn<
@@ -426,6 +475,7 @@ export type {
 } from './errors';
 export {
   ArrayPopEmptyError,
+  BuiltinSlotNotOwnedError,
   CardinalityExceededError,
   ComponentAlreadyPresentError,
   ComponentNotDefinedError,
@@ -438,8 +488,6 @@ export {
   ManagedArrayElementTypeNotAllowedError,
   ManagedBufferOutOfBoundsError,
   ManagedBufferShrinkNotSupportedError,
-  ManagedRefDoubleReleaseError,
-  ManagedRefReleasedError,
   RelationshipDetachMismatchError,
   RelationshipMirrorComponentNotRegisteredError,
   RelationshipMirrorFieldTypeMismatchError,
@@ -449,10 +497,14 @@ export {
   ResourceNotFoundError,
   ScheduleMutationError,
   SchemaUnsupportedFieldError,
+  SharedRefDoubleReleaseError,
+  SharedRefReleasedError,
   SpawnDataUnknownFieldError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,
   StaleEntityError,
+  UniqueRefDoubleReleaseError,
+  UniqueRefReleasedError,
 } from './errors';
 
 // ────────────────────────────────────────────────────────────────────────────

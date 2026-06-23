@@ -15,6 +15,7 @@ import {
   CORE_WORKSPACE_IDS,
 } from '../../lib/workspaces';
 import { useAppStore } from '../../store';
+import { useTranslation } from '@/i18n';
 import { FloatingMenu } from '../ui/FloatingMenu';
 import { buildWorkspacePill, REFERENCE_LABEL } from '../Composer/referenceRegistry';
 
@@ -26,6 +27,7 @@ export function modeForWorkspace(id: string): 'preview' | 'workbench' | 'edit' {
 }
 
 export function WorkspaceTabs({ setMode }: { setMode: (m: 'preview' | 'workbench' | 'edit') => void }) {
+  const { t } = useTranslation();
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => subscribeWorkspaces(bump), []);
 
@@ -146,7 +148,7 @@ export function WorkspaceTabs({ setMode }: { setMode: (m: 'preview' | 'workbench
           </button>
         );
       })}
-      <button className="ws-add-btn" title="新建工作区" onClick={handleAdd}>
+      <button className="ws-add-btn" title={t('workspaceTabs.addWorkspace')} onClick={handleAdd}>
         <Plus size={11} />
       </button>
     </div>
@@ -162,7 +164,7 @@ export function WorkspaceTabs({ setMode }: { setMode: (m: 'preview' | 'workbench
             className="ws-ctx-item"
             onClick={() => { startRename(ctxWs.id, ctxWs.name); setCtxMenu(null); }}
           >
-            重命名
+            {t('workspaceTabs.rename')}
           </button>
         )}
         <button
@@ -177,7 +179,7 @@ export function WorkspaceTabs({ setMode }: { setMode: (m: 'preview' | 'workbench
             className="ws-ctx-item ws-ctx-item--danger"
             onClick={() => { deleteWorkspace(ctxWs.id); setCtxMenu(null); }}
           >
-            删除工作区
+            {t('workspaceTabs.deleteWorkspace')}
           </button>
         )}
       </FloatingMenu>

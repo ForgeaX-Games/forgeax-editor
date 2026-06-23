@@ -223,62 +223,53 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     expect(device).toBeDefined();
     if (device === undefined) return;
 
+    const world = new World();
+
     // Entity A: schema-driven (PBR) material with bright-green chequer
     // texture. If the texture leaks onto B, B's white pixels turn
-    // greenish. feat-20260523 M8-T04: paramValues.baseColorTexture
-    // carries the GUID; extract resolves it via assets.resolveGuid.
+    // greenish. feat-20260614 M8: paramValues.baseColorTexture carries the
+    // GUID; the extract stage resolves it via assets.lookup(guid) then mints a
+    // user-tier column handle via world.allocSharedRef.
     const texGreenGuid = AssetGuid.random();
-    const texGreen = assets.registerWithGuid<TextureAsset>(
-      texGreenGuid,
-      makeChequerTexture(0, 200, 0),
-    );
-    void texGreen;
-    const matA = assets
-      .register<MaterialAsset>({
-        kind: 'material',
-        passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::default-standard-pbr',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
-          },
-        ],
-        paramValues: {
-          baseColor: [1, 1, 1],
-          metallic: 0,
-          roughness: 0.5,
-          baseColorTexture: AssetGuid.format(texGreenGuid),
+    assets.catalog(texGreenGuid, makeChequerTexture(0, 200, 0));
+    const matA = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-standard-pbr',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
         },
-      })
-      .unwrap();
+      ],
+      paramValues: {
+        baseColor: [1, 1, 1],
+        metallic: 0,
+        roughness: 0.5,
+        baseColorTexture: AssetGuid.format(texGreenGuid),
+      },
+    });
 
     // Entity B: unlit solid white, no texture.
-    const matB = assets
-      .register<MaterialAsset>({
-        kind: 'material',
-        passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::default-unlit',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
-          },
-        ],
-        paramValues: { baseColor: [1, 1, 1, 1] },
-      })
-      .unwrap();
+    const matB = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-unlit',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      ],
+      paramValues: { baseColor: [1, 1, 1, 1] },
+    });
 
     const cubeRes = createBoxGeometry(1, 1, 1);
     expect(cubeRes.ok).toBe(true);
     if (!cubeRes.ok) return;
     const cubeAsset: MeshAsset = cubeRes.value;
-    const cubeGuidA = AssetGuid.random();
-    const cubeGuidB = AssetGuid.random();
-    const cubeHandleA = assets.registerWithGuid<MeshAsset>(cubeGuidA, cubeAsset);
-    const cubeHandleB = assets.registerWithGuid<MeshAsset>(cubeGuidB, cubeAsset);
-
-    const world = new World();
+    const cubeHandleA = world.allocSharedRef('MeshAsset', cubeAsset);
+    const cubeHandleB = world.allocSharedRef('MeshAsset', cubeAsset);
 
     // A left, B right. Both half-scale so they don't overlap.
     world.spawn(
@@ -467,58 +458,50 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     expect(device).toBeDefined();
     if (device === undefined) return;
 
-    // feat-20260523 M8-T04: schema-driven register form with GUID texture ref.
-    const texGreenGuid2 = AssetGuid.random();
-    const texGreen = assets.registerWithGuid<TextureAsset>(
-      texGreenGuid2,
-      makeChequerTexture(0, 200, 0),
-    );
-    void texGreen;
-    const matA = assets
-      .register<MaterialAsset>({
-        kind: 'material',
-        passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::default-standard-pbr',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
-          },
-        ],
-        paramValues: {
-          baseColor: [1, 1, 1],
-          metallic: 0,
-          roughness: 0.5,
-          baseColorTexture: AssetGuid.format(texGreenGuid2),
-        },
-      })
-      .unwrap();
+    const world = new World();
 
-    const matB = assets
-      .register<MaterialAsset>({
-        kind: 'material',
-        passes: [
-          {
-            name: 'Forward',
-            shader: 'forgeax::default-unlit',
-            tags: { LightMode: 'Forward' },
-            queue: 2000,
-          },
-        ],
-        paramValues: { baseColor: [1, 1, 1, 1] },
-      })
-      .unwrap();
+    // feat-20260614 M8: schema-driven material with GUID texture ref; the
+    // texture POD is catalogued (GUID->payload SSOT) and the extract stage
+    // resolves it to a user-tier column handle via world.allocSharedRef.
+    const texGreenGuid2 = AssetGuid.random();
+    assets.catalog(texGreenGuid2, makeChequerTexture(0, 200, 0));
+    const matA = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-standard-pbr',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      ],
+      paramValues: {
+        baseColor: [1, 1, 1],
+        metallic: 0,
+        roughness: 0.5,
+        baseColorTexture: AssetGuid.format(texGreenGuid2),
+      },
+    });
+
+    const matB = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+      kind: 'material',
+      passes: [
+        {
+          name: 'Forward',
+          shader: 'forgeax::default-unlit',
+          tags: { LightMode: 'Forward' },
+          queue: 2000,
+        },
+      ],
+      paramValues: { baseColor: [1, 1, 1, 1] },
+    });
 
     const cubeRes = createBoxGeometry(1, 1, 1);
     expect(cubeRes.ok).toBe(true);
     if (!cubeRes.ok) return;
     const cubeAsset: MeshAsset = cubeRes.value;
-    const cubeGuidA = AssetGuid.random();
-    const cubeGuidB = AssetGuid.random();
-    const cubeHandleA = assets.registerWithGuid<MeshAsset>(cubeGuidA, cubeAsset);
-    const cubeHandleB = assets.registerWithGuid<MeshAsset>(cubeGuidB, cubeAsset);
-
-    const world = new World();
+    const cubeHandleA = world.allocSharedRef('MeshAsset', cubeAsset);
+    const cubeHandleB = world.allocSharedRef('MeshAsset', cubeAsset);
 
     // B first (swap order). B right, A left.
     world.spawn(

@@ -40,7 +40,6 @@ import {
   type LocalEntityId,
   type SceneAsset,
   type SceneEntity,
-  toUnmanaged,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
@@ -75,30 +74,30 @@ import {
   RelationshipSelfCycleError,
   World,
 } from '../index';
-import { ManagedRefStore } from '../managed-ref-store';
 import type { ColumnBundle } from '../query';
+import { UniqueRefStore } from '../unique-ref-store';
 import { handleNumeric } from './utils/handle-numeric';
 
 {
   // --- from world-alloc-managed-ref.test.ts ---
-  describe('feat-20260528 M1 t2 World.allocManagedRef() public API', () => {
-    it('allocManagedRef returns a branded Handle', () => {
+  describe('feat-20260528 M1 t2 World.allocUniqueRef() public API', () => {
+    it('allocUniqueRef returns a branded Handle', () => {
       const world = new World();
-      defineComponent('RefTest', { payload: { type: 'ref<Test>' } });
+      defineComponent('RefTest', { payload: { type: 'unique<Test>' } });
 
-      const handle = world.allocManagedRef<'Test', { id: number }>('Test', { id: 42 });
+      const handle = world.allocUniqueRef<'Test', { id: number }>('Test', { id: 42 });
       expect(typeof handle).toBe('number');
       expect(handle).not.toBe(0);
     });
 
-    it('allocManagedRef with onRelease: despawn entity carrying ref field triggers callback', () => {
+    it('allocUniqueRef with onRelease: despawn entity carrying ref field triggers callback', () => {
       const world = new World();
-      const Holder = defineComponent('Holder', { value: { type: 'ref<Test>' } });
+      const Holder = defineComponent('Holder', { value: { type: 'unique<Test>' } });
 
       let released = false;
       let releasedPayload: { id: number } | undefined;
 
-      const handle = world.allocManagedRef<'Test', { id: number }>('Test', { id: 7 }, (p) => {
+      const handle = world.allocUniqueRef<'Test', { id: number }>('Test', { id: 7 }, (p) => {
         released = true;
         releasedPayload = p;
       });
@@ -118,16 +117,16 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(releasedPayload).toEqual({ id: 7 });
     });
 
-    it('allocManagedRef onRelease: set field overwrite triggers callback for old handle', () => {
+    it('allocUniqueRef onRelease: set field overwrite triggers callback for old handle', () => {
       const world = new World();
-      const Holder = defineComponent('Holder2', { value: { type: 'ref<Test>' } });
+      const Holder = defineComponent('Holder2', { value: { type: 'unique<Test>' } });
 
       const released: number[] = [];
 
-      const h1 = world.allocManagedRef<'Test', { id: number }>('Test', { id: 1 }, (p) => {
+      const h1 = world.allocUniqueRef<'Test', { id: number }>('Test', { id: 1 }, (p) => {
         released.push(p.id);
       });
-      const h2 = world.allocManagedRef<'Test', { id: number }>('Test', { id: 2 }, () => {});
+      const h2 = world.allocUniqueRef<'Test', { id: number }>('Test', { id: 2 }, () => {});
 
       const entity = world
         .spawn({
@@ -141,11 +140,11 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(released).toEqual([1]);
     });
 
-    it('allocManagedRef handle identity is preserved through world.get', () => {
+    it('allocUniqueRef handle identity is preserved through world.get', () => {
       const world = new World();
-      const Holder = defineComponent('Holder3', { value: { type: 'ref<Test>' } });
+      const Holder = defineComponent('Holder3', { value: { type: 'unique<Test>' } });
 
-      const handle = world.allocManagedRef<'Test', string>('Test', 'hello-world');
+      const handle = world.allocUniqueRef<'Test', string>('Test', 'hello-world');
 
       const entity = world
         .spawn({
@@ -163,13 +162,13 @@ import { handleNumeric } from './utils/handle-numeric';
       }
     });
 
-    it('allocManagedRef onRelease: removeComponent triggers callback', () => {
+    it('allocUniqueRef onRelease: removeComponent triggers callback', () => {
       const world = new World();
-      const Holder = defineComponent('Holder4', { value: { type: 'ref<Test>' } });
+      const Holder = defineComponent('Holder4', { value: { type: 'unique<Test>' } });
 
       let released = false;
 
-      const handle = world.allocManagedRef<'Test', string>('Test', 'payload', () => {
+      const handle = world.allocUniqueRef<'Test', string>('Test', 'payload', () => {
         released = true;
       });
 
@@ -184,7 +183,7 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(released).toBe(true);
     });
 
-    it('allocManagedRef double-release: despawn after set-overwrite does not double-fire', () => {
+    it('allocUniqueRef double-release: despawn after set-overwrite does not double-fire', () => {
       // §contract — managed handles are operational, not persistent.
       // Spec: docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md §3.3.
       // After release-realloc the same handle u32 silently resolves to the
@@ -195,14 +194,14 @@ import { handleNumeric } from './utils/handle-numeric';
       // the cb (payload-presence detection); the appended stale-resolve
       // assertion exercises the silent-resolve branch directly.
       const world = new World();
-      const Holder = defineComponent('Holder5', { value: { type: 'ref<Test>' } });
+      const Holder = defineComponent('Holder5', { value: { type: 'unique<Test>' } });
 
       let callCount = 0;
 
-      const h1 = world.allocManagedRef<'Test', string>('Test', 'first', () => {
+      const h1 = world.allocUniqueRef<'Test', string>('Test', 'first', () => {
         callCount++;
       });
-      const h2 = world.allocManagedRef<'Test', string>('Test', 'second', () => {});
+      const h2 = world.allocUniqueRef<'Test', string>('Test', 'second', () => {});
 
       const entity = world
         .spawn({
@@ -216,14 +215,14 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(callCount).toBe(1);
 
       // Silent stale-resolve (spec §3.3): h1 is released but h2 is still live;
-      // freeSlots = [h1.slot]. A fresh allocManagedRef pops h1's slot via LIFO,
+      // freeSlots = [h1.slot]. A fresh allocUniqueRef pops h1's slot via LIFO,
       // making the new handle equal h1 numerically. Resolving the OLD h1 then
       // returns the NEW payload with no error — by-design (no gen tag; no
       // stale-slot detection at runtime).
-      const h3 = world.allocManagedRef<'Test', string>('Test', 'third');
+      const h3 = world.allocUniqueRef<'Test', string>('Test', 'third');
       expect(h3 as unknown as number).toBe(h1 as unknown as number);
-      // biome-ignore lint/suspicious/noExplicitAny: targeted private read mirrors managed-ref-store.unit.test.ts
-      const store = (world as any).managedRefs as ManagedRefStore;
+      // biome-ignore lint/suspicious/noExplicitAny: targeted private read mirrors unique-ref-store.unit.test.ts
+      const store = (world as any).uniqueRefs as UniqueRefStore;
       const staleResolve = store.resolve<'Test', string>(h1);
       expect(staleResolve.ok).toBe(true);
       if (staleResolve.ok) {
@@ -247,7 +246,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.spawn({ component: Pos, data: { x: 10, y: 20 } });
         },
       });
@@ -255,7 +254,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'counter',
         queries: [{ with: [Pos, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           for (const result of queryResults) {
             for (const bundle of result) {
               entityCountDuringSystem += bundle.Entity.self.length;
@@ -285,7 +284,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'destroyer',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.despawn(e);
         },
       });
@@ -293,7 +292,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'checker',
         queries: [{ with: [Tag, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           for (const result of queryResults) {
             for (const bundle of result) {
               if (bundle.Entity.self.length > 0) {
@@ -319,7 +318,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'adder',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.addComponent(e, { component: Vel, data: { vx: 5 } });
         },
       });
@@ -341,7 +340,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'remover',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.removeComponent(e, Vel);
         },
       });
@@ -361,7 +360,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           pendingEntity = commands.spawn({ component: Pos, data: { x: 99 } });
           // The handle should be a valid number
           expect(typeof pendingEntity).toBe('number');
@@ -381,7 +380,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'checker',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           const pending = commands.spawn({ component: Pos, data: { x: 1 } });
           expect(commands.isDeferred(pending)).toBe(true);
         },
@@ -398,7 +397,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           pendingEntity = commands.spawn({ component: Pos, data: { x: 42 } });
         },
       });
@@ -421,7 +420,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'multiSpawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.spawn({ component: Tag, data: { v: 1 } });
           commands.spawn({ component: Tag, data: { v: 2 } });
           commands.spawn({ component: Tag, data: { v: 3 } });
@@ -435,7 +434,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'counter',
         queries: [{ with: [Tag, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           for (const result of queryResults) {
             for (const bundle of result) {
               count += bundle.Entity.self.length;
@@ -458,7 +457,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.spawn({ component: Pos, data: { x: 1 } });
         },
       });
@@ -471,7 +470,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'verifier',
         queries: [{ with: [Pos, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           for (const result of queryResults) {
             for (const bundle of result) {
               found += bundle.Entity.self.length;
@@ -577,7 +576,7 @@ import { handleNumeric } from './utils/handle-numeric';
     });
 
     it('covers the 6 vocab-family keys', () => {
-      for (const k of ['entity', 'string', 'buffer', 'ref', 'handle', 'array']) {
+      for (const k of ['entity', 'string', 'buffer', 'ref', 'shared', 'array']) {
         expect(TYPE_METADATA[k]).toBeDefined();
       }
     });
@@ -915,7 +914,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'ac14-spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           pending = commands.spawn({ component: Tag, data: {} });
           // Inside the system, before flush: the slot is pending, so not live.
           // biome-ignore lint/style/noNonNullAssertion: assigned on the line above
@@ -1537,6 +1536,7 @@ import { handleNumeric } from './utils/handle-numeric';
         mirror: 'DefOrderChildren1',
         field: 'entities',
         exclusive: true,
+        linkedSpawn: true,
       });
     });
 
@@ -1641,6 +1641,7 @@ import { handleNumeric } from './utils/handle-numeric';
         mirror: 'RelChildren1',
         field: 'entities',
         exclusive: true,
+        linkedSpawn: true,
       });
     });
 
@@ -1682,7 +1683,7 @@ import { handleNumeric } from './utils/handle-numeric';
         { parent: { type: 'entity' } },
         { relationship: { mirror: 'RelChildren5', field: 'entities', exclusive: true } },
       );
-      expect(ChildOf.relationship?.linkedSpawn ?? false).toBe(false);
+      expect(ChildOf.relationship?.linkedSpawn ?? false).toBe(true);
     });
 
     it('relationship.linkedSpawn can be set to true explicitly', () => {
@@ -2649,7 +2650,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'deferSpawn',
         queries: [],
-        fn: (_results, commands) => {
+        fn: (_world, _results, commands) => {
           pendingEntity = commands.spawn({ component: A, data: { v: 42 } });
           expect(commands.isDeferred(pendingEntity)).toBe(true);
         },
@@ -2780,7 +2781,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'movement',
         queries: [{ with: [Position, Velocity, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
               const posFields = bundle.IntPos as Record<string, Float32Array>;
@@ -2808,7 +2809,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'despawner',
         queries: [{ with: [Position] }],
-        fn: (_queryResults, commands) => {
+        fn: (_world, _queryResults, commands) => {
           // Deferred despawn e2
           commands.despawn(e2);
         },
@@ -2842,7 +2843,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           if (frame === 0) {
             commands.spawn({ component: Tag, data: { value: 42 } });
           }
@@ -2853,7 +2854,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'counter',
         queries: [{ with: [Tag, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           spawnedCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -2919,7 +2920,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'mixedReader',
         queries: [{ with: [Position, Health, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           bundles.length = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -2978,7 +2979,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'tagQuery',
         queries: [{ with: [Position, Player, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           matchCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -2998,7 +2999,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'excludeTag',
         queries: [{ with: [Position, EntityComponent], without: [Player] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           excludedCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -3034,7 +3035,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'pvCounter',
         queries: [{ with: [Position, Velocity, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           pvCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -3049,7 +3050,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'pvgCounter',
         queries: [{ with: [Position, Velocity, Gravity, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           pvgCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -3096,7 +3097,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'aNotB',
         queries: [{ with: [A, EntityComponent], without: [B] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           aNotBCount = 0;
           for (const archetypeBundles of queryResults) {
             for (const bundle of archetypeBundles) {
@@ -3146,7 +3147,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'posReader',
         queries: [{ with: [Pos, EntityComponent] }],
-        fn: (queryResults) => {
+        fn: (_world, queryResults) => {
           totalPosEntities = 0;
           posValues = [];
           for (const archetypeBundles of queryResults) {
@@ -3172,7 +3173,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'modifier',
         queries: [],
-        fn: (_q, commands) => {
+        fn: (_world, _q, commands) => {
           commands.despawn(e2);
           commands.addComponent(e1, { component: Acc, data: { a: 100 } });
         },
@@ -3192,28 +3193,28 @@ import { handleNumeric } from './utils/handle-numeric';
 {
   // --- from world-managed-refs-non-null.test.ts ---
   interface WorldInternals {
-    managedRefs: ManagedRefStore | null;
+    uniqueRefs: UniqueRefStore | null;
   }
 
-  describe('w1 - World.managedRefs non-null after construction (AC-08)', () => {
-    it('new World() owns a non-null ManagedRefStore without external store wiring', () => {
+  describe('w1 - World.uniqueRefs non-null after construction (AC-08)', () => {
+    it('new World() owns a non-null UniqueRefStore without external store wiring', () => {
       const w = new World();
-      const refs = (w as unknown as WorldInternals).managedRefs;
+      const refs = (w as unknown as WorldInternals).uniqueRefs;
       expect(refs).not.toBeNull();
-      expect(refs).toBeInstanceOf(ManagedRefStore);
+      expect(refs).toBeInstanceOf(UniqueRefStore);
     });
 
     it('spawn + despawn on a ref<T> field dispatches without external store wiring', () => {
       // Behavioural counterpart: the despawn release loop must traverse the
-      // internal managedRefs without throwing. Before w2 the managedRefs slot
+      // internal uniqueRefs without throwing. Before w2 the uniqueRefs slot
       // is null and `releaseManagedRefHandle` short-circuits silently, so this
       // case alone does not red-gate the contract; the structural assertion
       // above is the load-bearing gate. Kept here so the file documents the
       // post-w2 dispatch path AI users actually exercise.
-      const Mat = defineComponent('Mat', { handle: { type: 'ref<MaterialAsset>' } });
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
-      const refs = (w as unknown as WorldInternals).managedRefs;
-      if (refs === null) throw new Error('AC-08 violated: managedRefs is null after new World()');
+      const refs = (w as unknown as WorldInternals).uniqueRefs;
+      if (refs === null) throw new Error('AC-08 violated: uniqueRefs is null after new World()');
       const h = refs.alloc('MaterialAsset', { id: 1 });
       const spawnR = w.spawn({ component: Mat, data: { handle: h } });
       if (!spawnR.ok) throw new Error('expected spawn ok');
@@ -3222,7 +3223,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const resolveR = refs.resolve(h);
       expect(resolveR.ok).toBe(false);
       if (resolveR.ok) throw new Error('expected released');
-      expect(resolveR.error.code).toBe('managed-ref-released');
+      expect(resolveR.error.code).toBe('unique-ref-released');
     });
   });
 }
@@ -3311,14 +3312,14 @@ import { handleNumeric } from './utils/handle-numeric';
 {
   // --- from world-spawn-defaults.test.ts ---
   // M3 ECS-fication: dead world.sceneInstances.* migrated to instantiateScene +
-  // registerSceneAsset (allocManagedRef + toUnmanaged) + read mapping via
+  // registerSceneAsset (allocUniqueRef + toShared) + read mapping via
   // SceneInstance component on synthetic root. SceneInstance must be defined
   // (matches the runtime schema in @forgeax/engine-runtime) so instantiateScene
   // can resolve it by name.
   defineComponent('SceneInstance', {
-    source: { type: 'handle<SceneAsset>' },
+    source: { type: 'shared<SceneAsset>' },
     mapping: { type: 'array<entity>' },
-    state: { type: 'ref<SceneInstanceState>' },
+    state: { type: 'unique<SceneInstanceState>' },
   });
 
   function localId(n: number): LocalEntityId {
@@ -3329,9 +3330,8 @@ import { handleNumeric } from './utils/handle-numeric';
     return { kind: 'scene', entities: nodes };
   }
 
-  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
-    const managed = world.allocManagedRef('SceneAsset', asset);
-    return toUnmanaged<'SceneAsset'>(managed as unknown as number);
+  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+    return world.allocSharedRef('SceneAsset', asset);
   }
 
   function firstSceneEntity(world: World, root: EntityHandle): EntityHandle {
@@ -3499,19 +3499,19 @@ import { handleNumeric } from './utils/handle-numeric';
     //                            resolves to `Entity | null` -- the read
     //                            path returns null when the raw equals
     //                            ENTITY_NULL_RAW.
-    //   ref<MaterialAsset>    -> u32 column (managedRefs handle); layer-3
+    //   ref<MaterialAsset>    -> u32 column (uniqueRefs handle); layer-3
     //                            default 0 (NULL sentinel managedRef
     //                            handle). The read path surfaces the raw
     //                            u32 directly (not a resolved payload --
-    //                            FieldValueType<'ref<T>'> = Handle<T,
-    //                            'managed'>, a u32 brand). spawn vs
+    //                            FieldValueType<'unique<T>'> = Handle<T,
+    //                            'unique'>, a u32 brand). spawn vs
     //                            SceneAsset.instantiate must produce the
     //                            SAME u32 column value (0) for the
     //                            byte-equivalence contract to hold.
     const Brands = defineComponent('t10-brands', {
-      handle: { type: 'handle<MeshAsset>' },
+      handle: { type: 'shared<MeshAsset>' },
       parent: { type: 'entity' },
-      mat: { type: 'ref<MaterialAsset>' },
+      mat: { type: 'unique<MaterialAsset>' },
     });
 
     it('AC-10 brand-null — spawn data: {} produces NULL sentinel column state byte-equivalent to SceneAsset.instantiate', () => {
@@ -3546,7 +3546,7 @@ import { handleNumeric } from './utils/handle-numeric';
       void ENTITY_NULL_RAW; // anchor the constant the contract relies on.
 
       // ref<MaterialAsset>: column u32 default 0 (NULL managedRef
-      // handle). FieldValueType<'ref<T>'> = Handle<T, 'managed'> --
+      // handle). FieldValueType<'unique<T>'> = Handle<T, 'unique'> --
       // the read returns the raw u32 directly (no resolve()). Both
       // routes must produce the SAME u32 (0) for byte-equivalence.
       expect(unwrapHandle(spawnRow.mat)).toBe(0);
@@ -3590,7 +3590,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'deferred-spawner',
         queries: [],
-        fn: (_q, commands) => {
+        fn: (_world, _q, commands) => {
           // Deferred spawn returns a pending Entity; materialized on flush.
           pending = commands.spawn({ component: Hp, data: { current: 7, max: 9 } });
         },
@@ -3626,11 +3626,11 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 
-  describe('AC-05 — EcsErrorCode is a closed union of exactly 32 members', () => {
-    it('compile-time member count is 32 (bug-20260615 spawn-data-unknown-field-fail-fast adds the spawn-data-unknown-field code; previous baseline 31 from tweak-20260612 ecs-concept-compression)', () => {
+  describe('AC-05 — EcsErrorCode is a closed union of exactly 35 members', () => {
+    it('compile-time member count is 35 (feat-20260614 ecs-shared-component-and-unique-rename M6 D-15 adds builtin-slot-not-owned; M3 added shared-ref-released + shared-ref-double-release; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
       // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 32.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<32>();
+      // compile error here, falsifiable by changing the literal 35.
+      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<35>();
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {
@@ -3695,7 +3695,7 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 
   describe('layer-3 typeDefault — vocab arms', () => {
-    it("'string' -> 0 (managedRefs handle slot)", () => {
+    it("'string' -> 0 (uniqueRefs handle slot)", () => {
       expect(typeDefault('string')).toBe(0);
     });
     it("'entity' -> ENTITY_NULL_RAW", () => {
@@ -3719,11 +3719,11 @@ import { handleNumeric } from './utils/handle-numeric';
     it("'buffer<64>' -> 0 (fixed-byte inline stride-N column zeroed row)", () => {
       expect(typeDefault('buffer<64>')).toBe(0);
     });
-    it("'ref<MaterialAsset>' -> 0 (ManagedRefStore handle slot)", () => {
-      expect(typeDefault('ref<MaterialAsset>')).toBe(0);
+    it("'unique<MaterialAsset>' -> 0 (UniqueRefStore handle slot)", () => {
+      expect(typeDefault('unique<MaterialAsset>')).toBe(0);
     });
-    it("'handle<MeshAsset>' -> 0 (unmanaged handle phantom u32)", () => {
-      expect(typeDefault('handle<MeshAsset>')).toBe(0);
+    it("'shared<MeshAsset>' -> 0 (unmanaged handle phantom u32)", () => {
+      expect(typeDefault('shared<MeshAsset>')).toBe(0);
     });
   });
 
@@ -3760,8 +3760,8 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('brand-class field (handle<T>) — schema-nullable gets layer-3 NULL sentinel 0', () => {
       const C = defineComponent('M', {
-        mesh: { type: 'handle<MeshAsset>' },
-        mat: { type: 'ref<MaterialAsset>' },
+        mesh: { type: 'shared<MeshAsset>' },
+        mat: { type: 'unique<MaterialAsset>' },
       });
       const out = fillComponentDefaults(C, {});
       expect(out.mesh).toBe(0);
@@ -3877,7 +3877,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.addSystem({
         name: 'rsd-spawner',
         queries: [],
-        fn: (_queries, commands) => {
+        fn: (_world, _queries, commands) => {
           commands.spawn({ component: ChildOf, data: { parent } });
         },
       });
@@ -3949,7 +3949,7 @@ import { handleNumeric } from './utils/handle-numeric';
         world.addSystem({
           name: 'defer-spawn',
           queries: [],
-          fn: (_q, commands) => {
+          fn: (_world, _q, commands) => {
             pendingEntity = commands.spawn({ component: Tag, data: {} });
           },
         });
@@ -3969,7 +3969,7 @@ import { handleNumeric } from './utils/handle-numeric';
         world.addSystem({
           name: 'check-pending',
           queries: [{ with: [Tag] }],
-          fn: (queries, commands) => {
+          fn: (_world, queries, commands) => {
             const spawned = commands.spawn({ component: Tag, data: {} });
             // Inside the system, before flush, the pending entity won't match a query
             for (const _row of queries[0]) {
@@ -4070,7 +4070,7 @@ import { handleNumeric } from './utils/handle-numeric';
         world.addSystem({
           name: 'lifecycle-spawn',
           queries: [],
-          fn: (_q, commands) => {
+          fn: (_world, _q, commands) => {
             spawnedHandle = commands.spawn({ component: Tag, data: {} });
             // Pending: not yet live
             expect(commands.isDeferred(spawnedHandle)).toBe(true);

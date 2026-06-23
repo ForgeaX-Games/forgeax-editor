@@ -58,7 +58,6 @@
 // drives the actual GPU dispatch when MaterialAsset.shadingModel
 // resolves to 'unlit').
 import { World } from '@forgeax/engine-ecs';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
 import {
   Camera,
   Engine,
@@ -99,7 +98,7 @@ import playShaderSrc from './shaders/play.wgsl?raw';
 // users observe it via DevTools or the bench-screenshot hook.
 const PLAY_BASE_COLOR = [1.0, 0.5, 0.2, 1.0] as const;
 
-function spawnPulseScene(world: World, assets: AssetRegistry): void {
+function spawnPulseScene(world: World): void {
   // Camera entity: identity orientation + posZ=3 (LO 1.1 / 1.3 cam
   // baseline) so the triangle sits inside the perspective frustum.
   world.spawn(
@@ -123,13 +122,13 @@ function spawnPulseScene(world: World, assets: AssetRegistry): void {
   // Pass-based MaterialAsset: the passes array with forgeax::default-unlit
   // routes the MeshRenderer through the engine's unlit pipeline; the
   // `baseColor` RGBA quadruple is the LO 1.3 orange triangle teaching colour.
-  const playMaterial = assets.register<MaterialAsset>({
+  const playMaterial = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
     ],
     paramValues: { baseColor: PLAY_BASE_COLOR },
-  }).unwrap();
+  });
   // Triangle entity: builtin HANDLE_TRIANGLE mesh + MeshRenderer
   // pointing at the unlit MaterialAsset above. The triangle sits at
   // origin / identity rotation / unit scale (M0 SSOT lock).
@@ -196,8 +195,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       return;
     }
     const world = new World();
-    const assets = renderer.assets;
-    spawnPulseScene(world, assets);
+    spawnPulseScene(world);
     const basePulseTime = performance.now();
     // rAF-driven LO 1.3 pulse loop: compute the pulse scalar every
     // frame + draw the scene through the engine RenderSystem. The

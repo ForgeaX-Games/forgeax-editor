@@ -1,22 +1,20 @@
-// w13 - AssetRegistry Node path (loadByGuid + GUID-keyed dual-layer API).
+// w13 - AssetRegistry Node path (loadByGuid + GUID-keyed catalog API).
 //
 // Migration from load(url) to loadByGuid (feat-20260513-guid-asset-package-system w13).
-// Covers registerWithGuid + loadByGuid ok path + resolveGuid idempotency
-// + asset-not-found error path on missing GUID.
-//
-// Original load(url) error paths (asset-fetch-failed / asset-parse-failed /
-// asset-format-unsupported) are removed: loadByGuid v1 is a Map lookup
-// with no network fetch; those paths will be re-added in M4 when real
-// fetch-from-pack-index is implemented.
-//
-// asset-not-found is kept: get(unregistered handle) path is unaffected.
+// feat-20260614 M8 (D-17): the registry catalogues GUID -> payload and
+// `loadByGuid` returns the PAYLOAD (no handle); column minting moved to
+// `world.allocSharedRef`, handle->payload resolution to `resolveAssetHandle`.
+// Covers catalog + loadByGuid ok path + payload idempotency + asset-not-found
+// error path on missing GUID + asset-not-found on an unresolvable handle.
 
+import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, TextureAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
+import { resolveAssetHandle } from '../resolve-asset-handle';
 import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -42,29 +40,25 @@ function makeMesh(): TypesMeshAsset {
 }
 
 describe('w13 - AssetRegistry Node loadByGuid happy path', () => {
-  it('loadByGuid() returns Ok(Handle) for a registered GUID', async () => {
+  it('loadByGuid() returns Ok(payload) for a catalogued GUID', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_DAWN_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
     const mesh = makeMesh();
-    reg.registerWithGuid<TypesMeshAsset>(guid, mesh);
+    reg.catalog<TypesMeshAsset>(guid, mesh);
     const res = await reg.loadByGuid<TypesMeshAsset>(guid);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const handle: Handle<'MeshAsset', 'unmanaged'> = res.value;
-    const got = reg.get<TypesMeshAsset>(handle);
-    expect(got.ok).toBe(true);
-    if (!got.ok) return;
-    expect(got.value.kind).toBe('mesh');
+    expect(res.value.kind).toBe('mesh');
   });
 
-  it('two loadByGuid(sameGuid) calls return same Handle (idempotent)', async () => {
+  it('two loadByGuid(sameGuid) calls return same payload (idempotent)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const parseResult = AssetGuid.parse(GUID_DAWN_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
-    reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
+    reg.catalog<TypesMeshAsset>(guid, makeMesh());
     const a = await reg.loadByGuid<TypesMeshAsset>(guid);
     const b = await reg.loadByGuid<TypesMeshAsset>(guid);
     expect(a.ok).toBe(true);
@@ -86,10 +80,10 @@ describe('w13 - AssetRegistry Node error paths (AC-03 migration)', () => {
     if (!res.ok) expect(res.error.code).toBe('asset-not-found');
   });
 
-  it('asset-not-found: get(unregistered handle)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-    const fake = toUnmanaged<'TextureAsset'>(0xdeadbeef);
-    const res = reg.get<TextureAsset>(fake);
+  it('asset-not-found: resolveAssetHandle(unallocated handle)', () => {
+    const world = new World();
+    const fake = toShared<'TextureAsset'>(0xdeadbeef);
+    const res = resolveAssetHandle<TextureAsset>(world, fake as Handle<string, 'shared'>);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('asset-not-found');
   });

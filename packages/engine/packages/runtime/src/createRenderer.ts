@@ -65,8 +65,6 @@ import type {
   MaterialRenderState,
   PassKind,
   PrimitiveTopology,
-  RenderPipelineAsset,
-  MeshAsset as TypesMeshAsset,
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { derive, unwrapHandle } from '@forgeax/engine-types';
@@ -78,6 +76,7 @@ import {
   HANDLE_SPHERE,
   HANDLE_TRIANGLE,
 } from './asset-registry';
+import { BuiltinAssetRegistry } from './builtin-asset-registry';
 import { classifyEnvErrorReason, composeEnvErrorHint } from './create-renderer-env-classify';
 import { createEngineMetrics } from './engine-metrics';
 import {
@@ -130,12 +129,17 @@ import {
   type RendererOptions,
   RhiErrorListenerRegistry,
 } from './renderer';
+import { resolveAssetHandle } from './resolve-asset-handle';
 import {
+  ADVANCE_ANIMATION_PLAYER_SYSTEM,
+  AdvanceAnimationPlayer,
+  ANIMATION_ASSET_RESOLVER_KEY,
   type AnimationAssetResolver,
   registerAdvanceAnimationPlayer,
 } from './systems/advance-animation-player';
 import {
   PROPAGATE_TRANSFORMS_SYSTEM,
+  PropagateTransforms,
   registerPropagateTransforms,
 } from './systems/propagate-transforms';
 import {
@@ -150,7 +154,15 @@ import { createDefaultLoaderRegistry } from './wire-default-loaders';
 // Re-export registerPropagateTransforms so consumers can wire the
 // Transform.world mat4 derivation (audio listener sync + picking read the
 // derived Transform.world from scripts).
-export { PROPAGATE_TRANSFORMS_SYSTEM, registerAdvanceAnimationPlayer, registerPropagateTransforms };
+export {
+  ADVANCE_ANIMATION_PLAYER_SYSTEM,
+  AdvanceAnimationPlayer,
+  ANIMATION_ASSET_RESOLVER_KEY,
+  PROPAGATE_TRANSFORMS_SYSTEM,
+  PropagateTransforms,
+  registerAdvanceAnimationPlayer,
+  registerPropagateTransforms,
+};
 
 // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4): a single
 // shared empty ArrayBuffer used by `buildPipelineContext` to synthesize the
@@ -1014,14 +1026,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // queue.submit + queue.writeTexture all live on RhiDevice).
   // feat-20260601-gpu-resource-store-extraction M1 (D-3 / D-8): device +
   // shader-module factory + cube-POD register relay are wired onto the store
-  // together. `registerCube` is the wire-layer closure `(pod) =>
-  // assets.register(pod)` -- the store never imports AssetRegistry (AC-08); CPU
-  // cataloguing of the minted CubeTextureAsset flows back through this fn.
+  // together. feat-20260614 M8 (D-15 / D-17): `registerCube` is the wire-layer
+  // closure `(world, pod) => world.allocSharedRef('CubeTextureAsset', pod)` --
+  // the runtime-minted cube POD lands in the draw-time world's user-tier
+  // SharedRefStore (the AssetRegistry owns no handles). The store passes the
+  // draw-time world through at `uploadCubemapFromEquirect` time.
   gpuStore.configureGpuDevice(
     // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
     internals.device as any,
     packShaderFactory as unknown as MipmapShaderModuleFactory | undefined,
-    (pod) => assets.register(pod),
+    (world, pod) => ok(world.allocSharedRef('CubeTextureAsset', pod)),
     internals.device.caps,
   );
   // D-S3: Renderer.ready three-step strict-serial Promise. Kicked off
@@ -1056,7 +1070,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   const ready: Promise<Result<void, RhiError>> = buildReadyWebGPU(
     internals.device,
     getShader,
-    assets,
     gpuStore,
     internals.pack.createShaderModule,
     internals.errorRegistry,
@@ -1582,27 +1595,22 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       return internals.meshSsboState;
     },
   });
-  // feat-20260601-customizable-render-pipeline-seam M1 / w8: DOGFOOD. The default frame is
-  // driven through the SAME public channel an AI user would use - registerPipeline the
-  // built-in forward logic, register a default RenderPipelineAsset, then installPipeline
-  // the returned handle. No internal `new` shortcut, no private install (requirements M1
-  // item 6). The register<RenderPipelineAsset> call takes no `as` assertion (AC-04: the
-  // brand is inferred from the asset literal's `kind`). The handle is memory-only (OOS-1:
-  // no disk serialization). install cannot fail here (the id was just registered + the
-  // handle is fresh); a failure would be an engine-boot invariant break, so it throws
-  // rather than routing through the RhiError fan-out (PipelineError is a distinct union,
-  // not part of the onError channel).
+  // feat-20260601-customizable-render-pipeline-seam M1 / w8 (D-19): DOGFOOD. The default
+  // frame is driven through the SAME public channel an AI user would use - registerPipeline
+  // the built-in forward logic, then installPipeline a default RenderPipelineAsset POD
+  // (built inline, no AssetRegistry round-trip; D-19: installPipeline takes the payload,
+  // there is no World at boot to allocate a shared ref against). install cannot fail here
+  // (the id was just registered), so it throws -- a failure would be an engine-boot
+  // invariant break, not part of the RhiError onError fan-out (PipelineError is a distinct
+  // union).
   renderSystem.registerPipeline(URP_PIPELINE_ID, urpPipeline);
   // feat-20260608-cluster-lighting M2 / w10: HDRP cluster-forward registered (not installed).
   // installPipeline(hdrpAsset) is the explicit AI-user opt-in.
   renderSystem.registerPipeline(HDRP_PIPELINE_ID, hdrpPipeline);
-  const defaultPipelineHandle = assets
-    .register<RenderPipelineAsset>({
-      kind: 'render-pipeline',
-      pipelineId: URP_PIPELINE_ID,
-    })
-    .unwrap();
-  const defaultInstall = renderSystem.installPipeline(defaultPipelineHandle);
+  const defaultInstall = renderSystem.installPipeline({
+    kind: 'render-pipeline',
+    pipelineId: URP_PIPELINE_ID,
+  });
   if (!defaultInstall.ok) throw defaultInstall.error;
   // m3-2: onFrameEnd injection point. The recorder subscribes via
   // renderer._onFrameEnd(cb) to get frame-completion callbacks after
@@ -2077,8 +2085,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     registerPipeline(id, impl) {
       renderSystem.registerPipeline(id, impl);
     },
-    installPipeline(handle) {
-      return renderSystem.installPipeline(handle);
+    installPipeline(asset) {
+      return renderSystem.installPipeline(asset);
     },
     // F-2 fix-up: 1:1 forward to RenderSystem.postProcess.register (D-D zero
     // processing — the registry + dedup live on the RenderSystem closure).
@@ -3166,14 +3174,11 @@ async function prepareMaterialShaders(
           source: wgsl,
           paramSchema,
         };
-        assets.registerWithGuid(shaderGuid, shaderAsset);
-      } else {
-        assets.register({
-          kind: 'shader' as const,
-          name: msEntry.identifier,
-          source: wgsl,
-          paramSchema,
-        });
+        // feat-20260614 M8 (D-17): catalogue the shader asset by GUID so it is
+        // GUID-addressable; no handle minted. A shader without an engine GUID
+        // lives only in the ShaderRegistry (the registerMaterialShader SSOT
+        // above) -- there is no GUID to catalogue it under.
+        assets.catalog(shaderGuid, shaderAsset);
       }
     }
   }
@@ -3208,14 +3213,8 @@ async function prepareMaterialShaders(
             source: entry.wgsl,
             paramSchema: [] as readonly import('@forgeax/engine-types').ParamSchemaEntry[],
           };
-          assets.registerWithGuid(shaderGuid, shaderAsset);
-        } else {
-          assets.register({
-            kind: 'shader' as const,
-            name: shadowCasterIdentifier,
-            source: entry.wgsl,
-            paramSchema: [] as readonly import('@forgeax/engine-types').ParamSchemaEntry[],
-          });
+          // feat-20260614 M8 (D-17): catalogue by GUID; no handle minted.
+          assets.catalog(shaderGuid, shaderAsset);
         }
         break;
       }
@@ -3226,7 +3225,6 @@ async function prepareMaterialShaders(
 async function buildReadyWebGPU(
   rhiDevice: RhiDevice,
   getShader: () => ShaderRegistry,
-  assets: AssetRegistry,
   gpuStore: GpuResourceStore,
   asyncCreateShaderModule:
     | ((
@@ -4001,13 +3999,15 @@ async function buildReadyWebGPU(
     // legacy direct-upload path so the BUILTIN seed retains GPU buffers
     // even on the unwired path.
     // M5 / w19: HANDLE_CUBE / HANDLE_TRIANGLE are now
-    // `Handle<'MeshAsset','unmanaged'>` (the unified SSOT brand from
+    // `Handle<'MeshAsset','shared'>` (the unified SSOT brand from
     // `@forgeax/engine-types` per feat-20260517-handle-type-unify) which
     // matches AssetRegistry.get<MeshAsset>'s parameter type
-    // `Handle<'MeshAsset', 'unmanaged'>` directly — no cross-brand cast.
-    const assetRes = assets.get<TypesMeshAsset>(handle);
-    if (!assetRes.ok) continue;
-    const asset = assetRes.value;
+    // `Handle<'MeshAsset', 'shared'>` directly — no cross-brand cast.
+    // feat-20260614 M8 (D-15): the builtin seed handles are builtin-tier
+    // (slot < BUILTIN_BASE); resolve their PODs directly from the process-
+    // static BuiltinAssetRegistry (no World needed at boot).
+    const asset = BuiltinAssetRegistry.resolve(handle);
+    if (asset === null) continue;
     if (asset.kind !== 'mesh') continue;
     // Builtins always carry indices; the `?? 0` keeps typecheck happy now that
     // MeshAsset.indices is optional, and supports a vertex-only fallback mesh
@@ -5587,9 +5587,8 @@ async function buildReadyWebGPU(
             modules,
           ) as RenderPipeline;
         } catch (msaaErr) {
-          // biome-ignore lint/suspicious/noConsole: deliberate user-visible warning;
-          // the MSAA variant is a graceful-degradation path — console.warn is the
-          // canonical signal for "feature degrades, not fails."
+          // The MSAA variant is a graceful-degradation path -- console.warn is the
+          // canonical signal for "feature degrades, not fails" (noConsole allows warn).
           console.warn(
             `[forgeax] skybox MSAA pipeline variant build failed at renderer init; ` +
               `non-MSAA skybox unaffected. (cause: ${String(msaaErr)})`,
@@ -6595,17 +6594,16 @@ async function runShimStep<T>(
  * assets by looking them up in the asset registry's internal map.
  */
 export function createAnimationAssetResolver(assets: AssetRegistry | null): AnimationAssetResolver {
+  // feat-20260614 M8 (D-15 / D-17): AnimationClip handles are user-tier column
+  // slots resolved through the per-World SharedRefStore via resolveAssetHandle;
+  // the AssetRegistry holds no handle map. `assets` is retained in the signature
+  // for call-site stability but is no longer the resolution source.
+  void assets;
   return {
-    resolveAnimationClip(handleRaw: number): AnimationClip | undefined {
-      if (assets === null) return undefined;
-      // bug-20260612: prior impl referenced `assets._getAsset(id)` which
-      // doesn't exist on AssetRegistry; the optional `?.` chain silently
-      // returned undefined on every call, so AnimationPlayer.clip never
-      // resolved and joint Transforms never animated. Use the public
-      // `get<T>(handle)` API instead — it accepts the raw u32 (unwrapHandle
-      // accepts both Handle<T,'unmanaged'> objects and number passthroughs).
-      const lookup = assets.get<AnimationClip>(
-        handleRaw as unknown as Handle<'AnimationClip', 'unmanaged'>,
+    resolveAnimationClip(world: World, handleRaw: number): AnimationClip | undefined {
+      const lookup = resolveAssetHandle(
+        world,
+        handleRaw as unknown as Handle<'AnimationClip', 'shared'>,
       );
       if (!lookup.ok) return undefined;
       const asset = lookup.value as unknown as { kind?: string };

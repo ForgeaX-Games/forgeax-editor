@@ -15,7 +15,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { Result, RhiDevice, RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
-import type { Handle } from '@forgeax/engine-types';
+import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
 import type { EngineMetrics } from './engine-metrics';
 import type { RuntimeError } from './errors';
@@ -405,13 +405,13 @@ export interface Renderer {
    */
   registerPipeline(id: string, impl: RenderPipeline): void;
   /**
-   * feat-20260601-customizable-render-pipeline-seam M1 / w8: install the pipeline bound by
-   * a `RenderPipelineAsset` handle (obtained from `renderer.assets.register(...)`). On a
-   * stale / unregistered handle returns `Result.err(PipelineError{code:'pipeline-not-found'})`;
+   * feat-20260601-customizable-render-pipeline-seam M1 / w8 (D-19): install the pipeline
+   * described by a `RenderPipelineAsset` POD (built inline, no registration step). On an
+   * unregistered `pipelineId` returns `Result.err(PipelineError{code:'pipeline-not-found'})`;
    * AI users consume `err.code` by property access. On success the next `draw` rebuilds the
    * per-frame graph through the newly installed pipeline (runtime hot-swap).
    */
-  installPipeline(handle: Handle<'RenderPipelineAsset', 'unmanaged'>): Result<void, PipelineError>;
+  installPipeline(asset: RenderPipelineAsset): Result<void, PipelineError>;
   /**
    * feat-20260604-resource-owning-render-graph-and-fullscreen-postpr M2 / F-2 fix-up:
    * fullscreen post-process registration channel. `postProcess.register(id, entry)`

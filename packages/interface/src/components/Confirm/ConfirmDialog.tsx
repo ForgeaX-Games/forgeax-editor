@@ -13,6 +13,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
+import { useTranslation } from '@/i18n';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -53,6 +54,7 @@ interface PendingConfirm {
 }
 
 export function ConfirmDialog(): ReactElement | null {
+  const { t } = useTranslation();
   const [queue, setQueue] = useState<PendingConfirm[]>([]);
   const queueRef = useRef<PendingConfirm[]>([]);
   queueRef.current = queue;
@@ -137,7 +139,7 @@ export function ConfirmDialog(): ReactElement | null {
       <AlertDialogContent className="max-w-xl">
         <AlertDialogHeader>
           <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>{head.callerKind ?? 'AI'} 想运行一个需要确认的 tool</span>
+            <span>{t('confirmDialog.wantsToRunTool', { caller: head.callerKind ?? 'AI' })}</span>
             {remainingS != null && (
               <span className={remainingS < 5 ? 'text-destructive' : 'text-muted-foreground'}>
                 {remainingS}s
@@ -155,9 +157,9 @@ export function ConfirmDialog(): ReactElement | null {
           {safeStringify(head.args)}
         </pre>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => send('deny')}>拒绝</AlertDialogCancel>
+          <AlertDialogCancel onClick={() => send('deny')}>{t('confirmDialog.deny')}</AlertDialogCancel>
           <AlertDialogAction autoFocus onClick={() => send('allow')}>
-            允许
+            {t('confirmDialog.allow')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

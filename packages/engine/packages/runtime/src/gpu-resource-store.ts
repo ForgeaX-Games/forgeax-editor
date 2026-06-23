@@ -26,6 +26,7 @@
 // not prewarmed surfaces a structured RhiError on the sync path -- it is never
 // lazily awaited (that would break the sync draw contract).
 
+import type { World } from '@forgeax/engine-ecs';
 import { halfFloat } from '@forgeax/engine-math';
 import {
   type Buffer,
@@ -154,8 +155,9 @@ type MipmapBlitDeviceWithBuffer = MipmapBlitDevice & {
 
 /** Cube-POD register-relay injected by the wire layer (D-3). */
 type RegisterCube = (
+  world: World,
   pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'unmanaged'>, AssetError>;
+) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError>;
 
 // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M-3 / w11:
 // the three handle map value types now hold GpuTexture / GpuBuffer wrappers
@@ -240,14 +242,14 @@ export class GpuResourceStore {
   private readonly cubemapGpuHandles: Map<number, CubemapGpuEntry> = new Map();
   // Maps source TextureAsset handle id -> CubeTextureAsset handle so the same
   // equirect source always resolves to the same cubemap (idempotent).
-  private readonly cubemapIdempotentMap: Map<number, Handle<'CubeTextureAsset', 'unmanaged'>> =
+  private readonly cubemapIdempotentMap: Map<number, Handle<'CubeTextureAsset', 'shared'>> =
     new Map();
   // Pending equirect-cubemap uploads queued before the device was wired. The
   // field is retained for the device-not-wired arm of uploadCubemapFromEquirect
   // (mints a placeholder cube handle); there is NO global replay loop (D-3 /
   // user ruling: the pull model has no global replay).
   private readonly pendingCubemapUploads: Array<{
-    handle: Handle<'TextureAsset', 'unmanaged'>;
+    handle: Handle<'TextureAsset', 'shared'>;
   }> = [];
   private readonly meshGpuHandles: Map<number, MeshGpuEntry> = new Map();
 
@@ -380,7 +382,7 @@ export class GpuResourceStore {
    * made resident, else `undefined`.
    */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
-  getTextureGpuView(handle: Handle<'TextureAsset', 'unmanaged'>): any | undefined {
+  getTextureGpuView(handle: Handle<'TextureAsset', 'shared'>): any | undefined {
     return this.textureGpuHandles.get(unwrapHandle(handle))?.view;
   }
 
@@ -390,19 +392,19 @@ export class GpuResourceStore {
    * `device.createTextureView` arguments) read `.handle` on the wrapper;
    * `.destroy()` routes through the destroy chain (M-3 / w11).
    */
-  getCubemapGpuTexture(handle: Handle<'CubeTextureAsset', 'unmanaged'>): GpuTexture | undefined {
+  getCubemapGpuTexture(handle: Handle<'CubeTextureAsset', 'shared'>): GpuTexture | undefined {
     return this.cubemapGpuHandles.get(unwrapHandle(handle))?.texture;
   }
 
   /** Return the full-cube texture view, or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
-  getCubemapGpuView(handle: Handle<'CubeTextureAsset', 'unmanaged'>): any | undefined {
+  getCubemapGpuView(handle: Handle<'CubeTextureAsset', 'shared'>): any | undefined {
     return this.cubemapGpuHandles.get(unwrapHandle(handle))?.view;
   }
 
   /** Return per-face 2D views (6 faces), or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture views
-  getCubemapFaceViews(handle: Handle<'CubeTextureAsset', 'unmanaged'>): readonly any[] | undefined {
+  getCubemapFaceViews(handle: Handle<'CubeTextureAsset', 'shared'>): readonly any[] | undefined {
     return this.cubemapGpuHandles.get(unwrapHandle(handle))?.faceViews;
   }
 
@@ -411,7 +413,7 @@ export class GpuResourceStore {
    * `Handle<MeshAsset>` if resident, else `undefined`. Consumers treat this
    * as the canonical "mesh asset has GPU residency" probe.
    */
-  getMeshGpuHandles(handle: Handle<'MeshAsset', 'unmanaged'>): MeshGpuEntry | undefined {
+  getMeshGpuHandles(handle: Handle<'MeshAsset', 'shared'>): MeshGpuEntry | undefined {
     return this.meshGpuHandles.get(unwrapHandle(handle));
   }
 
@@ -430,7 +432,7 @@ export class GpuResourceStore {
    * (createRenderer step-3 owns them; D-1).
    */
   ensureResident(
-    handle: Handle<'MeshAsset', 'unmanaged'> | Handle<'TextureAsset', 'unmanaged'>,
+    handle: Handle<'MeshAsset', 'shared'> | Handle<'TextureAsset', 'shared'>,
     pod: TypesMeshAsset | TextureAsset,
     // biome-ignore lint/suspicious/noExplicitAny: opaque GPU handle entry union
   ): Result<any, RhiError | AssetError | ImageError> {
@@ -459,7 +461,7 @@ export class GpuResourceStore {
         // the TextureAsset POD: `data` carries the pixel bytes.
         const decoded: DecodedImage = decodedFromTexture(pod);
         return this.uploadTextureSync(
-          handle as Handle<'TextureAsset', 'unmanaged'>,
+          handle as Handle<'TextureAsset', 'shared'>,
           pod,
           decoded,
           projected.value,
@@ -477,7 +479,7 @@ export class GpuResourceStore {
    * (the one async source).
    */
   async uploadTexture(
-    handle: Handle<'TextureAsset', 'unmanaged'>,
+    handle: Handle<'TextureAsset', 'shared'>,
     pod: TextureAsset,
     decoded: DecodedImage,
   ): Promise<Result<void, AssetError | ImageError | RhiError>> {
@@ -536,7 +538,7 @@ export class GpuResourceStore {
    * returns a structured RhiError instead of awaiting a build.
    */
   private uploadTextureSync(
-    handle: Handle<'TextureAsset', 'unmanaged'>,
+    handle: Handle<'TextureAsset', 'shared'>,
     pod: TextureAsset,
     decoded: DecodedImage,
     renderData: TextureRenderData,
@@ -581,7 +583,7 @@ export class GpuResourceStore {
    * (with ok) when no device is wired (deferred path).
    */
   private prepareTextureUpload(
-    handle: Handle<'TextureAsset', 'unmanaged'>,
+    handle: Handle<'TextureAsset', 'shared'>,
     pod: TextureAsset,
     decoded: DecodedImage,
     renderData: TextureRenderData,
@@ -656,9 +658,10 @@ export class GpuResourceStore {
    * `registerCube` relay (D-3); the store never imports AssetRegistry.
    */
   async uploadCubemapFromEquirect(
-    sourceHandle: Handle<'TextureAsset', 'unmanaged'>,
+    world: World,
+    sourceHandle: Handle<'TextureAsset', 'shared'>,
     sourcePod: TextureAsset,
-  ): Promise<Result<Handle<'CubeTextureAsset', 'unmanaged'>, AssetError | RhiError>> {
+  ): Promise<Result<Handle<'CubeTextureAsset', 'shared'>, AssetError | RhiError>> {
     const sourceId = unwrapHandle(sourceHandle);
 
     const existing = this.cubemapIdempotentMap.get(sourceId);
@@ -752,7 +755,7 @@ export class GpuResourceStore {
         format: tex.format,
         faces: [],
       };
-      const cubeHandle = registerCube(cubeAsset);
+      const cubeHandle = registerCube(world, cubeAsset);
       if (!cubeHandle.ok) return cubeHandle;
       this.cubemapIdempotentMap.set(sourceId, cubeHandle.value);
       return ok(cubeHandle.value);
@@ -863,7 +866,7 @@ export class GpuResourceStore {
       format: tex.format,
       faces: [],
     };
-    const regResult = registerCube(cubeAsset);
+    const regResult = registerCube(world, cubeAsset);
     if (!regResult.ok) return regResult;
     const cubeHandle = regResult.value;
     const cubeId = unwrapHandle(cubeHandle);
@@ -1208,7 +1211,7 @@ export class GpuResourceStore {
    * data in-place. The handle must have been made resident.
    */
   updateMesh(
-    handle: Handle<'MeshAsset', 'unmanaged'>,
+    handle: Handle<'MeshAsset', 'shared'>,
     newVertices: Float32Array,
     newIndices: Uint16Array,
   ): void {

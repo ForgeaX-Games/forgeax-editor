@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
@@ -19,8 +20,13 @@ const monorepoRoot = resolve(here, '..', '..', '..');
 // (feat-20260518-pbr-direct-lighting-mvp M5 / w22.8: the engine's WGSL
 // SSOT lives in packages/shader/src/{pbr,unlit}.wgsl; the legacy inline
 // PBR fallback was deleted in w22.9).
+// vitePluginRhiDebug (feat-20260617 M4 / w25): mounts the dev-only
+// POST /__forgeax-debug/tape endpoint + injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG.
+// With FORGEAX_ENGINE_RHI_DEBUG=1 in the env, the createApp guard mounts
+// window.__forgeax.captureFrame(n) -> capture-browser round-trip. hello-cube's
+// main.ts bootstraps via createApp so the guard fires (browser e2e w22).
 export default defineConfig({
-  plugins: [forgeaxShader() as never],
+  plugins: [forgeaxShader() as never, vitePluginRhiDebug()],
   server: {
     fs: {
       allow: [monorepoRoot],

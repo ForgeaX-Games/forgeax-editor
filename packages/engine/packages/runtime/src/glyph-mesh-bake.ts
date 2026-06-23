@@ -29,16 +29,16 @@
 // from `attributes.position` (uploadMeshById reads `mesh.vertices`). `pick.ts`
 // is NOT modified -- the cube is purely a bake-step property of the mesh.
 
+import type { World } from '@forgeax/engine-ecs';
 import { ok, type Result } from '@forgeax/engine-rhi';
 import type { AssetError, Handle, MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
 
-import type { AssetRegistry } from './asset-registry';
 import type { GlyphLayoutResult } from './glyph-layout';
 
 /** Result of baking a glyph layout into a registered mesh. */
 export interface GlyphMeshBakeResult {
   /** The registered unmanaged mesh handle (feed to `MeshFilter.assetHandle`). */
-  readonly handle: Handle<'MeshAsset', 'unmanaged'>;
+  readonly handle: Handle<'MeshAsset', 'shared'>;
   /**
    * Conservative bounding-sphere cube AABB in local space: 6 floats
    * [-R,-R,-R, R,R,R] centered at the anchor (plan-strategy D-5). Empty
@@ -86,13 +86,18 @@ export function conservativeCubeAabb(radius: number): Float32Array {
  *   layout produced by w15, but the gate is honored, not bypassed).
  */
 export function bakeGlyphMesh(
-  assets: AssetRegistry,
+  world: World,
   layout: GlyphLayoutResult,
 ): Result<GlyphMeshBakeResult, AssetError> {
-  const meshAsset = buildGlyphMeshAsset(layout);
-  const reg = assets.register(meshAsset);
-  if (!reg.ok) return reg;
-  return ok({ handle: reg.value, aabb: conservativeCubeAabb(layout.radius) });
+  const aabb = conservativeCubeAabb(layout.radius);
+  // feat-20260614 M8 (D-17/D-19): the baked text mesh is a runtime-minted
+  // user-tier asset allocated directly into the world's SharedRefStore. Unlike
+  // `AssetRegistry.catalog` (which runs `withMeshAabb` to compute the AABB from
+  // `attributes.position`), `allocSharedRef` stores the payload verbatim -- so
+  // the mesh POD must carry its own `.aabb` for the cull / pick path to read it.
+  const meshAsset: MeshAsset = { ...buildGlyphMeshAsset(layout), aabb };
+  const handle = world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', meshAsset);
+  return ok({ handle, aabb });
 }
 
 /**

@@ -20,6 +20,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import type { ReactElement } from 'react';
 import { defaultFor, findMissingRequired, coerceEnumValue, type JsonSchema } from './schema-form-utils';
+import { useTranslation } from '@/i18n';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -57,6 +58,7 @@ interface FieldProps {
 }
 
 function Field({ schema, value, onChange, required, pathLabel }: FieldProps): ReactElement {
+  const { t } = useTranslation();
   const readonly = schema['x-fx-readonly'] === true;
   const secret = schema['x-fx-secret'] === true;
   const multiline = schema['x-fx-multiline'] === true || schema.format === 'multiline';
@@ -161,7 +163,7 @@ function Field({ schema, value, onChange, required, pathLabel }: FieldProps): Re
           className="fx-sf-array-add self-start"
           onClick={() => onChange([...arr, defaultFor(item)])}
         >
-          + 添加
+          {t('schemaForm.addItem')}
         </Button>
       </fieldset>
     );
@@ -229,6 +231,7 @@ export function SchemaForm({
   layout = 'panel',
   busy,
 }: SchemaFormProps): ReactElement {
+  const { t } = useTranslation();
   const initial = useMemo(
     () => (initialValue !== undefined ? initialValue : defaultFor(schema)),
     [initialValue, schema],
@@ -250,16 +253,16 @@ export function SchemaForm({
     <form className={`fx-sf fx-sf-${layout}`} onSubmit={submit}>
       <Field schema={schema} value={value} onChange={setValue} />
       {missing.length > 0 ? (
-        <div className="fx-sf-error">缺少必填字段: {missing.join(', ')}</div>
+        <div className="fx-sf-error">{t('schemaForm.missingRequired', { fields: missing.join(', ') })}</div>
       ) : null}
       <div className="fx-sf-actions">
         {onCancel ? (
           <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-            取消
+            {t('common.cancel')}
           </Button>
         ) : null}
         <Button type="submit" size="sm" disabled={busy}>
-          {submitLabel ?? '运行'}
+          {submitLabel ?? t('schemaForm.run')}
         </Button>
       </div>
     </form>

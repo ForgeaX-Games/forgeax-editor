@@ -81,15 +81,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Register a custom cube mesh with known AABB via the renderer's asset
-  // registry. The built-in HANDLE_CUBE uses engine-internal handle values;
-  // using createBoxGeometry + register ensures AABB computation for culling.
+  // Mint a custom cube mesh with known AABB as a user-tier shared ref. The
+  // built-in HANDLE_CUBE uses engine-internal handle values; using
+  // createBoxGeometry + allocSharedRef ensures AABB computation for culling.
   const boxResult = createBoxGeometry(1, 1, 1, 1, 1, 1);
   if (!boxResult.ok) {
     console.error('[culling] createBoxGeometry failed:', boxResult.error.code);
     return;
   }
-  const cubeHandle = renderer.assets.register(boxResult.value).unwrap();
+  const cubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
 
   // Spawn cubes AFTER renderer is ready (mesh assets with AABB are registered).
   // Half the cubes keep `frustumCulled=1` (default) so the demo's culling

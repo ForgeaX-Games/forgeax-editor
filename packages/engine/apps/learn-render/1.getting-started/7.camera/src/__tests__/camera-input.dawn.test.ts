@@ -10,7 +10,7 @@
 //
 // Scope (T-M11-01 acceptanceCheck):
 //   (a) Frame-start scan: a synthetic InputBackend feeding the
-//       createFrameStartScanSystem(backend, world) factory writes
+//       InputFrameStartScan system token reads INPUT_BACKEND_KEY and writes
 //       InputSnapshot under the well-known Resource key; the
 //       snapshot is fresh every world.update() (charter F2 minimal
 //       surface + plan-strategy D-5 frame-start ordering).
@@ -36,10 +36,11 @@
 // path lands in scripts/smoke-dawn.mjs (T-M11-02).
 
 import {
-  createFrameStartScanSystem,
+  INPUT_BACKEND_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputBackend,
   type InputBackendSample,
+  InputFrameStartScan,
   type InputSnapshot,
 } from '@forgeax/engine-input';
 import { World } from '@forgeax/engine-ecs';
@@ -88,10 +89,11 @@ function fixtureBackend(): InputBackend & {
 }
 
 describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 + plan-strategy D-5)', () => {
-  it('AC-07 (a): createFrameStartScanSystem writes InputSnapshot Resource each world.update()', () => {
+  it('AC-07 (a): InputFrameStartScan writes InputSnapshot Resource each world.update()', () => {
     const backend = fixtureBackend();
     const world = new World();
-    world.addSystem(createFrameStartScanSystem(backend, world));
+    world.insertResource(INPUT_BACKEND_KEY, backend);
+    world.addSystem(InputFrameStartScan);
 
     expect(world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)).toBe(false);
     world.update();
@@ -101,7 +103,8 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
   it('AC-07 (b): WASD held keys land in keyboard.down(...); absent keys return false', () => {
     const backend = fixtureBackend();
     const world = new World();
-    world.addSystem(createFrameStartScanSystem(backend, world));
+    world.insertResource(INPUT_BACKEND_KEY, backend);
+    world.addSystem(InputFrameStartScan);
 
     backend.setHeldKeys(['w', 'a']);
     world.update();
@@ -122,7 +125,8 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
   it('AC-07 (c): mouse.movementDelta is per-frame; consecutive samples produce the slice each tick', () => {
     const backend = fixtureBackend();
     const world = new World();
-    world.addSystem(createFrameStartScanSystem(backend, world));
+    world.insertResource(INPUT_BACKEND_KEY, backend);
+    world.addSystem(InputFrameStartScan);
 
     backend.setMouseDelta(7, -3);
     world.update();
@@ -146,7 +150,8 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
   it('AC-07 (d): up-edge appears in keyboard.up(...) for exactly one frame, then collapses', () => {
     const backend = fixtureBackend();
     const world = new World();
-    world.addSystem(createFrameStartScanSystem(backend, world));
+    world.insertResource(INPUT_BACKEND_KEY, backend);
+    world.addSystem(InputFrameStartScan);
 
     backend.setUpKeys(['Escape']);
     world.update();

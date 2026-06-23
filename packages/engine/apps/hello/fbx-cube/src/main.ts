@@ -78,7 +78,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
+  // feat-20260614 M8 (D-17): loadByGuid returns the payload; mint a user-tier
+  // column handle for instantiate.
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
   if (!instRes.ok) {
     console.error(
       '[fbx-cube] scene instantiate failed:',
