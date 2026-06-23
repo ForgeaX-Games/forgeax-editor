@@ -2,7 +2,7 @@ import {
   createApp,
   loadGame,
   isLoadGameError,
-  type GameEntry,
+  type BootstrapEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera, Transform, createCylinderGeometry } from '@forgeax/engine-runtime';
 import {
@@ -23,7 +23,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SceneAsset, AssetError } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { GameContext } from './types';
+import type { BootstrapContext, GameContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 
 const root = document.getElementById('app') ?? document.body;
@@ -354,7 +354,7 @@ const ctx: GameContext = {
 };
 
 // ── loadGame ──
-async function resolveGame(id: string): Promise<GameEntry | null> {
+async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   // id is already validated by GAME_ID_RE before reaching here.
   // Non-template slugs that fail validation are replaced with '_template'
   // during URL construction.
@@ -403,15 +403,14 @@ async function resolveGame(id: string): Promise<GameEntry | null> {
   return result.value;
 }
 
-// ── entry bootstrap hook (D-3: semantic downgrade — host instantiates
+// ── entry bootstrap hook (D-2: semantic downgrade — host instantiates
 // defaultScene before this point, so the game module receives a world that
-// already contains the default scene entities. entry is no longer the "total
-// entry" that fetches + instantiates the scene itself; it is a bootstrap hook
-// whose job is wiring HUD / inputs / custom systems onto the live world.
-// Signature unchanged: export default start (C4 / OOS-3).
+// already contains the default scene entities. The bootstrap hook wires HUD /
+// inputs / custom systems onto the live world. Signature: export function
+// bootstrap(world, ctx?) — world as first param.
 const entry = await resolveGame(gameId);
 if (entry) {
-  await entry(ctx);
+  await entry(world, ctx);
 } else {
   console.log('[engine] using fallback scene; write games/<id>/main.ts to override');
   world.spawn(
