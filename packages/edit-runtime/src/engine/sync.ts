@@ -1,4 +1,4 @@
-// Engine sync — projects the authored SceneDocument onto the engine's NATIVE
+// Engine sync — projects the authored EditSession onto the engine's NATIVE
 // scene pipeline, INCREMENTALLY. Instead of tearing down + rebuilding the whole
 // scene on every edit (a one-frame flash), it diffs the new projection against the
 // last one and applies only the delta:

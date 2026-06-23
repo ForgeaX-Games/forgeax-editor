@@ -68,8 +68,12 @@ export function makeEditSession(
     nextLocalId: EntityId;
     asset?: SceneAsset;
   };
+  // Non-enumerable so the derived projection is NOT serialized onto the wire
+  // (BroadcastChannel structuredClone / JSON.stringify skip it) — entities/order
+  // are the only persisted source of truth, and receivers revive the getter via
+  // makeEditSession. Direct `.asset` access still works.
   Object.defineProperty(session, 'asset', {
-    enumerable: true,
+    enumerable: false,
     get(): SceneAsset {
       return projectSessionAsset(session.entities, session.order);
     },
