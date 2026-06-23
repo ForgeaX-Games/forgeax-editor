@@ -29,36 +29,26 @@ import { World } from '@forgeax/engine-ecs';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { loadGameProject } from '@forgeax/engine-project';
 
-// Re-export World for consumers that need it (e.g. edit-runtime).
-export type { World } from '@forgeax/engine-ecs';
-
-// ── Result type ──────────────────────────────────────────────────────────────
+/**
+ * A forgeax engine World returned by openProject.
+ *
+ * Use InstanceType<typeof World> to avoid TS2709 when the module shim
+ * (declare module) creates an ambient namespace conflict with the real
+ * class export.
+ */
+export type OpenProjectWorld = InstanceType<typeof World>;
 
 /** Outcome of a successful openProject call. */
 export interface OpenProjectResult {
-  /** A fresh World with the defaultScene instantiated (if any). */
-  readonly world: World;
-  /**
-   * The synthetic root EntityId of the instantiated scene, or null when the
-   * project has no defaultScene (graceful skip). Callers use this for
-   * despawnScene / collectSceneAsset later.
-   */
+  readonly world: OpenProjectWorld;
   readonly sceneRoot: number | null;
 }
-
-// ── Implementation ───────────────────────────────────────────────────────────
 
 /**
  * Open a game project and project its defaultScene (if any) into a fresh World.
  *
- * @param pointer - Project identifier (slug). Used to construct file paths;
- *   the reader is responsible for resolving them to actual content.
- * @param reader - Project-relative file reader. Receives paths like
- *   `'forge.json'` / `'scenes/main.pack.json'` and returns the content string.
- *   Throws on missing files (loadGameProject treats throws as `forge-missing`).
- *
- * @returns {@link OpenProjectResult} — `sceneRoot` is null when the project has
- *   no defaultScene or the scene pack cannot be resolved.
+ * @param pointer - Project identifier (slug).
+ * @param reader - Project-relative file reader.
  */
 export async function openProject(
   pointer: string,
@@ -81,17 +71,15 @@ export async function openProject(
 
   const defaultSceneGuid = gp.defaultScene as string;
 
-  // 3. Read the conventional scene pack. The pointer provides the project
-  //    context so the reader can construct the correct path.
+  // 3. Read the conventional scene pack.
   let packRaw: string;
   try {
-    // Conventional pack path: scenes/main.pack.json (single-scene default).
     packRaw = await reader(`scenes/main.pack.json`);
   } catch {
     return { world, sceneRoot: null };
   }
 
-  // 4. Parse the pack and locate the asset entry matching the defaultScene GUID.
+  // 4. Parse the pack and locate the asset entry.
   let pack: { assets?: Array<{ guid: string; kind: string; payload: unknown }> };
   try {
     pack = JSON.parse(packRaw);
@@ -120,8 +108,6 @@ export async function openProject(
     return { world, sceneRoot: null };
   }
 
-  // The dist may return the EntityHandle directly (number) or wrapped in
-  // SceneInstantiateOk ({ root, diagnostics }). Handle both shapes.
   const raw = res.value as unknown;
   const root: number =
     typeof raw === 'number' ? raw : (raw as { root: number }).root;
