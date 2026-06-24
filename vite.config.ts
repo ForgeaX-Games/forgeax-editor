@@ -39,20 +39,16 @@ const INTERFACE_DIR = existsSync(resolve(STUDIO_INTERFACE, 'src/app-kit.ts'))
 // travels with whichever interface checkout we resolved above.
 const DESIGN_DIR = resolve(INTERFACE_DIR, 'packages/design');
 // host-sdk / types are studio-layer packages only exercised by the wb:* plugin
-// path (studio-only; never rendered in the standalone editor shell). The
-// interface module graph still statically reaches them, so they must RESOLVE
-// even in a standalone clone where the studio tree is absent:
-//   - embedded (studio present): alias to the real studio sources.
-//   - standalone: alias host-sdk to a local stub (throws only if invoked,
-//     which cannot happen with no plugin iframe mounted); types is type-only
-//     so it can also point at the stub harmlessly.
+// path (studio-only; never rendered in the standalone editor shell). interface
+// now imports host-sdk as TYPES ONLY (the runtime port factories are injected
+// via PanelRenderers), so a standalone clone needs NO host-sdk runtime binding
+// and NO stub — type-only imports are erased at build. We still alias to the
+// real sources WHEN the studio tree is present (embedded mode) so types resolve.
 const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
 const HOST_SDK = resolve(STUDIO_ROOT, 'packages/host-sdk/src/index.ts');
 const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/types/src/index.ts');
-const HOST_SDK_STUB = resolve(PACKAGE_DIR, 'standalone/stubs/host-sdk.ts');
-const studioLayerAlias: Record<string, string> = {
-  '@forgeax/host-sdk': existsSync(HOST_SDK) ? HOST_SDK : HOST_SDK_STUB,
-};
+const studioLayerAlias: Record<string, string> = {};
+if (existsSync(HOST_SDK)) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
 if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 
 export default defineConfig({
