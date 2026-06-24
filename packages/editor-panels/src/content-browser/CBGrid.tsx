@@ -1,7 +1,8 @@
-import { useRef, useMemo, useCallback, useEffect, useState } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { CBAsset } from './types';
 import type { MultiSelectAPI } from './hooks';
+import { CBAssetItem } from './CBAssetItem';
 
 interface Props {
   items: CBAsset[];
@@ -10,13 +11,6 @@ interface Props {
   onDoubleClick?: (asset: CBAsset) => void;
   onContextMenu?: (e: React.MouseEvent, asset: CBAsset) => void;
 }
-
-const KIND_ICONS: Record<string, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
-};
 
 const GAP = 8;
 const LABEL_HEIGHT = 28;
@@ -78,27 +72,16 @@ export function CBGrid({ items, thumbnailSize, multiSelect, onDoubleClick, onCon
             >
               {rowItems.map((asset, colIdx) => {
                 const flatIndex = baseIndex + colIdx;
-                const selected = multiSelect.isSelected(asset);
                 return (
-                  <div
+                  <CBAssetItem
                     key={asset.guid}
-                    className={`cb-grid-item${selected ? ' sel' : ''}`}
-                    style={{ width: itemWidth, height: itemHeight }}
+                    asset={asset}
+                    selected={multiSelect.isSelected(asset)}
+                    thumbnailSize={thumbnailSize}
                     onClick={e => multiSelect.handleClick(flatIndex, e)}
                     onDoubleClick={() => onDoubleClick?.(asset)}
-                    onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, asset); }}
-                  >
-                    <div className="cb-grid-thumb" style={{ width: thumbnailSize, height: thumbnailSize }}>
-                      {asset.thumbnailUrl ? (
-                        <img src={asset.thumbnailUrl} alt={asset.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <span className="cb-grid-icon">{KIND_ICONS[asset.kind] ?? '📦'}</span>
-                      )}
-                    </div>
-                    <div className="cb-grid-label" title={`${asset.name}\n${asset.kind} · ${asset.guid}`}>
-                      {asset.name}
-                    </div>
-                  </div>
+                    onContextMenu={e => onContextMenu?.(e, asset)}
+                  />
                 );
               })}
             </div>

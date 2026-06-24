@@ -277,6 +277,24 @@
   overflow: hidden;
 }
 .cb-grid-icon { font-size: 24px; }
+.cb-thumb-sphere {
+  width: 70%;
+  height: 70%;
+  border-radius: 50%;
+  box-shadow: inset -4px -4px 8px rgba(0,0,0,0.4), inset 2px 2px 6px rgba(255,255,255,0.15);
+}
+.cb-thumb-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: rgba(0,0,0,0.7);
+  color: #ccc;
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.cb-grid-thumb { position: relative; }
 .cb-grid-label {
   margin-top: 4px;
   text-align: center;
@@ -352,3 +370,32 @@
   min-height: 20px;
 }
 .cb-status-selection { color: var(--accent, #4c9eff); }
+
+/* ── Rich tooltip ── */
+.cb-grid-item { position: relative; }
+.cb-rich-tooltip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  z-index: 200;
+  background: var(--panel-bg, #1e1e1e);
+  border: 1px solid var(--border, #555);
+  border-radius: 4px;
+  padding: 8px 10px;
+  min-width: 180px;
+  max-width: 260px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  font-size: 10px;
+}
+.cb-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.cb-tooltip-icon { font-size: 14px; }
+.cb-tooltip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-tooltip-row { color: var(--panel-fg, #999); padding: 1px 0; word-break: break-all; }
