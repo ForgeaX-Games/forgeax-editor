@@ -1,8 +1,8 @@
 /**
  * Content Browser V2 feature flag.
  *
- * Set `localStorage.setItem('forgeax.cb.v2', '1')` to enable.
- * Default: disabled (uses existing AssetsPanel).
+ * Default: enabled (V2 with toolbar, multi-select, virtualization).
+ * Set `localStorage.setItem('forgeax.cb.v2', '0')` to revert to V1.
  */
 export const CB_V2_ENABLED: boolean =
-  typeof localStorage !== 'undefined' && localStorage.getItem('forgeax.cb.v2') === '1';
+  typeof localStorage === 'undefined' || localStorage.getItem('forgeax.cb.v2') !== '0';
