@@ -13,6 +13,7 @@ import { CBGrid } from './CBGrid';
 import { CBList } from './CBList';
 import { CBColumn } from './CBColumn';
 import { CBStatusBar } from './CBStatusBar';
+import { CBToolbar } from './CBToolbar';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
@@ -162,6 +163,7 @@ export function ContentBrowserV2() {
 
   return (
     <div className="cb-root" onClick={handleContainerClick} onWheel={handleWheel}>
+      <CBToolbar currentPath={nav.currentPath} onReload={reload} />
       <CBNavigationBar nav={nav} gameSlug={gameSlug} />
       <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
         thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />

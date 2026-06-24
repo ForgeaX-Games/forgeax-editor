@@ -6,6 +6,7 @@ export { CBList } from './CBList';
 export { CBColumn } from './CBColumn';
 export { CBNavigationBar } from './CBNavigationBar';
 export { CBStatusBar } from './CBStatusBar';
+export { CBToolbar } from './CBToolbar';
 export { buildAssetContextMenu, buildFolderContextMenu } from './CBContextMenu';
 export * from './hooks';
 export * from './types';
