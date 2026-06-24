@@ -242,4 +242,51 @@ describe('w39 — writebackInstance drives the real engine collectSceneAsset cha
     expect(pack.assets[0]!.guid).toBe(SCENE_GUID);
     expect(pack.assets[0]!.kind).toBe('scene');
   });
+
+  it('(e) omitting handleToGuid surfaces a visible warning (not silent)', async () => {
+    // Affordance fix (r1 P3): when handleToGuid is missing the collector keeps
+    // raw handle ints for shared<T> fields -> an unloadable pack. That must not
+    // be silent; writebackInstance should advertise it via result.warnings.
+    defineComponent('W39_Warn', { v: 'f32' });
+
+    const asset = {
+      kind: 'scene' as const,
+      entities: [{ localId: 0, components: { W39_Warn: { v: 1 } } }],
+    };
+
+    const { world, root } = materialise(asset);
+
+    // No handleToGuid argument.
+    const result = await writebackInstance(world, {
+      packPath: 'assets/scenes/warn.pack.json',
+      sceneGuid: SCENE_GUID,
+      instanceRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings!.some((w) => w.includes('handleToGuid'))).toBe(true);
+  });
+
+  it('(f) a write failure carries a machine-readable .code', async () => {
+    // Affordance fix (r1 P3): failures must be programmatically branchable via
+    // .code, not only a free-form .error string. Force POST /api/files non-ok.
+    globalThis.fetch = (async () => ({ ok: false, status: 500 }) as Response) as unknown as typeof globalThis.fetch;
+
+    defineComponent('W39_Code', { v: 'f32' });
+    const asset = {
+      kind: 'scene' as const,
+      entities: [{ localId: 0, components: { W39_Code: { v: 1 } } }],
+    };
+    const { world, root } = materialise(asset);
+
+    const result = await writebackInstance(
+      world,
+      { packPath: 'assets/scenes/code.pack.json', sceneGuid: SCENE_GUID, instanceRoot: root },
+      new Map<number, string>([[1, 'x']]), // non-empty -> no warning noise
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('write-failed');
+  });
 });

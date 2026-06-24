@@ -139,6 +139,9 @@ describe('w13 — openProject projection', () => {
     // (SceneInstance + its owned entities)
     expect(snap.entityCount).toBeGreaterThan(0);
     expect(result.sceneRoot).toBeGreaterThan(0);
+    // P3 discriminant: a real scene was projected.
+    expect(result.status).toBe('opened');
+    expect(result.ok).toBe(true);
   });
 
   it('(b) fixture without defaultScene -> graceful skip (no throw, world exists)', async () => {
@@ -156,5 +159,26 @@ describe('w13 — openProject projection', () => {
     expect(result.sceneRoot).toBeNull();
     // World is empty (no entities from scene instantiation).
     expect(snap.entityCount).toBe(0);
+    // P3 discriminant: a successful open with no scene is NOT a failure —
+    // distinguishable from a load failure that also yields sceneRoot=null.
+    expect(result.status).toBe('no-scene');
+    expect(result.ok).toBe(true);
+  });
+
+  it('(c) invalid forge.json -> load-failed status (distinct from no-scene)', async () => {
+    // forge.json present but not valid JSON -> loadGameProject fails. This must
+    // be distinguishable from case (b): both yield sceneRoot=null, only the
+    // status/ok discriminant tells them apart (charter P3).
+    const reader = mapReader({
+      'forge.json': '{ not valid json',
+    });
+
+    const result = await openProject('test-broken', reader);
+
+    expect(result).toBeDefined();
+    expect(result.world).toBeDefined();
+    expect(result.sceneRoot).toBeNull();
+    expect(result.status).toBe('load-failed');
+    expect(result.ok).toBe(false);
   });
 });

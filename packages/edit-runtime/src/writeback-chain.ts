@@ -34,10 +34,32 @@ export interface WritebackTarget {
   instanceRoot: number;
 }
 
+/**
+ * Machine-readable failure stage for a writeback, so callers can branch
+ * programmatically instead of string-matching `error`. Mirrors the structured
+ * `.code` pattern from editor-core's discoverer-errors.ts (charter P3).
+ *
+ *   'collect-failed'   — collectSceneAsset / serializeSceneAssetToPack threw.
+ *   'serialize-failed' — reserved: JSON.stringify of the pack threw.
+ *   'write-failed'     — POST /api/files returned non-ok or fetch rejected.
+ */
+export type WritebackErrorCode =
+  | 'collect-failed'
+  | 'serialize-failed'
+  | 'write-failed';
+
 export interface WritebackResult {
   ok: boolean;
-  /** structured reason when ok===false (for the toolbar / log). */
+  /** machine-readable failure stage when ok===false (branch on this, not `error`). */
+  code?: WritebackErrorCode;
+  /** structured human/AI-readable reason when ok===false (for the toolbar / log). */
   error?: string;
+  /**
+   * Non-fatal advisories surfaced even when ok===true. Populated e.g. when
+   * `handleToGuid` was omitted, so raw handle integers pass through and the
+   * written pack may be unloadable elsewhere (the failure is no longer silent).
+   */
+  warnings?: string[];
 }
 
 /**
@@ -53,13 +75,31 @@ export async function writebackInstance(
   target: WritebackTarget,
   handleToGuid?: Map<number, string>,
 ): Promise<WritebackResult> {
+  const warnings: string[] = [];
+  // Visible advisory: without the handle->GUID reverse index the collector keeps
+  // raw handle integers for shared<T> fields (MeshFilter.assetHandle /
+  // MeshRenderer.materials), producing a pack that is unloadable elsewhere. Make
+  // that non-silent rather than letting it pass through quietly (charter P3).
+  if (!handleToGuid || handleToGuid.size === 0) {
+    const msg =
+      'writebackInstance: handleToGuid missing/empty — raw handle integers will ' +
+      'pass through for shared<T> fields; the written pack may be unloadable.';
+    warnings.push(msg);
+    console.warn(msg);
+  }
+
   let json: string;
   try {
     const asset = collectSceneAsset(world, target.instanceRoot, handleToGuid);
     const pack = serializeSceneAssetToPack(asset, target.sceneGuid);
     json = JSON.stringify(pack, null, 2) + '\n';
   } catch (err) {
-    return { ok: false, error: `collect/serialize failed: ${(err as Error)?.message ?? String(err)}` };
+    return {
+      ok: false,
+      code: 'collect-failed',
+      error: `collect/serialize failed: ${(err as Error)?.message ?? String(err)}`,
+      warnings,
+    };
   }
   try {
     const r = await fetch('/api/files', {
@@ -67,8 +107,15 @@ export async function writebackInstance(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: target.packPath, content: json }),
     });
-    return r.ok ? { ok: true } : { ok: false, error: `POST /api/files -> ${r.status}` };
+    return r.ok
+      ? { ok: true, warnings }
+      : { ok: false, code: 'write-failed', error: `POST /api/files -> ${r.status}`, warnings };
   } catch (err) {
-    return { ok: false, error: `disk write failed: ${(err as Error)?.message ?? String(err)}` };
+    return {
+      ok: false,
+      code: 'write-failed',
+      error: `disk write failed: ${(err as Error)?.message ?? String(err)}`,
+      warnings,
+    };
   }
 }
