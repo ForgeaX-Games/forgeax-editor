@@ -165,81 +165,85 @@ export function ContentBrowserV2() {
     setThumbnailSize(prev => Math.max(48, Math.min(200, prev - Math.sign(e.deltaY) * 8)));
   }, [viewMode]);
 
-  if (!gameSlug || gameSlug === 'default') {
-    return <div className="cb-root"><div style={{ padding: 16, opacity: 0.5 }}>No game open</div></div>;
-  }
+  const noGame = !gameSlug || gameSlug === 'default';
 
   return (
     <div className="cb-root" onWheel={handleWheel}>
       <CBToolbar currentPath={nav.currentPath} onReload={reload} />
-      <div className="cb-split">
-        {/* Left: Source panel */}
-        <div className="cb-source-panel">
-          {favorites.favorites.length > 0 && (
+      {noGame ? (
+        <div style={{ padding: 16, opacity: 0.6, textAlign: 'center', marginTop: 32 }}>
+          Open a game to browse assets
+        </div>
+      ) : (
+        <div className="cb-split">
+          {/* Left: Source panel */}
+          <div className="cb-source-panel">
+            {favorites.favorites.length > 0 && (
+              <div className="cb-source-section">
+                <div className="cb-source-title">★ Favorites</div>
+                {favorites.favorites.map(path => (
+                  <button key={path} className={`cb-source-item${nav.currentPath === path ? ' sel' : ''}`}
+                    onClick={() => nav.navigate(path)}>
+                    {path.split('/').pop() || path}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="cb-source-section">
-              <div className="cb-source-title">★ Favorites</div>
-              {favorites.favorites.map(path => (
-                <button key={path} className={`cb-source-item${nav.currentPath === path ? ' sel' : ''}`}
-                  onClick={() => nav.navigate(path)}>
-                  {path.split('/').pop() || path}
+              <div className="cb-source-title">{gameSlug}</div>
+              <button className={`cb-source-item${!nav.currentPath ? ' sel' : ''}`}
+                onClick={() => nav.navigate('')}>
+                All
+              </button>
+              {packDirs.map(dir => (
+                <button key={dir} className={`cb-source-item${nav.currentPath === dir ? ' sel' : ''}`}
+                  onClick={() => nav.navigate(dir)}
+                  style={{ paddingLeft: `${8 + dir.split('/').length * 8}px` }}>
+                  📁 {dir.split('/').pop()}
                 </button>
               ))}
             </div>
-          )}
-          <div className="cb-source-section">
-            <div className="cb-source-title">{gameSlug}</div>
-            <button className={`cb-source-item${!nav.currentPath ? ' sel' : ''}`}
-              onClick={() => nav.navigate('')}>
-              All
-            </button>
-            {packDirs.map(dir => (
-              <button key={dir} className={`cb-source-item${nav.currentPath === dir ? ' sel' : ''}`}
-                onClick={() => nav.navigate(dir)}
-                style={{ paddingLeft: `${8 + dir.split('/').length * 8}px` }}>
-                📁 {dir.split('/').pop()}
-              </button>
-            ))}
+          </div>
+
+          {/* Right: Asset view */}
+          <div className="cb-asset-view" onClick={handleContainerClick}>
+            <CBNavigationBar nav={nav} gameSlug={gameSlug} />
+            <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
+              thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
+            {loading ? (
+              <div style={{ padding: 16, opacity: 0.5 }}>Loading assets…</div>
+            ) : sortedAssets.length === 0 ? (
+              <div style={{ padding: 16, opacity: 0.5 }}>
+                {filter.activeFilterCount > 0 || filter.searchQuery ? 'No matching assets' : 'No assets found'}
+              </div>
+            ) : viewMode === 'grid' ? (
+              <CBGrid
+                items={sortedAssets}
+                thumbnailSize={thumbnailSize}
+                multiSelect={multiSelect}
+                onDoubleClick={handleDoubleClick}
+                onContextMenu={handleContextMenu}
+              />
+            ) : viewMode === 'list' ? (
+              <CBList
+                items={sortedAssets}
+                multiSelect={multiSelect}
+                onDoubleClick={handleDoubleClick}
+                onContextMenu={handleContextMenu}
+              />
+            ) : (
+              <CBColumn
+                items={sortedAssets}
+                multiSelect={multiSelect}
+                sort={sort}
+                onDoubleClick={handleDoubleClick}
+                onContextMenu={handleContextMenu}
+              />
+            )}
+            <CBStatusBar totalItems={sortedAssets.length} selection={multiSelect.selection} />
           </div>
         </div>
-
-        {/* Right: Asset view */}
-        <div className="cb-asset-view" onClick={handleContainerClick}>
-          <CBNavigationBar nav={nav} gameSlug={gameSlug} />
-          <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
-            thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
-          {loading ? (
-            <div style={{ padding: 16, opacity: 0.5 }}>Loading assets…</div>
-          ) : sortedAssets.length === 0 ? (
-            <div style={{ padding: 16, opacity: 0.5 }}>
-              {filter.activeFilterCount > 0 || filter.searchQuery ? 'No matching assets' : 'No assets found'}
-            </div>
-          ) : viewMode === 'grid' ? (
-            <CBGrid
-              items={sortedAssets}
-              thumbnailSize={thumbnailSize}
-              multiSelect={multiSelect}
-              onDoubleClick={handleDoubleClick}
-              onContextMenu={handleContextMenu}
-            />
-          ) : viewMode === 'list' ? (
-            <CBList
-              items={sortedAssets}
-              multiSelect={multiSelect}
-              onDoubleClick={handleDoubleClick}
-              onContextMenu={handleContextMenu}
-            />
-          ) : (
-            <CBColumn
-              items={sortedAssets}
-              multiSelect={multiSelect}
-              sort={sort}
-              onDoubleClick={handleDoubleClick}
-              onContextMenu={handleContextMenu}
-            />
-          )}
-          <CBStatusBar totalItems={sortedAssets.length} selection={multiSelect.selection} />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
