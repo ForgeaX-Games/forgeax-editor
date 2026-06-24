@@ -6,6 +6,7 @@ import { dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, 
 import { AssetFolderTree } from './AssetFolderTree';
 import { AssetCard } from './AssetCard';
 import { Breadcrumb } from './Breadcrumb';
+import { CB_V2_ENABLED, ContentBrowserV2 } from './content-browser';
 
 type ViewMode = 'list' | 'grid';
 
@@ -28,6 +29,8 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export function AssetsPanel() {
+  if (CB_V2_ENABLED) return <ContentBrowserV2 />;
+
   const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();

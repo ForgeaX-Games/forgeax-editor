@@ -101,6 +101,7 @@
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+        "@tanstack/react-virtual": "^3.14.3",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -450,6 +451,15 @@
         "@forgeax/engine-rhi-wgpu": "workspace:*",
       },
     },
+    "packages/engine/packages/rhi-null": {
+      "name": "@forgeax/engine-rhi-null",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+      },
+    },
     "packages/engine/packages/rhi-webgpu": {
       "name": "@forgeax/engine-rhi-webgpu",
       "version": "0.0.0",
@@ -480,6 +490,7 @@
         "@forgeax/engine-pack": "workspace:^",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-null": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -949,6 +960,8 @@
 
     "@forgeax/engine-rhi-debug": ["@forgeax/engine-rhi-debug@workspace:packages/engine/packages/rhi-debug"],
 
+    "@forgeax/engine-rhi-null": ["@forgeax/engine-rhi-null@workspace:packages/engine/packages/rhi-null"],
+
     "@forgeax/engine-rhi-webgpu": ["@forgeax/engine-rhi-webgpu@workspace:packages/engine/packages/rhi-webgpu"],
 
     "@forgeax/engine-rhi-wgpu": ["@forgeax/engine-rhi-wgpu@workspace:packages/engine/packages/rhi-wgpu"],
@@ -1192,6 +1205,10 @@
     "@sideway/pinpoint": ["@sideway/pinpoint@2.0.0", "", {}, "sha512-RNiOoTPkptFtSVzQevY/yWtZwf/RxyVnPy/OcA9HBM3MlGDnBEYL5B41H0MTn0Uec8Hi+2qUtTfG2WWZBmMejQ=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "@tanstack/react-virtual": ["@tanstack/react-virtual@3.14.3", "", { "dependencies": { "@tanstack/virtual-core": "3.17.1" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-k/cnHPVaOfn46hSbiY6n4Dzf4QjCGWSF40zR5QIIYUqPAjpA6TN7InfYmcMiDVQGP2iUn9xsRbAl8u1v3UmeVQ=="],
+
+    "@tanstack/virtual-core": ["@tanstack/virtual-core@3.17.1", "", {}, "sha512-VZyW2Uiml5tmBZwPGrSD3Sz73OxzljQMCmzYHsUTPEuTsERf5xwa+uWb01xEzkz3ZSYTjj8NEb/mKHvgKxyZdA=="],
 
     "@tauri-apps/api": ["@tauri-apps/api@2.11.0", "", {}, "sha512-7CinYODhky9lmO23xHnUFv0Xt43fbtWMyxZcLcRBlFkcgXKuEirBvHpmtJ89YMhyeGcq20Wuc47Fa4XjyniywA=="],
 
