@@ -6,12 +6,8 @@ import { dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, 
 import { AssetFolderTree } from './AssetFolderTree';
 import { AssetCard } from './AssetCard';
 import { Breadcrumb } from './Breadcrumb';
-import { lazy, Suspense } from 'react';
-import { CB_V2_ENABLED } from './content-browser/feature-flags';
-
-const ContentBrowserV2 = lazy(() =>
-  import('./content-browser/ContentBrowserV2').then(m => ({ default: m.ContentBrowserV2 }))
-);
+import { Suspense } from 'react';
+import { ContentBrowserV2 } from './content-browser/ContentBrowserV2';
 
 type ViewMode = 'list' | 'grid';
 
@@ -34,8 +30,9 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export function AssetsPanel() {
-  if (CB_V2_ENABLED) return <Suspense fallback={<div style={{ padding: 16, opacity: 0.5 }}>Loading Content Browser…</div>}><ContentBrowserV2 /></Suspense>;
+  return <ContentBrowserV2 />;
 
+  /* V1 legacy code below — preserved for rollback */
   const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
