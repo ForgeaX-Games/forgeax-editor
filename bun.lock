@@ -45,6 +45,8 @@
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@tanstack/react-virtual": "^3.14.3",
+        "@tanstack/virtual-core": "^3.17.1",
         "lucide-react": "^0.460.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
