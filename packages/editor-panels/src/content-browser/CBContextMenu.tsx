@@ -1,5 +1,5 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
-import { setAssetSelection, requestRefAsset } from '@forgeax/editor-shared';
+import { setAssetSelection, requestRefAsset, requestAddAssetsToChat, type AssetChatRef } from '@forgeax/editor-shared';
 
 export interface ContextMenuPosition {
   x: number;
@@ -52,25 +52,31 @@ export function buildAssetContextMenu(
 
     // ── AI ──
     { id: 'add-to-chat', label: '🤖 Add to AI Chat', action: () => {
-      for (const a of targets) {
-        requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath });
-      }
-      // M5: batch addAssetToChat with full payload via dedicated protocol message
+      const refs: AssetChatRef[] = targets.map(a => ({
+        type: 'asset' as const,
+        guid: a.guid,
+        kind: a.kind,
+        name: a.name,
+        path: a.packPath,
+        payload: a.payload,
+      }));
+      requestAddAssetsToChat(refs);
     }},
     { id: 'add-with-deps', label: '🤖 Add with Dependencies', action: () => {
       const visited = new Set<string>();
+      const refs: AssetChatRef[] = [];
       for (const a of targets) {
         if (visited.has(a.guid)) continue;
         visited.add(a.guid);
-        requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath });
+        refs.push({ type: 'asset', guid: a.guid, kind: a.kind, name: a.name, path: a.packPath, payload: a.payload });
         for (const refGuid of a.refs) {
           if (visited.has(refGuid)) continue;
           visited.add(refGuid);
           const dep = allAssets.find(x => x.guid === refGuid);
-          if (dep) requestRefAsset({ guid: dep.guid, kind: dep.kind, name: dep.name, packPath: dep.packPath });
+          if (dep) refs.push({ type: 'asset', guid: dep.guid, kind: dep.kind, name: dep.name, path: dep.packPath, payload: dep.payload });
         }
       }
-      // M5: batch addAssetToChat with payload + dependency graph
+      requestAddAssetsToChat(refs);
     }},
   ];
 }
@@ -98,10 +104,25 @@ export function buildFolderContextMenu(
 
     // ── AI ──
     { id: 'add-folder-chat', label: '🤖 Add Folder to AI Chat', action: () => {
-      for (const a of assetsInFolder) {
-        requestRefAsset({ guid: a.guid, kind: a.kind, name: a.name, packPath: a.packPath });
-      }
-      // M5: batch addAssetToChat with folder summary via dedicated protocol
+      const kinds: Record<string, number> = {};
+      for (const a of assetsInFolder) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
+      const ref: AssetChatRef = {
+        type: 'folder',
+        name: folder.name,
+        path: folder.path,
+        summary: { totalAssets: assetsInFolder.length, kinds, guids: assetsInFolder.map(a => a.guid) },
+      };
+      requestAddAssetsToChat([ref]);
+    }},
+    { id: 'add-folder-summary', label: '🤖 Add Folder Summary to Chat', action: () => {
+      const kinds: Record<string, number> = {};
+      for (const a of assetsInFolder) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
+      requestAddAssetsToChat([{
+        type: 'folder',
+        name: folder.name,
+        path: folder.path,
+        summary: { totalAssets: assetsInFolder.length, kinds, guids: assetsInFolder.map(a => a.guid) },
+      }]);
     }},
   ];
 }

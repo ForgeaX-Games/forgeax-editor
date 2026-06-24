@@ -115,6 +115,7 @@ export type {
   EditorSnapshot,
   EditorSyncMsg,
   PopoutGeom,
+  AssetChatRef,
 } from './sync-channel';
 
 // ── Anim ──
@@ -220,6 +221,7 @@ export {
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
+  requestAddAssetsToChat,
   useDocVersion,
   useMainConnected,
   useGizmoMode,

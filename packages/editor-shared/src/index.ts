@@ -41,6 +41,7 @@ export {
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
+  requestAddAssetsToChat,
   useDocVersion,
   useMainConnected,
   useGizmoMode,
@@ -70,7 +71,7 @@ export {
   getAssetSelection,
   useAssetSelection,
 } from '@forgeax/editor-core';
-export type { SceneFileEntry, PlayConfig, SelectedAsset } from '@forgeax/editor-core';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, AssetChatRef } from '@forgeax/editor-core';
 
 // ── Entity operations ──
 export {
