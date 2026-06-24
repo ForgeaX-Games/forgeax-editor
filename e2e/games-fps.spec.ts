@@ -20,6 +20,8 @@ import {
   assertEntityCount,
   assertNoForbiddenErrors,
   assertNonEmptyFrames,
+  assertNonFallbackScene,
+  collectConsoleLogs,
   collectErrors,
   gotoGame,
 } from './games-smoke-helpers';
@@ -27,12 +29,17 @@ import {
 test.describe('fps skip-path smoke', () => {
   test('fps: private self-load runs after host skip, renders, HUD present', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'fps');
 
     // fps spawns scene geometry + weapons + colliders via its private path.
     // entityCount > 0 confirms the entry ran and populated the world after the
     // host skipped instantiate.
-    await assertEntityCount(page);
+    const count = await assertEntityCount(page);
+
+    // AC-04 non-fallback: bootstrap was really called (no fallback-scene marker
+    // + entity count above the bare-camera floor), not the host's degraded path.
+    assertNonFallbackScene(logs, count);
 
     await assertNonEmptyFrames(page);
 

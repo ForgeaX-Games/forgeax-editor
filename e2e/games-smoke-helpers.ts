@@ -37,9 +37,37 @@ export const FORBIDDEN_ERROR_SUBSTRINGS = [
   'defaultScene', // any defaultScene-tagged engine/host error
 ] as const;
 
+// Substrings the host (play-runtime main.ts) logs ONLY when it falls back to
+// the bare 2-entity camera scene instead of calling the game's named bootstrap
+// entry. These are the smoking gun for the regression M7 fixes: the pre-bump
+// nested engine's loadGame read `module.default`, rejected the 6 named-only
+// `bootstrap` games, and the host took this fallback branch
+// (main.ts:399 `loadGame: <code> — using fallback`, main.ts:415 `using
+// fallback scene`). After the bump, loadGame resolves the named bootstrap and
+// the host calls `entry(world, ctx)` — so NONE of these markers must appear.
+//
+// AC-04 non-fallback invariant (plan-strategy §5.4, implement-review concern
+// 1c): a directly-observable proof, from the e2e side alone, that bootstrap was
+// really invoked rather than the loader silently degrading to a fallback scene.
+export const FALLBACK_MARKER_SUBSTRINGS = [
+  'using fallback', // main.ts:399 `loadGame: <code> — using fallback`
+  'fallback scene', // main.ts:362 / main.ts:415 fallback-scene branch
+] as const;
+
+// A real game scene always spawns far more than the fallback branch's two
+// entities (a single Transform + Camera, main.ts:416-419). Any count at or
+// below this floor means the host rendered the bare fallback, not the game.
+export const FALLBACK_ENTITY_FLOOR = 2;
+
 /** A page/console error captured during a smoke run, with its origin. */
 export interface CapturedError {
   source: 'pageerror' | 'console';
+  text: string;
+}
+
+/** A console message captured at any level (used for fallback-marker checks). */
+export interface CapturedLog {
+  type: string;
   text: string;
 }
 
@@ -54,6 +82,18 @@ export function collectErrors(page: Page): CapturedError[] {
     if (m.type() === 'error') errors.push({ source: 'console', text: m.text() });
   });
   return errors;
+}
+
+/**
+ * Attach a console listener that captures EVERY console message (not just
+ * errors) and return the live array. The host logs its fallback-scene decision
+ * at `log` level, so assertNonFallbackScene needs the full stream — collectErrors
+ * (error-only) would miss it. Call before page.goto so nothing is missed.
+ */
+export function collectConsoleLogs(page: Page): CapturedLog[] {
+  const logs: CapturedLog[] = [];
+  page.on('console', (m) => logs.push({ type: m.type(), text: m.text() }));
+  return logs;
 }
 
 /**
@@ -141,4 +181,38 @@ export function assertNoForbiddenErrors(errors: CapturedError[]): void {
     offending,
     `forbidden errors present:\n${offending.map((e) => `[${e.source}] ${e.text}`).join('\n')}`,
   ).toEqual([]);
+}
+
+/**
+ * Assert the game ran via its named `bootstrap` entry, NOT the host's fallback
+ * scene (AC-04 non-fallback invariant; the regression M7 fixes). Two
+ * independent, e2e-observable signals must both hold:
+ *
+ *   1. No fallback-decision marker appeared in the console stream
+ *      (FALLBACK_MARKER_SUBSTRINGS) — the host only logs these when loadGame
+ *      rejects the entry (the pre-bump nested-engine `module.default` reject of
+ *      named-only bootstrap) and it degrades to the bare camera scene.
+ *   2. The live world holds more than the fallback floor of entities — a
+ *      fallback renders exactly a Transform + Camera (2 entities), whereas
+ *      every real game's bootstrap spawns its own scene/systems well above it.
+ *
+ * `count` is the entity count already read by assertEntityCount, so callers do
+ * not re-poll. Pass the same value to keep the single-load upper bound and the
+ * non-fallback lower bound consistent.
+ */
+export function assertNonFallbackScene(logs: CapturedLog[], count: number): void {
+  const fallbackHits = logs.filter((l) =>
+    FALLBACK_MARKER_SUBSTRINGS.some((sub) => l.text.includes(sub)),
+  );
+  expect(
+    fallbackHits,
+    `host took the fallback-scene path (bootstrap NOT called):\n${fallbackHits
+      .map((l) => `[${l.type}] ${l.text}`)
+      .join('\n')}`,
+  ).toEqual([]);
+
+  expect(
+    count,
+    `entity count ${count} <= fallback floor ${FALLBACK_ENTITY_FLOOR} — host likely rendered the bare fallback camera, not the game's bootstrap scene`,
+  ).toBeGreaterThan(FALLBACK_ENTITY_FLOOR);
 }

@@ -20,6 +20,8 @@ import {
   assertEntityCount,
   assertNoForbiddenErrors,
   assertNonEmptyFrames,
+  assertNonFallbackScene,
+  collectConsoleLogs,
   collectErrors,
   gotoGame,
 } from './games-smoke-helpers';
@@ -27,20 +29,26 @@ import {
 test.describe('pure-code games smoke', () => {
   test('spin-cube: pure-code world spawns, renders, no defaultScene error', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'spin-cube');
 
     // 24 cubes + camera spawned purely in code; the orphan scene.pack.json on
     // disk must not have been instantiated by the host (no defaultScene field).
-    await assertEntityCount(page);
+    const count = await assertEntityCount(page);
+    // AC-04 non-fallback: bootstrap ran (24-cube world), not the bare fallback.
+    assertNonFallbackScene(logs, count);
     await assertNonEmptyFrames(page);
     assertNoForbiddenErrors(errors);
   });
 
   test('shoot-opt: pure-code world spawns, renders, no defaultScene error', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'shoot-opt');
 
-    await assertEntityCount(page);
+    const count = await assertEntityCount(page);
+    // AC-04 non-fallback: bootstrap ran (enemies + projectiles), not fallback.
+    assertNonFallbackScene(logs, count);
     await assertNonEmptyFrames(page);
     // No HUD assertion — shoot-opt has no DOM HUD.
     assertNoForbiddenErrors(errors);

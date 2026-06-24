@@ -32,6 +32,8 @@ import {
   assertEntityCount,
   assertNoForbiddenErrors,
   assertNonEmptyFrames,
+  assertNonFallbackScene,
+  collectConsoleLogs,
   collectErrors,
   gotoGame,
 } from './games-smoke-helpers';
@@ -39,6 +41,7 @@ import {
 test.describe('pack+GUID games smoke', () => {
   test('hellforge: host-fed scene loads single, renders, HUD present', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'hellforge');
 
     // Scene single-load: the encampment pack (Ground + props + campfire) plus
@@ -48,6 +51,10 @@ test.describe('pack+GUID games smoke', () => {
     const count = await assertEntityCount(page);
     const SINGLE_LOAD_MAX = 85;
     expect(count, `hellforge entity count ${count} exceeds single-load bound`).toBeLessThan(SINGLE_LOAD_MAX);
+
+    // AC-04 non-fallback: host resolved + instantiated the named bootstrap entry
+    // (host-fed scene), not the bare fallback camera (concern 1c regression).
+    assertNonFallbackScene(logs, count);
 
     await assertNonEmptyFrames(page);
 
@@ -60,6 +67,7 @@ test.describe('pack+GUID games smoke', () => {
 
   test('test3: host-fed scene loads single, renders, no spawn errors', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'test3');
 
     // test3's pack was nodes→entities + material→materials migrated; a missed
@@ -71,6 +79,10 @@ test.describe('pack+GUID games smoke', () => {
     const SINGLE_LOAD_MAX = 85;
     expect(count, `test3 entity count ${count} exceeds single-load bound`).toBeLessThan(SINGLE_LOAD_MAX);
 
+    // AC-04 non-fallback: host-fed bootstrap ran (migrated pack scene), not the
+    // bare fallback camera.
+    assertNonFallbackScene(logs, count);
+
     await assertNonEmptyFrames(page);
 
     // test3 has no DOM HUD — no HUD assertion (plan-strategy: skip where N/A).
@@ -79,6 +91,7 @@ test.describe('pack+GUID games smoke', () => {
 
   test('cow-survivor: first-level host-fed scene loads single, renders, HUD present', async ({ page }) => {
     const errors = collectErrors(page);
+    const logs = collectConsoleLogs(page);
     await gotoGame(page, 'cow-survivor');
 
     // First level (idx===0) takes the host-fed branch in loadLevel — the host
@@ -89,6 +102,10 @@ test.describe('pack+GUID games smoke', () => {
     const count = await assertEntityCount(page);
     const SINGLE_LOAD_MAX = 350;
     expect(count, `cow entity count ${count} exceeds single-load bound`).toBeLessThan(SINGLE_LOAD_MAX);
+
+    // AC-04 non-fallback: host-fed bootstrap ran (level1 scene + player), not
+    // the bare fallback camera.
+    assertNonFallbackScene(logs, count);
 
     await assertNonEmptyFrames(page);
 
