@@ -1,3 +1,5 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: getTape() now returns Tape | DebugError | undefined; existing self-contained tape tests always get Tape back, safe to narrow with any cast
+// biome-ignore-all lint/style/noNonNullAssertion: test assertions on mock stubs verified by parent expect guards
 // m3-3: bootstrap integration test — verify FORGEAX_ENGINE_RHI_DEBUG=1 wiring:
 // wrap -> wrapCreateShaderModule -> onFrameEnd listener register -> draw -> frameMark.
 //
@@ -153,7 +155,7 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle'); // 1 frame complete -> finalizing -> idle
 
     // Check tape events
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
     expect(tape?.events).toHaveLength(1);
     expect(tape?.events[0]?.kind).toBe('frameMark');
@@ -187,7 +189,7 @@ describe('bootstrap integration (m3-3)', () => {
     // After frame-end, recorder should have transitioned
     expect(debugInst.getState()).toBe('idle');
 
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
     expect(tape?.events).toHaveLength(1);
     expect(tape?.events[0]?.kind).toBe('frameMark');
@@ -210,12 +212,12 @@ describe('bootstrap integration (m3-3)', () => {
     // For this test, we verify the frameMark behavior directly.
     debugInst.onFrameEnd();
 
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
 
     // frameMark should be the last event (or the only event if no RHI calls)
     // biome-ignore lint/style/noNonNullAssertion: guarded by expect above — tape is defined
-    const frameMarkEvents = tape!.events.filter((e) => e.kind === 'frameMark');
+    const frameMarkEvents = tape!.events.filter((e: any) => e.kind === 'frameMark');
     expect(frameMarkEvents).toHaveLength(1);
     // biome-ignore lint/style/noNonNullAssertion: guarded by toHaveLength(1)
     expect(frameMarkEvents[0]!.kind).toBe('frameMark');
@@ -238,7 +240,7 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle');
 
     // No tape should be produced (nothing recorded)
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeUndefined();
   });
 
@@ -265,9 +267,9 @@ describe('bootstrap integration (m3-3)', () => {
     expect(result.ok).toBe(true);
 
     // The tape should contain a createShaderModule event
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
-    const csmEvents = tape?.events.filter((e) => e.kind === 'createShaderModule');
+    const csmEvents = tape?.events.filter((e: any) => e.kind === 'createShaderModule');
     expect(csmEvents).toHaveLength(1);
   });
 });

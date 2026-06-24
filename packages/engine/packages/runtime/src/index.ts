@@ -624,6 +624,8 @@ export {
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
 } from './createRenderer';
+// ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
+export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';
 export { registerRuntimeInspector } from './register-inspector';
 
 // ─── Screen-to-entity picking (feat-20260529-picking-raycasting-screen-to-entity M3 / w14) ──
