@@ -1,4 +1,9 @@
-/** Vector agent avatar art (forgeax-preview port). */
+/** Vector agent avatar art (forgeax-preview port).
+ *
+ *  ADR-0019: 当 agent 在 server 端有 avatarRules (AVATAR.md 已 seed) 时,
+ *  优先渲染 <AgentAvatarVideo>; 否则保留原 SVG 渲染. 调用方完全不用区分.
+ */
+import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
 
 type Props = {
   agentId: string;
@@ -6,6 +11,9 @@ type Props = {
   fallback: string;
   size?: number;
   glass?: boolean;
+  /** 'conversational' = 跟 chat 事件联动 (默认); 'idle' = 永远循环 default state.
+   *  列表 / register / hover 摘要等"不参与对话流"的位置传 'idle'. */
+  mode?: 'conversational' | 'idle';
 };
 
 function AvatarArt({ agentId }: { agentId: string }) {
@@ -106,11 +114,11 @@ export function accentForRoleTribe(tribe: string): string {
   return TRIBE_ACCENT[tribe] ?? 'var(--primary)';
 }
 
-export function AgentAvatar({ agentId, accent, fallback, size = 28, glass = false }: Props) {
+export function AgentAvatar({ agentId, accent, fallback, size = 28, glass = false, mode = 'conversational' }: Props) {
   const art = AvatarArt({ agentId });
   const gradId = `ag-glass-${agentId.replace(/[^a-z0-9-]/gi, '-')}`;
 
-  return (
+  const svgFallback = (
     <span
       className={`agent-avatar agent-avatar--art${glass ? ' agent-avatar--glass' : ''}`}
       style={
@@ -147,5 +155,16 @@ export function AgentAvatar({ agentId, accent, fallback, size = 28, glass = fals
         </svg>
       </span>
     </span>
+  );
+
+  return (
+    <AgentAvatarVideo
+      agentId={agentId}
+      mode={mode}
+      size={size}
+      shape="circle"
+      className="agent-avatar agent-avatar--video"
+      fallback={svgFallback}
+    />
   );
 }

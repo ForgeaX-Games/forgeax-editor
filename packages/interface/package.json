@@ -14,15 +14,16 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b tsconfig.lint.json && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test": "bun test src/lib src/components",
     "test:e2e": "node test/e2e/smoke.mjs",
-    "lint": "tsc --noEmit",
-    "lint:agnostic": "! grep -rEn \"(from|import\\()\\s*['\\\"]@forgeax/editor\" src --include='*.ts' --include='*.tsx'"
+    "lint": "tsc --noEmit -p tsconfig.lint.json",
+    "lint:agnostic": "! grep -rEn \"(from|import\\()\\s*['\\\"]@forgeax/editor\" src --include='*.ts' --include='*.tsx'",
+    "lint:dep": "depcruise -c .dependency-cruiser.cjs src"
   },
   "dependencies": {
     "@google/model-viewer": "^4.2.0",
@@ -60,6 +61,7 @@
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "dependency-cruiser": "^17.4.3",
     "postcss": "^8.5.14",
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",

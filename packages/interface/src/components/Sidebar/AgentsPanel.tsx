@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode, type KeyboardEvent, type C
 import { FileCode2, FileJson, FileText, FileImage, FileAudio, File as FileIcon } from 'lucide-react';
 import { useAppStore, type LiveAgent, type AgentFileTouch } from '../../store';
 import { openAgentDetail } from '../../lib/open-agent-detail';
+import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
 import { useTranslation } from '@/i18n';
 
 function FileGlyph({ name }: { name: string }): ReactNode {
@@ -287,7 +288,18 @@ function LiveAgentCard({
         aria-selected={active}
         tabIndex={tabbable ? 0 : -1}
       >
-        <span className="ac-avatar" style={{ background: gradient }}>{initialFor(agent.display)}</span>
+        {/* ADR-0019: 列表视图 - mode='idle' 循环播 default (期待), 不参与对话状态机.
+         *  size 跟 .ac-avatar (32px) 对齐; 不传 className=ac-avatar 因为 .ac-avatar 自带
+         *  display:inline-flex 文字居中, 跟 video 不冲突但容易踩 background 渲染奇怪. */}
+        <AgentAvatarVideo
+          agentId={agent.path}
+          mode="idle"
+          size={32}
+          shape="circle"
+          fallback={
+            <span className="ac-avatar" style={{ background: gradient }}>{initialFor(agent.display)}</span>
+          }
+        />
         <span className="ac-name-block">
           <span className="ac-name">
             {isMain && <span className="ac-main-pin" aria-label={t('agentsPanel.mainAgent')}>★</span>}

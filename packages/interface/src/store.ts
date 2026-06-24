@@ -90,6 +90,45 @@ export interface NetworkEntry {
   ts: number;
 }
 
+// ── Observability (trace + log) telemetry ───────────────────────────────────
+// Wire shapes MIRROR `@forgeax/types`'s observability schema (SpanData /
+// LogRecord / TelemetryRecord). interface has no dep on @forgeax/types, so the
+// line shape is re-declared locally as plain TS (Schema-as-Contract lives in
+// packages/types; this is the consumer-side view). Both信道 feed the SAME slice:
+//   - node→server→WS  `{ type:'telemetry',     records }`  (handleDaemonWs)
+//   - iframe→shell     `{ type:'VAG_TELEMETRY', records }`  (healthBridge)
+// 见 .claude/docs/架构设计/forgeax-os/可观测性-trace-log-v3-B档-并行执行计划-2026-06-24.md §B。
+export interface TelemetrySpan {
+  kind: 'span';
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  startTs: number;
+  /** 缺失 = provisional(onStart 临时态),渲染成「进行中」。 */
+  endTs?: number;
+  provisional?: boolean;
+  attrs?: Record<string, unknown>;
+  events?: Array<{ name: string; ts: number; attrs?: Record<string, unknown> }>;
+  status?: { code: 'ok' | 'error'; message?: string };
+  sid?: string;
+  agentId?: string;
+}
+
+export interface TelemetryLog {
+  kind: 'log';
+  ts: number;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  msg: string;
+  fields?: Record<string, unknown>;
+  traceId?: string;
+  spanId?: string;
+  sid?: string;
+  agentId?: string;
+}
+
+export type TelemetryRecord = TelemetrySpan | TelemetryLog;
+
 export interface SubAgentRun {
   emitterId: string;
   text: string;
@@ -145,6 +184,9 @@ export interface QueuedMessage {
  *  queueing it behind the current turn. */
 export interface SendMessageOpts {
   handoff?: 'steer';
+  /** 多模态附件(图片)。每项 `{ kind:'image', mediaType, data(base64 或 dataUrl) }`。
+   *  透传进 /api/sessions/:sid/messages 的 payload → 内核 facade 组 image block(forgeax-core)。 */
+  attachments?: Array<Record<string, unknown>>;
 }
 
 export interface ChatMessage {
@@ -490,7 +532,7 @@ interface AppState {
    * events go to `.forgeax/runs/<runId>.jsonl` (AG-UI format), NOT to the
    * forgeax-cli `team/sessions/` ledger that `loadSession` reads.
    *
-   * Without this, refreshing the studio while talking to the reference agent CLI wipes the
+   * Without this, refreshing the studio while talking to the claude-code provider wipes the
    * conversation from the UI even though the run continues on the server
    * (visible in Dashboard).  See `forgeax-dev-diary/2026-05-17/` for the
    * root-cause report.
@@ -512,6 +554,15 @@ interface AppState {
   networkLog: NetworkEntry[];
   pushNetwork: (entry: NetworkEntry) => void;
   clearNetwork: () => void;
+
+  // ── Telemetry buffer (trace spans + structured logs) ──
+  //  Fed by two信道 into ONE slice: node telemetry over WS
+  //  (`{type:'telemetry'}`, handleDaemonWs) and iframe telemetry over
+  //  postMessage (`{type:'VAG_TELEMETRY'}`, healthBridge). Span + log records
+  //  live together (split by `kind` in the viewer). Capped at 500 (S4).
+  telemetry: TelemetryRecord[];
+  pushTelemetry: (records: TelemetryRecord[]) => void;
+  clearTelemetry: () => void;
 
   // ── Chat thread (real, no fake) ──
   messages: ChatMessage[];
@@ -1385,9 +1436,18 @@ const _initialMirror = {
 // P-UNIFY.4 — daemon WS handler. Hoisted out of the store factory so it
 // captures set/get via closure after they're available. Routes daemon-tick-*
 // events to the right tab by threadId, with bubble keyed by tickId.
-function handleDaemonWs(msg: unknown): void {
+export function handleDaemonWs(msg: unknown): void {
   if (!msg || typeof msg !== 'object') return;
-  const m = msg as { type?: string; threadId?: string; tickId?: string; daemonId?: string; event?: unknown; promptPreview?: string; bytes?: number };
+  const m = msg as { type?: string; threadId?: string; tickId?: string; daemonId?: string; event?: unknown; promptPreview?: string; bytes?: number; records?: unknown };
+  // Telemetry (trace+log) main信道: node sidecar → server → WS
+  // `{ type:'telemetry', records: Array<SpanData|LogRecord> }`. No threadId, so
+  // it must be dispatched before the threadId guard below (same as
+  // workspace-changed). Feeds the unified telemetry slice (500-cap, S4).
+  if (m.type === 'telemetry') {
+    const records = Array.isArray(m.records) ? (m.records as TelemetryRecord[]) : [];
+    if (records.length) useAppStore.getState().pushTelemetry(records);
+    return;
+  }
   // Workspace hot-switch: the server re-pointed FORGEAX_PROJECT_ROOT at a new
   // dir. In-process and in-tab state scoped to the old root isn't re-scoped, so
   // every open tab must do a full reload (all per-request endpoints then re-read
@@ -1744,6 +1804,14 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
     if (!tab) return;
     if (kind === 'done') {
       const msgId = String(payload.msgId ?? '');
+      // 迟到 / 已定格的 done:目标消息已被 finalized 从列表删除则忽略 —— 否则会用一个
+      // 不存在的 targetMsgId 重新置灰并弹出假「已回退」条。done(/rewind 的 WS)与
+      // finalized(/messages 的 WS)跨双通道,编辑后回退发送时 done 可能后到。正常 ⟲
+      // 回退时目标消息仍在列表 → 不命中本守卫。
+      if (msgId && tab.agentId) {
+        const cur = tab.messagesByAgent[tab.agentId];
+        if (Array.isArray(cur) && cur.length > 0 && !cur.some((m) => m.msgId === msgId)) return;
+      }
       const mode = (payload.mode === 'code' || payload.mode === 'conversation' ? payload.mode : 'both') as
         'both' | 'conversation' | 'code';
       const boundaryId = String(payload.boundaryId ?? '');
@@ -1776,12 +1844,22 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       // 被回退段 = [目标消息下标 .. 最后一条 user 消息之前],「最后一条 user」
       // 就是刚发出的那条新消息;它及其后(新回复)保留。WAL 里仍在,mask 后
       // 不可见,刷新 replay 结果一致。
+      //
+      // target/mode **优先取事件自带**(server 在 finalizePending 回带),仅当事件没带
+      // 时才回退到本地 pendingRewind。关键:done 与 finalized 跨 WS 双通道,编辑后回退
+      // 发送时 finalized 可能先于 done 到达,此刻 pendingRewind 仍为 null —— 若只认
+      // pendingRewind 就会漏删置灰段(且 editingMsgId 因 pendingRewind 没转真也不清),
+      // 表现为「灰色段不删、新消息也灰」。
       const pr = tab.pendingRewind;
+      const targetMsgId = String(payload.targetMsgId ?? pr?.targetMsgId ?? '');
+      const pm = payload.mode;
+      const finMode: 'both' | 'conversation' | 'code' =
+        pm === 'code' || pm === 'conversation' || pm === 'both' ? pm : (pr?.mode ?? 'both');
       set((s) => patchTabField(s, sid, { pendingRewind: null, rewindDirtyNotice: null }));
-      if (pr && pr.mode !== 'code' && tab.agentId) {
+      if (targetMsgId && finMode !== 'code' && tab.agentId) {
         const agent = tab.agentId;
         set((s) => patchAgentMessages(s, sid, agent, (msgs) => {
-          const targetIdx = msgs.findIndex((m) => m.msgId === pr.targetMsgId);
+          const targetIdx = msgs.findIndex((m) => m.msgId === targetMsgId);
           if (targetIdx < 0) return msgs;
           let lastUserIdx = -1;
           for (let i = msgs.length - 1; i > targetIdx; i--) {
@@ -2028,17 +2106,23 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       // here instead. Only the replay path does this; live builds its own
       // segments via session-stream, and claude-code's live accumulator is a
       // different call site — neither is touched.
+      // 来源 badge 的 **per-turn** 还原:内核路径账本在 hook:turnStart / assistantMessage
+      //   payload 带 providerId(见 transcribe-turn.ts);原生 forgeax 路径不写 → 默认 'forgeax'。
+      //   curPid 在 feed 循环里按「轮边界重置 + 轮内捕获」更新,onMessage 同步触发时读取,
+      //   这样**每条 assistant 气泡拿自己那一轮的来源**(修复:全局取最后一个 → 1/2 都变 claude-code)。
+      let curPid: string | undefined;
       const acc = new TurnAccumulator({
         ...mainCbs,
         onMessage: (msg) => {
           mainCbs.onMessage?.(msg);
           const ts = msg.timestamp ?? Date.now();
           if (msg.kind === 'assistant_complete') {
+            const pid = curPid ?? 'forgeax'; // 未标记 = 原生 forgeax(与 live store.ts 默认一致)
             replayEffects.applyMain((m) => {
               let segs = m.segments ?? [];
               if (msg.thinking?.trim()) segs = appendChatSegment(segs, { kind: 'thinking', ts, text: msg.thinking });
               if (msg.text?.trim()) segs = appendChatSegment(segs, { kind: 'text', ts, text: msg.text });
-              return { ...m, segments: segs };
+              return { ...m, segments: segs, providerId: m.providerId ?? pid };
             });
           } else if (msg.kind === 'tool_call') {
             const tc = rendererToolCallToLegacy(msg as ToolCallMessage);
@@ -2071,7 +2155,17 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       // 3. ts 升序喂入。ledger 本身就是 append 顺序，但 compact_boundary 边界
       //    + 多 shard merge 可能不严格 ts-monotonic，稳妥起见 sort 一次。
       const sorted = [...events].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-      for (const ev of sorted) acc.feed(ev);
+      for (const ev of sorted) {
+        // per-turn providerId 跟踪(供 onMessage 同步读取):
+        //   轮边界(user_input / hook:turnStart)重置为「该轮自己的 providerId」
+        //   (内核路径写在 turnStart payload;原生路径无 → undefined → 默认 forgeax);
+        //   轮内任意带 providerId 的事件(如 hook:assistantMessage)继续刷新。
+        const p = (ev as { type?: string; payload?: { providerId?: unknown } }).payload;
+        const pid = p && typeof p.providerId === 'string' && p.providerId ? p.providerId : undefined;
+        if (ev.type === 'user_input' || ev.type === 'hook:turnStart') curPid = pid;
+        else if (pid) curPid = pid;
+        acc.feed(ev);
+      }
       acc.flush();
 
       // 4. 历史读没有 live stream 终结点，把所有 streaming 状态翻 done。
@@ -2307,6 +2401,17 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
     }));
   },
   clearNetwork: () => set({ networkLog: [] }),
+
+  telemetry: [],
+  pushTelemetry: (records) => {
+    if (!records.length) return;
+    set((s) => {
+      const next = [...s.telemetry, ...records];
+      // Cap at 500 records (S4); drop oldest.
+      return { telemetry: next.length > 500 ? next.slice(next.length - 500) : next };
+    });
+  },
+  clearTelemetry: () => set({ telemetry: [] }),
 
   liveAgents: {},
   agentFileActivity: {},
@@ -3156,7 +3261,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         markEmittedClientMsg(clientMsgId);
         const r = await emitForgeaXMessage(startSid, expandPills(trimmed), {
           to: candidate,
-          payload: { agentId, clientMsgId },
+          payload: { agentId, clientMsgId, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
           handoff: 'steer',
         });
         if (!r.ok) throw new Error(r.error ?? 'emit failed');
@@ -3291,7 +3396,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         markEmittedClientMsg(clientMsgId);
         const r = await emitForgeaXMessage(startSid, expandPills(trimmed), {
           to: targetAgent,
-          payload: { agentId, clientMsgId },
+          payload: { agentId, clientMsgId, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
         });
         if (!r.ok) throw new Error(r.error ?? 'emit failed');
         // checkpoint:server 注入并回传 msgId —— 补到预 push 的 user 气泡,并
@@ -3354,11 +3459,18 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         signal,
       });
     } catch (e) {
-      patchAsst((m) => ({
-        ...m,
-        status: 'error',
-        errorMessage: `network error: ${(e as Error).message}`,
-      }));
+      // AbortError = 这条被取消/被新一轮顶替(rewind+send、Stop、超发),不是真网络故障。
+      // 与下面 SSE 流读取段的 AbortError 处理对齐:静默收尾为 done,别弹「network error:
+      // signal is aborted without reason」这种吓人的红字(回退后改发就常命中此路)。
+      if ((e as Error).name === 'AbortError' || signal.aborted) {
+        patchAsst((m) => (m.status === 'streaming' ? { ...m, status: 'done' } : m));
+      } else {
+        patchAsst((m) => ({
+          ...m,
+          status: 'error',
+          errorMessage: `network error: ${(e as Error).message}`,
+        }));
+      }
       setTabStreaming(false);
       _abortByTab.delete(startSid);
       return;

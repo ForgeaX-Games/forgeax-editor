@@ -1,4 +1,4 @@
-import React, { createElement, useEffect, useRef, useState } from 'react';
+import React, { createElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Eye, Pencil, Save, FileCode, FileText, FileJson, File, Columns2, Paintbrush, MessageSquare } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -7,10 +7,17 @@ import { useLocalSize } from '../Resize/ResizeHandle';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import { WorkbenchPluginHost, pluginRendersInMainArea } from './WorkbenchPluginHost';
-import { WB_PLUGIN_AUTHOR_ID } from '../../../../marketplace/plugins/wb-plugin-author/src/panel';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { openAgentDetail } from '../../lib/open-agent-detail';
 import { useFileActivityVersion, useFileLocks } from '../../lib/file-activity-stream';
+import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
 import { useTranslation } from '@/i18n';
+import {
+  foldAgents,
+  type CatalogItem,
+  type SkinGroup,
+  type SubagentFamilyGroup,
+} from '../../data/agent-groups';
 
 type PreviewKind = 'text' | 'image' | 'audio' | 'video' | 'model' | 'binary';
 interface PreviewFile {
@@ -76,6 +83,7 @@ function placeholderText(t: (k: string) => string): string {
 export function WorkbenchMode() {
   const workbenchTab = useAppStore((s) => s.workbenchTab);
   const expandedPluginId = useAppStore((s) => s.workbenchExpandedPluginId);
+  const { workbenchPanels } = usePanelRenderers();
 
   if (workbenchTab === 'agents') return <AgentsMainArea />;
 
@@ -83,9 +91,10 @@ export function WorkbenchMode() {
 
   // wb:* tools tab. Standalone-iframe plugins are owned by the always-mounted
   // keep-alive CenterPluginLayer (overlay in MainArea) — render nothing here so
-  // their iframe survives tab/mode switches instead of cold-restarting. The
-  // inline wb-plugin-author panel (no standalone build) still renders here.
-  if (expandedPluginId === WB_PLUGIN_AUTHOR_ID) return <WorkbenchPluginHost />;
+  // their iframe survives tab/mode switches instead of cold-restarting. A plugin
+  // with an injected inline panel (host-registered, e.g. wb-plugin-author) still
+  // renders here via WorkbenchPluginHost.
+  if (expandedPluginId && workbenchPanels?.[expandedPluginId]) return <WorkbenchPluginHost />;
   if (expandedPluginId) return null;
   return (
     <div className="workbench-mode">
@@ -745,6 +754,26 @@ function WbGallery() {
 // workbenchTab === 'agents'. Fetches the same /api/workbench/agents data as
 // AgentsPanel but renders it in a 2-column card grid with per-agent file
 // lists. Clicking a file opens it in the editor (switches to 'files' tab).
+//
+// ADR-0019 §9 — Catalog-side fold (2026-06-22):
+// Server returns a flat list of ~28 agents but contains 3 latent relationships
+// (skin family / sub-agent family / provider-default coders). We use
+// `foldAgents()` from `data/agent-groups.ts` to collapse them visually:
+//   - skin group → one card with a chip row of skin variants
+//   - subagent-family → lead card + nested mini-card column for sub-agents
+//   - everything else → flat card (unchanged behavior)
+//
+// Click semantics (per user decision 2026-06-22 "view_only_strict"):
+//   - flat agent  → openAgentDetail(id)              [unchanged: opens editor + setTabAgent]
+//   - skin chip   → openAgentDetail(skinId)          [picking a skin IS the routing intent]
+//   - lead card   → openAgentDetail(leadId)          [normal: addressing lead is fine]
+//   - sub-card    → openAgentDetail(subId, switchChat: false)
+//                   [view-only: catalog browsing must NOT auto-route the chat to a sub;
+//                    conversation goes through lead → delegate_to_subagent]
+//
+// Surfaces deliberately kept flat (per ADR-0019 §9):
+//   - Sidebar/AgentsPanel (runtime instances), SettingsPanel/SectionsRegister
+//     (per-agent install/uninstall), Composer @-mention dropdown, ChatAgentCapsule.
 interface AgentRec {
   id: string;
   name: string;
@@ -761,6 +790,16 @@ export function AgentsMainArea() {
   const openFile = useAppStore((s) => s.openFile);
   const openWorkbench = useAppStore((s) => s.openWorkbench);
   const activeSid = useAppStore((s) => s.activeSid);
+  // Drives skin-group active highlighting: which member of the skin family is
+  // currently bound to the chat tab. We read `tab.agentId` (runtime truth)
+  // instead of `agentBySid` (persistence cache) so the chip lit-state stays
+  // in sync with every code path that touches the active agent — including
+  // chat-side switches that update tab.agentId without going through the
+  // setTabAgent action (e.g. mid-stream agent self-handoff). This mirrors
+  // what ChatAgentCapsule reads.
+  const activeAgentId = useAppStore(
+    (s) => s.tabs.find((t) => t.sid === s.activeSid)?.agentId ?? null,
+  );
   // Agents the user opted OUT of (Settings → Agents checkboxes). They're
   // excluded from the main avatar row / delegate tools, so reflect that here
   // too: dim the card + drop the "active" badge instead of misleadingly
@@ -814,6 +853,37 @@ export function AgentsMainArea() {
     void openFile(path);
   };
 
+  // ── Masonry via JS-distributed flex columns (replaces CSS `columns` multicol) ──
+  // Why not CSS multicol anymore: WebKit (WKWebView/.app) mispaints the
+  // composited <video> avatars inside a multicol fragmentation context — on
+  // hover repaint a card's video gets drawn at a wrong page coordinate
+  // (duplicate avatar near the window bottom / black flash). CSS multicol was
+  // the trigger; no in-flow/clip/compositing tweak fixed it while the cards
+  // lived in a fragmented column flow. We keep the masonry *look* (balanced
+  // columns, no row-height gaps) by measuring the container width and splitting
+  // the folded items into N plain flex columns ourselves — a non-fragmented
+  // layout WebKit composites correctly.
+  const COL_TARGET = 280; // px, mirrors the old `columns: 280px`
+  const COL_GAP = 12;
+  const [colCount, setColCount] = useState(1);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const gridRefCb = useCallback((node: HTMLDivElement | null) => {
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    if (!node) return;
+    const recompute = () => {
+      const w = node.clientWidth;
+      const n = Math.max(1, Math.floor((w + COL_GAP) / (COL_TARGET + COL_GAP)));
+      setColCount((prev) => (prev === n ? prev : n));
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(node);
+    roRef.current = ro;
+  }, []);
+
   if (err) {
     return (
       <div className="wm-agents-main">
@@ -841,59 +911,429 @@ export function AgentsMainArea() {
           <span>{t('workbench.agentsEmpty')}</span>
         </div>
       ) : (
-        <div className="wm-agents-grid">
-          {agents.map((a) => {
-            const off = !a.isMain && uninstalledAgentIds.includes(a.id);
-            return (
-            <div
-              key={a.id}
-              role="button"
-              tabIndex={0}
-              className={`wm-agent-card is-clickable${a.isMain ? ' main' : ''}${a.status === 'placeholder' || off ? ' placeholder' : ''}`}
-              data-agent-id={a.id}
-              data-agent-name={a.name}
-              onClick={() => openAgentDetail(a.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAgentDetail(a.id); } }}
-              title={off
-                ? `${a.name} · ${a.role} · ${t('workbench.agentDisabledTitle')}`
-                : `${a.name} · ${a.role} · ${t('workbench.agentDetailTitle')}`}
-            >
-              <div className="wm-agent-card-header">
-                <span className="wm-agent-avatar" style={{ background: a.color }}>{a.avatar}</span>
-                <div className="wm-agent-meta">
-                  <span className="wm-agent-name">{a.name}</span>
-                  <span className="wm-agent-role">{a.role}</span>
-                </div>
-                {off
-                  ? <span className="wm-agent-badge">{t('workbench.disabledBadge')}</span>
-                  : a.status === 'active' && <span className="wm-agent-badge active">active</span>}
-              </div>
-              {a.files.length > 0 && (
-                <ul className="wm-agent-files">
-                  {a.files.map((f) => (
-                    <li key={f.path}>
-                      <button
-                        type="button"
-                        className="wm-agent-file-btn"
-                        onClick={(e) => { e.stopPropagation(); handleFileClick(f.path); }}
-                        title={f.path}
-                      >
-                        <span className="wm-agent-file-ico" aria-hidden>{f.ico}</span>
-                        <span className="wm-agent-file-name">{f.name}</span>
-                      </button>
-                    </li>
+        (() => {
+          const renderItem = (
+            item: CatalogItem<AgentRec>,
+          ): { key: string; node: ReactNode } => {
+            if (item.kind === 'flat') {
+              return {
+                key: item.agent.id,
+                node: (
+                  <AgentCard
+                    a={item.agent}
+                    variant="flat"
+                    uninstalledAgentIds={uninstalledAgentIds}
+                    handleFileClick={handleFileClick}
+                    t={t}
+                  />
+                ),
+              };
+            }
+            if (item.kind === 'subagent-family') {
+              return {
+                key: item.group.id,
+                node: (
+                  <SubagentFamilyGroupCard
+                    group={item.group}
+                    lead={item.lead}
+                    subs={item.subs}
+                    uninstalledAgentIds={uninstalledAgentIds}
+                    handleFileClick={handleFileClick}
+                    t={t}
+                  />
+                ),
+              };
+            }
+            // skin-group
+            return {
+              key: item.group.id,
+              node: (
+                <SkinGroupCard
+                  group={item.group}
+                  members={item.members}
+                  providers={item.providers}
+                  head={item.head}
+                  activeAgentId={activeAgentId}
+                  uninstalledAgentIds={uninstalledAgentIds}
+                  handleFileClick={handleFileClick}
+                  t={t}
+                />
+              ),
+            };
+          };
+          // Round-robin distribute folded items into colCount columns. Keeps a
+          // natural row-major reading order (item 0,1,2 across the top row) and
+          // spreads the few tall group cards (iro/reia/skin) across columns for
+          // rough height balance — good enough without measuring card heights.
+          const items = foldAgents(agents, { activeId: activeAgentId });
+          const columns: Array<Array<{ key: string; node: ReactNode }>> =
+            Array.from({ length: colCount }, () => []);
+          items.forEach((item, i) => {
+            columns[i % colCount].push(renderItem(item));
+          });
+          return (
+            <div className="wm-agents-grid" ref={gridRefCb}>
+              {columns.map((col, ci) => (
+                <div className="wm-agents-col" key={ci}>
+                  {col.map((c) => (
+                    <React.Fragment key={c.key}>{c.node}</React.Fragment>
                   ))}
-                </ul>
-              )}
-              {a.files.length === 0 && (
-                <div className="wm-agent-no-files">{t('workbench.noProducedFiles')}</div>
-              )}
+                </div>
+              ))}
             </div>
-            );
-          })}
-        </div>
+          );
+        })()
       )}
     </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-card subcomponents for AgentsMainArea grid.
+//
+// Why subcomponents instead of inline JSX:
+//   - 3 different visual treatments (flat / skin-group / subagent-family) each
+//     ~30 lines of JSX. Inlining all 3 inside the .map() makes AgentsMainArea
+//     unreadable.
+//   - Sub-cards inside subagent-family share most of their layout with the
+//     standalone flat card (avatar + meta + badge + files) — `AgentCard` is
+//     reused there in `variant="sub"` mode (compact, no file list, view-only).
+// ───────────────────────────────────────────────────────────────────────────
+
+type AgentCardVariant = 'flat' | 'lead' | 'sub' | 'provider';
+
+type TFn = (key: string) => string;
+
+function AgentCard({
+  a,
+  variant,
+  uninstalledAgentIds,
+  handleFileClick,
+  derivedStatus,
+  t,
+}: {
+  a: AgentRec;
+  variant: AgentCardVariant;
+  uninstalledAgentIds: string[];
+  handleFileClick: (path: string) => void;
+  /**
+   * Optional badge override. The flat / sub variants display badge based on
+   * `a.status` directly. For LEAD cards we aggregate sub status into the
+   * lead so a placeholder lead with running subs reads as `active` — without
+   * this, the right-side badge area on iro / reia would always be empty
+   * because the lead itself isn't spawned (Forge dispatches subs through
+   * delegate_to_subagent, never the lead's chat instance).
+   */
+  derivedStatus?: AgentRec['status'];
+  t: TFn;
+}) {
+  const off = !a.isMain && uninstalledAgentIds.includes(a.id);
+  // Click semantics by variant:
+  //   'sub'      → view-only (no setTabAgent) — caller is browsing subs of a
+  //                lead family; chat must continue through the lead per
+  //                view_only_strict decision (2026-06-22).
+  //   'provider' → full openAgentDetail — provider-default coders are
+  //                independent chat targets; clicking commits to that driver.
+  //   'flat'/'lead' → full openAgentDetail (default).
+  const isSub = variant === 'sub';
+  const isProvider = variant === 'provider';
+  // sub + provider share the compact mini-card visual (no file list, smaller
+  // avatar). Only their click handlers differ.
+  const isCompact = isSub || isProvider;
+  const handleClick = () => openAgentDetail(a.id, isSub ? { switchChat: false } : undefined);
+  const avatarSize = isCompact ? 36 : 48;
+  // Status used for both the placeholder class and the right-side badge.
+  const effectiveStatus: AgentRec['status'] = derivedStatus ?? a.status;
+  const cls = [
+    'wm-agent-card',
+    'is-clickable',
+    a.isMain ? 'main' : '',
+    effectiveStatus === 'placeholder' || off ? 'placeholder' : '',
+    variant === 'lead' ? 'is-lead' : '',
+    isCompact ? 'wm-agent-sub-mini' : '',
+  ].filter(Boolean).join(' ');
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={cls}
+      data-agent-id={a.id}
+      data-agent-name={a.name}
+      onClick={handleClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } }}
+      title={off
+        ? `${a.name} · ${a.role} · ${t('workbench.agentDisabledTitle')}`
+        : `${a.name} · ${a.role} · ${t('workbench.agentDetailTitle')}`}
+    >
+      <div className="wm-agent-card-header">
+        {/* ADR-0019: workbench/tools 列表 - mode='idle' 循环 default (期待).
+         *  size=48 跟 .wm-agent-avatar 对齐 (CSS 已从 32→48). Sub-mini 用 36
+         *  以匹配缩进后的视觉权重. */}
+        <AgentAvatarVideo
+          agentId={a.id}
+          mode="idle"
+          size={avatarSize}
+          shape="circle"
+          fallback={
+            <span
+              className="wm-agent-avatar"
+              style={{
+                background: a.color,
+                width: avatarSize,
+                height: avatarSize,
+                fontSize: isSub ? 14 : 18,
+              }}
+            >
+              {a.avatar}
+            </span>
+          }
+        />
+        <div className="wm-agent-meta">
+          <span className="wm-agent-name">{a.name}</span>
+          <span className="wm-agent-role">{a.role}</span>
+        </div>
+        {off
+          ? <span className="wm-agent-badge">{t('workbench.disabledBadge')}</span>
+          : effectiveStatus === 'active' && <span className="wm-agent-badge active">active</span>}
+      </div>
+      {/* Sub & provider mini-cards skip the file list to keep the nested column compact. */}
+      {!isCompact && a.files.length > 0 && (
+        <ul className="wm-agent-files">
+          {a.files.map((f) => (
+            <li key={f.path}>
+              <button
+                type="button"
+                className="wm-agent-file-btn"
+                onClick={(e) => { e.stopPropagation(); handleFileClick(f.path); }}
+                title={f.path}
+              >
+                <span className="wm-agent-file-ico" aria-hidden>{f.ico}</span>
+                <span className="wm-agent-file-name">{f.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!isCompact && a.files.length === 0 && (
+        <div className="wm-agent-no-files">{t('workbench.noProducedFiles')}</div>
+      )}
+    </div>
+  );
+}
+
+function SubagentFamilyGroupCard({
+  group,
+  lead,
+  subs,
+  uninstalledAgentIds,
+  handleFileClick,
+  t,
+}: {
+  group: SubagentFamilyGroup;
+  lead: AgentRec;
+  subs: AgentRec[];
+  uninstalledAgentIds: string[];
+  handleFileClick: (path: string) => void;
+  t: TFn;
+}) {
+  void group;
+  // Aggregate the family's runtime state into the lead card's badge slot.
+  // Rationale: the lead is rarely "active" on its own — Forge dispatches via
+  // delegate_to_subagent into the subs, so /api/workbench/agents reports
+  // lead.status='placeholder' while subs.status='active'. Without this
+  // aggregation, iro / reia would always read as "idle" even when their
+  // family is busy doing work. We promote sub activity to the lead card so
+  // the catalog reflects "this family is in use".
+  const anySubActive = subs.some((s) => s.status === 'active');
+  const leadDerivedStatus: AgentRec['status'] =
+    lead.status === 'active' || anySubActive ? 'active' : lead.status;
+  return (
+    <div className="wm-agent-group-subagent">
+      <AgentCard
+        a={lead}
+        variant="lead"
+        uninstalledAgentIds={uninstalledAgentIds}
+        handleFileClick={handleFileClick}
+        derivedStatus={leadDerivedStatus}
+        t={t}
+      />
+      {/* Hint row that visually frames the nested column as "subordinates of
+       *  the lead above". Mirrors `.nested { border-left: dashed }` from the
+       *  v2-vision mockup. */}
+      <div className="wm-agent-nested-hint">
+        ↳ {t('workbench.subagentsHint').replace('{n}', String(subs.length))}
+      </div>
+      <div className="wm-agent-nested">
+        {subs.map((sub) => (
+          <AgentCard
+            key={sub.id}
+            a={sub}
+            variant="sub"
+            uninstalledAgentIds={uninstalledAgentIds}
+            handleFileClick={handleFileClick}
+            t={t}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkinGroupCard({
+  group,
+  members,
+  providers,
+  head,
+  activeAgentId,
+  uninstalledAgentIds,
+  handleFileClick,
+  t,
+}: {
+  group: SkinGroup;
+  members: AgentRec[];
+  providers: AgentRec[];
+  head: AgentRec;
+  activeAgentId: string | null;
+  uninstalledAgentIds: string[];
+  handleFileClick: (path: string) => void;
+  t: TFn;
+}) {
+  // Aggregate state of the WHOLE coder family — both skin members and
+  // provider-default coders — into the head badge. Mirrors the
+  // SubagentFamilyGroupCard "active if any member is active" rule. Without
+  // this, the right-side badge slot on 程序员 would always be empty even
+  // when coders are spawned, because there's no single "lead" entity to
+  // report status from.
+  //
+  //   anyActive → show green "active"
+  //   all off   → show "已停用"
+  //   otherwise → no badge (placeholder / idle state)
+  const family = [...members, ...providers];
+  const anyActive = family.some((m) => m.status === 'active');
+  const allOff = family.every((m) => !m.isMain && uninstalledAgentIds.includes(m.id));
+  // Structural shape mirrors SubagentFamilyGroupCard (no outer frame on the
+  // group wrapper) so the visual reads the same as iro / reia: the lead
+  // card has its own frame, the dashed nested column hangs below it, and
+  // each provider mini-card is its own framed card. Earlier version wrapped
+  // the whole group in a single big bordered card which made head + chips +
+  // providers all look like one giant card — fixed 2026-06-22.
+  return (
+    <div className="wm-agent-group-subagent">
+      <div className="wm-agent-card wm-agent-skin-head-card">
+        <div className="wm-agent-card-header">
+          {/* Head visual follows the active skin (so the card identity reflects
+           *  the current chat). Falls back to representativeId via foldAgents. */}
+          <AgentAvatarVideo
+            agentId={head.id}
+            mode="idle"
+            size={48}
+            shape="circle"
+            fallback={
+              <span className="wm-agent-avatar" style={{ background: head.color }}>{head.avatar}</span>
+            }
+          />
+          <div className="wm-agent-meta">
+            <span className="wm-agent-name">{group.label} · {head.name}</span>
+            <span className="wm-agent-role">{group.sublabel}</span>
+          </div>
+          {allOff
+            ? <span className="wm-agent-badge">{t('workbench.disabledBadge')}</span>
+            : anyActive && <span className="wm-agent-badge active">active</span>}
+        </div>
+        <div className="wm-skin-chip-row">
+          {members.map((m) => (
+            <SkinChip
+              key={m.id}
+              m={m}
+              isActive={m.id === activeAgentId}
+              uninstalledAgentIds={uninstalledAgentIds}
+            />
+          ))}
+        </div>
+        <div className="wm-agent-no-files">{t('workbench.skinGroupHint')}</div>
+      </div>
+      {providers.length > 0 && (
+        <>
+          <div className="wm-agent-nested-hint">
+            ↳ {t('workbench.providerCodersHint').replace('{n}', String(providers.length))}
+          </div>
+          <div className="wm-agent-nested">
+            {providers.map((p) => (
+              <AgentCard
+                key={p.id}
+                a={p}
+                variant="provider"
+                uninstalledAgentIds={uninstalledAgentIds}
+                handleFileClick={handleFileClick}
+                t={t}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Skin chip with two-tier click semantics (2026-06-22 follow-up):
+//   - single-click: setTabAgent ONLY — switch the chat to this persona,
+//                   do not open the persona editor iframe. Fires
+//                   synchronously so the chip lights up instantly.
+//   - double-click: full openAgentDetail — opens persona editor (which
+//                   also calls setTabAgent internally, harmless because
+//                   it's idempotent — the chip is already on this skin
+//                   after the single-click that precedes the second click).
+//
+// Implementation note: a previous version debounced single-click by 250ms
+// to "cancel" it on dblclick. That left users staring at an un-updated
+// chip for a quarter second after every click (and in practice the timer
+// occasionally didn't fire at all, leaving the chip stuck — see chat log
+// 2026-06-22). The simpler design is: fire both handlers; setTabAgent is
+// cheap and idempotent, openAgentDetail's only extra side effect is
+// opening the persona iframe (which is exactly the dblclick intent).
+function SkinChip({
+  m,
+  isActive,
+  uninstalledAgentIds,
+}: {
+  m: AgentRec;
+  isActive: boolean;
+  uninstalledAgentIds: string[];
+}) {
+  const off = !m.isMain && uninstalledAgentIds.includes(m.id);
+  const setTabAgent = useAppStore((s) => s.setTabAgent);
+  const activeSid = useAppStore((s) => s.activeSid);
+  const handleClick = () => {
+    if (activeSid) setTabAgent(activeSid, m.id);
+  };
+  const handleDoubleClick = () => {
+    openAgentDetail(m.id);
+  };
+  return (
+    <button
+      type="button"
+      className={`wm-skin-chip${isActive ? ' active' : ''}${off ? ' placeholder' : ''}`}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      title={`${m.name} · ${m.role} · 单击切换 · 双击进 Persona 编辑`}
+      data-agent-id={m.id}
+    >
+      <AgentAvatarVideo
+        agentId={m.id}
+        mode="idle"
+        size={26}
+        shape="circle"
+        fallback={
+          <span
+            className="wm-agent-avatar"
+            style={{ background: m.color, width: 26, height: 26, fontSize: 12 }}
+          >
+            {m.avatar}
+          </span>
+        }
+      />
+      <span className="wm-skin-chip-name">{m.name}</span>
+    </button>
   );
 }
 

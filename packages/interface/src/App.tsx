@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { TopBar } from './components/TopBar/TopBar';
 import { DockShell } from './components/DockShell/DockShell';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS, type PanelRenderers } from './components/DockShell/panelRenderers';
+import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
 import { HealthIndicator } from './components/StatusBar/HealthIndicator';
@@ -91,6 +92,38 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // ── ✎ Content Browser → Chat: batch asset/folder refs (M5) ────────────────
+  useEffect(() => {
+    const onBatchRef = (ev: MessageEvent) => {
+      if (!isTrustedMessageOrigin(ev.origin)) return;
+      const data = ev.data as { type?: unknown; refs?: unknown } | null;
+      if (!data || data.type !== 'FORGEAX_ADD_ASSET_TO_CHAT' || !Array.isArray(data.refs)) return;
+      const insert = useAppStore.getState().requestComposerInsert;
+      for (const ref of data.refs as Array<Record<string, unknown>>) {
+        if (ref.type === 'asset' && typeof ref.guid === 'string') {
+          insert(buildAssetPill({
+            guid: ref.guid,
+            name: typeof ref.name === 'string' ? ref.name : undefined,
+            assetKind: typeof ref.kind === 'string' ? ref.kind : undefined,
+            packPath: typeof ref.path === 'string' ? ref.path : undefined,
+            payload: ref.payload as Record<string, unknown> | undefined,
+          }));
+        } else if (ref.type === 'folder' && typeof ref.path === 'string') {
+          insert(buildAssetPill({
+            guid: `folder:${ref.path}`,
+            name: typeof ref.name === 'string' ? `📁 ${ref.name}` : '📁 Folder',
+            assetKind: 'folder',
+            packPath: typeof ref.path === 'string' ? ref.path : undefined,
+            payload: ref.summary as Record<string, unknown> | undefined,
+          }));
+        }
+      }
+    };
+    window.addEventListener('message', onBatchRef);
+    return () => window.removeEventListener('message', onBatchRef);
+  }, []);
+
   // WAL replay trigger lives in ChatPanel — it watches activeTab.agentId
   // and re-fires loadSession on every change. No mount hook here so the
   // trigger has a single owner.
@@ -112,6 +145,14 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
           panel — plan-strategy section 2 D-4. */}
       <div className="studio-body">
         <DockShell hideChatAndForge={hideChatAndForge} />
+        {/* Always-mounted keep-alive owner of the Play + Edit viewport surfaces.
+            Lives OUTSIDE the dockview tree (which rebuilds on every Play/Edit/AI
+            workspace switch) so the heavy viewport iframes are mounted once and
+            kept alive across switches — paused in the background, never rebooted.
+            Kills the "switch Play→Edit and the app freezes" cold-reboot hang.
+            Renders the real surfaces via PanelRenderers context (no editor import);
+            positions the active one over its dockview anchor. */}
+        <SurfaceKeepAliveLayer />
       </div>
       {/* Blender-style global status bar at the very bottom.  Any component
           can register a chip via `useStatusBarItem(...)`.  PulseFeeds owns

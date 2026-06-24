@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ExternalLink, ArrowDown, Undo2 } from 'lucide-react';
+import { ExternalLink, ArrowDown, Undo2, ChevronDown } from 'lucide-react';
 import { ForgeCard } from './ForgeCard';
 import { Composer } from './Composer';
 import { PermissionPrompt } from './PermissionPrompt';
 import { ChatAgentCapsule } from './ChatAgentCapsule';
 import { RewindConfirmDialog, RewindBanner, DirtyNoticeBar, RewindInlineEditor, BubbleEditInline } from './RewindControls';
+import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
+import { useAgentNames, shortAgentId } from './useAgentNames';
 import { useAppStore, type ChatMessage } from '../../store';
 import { parseSegments } from '../Composer/pill';
 import { PillChip } from '../Composer/PillChip';
@@ -15,6 +17,14 @@ import './ChatPanel.css';
 // True when THIS window is itself a detached surface (so we don't show a
 // "pop out" button inside an already-popped-out window).
 const IS_DETACHED_WINDOW = decodeSurfaceFromLocation() !== null;
+
+// 消息编辑草稿(**仅内存**):点自己消息进编辑态后,若用户改了内容却未发送就失焦/
+// 取消,把草稿按 sid:msgId 暂存;下次重新编辑同一条时回填用户上次改到一半的内容。
+// 故意用模块级 Map(非 store / 非 ref):跨组件重挂(切 tab、弹出窗口)仍在,但页面
+// 刷新即随模块重建而清空 —— 正是「只记内存,刷新就没了」。未改动(草稿==原文)或清空
+// 则删除该键,保证下次回到原文。
+const editDrafts = new Map<string, string>();
+const editDraftKey = (sid: string, msgId: string) => `${sid}::${msgId}`;
 
 // memleak case-02 (MEMLEAK_CASE02_RENDER_WINDOW) — chat-history scroll-up paging.
 // messagesByAgent[agentId] is never capped (store.ts), and we used to render
@@ -126,12 +136,67 @@ function formatTs(ms: number, now: number = Date.now()): string {
  *  Long text (>180 chars or multi-line) auto-collapses to first line with
  *  "[展开]" toggle — mirrors ink-renderer's SystemLine.Collapsible behavior. */
 const SYS_COLLAPSE_THRESHOLD = 180;
+
+// Inter-agent "拍一拍" phrases. Read as "{from}拍了拍{to}，并{action}".
+// HANDOFF — the delegating agent passes the task to another agent (紫色派活).
+const PAT_HANDOFF_ACTIONS = [
+  '把活儿交给了 ta',
+  '请 ta 来搭把手',
+  '甩了个大活过去',
+  '喊 ta 出场救场',
+  '把接力棒递了过去',
+  '派 ta 去开工',
+  '托付了一件大事',
+  '让 ta 接手了',
+  '点名 ta 上场',
+  '请 ta 接力一棒',
+];
+// COMPLETION — the delegated agent reports back after finishing (蓝色完工).
+const PAT_DONE_ACTIONS = [
+  '交差了',
+  '把成果递了回来',
+  '报告任务完成',
+  '把活儿干完了',
+  '交卷啦',
+  '搞定收工',
+  '把接力棒还了回来',
+  '汇报了战果',
+  '功成身退',
+  '把任务画上了句号',
+];
+
+function patActionFor(seed: string, pool: readonly string[]): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return pool[Math.abs(h) % pool.length]!;
+}
+
 function SystemLine({ m }: { m: ChatMessage }) {
   const { t } = useTranslation();
+  const resolveName = useAgentNames();
   const isError = m.level === 'error';
   const isWarning = m.level === 'warning';
   const isIncoming = m.direction === 'incoming';
   const isOutgoing = m.direction === 'outgoing';
+  // Inter-agent traffic (有 from + to) gets the "拍一拍" treatment: the emitter's
+  // avatar replaces the emoji, and a pat phrase frames the from→to relationship.
+  // 紫色派活 (source 含 user_input) = handoff; 蓝色完工 = completion.
+  const isInterAgent = !isError && !isWarning && !!m.from && !!m.to;
+  const isHandoff = isInterAgent && (m.source ?? '').includes('user_input');
+  const fromName = isInterAgent ? resolveName(m.from) : '';
+  const toName = isInterAgent ? resolveName(m.to) : '';
+  const patText = isInterAgent
+    ? `${fromName}拍了拍${toName}，并${patActionFor(
+        m.msgId ?? m.id ?? `${m.from}:${m.to}`,
+        isHandoff ? PAT_HANDOFF_ACTIONS : PAT_DONE_ACTIONS,
+      )}`
+    : '';
+  // 完工消息正文形如「✓ X 完成了…：brief\n\n--- X 的产出 ---\n<产出>」。
+  // 摘要(brief 之前+brief)常显在外,产出段折叠进「展开」。
+  const patProduceMatch = isInterAgent ? m.text.match(/\n\n--- .+? 的产出 ---\n/) : null;
+  const patSummary = patProduceMatch ? m.text.slice(0, patProduceMatch.index) : m.text;
+  const patOutput = patProduceMatch ? m.text.slice(patProduceMatch.index! + patProduceMatch[0].length) : '';
+  const hasPatOutput = isInterAgent && patOutput.trim().length > 0;
   const icon = isError ? '✖' : isWarning ? '⚠' : isIncoming ? '📨' : isOutgoing ? '📤' : '·';
   const cls = [
     'sys-line',
@@ -149,6 +214,47 @@ function SystemLine({ m }: { m: ChatMessage }) {
     ? firstLine.slice(0, SYS_COLLAPSE_THRESHOLD) + '…'
     : firstLine;
   const label = m.source ? `${m.source}:` : '';
+
+  // 拍一拍 inter-agent 卡片:头像嵌进胶囊(底色保留),摘要常显在外,
+  // 产出折叠进右下角「展开」。
+  if (isInterAgent) {
+    return (
+      <div className={cls} data-direction={m.direction} data-level={m.level} data-pat="1">
+        <div className="sys-body sys-pat-body">
+          <div className="sys-pat-cap">
+            <AgentAvatarVideo
+              agentId={shortAgentId(m.from!)}
+              mode="idle"
+              size={20}
+              shape="circle"
+              className="sys-pat-avatar"
+              fallback={<span className="sys-icon" aria-hidden="true">{icon}</span>}
+            />
+            <span className="sys-pat-text">{patText}</span>
+          </div>
+          {(patSummary.trim() || (hasPatOutput && open)) && (
+            <div className="sys-pat-content">
+              {patSummary.trim() && <span className="sys-text">{patSummary.trim()}</span>}
+              {hasPatOutput && open && <span className="sys-pat-output">{patOutput.trim()}</span>}
+            </div>
+          )}
+          {hasPatOutput && (
+            <div className="sys-pat-foot">
+              <button
+                type="button"
+                className="sys-pat-toggle"
+                onClick={() => setOpen((v) => !v)}
+                title="点击查看产出"
+              >
+                {open ? '收起' : '展开'}
+                <ChevronDown size={11} className={open ? 'spt-chev open' : 'spt-chev'} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cls} data-direction={m.direction} data-level={m.level}>
@@ -479,10 +585,16 @@ export function ChatPanel() {
                   <BubbleEditInline
                     sid={activeSid}
                     msgId={m.msgId!}
-                    initialText={m.text}
+                    initialText={editDrafts.get(editDraftKey(activeSid, m.msgId!)) ?? m.text}
                     hasCode={checkpointMsgIds?.[m.msgId!] === true}
                     isStreaming={chatStreaming}
-                    onCancel={() => setEditingMsgId(null)}
+                    onCancel={(draft) => {
+                      // 非发送退出:改过(且非空)→ 暂存草稿;未改 / 清空 → 删键回原文。
+                      const k = editDraftKey(activeSid, m.msgId!);
+                      if (draft.trim() && draft !== m.text) editDrafts.set(k, draft);
+                      else editDrafts.delete(k);
+                      setEditingMsgId(null);
+                    }}
                   />
                 </div>
               </Fragment>

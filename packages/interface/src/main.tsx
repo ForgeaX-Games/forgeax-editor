@@ -14,6 +14,7 @@ applyTheme('dark');
 // Restore the persisted UI language before first paint. English is the default
 // (source of truth); other languages are a user-facing overlay.
 initI18n();
+import { initAegis } from './lib/aegis';
 import { BrandProvider } from './brand';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { bootStageEntry } from './boot/driver';
@@ -22,11 +23,18 @@ import { subscribeSessionStream } from './lib/session-stream';
 import { subscribeNarrativeCopilot } from './lib/narrative-copilot';
 import { subscribeFileActivityStream } from './lib/file-activity-stream';
 import { subscribePermissionStream } from './lib/permission-stream';
+import { subscribePerceptionStream } from './lib/perception-stream';
 import { syncBrowserPrefsFromServer, startBrowserPrefsSync } from './lib/browser-prefs-sync';
 import { useAppStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
 import { DetachedSurface } from './components/DetachedSurface';
 import { installHealthBridge } from './components/StatusBar/healthBridge';
+
+// Boot Aegis (Galileo) front-end monitoring first, before any heavy boot work,
+// so early throws are captured. Inert unless VITE_AEGIS_* is configured (PROD,
+// or dev with VITE_AEGIS_DEV=1). MUST sit after all imports — Vite dev keeps
+// source statement order, so a call placed above its import never binds.
+initAegis();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root missing');
@@ -113,6 +121,7 @@ function bootStore() {
   subscribeNarrativeCopilot();
   subscribeFileActivityStream();
   subscribePermissionStream();
+  subscribePerceptionStream();
   void useAppStore.getState().initSessions();
 }
 

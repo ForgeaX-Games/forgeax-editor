@@ -149,7 +149,8 @@
       "mainAgent": "Main agent",
       "newSessionEntry": "New session entry",
       "followManifest": "Follow manifest",
-      "followManifestId": "Follow manifest ({{id}})"
+      "followManifestId": "Follow manifest ({{id}})",
+      "familyLabel": "family"
     },
     "sections": {
       "fxpackImport": ".fxpack import",
@@ -381,7 +382,10 @@
     "agentDisabledTitle": "disabled in Settings (not included in collaboration/dispatch)",
     "agentDetailTitle": "click to open Agent detail (products / long-term memory / Skills)",
     "disabledBadge": "Disabled",
-    "noProducedFiles": "No produced files yet"
+    "noProducedFiles": "No produced files yet",
+    "subagentsHint": "{n} sub-specialists below · talk to the lead (click to view Persona only)",
+    "skinGroupHint": "Affects chat tone only · click to switch skin · double-click to edit Persona",
+    "providerCodersHint": "{n} CLI drivers below · click to switch driver + open Persona editor"
   },
   "gameSwitcher": {
     "activateFailedTitle": "Game switch not fully applied",
@@ -839,7 +843,9 @@
     "selectBeforeSubmit": "↑ Pick an option before submitting",
     "submit": "Submit",
     "deny": "Deny",
-    "allow": "Allow"
+    "allow": "Allow",
+    "capabilityLabel": "Capability: {{capability}}",
+    "rememberSession": "Remember for this session"
   },
   "dockShell": {
     "popoutToWindow": "Pop out to a separate OS window",
@@ -850,12 +856,26 @@
     "pluginPanels": "Plugin Panels"
   },
   "firstRun": {
-    "errMissingKey": "Please enter an API Key",
+    "errMissingKey": "Please enter your OpenRouter API Key",
     "errSaveFailed": "Save failed",
-    "title": "Welcome to ForgeaX Studio",
-    "introBefore": "On first use, please enter your Anthropic API Key. It is only written to the local file",
-    "introAfter": " and is never uploaded anywhere.",
-    "baseUrlPlaceholder": "ANTHROPIC_BASE_URL (optional proxy, leave empty for official)",
+    "title": "👋 Welcome to ForgeaX Studio",
+    "lead": "Just tell Forge \"make a game about XX\" and it will plan, write code, and run it live on the right. To start, pick how Forge reaches a model:",
+    "opt1Title": "① Use an OpenRouter Key",
+    "opt1Badge": "Recommended · self-serve",
+    "opt1DescBefore": "Create a key at ",
+    "opt1DescAfter": " (sk-or-…) and paste it here. It is only written to the local ~/ForgeaxProjects/.env and never uploaded anywhere.",
+    "opt2Title": "② Use a locally-installed CLI",
+    "opt2Desc": "claude-code / codex / cursor — once you `login` in that CLI, just switch provider at the bottom-left of the chat box. No key needed here.",
+    "skip": "Skip for now",
+    "useLocalCli": "I'll use a local CLI",
+    "fillKey": "Enter Key ▶",
+    "step2Title": "🔑 Enter your OpenRouter API Key",
+    "step2LeadBefore": "Create one at ",
+    "step2LeadAfter": " (format sk-or-…). OpenRouter bills against your account balance.",
+    "keyPlaceholder": "sk-or-...",
+    "advanced": "Advanced (proxy URL, usually no need to change)",
+    "baseUrlPlaceholder": "https://openrouter.ai/api",
+    "back": "◀ Back",
     "saving": "Saving…",
     "saveAndStart": "Save and Start"
   },

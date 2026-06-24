@@ -31,7 +31,9 @@ import { ModelPicker } from '../ModelPicker';
 import { TrustPanel } from './TrustPanel';
 import { AuthorPanel } from './AuthorPanel';
 import { useAppStore, seedUninstalledIfFirstRun } from '../../store';
-import { useTranslation } from '@/i18n';
+import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
+import { useTranslation, type TFunction } from '@/i18n';
+import { foldAgents } from '../../data/agent-groups';
 
 // ── shared state types (kept in sync with /api/settings) ─────────────────
 
@@ -609,19 +611,25 @@ function AgentsBody() {
     (a) => a.id === effectiveMainId || !uninstalledIds.includes(a.id),
   );
 
-  // 列表渲染：所有 agent 同一档显示，main 那一项不显 checkbox / 显 badge。
-  const sortedAgents = [...agents].sort((a, b) => {
-    if (a.id === effectiveMainId) return -1;
-    if (b.id === effectiveMainId) return 1;
-    const aOff = uninstalledIds.includes(a.id) ? 1 : 0;
-    const bOff = uninstalledIds.includes(b.id) ? 1 : 0;
-    if (aOff !== bOff) return aOff - bOff;
-    return a.id.localeCompare(b.id);
-  });
-  const installedCount = sortedAgents.filter(
-    (a) => a.id !== effectiveMainId && !uninstalledIds.includes(a.id),
-  ).length;
-  const subCount = sortedAgents.filter((a) => a.id !== effectiveMainId).length;
+  // List shape (2026-06-22): main agent first, then everything else folded
+  // into family groups (iro art-family / reia reel-family / coder skin
+  // family with provider-defaults). Inside each group we keep registry
+  // order (NOT installed-first) so the layout stays stable as the user
+  // toggles checkboxes — otherwise a row "jumps" position the moment you
+  // uncheck it, which is disorienting in a settings panel.
+  //
+  // `foldAgents` is the same helper that drives the workbench catalog so
+  // both surfaces stay in sync — if we add a new family group there it
+  // shows up here automatically too.
+  // Fold the FULL list (main included) so the main agent (forge) renders as the
+  // HEAD of its family group (producer-family: forge → arin / forgeax-default),
+  // matching the art family (iro → ...) treatment instead of being pinned out on
+  // its own. The main is marked with ★ + no checkbox wherever it lands in the
+  // fold (flat row or subagent-family lead) via the `isMain` flags below.
+  const rest = agents.filter((a) => a.id !== effectiveMainId);
+  const grouped = foldAgents(agents);
+  const installedCount = rest.filter((a) => !uninstalledIds.includes(a.id)).length;
+  const subCount = rest.length;
 
   return (
     <div className="settings-info" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -648,40 +656,252 @@ function AgentsBody() {
         </select>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {sortedAgents.map((a) => {
-          const isMain = a.id === effectiveMainId;
-          const installed = isMain || !uninstalledIds.includes(a.id);
-          return (
-            <label
-              key={a.id}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 6, cursor: isMain ? 'default' : 'pointer', opacity: installed ? 1 : 0.55, background: isMain ? 'var(--surface-elevated)' : 'transparent' }}
-              onMouseEnter={(e) => { if (!isMain) (e.currentTarget as HTMLElement).style.background = 'var(--surface-elevated)'; }}
-              onMouseLeave={(e) => { if (!isMain) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-            >
-              {isMain ? (
-                <span style={{ width: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} aria-hidden>★</span>
-              ) : (
-                <input
-                  type="checkbox"
-                  checked={installed}
-                  onChange={() => toggle(a.id)}
-                  style={{ cursor: 'pointer' }}
+        {/* The main agent is no longer pinned separately — it folds into its
+            family group (producer-family) as the lead and is flagged ★ via
+            `isMain` below, exactly like any other family head. */}
+        {/* grouped: family / skin groups get a section divider with the group
+            label, members render indented underneath; flat agents render with
+            no indent inline with the natural fold order. */}
+        {grouped.map((item) => {
+          if (item.kind === 'flat') {
+            const flatIsMain = item.agent.id === effectiveMainId;
+            return (
+              <AgentRegisterRow
+                key={item.agent.id}
+                a={item.agent}
+                isMain={flatIsMain}
+                installed={flatIsMain || !uninstalledIds.includes(item.agent.id)}
+                toggle={toggle}
+                indent={0}
+                t={t}
+              />
+            );
+          }
+          if (item.kind === 'subagent-family') {
+            // SubagentFamilyGroup itself has no label field — derive from the
+            // lead's display name (e.g. "iro · 美术家族", "reia · 影游家族").
+            // Lead sits at indent=1 (one rail below the divider), subs at
+            // indent=2 (two rails) so the lead↔sub hierarchy reads visually
+            // — without the deeper sub indent every row looks like a sibling.
+            const total = 1 + item.subs.length;
+            const label = `${item.lead.name} · ${t('settings.agents.familyLabel')}`;
+            const leadIsMain = item.lead.id === effectiveMainId;
+            return (
+              <div key={`fam-${item.group.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
+                <AgentGroupDivider label={label} count={total} sublabel={item.lead.role} />
+                <AgentRegisterRow
+                  a={item.lead}
+                  isMain={leadIsMain}
+                  installed={leadIsMain || !uninstalledIds.includes(item.lead.id)}
+                  toggle={toggle}
+                  indent={1}
+                  t={t}
                 />
-              )}
-              <span style={{ width: 22, height: 22, borderRadius: 4, background: a.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>{a.avatar}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <strong>{a.name}</strong>
-                  {isMain && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· main · {t('settings.agents.newSessionEntry')}</span>}
-                  {!isMain && a.status === 'placeholder' && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· placeholder</span>}
-                </div>
-                <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.role}</div>
+                {item.subs.map((s) => (
+                  <AgentRegisterRow
+                    key={s.id}
+                    a={s}
+                    isMain={false}
+                    installed={!uninstalledIds.includes(s.id)}
+                    toggle={toggle}
+                    indent={2}
+                    t={t}
+                  />
+                ))}
               </div>
-              <code style={{ fontSize: 10, color: 'var(--text-dim)' }}>{a.id}</code>
-            </label>
+            );
+          }
+          // skin-group: 5 persona skins as a HORIZONTAL chip row (tone-only
+          // variants of the same coder capability — a vertical list of 5
+          // near-identical rows wastes space and obscures the "they're
+          // interchangeable" semantics). Provider-default CLI drivers
+          // (cc-coder / claude-code-default / codex-default / cursor-default)
+          // stay as full rows because each one is a distinct backend with
+          // different auth / cost / behavior characteristics that benefit
+          // from the avatar + name + id treatment.
+          const total = item.members.length + item.providers.length;
+          return (
+            <div key={`skin-${item.group.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
+              <AgentGroupDivider label={item.group.label} count={total} sublabel={item.group.sublabel} />
+              <SkinChipToggleRow members={item.members} uninstalledIds={uninstalledIds} toggle={toggle} />
+              {item.providers.map((p) => (
+                <AgentRegisterRow
+                  key={p.id}
+                  a={p}
+                  isMain={false}
+                  installed={!uninstalledIds.includes(p.id)}
+                  toggle={toggle}
+                  indent={1}
+                  t={t}
+                />
+              ))}
+            </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ── small leaf components factored out for the grouped layout ────────────
+// AgentGroupDivider: the thin section label that introduces a family/skin
+//   group. Stays inline with the list (no extra surface card) so it doesn't
+//   visually compete with the existing dropdown card above. count = total
+//   members shown under it.
+function AgentGroupDivider({ label, count, sublabel }: { label: string; count: number; sublabel?: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 10px 2px',
+        fontSize: 11, color: 'var(--text-dim)',
+        textTransform: 'uppercase', letterSpacing: 0.4,
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{label}</span>
+      <span>· {count}</span>
+      {sublabel ? <span style={{ textTransform: 'none', letterSpacing: 0 }}>· {sublabel}</span> : null}
+      <span style={{ flex: 1, height: 1, background: 'var(--border)', opacity: 0.4 }} />
+    </div>
+  );
+}
+
+// AgentRegisterRow: one row in the register.
+//   indent=0 → flush left, no rail (top-level flat agents).
+//   indent=1 → one rail to the left (group lead / skin-group provider).
+//   indent=2 → two rails (subagent-family sub — visually nested under lead).
+//   main = ★ instead of checkbox + always-on surface-elevated background.
+function AgentRegisterRow({
+  a, isMain, installed, toggle, indent, t,
+}: {
+  a: WorkbenchAgent;
+  isMain: boolean;
+  installed: boolean;
+  toggle: (id: string) => void;
+  indent: 0 | 1 | 2;
+  t: TFunction;
+}) {
+  // marginLeft accumulates with indent depth; paddingLeft sits the content
+  // right of where the rail enters the row. Numbers chosen so the avatar
+  // column lines up clearly across indent levels (lead ≈ 34px from edge,
+  // sub ≈ 58px, giving a visible ~24px step that reads as "child").
+  const marginLeft = indent === 0 ? 0 : indent === 1 ? 12 : 36;
+  const paddingLeft = indent === 0 ? 10 : 22;
+  return (
+    <label
+      key={a.id}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 10px',
+        paddingLeft,
+        borderLeft: indent >= 1 ? '1px solid var(--border)' : 'none',
+        marginLeft,
+        borderRadius: 6,
+        cursor: isMain ? 'default' : 'pointer',
+        opacity: installed ? 1 : 0.55,
+        background: isMain ? 'var(--surface-elevated)' : 'transparent',
+      }}
+      onMouseEnter={(e) => { if (!isMain) (e.currentTarget as HTMLElement).style.background = 'var(--surface-elevated)'; }}
+      onMouseLeave={(e) => { if (!isMain) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+    >
+      {isMain ? (
+        <span style={{ width: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} aria-hidden>★</span>
+      ) : (
+        <input
+          type="checkbox"
+          checked={installed}
+          onChange={() => toggle(a.id)}
+          style={{ cursor: 'pointer' }}
+        />
+      )}
+      {/* ADR-0019: register 列表 - mode='idle' 循环 default (期待). */}
+      <AgentAvatarVideo
+        agentId={a.id}
+        mode="idle"
+        size={32}
+        shape="square"
+        fallback={
+          <span style={{ width: 32, height: 32, borderRadius: 4, background: a.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>{a.avatar}</span>
+        }
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <strong>{a.name}</strong>
+          {isMain && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· main · {t('settings.agents.newSessionEntry')}</span>}
+          {!isMain && a.status === 'placeholder' && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· placeholder</span>}
+        </div>
+        <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.role}</div>
+      </div>
+      <code style={{ fontSize: 10, color: 'var(--text-dim)' }}>{a.id}</code>
+    </label>
+  );
+}
+
+// SkinChipToggleRow: horizontal pill row for the 5 coder personality skins.
+//   Each chip = mini avatar + name. Click toggles install. Visual state:
+//   installed = lime border + tinted fill (mirrors catalog active-chip
+//   styling so the "is this active" affordance reads the same in both
+//   surfaces). Uninstalled = faint border + reduced opacity.
+//   indent=1 (one rail) to match the skin-group sibling provider rows.
+//   `flexWrap: wrap` so narrow settings panels reflow chips instead of
+//   overflowing.
+function SkinChipToggleRow({
+  members, uninstalledIds, toggle,
+}: {
+  members: WorkbenchAgent[];
+  uninstalledIds: string[];
+  toggle: (id: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex', flexWrap: 'wrap', gap: 6,
+        padding: '6px 10px 6px 22px',
+        marginLeft: 12,
+        borderLeft: '1px solid var(--border)',
+      }}
+    >
+      {members.map((m) => {
+        const installed = !uninstalledIds.includes(m.id);
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => toggle(m.id)}
+            title={`${m.name} (${m.id})`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '3px 10px 3px 4px',
+              borderRadius: 999,
+              border: installed
+                ? '1px solid var(--accent, #d4ff48)'
+                : '1px solid var(--border)',
+              background: installed
+                ? 'rgba(212, 255, 72, 0.10)'
+                : 'transparent',
+              color: installed
+                ? 'var(--accent, #d4ff48)'
+                : 'var(--text-dim)',
+              cursor: 'pointer',
+              opacity: installed ? 1 : 0.6,
+              fontSize: 12,
+              lineHeight: 1.4,
+              transition: 'background 0.15s, border-color 0.15s, opacity 0.15s',
+            }}
+          >
+            <AgentAvatarVideo
+              agentId={m.id}
+              mode="idle"
+              size={20}
+              shape="square"
+              fallback={
+                <span style={{ width: 20, height: 20, borderRadius: 3, background: m.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0 }}>{m.avatar}</span>
+              }
+            />
+            <span style={{ fontWeight: installed ? 600 : 400 }}>{m.name}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

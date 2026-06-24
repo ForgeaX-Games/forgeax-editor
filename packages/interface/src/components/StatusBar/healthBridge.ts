@@ -21,7 +21,7 @@
 
 import { pushHealth, type HealthLevel, type HealthSource } from './healthStore';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { useAppStore, type NetworkEntry } from '../../store';
+import { useAppStore, type NetworkEntry, type TelemetryRecord } from '../../store';
 
 let installed = false;
 
@@ -76,6 +76,16 @@ function sourceFromEvent(ev: MessageEvent): HealthSource {
   } catch { /* cross-origin / detached */ }
   // Fall back to URL hints in the message origin.
   return 'engine';
+}
+
+/** iframe→shell telemetry postMessage 摄取(VAG_TELEMETRY)。返 true=本消息已消费。
+ *  抽成纯函数,既给 message 监听复用,也便于单测(不必装全局监听,避免跨用例污染)。 */
+export function ingestVagTelemetry(data: unknown): boolean {
+  if ((data as { type?: unknown } | null)?.type !== 'VAG_TELEMETRY') return false;
+  const recs = (data as { records?: unknown }).records;
+  if (!Array.isArray(recs) || recs.length === 0) return true;
+  useAppStore.getState().pushTelemetry(recs as TelemetryRecord[]);
+  return true;
 }
 
 export function installHealthBridge(): void {
@@ -195,5 +205,11 @@ export function installHealthBridge(): void {
       });
       return;
     }
+
+    // Telemetry (trace+log) postMessage信道 — iframe-produced spans/logs forwarded
+    // up to the shell (same VAG family as VAG_CONSOLE/VAG_NETWORK). Feeds the SAME
+    // store.telemetry slice as the node-side `{type:'telemetry'}` WS path, so one
+    // viewer sees both. Records carry their own `kind` discriminator.
+    if (ingestVagTelemetry(data)) return;
   });
 }

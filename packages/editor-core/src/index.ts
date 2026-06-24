@@ -115,6 +115,7 @@ export type {
   EditorSnapshot,
   EditorSyncMsg,
   PopoutGeom,
+  AssetChatRef,
 } from './sync-channel';
 
 // ── Anim ──
@@ -135,6 +136,19 @@ export {
   extractPackDirs,
 } from './assets';
 export type { PackAsset, RawAsset } from './assets';
+
+// ── Pack CRUD (M2) ──
+export {
+  generateAssetGuid,
+  addAssetToPack,
+  removeAssetFromPack,
+  renameAssetInPack,
+  duplicateAssetInPack,
+  moveAsset,
+  deleteAsset,
+  createPack,
+  createDirectory,
+} from './pack-ops';
 
 // ── Matgraph ──
 export {
@@ -220,6 +234,7 @@ export {
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
+  requestAddAssetsToChat,
   useDocVersion,
   useMainConnected,
   useGizmoMode,

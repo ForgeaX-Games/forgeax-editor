@@ -15,8 +15,26 @@ const WB_PLUGIN_ID = '@forgeax-plugin/wb-agent-persona';
 const STORAGE_KEY = 'wb-agent-persona:selected-agent-id';
 const CHANNEL = 'wb-agent-persona';
 
-export function openAgentDetail(agentId: string): void {
+export interface OpenAgentDetailOptions {
+  /**
+   * When true (default), also `setTabAgent(activeSid, agentId)` — i.e. switch
+   * the chat tab to address this agent directly.
+   *
+   * When false, only open the persona editor focused on the agent without
+   * touching the chat tab. Used by AgentsMainArea for sub-agents inside a
+   * subagent-family group: catalog browsing should NOT auto-route the chat
+   * to a sub (per 2026-06-22 view-only decision — conversation goes through
+   * the lead's delegate_to_subagent, not direct).
+   */
+  switchChat?: boolean;
+}
+
+export function openAgentDetail(
+  agentId: string,
+  opts: OpenAgentDetailOptions = {},
+): void {
   if (!agentId) return;
+  const { switchChat = true } = opts;
   try { localStorage.setItem(STORAGE_KEY, agentId); } catch { /* private mode */ }
   try {
     const bc = new BroadcastChannel(CHANNEL);
@@ -24,6 +42,6 @@ export function openAgentDetail(agentId: string): void {
     bc.close();
   } catch { /* old browser */ }
   const store = useAppStore.getState();
-  if (store.activeSid) store.setTabAgent(store.activeSid, agentId);
+  if (switchChat && store.activeSid) store.setTabAgent(store.activeSid, agentId);
   store.openWorkbench({ tab: WB_TAB, expandedPluginId: WB_PLUGIN_ID });
 }

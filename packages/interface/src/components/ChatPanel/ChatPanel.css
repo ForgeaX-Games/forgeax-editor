@@ -715,6 +715,125 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
 }
 .sys-meta-from { opacity: 0.78; }
 .sys-meta-to { opacity: 0.92; }
+
+/* 拍一拍 inter-agent header: emitter avatar replaces the emoji, pat phrase
+ * replaces the source label. (尺寸在 .sys-pat-cap .sys-pat-avatar 里定义) */
+.sys-pat-avatar {
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.sys-pat-text {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sys-line.is-incoming .sys-pat-text { color: #9ddcfd; }
+.sys-line.is-outgoing .sys-pat-text { color: #cfb6ff; }
+
+/* ── 拍一拍卡片 · 胶囊徽章 (方案 C) ──
+ * 拍一拍文案做圆角胶囊(方向色半透明底),发起者头像嵌在胶囊左端;
+ * 摘要+产出在下方缩进、共用一条左竖线,产出通过右下角「展开」按钮收放。 */
+.sys-line[data-pat] {
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+}
+.sys-pat-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+/* 胶囊:头像 + 拍一拍文案,方向色底色,头像被框在胶囊内 */
+.sys-pat-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 12px 2px 3px;
+  border-radius: 999px;
+}
+.sys-line[data-pat].is-outgoing .sys-pat-cap { background: rgba(150, 110, 255, 0.20); }
+.sys-line[data-pat].is-incoming .sys-pat-cap { background: rgba(90, 180, 255, 0.20); }
+.sys-pat-cap .sys-pat-avatar {
+  width: 22px;
+  height: 22px;
+  margin-top: -2px;
+}
+.sys-pat-cap .sys-pat-text {
+  flex: 0 1 auto;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 胶囊下方的文字内容:缩进 + 一条左竖线(摘要与产出共用,连续) */
+.sys-pat-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(255, 255, 255, 0.16);
+}
+.sys-line[data-pat].is-outgoing .sys-pat-content { border-left-color: rgba(150, 110, 255, 0.5); }
+.sys-line[data-pat].is-incoming .sys-pat-content { border-left-color: rgba(90, 180, 255, 0.5); }
+.sys-line[data-pat] .sys-text {
+  font-size: 11px;
+  opacity: 0.72;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 产出 —— 折叠进「展开」的 agent 实际输出 */
+.sys-pat-output {
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.82;
+}
+/* 展开按钮 —— 卡片右下角 */
+.sys-pat-foot {
+  align-self: flex-end;
+  margin-top: 1px;
+}
+
+/* 展开/收起按钮 —— 明确的圆角胶囊按钮 + 旋转 chevron,hover 提示「点击查看产出」 */
+.sys-pat-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 1px 8px 1px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.sys-pat-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.sys-line[data-pat].is-outgoing .sys-pat-toggle:hover { border-color: var(--color-role-orchestrator); }
+.sys-line[data-pat].is-incoming .sys-pat-toggle:hover { border-color: var(--prim-color-sky-300); }
+.sys-pat-toggle .spt-chev {
+  transition: transform 0.16s ease;
+}
+.sys-pat-toggle .spt-chev.open { transform: rotate(180deg); }
 .sys-toggle {
   appearance: none;
   -webkit-appearance: none;
@@ -895,7 +1014,7 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
      ~46px at letter-spacing:0.10em. Layout never crunches at any viewport. */
 }
 .kc-logo {
-  width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
+  width: 28px; height: 28px; border-radius: 50%; object-fit: cover;
   /* iter-96 supersedes this hint with a canvas pre-bake (Lanczos) via
      useDownsampledImage. The hook falls back to the raw 1024×1024 PNG when
      createImageBitmap is unavailable (old Safari / WebView); the hint below
@@ -940,6 +1059,50 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
   color: var(--text-muted);
 }
 .kc-chev { color: rgba(255,255,255,0.5); }
+
+/* Live work-state word in the agent bubble header (top-right). `.kc-name`
+   (flex:1) shoves it to the right edge, so it sits just left of the provider/
+   status/chevron cluster. Reads the same 9-bucket emotion state that drives
+   the avatar webm, so face + text stay in sync; only mounted while the turn
+   is running/waiting (ForgeCard guards it).
+
+   Two nested spans give "隐现 + 呼吸感":
+     - outer .kc-statusword  : continuous slow opacity breathe (always alive).
+     - inner .kc-statusword-in: replays a fade+rise entrance on every text swap
+       (keyed remount). Nesting means the two opacity animations multiply
+       instead of fighting over the same property. */
+.kc-statusword {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  color: #39ff14;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  /* 半透明荧光绿圆角矩形底 */
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(57, 255, 20, 0.12);
+  border: 1px solid rgba(57, 255, 20, 0.28);
+  animation: kc-status-breathe 2.6s ease-in-out infinite;
+}
+.kc-statusword-in {
+  display: inline-block;
+  animation: kc-status-in 380ms ease-out both;
+}
+@keyframes kc-status-breathe {
+  0%, 100% { opacity: 0.32; }
+  50%      { opacity: 1; }
+}
+@keyframes kc-status-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kc-statusword { animation: none; opacity: 0.85; }
+  .kc-statusword-in { animation: none; transform: none; }
+}
 
 .status-done { color: var(--accent-green); }
 .status-running { color: var(--accent-orange); animation: spin 1s linear infinite; }
@@ -1644,6 +1807,19 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
 .sac-emoji { font-size: 12px; }
 .sac-name { font-weight: 600; }
 .sac-role { color: var(--text-muted, rgba(255,255,255,0.4)); font-size: 10px; }
+/* Handoff "拍一拍" header: initiator avatar replaces the emoji, the pat
+   sentence replaces the name. The avatar is a small circle aligned to the
+   row; the text takes the remaining space and ellipsizes so the status /
+   tools meta on the right stays visible. */
+.sac-pat-avatar { flex: 0 0 auto; border-radius: 50%; }
+.sac-pat-text {
+  font-weight: 600;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sac-provider {
   font-size: 9px;
   padding: 0 5px;

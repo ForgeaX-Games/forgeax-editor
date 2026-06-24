@@ -817,6 +817,9 @@ function dispatch(evt: SessionEvent): void {
   // has its own onSessionEvent handler. They have no chat representation and
   // would otherwise be rendered as system messages by the fallback below.
   if (type.startsWith('file-activity:')) return;
+  // perception:* events are consumed by lib/perception-stream.ts (re-emitted to
+  // the preview iframe). No chat representation — skip the fallback render.
+  if (type.startsWith('perception:')) return;
   if (type === 'agent_added') {
     const p = payload as { path?: string; display?: string; parent?: string; depth?: number };
     if (p.path) {

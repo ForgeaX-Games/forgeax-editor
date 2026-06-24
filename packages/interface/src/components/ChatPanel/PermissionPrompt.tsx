@@ -35,8 +35,10 @@ export function PermissionPrompt(): ReactElement | null {
   const [busy, setBusy] = useState(false);
   // AskUserQuestion: chosen labels per question index.
   const [picks, setPicks] = useState<Record<number, string[]>>({});
+  // 「记住本会话」勾选(仅 trust-gate ask 卡 canRemember 时可见)。
+  const [remember, setRemember] = useState(false);
 
-  useEffect(() => { setPicks({}); setBusy(false); }, [pending?.reqId]);
+  useEffect(() => { setPicks({}); setBusy(false); setRemember(false); }, [pending?.reqId]);
 
   if (!activeSid || !pending) return null;
 
@@ -53,7 +55,8 @@ export function PermissionPrompt(): ReactElement | null {
       await fetch(`/api/sessions/${encodeURIComponent(activeSid)}/permission-reply`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reqId, allow, ...(answers ? { answers } : {}) }),
+        // remember:仅在 allow 时有意义 —— 让 host 记住本会话该 capability,同类免卡。
+        body: JSON.stringify({ reqId, allow, ...(answers ? { answers } : {}), ...(allow && remember ? { remember: true } : {}) }),
       });
     } catch { /* server times out fail-closed if this never lands */ } finally {
       setBusy(false);
@@ -140,12 +143,23 @@ export function PermissionPrompt(): ReactElement | null {
         </>
       ) : (
         <>
+          {pending.capability && (
+            <div style={{ fontSize: 11, opacity: 0.7 }}>
+              {t('permission.capabilityLabel', { capability: pending.capability })}
+            </div>
+          )}
           <code style={{
             display: 'block', padding: '6px 8px', borderRadius: 6,
             background: 'var(--color-bg-base, #0e0e0e)', color: 'var(--color-text-primary, #ddd)',
             wordBreak: 'break-all', whiteSpace: 'pre-wrap',
           }}>{pending.command || pending.toolName}</code>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+            {pending.canRemember && (
+              <label style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.85, cursor: 'pointer' }}>
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                {t('permission.rememberSession')}
+              </label>
+            )}
             <button onClick={() => reply(false)} disabled={busy} style={btn('ghost')}>
               {busy ? <Loader2 size={13} className="spin" /> : <X size={13} />} {t('permission.deny')}
             </button>

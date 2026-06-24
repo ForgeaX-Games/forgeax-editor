@@ -96,7 +96,20 @@ export type EditorSyncMsg =
   // scene-scoped panels (Hierarchy/Inspector/…) reload and re-pair with it
   | { t: 'sceneChanged'; id: string }
   // any panel → all: asset selection changed (Content Browser → Asset Inspector)
-  | { t: 'assetSelect'; asset: { guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string } | null };
+  | { t: 'assetSelect'; asset: { guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string } | null }
+  // panel → main: batch-add asset/folder refs into AI Chat context (M5)
+  | { t: 'addAssetToChat'; refs: AssetChatRef[] };
+
+/** Reference payload for AI Chat context injection (M5). */
+export interface AssetChatRef {
+  type: 'asset' | 'folder';
+  guid?: string;
+  kind?: string;
+  name: string;
+  path: string;
+  payload?: Record<string, unknown>;
+  summary?: { totalAssets: number; kinds: Record<string, number>; guids: string[] };
+}
 
 /** Persisted geometry of a popped-out panel window. */
 export interface PopoutGeom { w: number; h: number; x: number; y: number }

@@ -91,7 +91,8 @@ describe('buildReferenceFor — DOM units', () => {
     const node = el(`<div class="tb-game-row" data-game-slug="rogue"></div>`);
     const ref = buildReferenceFor(node)!;
     const copies = ref.descriptor.copy?.(ref.el) ?? [];
-    expect(copies).toEqual([{ label: '复制 slug', text: 'rogue' }]);
+    // i18n: reference.copy_slug is English by default in the test locale.
+    expect(copies).toEqual([{ label: 'Copy slug', text: 'rogue' }]);
   });
 
   it('every descriptor has a unique kind', () => {

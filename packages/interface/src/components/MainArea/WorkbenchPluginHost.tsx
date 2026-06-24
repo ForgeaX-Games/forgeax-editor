@@ -5,13 +5,7 @@ import { useAppStore } from '../../store';
 import type { BusPluginInfo } from '../../lib/bus-api';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
 import { WorkbenchAgentPicker } from './WorkbenchAgentPicker';
-// Doc 09 §2.1 / IMPLEMENTATION-COVERAGE gap 7 — wb-plugin-author panel now
-// lives inside the marketplace plugin itself; import directly so there is a
-// single source of truth (the host's previous parallel copy is gone).
-import {
-  PluginAuthorPanel,
-  WB_PLUGIN_AUTHOR_ID,
-} from '../../../../marketplace/plugins/wb-plugin-author/src/panel';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 // MainArea-side workbench plugin host. Standalone-iframe plugins are now owned
 // by the keep-alive `CenterPluginLayer` (always-mounted overlay in MainArea) so
@@ -34,15 +28,18 @@ export function pluginRendersInSidebarLeftPane(pluginInfo?: BusPluginInfo | null
   return !!(pluginInfo?.entry?.standalone && pluginInfo?.workbench?.panes?.left);
 }
 
-/** Inline host for the wb-plugin-author panel only. WorkbenchMode routes
+/** Inline host for non-iframe workbench panels. WorkbenchMode routes
  *  standalone-iframe plugins to the keep-alive CenterPluginLayer and only calls
- *  this for `WB_PLUGIN_AUTHOR_ID`; the manifest fetch just feeds the agent
+ *  this for plugins that have an injected inline panel (see
+ *  PanelRenderers.workbenchPanels — studio registers wb-plugin-author; interface
+ *  itself names no specific plugin). The manifest fetch just feeds the agent
  *  picker's preferredAgent. */
 export function WorkbenchPluginHost(): ReactElement | null {
   const { t } = useTranslation();
   const pluginId = useAppStore((s) => s.workbenchExpandedPluginId);
   const setPluginId = useAppStore((s) => s.setWorkbenchExpandedPluginId);
   const manifest = usePluginManifest(pluginId ?? '');
+  const { workbenchPanels } = usePanelRenderers();
 
   if (!pluginId) return null;
 
@@ -63,15 +60,17 @@ export function WorkbenchPluginHost(): ReactElement | null {
   // Standalone-iframe plugins are owned by CenterPluginLayer (keep-alive).
   if (manifest && manifest !== 'loading' && manifest.entry?.standalone) return null;
 
-  // Doc 09 §2.1 — wb-plugin-author renders inline (no standalone iframe build
-  // yet). Once a per-plugin static-serve route is in place this branch goes
-  // away and the manifest gets `entry.standalone`.
-  if (pluginId === WB_PLUGIN_AUTHOR_ID) {
+  // Inline (non-iframe) panel injected by the host. Studio registers
+  // wb-plugin-author here; standalone registers nothing → this map is empty and
+  // we fall through to the placeholder branch below. interface holds no plugin
+  // id — it renders whatever the host injected for this expanded plugin.
+  const InlinePanel = workbenchPanels?.[pluginId];
+  if (InlinePanel) {
     return (
       <div className="wb-plugin-host">
         <div className="wb-plugin-host-bar">{back}{picker}</div>
         <div className="wb-plugin-host-body" style={{ display: 'flex', flexDirection: 'column' }}>
-          <PluginAuthorPanel />
+          <InlinePanel />
         </div>
       </div>
     );

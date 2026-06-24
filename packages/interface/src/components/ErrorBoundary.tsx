@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { t } from '@/i18n';
+import { reportError } from '@/lib/aegis';
 
 interface Props {
   children: ReactNode;
@@ -50,6 +51,10 @@ export class RecoveryBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ error, info });
+    // React swallows render throws before they reach window.onerror, so Aegis'
+    // auto JS-error capture never sees them — report explicitly. No-op unless
+    // monitoring is configured + live.
+    reportError(error, info.componentStack, this.props.scope);
     // Tear down the boot splash so the error is visible (it otherwise sits on
     // top of this fallback). Lossy by contract — ignored if absent.
     try {

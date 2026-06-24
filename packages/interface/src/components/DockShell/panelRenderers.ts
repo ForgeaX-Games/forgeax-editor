@@ -12,6 +12,12 @@
 // This is the same shape as the existing `wb:*` plugin merge: DockShell owns
 // the docking mechanics, the host supplies the panel bodies.
 import { createContext, useContext, type ReactNode } from 'react';
+// Type-only — erased at build. The runtime factories are INJECTED via
+// PanelRenderers below so interface never statically pulls @forgeax/host-sdk
+// into its module graph (it's a studio-only package; the standalone editor
+// shell has no host-sdk and must still bundle interface). See B in the
+// dependency-inversion refactor.
+import type { createPluginPort, createWindowTransport } from '@forgeax/host-sdk';
 
 export interface PanelRenderers {
   /** Editor sub-panel ids (ep:*). Empty when no editor is wired. */
@@ -22,6 +28,22 @@ export interface PanelRenderers {
   renderEdit?: (opts: { viewportOnly?: boolean }) => ReactNode;
   /** Renders the play/preview surface. Omitted → placeholder. */
   renderPreview?: () => ReactNode;
+  /**
+   * Inline workbench panels (non-iframe React panels), keyed by bus plugin id.
+   * The host (studio) injects concrete panels like wb-plugin-author; interface
+   * itself holds NO specific plugin id and renders whatever is registered.
+   * Omitted (standalone) → no inline panels, host falls back to the
+   * iframe/placeholder branch. See A in the dependency-inversion refactor.
+   */
+  workbenchPanels?: Record<string, () => ReactNode>;
+  /**
+   * Host-SDK port factories for the studio-only wb:* plugin iframe RPC.
+   * Injected so interface's StandalonePluginIframe can import these as TYPES
+   * only — when absent (standalone), no plugin iframe RPC is wired (the
+   * standalone shell never opens a wb:* plugin). See B.
+   */
+  createPluginPort?: typeof createPluginPort;
+  createWindowTransport?: typeof createWindowTransport;
 }
 
 // Default editor panel ids + titles. These are plain strings (NOT an import
@@ -30,13 +52,14 @@ export interface PanelRenderers {
 export const DEFAULT_EDITOR_PANEL_IDS: readonly string[] = [
   'hierarchy', 'assets', 'inspector', 'history',
   'capabilities', 'material', 'timeline', 'matgraph', 'launcher',
+  'asset-inspector',
 ];
 
 export const DEFAULT_EDITOR_PANEL_TITLES: Record<string, string> = {
   hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
   history: 'History', capabilities: 'Capabilities',
   material: 'Material', timeline: 'Timeline', matgraph: 'Mat Graph',
-  launcher: 'Launcher',
+  launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
 };
 
 export const DEFAULT_PANEL_RENDERERS: PanelRenderers = {

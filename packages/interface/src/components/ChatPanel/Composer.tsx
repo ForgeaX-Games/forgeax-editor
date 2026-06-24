@@ -483,6 +483,36 @@ export function Composer() {
     return () => clearTimeout(id);
   }, [hintFor]);
 
+  // ── 多模态:暂存待发送的图片(file picker / 粘贴)。发送时随 sendMessage 的
+  //   attachments 传给 forgeax-core 内核;发送后清空。data 用 base64(无 dataUrl 前缀)。
+  const [images, setImages] = useState<Array<{ id: string; name: string; data: string; mediaType: string }>>([]);
+  const imgInputRef = useRef<HTMLInputElement | null>(null);
+  const addFiles = (files: FileList | File[] | null) => {
+    if (!files) return;
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith('image/')) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = typeof reader.result === 'string' ? reader.result : '';
+        const comma = res.indexOf(',');
+        const data = comma >= 0 ? res.slice(comma + 1) : res; // 剥 dataUrl 前缀,只留 base64
+        setImages((prev) => [
+          ...prev,
+          { id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: f.name, data, mediaType: f.type || 'image/png' },
+        ]);
+      };
+      reader.readAsDataURL(f);
+    }
+  };
+  const removeImage = (id: string) => setImages((prev) => prev.filter((i) => i.id !== id));
+  /** 把暂存图片转成 sendMessage 的 attachments(kind:'image')。 */
+  const takeAttachments = (): Array<Record<string, unknown>> | undefined => {
+    if (images.length === 0) return undefined;
+    const atts = images.map((i) => ({ kind: 'image', mediaType: i.mediaType, data: i.data }));
+    setImages([]);
+    return atts;
+  };
+
   // P3.45 — close slash popover on outside-click or Escape. Mirrors the cliOpen
   // dismissal contract so two popovers in the same composer-bar behave the
   // same way to the player.
@@ -704,16 +734,21 @@ export function Composer() {
 
   const onSubmit = async () => {
     const t = text.trim();
-    if (!t) return;
+    // 允许"只发图无文字"——但内核 user 文本不能为空,给个占位提示。
+    if (!t && images.length === 0) return;
     if (isStreaming) {
       // Agent is mid-turn — queue client-side. It flushes as its own turn when
       // the current turn ends (sequential, one turn per queued message).
-      enqueueMessage(t);
-      setText('');
-      return;
+      // 注:排队消息暂不带图(图随当前输入即时发);有图时直接发不入队。
+      if (images.length === 0) {
+        enqueueMessage(t);
+        setText('');
+        return;
+      }
     }
+    const attachments = takeAttachments();
     setText('');
-    await sendMessage(t);
+    await sendMessage(t || '(see attached image)', attachments ? { attachments } : undefined);
   };
 
   // Interrupt the running turn and send `text` immediately (handoff: steer).
@@ -823,11 +858,41 @@ export function Composer() {
         onChange={setText}
         onKeyDown={onKeyDown}
       />
+      {images.length > 0 && (
+        <div className="cb-img-strip" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 8px' }}>
+          {images.map((img) => (
+            <div key={img.id} style={{ position: 'relative', width: 56, height: 56, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--color-border, #444)' }}>
+              <img
+                src={`data:${img.mediaType};base64,${img.data}`}
+                alt={img.name}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+              <button
+                type="button"
+                aria-label="remove image"
+                onClick={() => removeImage(img.id)}
+                style={{
+                  position: 'absolute', top: 1, right: 1, width: 16, height: 16, lineHeight: '14px',
+                  borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 11,
+                  background: 'rgba(0,0,0,0.6)', color: '#fff',
+                }}
+              >×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input
+        ref={imgInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
+      />
       <div className="composer-bar">
         <div className="cb-left-group">
-          <button className="cb-btn cb-soon" title={t('composer.imageUploadSoon')} aria-disabled="true" type="button" onClick={() => setHintFor(CB_HINT.IMG)}>
+          <button className="cb-btn" title={t('composer.imageUploadSoon')} type="button" onClick={() => imgInputRef.current?.click()}>
             <Upload size={16} />
-            {hintFor === CB_HINT.IMG && <span className="cb-hint" role="status">{t('composer.comingSoon')}</span>}
           </button>
           <div className="cb-at">
             <button

@@ -295,13 +295,26 @@ export function buildEntityPill(p: { id?: number | string; name: string; compone
   };
 }
 
-export function buildAssetPill(p: { guid: string; name?: string; assetKind?: string; packPath?: string }): PillPayload {
+export function buildAssetPill(p: { guid: string; name?: string; assetKind?: string; packPath?: string; payload?: Record<string, unknown> }): PillPayload {
   const name = p.name ?? p.guid.slice(0, 8);
+  const isFolderSummary = p.assetKind === 'folder' && p.payload;
+  let detail: string;
+  if (isFolderSummary) {
+    const s = p.payload as { totalAssets?: number; kinds?: Record<string, number>; guids?: string[] };
+    const kindList = s.kinds ? Object.entries(s.kinds).map(([k, v]) => `${k} × ${v}`).join(', ') : '';
+    detail = `[${t('reference.asset')}: folder="${name}" path=${p.packPath ?? ''} totalAssets=${s.totalAssets ?? 0} kinds=(${kindList})]`;
+  } else if (p.payload) {
+    const payloadStr = JSON.stringify(p.payload, null, 2);
+    const truncPayload = payloadStr.length > 2000 ? payloadStr.slice(0, 2000) + '\n…(truncated)' : payloadStr;
+    detail = `[${t('reference.asset')}: guid=${p.guid} kind=${p.assetKind ?? ''}${p.packPath ? ` pack=${p.packPath}` : ''}\npayload:\n${truncPayload}]`;
+  } else {
+    detail = `[${t('reference.asset')}: guid=${p.guid} kind=${p.assetKind ?? ''}${p.packPath ? ` pack=${p.packPath}` : ''}]`;
+  }
   return {
-    kind: 'entity', display: name, icon: '🧱',
-    detail: `[${t('reference.asset')}: guid=${p.guid} kind=${p.assetKind ?? ''}${p.packPath ? ` pack=${p.packPath}` : ''}]`,
+    kind: 'entity', display: name, icon: isFolderSummary ? '📁' : '🧱',
+    detail,
     tooltip: {
-      title: `🧱 ${t('reference.asset')} · ${name}`,
+      title: `${isFolderSummary ? '📁' : '🧱'} ${t('reference.asset')} · ${name}`,
       lines: [`guid: ${p.guid}`, p.assetKind ? `kind: ${p.assetKind}` : '', p.packPath ? `pack: ${p.packPath}` : ''].filter(Boolean),
     },
   };

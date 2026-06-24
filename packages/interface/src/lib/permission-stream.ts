@@ -25,6 +25,11 @@ export interface PendingPermission {
   /** Raw tool input. For AskUserQuestion it holds { questions: [...] } so the
    *  card can render the option picker and return the user's answers. */
   input?: unknown;
+  /** 信任闸命中的能力(exec/write/network/credential/delete);trust-gate ask 卡有,
+   *  CC permission-prompt 卡无。用于卡片副标题 + 「记住本会话」的归类。 */
+  capability?: string;
+  /** trust-gate ask 卡允许「记住本会话」(CC 卡为 false/缺省)。 */
+  canRemember?: boolean;
 }
 
 const _state = new Map<string, PendingPermission>();
@@ -47,6 +52,8 @@ function dispatchPermission(evt: SessionEvent): void {
       command: typeof p.command === 'string' ? p.command : '',
       agent: typeof p.agent === 'string' ? p.agent : 'forge',
       input: (p as { input?: unknown }).input,
+      ...(typeof p.capability === 'string' ? { capability: p.capability } : {}),
+      ...((p as { canRemember?: unknown }).canRemember === true ? { canRemember: true } : {}),
     });
   } else {
     // resolved — clear only if it's the same request still showing.

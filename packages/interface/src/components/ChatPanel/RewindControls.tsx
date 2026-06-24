@@ -54,6 +54,8 @@ export function RewindConfirmDialog({
 }) {
   const { t } = useTranslation();
   const performRewind = useAppStore((s) => s.performRewind);
+  const cancelStream = useAppStore((s) => s.cancelStream);
+  const isStreaming = useAppStore((s) => s.isStreaming);
   const [preview, setPreview] = useState<RewindPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,6 +75,9 @@ export function RewindConfirmDialog({
     setBusy(true);
     setError(null);
     try {
+      // 模型还在回复时点回退 = 放弃当前这轮:先立即终止在飞回复(cancelStream 同
+      // Stop 键,CLI/原生两路都断),再打回退快照。空闲时 cancelStream 为安全 no-op。
+      if (isStreaming) cancelStream();
       await performRewind(sid, msgId, mode);
       onClose();
     } catch (e) {
@@ -139,7 +144,6 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
 }) {
   const { t } = useTranslation();
   const sendMessage = useAppStore((s) => s.sendMessage);
-  const enqueueMessage = useAppStore((s) => s.enqueueMessage);
   const performRewindCancel = useAppStore((s) => s.performRewindCancel);
   const [text, setText] = useState(initialText);
   // 仅防发送重复触发的瞬时 ref —— 不用 state 当永久闸,否则 enqueue 后会把
@@ -167,9 +171,9 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
     if (!msg || sendingRef.current) return;
     sendingRef.current = true;
     // 发送即定格:server /messages 先 finalizePending 再打新快照,被回退段由
-    // rewind:finalized 从列表移除(本编辑器随之卸载)。mid-turn 则排队。
-    if (isStreaming) enqueueMessage(msg);
-    else void sendMessage(msg);
+    // rewind:finalized 从列表移除(本编辑器随之卸载)。模型仍在回复时立即终止上一轮
+    // (handoff:'steer' = 中断在飞 turn 并把本条作为下一轮),而非排队等它跑完。
+    void sendMessage(msg, isStreaming ? { handoff: 'steer' } : undefined);
   };
 
   // Redo(恢复):始终可点。失败(网络 / 已定格 409)不静默 —— 既给提示,也
@@ -227,12 +231,13 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
   initialText: string;
   hasCode: boolean;
   isStreaming: boolean;
-  onCancel: () => void;
+  /** 非发送退出编辑态(blur / 点「取消编辑」)。draft = 当前输入框内容,
+   *  由上层决定是否按 sid:msgId 暂存(仅内存),供下次重新编辑回填。 */
+  onCancel: (draft: string) => void;
 }) {
   const { t } = useTranslation();
   const performRewind = useAppStore((s) => s.performRewind);
   const sendMessage = useAppStore((s) => s.sendMessage);
-  const enqueueMessage = useAppStore((s) => s.enqueueMessage);
   const [text, setText] = useState(initialText);
   const [phase, setPhase] = useState<'editing' | 'confirming'>('editing');
   const [preview, setPreview] = useState<RewindPreview | null>(null);
@@ -240,6 +245,7 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
   const [busy, setBusy] = useState(false);
   const sendingRef = useRef(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     const ta = taRef.current;
@@ -266,8 +272,8 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
     try {
       await performRewind(sid, msgId, mode);
       // 发送即触发 server finalizePending 定格;本组件随 rewind:finalized 卸载。
-      if (isStreaming) enqueueMessage(msg);
-      else await sendMessage(msg);
+      // 模型仍在回复时立即终止上一轮(handoff:'steer' 中断在飞 turn 并把本条作为下一轮),不排队等它跑完。
+      await sendMessage(msg, isStreaming ? { handoff: 'steer' } : undefined);
     } catch (e) {
       sendingRef.current = false;
       setBusy(false);
@@ -304,8 +310,20 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
     }
   };
 
+  // 失去焦点即退出编辑态(对齐 WorkspaceTabs 重命名):点到编辑器之外 = 不想改了。
+  //   - 确认浮层 / 发送中(phase!=='editing' || busy)不退出 —— 那是流程中,不是放弃。
+  //   - 焦点仍落在编辑器内部(发送按钮 / 取消链接等)→ 不算"失去焦点",忽略。
+  //     发送按钮额外用 onMouseDown preventDefault 兜底:WebKit(桌面 WKWebView)鼠标
+  //     点按钮不给焦点,relatedTarget=null,光靠 contains 判不住,会误退出。
+  const onBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+    if (phase !== 'editing' || busy || sendingRef.current) return;
+    const next = e.relatedTarget as Node | null;
+    if (next && rootRef.current?.contains(next)) return;
+    onCancel(text);
+  };
+
   return (
-    <div className="rw-inline rw-edit-inline">
+    <div className="rw-inline rw-edit-inline" ref={rootRef}>
       <div className="rw-inline-box">
         <textarea
           ref={taRef}
@@ -315,6 +333,7 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
           placeholder={t('rewind.inlinePlaceholder')}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
+          onBlur={onBlur}
           disabled={busy && phase === 'editing'}
         />
         <div className="rw-inline-actions">
@@ -323,13 +342,14 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
             className="rw-inline-send"
             disabled={!text.trim() || busy}
             title={t('rewind.editAndSendFromHere')}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={submit}
           ><ArrowUp size={14} strokeWidth={2.4} /></button>
         </div>
       </div>
       <div className="rw-inline-foot">
         {err && <span className="rw-err">{err}</span>}
-        <button type="button" className="rw-redo-link" disabled={busy} onClick={onCancel}>{t('rewind.cancelEdit')}</button>
+        <button type="button" className="rw-redo-link" disabled={busy} onClick={() => onCancel(text)}>{t('rewind.cancelEdit')}</button>
       </div>
 
       {phase === 'confirming' && preview && (

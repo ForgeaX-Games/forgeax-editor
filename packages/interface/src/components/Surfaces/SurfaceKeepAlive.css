@@ -1,0 +1,31 @@
+/* Keep-alive surface layer — the Play/Edit viewports mounted once, kept alive,
+ * and overlaid on their dockview anchors. See SurfaceKeepAliveLayer.tsx. */
+
+/* The anchor placeholder inside the dockview preview/edit panels. It only reserves
+ * the cell; the live (fixed) surface is drawn on top of it by the keep-alive layer. */
+.surface-anchor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The always-mounted root holds the kept-alive items but takes no space itself. */
+.fx-surface-keepalive-root {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Each kept-alive surface. position:fixed so it can be overlaid on its dockview
+ * anchor's rect (top/left/width/height set imperatively) without re-parenting the
+ * iframe. Inactive items are display:none (set inline) → their IntersectionObserver
+ * pauses the engine. z-index sits above in-flow dock content but below dock pop-out
+ * affordances (200), popovers (1000), detached-surface (9000), and modals/menus. */
+.fx-surface-keepalive-item {
+  position: fixed;
+  z-index: 40;
+  pointer-events: auto;
+  /* `display` (none/flex) + top/left/width/height are owned by syncLayout(). */
+}

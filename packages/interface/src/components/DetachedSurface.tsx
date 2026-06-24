@@ -19,9 +19,10 @@ import { StandalonePluginIframe } from './MainArea/StandalonePluginIframe';
 import { AgentsMainArea, WorkbenchModeDefault } from './MainArea/WorkbenchMode';
 import { ChatPanel } from './ChatPanel/ChatPanel';
 import { ConsolePanel } from './MainArea/ConsolePanel';
-import { PreviewPanel, EditPanel } from './MainArea/SurfacePanels';
 import { Sidebar } from './Sidebar/Sidebar';
 import { MainArea } from './MainArea/MainArea';
+import { usePanelRenderers } from './DockShell/panelRenderers';
+import { FatalBanner } from './StatusBar/FatalBanner';
 
 interface Props {
   surface: SurfaceDescriptor;
@@ -40,6 +41,7 @@ export function DetachedSurface({ surface }: Props): ReactElement {
  *  Wrapped full-bleed since they normally live inside a sized layout slot. */
 function DetachedPanelSurface({ surface }: Props): ReactElement {
   const { t } = useTranslation();
+  const { renderPreview, renderEdit } = usePanelRenderers();
   let body: ReactElement;
   switch (surface.id) {
     case 'chat':
@@ -62,14 +64,27 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
       body = <MainArea />;
       break;
     // Preview viewport panel — renders the game preview iframe in its own window.
+    // Detached windows have NO keep-alive layer (the whole OS window IS the
+    // visibility), so render the real surface directly via PanelRenderers — not the
+    // in-shell <SurfaceAnchor> placeholder, which would leave the window empty.
     case 'preview':
-      body = <PreviewPanel />;
+      body = (
+        <div className="surface-region">
+          <FatalBanner source="play" />
+          {renderPreview ? renderPreview() : <NoEditorBody />}
+        </div>
+      );
       break;
     // Edit viewport panel — renders the full editor (NOT viewportOnly) in its own
     // window: the editor iframe boots with its own DockManager panels so the OS
     // window is a complete standalone editor experience.
     case 'edit':
-      body = <EditPanel />;
+      body = (
+        <div className="surface-region">
+          <FatalBanner source="edit" />
+          {renderEdit ? renderEdit({ viewportOnly: false }) : <NoEditorBody />}
+        </div>
+      );
       break;
     default:
       return (
@@ -107,6 +122,14 @@ function DetachedPluginSurface({ surface }: Props): ReactElement {
   return (
     <div className="fx-detached-surface" style={fill}>
       <StandalonePluginIframe plugin={manifest} pane={surface.pane} active />
+    </div>
+  );
+}
+
+function NoEditorBody(): ReactElement {
+  return (
+    <div className="surface-placeholder">
+      <div className="surface-placeholder-title">No editor configured</div>
     </div>
   );
 }

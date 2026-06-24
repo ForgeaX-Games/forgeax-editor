@@ -328,6 +328,62 @@
   opacity: 1;
 }
 
+/* ── "拍了拍你" 气泡 —— agent 回复完成后, 紧贴胶囊下方冒出, 维持 5s 后消失 ──
+ *
+ * wrap 是 width:max-content (= 胶囊宽), left:0/right:0 的容器就等于胶囊宽; 内部气泡
+ * width:fit-content 随文字伸缩, max-width:100% 把上限钉在胶囊宽 (满了就换行). */
+.cas-pat-bubble {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: flex-start;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.26s ease, transform 0.26s ease;
+}
+.cas-pat-bubble.is-show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.cas-pat-text {
+  position: relative;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-background-base) 90%, transparent);
+  border: 1px solid var(--color-border-default);
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(6px);
+  word-break: break-word;
+}
+/* 朝上的小尖角, 指向胶囊第一个头像 (--pat-tail-x 由 JS 测量后注入, 相对气泡左边缘). */
+.cas-pat-text::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: var(--pat-tail-x, 24px);
+  width: 8px;
+  height: 8px;
+  transform: translateX(-50%) rotate(45deg);
+  background: inherit;
+  border-left: 1px solid var(--color-border-default);
+  border-top: 1px solid var(--color-border-default);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cas-pat-bubble { transition: opacity 0.26s ease; transform: none; }
+  .cas-pat-bubble.is-show { transform: none; }
+}
+
 .cas-page-dot {
   width: 5px;
   height: 5px;
@@ -355,10 +411,12 @@
   align-items: center;
   gap: 0;
   padding: 0;
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
+  /* ADR-0019: button 跟 cas-avatar-wrap (32×32) 同尺寸, 不再 overflow:hidden 切 wrap.
+   * 之前默认 24×24, wrap 32 溢出 8px 被切掉, portrait WEBM 头部不可见. */
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
   overflow: hidden;
   border: none;
   border-radius: 50%;
@@ -399,8 +457,8 @@
 /* ── Avatar wrapper — drives size transitions ── */
 .cas-avatar-wrap {
   position: relative;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   transition:
     width  0.26s cubic-bezier(0.4, 0, 0.2, 1),
@@ -409,8 +467,68 @@
 
 /* All wrappers grow when the strip is hovered */
 .chat-agent-capsule-wrap:hover .cas-avatar-wrap {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+}
+
+/* ADR-0019 — WEBM avatar fills the wrap exactly. !important overrides the inline
+ * `width/height` <AgentAvatarVideo>'s size prop sets (cas-avatar-wrap drives sizing
+ * here, not the component). 没这条会 anchor 左上 + 溢出 → 视觉上歪. */
+.cas-avatar-wrap > .agent-avatar-video {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Capsule-only avatar framing — the small capsule circle showed faces a bit
+ * too low, so lift + zoom the WEBM layer just here. Scoped to .cas-avatar-wrap
+ * and given higher specificity than the global per-agent rules in
+ * agent-avatar-video.css (the extra [data-agent-id] bumps the weight) so this
+ * wins inside the capsule WITHOUT touching the same component anywhere else
+ * (sidebar / chat / workbench / settings keep their own framing). The circular
+ * frame stays 32/44px; only the image inside is scaled/shifted. */
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id] .aav-layer {
+  transform: scale(1.32) translate3d(0, -16%, 0);
+  transform-origin: center top;
+}
+/* Capsule per-agent tweaks (override the uniform rule above; same specificity,
+ * later in source so they win). Still scoped to .cas-avatar-wrap only. */
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="cc-coder"] .aav-layer {
+  transform: scale(1.52) translate3d(0, -48%, 0);
+}
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="lock"] .aav-layer {
+  transform: scale(1.32) translate3d(0, -28%, 0);
+}
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="iro"] .aav-layer {
+  transform: scale(1.32) translate3d(0, -20%, 0);
+}
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="suzu"] .aav-layer {
+  transform: scale(1.38) translate3d(0, -26%, 0);
+}
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="arin"] .aav-layer {
+  transform: scale(1.16) translate3d(0, -24%, 0);
+}
+.cas-avatar-wrap > .agent-avatar-video[data-agent-id="iori"] .aav-layer {
+  transform: scale(1.24) translate3d(0, -9%, 0);
+}
+
+/* Nudge ONLY the capsule's outer pill/border down a few px while keeping the
+ * avatars where they are: move the whole pill down N, then pull the avatar
+ * wrap back up N so its net position is unchanged. (Name label is hover-only,
+ * a few px shift there is invisible.) */
+.chat-agent-capsule {
+  transform: translateY(3px);
+}
+.cas-avatar-wrap {
+  transform: translateY(-3px);
+}
+
+/* ADR-0019 — 选中态绿色环. 原来靠 .cas-avatar 改 background 提示选中, 现在 WEBM
+ * 盖住了背景, 改用 box-shadow ring (不占布局, 不会跟 cas-spinner 的 inset:-3px 撞). */
+.cas-btn.is-selected .cas-avatar-wrap {
+  box-shadow: 0 0 0 2px var(--primary);
+  border-radius: 50%;
 }
 
 /* ── Avatar circle — fills the wrapper ── */

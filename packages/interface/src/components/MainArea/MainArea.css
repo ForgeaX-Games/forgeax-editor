@@ -1854,9 +1854,33 @@
   text-align: center;
 }
 .wm-agents-err { color: var(--color-status-error); }
+/* Masonry via JS-distributed flex columns (2026-06-23, replaces CSS multicol).
+ *
+ * History: this used to be `columns: 280px` (CSS multicol) to get masonry
+ * without the row-height gaps a plain CSS grid leaves under short cards. But
+ * WebKit (WKWebView / desktop .app) mispaints the composited <video> avatars
+ * inside a multicol fragmentation context — hovering a card re-composited its
+ * <video> at a wrong page coordinate (a duplicate avatar near the window
+ * bottom + black flash). No in-flow/clip-path/compositing tweak fixed it while
+ * the cards lived in a fragmented column flow. Chrome (Dawn) rendered it fine.
+ *
+ * Fix: AgentsMainArea now measures the container width, computes the column
+ * count (~280px target), and splits the folded items into N plain flex columns
+ * itself (see gridRefCb / round-robin distribution there). Each column is a
+ * normal flex stack — NOT a fragmentation context — so WebKit composites the
+ * avatars correctly. We keep the masonry look (balanced columns, no row-height
+ * gaps) without the multicol bug. Reading order becomes natural row-major.
+ */
 .wm-agents-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.wm-agents-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 .wm-agent-card {
@@ -1890,13 +1914,13 @@
   gap: 8px;
 }
 .wm-agent-avatar {
-  width: 32px;
-  height: 32px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 18px;
   flex-shrink: 0;
   color: #fff;
   font-weight: 700;
@@ -1972,6 +1996,108 @@
   font-size: 11px;
   color: var(--color-text-quaternary, var(--color-text-tertiary));
   padding: 4px 6px;
+}
+
+/* ── Agent group cards (catalog-side fold, ADR-0019 §9, 2026-06-22) ─────
+ * Three additional grid items beyond the flat `.wm-agent-card`:
+ *
+ *   .wm-agent-group-subagent  → lead card + nested column for sub-agents.
+ *                               Single grid cell, vertical stack inside.
+ *   .wm-agent-nested          → indented (dashed border-left, mirrors the
+ *                               v2-vision mockup `.nested` style) container
+ *                               that holds the sub mini-cards.
+ *   .wm-agent-sub-mini        → compact variant of `.wm-agent-card` for
+ *                               subs (no file list, smaller avatar). Click
+ *                               opens Persona editor without setTabAgent
+ *                               (view-only per user decision).
+ *   .wm-agent-group-skin      → skin family card with a horizontal chip row
+ *                               for the persona variants. Picking a chip IS
+ *                               the chat-routing intent so it calls
+ *                               openAgentDetail() normally (setTabAgent on).
+ */
+.wm-agent-group-subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wm-agent-nested-hint {
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+  padding: 0 4px 0 18px;
+  margin-top: -2px;
+}
+.wm-agent-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 16px;
+  padding-left: 12px;
+  border-left: 1px dashed var(--color-border-default);
+}
+/* Sub / provider mini-cards keep their own borders (each reads as a
+ * standalone framed card) — visually distinct from the lead card above so
+ * the user doesn't perceive the lead's frame as extending around its
+ * subagents. The dashed left border on `.wm-agent-nested` only signals
+ * "these belong to the lead", it isn't a container frame.
+ *
+ * Earlier attempt to remove sub borders (2026-06-22) was reverted: with no
+ * border the subs visually merged into the lead's frame, making the lead
+ * look like one big card. */
+.wm-agent-sub-mini {
+  padding: 8px 10px;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.wm-agent-sub-mini .wm-agent-name { font-size: 11.5px; }
+.wm-agent-sub-mini .wm-agent-role { font-size: 10.5px; }
+
+/* Skin head card: reuses .wm-agent-card framing. Just owns the layout of
+ * the inner sections (header row → chip row → hint line). No own border /
+ * bg — both come from .wm-agent-card. Earlier .wm-agent-group-skin had its
+ * own outer frame that wrapped the entire skin family (head + chips +
+ * providers) into a single huge card; removed 2026-06-22 to align with the
+ * subagent-family pattern (lead card framed alone, subs framed separately
+ * below in the nested column). */
+.wm-agent-skin-head-card {
+  gap: 10px;
+}
+.wm-skin-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wm-skin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  background: transparent;
+  /* Inactive: very subtle hairline so the chip reads as a flat button, not
+   * a framed pill. Only the .active chip gets a clear lime border so the
+   * selected state is the only one that "frames". */
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.wm-skin-chip:hover {
+  background: var(--color-background-elevated-hover, rgba(255, 255, 255, 0.05));
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--color-text-primary);
+}
+.wm-skin-chip.active {
+  border-color: var(--color-brand-primary);
+  color: var(--color-brand-primary);
+  background: rgba(212, 255, 72, 0.12);
+  font-weight: 600;
+}
+.wm-skin-chip.active .wm-skin-chip-name { color: var(--color-brand-primary); }
+.wm-skin-chip.placeholder { opacity: 0.5; }
+.wm-skin-chip-name {
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ─── Reel Player in Play workspace ─── */

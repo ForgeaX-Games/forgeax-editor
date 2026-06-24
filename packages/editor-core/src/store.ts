@@ -14,6 +14,7 @@ import {
   type EditorSyncMsg,
   type PopoutGeom,
   type SyncPanelId,
+  type AssetChatRef,
 } from './sync-channel';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { findScenePackByGuid } from './assets';
@@ -285,6 +286,21 @@ export function requestRefAsset(asset: { guid: string; kind: string; name: strin
   try {
     window.parent?.postMessage(
       { type: 'VAG_EDITOR_REF', payload: { kind: 'asset', guid: asset.guid, assetKind: asset.kind, name: asset.name, packPath: asset.packPath } },
+      '*',
+    );
+  } catch {
+    /* cross-origin — non-fatal */
+  }
+}
+
+/** Batch-add asset/folder refs into the ForgeaX AI Chat context (M5).
+ *  Carries full payload so the AI can reason about asset contents. */
+export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
+  if (refs.length === 0) return;
+  if (IS_POPOUT) { postSync({ t: 'addAssetToChat', refs }); return; }
+  try {
+    window.parent?.postMessage(
+      { type: 'FORGEAX_ADD_ASSET_TO_CHAT', refs },
       '*',
     );
   } catch {
@@ -1075,6 +1091,7 @@ function mainOnMessage(ev: MessageEvent): void {
     case 'frame': requestFrame(); break;
     case 'refEntity': requestRefEntity(msg.id); break;
     case 'refAsset': requestRefAsset(msg.asset); break;
+    case 'addAssetToChat': requestAddAssetsToChat(msg.refs); break;
     case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
     case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
       case 'openScene': void switchSceneFile(msg.id); break;

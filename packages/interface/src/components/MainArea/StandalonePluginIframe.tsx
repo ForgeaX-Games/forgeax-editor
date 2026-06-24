@@ -16,12 +16,16 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import { createPluginPort, createWindowTransport } from '@forgeax/host-sdk';
+// Type-only — the runtime factories are injected via PanelRenderers so interface
+// never statically pulls @forgeax/host-sdk (studio-only) into its module graph.
+// The standalone editor shell bundles interface WITHOUT host-sdk present.
+import type { PluginPort } from '@forgeax/host-sdk';
 import { useTranslation } from '@/i18n';
 import type { BusPluginInfo } from '../../lib/bus-api';
 import { upsertSurface, removePluginSurfaces } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
 import { useAppStore } from '../../store';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
  *  index.html reads `?pane=` and tags `<body data-pane=...>`; CSS hides the
@@ -119,11 +123,15 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
 
 export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
   const { t } = useTranslation();
+  // Host-SDK port factories are injected (studio-only). Absent in the standalone
+  // editor shell — but that shell never opens a wb:* plugin, so the wiring effect
+  // below simply no-ops when they're missing.
+  const { createPluginPort, createWindowTransport } = usePanelRenderers();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Live port handle, so the visibility effect below can push updates after the
   // initial iframe load without re-running the heavy wiring effect.
-  const portRef = useRef<ReturnType<typeof createPluginPort> | null>(null);
+  const portRef = useRef<PluginPort | null>(null);
   // Mirrors `active` so the (later-invoked) iframe load handler reads the latest
   // value rather than the value captured when the wiring effect first ran.
   const activeRef = useRef(active);
@@ -146,7 +154,10 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
-    let port: ReturnType<typeof createPluginPort> | null = null;
+    // No host-sdk injected (standalone editor shell) → no plugin RPC. The raw
+    // postMessage navigate fallback below still works without it.
+    if (!createPluginPort || !createWindowTransport) return;
+    let port: PluginPort | null = null;
 
     // Raw postMessage fallback for plugins still on the legacy PlatformBridge
     // (wb-character/wb-anim) that don't speak host-sdk. They can request a
@@ -262,7 +273,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
       portRef.current = null;
       removePluginSurfaces(plugin.id);
     };
-  }, [plugin.id, src, pane]);
+  }, [plugin.id, src, pane, createPluginPort, createWindowTransport]);
 
   // Keep-alive visibility: push on every `active` flip without tearing down the
   // iframe.

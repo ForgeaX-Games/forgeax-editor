@@ -1,0 +1,213 @@
+// Pack file CRUD operations (M2).
+//
+// All writes go through the server's POST /api/files. Reads use GET /api/files.
+// Schema validation is deferred to engine load time — the editor reads pack
+// files as loose JSON and preserves schemaVersion + kind verbatim.
+
+import { fetchWithTimeout } from './net';
+import { stableGuid } from './scene-pack';
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface PackAssetEntry {
+  guid: string;
+  kind: string;
+  name?: string;
+  payload: unknown;
+  refs: string[];
+}
+
+interface PackFile {
+  schemaVersion: string;
+  kind: 'internal-text-package';
+  assets: PackAssetEntry[];
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+async function readPack(packPath: string): Promise<PackFile | null> {
+  try {
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as { content?: string };
+    if (!j.content) return null;
+    return JSON.parse(j.content) as PackFile;
+  } catch {
+    return null;
+  }
+}
+
+async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
+  try {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: packPath, content: JSON.stringify(pack, null, 2) + '\n' }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteFile(filePath: string): Promise<boolean> {
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── GUID generation ──────────────────────────────────────────────────────────
+
+let guidCounter = 0;
+
+/** Generate a new asset GUID. Uses stableGuid with a timestamp + counter seed
+ *  so GUIDs are deterministic within a session but unique across time. */
+export function generateAssetGuid(): string {
+  return stableGuid(`editor-new|${Date.now()}|${guidCounter++}`);
+}
+
+// ── Dangling refs check ──────────────────────────────────────────────────────
+
+/** Find assets in `pack` that reference `removingGuid` in their refs[]. */
+function findDanglingRefs(pack: PackFile, removingGuid: string): string[] {
+  return pack.assets
+    .filter(a => a.guid !== removingGuid && a.refs.includes(removingGuid))
+    .map(a => a.name ?? a.guid);
+}
+
+// ── CRUD API ─────────────────────────────────────────────────────────────────
+
+/** Add a new asset entry to an existing pack file. */
+export async function addAssetToPack(
+  packPath: string,
+  asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] },
+): Promise<boolean> {
+  const pack = await readPack(packPath);
+  if (!pack) return false;
+  pack.assets.push({
+    guid: asset.guid,
+    kind: asset.kind,
+    name: asset.name,
+    payload: asset.payload,
+    refs: asset.refs ?? [],
+  });
+  return writePack(packPath, pack);
+}
+
+/** Remove an asset entry from a pack. Returns list of assets with dangling refs. */
+export async function removeAssetFromPack(
+  packPath: string,
+  guid: string,
+): Promise<{ ok: boolean; danglingRefs: string[] }> {
+  const pack = await readPack(packPath);
+  if (!pack) return { ok: false, danglingRefs: [] };
+  const dangling = findDanglingRefs(pack, guid);
+  pack.assets = pack.assets.filter(a => a.guid !== guid);
+  const ok = await writePack(packPath, pack);
+  return { ok, danglingRefs: dangling };
+}
+
+/** Rename an asset within a pack (change its `name` field). */
+export async function renameAssetInPack(
+  packPath: string,
+  guid: string,
+  newName: string,
+): Promise<boolean> {
+  const pack = await readPack(packPath);
+  if (!pack) return false;
+  const entry = pack.assets.find(a => a.guid === guid);
+  if (!entry) return false;
+  entry.name = newName;
+  return writePack(packPath, pack);
+}
+
+/** Duplicate an asset within the same pack (new GUID, same kind/payload). */
+export async function duplicateAssetInPack(
+  packPath: string,
+  guid: string,
+): Promise<{ ok: boolean; newGuid: string }> {
+  const pack = await readPack(packPath);
+  if (!pack) return { ok: false, newGuid: '' };
+  const source = pack.assets.find(a => a.guid === guid);
+  if (!source) return { ok: false, newGuid: '' };
+  const newGuid = generateAssetGuid();
+  pack.assets.push({
+    guid: newGuid,
+    kind: source.kind,
+    name: source.name ? `${source.name} (copy)` : undefined,
+    payload: structuredClone(source.payload),
+    refs: [...source.refs],
+  });
+  const ok = await writePack(packPath, pack);
+  return { ok, newGuid };
+}
+
+/** Move an asset from one pack to another (GUID preserved). */
+export async function moveAsset(
+  sourcePackPath: string,
+  targetPackPath: string,
+  guid: string,
+): Promise<boolean> {
+  const sourcePack = await readPack(sourcePackPath);
+  if (!sourcePack) return false;
+  const entry = sourcePack.assets.find(a => a.guid === guid);
+  if (!entry) return false;
+
+  let targetPack = await readPack(targetPackPath);
+  if (!targetPack) {
+    targetPack = { schemaVersion: sourcePack.schemaVersion, kind: 'internal-text-package', assets: [] };
+  }
+
+  sourcePack.assets = sourcePack.assets.filter(a => a.guid !== guid);
+  targetPack.assets.push(entry);
+
+  const [s1, s2] = await Promise.all([
+    writePack(sourcePackPath, sourcePack),
+    writePack(targetPackPath, targetPack),
+  ]);
+  return s1 && s2;
+}
+
+/** Delete an asset. If the pack becomes empty, delete the file too. */
+export async function deleteAsset(packPath: string, guid: string): Promise<boolean> {
+  const pack = await readPack(packPath);
+  if (!pack) return false;
+  pack.assets = pack.assets.filter(a => a.guid !== guid);
+  if (pack.assets.length === 0) {
+    return deleteFile(packPath);
+  }
+  return writePack(packPath, pack);
+}
+
+/** Create a new empty pack file. */
+export async function createPack(
+  dirPath: string,
+  packName: string,
+  schemaVersion = '1.0',
+): Promise<string | null> {
+  const path = `${dirPath}/${packName}.pack.json`;
+  const pack: PackFile = {
+    schemaVersion,
+    kind: 'internal-text-package',
+    assets: [],
+  };
+  const ok = await writePack(path, pack);
+  return ok ? path : null;
+}
+
+/** Create a directory via the server API. */
+export async function createDirectory(dirPath: string): Promise<boolean> {
+  try {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: dirPath, content: '', mkdir: true }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}

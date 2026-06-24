@@ -28,6 +28,7 @@ import {
   migrateLayoutVersion,
 } from '../../lib/workspaces';
 import { STORAGE_KEYS, APP_EVENTS } from '../../lib/storageKeys';
+import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
 import './DockShell.css';
 
 // DockShell — the interface shell's window/docking layer (design EDITOR-MODE §0.2,
@@ -263,6 +264,10 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
     api.onDidLayoutChange(() => {
       saveWorkspaceLayout(prevWorkspaceIdRef.current, api.toJSON());
       bump();
+      // Tell the keep-alive surface layer to re-track its anchors — panel
+      // resize/drag/close moves the Play/Edit anchor rects the fixed surfaces
+      // overlay. (Anchor mount/unmount is handled separately by subscribeAnchors.)
+      pingAnchorRelayout();
     });
 
     api.onWillDragPanel((e) => {

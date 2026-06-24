@@ -4,7 +4,7 @@
 // When the agent emits richer markdown we'll graduate to react-markdown — until
 // then, the goal is "make `**bold**` actually bold" without pulling in a tree.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { useTranslation } from '@/i18n';
 import { STRONG_REFLECTION_RE, SOFT_REFLECTION_RE, STRONG_CORR_RE } from './reflection-i18n';
@@ -268,12 +268,42 @@ function renderInline(text: string, keyPrefix = ''): (string | ReactElement)[] {
   return out;
 }
 
+// memleak case-15 (md-stream-throttle) — while a message streams, the store
+// appends every token / tool-call marker into the same running message, and
+// ForgeCard renders the tail segment with animated=true → MarkdownView. Parsing
+// + rebuilding the WHOLE element tree on every delta is O(n²) over the message
+// length and outran V8 GC → JS-heap OOM crashed the renderer (4GB). Throttle the
+// text MarkdownView actually renders to ~8fps: leading-edge so a static/done
+// message (text set once) renders immediately with no lag, trailing-edge so the
+// final streamed text is always rendered in full. Bounds parse+rebuild count to
+// ~(duration/THROTTLE) instead of one-per-token.
+const MD_STREAM_THROTTLE_MS = 120;
+function useThrottledValue<T>(value: T, ms: number): T {
+  const [shown, setShown] = useState(value);
+  const lastAt = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const since = Date.now() - lastAt.current;
+    if (since >= ms) {
+      lastAt.current = Date.now();
+      setShown(value);
+    } else {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => { lastAt.current = Date.now(); setShown(value); }, ms - since);
+    }
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [value, ms]);
+  return shown;
+}
+
 export function MarkdownView({ text }: { text: string }) {
   const { t } = useTranslation();
-  const blocks = useMemo(() => parseBlocks(text), [text]);
-  return (
-    <div className="md">
-      {blocks.map((b, i) => {
+  const throttledText = useThrottledValue(text, MD_STREAM_THROTTLE_MS);
+  const blocks = useMemo(() => parseBlocks(throttledText), [throttledText]);
+  // The block→element build (renderInline for every block) is as expensive as
+  // the parse and previously ran on EVERY render; memoize it on the throttled
+  // blocks so it too fires at most ~8fps during streaming, not per token.
+  const body = useMemo(() => blocks.map((b, i) => {
         switch (b.kind) {
           case 'heading': {
             const lvl = Math.min(6, Math.max(1, b.level));
@@ -376,7 +406,6 @@ export function MarkdownView({ text }: { text: string }) {
             );
           }
         }
-      })}
-    </div>
-  );
+      }), [blocks, t]);
+  return <div className="md">{body}</div>;
 }

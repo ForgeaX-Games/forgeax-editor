@@ -76,7 +76,12 @@ function displayContent(content: unknown): string {
 }
 
 function extractLLMMessage(p: Record<string, unknown>): LLMMessage | null {
-  const raw = p.llmMessage;
+  // Hook.AssistantMessage payload carries the message under either `llmMessage`
+  // (kernel-turn / conscious-agent native path) OR `msg` (cli-provider bridge /
+  // CliEventBridge path). Both are declared on the payload type — accept either,
+  // else bridge-persisted turns replay with an empty assistant bubble (history
+  // appears to vanish on refresh).
+  const raw = p.llmMessage ?? p.msg;
   if (!raw || typeof raw !== 'object') return null;
   if (Array.isArray(raw)) return (raw[0] as LLMMessage) ?? null;
   return raw as LLMMessage;

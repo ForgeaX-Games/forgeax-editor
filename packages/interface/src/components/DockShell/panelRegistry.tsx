@@ -18,6 +18,7 @@ import { ChatPanel } from '../ChatPanel/ChatPanel';
 import { AgentsPanel } from '../Sidebar/AgentsPanel';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
+import { TelemetryViewer } from '../MainArea/TelemetryViewer';
 import { InfoPanel } from '../StatusBar/InfoPanel';
 import { EditorPanelFrame, type EditorPanelId } from './EditorPanelFrame';
 import { RecoveryBoundary } from '../ErrorBoundary';
@@ -59,6 +60,10 @@ export const OPTIONAL_PANELS: PanelDef[] = [
   { id: 'agents', title: 'Agents', group: 'optional', canPopOut: true, render: () => <AgentsPanel /> },
   { id: 'files', title: 'Files', group: 'optional', canPopOut: true, render: () => <FilesPanel /> },
   { id: 'console', title: 'Console', group: 'optional', canPopOut: true, render: () => <ConsolePanel /> },
+  // Observability (trace + log) feed — trace waterfall + log stream, fed by the
+  // unified store.telemetry slice (node WS `{type:'telemetry'}` + iframe
+  // `VAG_TELEMETRY`). See MainArea/TelemetryViewer.tsx.
+  { id: 'telemetry', title: 'Telemetry', group: 'optional', canPopOut: true, render: () => <TelemetryViewer /> },
   // Blender-INFO-style health/log feed — the same store the bottom HealthStatusBar
   // peeks at, full-height with click-to-copy + repeat-fold (×N).
   { id: 'info', title: 'Info', group: 'optional', canPopOut: true, render: () => <InfoPanel /> },
