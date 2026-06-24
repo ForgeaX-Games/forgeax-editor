@@ -37,11 +37,12 @@
 //     against `device.caps.storageBuffer` (D-5 cap-gate: backends
 //     lacking storage buffer support emit `RhiError 'feature-not-enabled'`).
 
-import type { World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { type Mat4, mat3, mat4, vec3 } from '@forgeax/engine-math';
 import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
 import {
   type BindGroup,
+  type BindGroupEntry,
   type Buffer,
   type CommandBuffer,
   type RenderPipeline,
@@ -59,16 +60,15 @@ import type {
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { derive, toShared } from '@forgeax/engine-types';
 import { bin } from './cluster-binner';
-import type { Tonemap } from './components/camera';
 import {
   HdrpIndexListOverflowError,
   HdrpLightBudgetExceededError,
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
-  ShadowDisabledByMissingComponentError,
   SkyboxCubemapNotReadyError,
+  VideoUploadUnsupportedError,
 } from './errors';
 import { GpuBuffer } from './gpu-resource';
 import type { GpuResourceStore } from './gpu-resource-store';
@@ -103,6 +103,7 @@ import type {
   RenderPipelineData,
 } from './render-pipeline-context';
 import {
+  configureSurface,
   type MeshGpuHandles,
   type PipelineState,
   type RenderSystemInternals,
@@ -124,6 +125,8 @@ import { resolveAssetHandle } from './resolve-asset-handle';
 import { ShadowAtlas } from './shadow-atlas';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 import { matchPass } from './systems/pass-selector';
+import { VIDEO_ELEMENT_PROVIDER_KEY, type VideoElementProvider } from './video-element-provider';
+import { probeVideoHighPerfUpload } from './video-player-system';
 
 /**
  * feat-20260608-create-app-param-surface-trim / M1 / D-8 (q8 user lock):
@@ -182,25 +185,19 @@ function makeZeroCameraFallbackSnapshot(): CameraSnapshot {
   };
 }
 
-function tonemapToU32(mode: Tonemap): number {
-  switch (mode) {
-    case 'reinhard-extended':
-      return 1;
-    case 'linear':
-      return 2;
-    case 'cineon':
-      return 3;
-    case 'aces-filmic':
-      return 4;
-    case 'agx':
-      return 5;
-    case 'neutral':
-      return 6;
-    default:
-      return 0;
-  }
+// feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t2
+// (D-7): host-clamp the merged DirectionalLight's pcfKernelSize to the nearest
+// valid odd kernel in {1,3,5} before it reaches the View UBO float [128].
+// lighting-directional.wgsl runs a constant-trip-count loop to MAX_PCF_HALF=2
+// (merged 5.3-production-shadow-demos AC-14 variant-free pattern) and clips each
+// iteration to half = (pcfKernelSize-1)/2, so the supported kernel set is
+// {1,3,5} (cap 5). undefined (no shadow fields) defaults to 3.
+function clampPcfKernelSize(value: number | undefined): number {
+  if (value === undefined) return 3;
+  if (value <= 1) return 1;
+  if (value <= 3) return 3;
+  return 5;
 }
-
 /**
  * Per-RenderSystem mutable frame state.
  *
@@ -234,12 +231,6 @@ export interface RenderFrameState {
   perFrameGraph: RenderGraph<RenderPipelineContext> | null;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
   warnedZeroLightStandard: boolean;
-  /**
-   * feat-20260520-directional-light-shadow-mapping verify round 1 fix
-   * (AC-04 + AC-22): once-warn latch for shadow disabled by missing
-   * component. Fire at most once per RenderSystem lifetime.
-   */
-  warnedShadowDisabled: boolean;
   /**
    * feax-20260608-multi-light-warn-once M3: once-warn latch for multi-light
    * overrun per bucket (directional N>1 / point N>4 / spot N>4). Fires at
@@ -287,33 +278,45 @@ export interface RenderFrameState {
    */
   readonly warnedNineSliceScaleEntities: Set<number>;
   /**
-   * feat-20260531-per-frame-bind-group-cache M2 / w7: per-frame bind group
-   * caches. Keyed by variant discriminator + ordered handle-id sequence;
-   * hit returns the cached BindGroup from a previous frame, miss calls
-   * device.createBindGroup and stores the result. viewBindGroupCache
-   * covers both main (#1) and shadow (#3) variants (distinct keys per D-2).
+   * feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
+   * bind group caches converted to nested WeakMap chain roots (D-3).
+   * Each root is a WeakMap<object, WeakMap<...>> walked by
+   * getOrCreateFromChain; the chain depth varies by variant
+   * (view-main = 7, mesh = 1, hdrp-unified = 5, skin = 2).
+   * The root WeakMap is init-time stable — never cleared, no eviction.
+   * Chain keys are always inner buffer handles, never wrappers (D-3).
    */
-  readonly viewBindGroupCache: Map<string, BindGroup>;
-  readonly meshBindGroupCache: Map<string, BindGroup>;
+  readonly viewBindGroupCache: WeakMap<object, unknown>;
+  readonly meshBindGroupCache: WeakMap<object, unknown>;
   /**
-   * feat-20260531-per-frame-bind-group-cache M3 / w12: per-entity material
-   * and instances bind group caches. Keyed by variant discriminator +
-   * entityKey + ordered handle-id sequence (D-2 handle-set keys). Cache
-   * fields use 'BgCache' suffix to avoid collision with the banned
-   * identifier 'materialBindGroup' (check-render-record-no-opaque-order-
-   * zero-material.mjs grep gate).
+   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
+   * bind group caches scoped by entityKey (packed u32 as number).
+   * Outer Map<number, WeakMap<handle, ...>> lets GC collect entries for
+   * destroyed entities whose handles are unreachable; per-entity material
+   * and instances share the same two-level shape (D-1). The inner WeakMap
+   * value is opaque (`unknown`) because `getOrCreateFromChain` walks a
+   * variable-depth chain — intermediate handles map to nested WeakMaps and
+   * only the final handle maps to the variant->BindGroup leaf Map. Direct
+   * readers (HDRP shadow-instances read end) assert the leaf shape locally.
    */
-  readonly materialBgCache: Map<string, BindGroup>;
-  readonly instancesBgCache: Map<string, BindGroup>;
+  readonly materialBgPerEntity: Map<number, WeakMap<object, unknown>>;
+  readonly instancesBgPerEntity: Map<number, WeakMap<object, unknown>>;
   /**
-   * M2 / w7: maps each opaque RHI handle object (Buffer / TextureView /
-   * Sampler) to a sequential numeric id. A single shared counter per
-   * RenderFrameState (stable across the RenderSystem lifetime) so the same
-   * GPU resource always maps to the same id. Used by getOrCreateBindGroup
-   * to build deterministic cache keys from object handles.
+   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: cross-entity
+   * shared material bind group cache (OQ-1 option A). Outer key is the
+   * material shaderId string; inner chain is a WeakMap keyed by the same
+   * handle objects used in per-entity chains. Reuses the generic
+   * `getOrCreatePerEntity` helper with outerKey string|number (D-1).
    */
-  readonly handleToId: Map<object, number>;
-  nextHandleId: number;
+  readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
+  /**
+   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: singleton
+   * material bind group cache (D-6). Single flat Map<variant, BindGroup>
+   * for the one true singleton in production: shadow-material-singleton.
+   * shadow-instances-singleton is a test fixture fiction (research F3);
+   * no second singleton field is needed.
+   */
+  readonly singletonMaterialCache: Map<string, BindGroup>;
   /**
    * feat-20260601-customizable-render-pipeline-seam M1 / w7: the raw u32 handle of the
    * currently installed RenderPipelineAsset (0 = none installed). `installPipeline` sets
@@ -457,46 +460,9 @@ const COPY_DST_USAGE = 8;
 const MAX_UNIFORM_INSTANCES = 128;
 
 /**
- * feat-20260531-per-frame-bind-group-cache M2 / w7: assigns a stable
- * sequential numeric id to each opaque RHI handle object (Buffer,
- * TextureView, Sampler). The same object reference always maps to the
- * same id; calling this each frame on the same GPU resource is idempotent.
- * Used by buildBindGroupCacheKey to produce deterministic string keys
- * for Map<string, BindGroup> caches (D-2: fine-grain handle-set keys).
- */
-function getOrAssignHandleId(frameState: RenderFrameState, handle: object): number {
-  let id = frameState.handleToId.get(handle);
-  if (id === undefined) {
-    id = frameState.nextHandleId;
-    frameState.handleToId.set(handle, id);
-    frameState.nextHandleId = id + 1;
-  }
-  return id;
-}
-
-/**
- * M2 / w7: builds a deterministic cache-key string from a variant
- * discriminator and an ordered array of bound resource handles.
- * Ordering is the bind group entry order (binding 0..N); the variant
- * discriminator prefixes the key to isolate main vs shadow view
- * variants (AC-06).
- *
- * @internal — exported for unit test access (w9-a R-2 mutation-resistance test)
- */
-export function buildBindGroupCacheKey(
-  variant: string,
-  handles: object[],
-  frameState: RenderFrameState,
-): string {
-  const ids = handles.map((h) => getOrAssignHandleId(frameState, h));
-  return `${variant}-${ids.join('-')}`;
-}
-
-/**
  * M3 / w12: extracts the underlying GPU resource object from a bind
  * group entry descriptor. Returns the raw object reference (Buffer,
- * TextureView, or Sampler) that `getOrAssignHandleId` can map to a
- * stable numeric id for cache-key construction.
+ * TextureView, or Sampler) usable as a WeakMap chain key.
  */
 function extractEntryResourceHandle(entry: { resource: { kind: string; value: unknown } }): object {
   const v = entry.resource.value;
@@ -507,61 +473,92 @@ function extractEntryResourceHandle(entry: { resource: { kind: string; value: un
 }
 
 /**
- * M2 / w7: lookup-then-create helper for per-frame bind group caches.
- * On cache hit returns the cached BindGroup (zero-cost).
- * On cache miss calls the factory, bumps bindGroupCounts.createBindGroup,
- * stores the result, and returns it.
+ * feat-20260622-handle-to-id-allocator-elimination M2 / w7: walks a nested
+ * WeakMap chain to find or create a BindGroup leaf. Each handle in the
+ * `handles` array is a chain node; the final leaf is a Map<string, BindGroup>
+ * keyed by `variant` (D-2). Chain keys are always object references, never
+ * numeric ids — GC reclaims entries for dead handles automatically.
  *
- * This single shared helper avoids jscpd dup-check violations across the
- * 14 createBindGroup call sites (plan-strategy S5.6).
+ * On cache hit returns the cached BindGroup. On miss calls `factory`,
+ * bumps `bindGroupCounts.createBindGroup`, stores the result at the leaf,
+ * and returns it. Hit/miss accounting is observable via `bindGroupCounts`
+ * (D-8: the skin probe reads `counts.createBindGroup` delta).
  */
-function getOrCreateBindGroup(
-  cache: Map<string, BindGroup>,
-  key: string,
+export function getOrCreateFromChain(
+  root: WeakMap<object, unknown>,
+  handles: readonly object[],
+  variant: string,
   factory: () => BindGroup,
-  bindGroupCounts: BindGroupCounts,
+  counts: { createBindGroup: number; keys: string[] },
 ): BindGroup {
-  const hit = cache.get(key);
+  let node = root;
+  for (let i = 0; i < handles.length - 1; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: handles length guards the index
+    const h = handles[i]!;
+    let next = node.get(h) as WeakMap<object, unknown> | undefined;
+    if (next === undefined) {
+      next = new WeakMap();
+      node.set(h, next);
+    }
+    node = next;
+  }
+  // biome-ignore lint/style/noNonNullAssertion: known non-empty at call sites
+  const last = handles[handles.length - 1]!;
+  let leaf = node.get(last) as Map<string, BindGroup> | undefined;
+  if (leaf === undefined) {
+    leaf = new Map();
+    node.set(last, leaf);
+  }
+  const hit = leaf.get(variant);
   if (hit !== undefined) return hit;
   const bg = factory();
-  bindGroupCounts.createBindGroup += 1;
-  bindGroupCounts.keys.push(key);
-  cache.set(key, bg);
+  counts.createBindGroup += 1;
+  counts.keys.push(variant);
+  leaf.set(variant, bg);
   return bg;
 }
 
 /**
- * M4 / w14: drops cache entries whose entityKey segment (extracted from
- * the key string prefix) is not in the validated entity key set.
+ * feat-20260622-handle-to-id-allocator-elimination M2 / w8: per-entity bind
+ * group lookup-or-create helper (D-2). Two-step lookup: outer Map.get(outerKey)
+ * finds or lazily creates an inner WeakMap chain, then delegates to
+ * `getOrCreateFromChain` for the chain walk. outerKey is `string | number`
+ * to cover both per-entity (number entityKey) and material-shared
+ * (string shaderId) caches (D-1 / OQ-1).
+ */
+export function getOrCreatePerEntity(
+  outerMap: Map<string | number, WeakMap<object, unknown>>,
+  outerKey: string | number,
+  handles: readonly object[],
+  variant: string,
+  factory: () => BindGroup,
+  counts: { createBindGroup: number; keys: string[] },
+): BindGroup {
+  let inner = outerMap.get(outerKey) as WeakMap<object, unknown> | undefined;
+  if (inner === undefined) {
+    inner = new WeakMap();
+    outerMap.set(outerKey, inner);
+  }
+  return getOrCreateFromChain(inner, handles, variant, factory, counts);
+}
+
+/**
+ * feat-20260622-handle-to-id-allocator-elimination M2 / w8: evicts per-entity
+ * cache entries whose entityKey is not in the validated set. Works on
+ * Map<entityKey, WeakMap<handle, BindGroup>> by iterating the outer Map keys
+ * and deleting entries for which validatedEntityKeys.has(ek) is false.
+ * No string parsing, no Number / Number.isNaN — the entityKey is already a
+ * number (D-1 / RD4).
  *
- * Cache keys follow the 'variant-entityKey-handleIds...' format (D-2).
- * This helper extracts the entityKey by finding the first two '-'
- * delimiters, parses the segment between them as a number, and deletes
- * the entry when that number is not in the live set.
- *
- * The same logic applies to materialBgCache and instancesBgCache — the
- * single helper avoids a jscpd dup-check violation (plan-strategy S5.6).
- *
- * @internal — exported for unit test access (w16 sentinel-survival test)
+ * @internal — exported for unit test access (AC-08)
  */
 export function cleanPerEntityCache(
-  cache: Map<string, BindGroup>,
+  cache: Map<number, WeakMap<object, unknown>>,
   validatedEntityKeys: Set<number>,
-  _variant: string,
 ): void {
-  for (const key of cache.keys()) {
-    const firstDash = key.indexOf('-');
-    if (firstDash === -1) continue;
-    const secondDash = key.indexOf('-', firstDash + 1);
-    if (secondDash === -1) continue;
-    const ek = Number(key.slice(firstDash + 1, secondDash));
-    // D-6 sentinel keys (e.g. 'shadow-material-singleton') produce NaN here
-    // because their segment between the dashes is non-numeric. Skip them so
-    // the sentinel entries survive across frames — they are init-time stable
-    // and must NOT be evicted by per-entity clean-up.
-    if (Number.isNaN(ek)) continue;
+  for (const ek of cache.keys()) {
     if (!validatedEntityKeys.has(ek)) {
-      cache.delete(key);
+      cache.delete(ek);
     }
   }
 }
@@ -576,11 +573,12 @@ export function cleanPerEntityCache(
  *  - `{ ok: true }`       — slotCount already covers `neededSlots` (idempotent
  *                           short-circuit), or the controller successfully grew
  *                           in this call. Caller proceeds with the frame.
- *  - `{ ok: false, code }` — controller hit ceiling / capacity and ALREADY
- *                           fired the structured error via errorRegistry.
- *                           Caller must early-return: skip writeBuffer loops,
- *                           skip pass record (AC-08: 0 writeBuffer / 0 draw,
- *                           no truncation).
+ *  - `{ ok: false, code, degradedToSlotCount }` — controller hit ceiling /
+ *                           capacity and ALREADY fired the structured error
+ *                           via errorRegistry.  Caller truncates the draw
+ *                           list to `degradedToSlotCount` (graceful degradation
+ *                           per plan-strategy D-2): renders the subset that
+ *                           fits, discards overflow, no black frame.
  *
  * This helper does NOT re-fire on `ok:false` — the controller is the single
  * fire site (createRenderer.ts grow factory), so callers see exactly one
@@ -597,9 +595,8 @@ export function cleanPerEntityCache(
  * Bind-group cache invalidation is automatic: on grow, the controller
  * mutates `meshSsboState.mesh.buffer` / `.material.buffer` in place
  * (wrapper-object identity preserved, inner buffer replaced — research §F8).
- * Downstream `getOrAssignHandleId(<inner buffer>)` therefore yields a fresh
- * id, `buildBindGroupCacheKey` composes a different key, and
- * `getOrCreateBindGroup` rebuilds the BindGroup on the next frame
+ * Downstream the fresh inner buffer object is a new WeakMap chain key, so
+ * `getOrCreateFromChain` misses and rebuilds the BindGroup on the next frame
  * (AC-07; T-M3-03 (a) test).
  *
  * @internal — exported for unit-test access (`mesh-ssbo-grow.test.ts`
@@ -613,6 +610,7 @@ export function ensureMeshSsboCapacity(
           | {
               readonly ok: false;
               readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
+              readonly degradedToSlotCount: number;
             })
       | undefined;
     readonly meshSsboState?: { readonly slotCount: number } | undefined;
@@ -623,6 +621,7 @@ export function ensureMeshSsboCapacity(
   | {
       readonly ok: false;
       readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
+      readonly degradedToSlotCount: number;
     } {
   // Empty scene / no controller wired (legacy / test fixture path).
   if (neededSlots <= 0) return { ok: true };
@@ -731,8 +730,9 @@ export interface DispatchCounts {
 export interface BindGroupCounts {
   createBindGroup: number;
   /**
-   * Debug-only: records every cache-miss key passed to getOrCreateBindGroup
-   * for unit-test observability. Production paths do not read this array.
+   * Debug-only: records the variant of every cache-miss BindGroup created via
+   * `getOrCreateFromChain` for unit-test observability. Production paths do
+   * not read this array.
    */
   keys: string[];
 }
@@ -873,6 +873,109 @@ function residentTextureView(
     return undefined;
   }
   return store.getTextureGpuView(handle);
+}
+
+// feat-20260623-world-space-video-asset M4 / w16 (D-3): resolve the
+// current-frame GPU view for a video-sourced texture field through the
+// transient DynamicTextureStore, NOT the static `residentTextureView` /
+// `ensureResident` cache (video never enters that switch; AC-08).
+//
+// Per frame: ask the host-registered VideoElementProvider (World Resource,
+// D-1) for this entity's HTMLVideoElement, upload its current frame via
+// `store.uploadFrame` (copyExternalImageToTexture), and return the resulting
+// view. When the provider is absent / returns no element / the element has no
+// decodable dimensions yet, fall back to any previously-uploaded view and
+// finally to `undefined` (caller binds the default view this frame — charter
+// P3 graceful, no garbage sampling). A failed GPU upload fires the structured
+// RhiError on the engine channel and degrades to the default view.
+//
+// `highPerfAvailable` is the w17 capability probe; the high-perf
+// GPUExternalTexture branch is a reserved hook (OOS-5) — when it ever becomes
+// available the upload would route there. Today it is always false so the
+// general copyExternalImageToTexture path is the only one taken.
+function videoTextureView(
+  world: World,
+  store: import('./dynamic-texture-store').DynamicTextureStore | undefined,
+  runtime: RenderSystemRuntime,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+  highPerfAvailable: boolean,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
+): any | undefined {
+  if (store === undefined) return undefined;
+  const provider = world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY)
+    ? world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY)
+    : undefined;
+  const element = provider?.getElement(entityKey as unknown as EntityHandle, clip);
+  // AC-10 double-miss: a VideoPlayer entity can reach NEITHER upload path this
+  // frame — no host HTMLVideoElement (general copyExternalImageToTexture path)
+  // AND no high-perf GPUExternalTexture path. This is the genuine "this backend
+  // exposes no usable video upload path" case (no provider registered, or the
+  // provider yields nothing while the high-perf reserved hook is unavailable —
+  // OOS-5 keeps it always false today). Rather than silently binding the
+  // default view, fire the structured VideoUploadUnsupportedError on the engine
+  // error channel so an AI user can detect the dead path via `.code` / `.hint`
+  // (charter P3; AC-10 signal lives on the REAL per-frame upload path, not an
+  // orphan system). The default view is still bound this frame so the draw
+  // does not crash (graceful degradation), but the failure is no longer silent.
+  if (element === undefined && !highPerfAvailable) {
+    runtime.errorRegistry.fire(new VideoUploadUnsupportedError());
+    return store.getView(clip);
+  }
+  // D-2 / w17 high-perf reserved hook: a future GPUExternalTexture import path
+  // would key off `highPerfAvailable` here. It is always false today
+  // (importExternalTexture absent), so the general copyExternalImageToTexture
+  // path below is the sole route end-to-end.
+  if (element === undefined) return store.getView(clip);
+  const width = element.videoWidth;
+  const height = element.videoHeight;
+  const uploaded = store.uploadFrame(clip, element, width, height);
+  if (uploaded === undefined) return store.getView(clip);
+  if (!uploaded.ok) {
+    runtime.errorRegistry.fire(uploaded.error);
+    return store.getView(clip);
+  }
+  return uploaded.value;
+}
+
+// feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): the built-in
+// standard-PBR user-region texture field order, used when the shader is not
+// resolvable through getParamSchema (cross-worktree late-register). Mirrors
+// derive(default-standard-pbr).textureFieldNames.
+const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+];
+
+/**
+ * feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): ordered user-region
+ * texture field names for a material's bind-group assembly, derived from the
+ * shader's paramSchema via the `derive()` SSOT (insertion order = sampler/
+ * texture pair order in derive().bglEntries). Falls back to the built-in 3
+ * fields when the schema is unavailable.
+ */
+function userRegionTextureFieldOrder(
+  schema: Parameters<typeof derive>[0] | undefined,
+): readonly string[] {
+  if (schema === undefined) return BUILTIN_USER_REGION_TEXTURE_FIELDS;
+  return [...derive(schema).textureFieldNames];
+}
+
+/**
+ * feat-20260621-learn-render-5-5-parallax M2 / w8: the fallback texture view
+ * for a user-region field when no handle is provided (graceful, charter P3).
+ * normalTexture decodes to a flat tangent normal; everything else (baseColor,
+ * MR, height, ...) uses the 1x1 white default (height white -> zero displacement).
+ */
+function defaultViewForUserRegionField(
+  field: string,
+  pipelineState: PipelineState,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view
+): any {
+  if (field === 'normalTexture') return pipelineState.defaultNormalTextureView;
+  if (field === 'baseColorTexture') return pipelineState.fallbackTextureView;
+  return pipelineState.defaultWhiteTextureView;
 }
 
 /**
@@ -1200,6 +1303,7 @@ export function recordFrame(
   skylightCount: number,
   skybox: SkyboxSnapshot | undefined,
   skyboxCount: number,
+  postProcessParams: ReadonlyMap<string, Uint8Array>,
 ): void {
   // The `try / finally` wrapper advances `frameState.frameNumber` exactly
   // once per `recordFrame` invocation regardless of which early-return
@@ -1244,28 +1348,12 @@ export function recordFrame(
     if (lights.directionalCount > 1) {
       warnMultiLightDirectional(frameState, lights.directionalCount);
     }
-    // feat-20260520-directional-light-shadow-mapping verify round 1 fix:
-    // once-warn for shadow disabled by missing component (AC-04 + AC-22).
-    // Fires at most once per RenderSystem lifecycle via warnedShadowDisabled
-    // latch. Follows the same console.warn pattern as warnedZeroLightStandard
-    // (non-production only) so smoke gates that track onError fire count
-    // are not polluted by configuration once-warns.
-    if (!frameState.warnedShadowDisabled) {
-      const ac04 = lights.directional !== undefined && lights.shadowMapSize === undefined;
-      const ac22 = lights.hasOrphanShadow;
-      if (ac04 || ac22) {
-        frameState.warnedShadowDisabled = true;
-        const err = new ShadowDisabledByMissingComponentError(ac04 ? 'shadow' : 'light');
-        const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
-        if (env?.env?.NODE_ENV !== 'production') {
-          console.warn(`[forgeax] ${err.message}`, {
-            code: err.code,
-            expected: err.expected,
-            hint: err.hint,
-          });
-        }
-      }
-    }
+    // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t2:
+    // the AC-04/AC-22 "shadow disabled by missing component" once-warn is gone.
+    // After merging DirectionalLightShadow into DirectionalLight there is no
+    // orphan-shadow / missing-companion configuration to warn about -- castShadow
+    // defaults true on the single component, so the warn condition can never
+    // arise. The error class + RuntimeErrorCode member have been removed in M4 (m4-t2).
 
     // feat-20260608-cluster-lighting M6 / w23 (F-4 fix): URP-only multi-light
     // warn. HDRP supports 256 punctual lights via SSBO; the 4-slot first-slice
@@ -1667,10 +1755,39 @@ export function recordFrame(
     const canvasContext: RhiCanvasContext | null = internals.context;
     if (canvasContext === null) return;
 
-    const currentTextureResult = canvasContext.getCurrentTexture();
+    let currentTextureResult = canvasContext.getCurrentTexture();
     if (!currentTextureResult.ok) {
-      internals.errorRegistry.fire(currentTextureResult.error);
-      return;
+      // A-IN-2 / AC-03: reset configured flag + reconfigure canvas context +
+      // retry getCurrentTexture once. Only the exceptional path (surface
+      // outdated) hits this branch; the normal hot path stays unmodified
+      // (A-AC-05: zero reconfigure calls on success).
+      pipelineState.perPassResources.configured = false;
+      const cfgResult = configureSurface(
+        canvasContext,
+        internals.device,
+        pipelineState.format,
+        pipelineState.colorAttachmentFormat,
+      );
+      if (cfgResult.ok) {
+        pipelineState.perPassResources.configured = true;
+        (globalThis as Record<string, unknown>).__forgeaxSwapChainFormat = pipelineState.format;
+      }
+      // Retry getCurrentTexture exactly once
+      const retryResult = canvasContext.getCurrentTexture();
+      if (!retryResult.ok) {
+        internals.errorRegistry.fire(retryResult.error);
+        // A-AC-04: consecutive failure → internal-fault with surface detail
+        internals.healthRegistry.fire({
+          reason: 'internal-fault',
+          detail: {
+            message:
+              'surface-configure-failed after retry: getCurrentTexture failed twice consecutively',
+          },
+          recoverable: false,
+        });
+        return;
+      }
+      currentTextureResult = retryResult;
     }
     // bug-20260519: when the canvas storage format differs from the
     // sRGB-encoding view format, ask for the view explicitly so the GPU
@@ -2204,30 +2321,31 @@ export function recordFrame(
     // Build a Set<number> of entityKeys from the validated renderables.
     // The entityKey is the packed Entity u32 (encodeEntity(indexSlot,
     // generation)) surfaced by D-1.  Entries in the per-entity caches
-    // (materialBgCache, instancesBgCache) whose entityKey segment is NOT
-    // in this set are orphaned — their entity has been despawned — and
-    // must be dropped.
+    // (materialBgPerEntity, instancesBgPerEntity) whose outer-Map entityKey
+    // is NOT in this set are orphaned — their entity has been despawned —
+    // and must be dropped.
     //
     // view + mesh caches are frame-shared (no entityKey component), so
-    // they are not subject to per-entity clean-up.  Their keys contain
-    // GPU resource handle ids, and the caches are naturally bounded by
-    // the fixed number of GPU resource combinations.
+    // they are not subject to per-entity clean-up.  They are keyed by
+    // GPU resource handle objects (WeakMap chains), and the caches are
+    // naturally bounded by the fixed number of GPU resource combinations.
     const validatedEntityKeys = new Set<number>();
     for (const v of validated) {
       validatedEntityKeys.add(v.source.entityKey);
     }
 
-    // Clean per-entity material BG cache: drop entries whose entityKey
-    // segment is absent from the current validated set.
-    cleanPerEntityCache(frameState.materialBgCache, validatedEntityKeys, 'material');
+    // Clean per-entity material BG cache: drop outer-Map entries whose
+    // entityKey is absent from the current validated set. The shared and
+    // singleton material caches have no entityKey and are not touched here.
+    cleanPerEntityCache(frameState.materialBgPerEntity, validatedEntityKeys);
 
     // Clean per-entity instances BG cache.
-    cleanPerEntityCache(frameState.instancesBgCache, validatedEntityKeys, 'instances');
+    cleanPerEntityCache(frameState.instancesBgPerEntity, validatedEntityKeys);
 
     // viewBindGroupCache + meshBindGroupCache are frame-shared (keyed by
-    // GPU resource handle ids, no entityKey).  GPU resources are created
-    // once at init-time and their handle references are immutable — the
-    // cache is naturally bounded.  No per-frame clean-up needed.
+    // GPU resource handle objects, no entityKey).  GPU resources are
+    // created once at init-time and their handle references are immutable,
+    // so the WeakMap chains are naturally bounded.  No per-frame clean-up.
 
     // D-5 retrofit: instanceBuffers clean-up.  The instanceBuffers Map is
     // keyed by `encacheKey` (packed Entity u32, same as entityKey on
@@ -2235,8 +2353,16 @@ export function recordFrame(
     // validated set — this retrofits the same per-frame clean-up policy
     // onto the pre-existing cache (which previously had no clean-up at
     // all, OQ-3 / R-4).
-    for (const key of frameState.instanceBuffers.keys()) {
+    //
+    // feat-20260619 M4 / F11: destroy the GPU buffer before Map.delete so
+    // despawned entities release their instance-buffer backing memory
+    // symmetrically (D-6). Failure fires errorRegistry + continues sweep.
+    for (const [key, entry] of frameState.instanceBuffers.entries()) {
       if (!validatedEntityKeys.has(key)) {
+        if (!entry.buffer.isDestroyed) {
+          const r = entry.buffer.destroy();
+          if (!r.ok) internals.errorRegistry.fire(r.error);
+        }
         frameState.instanceBuffers.delete(key);
       }
     }
@@ -2275,9 +2401,10 @@ export function recordFrame(
     // `validatedOrdered.length` slots BEFORE the first per-entity writeBuffer
     // (line 1786 below). On `ok:false` the controller has already fired a
     // structured RuntimeError (`mesh-ssbo-ceiling-reached` /
-    // `mesh-ssbo-capacity-exceeded`); we early-return the frame: 0
-    // writeBuffer + 0 draw + no pass record (AC-08, no truncation). The
-    // helper is idempotent across same-frame re-calls (AC-09) and
+    // `mesh-ssbo-capacity-exceeded`); we truncate the draw list to
+    // `degradedToSlotCount` (graceful degradation per plan-strategy D-2):
+    // render the subset that fits, discard overflow, no black frame.
+    // The helper is idempotent across same-frame re-calls (AC-09) and
     // short-circuits on length=0 / length<=slotCount (boundary table).
     //
     // bug-20260609: feat-20260608 M5 amend made the material UBO indexed by
@@ -2297,7 +2424,8 @@ export function recordFrame(
     const neededSlots = Math.max(validatedOrdered.length, neededMaterialSlots);
     const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
     if (!meshSsboCapResult.ok) {
-      return;
+      // Graceful degradation: truncate to pre-grow capacity, render the subset.
+      validatedOrdered = validatedOrdered.slice(0, meshSsboCapResult.degradedToSlotCount);
     }
 
     // D-2 (bug-20260527): LDR sprite pass split.
@@ -2358,7 +2486,9 @@ export function recordFrame(
       //   [44..59] inverseViewProj, [60..75] lightViewProj1,
       //   [76..91] lightViewProj2, [92..107] lightViewProj3,
       //   [108]/[112]/[116]/[120] splitPlanes (vec4 stride),
-      //   [124] cascadeCount, [125] cascadeBlend, [126..147] tail pad.
+      //   [124] cascadeCount, [125] cascadeBlend,
+      //   [126] depthBias, [127] normalBias, [128] pcfKernelSize (feat-20260621
+      //   M3 / m3-t2-t3), [129..147] tail pad.
       const VIEW_PAYLOAD_FLOATS = 148;
       const viewPayload = new Float32Array(VIEW_PAYLOAD_FLOATS);
       for (let i = 0; i < 16; i++) viewPayload[i] = (worldViewProj as unknown as number[])[i] ?? 0;
@@ -2401,6 +2531,20 @@ export function recordFrame(
       // cascadeCount / cascadeBlend at [124..125].
       viewPayload[124] = lights.cascadeCount ?? 0;
       viewPayload[125] = lights.cascadeBlend ?? 0;
+      // feat-20260621-merge-directionallightshadow-into-directionallight M3 /
+      // m3-t2: shadow bias + PCF kernel width from the merged DirectionalLight
+      // land in the formerly-free tail pad at floats [126/127/128] (bytes
+      // 504/508/512). VIEW_PAYLOAD_FLOATS / VIEW_UBO_BYTES are unchanged --
+      // the WGSL View struct (common.wgsl) appends matching f32 at the same
+      // slots; the host tail pad shrinks 88 B -> 64 B, rest stays zero.
+      // pcfKernelSize is host-clamped to the nearest valid odd kernel {1,3,5}
+      // (cap 5, matching lighting-directional.wgsl MAX_PCF_HALF=2 from the
+      // merged 5.3-production-shadow-demos AC-14 variant-free loop) so the
+      // per-iteration radius clip has a fixed, legal bound; undefined
+      // (no cast-shadow / no shadow fields) defaults to 3.
+      viewPayload[126] = lights.depthBias ?? 0.005;
+      viewPayload[127] = lights.normalBias ?? 0.05;
+      viewPayload[128] = clampPcfKernelSize(lights.pcfKernelSize);
 
       const viewUploadResult = internals.device.queue.writeBuffer(
         pipelineState.viewUniformBuffer,
@@ -2515,17 +2659,19 @@ export function recordFrame(
     const encoder: RhiCommandEncoder = encoderResult.value;
 
     // ── feat-20260531-per-frame-bind-group-cache M2 / w7-w8 ────────
-    // Per-frame bind group caches (D-2 handle-set keys, D-4
-    // RenderFrameState host). Each call site below uses
-    // getOrCreateBindGroup to: (1) build a deterministic cache key from
-    // variant discriminator + ordered bound resource handles, (2) lookup
-    // the cache Map, (3) hit = reuse, miss = factory create + bump
-    // bindGroupCounts.createBindGroup + store.
+    // feat-20260622-handle-to-id-allocator-elimination M3: per-frame bind
+    // group caches keyed by handle-object identity (D-2 / D-3). Each call
+    // site below uses `getOrCreateFromChain` (init-time-stable view/mesh) or
+    // `getOrCreatePerEntity` (entity-scoped material/instances): walk the
+    // WeakMap chain of bound resource handles to a variant->BindGroup leaf;
+    // hit = reuse, miss = factory create + bump bindGroupCounts.createBindGroup
+    // + store.
     //
-    // View main (#1) key = 'view-main' + ids of b0(viewUniformBuffer),
-    // b1(pointLightsBuffer), b2(spotLightsBuffer), b3(graph shadowDepth
-    // view or shadowFallbackTextureView), b4(shadowSampler).
-    // Mesh (#2) key = 'mesh' + id of b0(meshStorageBuffer).
+    // View main (#1) chain = b0(viewUniformBuffer), b1(pointLightsBuffer),
+    // b2(spotLightsBuffer), b3(graph shadowDepth view or
+    // shadowFallbackTextureView), b4(shadowSampler), b5(atlas view), b6
+    // (shadowParams); variant 'view-main'.
+    // Mesh (#2) chain = inner b0 buffer (meshStorageBuffer.buffer); variant 'mesh'.
     let viewBindGroup: BindGroup | null = null;
     let meshBindGroup: BindGroup | null = null;
     // feat-20260609-hdrp-cluster-fragment-ggx M4 / w19: HDRP unified group(2)
@@ -2537,7 +2683,7 @@ export function recordFrame(
       // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`).
       // Graph owns the texture lifecycle; record-stage reads the resolved
       // view each frame (D-2 SSOT). When the graph has not allocated the
-      // target (no DirectionalLightShadow wired or shadowMapSize=0),
+      // target (castShadow:false or shadowMapSize=0),
       // `getColorTargetView` returns undefined and we fall through to the
       // 1x1 fallback view that keeps the BGL satisfied.
       const graphShadowView = frameState.perFrameGraph?.getColorTargetView('shadowDepth') as
@@ -2554,22 +2700,18 @@ export function recordFrame(
         : null;
       const b5View =
         atlasViewMaybe !== null ? atlasViewMaybe : pipelineState.shadowAtlasFallbackTextureView;
-      const viewKey = buildBindGroupCacheKey(
-        'view-main',
-        [
-          pipelineState.viewUniformBuffer as unknown as object,
-          pipelineState.pointLightsBuffer as unknown as object,
-          pipelineState.spotLightsBuffer as unknown as object,
-          b3View as unknown as object,
-          pipelineState.perPassResources.shadowSampler as unknown as object,
-          b5View as unknown as object,
-          pipelineState.shadowParamsBuffer as unknown as object,
-        ],
-        frameState,
-      );
-      viewBindGroup = getOrCreateBindGroup(
+      viewBindGroup = getOrCreateFromChain(
         frameState.viewBindGroupCache,
-        viewKey,
+        [
+          pipelineState.viewUniformBuffer,
+          pipelineState.pointLightsBuffer,
+          pipelineState.spotLightsBuffer,
+          b3View,
+          pipelineState.perPassResources.shadowSampler,
+          b5View,
+          pipelineState.shadowParamsBuffer,
+        ],
+        'view-main',
         () => {
           const viewBindGroupResult = internals.device.createBindGroup({
             label: 'pbr-view-bg',
@@ -2653,18 +2795,14 @@ export function recordFrame(
         bindGroupCounts,
       );
 
-      // M3 / T-M3-04 (R1 grep gate): pass the inner `.buffer` to handle-id
-      // assignment so the cache key tracks the underlying GPU buffer
+      // M3 / w10 (D-3 hard constraint): use the inner `.buffer` as the
+      // WeakMap chain key so the cache tracks the underlying GPU buffer
       // identity. The wrapper object's identity is stable across grow
-      // events; passing the wrapper would defeat AC-07 cache invalidation.
-      const meshKey = buildBindGroupCacheKey(
-        'mesh',
-        [pipelineState.meshStorageBuffer.buffer as unknown as object],
-        frameState,
-      );
-      meshBindGroup = getOrCreateBindGroup(
+      // events; using the wrapper would defeat AC-07 cache invalidation.
+      meshBindGroup = getOrCreateFromChain(
         frameState.meshBindGroupCache,
-        meshKey,
+        [pipelineState.meshStorageBuffer.buffer],
+        'mesh',
         () => {
           // bug-20260610: WebGL2 fallback path needs the binding to cover the
           // whole `array<Mesh, 128>` uniform buffer (14336 B) instead of a
@@ -2711,20 +2849,18 @@ export function recordFrame(
           frameState.installedPipelineConfig?.clusterGrid,
         );
         if (hdrpBuffers !== null) {
-          const hdrpKey = buildBindGroupCacheKey(
-            'hdrp-unified',
-            [
-              pipelineState.meshStorageBuffer.buffer as unknown as object,
-              hdrpBuffers.lightDataBuffer as unknown as object,
-              hdrpBuffers.clusterGridBuffer as unknown as object,
-              hdrpBuffers.lightIndexListBuffer as unknown as object,
-              hdrpBuffers.clusterUniformBuffer as unknown as object,
-            ],
-            frameState,
-          );
-          hdrpClusterBindGroup = getOrCreateBindGroup(
+          // D-3: buffer dimension uses the inner `.buffer` (same constraint
+          // as the mesh path) so a grow event rotates the chain key.
+          hdrpClusterBindGroup = getOrCreateFromChain(
             frameState.meshBindGroupCache,
-            hdrpKey,
+            [
+              pipelineState.meshStorageBuffer.buffer,
+              hdrpBuffers.lightDataBuffer,
+              hdrpBuffers.clusterGridBuffer,
+              hdrpBuffers.lightIndexListBuffer,
+              hdrpBuffers.clusterUniformBuffer,
+            ],
+            'hdrp-unified',
             () => {
               const bg = createHdrpUnifiedBindGroup(
                 internals,
@@ -2796,6 +2932,7 @@ export function recordFrame(
       msaaActive,
       geometryColorResolveView,
       ldrSpriteColorView,
+      postProcessParams,
       dispatch: transparentDispatch,
       hdrpClusterBindGroup,
     };
@@ -2852,6 +2989,12 @@ export function recordFrame(
       internals.errorRegistry.fire(submitResult.error);
       return;
     }
+    // bug-20260622 D-3: reclaim retired transient textures after the main
+    // queue.submit. Fire-and-forget with .catch — the async
+    // onSubmittedWorkDone may resolve after the renderer/device is disposed
+    // (e.g. test teardown), at which point the WASM instance / queue ref is
+    // no longer valid; we swallow the post-dispose rejection.
+    graph.reclaimRetiredTransients().catch(() => {});
   } finally {
     frameState.frameNumber += 1;
     // feat-20260608-cluster-lighting M5 / w22: clear HDRP once-per-frame fired
@@ -2965,7 +3108,7 @@ export function recordShadowPass(
   // M5-T1: shadow depth target read directly from render-graph
   // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`;
   // D-2 SSOT). Returns undefined when the graph has not allocated the
-  // target (no DirectionalLightShadow wired or shadowMapSize=0); the
+  // target (castShadow:false or shadowMapSize=0); the
   // gate below (`shadowView !== null`) is preserved by coalescing
   // undefined to null.
   const shadowView =
@@ -3011,24 +3154,19 @@ export function recordShadowPass(
       // b3 is always shadowFallbackTextureView (not the actual shadow
       // map — WebGPU forbids writing to and sampling from the same
       // texture in the same synchronization scope). Handles are all
-      // init-time stable (D-6 sentinel effectively — key hits from
-      // frame 2 onward).
-      const shadowViewKey = buildBindGroupCacheKey(
-        'view-shadow',
-        [
-          pipelineState.viewUniformBuffer as unknown as object,
-          pipelineState.pointLightsBuffer as unknown as object,
-          pipelineState.spotLightsBuffer as unknown as object,
-          pipelineState.shadowFallbackTextureView as unknown as object,
-          pipelineState.perPassResources.shadowSampler as unknown as object,
-          pipelineState.shadowAtlasFallbackTextureView as unknown as object,
-          pipelineState.shadowParamsBuffer as unknown as object,
-        ],
-        c.frameState,
-      );
-      const shadowViewBg = getOrCreateBindGroup(
+      // init-time stable, so the WeakMap chain hits from frame 2 onward.
+      const shadowViewBg = getOrCreateFromChain(
         c.frameState.viewBindGroupCache,
-        shadowViewKey,
+        [
+          pipelineState.viewUniformBuffer,
+          pipelineState.pointLightsBuffer,
+          pipelineState.spotLightsBuffer,
+          pipelineState.shadowFallbackTextureView,
+          pipelineState.perPassResources.shadowSampler,
+          pipelineState.shadowAtlasFallbackTextureView,
+          pipelineState.shadowParamsBuffer,
+        ],
+        'view-shadow',
         () => {
           const shadowViewBgResult = runtime.device.createBindGroup({
             label: 'shadow-view-bg',
@@ -3109,12 +3247,12 @@ export function recordShadowPass(
       // materialBindGroupLayout (14 entries: material 0..6 + Skylight
       // 7..13 per feat-20260520-skylight-ibl-cubemap D-5 round-4).
       //
-      // M4 / w15 (D-6 sentinel cache): all handles are init-time stable
-      // pipelineState defaults + skylightFallback resources.  Use a fixed
-      // sentinel key (no entityKey) — hit from frame 2 onward, zero-cost
-      // after the first frame.  Key is 'shadow-material-singleton'; the
-      // clean-up loop in recordFrame skips sentinel keys via Number.isNaN
-      // (the segment between the two dashes is non-numeric).
+      // D-6 / AC-05: all handles are init-time stable pipelineState defaults
+      // + skylightFallback resources, so this BG is a true singleton (no
+      // entityKey).  It lives in its own flat singletonMaterialCache
+      // Map<variant, BindGroup> under 'shadow-material-singleton' — hit from
+      // frame 2 onward, and cleanPerEntityCache never touches it (it is not
+      // in any per-entity Map).
       const shadowMaterialBaseEntries = [
         {
           binding: 0,
@@ -3184,20 +3322,22 @@ export function recordShadowPass(
               shadowEmissiveAo,
             )
           : shadowMaterialBaseEntries;
-      const shadowMaterialBg = getOrCreateBindGroup(
-        c.frameState.materialBgCache,
-        'shadow-material-singleton',
-        () => {
-          const shadowMaterialBgResult = runtime.device.createBindGroup({
-            label: 'shadow-material-bg',
-            layout: pipelineState.materialBindGroupLayout,
-            entries: shadowMergedEntries,
-          });
-          if (!shadowMaterialBgResult.ok) throw shadowMaterialBgResult.error;
-          return shadowMaterialBgResult.value;
-        },
-        c.bindGroupCounts,
-      );
+      // D-6 / AC-05: the one true singleton material BG lives in its own flat
+      // Map<variant, BindGroup> (no entityKey, no handle chain). Cache hit
+      // from frame 2 onward; the cleanPerEntityCache eviction never touches it.
+      let shadowMaterialBg = c.frameState.singletonMaterialCache.get('shadow-material-singleton');
+      if (shadowMaterialBg === undefined) {
+        const shadowMaterialBgResult = runtime.device.createBindGroup({
+          label: 'shadow-material-bg',
+          layout: pipelineState.materialBindGroupLayout,
+          entries: shadowMergedEntries,
+        });
+        if (!shadowMaterialBgResult.ok) throw shadowMaterialBgResult.error;
+        shadowMaterialBg = shadowMaterialBgResult.value;
+        c.bindGroupCounts.createBindGroup += 1;
+        c.bindGroupCounts.keys.push('shadow-material-singleton');
+        c.frameState.singletonMaterialCache.set('shadow-material-singleton', shadowMaterialBg);
+      }
 
       // feat-20260604-instances-per-instance-transform-shader-group3-bin M2 / w12 (D-1 (C)):
       // shadow pass per-instance channel alignment — replaces the identity singleton
@@ -3359,6 +3499,12 @@ export function recordShadowPass(
               if (!bufRes.ok) {
                 runtime.errorRegistry.fire(bufRes.error);
               } else {
+                // feat-20260619 M4 / F12: destroy the old cached buffer
+                // before replacing it with the new one (D-6).
+                if (cached !== undefined && !cached.buffer.isDestroyed) {
+                  const r = cached.buffer.destroy();
+                  if (!r.ok) runtime.errorRegistry.fire(r.error);
+                }
                 const newBuffer = new GpuBuffer(runtime.device, bufRes.value);
                 active = {
                   buffer: newBuffer,
@@ -3384,11 +3530,16 @@ export function recordShadowPass(
           }
         }
 
-        // Bind per-entity instances BG for @group(3) (or fallback identity)
-        const shadowInstancesBgKey = `shadow-instances-${entry.source.entityKey}-${getOrAssignHandleId(c.frameState, shadowInstanceBuffer as unknown as object)}`;
-        const shadowInstancesBg = getOrCreateBindGroup(
-          c.frameState.instancesBgCache,
-          shadowInstancesBgKey,
+        // Bind per-entity instances BG for @group(3) (or fallback identity).
+        // D-4: write end of the HDRP shadow-instances producer/consumer pair.
+        // outerKey = entry.source.entityKey, handle = shadowInstanceBuffer;
+        // the HDRP main pass read end (:3820 below) must look up the same
+        // (entityKey, instBuffer) leaf or the shadow instances silently drop.
+        const shadowInstancesBg = getOrCreatePerEntity(
+          c.frameState.instancesBgPerEntity,
+          entry.source.entityKey,
+          [shadowInstanceBuffer],
+          'shadow-instances',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'shadow-instances-bg',
@@ -3562,32 +3713,28 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       // use while the real atlas faces are render-attached here.
       pass.setPipeline(shadowPipeline);
       // Look up the shadow view BG built earlier this frame by recordShadowPass.
-      // `view-shadow` is the cache key prefix; tied to the same handle ids.
-      // If the directional shadow path wasn't taken (no DirectionalLightShadow),
+      // `view-shadow` is the cache variant; keyed by the same handle objects.
+      // If the directional shadow path wasn't taken (castShadow:false),
       // shadow-view-bg was never built -- skip the geometry walk in that case
       // (the depth attachment was still cleared above which is the AC-04
       // "atlas face cleared to far" minimum guarantee).
-      const shadowViewKeyForLookup = buildBindGroupCacheKey(
-        'view-shadow',
-        [
-          pipelineState.viewUniformBuffer as unknown as object,
-          pipelineState.pointLightsBuffer as unknown as object,
-          pipelineState.spotLightsBuffer as unknown as object,
-          pipelineState.shadowFallbackTextureView as unknown as object,
-          pipelineState.perPassResources.shadowSampler as unknown as object,
-          pipelineState.shadowAtlasFallbackTextureView as unknown as object,
-          pipelineState.shadowParamsBuffer as unknown as object,
-        ],
-        frameState,
-      );
       // Build (or reuse) the shadow-view BG. If the directional shadow path
       // already populated it earlier this frame, the cache hits; otherwise
-      // (no DirectionalLightShadow in the scene -- recordShadowPass never
+      // (castShadow:false -- recordShadowPass never
       // ran) we build it on-demand here so the point shadow caster has a
       // valid b0 view BG even on directional-shadow-free scenes.
-      const cachedShadowViewBg = getOrCreateBindGroup(
+      const cachedShadowViewBg = getOrCreateFromChain(
         frameState.viewBindGroupCache,
-        shadowViewKeyForLookup,
+        [
+          pipelineState.viewUniformBuffer,
+          pipelineState.pointLightsBuffer,
+          pipelineState.spotLightsBuffer,
+          pipelineState.shadowFallbackTextureView,
+          pipelineState.perPassResources.shadowSampler,
+          pipelineState.shadowAtlasFallbackTextureView,
+          pipelineState.shadowParamsBuffer,
+        ],
+        'view-shadow',
         () => {
           const r = runtime.device.createBindGroup({
             label: 'shadow-view-bg',
@@ -3633,12 +3780,13 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       );
       // Same on-demand build for the dummy material BG (the shadow_caster
       // shader does not consume @group(1) but the PSO requires the BGL
-      // to validate). Reuse the same singleton key recordShadowPass uses
-      // so the two paths share one allocation per frame.
-      const cachedShadowMaterialBg = getOrCreateBindGroup(
-        frameState.materialBgCache,
+      // to validate). Reuse the same singleton Map entry recordShadowPass
+      // writes so the two paths share one allocation per frame (D-6).
+      let cachedShadowMaterialBg = frameState.singletonMaterialCache.get(
         'shadow-material-singleton',
-        () => {
+      );
+      if (cachedShadowMaterialBg === undefined) {
+        const buildShadowMaterialSingleton = (): BindGroup => {
           const fb = pipelineState.skylightFallback;
           const fallbackEntries = [
             {
@@ -3708,9 +3856,12 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
           });
           if (!r.ok) throw r.error;
           return r.value;
-        },
-        c.bindGroupCounts,
-      );
+        };
+        cachedShadowMaterialBg = buildShadowMaterialSingleton();
+        c.bindGroupCounts.createBindGroup += 1;
+        c.bindGroupCounts.keys.push('shadow-material-singleton');
+        frameState.singletonMaterialCache.set('shadow-material-singleton', cachedShadowMaterialBg);
+      }
       if (meshBindGroup === null) {
         pass.end();
         const finishOnly = enc.finish();
@@ -3765,8 +3916,16 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
             instCount = Math.max(1, inst.instanceCount);
           }
         }
-        const instBgKey = `shadow-instances-${entry.source.entityKey}-${getOrAssignHandleId(frameState, instBufferKey)}`;
-        const cachedInstBg = frameState.instancesBgCache.get(instBgKey);
+        // D-4 read end: look up the leaf recordShadowPass wrote at :3439
+        // with the SAME (entityKey, instBuffer) pair. The single-handle chain
+        // stores the variant->BindGroup leaf Map directly under the buffer
+        // handle in the inner WeakMap, so the variant lookup is the third
+        // step. The inner WeakMap value is opaque (`unknown`); the 1-handle
+        // shadow-instances chain guarantees it is the leaf Map here.
+        const shadowInstLeaf = frameState.instancesBgPerEntity
+          .get(entry.source.entityKey)
+          ?.get(instBufferKey) as Map<string, BindGroup> | undefined;
+        const cachedInstBg = shadowInstLeaf?.get('shadow-instances');
         if (cachedInstBg === undefined) continue; // recordShadowPass should have populated it
         pass.setBindGroup(3, cachedInstBg);
         for (const sm of submeshes) {
@@ -3966,6 +4125,14 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
   // disambiguate count=1 vs count=4 PSOs. Derived from the per-camera
   // msaaActive boolean (already on the context).
   const sampleCount = msaaActive ? 4 : 1;
+  // feat-20260623-world-space-video-asset M4 / w17 (D-2 / AC-09): high-perf
+  // GPUExternalTexture upload availability for video sources, resolved by the
+  // explicit RhiCaps-based capability probe. The probe checks
+  // backendKind==='webgpu' AND `importExternalTexture` method presence; the
+  // latter is absent today (OOS-5), so this is false and the general
+  // copyExternalImageToTexture path (w16) is the sole route. The branch exists
+  // so the AC-09 two-path reserved hook is code-review-verifiable, not a TODO.
+  const videoHighPerfAvailable = probeVideoHighPerfUpload(runtime.device);
   // feat-20260609-hdrp-cluster-fragment-ggx M4 / w16: HDRP active swaps the
   // group(2) bindGroup for the unified 7-entry layout (mesh SSBO at binding 0
   // + cluster 4 buffer at bindings 3..6). The dynamic offset
@@ -4551,6 +4718,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
               if (!bufRes.ok) {
                 runtime.errorRegistry.fire(bufRes.error);
               } else {
+                // feat-20260619 M4 / F12: destroy the old cached buffer
+                // before replacing it with the new one (D-6).
+                if (cached !== undefined && !cached.buffer.isDestroyed) {
+                  const r = cached.buffer.destroy();
+                  if (!r.ok) runtime.errorRegistry.fire(r.error);
+                }
                 const newBuffer = new GpuBuffer(runtime.device, bufRes.value);
                 active = {
                   buffer: newBuffer,
@@ -4583,10 +4756,11 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // The instanceBuffers cache already handles archVersion/byteLength
       // invalidation (handle changes on buffer rebuild); the BG cache
       // naturally misses when the underlying handle id differs.
-      const instancesBgKey = `instances-${entry.source.entityKey}-${getOrAssignHandleId(frameState, instanceBuffer as unknown as object)}`;
-      const instancesBindGroup: BindGroup = getOrCreateBindGroup(
-        frameState.instancesBgCache,
-        instancesBgKey,
+      const instancesBindGroup: BindGroup = getOrCreatePerEntity(
+        frameState.instancesBgPerEntity,
+        entry.source.entityKey,
+        [instanceBuffer],
+        'instances',
         () => {
           const result = runtime.device.createBindGroup({
             label: 'pbr-instances-bg',
@@ -4687,33 +4861,22 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const meshBindSize = runtime.device.caps.storageBuffer
           ? MESH_SSBO_BYTES
           : MESH_UBO_FULL_ARRAY_BYTES;
-        const skinBgKey = buildBindGroupCacheKey(
-          'pbr-skin-mesh',
-          [
-            pipelineState.meshStorageBuffer.buffer as unknown as object,
-            skinResources.paletteBuffer as unknown as object,
-          ],
-          frameState,
-        );
-        // m3-2: skin BG cache miss / hit instrumentation. Probe the cache
-        // before delegating to `getOrCreateBindGroup` so we can publish the
-        // per-frame counter the m3-1 acceptanceCheck reads (miss=1 + hit
-        // =N-1 across N skin entries sharing one allocator buffer + mesh
-        // SSBO). The probe is read-only; the actual factory + cache.set
-        // still flow through `getOrCreateBindGroup` to keep
-        // `bindGroupCounts.createBindGroup` accounting in the same place.
-        // Field is optional + opt-in (no PipelineState type change at this
-        // milestone -- read via structural cast so prod paths that omit
-        // the counter pay nothing).
+        // m3-2 / D-8: skin BG cache miss / hit instrumentation. The chain
+        // walk no longer exposes a string key to `.has()`, so we derive
+        // hit/miss from the w7 `bindGroupCounts.createBindGroup` accounting:
+        // snapshot the counter, run `getOrCreateFromChain`, and compare. A
+        // delta of 1 means the factory ran (miss); 0 means a chain hit. This
+        // publishes the per-frame counter the m3-1 acceptanceCheck reads
+        // (miss=1 + hit=N-1 across N skin entries sharing one allocator
+        // buffer + mesh SSBO). Field is optional + opt-in (read via
+        // structural cast so prod paths that omit the counter pay nothing).
         const skinStats = (pipelineState as { _skinBgCacheStats?: { miss: number; hit: number } })
           ._skinBgCacheStats;
-        if (skinStats !== undefined) {
-          if (frameState.meshBindGroupCache.has(skinBgKey)) skinStats.hit += 1;
-          else skinStats.miss += 1;
-        }
-        const skinBindGroup: BindGroup = getOrCreateBindGroup(
+        const skinMissesBefore = bindGroupCounts.createBindGroup;
+        const skinBindGroup: BindGroup = getOrCreateFromChain(
           frameState.meshBindGroupCache,
-          skinBgKey,
+          [pipelineState.meshStorageBuffer.buffer, skinResources.paletteBuffer],
+          'pbr-skin-mesh',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'pbr-skin-mesh-bg',
@@ -4757,6 +4920,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           },
           bindGroupCounts,
         );
+        if (skinStats !== undefined) {
+          if (bindGroupCounts.createBindGroup > skinMissesBefore) skinStats.miss += 1;
+          else skinStats.hit += 1;
+        }
         group2BindGroup = skinBindGroup;
         // m3-2: dyn-offset tuple via `_computeSkinGroup2DynOffsets` with the
         // per-entity palette cursor M2 m2-6 wrote at the extract stage.
@@ -4871,17 +5038,16 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           spriteEmissiveAo,
         );
 
-        // M3 / w12: sprite material BG cache (D-2 handle-set key).
-        // Same pattern as #9: 'material' + entityKey + ordered
-        // handle ids for all 14 entries. Sprite filler b3-b6
-        // (defaultSampler/defaultWhite/defaultNormal) are constant
+        // M3 / w12: sprite material BG cache (D-2 handle-chain).
+        // Per-entity: outerKey = entityKey, chain = the 14 merged-entry
+        // handle objects (D-5 extractEntryResourceHandle). Sprite filler
+        // b3-b6 (defaultSampler/defaultWhite/defaultNormal) are constant
         // handles — no spurious invalidation.
-        const spriteMaterialBgKey = `material-${entry.source.entityKey}-${spriteMergedEntries
-          .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
-          .join('-')}`;
-        const spriteBg: BindGroup = getOrCreateBindGroup(
-          frameState.materialBgCache,
-          spriteMaterialBgKey,
+        const spriteBg: BindGroup = getOrCreatePerEntity(
+          frameState.materialBgPerEntity,
+          entry.source.entityKey,
+          spriteMergedEntries.map((e) => extractEntryResourceHandle(e)),
+          'material',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-material-bg',
@@ -4936,31 +5102,112 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // smIdx; otherwise fall back to slot 0 (count-mismatch already
           // filtered by extract; this guard handles the materials.length=1
           // single-material path mapped over multi-submesh meshes safely).
-          // Cache key drops entityKey: identical-texture-set submeshes
-          // (whether on the same entity or different ones) share one BG.
-          // The 14 handle ids fully discriminate the binding state since
-          // sampler/textureView/buffer handles are stable per frame
-          // (frameState's getOrAssignHandleId is per-frame).
+          // This BG drops entityKey: identical-texture-set submeshes
+          // (whether on the same entity or different ones) share one BG via
+          // the shaderId-outer `materialBgShared` cache. The 14 handle
+          // objects form the WeakMap chain and fully discriminate the
+          // binding state since sampler/textureView/buffer handle identities
+          // are stable across frames.
           const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
           const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
-          let smBaseColorView = pipelineState.fallbackTextureView;
-          const smBcHandle = submeshMaterial.baseColorTexture;
-          if (smBcHandle !== undefined) {
-            const view = residentTextureView(world, store, runtime, smBcHandle);
-            if (view !== undefined) smBaseColorView = view as never;
+          // feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): assemble the
+          // user-region bind group by iterating the shader's
+          // derive(paramSchema).textureFieldNames SSOT (sampler-first pairing,
+          // matching derive().bglEntries ordering), instead of hardcoding
+          // baseColor/MR/normal at binding 2/4/6. Any Nth texture (e.g. parallax
+          // heightTexture) flows through here without a coupled edit. Each field
+          // reads its handle from MaterialSnapshot.textureHandles; a missing
+          // handle falls back to the per-field default view (charter P3:
+          // graceful — texture params are optional at register time).
+          const smShaderId = submeshMaterial.materialShaderId;
+          // Field NAMES come from the shader's own schema so the handle lookup
+          // resolves the shader's declared textures (e.g. parallax's
+          // diffuse/normal/depth, which differ from the built-in
+          // baseColor/MR/normal even though both derive a 3-pair user-region).
+          // The COUNT/order must match the BGL bound below: w6 hands out a
+          // per-shader BGL whenever the derived user-region shape differs from
+          // the shared built-in (getMaterialBindGroupLayout); a same-shape
+          // shader (3 texture2d pairs) reuses the shared BGL and its own 3
+          // fields produce the identical 3-pair shape.
+          const smPerShaderBgl =
+            smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
+          const smSchema =
+            smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined;
+          const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
+          const smBaseEntries: BindGroupEntry[] = [
+            {
+              binding: 0,
+              resource: {
+                kind: 'buffer' as const,
+                value: {
+                  buffer: pipelineState.materialUniformBuffer.buffer,
+                  offset: 0,
+                  size: MATERIAL_SLICE,
+                },
+              },
+            },
+          ];
+          // The bind group MUST emit exactly as many texture pairs as the bound
+          // BGL's user-region declares (mismatch => dawn "Binding entry not
+          // set"). The shared built-in BGL has a fixed 3-pair user-region; a
+          // per-shader BGL (w6) has one pair per shader-declared texture. Fill
+          // each slot positionally from the shader's own fields (so parallax's
+          // diffuse/normal/depth resolve) and pad any remaining shared-BGL
+          // slots with default views (so a 1-texture material like unlit still
+          // satisfies all 3 shared slots).
+          const smBglPairCount =
+            smPerShaderBgl !== undefined
+              ? smUserRegionFields.length
+              : BUILTIN_USER_REGION_TEXTURE_FIELDS.length;
+          // Sampler-first pairs at binding 1+2i (sampler) / 2+2i (texture),
+          // matching derive(paramSchema).bglEntries (sampler emitted first).
+          for (let fi = 0; fi < smBglPairCount; fi++) {
+            const field = smUserRegionFields[fi];
+            const samplerBinding = 1 + fi * 2;
+            const textureBinding = samplerBinding + 1;
+            let smView: unknown =
+              field !== undefined
+                ? defaultViewForUserRegionField(field, pipelineState)
+                : pipelineState.defaultWhiteTextureView;
+            // feat-20260623-world-space-video-asset M4 / w16 (D-3/D-5): a
+            // video-sourced field routes to the transient DynamicTextureStore
+            // (per-frame copyExternalImageToTexture), NOT residentTextureView
+            // (whose ensureResident has no `video` arm; AC-08). The video GUID
+            // occupies the same texture2d slot a static texture would (D-5), so
+            // the binding shape is identical — only the view source differs.
+            const smVideoClip =
+              field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
+            if (smVideoClip !== undefined) {
+              const view = videoTextureView(
+                world,
+                runtime.dynamicTextureStore,
+                runtime,
+                entry.source.entityKey,
+                smVideoClip,
+                videoHighPerfAvailable,
+              );
+              if (view !== undefined) smView = view;
+            } else {
+              const smHandle =
+                field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
+              if (smHandle !== undefined) {
+                const view = residentTextureView(world, store, runtime, smHandle);
+                if (view !== undefined) smView = view;
+              }
+            }
+            smBaseEntries.push(
+              {
+                binding: samplerBinding,
+                resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+              },
+              {
+                binding: textureBinding,
+                resource: { kind: 'textureView' as const, value: smView as never },
+              },
+            );
           }
-          let smMRView: unknown = pipelineState.defaultWhiteTextureView;
-          const smMRHandle = submeshMaterial.metallicRoughnessTexture;
-          if (smMRHandle !== undefined) {
-            const view = residentTextureView(world, store, runtime, smMRHandle);
-            if (view !== undefined) smMRView = view;
-          }
-          let smNormalView: unknown = pipelineState.defaultNormalTextureView;
-          const smNormalHandle = submeshMaterial.normalTexture;
-          if (smNormalHandle !== undefined) {
-            const view = residentTextureView(world, store, runtime, smNormalHandle);
-            if (view !== undefined) smNormalView = view;
-          }
+          // emissive / occlusion live in the engine-injection lightmap region,
+          // assembled after the user-region by assembleMaterialWithSkylightEntries.
           let smEmissiveView: unknown = pipelineState.defaultWhiteTextureView;
           const smEmissiveHandle = submeshMaterial.emissiveTexture;
           if (smEmissiveHandle !== undefined) {
@@ -4973,40 +5220,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
             const view = residentTextureView(world, store, runtime, smOcclusionHandle);
             if (view !== undefined) smOcclusionView = view;
           }
-          const smBaseEntries = [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer' as const,
-                value: {
-                  buffer: pipelineState.materialUniformBuffer.buffer,
-                  offset: 0,
-                  size: MATERIAL_SLICE,
-                },
-              },
-            },
-            {
-              binding: 1,
-              resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-            },
-            { binding: 2, resource: { kind: 'textureView' as const, value: smBaseColorView } },
-            {
-              binding: 3,
-              resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-            },
-            {
-              binding: 4,
-              resource: { kind: 'textureView' as const, value: smMRView as never },
-            },
-            {
-              binding: 5,
-              resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-            },
-            {
-              binding: 6,
-              resource: { kind: 'textureView' as const, value: smNormalView as never },
-            },
-          ];
           const smEmissiveAo: EmissiveAoBindGroupResources = {
             emissiveSampler: pipelineState.defaultSampler,
             emissiveView: smEmissiveView as never,
@@ -5018,26 +5231,30 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
             skylightResources,
             smEmissiveAo,
           );
-          // bug-20260610 layer 7d: cache key drops the per-entity entityKey
-          // segment so identical-material submeshes/entities dedup globally.
-          // Insert a non-numeric sentinel ('shared') in the 2nd segment so
-          // cleanPerEntityCache (which parses `<prefix>-<entityKey>-<rest>`)
-          // skips these entries — Number(<'shared'>) yields NaN, the cleanup
-          // loop's `Number.isNaN(ek)` branch keeps the entry alive across
-          // frames. Without this prefix, cleanup treats the first handle id
-          // as a candidate entityKey, mismatches the validated set, and
-          // drops the entry every frame -> AC-03 hello-cube smoke fails
-          // (frame-3 createBindGroupCount=1, expected 0).
-          const submeshMaterialBgKey = `material-shared-${smMergedEntries
-            .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
-            .join('-')}`;
-          perSubmeshBg = getOrCreateBindGroup(
-            frameState.materialBgCache,
-            submeshMaterialBgKey,
+          // bug-20260610 layer 7d: this BG drops the per-entity entityKey so
+          // identical-material submeshes/entities dedup globally (OQ-1 / PD1).
+          // It lives in the dedicated cross-entity `materialBgShared` cache:
+          // outerKey = shaderId string (the natural dedup dimension), chain =
+          // the merged-entry handle objects. No entityKey, so cleanPerEntityCache
+          // never touches it — the old `Number.isNaN('shared')` sentinel hack
+          // (D-6) is gone.
+          // feat-20260621-learn-render-5-5-parallax M2 / w8: a custom shader
+          // with >3 textures owns a per-shader material BGL (w6); the bind
+          // group must be created against THAT layout so the entry count
+          // (e.g. 20 for a 4-texture shader) matches. Built-in / 3-texture
+          // shaders resolve to the shared 18-entry BGL. The shaderId outerKey
+          // keeps two shaders with a coincidentally-identical handle set from
+          // colliding on layout.
+          const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
+          perSubmeshBg = getOrCreatePerEntity(
+            frameState.materialBgShared,
+            smShaderId ?? '',
+            smMergedEntries.map((e) => extractEntryResourceHandle(e)),
+            'material-shared',
             () => {
               const result = runtime.device.createBindGroup({
                 label: 'pbr-material-skylight-bg',
-                layout: pipelineState.materialBindGroupLayout,
+                layout: smMaterialBgl,
                 entries: smMergedEntries,
               });
               if (!result.ok) throw result.error;
@@ -5332,6 +5549,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
                 if (!bufRes.ok) {
                   runtime.errorRegistry.fire(bufRes.error);
                 } else {
+                  // feat-20260619 M4 / F12: destroy the old cached buffer
+                  // before replacing it with the new one (D-6).
+                  if (cachedSprite !== undefined && !cachedSprite.buffer.isDestroyed) {
+                    const r = cachedSprite.buffer.destroy();
+                    if (!r.ok) runtime.errorRegistry.fire(r.error);
+                  }
                   const newBuf = new GpuBuffer(runtime.device, bufRes.value);
                   activeSprite = {
                     buffer: newBuf,
@@ -5360,10 +5583,11 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
 
         // M3 / w12: LDR sprite split pass per-entity instances BG cache.
         // Same pattern as #7.
-        const spriteInstancesBgKey = `instances-${spriteEntry.source.entityKey}-${getOrAssignHandleId(frameState, spriteInstanceBuffer as unknown as object)}`;
-        const spriteInstancesBg: BindGroup = getOrCreateBindGroup(
-          frameState.instancesBgCache,
-          spriteInstancesBgKey,
+        const spriteInstancesBg: BindGroup = getOrCreatePerEntity(
+          frameState.instancesBgPerEntity,
+          spriteEntry.source.entityKey,
+          [spriteInstanceBuffer],
+          'instances',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-instances-bg',
@@ -5451,13 +5675,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         );
 
         // M3 / w12: LDR sprite split-pass per-entity material BG cache.
-        // Same pattern as #8/#9.
-        const spritePassMaterialBgKey = `material-${spriteEntry.source.entityKey}-${spritePassMergedEntries
-          .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
-          .join('-')}`;
-        const spritePassBg: BindGroup = getOrCreateBindGroup(
-          frameState.materialBgCache,
-          spritePassMaterialBgKey,
+        // Per-entity: outerKey = entityKey, chain = merged-entry handles (D-5).
+        const spritePassBg: BindGroup = getOrCreatePerEntity(
+          frameState.materialBgPerEntity,
+          spriteEntry.source.entityKey,
+          spritePassMergedEntries.map((e) => extractEntryResourceHandle(e)),
+          'material',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-material-bg',
@@ -5481,112 +5704,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
 
   if (!geometryPassEnded) {
     pass.end();
-  }
-}
-
-/**
- * feat-20260529-rendergraph-pass-abstraction M4 / w13c: post-process tonemap
- * fullscreen pass, extracted verbatim from recordFrame. Reads the HDR colour
- * view written by the main pass and writes LDR pixels into the swap-chain
- * srgb view via the SHARED frame encoder (c.encoder). Skipped on the
- * tonemap==='none' zero-overhead path. Driven by the 'tonemap' graph pass.
- */
-export function recordTonemapPass(c: _InternalRenderPipelineContext): void {
-  const { runtime, pipelineState, encoder, view, camera, tonemapActive } = c;
-  // feat-20260519-tonemap-reinhard-mvp / M3 / T-M3.3: post-process
-  // tonemap fullscreen pass. Reads the HDR colour view written by the
-  // geometry pass and writes the final LDR pixels into the swap-chain
-  // srgb view. Skipped on the `tonemap === 'none'` zero-overhead path.
-  //
-  // bug-20260519 D-3 nullable extension: the empty-manifest path leaves
-  // `tonemapPipeline` / `tonemapBindGroupLayout` / `tonemapSampler` /
-  // `tonemapParamsBuffer` `null` because the entire tonemap-resource
-  // block in `createRenderer.ts` was skipped. Fire structured
-  // `shader-compile-failed` (charter P3 explicit failure; AC-03 hint
-  // substring `engine-vite-plugin-shader`) and fall through to encoder
-  // finish — the geometry pass above either already fired the same error
-  // (entities present) or simply cleared the HDR target (Camera-only
-  // path); skipping the tonemap pass keeps the swap-chain in a defined
-  // state.
-  if (tonemapActive && pipelineState.perPassResources.hdrColorView !== null) {
-    const tonemapPipeline = pipelineState.perPassResources.tonemapPipeline;
-    const tonemapBindGroupLayout = pipelineState.perPassResources.tonemapBindGroupLayout;
-    const tonemapSampler = pipelineState.perPassResources.tonemapSampler;
-    const tonemapParamsBuffer = pipelineState.perPassResources.tonemapParamsBuffer;
-    if (
-      tonemapPipeline === null ||
-      tonemapBindGroupLayout === null ||
-      tonemapSampler === null ||
-      tonemapParamsBuffer === null
-    ) {
-      runtime.errorRegistry.fire(
-        new RhiError({
-          code: 'shader-compile-failed',
-          expected:
-            'manifest entries include pbr.wgsl + unlit.wgsl + tonemap.wgsl (engine SSOT triple)',
-          hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 3 engine entries; check vite plugin engineEntries option',
-        }),
-      );
-    } else {
-      // Per-frame writeBuffer for the 16-byte std140 params: [exposure(f32),
-      // whitePoint(f32), mode(u32), pad(f32)]. The mode u32 occupies the
-      // third 4-byte slot so the shader reads it via `params.mode : u32`.
-      const tonemapParamsBuf = new ArrayBuffer(16);
-      const tonemapParamsF32 = new Float32Array(tonemapParamsBuf);
-      const tonemapParamsU32 = new Uint32Array(tonemapParamsBuf);
-      tonemapParamsF32[0] = camera.exposure;
-      tonemapParamsF32[1] = camera.whitePoint;
-      tonemapParamsU32[2] = tonemapToU32(camera.tonemap);
-      tonemapParamsF32[3] = 0;
-      const tonemapParams = new Float32Array(tonemapParamsBuf);
-      const paramsWrite = runtime.device.queue.writeBuffer(tonemapParamsBuffer, 0, tonemapParams);
-      if (!paramsWrite.ok) throw paramsWrite.error;
-
-      // Lazily compose the 3-entry tonemap BindGroup; cache survives until
-      // the HDR view is invalidated by a resize (alloc path above sets
-      // `tonemapBindGroup = null` whenever HDR target reallocates).
-      if (pipelineState.perPassResources.tonemapBindGroup === null) {
-        const tonemapBgRes = runtime.device.createBindGroup({
-          label: 'tonemap-bg',
-          layout: tonemapBindGroupLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'textureView',
-                value: pipelineState.perPassResources.hdrColorView,
-              },
-            },
-            {
-              binding: 1,
-              resource: { kind: 'sampler', value: tonemapSampler },
-            },
-            {
-              binding: 2,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: tonemapParamsBuffer },
-              },
-            },
-          ],
-        });
-        if (!tonemapBgRes.ok) throw tonemapBgRes.error;
-        pipelineState.perPassResources.tonemapBindGroup = tonemapBgRes.value;
-      }
-      const tonemapBg = pipelineState.perPassResources.tonemapBindGroup;
-
-      const tonemapPass: RhiRenderPassEncoder = encoder.beginRenderPass(
-        buildBeginRenderPassDescriptor(
-          { colorFormats: ['bgra8unorm-srgb'], depthFormat: undefined, sampleCount: 1 },
-          { colorViews: [view] },
-          'tonemap',
-        ) as never,
-      );
-      tonemapPass.setPipeline(tonemapPipeline);
-      tonemapPass.setBindGroup(0, tonemapBg);
-      tonemapPass.draw(3, 1, 0, 0);
-      tonemapPass.end();
-    }
   }
 }
 

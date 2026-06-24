@@ -179,6 +179,12 @@ export default defineConfig({
                   '--disable-vulkan-surface',
                   '--ignore-gpu-blocklist',
                   '--disable-gpu-driver-bug-workarounds',
+                  // feat-20260619-audio-resource-ownership-deterministic-reclaim M5:
+                  // browser tests need AudioContext to start in 'running' state
+                  // without a real user gesture (headless chromium autoplay policy
+                  // gate). The engine's production gesture-resume listener is correct
+                  // and must NOT be altered; this flag lifts the gate in test only.
+                  '--autoplay-policy=no-user-gesture-required',
                 ],
               },
             }),

@@ -4,6 +4,7 @@ packages:
   - "apps/hello/*"
   - "apps/parity/*"
   - "apps/learn-render/*/*"
+  - "apps/learn-render/*/*/*"
   - "templates/game-default"
 
 allowBuilds:

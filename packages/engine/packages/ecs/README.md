@@ -8,6 +8,41 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 
 > Append-only registry of breaking-change rows for this package's public surface. Each row carries an ISO-date anchor (`YYYY-MM-DD`), the superseded shape, the new shape, a call-site upgrade diff, and the harness loop folder where the original decision lives. Per [AGENTS.md §Error model](../../AGENTS.md#error-model) the **Evolution contract** is: minor = add members only; major = rename / delete / reorder / narrow / deprecate. Rows below are all major edits.
 
+### 2026-06-22 — instantiateScene diagnostics envelope + unknown-field non-fatal (major)
+
+**Supersedes**: the legacy `world.instantiateScene` -> `Result<EntityHandle, ...>` surface with fatal-abort on unknown fields. Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260622-s5-device-surface-self-heal-recover/`.
+
+**Shape diff**:
+
+| Aspect | Before | After |
+|:--|:--|:--|
+| `instantiateScene` success value | `EntityHandle` (branded number, synthetic root) | `{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }` (envelope) |
+| Unknown-field behavior | `return err(SpawnDataUnknownFieldError)` — aborts entire scene | Skip the unknown field, record `SceneInstantiateDiagnostic` entry, continue (all entities spawn, known fields write correctly) |
+| New type | — | `SceneInstantiateDiagnostic = { readonly component: string; readonly field: string; readonly localId: number }` (barrel export from `@forgeax/engine-ecs`) |
+| Runtime `assets.instantiate()` | — | Keeps `Result<EntityHandle>` contract; internally unwraps `.root` |
+| NODE_ENV-gating | — | Not gated; diagnostics are production-observable (property-access, not string parsing) |
+
+**Call-site upgrade diff**:
+
+```diff
+ // before — EntityHandle directly, unknown field aborts entire scene
+-const r = world.instantiateScene(handle);
+-if (r.ok) {
+-  const root = r.value; // EntityHandle
+-}
+
+ // after — envelope with diagnostics
++const r = world.instantiateScene(handle);
++if (r.ok) {
++  const { root, diagnostics } = r.value;
++  for (const d of diagnostics) {
++    // d.component, d.field, d.localId — property access
++  }
++}
+```
+
+**Why this row exists**: AI users porting code that assumes `instantiateScene` returns an `EntityHandle` directly will hit TS errors. The envelope adds `diagnostics` to the success path; old callers can `r.value.root` (mechanical). The runtime `assets.instantiate()` keeps the simpler `Result<EntityHandle>` contract for users who don't need diagnostics.
+
 ### 2026-05-15 — Buffer / array schema vocab collapse (major)
 
 **Supersedes**: feat-20260514-ecs-children-instances-managed-buffer-array (the legacy `'buffer:<N>'` colon-literal keyword + `FixedArrayView<T>` / `VarArrayView<T>` value-shape exports + `defineComponent` `arrayStride` option). Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260515-buffer-array-vocab-collapse/`.
@@ -19,7 +54,7 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 | Buffer keyword shape | `'buffer:<N>'` (colon-literal, fixed only) | `'buffer'` (variable capacity) + `'buffer<N>'` (fixed N-byte capacity); collapsed-vocab generic forms |
 | Value-shape exports | `FixedArrayView<T>` / `VarArrayView<T>` (length / get / set / push / pop / grow methods) | **deleted** — `world.get(...).<arrayField>` returns `TypedArrayFor<T>` read-only snapshot; mutations route through 3 new World commands `world.push` / `world.pop` / `world.capacity` |
 | `defineComponent` options | accepted `arrayStride: { transforms: 16 }` | `arrayStride` option removed; stride contract migrates to RenderSystem entry defensive fail-fast for `Instances.transforms` |
-| `EcsErrorCode` count | 23 (18 base + 5 `managed-array-*`) | 25 (18 base + 1 surviving `managed-array-element-type-not-allowed` + 3 collapsed-vocab capacity codes `fixed-size-mismatch` / `fixed-array-overflow` / `array-pop-empty` + 1 `instance-transforms-stride-mismatch` from RenderSystem entry + 1 `spawn-light-invalid-bounds` from PointLight / SpotLight spawn payload validation + 1 `cardinality-exceeded` from DirectionalLightShadow singleton enforcement); rename + delete + add reshape (net 23 -> 25 across two minor adds) |
+| `EcsErrorCode` count | 23 (18 base + 5 `managed-array-*`) | 25 (18 base + 1 surviving `managed-array-element-type-not-allowed` + 3 collapsed-vocab capacity codes `fixed-size-mismatch` / `fixed-array-overflow` / `array-pop-empty` + 1 `instance-transforms-stride-mismatch` from RenderSystem entry + 1 `spawn-light-invalid-bounds` from PointLight / SpotLight spawn payload validation + 1 `cardinality-exceeded` from PointLightShadow cardinality=4 enforcement); rename + delete + add reshape (net 23 -> 25 across two minor adds) |
 | Single-import gate | `... / FixedArrayView / VarArrayView / ...` | view classes removed; gate set: `Handle / SchemaFieldType / ManagedRefStore / EcsErrorCode / EcsErrorDetail / EcsError / Name / TypedArrayFor` (+ all error classes) |
 | File `packages/ecs/src/managed-array-view.ts` | present (defines `FixedArrayView` / `VarArrayView`) | physically deleted |
 
@@ -470,7 +505,7 @@ world.despawn(e);
 | <a id="instance-transforms-stride-mismatch"></a>`'instance-transforms-stride-mismatch'` | `Error` (Result err) | `Instances.transforms.length % 16 === 0` violated at RenderSystem entry; spawn-site must allocate `new Float32Array(N * 16)` | `InstanceTransformsStrideMismatchError` (`packages/runtime/src/__tests__/render-system-stride.test.ts`) |
 | <a id="managed-array-element-type-not-allowed"></a>`'managed-array-element-type-not-allowed'` | `Panic` | element type must be `ScalarFieldType \| 'entity'`; nested arrays / `ref<T>` / `handle<T>` / `buffer` / `buffer<N>` element types are forbidden | `ManagedArrayElementTypeNotAllowedError` |
 | <a id="spawn-light-invalid-bounds"></a>`'spawn-light-invalid-bounds'` | `Error` (Result err) | PointLight / SpotLight spawn payload field out of documented bound (`.detail.field` narrows to `'range' \| 'innerOuter' \| 'outerNinety'`); fix the offending field at the spawn site | `SpawnLightInvalidBoundsError` |
-| <a id="cardinality-exceeded"></a>`'cardinality-exceeded'` | `Error` (Result err) | component declared cardinality=1 already present on another entity; despawn the extra carrier or merge data into one (canonical first consumer: `DirectionalLightShadow`) | `CardinalityExceededError` |
+| <a id="cardinality-exceeded"></a>`'cardinality-exceeded'` | `Error` (Result err) | component declared cardinality=N already present on N entities; despawn the extra carrier (canonical first consumer: `PointLightShadow` with cardinality=4) | `CardinalityExceededError` |
 | <a id="resource-invalid-value"></a>`'resource-invalid-value'` | `Error` (Result err) | resource-setter bound violation; pass a value inside the documented range (canonical first consumer: `setTransparentSortConfig` mode in `{0, 1, 2}`) | `ResourceInvalidValueError` |
 | <a id="sprite-animation-invalid"></a>`'sprite-animation-invalid'` | `Error` (Result err) | `spriteAnimationTickSystem` runtime invariant violated (e.g. frame index out of atlas range); fix the SpriteAnimation payload at the spawn site | `SpriteAnimationInvalidError` |
 | <a id="relationship-self-cycle"></a>`'relationship-self-cycle'` | `Error` (Result err) | `addChild` / `reparent` would make an entity its own ancestor; pick a target outside the child's subtree | `RelationshipSelfCycleError` |
@@ -634,7 +669,7 @@ Both are named `fields` but occupy **separate scopes** (parameter vs. property).
 
 ### Synthetic root invariant (D-V-0 / R2/F-7)
 
-`world.instantiateScene(handle)` returns one synthetic root `Entity` that
+`world.instantiateScene(handle)` returns `{ root, diagnostics }` — `root` is a synthetic root `Entity` that
 carries `SceneInstance{source, mapping, state}` and identity
 `Transform`. The Transform attach is load-bearing — `propagateTransforms`
 walks the `ChildOf` chain `meshRenderer -> ... -> syntheticRoot` through
@@ -647,11 +682,13 @@ cleanly without per-frame errors. AI users normally never observe these
 intermediates — they read the synthetic root via `world.get(root,
 SceneInstance)` and address members through `mapping[localId]`.
 
+`diagnostics: readonly SceneInstantiateDiagnostic[]` is a structured array of unknown-field records. When a `.pack.json` carries a field name that no longer matches the registered component schema, that field is skipped (entity still spawns with known fields intact) and logged as a diagnostic entry `{ component, field, localId }`. This is production-observable (property-access, not NODE_ENV-gated) and covers the "stale field in old pack.json does not blank the entire 21-entity scene" studio scenario.
+
 ### 8 World methods
 
 | Method | Signature | Effect |
 |:--|:--|:--|
-| `instantiateScene` | `(Handle<SceneAsset>, parent?: EntityHandle) => Result<EntityHandle, EcsError \| PackError>` | Materialise the SceneAsset; spawns 1 synthetic root + every entity / mount entity / nested member. Returns the synthetic root Entity. |
+| `instantiateScene` | `(Handle<SceneAsset>, parent?: EntityHandle) => Result<{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }, EcsError \| PackError>` | Materialise the SceneAsset; spawns 1 synthetic root + every entity / mount entity / nested member. Success returns `{ root, diagnostics }` — `root` is the synthetic root Entity, `diagnostics` is structured unknown-field records (property-access, production-observable). Unknown fields are skipped (do not abort the scene). |
 | `despawnScene` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | `despawnDescendants(root) + world.despawn(root)`. Returns the count of destroyed entities. |
 | `despawnDescendants` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | Walk `ChildOf` from `root` and despawn every descendant; root stays alive. Returns the count of destroyed entities. |
 | `setSceneOverride` | `<S>(root: EntityHandle, member: EntityHandle, component: Component<S>, field: keyof ShapeOf<S>, value: unknown) => Result<void, EcsError>` | Layer-0 override — write through to the live entity column AND record the diff in `state.overrides`. `member` is the live Entity; `component` and `field` are typed via the component's schema. |

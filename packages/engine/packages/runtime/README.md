@@ -45,6 +45,9 @@ const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 | `Renderer.dispose()` | `() => void` | **@placeholder M2/M3**: unbinds lost / error listeners + flips disposed flag; GPU resources reclaimed by `device.lost` / browser GC (explicit `device.destroy()` path in a follow-up); idempotent |
 | `Renderer.onLost(cb)` | `(RendererLostListener) => () => void` | device-lost notify (R-2, engine does not auto-recover) |
 | `Renderer.onError(cb)` | `(RhiErrorListener) => () => void` | RHI construction / operation error fan-out (F2 + K-9 silent skip fix reuse): backend RhiError + runtime catch (`'webgpu-runtime-error'`) reach AI users via listener; access `.code` / `.expected` / `.hint` / `.detail.compilerMessages`. See error-handling 6-member table + listener pattern. |
+| `Renderer.health()` | `() => HealthSnapshot` | Pull current health snapshot — `reason` (discriminant), `detail?` (per-reason narrowed), `recoverable` (derived boolean). Data SSOT from `HealthListenerRegistry.getLastSnapshot()`. |
+| `Renderer.recover()` | `() => Promise<Result<void, RecoverError>>` | Imperative single-shot device rebuild. In `'device-lost'` state: destroys all GPU resources, clears pendingDestroy, rebuilds device, re-wires listeners, rebuilds shader/pipeline, reconfigures canvas context. Returns `Result.ok` + fires `'alive'` on success; returns `Result.err` with discriminable `.code` on failure (adapter/device two-path). Async because `requestAdapter`/`requestDevice` is async. Call in `'alive'` state returns `'recover-not-needed'` (safe no-op). |
+| `Renderer.onHealthChange(cb)` | `(HealthChangeListener) => () => void` | Push-style health subscription; returns unsubscribe. Late-attach replay fires cb immediately if a snapshot has already been emitted (AC-07). |
 | `EngineEnvironmentError` | `class extends Error` | No usable rendering backend; `.detail.webgpuError` carries the structured error |
 
 ## Channel architecture
@@ -58,9 +61,83 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
   └─ 4) All fail → throw EngineEnvironmentError { detail.webgpuError, detail.wgpuError }
 ```
 
+## Renderer health / recover
+
+Renderer 提供三个健康面动词，统一回答"渲染器现在是否健康、为什么不健康、能否恢复"。`recover()` 是单次幂等设备重建——宿主决定重试节奏（引擎内无退避/定时器）。详见 [`skills/forgeax-engine-app/SKILL.md`](../../skills/forgeax-engine-app/SKILL.md) 用法教学（3 动词 + 消费片段）。
+
+### HealthReason (closed union, 3 members)
+
+```ts
+type HealthReason = 'alive' | 'device-lost' | 'internal-fault';
+```
+
+| member | meaning | recoverable |
+|:--|:--|:--|
+| `'alive'` | healthy baseline (registry not yet fired) | `false` |
+| `'device-lost'` | device loss detected | `true` |
+| `'internal-fault'` | internal renderer fault | `false` |
+
+Consume via `switch (snap.reason)` without default; TS narrows `snap.detail` per reason.
+
+### HealthSnapshot
+
+```ts
+type HealthSnapshot =
+  | { readonly reason: 'alive'; readonly recoverable: boolean }
+  | { readonly reason: 'device-lost'; readonly detail: HealthDetailDeviceLost; readonly recoverable: boolean }
+  | { readonly reason: 'internal-fault'; readonly detail: HealthDetailInternalFault; readonly recoverable: boolean };
+```
+
+`HealthSnapshot` is a discriminated union by `reason`. `switch(snap.reason)` narrows `snap.detail` to the per-reason detail type automatically (zero `as` casts):
+
+- `'alive'` -- no `detail` field
+- `'device-lost'` -- `snap.detail: { lostReason: 'unknown' | 'destroyed'; message: string }`
+- `'internal-fault'` -- `snap.detail: { message: string }`
+
+`recoverable` is derived from `reason` by `deriveRecoverable()`, not independently stored.
+
+### recover() semantics
+
+`recover()` returns `Promise<Result<void, RecoverError>>`. Post-S5 behavior:
+
+| state | return value |
+|:--|:--|
+| healthy (`'alive'`) | `Result.err(RecoverError 'recover-not-needed')` |
+| `'device-lost'` | On success: `Result.ok` + `fire('alive')`. On failure: `Result.err` with discriminable `.code` — `'recover-adapter-unavailable'` (requestAdapter returned null) or `'recover-device-unavailable'` (requestDevice failed). Health stays `'device-lost'` on failure. |
+
+Single-shot: no internal retry loop, no backoff, no timers, no counters, no `'recovering'` state added to `HealthReason`. Host owns retry rhythm.
+
+### RecoverError (closed union, 4 members)
+
+```ts
+type RecoverErrorCode =
+  | 'recover-not-needed'
+  | 'recover-not-implemented'
+  | 'recover-adapter-unavailable'
+  | 'recover-device-unavailable';
+```
+
+Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error objects carry `.code` / `.expected` / `.hint` only — **no `.detail` field** (each code has fixed semantics with no variable payload; unlike `RhiError` / `AssetError`, do not reach for `err.detail` on a `RecoverError`).
+
+| code | trigger | .hint |
+|:--|:--|:--|
+| `'recover-not-needed'` | Called when `health().reason === 'alive'` | "call health() first to confirm degraded state before calling recover()" |
+| `'recover-not-implemented'` | **reserved** — S3 skeleton returned this; never produced by the implemented path, kept to avoid breaking changes | "self-heal recovery is now implemented; this code should not appear in production" |
+| `'recover-adapter-unavailable'` | `requestAdapter` returned null during rebuild | "retry recover() after a host-chosen delay; adapter availability is transient" |
+| `'recover-device-unavailable'` | `requestDevice` failed or threw during rebuild | "retry recover() after a host-chosen delay; device creation is driver-dependent" |
+
+### onHealthChange replay
+
+- **late-attach replay**: callbacks registered after a health change fire immediately with the current snapshot (AC-07)
+- **unsubscribe**: returned function detaches the callback
+- **listener-throw isolation**: one callback throwing does not affect others
+- **relationship to onLost / onError**: independent channels -- `onLost` is terminal, `onError` is per-draw event stream, `onHealthChange` is the aggregated health-state change layer
+
 ## GPU-asset layers（AssetRegistry / deriveRenderData* / GpuResourceStore）
 
 > feat-20260601-gpu-resource-store-extraction — GPU 资源逻辑从 `AssetRegistry` god object 切出为三层，各层一句话职责，符号名可 grep 直达（charter F1 / P1 渐进披露）。
+>
+> **对称释放（feat-20260619 M1/M2）**：创建即注册回调（`allocSharedRef(brand, pod, onLastRelease)`），despawn 时 `SharedRefStore` 把引用计数压至 0 → 回调触发 → `evictX(handle)` 销毁 GPU 资源——**无需手动调 evict**。非 despawn 路径（sweep / teardown）走 `releaseUnreferenced` / `destroyAll` 兜底。四族（texture / mesh / cubemap / instance buffer / transient pool / handleToId）全覆盖。异常时为**吞错+fire errorRegistry+继续 sweep**，不崩帧。
 
 **三层职责命题（顶层）：**
 
@@ -72,9 +149,34 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
 
 | 符号 | 层 | 职责 |
 |:--|:--|:--|
-| `GpuResourceStore` | GPU 生死 | 持 7 GPU 字段 + 5 accessor；`renderer.store` 暴露；`configureGpuDevice(device, factory, registerCube)` 在 `renderer.ready` 后一次性 wire |
+| `GpuResourceStore` | GPU 生死 | 持三 Map（texture / cubemap / mesh handles）+ accessor；`renderer.store` 暴露；`configureGpuDevice(device, factory, registerCube)` 在 `renderer.ready` 后一次性 wire |
 | `ensureResident(handle, pod)` | GPU 生死 | pull-model 首访建：miss 时调 `deriveRenderData*` 投影 → 建资源 → 缓存 handle（memoized）；命中 O(1) 查表，**绝不每帧重投影**。miss 分支用 `switch(pod.kind)` no-default 穷举（漏 GPU-resource kind 则 `tsc -b` 报错） |
+| `evictTexture(handle)` / `evictMesh(handle)` / `evictCubemap(id)` | GPU 生死 | per-handle evict 原语：key 不存在 no-op；`isDestroyed` gate 去重（二次 evict 不重复 destroy）；返 `{ freed: number, errors: RhiError[] }`。`evictCubemap` 处理 source/cube 双 entry 共享同 wrapper 的去重 |
+
+> [!NOTE]
+> **`evictCubemap` 收 `id: number` 而非 `Handle`**（与 `evictTexture/Mesh` 不对称）：cubemap 有 source/cube 两个 key space 共享同一 GpuTexture wrapper，caller 可能持其一；统一收裸 id 让两 key space 都能驱动同一去重。从 `Handle` 取 id 用 `unwrapHandle(handle)`（`@forgeax/engine-types`）。日常事件式路径无需手动调（`allocSharedRef` onLastRelease 已传对 id）。
+| `releaseUnreferenced(liveSet)` | GPU 生死 | 遍历三 Map 所有 key，`key ∉ liveSet` 条目的资源 destroy + delete（key 在 liveSet 中的保留）。空 liveSet → 全量释放。幂等：二次调用 no-op。返 `{ freed: number, errors: RhiError[] }` |
+| `destroyAll()` | GPU 生死 | 全量 teardown：遍历三 Map destroy 所有条目 → clear。fire-and-forget（返 void）。幂等：二次调用 no-op |
 | `deriveRenderData*` | 投影 | POD → GPU 描述符纯派生（buffer usage / stride / mipLevelCount / format↔colorSpace 一致性 / cube faceSize），脱 GPU 可单测 |
+
+**两种错误约定——为何 `destroyAll` 返 void 而 `evict*`/`releaseUnreferenced` 返 `{freed, errors}`：**
+
+| 方法 | 返回形态 | 原因 |
+|:--|:--|:--|
+| `destroyAll()` | `void` | teardown fire-and-forget — 无 caller 消费返回值；destroyAll 调于 `renderer.dispose()` 路径，其时 device 即将丢失，没人接 `freed/errors` |
+| `evictTexture/Mesh/Cubemap(id)` | `{ freed: number, errors: RhiError[] }` | 有 caller — AC-11 稳态验收读 `freed` 判界，AI 用户用 `errors` 排障（charter P3 可观测） |
+| `releaseUnreferenced(liveSet)` | `{ freed: number, errors: RhiError[] }` | 有 caller — S4（`assetRegistry.invalidate`）/ S5（device 重建）作全量收口，caller 消费返回值判断释放量 |
+
+所有 `errors[]` 元素为 `RhiError` 结构体（`.code` / `.expected` / `.hint` / `.detail`），`RhiErrorCode` 闭合 union（`'destroy-after-destroy' | 'rhi-not-available' | ...`）是源文件 SSOT——`packages/rhi/src/errors.ts`，本节不重复枚举。
+
+**releaseUnreferenced 何时用——非日常路径（末尾兜底）：**
+
+`releaseUnreferenced(liveSet)` **不**接入日常帧循环（每帧 despawn 已由 `allocSharedRef` onLastRelease 自动 evict）。它供两处一次性收口调用：
+
+- **S4** — `assetRegistry.invalidate(guids)` 批量剔除已失活的 CPU 编目条目，连带清理对应 GPU 资源。
+- **S5** — device 重建（`Renderer.lostDevice` → 重建新 device → 旧 device 上的 GPU 资源全量释放；走 `releaseUnreferenced(new Set())` 空全集释放）。
+
+日常路径走事件式（创建注册回调 → despawn 触发销毁），`releaseUnreferenced` 只在突变点（编目失效 / device 重建）跑全量收口。
 
 **pull 时序与 builtin 首帧（末尾论证）：**
 
@@ -102,8 +204,8 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
 | `addColorTarget` / `addColorTargetAlias` | substrate | `RenderGraph` 上的资源声明 API（`@forgeax/engine-render-graph`）。`addColorTarget(name, {format, size, sample, usage, viewFormats})` 声明 graph-owned transient/RT/MSAA 多采样目标；`size` 三态枚举 `'swapchain' / 'half-swapchain' / {w,h}`。`addColorTargetAlias(name, source)` 把逻辑名（如 `hdrComposited`）折叠到现有物理纹理（KB-1） |
 | `addScenePass(g, name, {color, depth, reads, filter})` | 逻辑 | runtime 导出公开原语；把 ECS 场景画进 graph-owned 颜色 + 深度目标。逐实体 material UBO 打包 / 4-BGL 链装配作 **runtime-private** 实现细节（D-5 纯度边界）——render-graph 包不见这层逻辑 |
 | `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` | 逻辑 | 同源公开原语（runtime 导出，`packages/runtime/src/render-graph-primitives.ts`）；自定义管线挑选子集 / 重排即可 |
-| `addFullscreenPass(g, name, {shader, color, reads})` | 逻辑 / **extension point** | 通用全屏后处理原语——**这是 AI 用户扩展引擎渲染管线的唯一公开通道**。两步 idiom：(1) `renderer.postProcess.register(id, {source, params, reads})` 注册 `PostProcessShaderEntry`（注册冲突 throw `PostProcessError{code:'post-process-already-registered'}`，programmer-error fail-fast）；(2) `addFullscreenPass(g, 'pp', {shader: id, color: 'rt'})` 在 graph 拓扑里引用该 id。dispatcher 帧内 lookup 走 `runtime.lookupPostProcess`：命中 → `buildFullscreenPostProcessPass` + `createFullscreenBindGroup` 装配 BGL/sampler/bindgroup；miss → **throw** `PostProcessError{code:'post-process-not-found'}`（charter P3 结构化失败，AI 用户经 `err.code` 属性访问分流，**非** `Result.err`——dispatcher 是 throw 通道，与 pipeline-errors.ts 模板对齐）。`'fxaa'` id 是 dispatcher 内置硬连分支（delegate `recordFxaaPass`，保 R-COLORSPACE 字节等价）；其它 id 都走 AI 用户路径 |
-| `forgeax::urp` | 逻辑（dogfood worked example） | 引擎自带的标准前向管线（`packages/runtime/src/urp-pipeline.ts`）：9-pass 链 shadow / skybox / main / 4×bloom / tonemap / fxaa。**经同一公开 `addColorTarget` / `addScenePass` / `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` / `addFullscreenPass` 词汇**写出（feat-20260604 M3 / w21 重写：source 不再 import 任何私有 `record*Pass`，AC-12 grep 0）——要写自定义管线照它抄 |
+| `addFullscreenPass(g, name, {shader, color, reads, compositeOverSwapchain})` | 逻辑 / **extension point** | 通用全屏后处理原语——**这是 AI 用户扩展引擎渲染管线的唯一公开通道**。两步 idiom：(1) `renderer.postProcess.register(id, {source, params, reads})` 注册 `PostProcessShaderEntry`（注册冲突 throw `PostProcessError{code:'post-process-already-registered'}`，programmer-error fail-fast）；(2) `addFullscreenPass(g, 'pp', {shader: id, color: 'rt'})` 在 graph 拓扑里引用该 id。dispatcher 帧内 lookup 走 `runtime.lookupPostProcess`：命中 → `buildFullscreenPostProcessPass` + `createFullscreenBindGroup` 装配 BGL/sampler/bindgroup；miss → **throw** `PostProcessError{code:'post-process-not-found'}`（charter P3 结构化失败，AI 用户经 `err.code` 属性访问分流，**非** `Result.err`——dispatcher 是 throw 通道，与 pipeline-errors.ts 模板对齐）。`'fxaa'` id 是 dispatcher 内置硬连分支（delegate `recordFxaaPass`，保 R-COLORSPACE 字节等价）；其它 id 都走 AI 用户路径。**`compositeOverSwapchain: true`（feat-20260621 M4′）**：pass 先把当前 swap-chain copy 进 `color` scratch（effect 因此采样**已合成的最终像素**：阴影+tonemap+fxaa 之后），再经 swap-chain 的 **non-srgb storage view** 写回（R-COLORSPACE，同 `recordFxaaPass`，避免双重 sRGB 编码）。这是把内建 FXAA copy idiom 泛化成 AI-user effect 的机制——让内建管线在**不替换自身**（即不丢弃 shadow/tonemap pass）的前提下叠加注册 effect；`color` 须 `addColorTarget` 声明为 swap-chain 存储格式 + `COPY_DST | TEXTURE_BINDING` usage，`reads` 留空。**仅 WebGPU 后端**：帧中读 swap-chain（copy + non-srgb storage-view 写回）WebGL2 fallback swap-chain 不支持（无 COPY_SRC / 无 non-srgb 复用 view），与内建 FXAA 同限制 |
+| `forgeax::urp` | 逻辑（dogfood worked example） | 引擎自带的标准前向管线（`packages/runtime/src/urp-pipeline.ts`）：9-pass 链 shadow / skybox / main / 4×bloom / tonemap / fxaa。**经同一公开 `addColorTarget` / `addScenePass` / `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` / `addFullscreenPass` 词汇**写出（feat-20260604 M3 / w21 重写：source 不再 import 任何私有 `record*Pass`，AC-12 grep 0）——要写自定义管线照它抄。**`config.postEffects: string[]`（feat-20260621 M4′）**：安装时传入的注册 post-process id 列表，URP 在 fxaa 之后、debug-overlay 之前按序 `addFullscreenPass(..., {compositeOverSwapchain:true})` 逐个叠加（AUGMENT，非 REPLACE）——内建 9-pass 链不变，effect 叠在最终图像上。这是「在 URP 之上加后处理且**保留阴影**」的正道：`installPipeline({pipelineId:'forgeax::urp', config:{postEffects:[id]}})`。对比之下，安装一条全自定义管线会**整体替换** URP（连带丢弃其 shadow pass）——shadow demo 切忌。**仅 WebGPU 后端**（mid-frame swap-chain 读，同 `compositeOverSwapchain` 限制）；非 WebGPU 设备留空 |
 
 **dogfood / hot-swap 时序（末尾论证）：**
 
@@ -371,18 +473,43 @@ renderer.installPipeline(hdrpAsset).unwrap();   // D-17: POD directly, no regist
 
 **SsaoUniform 字节布局**（host SSOT：`SSAO_UNIFORM_BYTES = 256`、`SSAO_UNIFORM_INTENSITY_OFFSET = 192`）：3 mat4 (192 B) + vec4 intensityPad (16 B) + 48 B 末尾 padding，per-frame `writeBuffer` 一次性更新整块；这条 UBO 只挂在 SSAO compute pipelines 的 group(0) 上（compute shader 不读 intensityPad，但写仍保留以维持 256 B 对齐与单次 transfer）。lighting 路径上的 intensity 来源已迁到 `cluster_uniform.near_far_log.w`（见上方 binding 6 表格行）。
 
-**错误码**（`PostProcessErrorCode` closed union）：
+**错误码**（`PostProcessErrorCode` closed union，8 成员；SSOT `packages/runtime/src/post-process-errors.ts`）：
 
 | code | detail | 触发条件 |
 |:--|:--|:--|
 | `ssao-radius-non-positive` | `{ paramName: 'radius', value: number }` | `radius <= 0` |
 | `ssao-bias-negative` | `{ paramName: 'bias', value: number }` | `bias < 0` |
 | `ssao-storage-buffer-unavailable` | `{ missingCap: 'storageBuffer' }` | `Device.caps.storageBuffer === false` |
+| `params-size-mismatch` | `{ byteSize, actualLength }` | `postProcess.register({params})` 时 `byteSize < 16`（`.hint` 含最小 16 B 指引）或 `defaultValue.length !== byteSize`——register 阶段 fail-fast（feat-20260621 D-4） |
+| `params-update-size-mismatch` | `{ byteSize, actualLength }` | 数据驱动每帧写入时 `PostProcessParams.data` 的 byteLength !== 注册 `params.byteSize`——`dispatchFullscreenPass` 写入前 fail-fast（feat-20260621 D-4） |
+
+（其余 3 个成员 `post-process-already-registered` / `post-process-not-found` / `fullscreen-input-not-found` 见 §`addFullscreenPass` 行。）
+
+### 自定义 post-process params（数据驱动活字段）
+
+`PostProcessShaderEntry.params` 是**活字段**（feat-20260621）：声明 `{ byteSize, defaultValue }` 后，引擎在 `postProcess.register(id, {source, params, reads})` 时 eager-create 一个 per-id params UBO（`byteSize >= 16`，初值 `defaultValue`），并把 BGL 升为 3-entry `@group(1)`：`texture@0 + sampler@1 + buffer@2`。`entry.params === undefined` 时退化 2-entry（texture@0 + sampler@1），所有无 params 的 consumer（FXAA / gamma / framebuffers）零回归。
+
+每帧更新走**数据驱动**，非命令式 setter：在实体上挂 `PostProcessParams { shader: id, data }` 组件，每帧改 `data`（`AllowSharedBufferSource`）——extract 阶段收集成 `Map<shaderId, bytes>` snapshot，`dispatchFullscreenPass` 查表 → byteLength 复检（不符抛 `params-update-size-mismatch`）→ `queue.writeBuffer` 到该 UBO。心智模型与 `Camera.exposure` / `Transform` / lights「改组件 → 每帧生效」完全同构。
+
+```ts
+renderer.postProcess.register('mypkg::vignette', {
+  source: vignetteWgsl,           // WGSL 在 @group(1) @binding(2) 声明 var<uniform> params
+  params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+  reads: ['offscreenColor'],
+})
+world.spawn({
+  component: PostProcessParams,
+  data: { shader: 'mypkg::vignette', data: Float32Array.of(intensity, 0, 0, 0) },
+}) // data 接受任意 AllowSharedBufferSource（Float32Array / ArrayBuffer / Uint8Array）
+```
 
 ## Render flow（zero-config 默认 vs `tonemap='reinhard-extended'` opt-in）
 
 > [!IMPORTANT]
 > 默认路径（`Camera.tonemap === 'none'`，schema 默认值 `0`）保持 zero-overhead——几何 pass 直接写入 swap-chain `bgra8unorm-srgb` view，不分配任何 HDR 资源、不跑额外 pass。`Camera.tonemap === 'reinhard-extended'` 是 opt-in 路径——record 阶段读 `CameraSnapshot.tonemap` 后把几何 pass 路由到 per-renderer `rgba16float` HDR offscreen attachment（lazy alloc / resize-aware），然后在 swap-chain srgb view 上跑 fullscreen tonemap pass（`packages/shader/src/tonemap.wgsl` + `fullscreen_triangle()` SSOT）。两条路径**只在 record 阶段分流**，extract / prepare 完全共享。
+
+> [!NOTE]
+> **内建 tonemap 走统一 post-process params 通道**（feat-20260621 M-A3 / D-5）：`Camera.exposure` / `whitePoint` / `tonemap` 保留为 AI 用户面 SSOT（不改不删），但引擎内部不再为 tonemap 维护专用 pipeline / BGL / 16 B UBO——`forgeax::tonemap` 通过 `postProcess.register({source: tonemap.wgsl, params})` 注册到上文「自定义 post-process params」同一条数据驱动通道；extract 阶段引擎自身作为 provider 把 `Camera.exposure/whitePoint/tonemap` 打包成该 shader 的 16 B `data` 写入 snapshot。tonemap.wgsl 的 binding 也随之迁到 `@group(1) binding(0/1/2)`。这消除了「`Camera.exposure` vs `postProcess.register({params})` 两条 exposure 通道」的概念负担（compression == intelligence）。AI 用户心智模型不变：仍只改 `Camera.exposure`。
 
 ```mermaid
 flowchart LR
@@ -657,7 +784,7 @@ import {
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
 | `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
-| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity`（7 f32） | 0 light = unlit fallback（合法，不 fire onError） |
+| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + nearPlane + farPlane + pcfKernelSize`（9 f32 shadow params，feat-20260621 merge） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
 
 **错误分档表**（与 AGENTS.md `§ECS render bridge` 错误分档表同结构 SSOT；AI 用户 `renderer.onError(err => switch(err.code) {...})` 主消费方式 + `await renderer.ready` 主 reject 方式）：
 
@@ -787,13 +914,38 @@ renderer.onError((e: RhiError) => {
 
 | 分桶 | 规则 | 命中 component |
 |:--|:--|:--|
-| 单语义裸名 | drop `Component` suffix；命名直接表达单一语义 | `Transform` / `Camera` / `DirectionalLight` / `PointLight` / `SpotLight` / `Skylight` |
+| 单语义裸名 | drop `Component` suffix；命名直接表达单一语义 | `Transform` / `Camera` / `DirectionalLight`（含 shadow 字段，见下方 spawn 示例）/ `PointLight` / `SpotLight` / `Skylight` |
 | Unity 槽位 | `Filter` 槽位（资源选择）+ `Renderer` 槽位（材质 / 视觉绑定）后缀作 idiom 保留 | `MeshFilter` / `MeshRenderer` |
 | 关系组件持有者视角 | 名字 = 持有者对父的 verb / role；字段名与组件名互呼 | `ChildOf { parent: Entity }`（schema-vocab `'entity'`，relationship `mirror: 'Children'`，feat-20260514 M5/w18）/ `Children { entities: 'array<entity>' }`（feat-20260514-ecs-children-instances-managed-buffer-array：变长 `array<entity>` 取代 v1 OOS-04 的 `count: 'u32'` 计数 + 旧 `'entity[]'` 占位） |
 | 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.shadingModel` 路由 unlit / standard） |
 | 逐实体标志 | bool-ish `u8` 字段，默认为 1（opt-in culling），设为 0 禁用 | `MeshRenderer.frustumCulled`（`u8`）— per-entity opt-out of frustum culling |
 
 破坏性变更 row 见 [AGENTS.md §Breaking changes 2026-05-13](../../AGENTS.md#breaking-changes) 与 [§Breaking changes 2026-05-17 (Single MeshRenderer consolidation)](../../AGENTS.md#breaking-changes)。
+
+**`DirectionalLight` 合并 spawn 示例**（feat-20260621 -- shadow 字段并入灯光组件，无 `DirectionalLightShadow`）：
+
+```ts
+import { DirectionalLight } from '@forgeax/engine-runtime';
+
+// Zero-config（castShadow 默认为 true，4 级 cascade 全默认值）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+} }).unwrap();
+
+// 显式 shadow 配置（单组件，17 个字段）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
+  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+} }).unwrap();
+
+// 关闭阴影（castShadow: false，shadow 字段仍存但校验跳过）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0, directionY: -1, directionZ: 0,
+  castShadow: false,
+} }).unwrap();
+```
 
 ## Picking（屏幕 → 实体拾取）
 
@@ -1039,7 +1191,7 @@ world.spawn(
 
 ## Shadow mapping
 
-> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Cardinality cap: at most 1 `DirectionalLightShadow` component per world (N<=1). Without the component, the shadow pass is skipped and the main pass emits a once-warn.
+> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path + feat-20260621 merge -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Shadow parameters are **merged into `DirectionalLight`** via a `castShadow` boolean toggle (default `true`) -- a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts cascaded shadows by default. Setting `castShadow: false` skips the shadow pass silently (no error / no warn). There is no separate `DirectionalLightShadow` component; it was deleted (feat-20260621 M1-M6).
 
 ### Evolution
 
@@ -1049,22 +1201,36 @@ world.spawn(
 | LO 3.1.2 (M2) | feat-20260520 w12-w14 | single-sample shadow lookup (`textureSampleCompareLevel`) in `evalDirectional()` | acne + peter-panning present (baseline artifact) |
 | LO 3.1.3 (M3) | feat-20260520 w15-w16 | slope-scaled depth bias + 3x3 PCF in `evalDirectional()` | acne suppressed; soft shadow edges via 9-tap PCF kernel |
 | CSM unique path | feat-20260613 w1-w29 | N-cascade tile atlas (mapSize x N stride x mapSize) + per-cascade frustum-fit (PSSM split, lambda-blended) + per-fragment cascade selection with linear blend; `cascadeCount=1` degenerates without a fallback path | single-cascade legacy fields (`orthoHalfExtent`, `lightSpaceMatrix`) gone; 4-cascade is default |
+| Merge into DirectionalLight | feat-20260621 M1-M6 | Shadow params merged into `DirectionalLight` (castShadow gate + 9 f32 shadow fields); `DirectionalLightShadow` component deleted; no cardinality cap | single-component spawn; `data: {}` enables shadows by default |
 
-### DirectionalLightShadow component
+### DirectionalLight shadow fields (merged, feat-20260621)
 
-9-field schema registered on the same entity as `DirectionalLight`. The shadow pass binds them by entity, not by world-scope; spawning on separate entities triggers a once-warn (`RuntimeErrorCode 'shadow-disabled-by-missing-component'`) and the shadow silently does not appear. Spawning >1 fails fast with `EcsErrorCode 'cardinality-exceeded'`. Field validation failures emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
+Shadow parameters live **directly on `DirectionalLight`** -- no separate component. `castShadow` defaults to `true`: a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts 4-cascade CSM shadows with all defaults. Set `castShadow: false` to opt one light out of shadow rendering (shadow fields are still stored but validation is skipped). There is **no cardinality cap** -- the `DirectionalLight` component is first-hit-wins (same as before). Field validation failures (`castShadow === true` only) emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
+
+**Light fields** (7 f32):
+
+| Field | Default | Semantics |
+|:--|:--|:--|
+| `directionX/Y/Z` | 0, -1, 0 | Outgoing light direction (shader internally negates) |
+| `colorR/G/B` | 1, 1, 1 | Linear-space RGB |
+| `intensity` | 1 | Light intensity multiplier |
+
+**Shadow fields** (1 bool gate + 9 f32, migrated from deleted `DirectionalLightShadow`):
 
 | Field | Default | Semantics | Range |
 |:--|:--|:--|:--|
+| `castShadow` | `true` | Does this light compute a shadow map? `false` skips the shadow pass (silent, no error/warn) | `bool` |
 | `cascadeCount` | 4 | Number of cascade tiles in the atlas. `1` degenerates to a single-tile path through the same WGSL kernel | integer in `[1, 4]` |
 | `splitLambda` | 0.75 | PSSM split weight: `0` = uniform (linear in view-space depth), `1` = log (denser splits near camera) | `[0, 1]` |
 | `cascadeBlend` | 0.2 | Fraction of each cascade's view-space slab over which the WGSL sampler linearly blends to the next cascade. `0` = hard transitions, `0.5` = full overlap | `[0, 0.5]` |
 | `mapSize` | 2048 | Per-cascade tile resolution (NxN). Atlas is `mapSize x cascadeCount` wide x `mapSize` tall, depth32float | `>= 1`; power-of-two recommended |
-| `depthBias` | 0.005 | Pipeline-side bias floor (shader-side slope-scaled bias dominates) | `>= 0` |
-| `normalBias` | 0.05 | Reserved for future normal-offset bias | `>= 0` |
+| `depthBias` | 0.005 | Constant depth-bias floor. Shader bias is `max(normalBias * (1 - N.L), depthBias)` — `depthBias` wins on faces near-perpendicular to the light; wired via the `view.depthBias` View UBO tail-pad lane | `>= 0` |
+| `normalBias` | 0.05 | Slope-scaled bias: scales the `1 - N.L` term so grazing-angle faces get more bias (reduces shadow acne). Wired via the `view.normalBias` View UBO tail-pad lane and consumed by `lighting-directional.wgsl` | `>= 0` |
 | `nearPlane` | 0.1 | Camera frustum near plane fed to PSSM split (must match `Camera.nearPlane`) | `> 0` |
 | `farPlane` | 50 | Camera frustum far plane fed to PSSM split (caps shadow visibility distance) | `> nearPlane` |
-| `pcfKernelSize` | 3 | Reserved for future variable PCF kernel; current shader hard-codes 3x3 | `odd, >= 1` |
+| `pcfKernelSize` | 3 | PCF kernel size (odd, 1/3/5): drives the directional shadow PCF tap kernel via the `view.pcfKernelSize` View UBO tail-pad lane. `1` = hard edge (single tap), `3` = soft (9 taps), `5` = softer (25 taps); values clamp to MAX_PCF_HALF=2 | `odd, >= 1` |
+
+**Two-level `castShadow` disambiguation**: there are TWO `castShadow`-like concepts in the engine. (1) `DirectionalLight.castShadow` -- the **light-side toggle**: does this light compute/render a shadow map at all? `false` means the shadow atlas is not populated and the shader receives `shadowFactor = 1.0` (full light, no occlusion). (2) The **material/renderer-level ShadowCaster pass** -- whether a mesh writes into the shadow atlas. A mesh using `MaterialAsset` with a `passKind='shadow-caster'` pass (auto-generated by `Materials.standard(...)`) will be drawn into the shadow depth passes. A mesh whose material lacks that pass (e.g. hand-rolled custom material) silently does NOT write the atlas -- shadows won't occlude even when `castShadow` is `true`.
 
 Per-cascade frustum-fit (D-1, replaces the legacy fixed `orthoHalfExtent`): the camera frustum is split along view-space depth using PSSM with `splitLambda`; each cascade's 8 frustum corners are AABB-fit in light-space to derive the orthographic projection bounds. The camera projection variant (perspective vs orthographic) is honoured -- orthographic cameras feed `mat4.orthographic` to corner generation, perspective feeds `mat4.perspective`.
 
@@ -1084,23 +1250,26 @@ Slope-scaled bias (shader, `lighting-directional.wgsl::evalDirectional()`):
 ### Spawn example
 
 ```ts
-import { DirectionalLight, DirectionalLightShadow } from '@forgeax/engine-runtime';
+import { DirectionalLight } from '@forgeax/engine-runtime';
 
-// 4-cascade default (recommended baseline):
-world.spawn(
-  { component: DirectionalLight, data: { directionX: 0.2, directionY: -0.98, directionZ: 0,
-                                          colorR: 1, colorG: 1, colorB: 1, intensity: 1 } },
-  { component: DirectionalLightShadow, data: { cascadeCount: 4, splitLambda: 0.75,
-                                                cascadeBlend: 0.2, mapSize: 2048,
-                                                nearPlane: 0.1, farPlane: 50 } },
-).unwrap();
+// Zero-config: 4-cascade CSM with all defaults (castShadow defaults to true)
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+} }).unwrap();
 
-// cascadeCount=1 degenerate (compact scenes / low-budget devices):
-// Same WGSL path as 4-cascade -- no fallback shader variant.
-world.spawn(
-  { component: DirectionalLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
-  { component: DirectionalLightShadow, data: { cascadeCount: 1, mapSize: 1024 } },
-).unwrap();
+// Explicit config (all shadow fields on the same component):
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
+  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+} }).unwrap();
+
+// Opt out of shadows (still one component):
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0, directionY: -1, directionZ: 0,
+  castShadow: false,
+} }).unwrap();
 ```
 
 ### Knowledge base
@@ -1109,7 +1278,7 @@ See [.forgeax-harness/knowledge-base/wiki/learnopengl-as-evolution-roadmap.md](.
 
 ### PointLightShadow component (URP + HDRP)
 
-> feat-20260612-point-light-shadows-urp-hdrp M1-M5 — omnidirectional cube-map shadows for point lights, dual-pipeline (URP forward + HDRP cluster-forward). Cardinality cap = 4 shadow-casting point lights per world (cube_array atlas layers = 4). Spawn `PointLightShadow` on the same entity as `PointLight`; mismatched entities are silently skipped (same once-warn pattern as `DirectionalLightShadow`). Spawning a 5th `PointLightShadow` fails fast with `EcsErrorCode 'cardinality-exceeded'`.
+> feat-20260612-point-light-shadows-urp-hdrp M1-M5 — omnidirectional cube-map shadows for point lights, dual-pipeline (URP forward + HDRP cluster-forward). Cardinality cap = 4 shadow-casting point lights per world (cube_array atlas layers = 4). Spawn `PointLightShadow` on the same entity as `PointLight`; mismatched entities are silently skipped. Spawning a 5th `PointLightShadow` fails fast with `EcsErrorCode 'cardinality-exceeded'`. Note: `DirectionalLight` shadow params are merged into the light component (see above); `PointLightShadow` remains a separate component.
 
 6-field schema (defaults preserve LearnOpenGL 3.2 reference parameters):
 
@@ -1120,9 +1289,9 @@ See [.forgeax-harness/knowledge-base/wiki/learnopengl-as-evolution-roadmap.md](.
 | `normalBias` | 0.05 | Reserved for future normal-offset bias (R-3 parity with directional) | `>= 0` |
 | `nearPlane` | 0.1 | Cube perspective near plane (fov=90, aspect=1) | `> 0` |
 | `farPlane` | 25 | Cube perspective far plane | `> nearPlane` (validate fails otherwise) |
-| `pcfKernelSize` | 3 | Reserved for future variable PCF kernel; M3-M4 hard-codes 3x3 | `odd, >= 1` |
+| `pcfKernelSize` | 3 | PCF kernel size (odd >= 1). Note: point shadows use hardware 2x2 PCF, so this field does not affect the point-light tap count (the dynamic kernel lands on directional shadows only) | `odd, >= 1` |
 
-`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (`RuntimeErrorCode 'shadow-invalid-config'`, shared with `DirectionalLightShadow`) on `mapSize < 1` or `farPlane <= nearPlane`. The closed `RuntimeErrorCode` union is unchanged — point shadows reuse the directional surface (charter P4 closed-union SSOT).
+`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (`RuntimeErrorCode 'shadow-invalid-config'`, shared with `DirectionalLight.validate()`) on `mapSize < 1` or `farPlane <= nearPlane`. The closed `RuntimeErrorCode` union is unchanged -- point shadows reuse the directional surface (charter P4 closed-union SSOT).
 
 #### URP vs HDRP atlas binding contract
 
@@ -1438,6 +1607,8 @@ ECS-native writes via `world.set`, prefab-diff via `setSceneOverride`.
 | `lookup(guid)` | `(AssetGuid \| string) => Asset \| undefined` | Synchronous catalogue lookup; `undefined` on miss. Used render-side (e.g. `walkMaterialPassesOverSharedRefs`) to resolve a payload's embedded sub-asset GUIDs (D-19) without minting. |
 | `parseGuid(guidStr)` | `(string) => AssetGuid` | Parse a dash-form GUID; throws `AssetError` (`asset-parse-failed`) on a malformed literal (author-supplied, eager validation). |
 | `inspect()` | `() => InspectSnapshot` | Runtime catalogue snapshot for the inspector. |
+| `invalidate(guid)` | `(string) => void` | Remove a single GUID from the catalogue + in-flight map, delete its cached pack-file body (by the index entry's relativeUrl) + its pack-index entry (targeted; other GUIDs' entries survive), bump its per-GUID generation. The next loadByGuid performs a genuinely fresh fetch. No-op on unknown GUID. Does not release GPU resources (OOS-1). |
+| `invalidateAll()` | `() => { clearedCount: number }` | Clear the entire catalogue + in-flight map + packFileCache, reset packIndexCache to undefined (forcing a fresh pack-index fetch on the next load), bump global generation. Returns the number of entries cleared before the call. Idempotent. Does not release GPU resources (OOS-1). |
 | `configurePackIndex(url)` | `(string) => void` | Wire the pack-index URL for `loadByGuid`'s prod fetch path. Required before any prod-path `loadByGuid` call (build emits `pack-index.json`); dev path falls back to the in-memory catalogue. Idempotent — calling again resets the catalog cache (feat-20260517 D-2). |
 
 **Deleted by D-17** (no deprecation alias): `register` / `registerWithGuid` / `resolveGuid` / `guidOf` / `get(handle)` / `kindOf` / `resolveRefSync` + the handle<->guid maps (`guidToHandle` / `handleToGuid`) + `nextHandle`. `AssetRegistry` is math-/handle-free; resolution moved entirely ECS/render-side (see below).
@@ -1629,6 +1800,224 @@ Counter key namespace is dot-delimited (mirrors `forgeax.metrics.*` build-time M
 |:--|:--|:--|
 | UI panel with rounded corners that should NOT distort | `0` (stretch) | Corners pixel-fixed at any `Transform.scale`; centre stretches; edges stretch on their major axis only. |
 | Brick / wall / fabric texture that should repeat | `1` (tile) | Centre cell repeats `floor(size_xy / cell_size_xy)` times along each axis; sampler `addressMode='repeat'` required. |
+
+## Tilemap
+
+> feat-20260604-tilemap-2d-grid-layer-renderer-ecs-component (M0 baseline) +
+> feat-20260608-tilemap-object-layer-rendering (M1-M3 multi-cell + multi-atlas).
+> Tilemap is forgeax's regular-grid scene path: one `Tilemap` parent entity
+> + N `TileLayer` children carrying dense `Uint32Array` cell buffers. The
+> chunk-extract system spawns one transparent-bucket entity per non-zero
+> cell, riding the same `TransparentEntry` queue as standalone sprite
+> entities (charter P4 consistent abstraction — see §Transparent sort).
+> Variable-size decoration (trees, rocks, props) lives under §Object layer
+> below — same tilemap path, no parallel sprite-entity sibling.
+
+### Components (M0 baseline)
+
+| Component | Schema | Role |
+|:--|:--|:--|
+| `Tilemap` | `cols / rows: u32`, `tileSizeX / tileSizeY: f32`, `tileset: handle<TilesetAsset>`, `chunkSize: u32` | Parent entity carrying the grid dimensions + tileset reference. One per scene typically. |
+| `TileLayer` | `tiles: array<u32>`, `layerOrder: i32`, `dirty: u8` | Child entity (via `ChildOf parent=<tilemapEntity>`) carrying one dense `cols * rows` cell sheet. Cell value 0 = empty; non-zero encodes tile id + flip bits via `encodeTileBits(id, flipH, flipV, flipDiagonal, flipHex120)`. |
+| `pickTile(world, tilemapEntity, worldX, worldY)` | helper | Returns `{ layerEntity, cellX, cellY, tileId } | null` for the topmost non-zero cell at a world coordinate. |
+
+`TileLayer.tiles[cell]` encodes `tileId + 1` (engine reads
+`tileset.tiles[(value) - 1]`); cell value `0` is the empty-cell
+sentinel and never indexes into the tileset.
+
+The chunk-extract system reads `markTileLayerDirty(world, layerEntity)`
+to detect when a layer needs full re-spawn of its derived per-cell
+entities. The first frame after spawn rebuilds unconditionally
+(charter F1 first-frame heuristic).
+
+### Form 1 - unit-cell baseline (M0 / hello-tilemap)
+
+The simplest tileset: one atlas + N regions matching the atlas grid
++ one tile entry per region. All defaults apply (`widthCells=1`,
+`heightCells=1`, `pivotX=0.5`, `pivotY=0.5`, no collider).
+
+```ts
+const tilesetRes = assets.register<TilesetAsset>({
+  kind: 'tileset',
+  guid: 'demo/unit-cell',
+  atlases: [atlasHandle],
+  tileWidth: 16,
+  tileHeight: 16,
+  columns: 4,
+  rows: 4,
+  regions: [
+    { x: 0,  y: 0, width: 16, height: 16 },
+    { x: 16, y: 0, width: 16, height: 16 },
+  ],
+  tiles: [
+    { regionIndex: 0 },
+    { regionIndex: 1 },
+  ],
+});
+
+world.spawn(
+  { component: Transform, data: {} },
+  { component: Tilemap, data: { cols: 8, rows: 8, tileSizeX: 1, tileSizeY: 1, tileset: tilesetRes.value } },
+);
+```
+
+### Form 2 - multi-cell + custom pivot (feat-20260608 M2)
+
+Tile entries carry optional `widthCells` / `heightCells` (extent in
+cells, default 1) plus `pivotX` / `pivotY` in [0, 1] (default 0.5,
+foot anchor at `pivotY=0.2`-ish for top-down sprites). The chunk-
+extract system computes effective pivot under H/V/D flip
+(`effectivePivot = flipV ? 1 - pivotY : pivotY`, mirror for X; D flip
+swaps X/Y) so foot anchors stay stable when the cell carries flip
+bits (AC-10 falsifier).
+
+```ts
+const treeTileset: TilesetAsset = {
+  kind: 'tileset',
+  guid: 'demo/object-anchor',
+  atlases: [oakAtlas],
+  tileWidth: 16,
+  tileHeight: 16,
+  columns: 4,
+  rows: 4,
+  regions: [
+    { x: 0,  y: 0, width: 50, height: 49 },   // large tree atlas rect
+    { x: 64, y: 0, width: 32, height: 38 },   // mid tree atlas rect
+  ],
+  tiles: [
+    // large tree: 3 cells wide, 4 cells tall, foot anchor at 20% from bottom
+    { regionIndex: 0, widthCells: 3, heightCells: 4, pivotX: 0.5, pivotY: 0.2 },
+    // mid tree: 2 cells wide, 3 cells tall, foot anchor lower
+    { regionIndex: 1, widthCells: 2, heightCells: 3, pivotX: 0.5, pivotY: 0.15 },
+  ],
+};
+```
+
+### Form 3 - multi-atlas + collider schema (feat-20260608 M1/M3)
+
+`atlases: readonly Handle<TextureAsset>[]` (length >= 1) carries one
+or more texture handles; each region routes via
+`regions[i].atlasIndex ?? 0` (NICE-4 three-hop:
+`tile.regionIndex -> regions[regionIndex] -> atlasIndex -> atlases[atlasIndex]`).
+Tile entries optionally carry `collider: TilesetTileCollider` for
+downstream physics / pathfinding (the engine validates the shape but
+does NOT consume it; consumers grep `tileset.tiles[i].collider`).
+
+```ts
+import type { TilesetAsset, TilesetTileCollider } from '@forgeax/engine-types';
+
+const sceneTileset: TilesetAsset = {
+  kind: 'tileset',
+  guid: 'demo/multi-atlas',
+  atlases: [terrainAtlas, objectAtlas],
+  tileWidth: 16,
+  tileHeight: 16,
+  columns: 4,
+  rows: 4,
+  regions: [
+    // terrain region on atlas 0 (atlasIndex omitted = 0)
+    { x: 0,  y: 0, width: 16, height: 16 },
+    // object region on atlas 1
+    { x: 0,  y: 0, width: 50, height: 49, atlasIndex: 1 },
+  ],
+  tiles: [
+    { regionIndex: 0 },
+    {
+      regionIndex: 1,
+      widthCells: 3,
+      heightCells: 4,
+      pivotX: 0.5,
+      pivotY: 0.2,
+      collider: { type: 'rect', rect: [0.3, 0.0, 0.4, 0.2] },
+    },
+  ],
+};
+```
+
+`TilesetTileCollider` is a closed three-variant union (charter P3 closed enum):
+
+| `type` | Payload | Validation |
+|:--|:--|:--|
+| `'none'` | (none) | always accepted |
+| `'rect'` | `rect: readonly [number, number, number, number]` (x, y, w, h in [0, 1]) | `x + w <= 1`, `y + h <= 1`, `w > 0`, `h > 0` |
+| `'polygon'` | `points: readonly (readonly [number, number])[]` | `points.length >= 3`; each point in [0, 1]^2 |
+
+Out-of-range fields surface as `AssetError { code: 'tileset-tile-entry-malformed', detail.field: 'widthCells' | 'heightCells' | 'pivotX' | 'pivotY' | 'collider' | 'atlases' | 'atlasIndex' }` at `assets.register<TilesetAsset>` time (closed enum; AI users consume `.detail.field` directly, no string parsing — charter P3).
+
+### Form 4 - anchor-cell `TileLayer`
+
+For multi-cell tile entries the `TileLayer.tiles` buffer carries the
+tile id only at the **anchor cell** (`(cellX + pivotX, cellY + pivotY)`
+in cell units). The chunk-extract system spawns the multi-cell quad
+from that single cell write; downstream cells covered by the quad
+stay 0 in the layer buffer.
+
+```ts
+const tiles = new Uint32Array(cols * rows);
+// anchor a 3x4 large tree at cell (15, 7) — only one cell write
+tiles[7 * cols + 15] = encodeTileBits(2 /* tileId */, false, false, false, false);
+
+world.spawn(
+  { component: TileLayer, data: { tiles, layerOrder: 1000 } },
+  { component: ChildOf, data: { parent: tilemapEntity } },
+);
+```
+
+`layerOrder` controls inter-layer draw order in the per-cell
+`TransparentEntry` queue: layers with higher `layerOrder` paint
+above lower ones (`Layer.value = (layerOrder << 20) | chunkIndex`
+encoding). Use a comfortable gap (e.g. terrain layerOrder=0, object
+layerOrder=1000) so terrain chunks always rank below object cells.
+
+### Object layer
+
+> The "object layer" path — drawing variable-size, custom-pivot decoration
+> objects (trees / rocks / props / bridges) on top of a tile grid — lives
+> entirely inside the tile-grid path now (feat-20260608-tilemap-object-layer-rendering).
+> Before M0 those objects rode the per-instance sprite-entity path (one
+> `MaterialAsset` + one `MeshFilter / MeshRenderer / Layer / Transform`
+> entity per instance). M0-M3 introduced the `widthCells / heightCells /
+> pivotX / pivotY` tile-entry fields + per-entity Y-sort key so a single
+> `TileLayer` carries them; M4 migrated `apps/hello/asi-world` end-to-end.
+
+**Architecture record - two paths coexist.** forgeax explicitly
+acknowledges two independent "visible thing" paths; AI users pick
+based on a two-question decision tree (`requirements.md` §架构记录
+also carries the mermaid version):
+
+| Question | Answer | Path |
+|:--|:--|:--|
+| Position aligned to a tile-grid cell? | No (free placement) | sprite / per-entity path |
+| Position aligned to a tile-grid cell? | Yes | proceed |
+| Needs independent runtime state (HP / AI / inventory / dialog)? | Yes (per-instance state) | sprite / per-entity path |
+| Needs independent runtime state? | No (pure decoration / shared tileset data) | **tile-grid path (Object layer)** |
+
+The OOS-positive stance: forgeax explicitly **rejects** the "everything
+on the tilemap" design — industry consensus (Tiled object layer / Unity
+GameObject Tile / Godot 4 `y_sort_origin` / Bevy `bevy_ecs_tilemap` /
+cocos2d-x `objectgroup`) plus asi_world `terrain.json`'s own
+`cells` / `objects` split confirm the dual-path is the correct
+abstraction. AI users should not have to ask "why are we not unifying?".
+
+**asi_world `.tsj` flavor (D-9 phrasing fix).** The 153-entry per-tile
+`pivot` + `collider` schema in `apps/hello/asi-world/public/world/object_atlas.tsj`
+is an **asi_world `.tsj` extension** — the upstream Tiled native
+`.tsj` exports per-tile colliders through `<objectgroup>` and does
+not carry a `pivot` field on tile entries (Tiled object pivot lives on
+the placement instance, not the atlas tile). The forgeax
+`TilesetTileEntry { widthCells / heightCells / pivotX / pivotY /
+collider }` surface is engine-native and only happens to map asi_world
+`.tsj` 1:1; downstream consumers using upstream Tiled `.tsj` need to
+fold tile-collision objectgroup data into the `collider` field
+themselves at import time.
+
+**End-to-end demo entry points:**
+
+| Demo | What it shows |
+|:--|:--|
+| `apps/hello/tilemap` | Form 1 unit-cell baseline + dawn-node pixel-readback gate (M0 baseline) |
+| `apps/hello/tilemap-object-layer` | 5-sub-scene directed fixture: chunk-boundary z-fight + flip x pivot + multi-atlas + unit-cell baseline + sprite x tilemap world-Y interleave (M3 directed gate) |
+| `apps/hello/asi-world` | Real data: asi_world test2-b30f5a terrain (55x56 grid, 134 terrain tiles) + 779 placed objects (153 object atlas entries with widthCells / heightCells / pivot / collider) on a single shared `Tilemap` parent |
 
 ## Transparent sort
 

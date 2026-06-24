@@ -16,6 +16,7 @@
 import type {
   BindGroup,
   BindGroupLayout,
+  Buffer,
   RhiDevice,
   RhiError,
   RhiRenderPassEncoder,
@@ -60,14 +61,18 @@ export interface PostProcessShaderEntry {
   /** Composed WGSL source for the fragment stage (post-naga_oil). */
   readonly source: string;
   /**
-   * Params UBO schema. When undefined, the shader has no uniform buffer (e.g. FXAA).
-   * When present, the primitive creates a params UBO at the declared size and
-   * binds it at bindgroup(1) binding(0).
+   * Params UBO schema. When undefined, the shader has no uniform buffer (e.g. FXAA)
+   * and the BGL degrades to 2 entries (texture@0 + sampler@1). When present, the
+   * primitive eager-creates a params UBO (at register, sized `byteSize`) and binds
+   * it at bindgroup(1) binding(2) as part of a 3-entry BGL
+   * (texture@0 + sampler@1 + buffer@2). feat-20260621 M-A2 / D-2.
    */
   readonly params?: PostProcessParamsSchema | undefined;
   /**
    * Graph resource keys this post-process reads (as input textures).
-   * The primitive binds the first read as its input texture at bindgroup(0) binding(0).
+   * The primitive binds the first read as its input texture at @group(1)
+   * @binding(0) (the sampler is @group(1) @binding(1); group 0 is reserved for a
+   * future view bind group — dispatchFullscreenPass calls setBindGroup(1, ...)).
    * When empty or omitted, the pass reads the swap-chain directly.
    */
   readonly reads?: readonly string[] | undefined;
@@ -76,7 +81,10 @@ export interface PostProcessShaderEntry {
 /**
  * Params schema: the WGSL struct definition + default byte array for a post-process
  * UBO. The primitive allocates a GPU buffer of `byteSize` and uploads `defaultValue`
- * at creation time; the caller updates it per-frame via `setParams()` on the pass handle.
+ * at register time; the UBO is then updated per-frame via the data-driven
+ * `PostProcessParams` ECS component (component `data` -> extract snapshot ->
+ * dispatchFullscreenPass `queue.writeBuffer`), NOT via an imperative setter.
+ * feat-20260621 M-A1/M-A2 / D-1.
  */
 export interface PostProcessParamsSchema {
   /** Byte size of the WGSL params struct (must be UBO-aligned, min 16 B). */
@@ -103,8 +111,8 @@ export interface FullscreenPassDescriptor {
   readonly color: string;
   /**
    * Graph resource keys to read. The primitive binds the first read entry as its
-   * input texture (bindgroup(0) binding(0)). Passes with reads==[] sample the
-   * swap-chain directly (copyTextureToTexture path — plan-strategy D-1).
+   * input texture (@group(1) @binding(0); sampler @binding(1)). Passes with
+   * reads==[] sample the swap-chain directly (copyTextureToTexture path — plan-strategy D-1).
    */
   readonly reads?: readonly string[] | undefined;
 }
@@ -166,7 +174,14 @@ export interface FullscreenPostProcessPassHandle {
   /** The pass name (same as the `color` target key). */
   readonly name: string;
   /** Execute one fullscreen draw: bind input texture, set pipeline, draw 3 vertices. */
-  draw(encoder: RhiRenderPassEncoder, inputView: TextureView, paramsBuffer?: unknown): void;
+  draw(encoder: RhiRenderPassEncoder, inputView: TextureView): void;
+  /**
+   * The per-frame params UBO this pass binds at group(1) binding(2), or null
+   * when `entry.params === undefined` (param-less consumer, 2-entry BGL). The
+   * dispatcher writes the snapshot bytes into it before draw and composes it
+   * into the bind group via {@link createFullscreenBindGroup}.
+   */
+  readonly paramsBuffer: Buffer | null;
 }
 
 /**
@@ -180,24 +195,29 @@ export interface FullscreenPostProcessPassHandle {
  */
 export function buildFullscreenPostProcessPass(
   ctx: FullscreenPostProcessDeviceContext,
-  _entry: PostProcessShaderEntry,
+  entry: PostProcessShaderEntry,
 ): {
   bindGroupLayout: BindGroupLayout;
   sampler: Sampler | null;
   createHandle: (
     name: string,
     pipeline: unknown,
-    paramsBuffer?: unknown,
+    paramsBuffer: Buffer | null,
   ) => FullscreenPostProcessPassHandle;
 } | null {
   const { device } = ctx;
 
-  // Step 1: BGL (input texture + sampler).
+  // Step 1: BGL (input texture + sampler [+ params buffer]).
   // D-13 round-2: route through dispatcher; sampleType derives from
   // spec.attachments (R3 fix). Default spec yields the historical 'float'
   // / 'filtering' shape for color inputs.
+  // feat-20260621 D-2: when entry.params is present the BGL is the 3-entry
+  // 'fullscreen-post-with-params' kind (adds buffer@2 uniform); otherwise the
+  // 2-entry 'fullscreen-post' kind (param-less zero-regression, R-A7).
   const bglRes = device.createBindGroupLayout(
-    buildBindGroupLayoutDescriptor(FULLSCREEN_DEFAULT_SPEC, { kind: 'fullscreen-post' }),
+    buildBindGroupLayoutDescriptor(FULLSCREEN_DEFAULT_SPEC, {
+      kind: entry.params !== undefined ? 'fullscreen-post-with-params' : 'fullscreen-post',
+    }),
   );
   if (!bglRes.ok) {
     ctx.errorRegistry.fire(bglRes.error);
@@ -210,8 +230,9 @@ export function buildFullscreenPostProcessPass(
   return {
     bindGroupLayout: bglRes.value,
     sampler,
-    createHandle: (name, pipeline, _paramsBuffer) => ({
+    createHandle: (name, pipeline, paramsBuffer) => ({
       name,
+      paramsBuffer,
       draw(encoder, _inputView) {
         encoder.setPipeline(pipeline as never);
         // The bind group is composed per-frame by the record stage (mirrors
@@ -226,19 +247,32 @@ export function buildFullscreenPostProcessPass(
 
 /**
  * Create a fullscreen bind group (lazy, per-frame). Composes the input texture
- * view + the linear sampler into bindgroup(0).
+ * view + the linear sampler into group(1) (texture@0 + sampler@1). When
+ * `paramsBuffer` is supplied (feat-20260621 D-2: `entry.params !== undefined`),
+ * appends the per-frame params UBO at binding 2 (uniform), matching the 3-entry
+ * `'fullscreen-post-with-params'` BGL. Omitting it yields the 2-entry shape
+ * param-less consumers degrade to (R-A7).
  */
 export function createFullscreenBindGroup(
   device: RhiDevice,
   bgl: BindGroupLayout,
   inputView: TextureView,
   sampler: Sampler | null,
+  paramsBuffer?: Buffer | null,
 ): BindGroup | null {
   const entries: { binding: number; resource: { kind: string; value: unknown } }[] = [
     { binding: 0, resource: { kind: 'textureView', value: inputView } },
   ];
   if (sampler) {
     entries.push({ binding: 1, resource: { kind: 'sampler', value: sampler } });
+  }
+  if (paramsBuffer) {
+    // RHI buffer binding resource is `{ kind: 'buffer', value: { buffer } }` —
+    // the nested `{ buffer }` wrapper is the GPUBufferBinding shape dawn expects
+    // (mirrors createRenderer's shadow-probe UBO bindings). Passing the raw
+    // handle as `value` makes dawn reject createBindGroup ("no overload matched
+    // ... member 'resource' for array element 2").
+    entries.push({ binding: 2, resource: { kind: 'buffer', value: { buffer: paramsBuffer } } });
   }
   const res = device.createBindGroup({
     label: 'fullscreen-post-process-bg',

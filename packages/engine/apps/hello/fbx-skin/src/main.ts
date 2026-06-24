@@ -168,11 +168,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Camera + directional light. humanoid.fbx is in cm; ~150 unit body.
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 120, posZ: 250 } },
+      { component: Transform, data: { posX: 0, posY: 90, posZ: 520 } },
       {
         component: Camera,
         data: {
-          ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 1, far: 1000 }),
+          ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 1, far: 2000 }),
           clearR: 0,
           clearG: 0.4,
           clearB: 0.4,

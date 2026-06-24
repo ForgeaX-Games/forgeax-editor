@@ -601,18 +601,146 @@ import { WebAudioEngine } from '../web-audio-engine';
   }
 
   describe('audioTickSystem declarative playback (AC-02)', () => {
+    let OriginalAudioContext: typeof AudioContext;
+
+    beforeEach(() => {
+      OriginalAudioContext = globalThis.AudioContext;
+      vi.stubGlobal('document', {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      const mockCtor = vi.fn().mockImplementation(function AudioContextMock(this: unknown) {
+        return makeCompactMockCtx();
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: vitest global mock
+      globalThis.AudioContext = mockCtor as any;
+    });
+
+    afterEach(() => {
+      globalThis.AudioContext = OriginalAudioContext;
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    function makeCompactMockCtx(): AudioContext {
+      return {
+        state: 'running' as AudioContextState,
+        sampleRate: 48000,
+        destination: {
+          connect: vi.fn().mockReturnValue(undefined),
+          disconnect: vi.fn(),
+        } as unknown as AudioDestinationNode,
+        currentTime: 0,
+        listener: {
+          positionX: { value: 0 },
+          positionY: { value: 0 },
+          positionZ: { value: 0 },
+          forwardX: { value: 0 },
+          forwardY: { value: 0 },
+          forwardZ: { value: -1 },
+          upX: { value: 0 },
+          upY: { value: 1 },
+          upZ: { value: 0 },
+        } as unknown as AudioListener,
+        resume: vi.fn().mockResolvedValue(undefined),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        createGain: vi.fn(
+          () =>
+            ({
+              gain: { value: 1 },
+              connect: vi.fn().mockReturnValue(undefined),
+              disconnect: vi.fn(),
+            }) as unknown as GainNode,
+        ),
+        createBufferSource: vi.fn(
+          () =>
+            ({
+              buffer: null,
+              playbackRate: { value: 1 },
+              detune: { value: 0 },
+              loop: false,
+              loopStart: 0,
+              loopEnd: 0,
+              connect: vi.fn().mockReturnValue(undefined),
+              disconnect: vi.fn(),
+              start: vi.fn(),
+              stop: vi.fn(),
+              onended: null,
+              context: undefined,
+              numberOfInputs: 0,
+              numberOfOutputs: 1,
+              channelCount: 2,
+              channelCountMode: 'max' as const,
+              channelInterpretation: 'speakers' as const,
+              addEventListener: vi.fn(),
+              removeEventListener: vi.fn(),
+              dispatchEvent: vi.fn(),
+            }) as unknown as AudioBufferSourceNode,
+        ),
+        createPanner: vi.fn(
+          () =>
+            ({
+              panningModel: 'equalpower' as const,
+              distanceModel: 'inverse' as const,
+              refDistance: 1,
+              maxDistance: 10000,
+              rolloffFactor: 1,
+              coneInnerAngle: 360,
+              coneOuterAngle: 360,
+              coneOuterGain: 0,
+              positionX: { value: 0 },
+              positionY: { value: 0 },
+              positionZ: { value: 0 },
+              orientationX: { value: 1 },
+              orientationY: { value: 0 },
+              orientationZ: { value: 0 },
+              connect: vi.fn().mockReturnValue(undefined),
+              disconnect: vi.fn(),
+              context: undefined,
+              numberOfInputs: 1,
+              numberOfOutputs: 1,
+              channelCount: 2,
+              channelCountMode: 'clamped-max' as const,
+              channelInterpretation: 'speakers' as const,
+              addEventListener: vi.fn(),
+              removeEventListener: vi.fn(),
+              dispatchEvent: vi.fn(),
+            }) as unknown as PannerNode,
+        ),
+        decodeAudioData: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onstatechange: null,
+        baseLatency: 0,
+        outputLatency: 0,
+        getOutputTimestamp: vi.fn(),
+        createChannelMerger: vi.fn(),
+        createChannelSplitter: vi.fn(),
+        createDelay: vi.fn(),
+        createBiquadFilter: vi.fn(),
+        createConvolver: vi.fn(),
+        createDynamicsCompressor: vi.fn(),
+        createOscillator: vi.fn(),
+        createStereoPanner: vi.fn(),
+        createWaveShaper: vi.fn(),
+        createPeriodicWave: vi.fn(),
+        createIIRFilter: vi.fn(),
+        createScriptProcessor: vi.fn(),
+        createAnalyser: vi.fn(),
+        createMediaStreamDestination: vi.fn(),
+        createMediaStreamSource: vi.fn(),
+        createConstantSource: vi.fn(),
+        audioWorklet: undefined as unknown as AudioWorklet,
+      } as unknown as AudioContext;
+    }
+
     it('calls backend.play when a false->true edge is detected and buffer resolves', () => {
       const buffer = makeMockAudioBuffer();
-      const mockBackend = {
-        play: vi.fn(),
-        stop: vi.fn(),
-        setVolume: vi.fn(),
-        setBusVolume: vi.fn(),
-        setBusMute: vi.fn(),
-        getState: vi.fn(),
-        getActiveSourceCount: vi.fn(),
-        destroy: vi.fn(),
-      };
+
+      const engine = new WebAudioEngine();
+      const playSpy = vi.spyOn(engine, 'play');
 
       let storedPlaying = false;
       const clipHandle = 42;
@@ -629,31 +757,26 @@ import { WebAudioEngine } from '../web-audio-engine';
         // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       ) as any;
 
-      // Phase 1: first tick — entity playing:false, no edge
+      // Phase 1: first tick — entity playing:false, no edge (first observation)
       storedPlaying = false;
-      audioTickSystem(mockWorld, mockBackend);
-      expect(mockBackend.play).not.toHaveBeenCalled();
+      audioTickSystem(mockWorld, engine);
+      expect(playSpy).not.toHaveBeenCalled();
 
-      // Phase 2: host writes playing:true, second tick fires
+      // Phase 2: host writes playing:true, second tick fires -> false->true edge
       storedPlaying = true;
-      audioTickSystem(mockWorld, mockBackend);
+      audioTickSystem(mockWorld, engine);
 
       // Green assertion: backend.play must have been called
-      expect(mockBackend.play).toHaveBeenCalledTimes(1);
+      expect(playSpy).toHaveBeenCalledTimes(1);
+
+      engine.destroy();
     });
 
     it('passes the === registered AudioBuffer as second argument to backend.play', () => {
       const buffer = makeMockAudioBuffer();
-      const mockBackend = {
-        play: vi.fn(),
-        stop: vi.fn(),
-        setVolume: vi.fn(),
-        setBusVolume: vi.fn(),
-        setBusMute: vi.fn(),
-        getState: vi.fn(),
-        getActiveSourceCount: vi.fn(),
-        destroy: vi.fn(),
-      };
+
+      const engine = new WebAudioEngine();
+      const playSpy = vi.spyOn(engine, 'play');
 
       let storedPlaying = false;
       const clipHandle = 42;
@@ -670,25 +793,20 @@ import { WebAudioEngine } from '../web-audio-engine';
         // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       ) as any;
 
-      audioTickSystem(mockWorld, mockBackend);
+      audioTickSystem(mockWorld, engine);
       storedPlaying = true;
-      audioTickSystem(mockWorld, mockBackend);
+      audioTickSystem(mockWorld, engine);
 
-      expect(mockBackend.play).toHaveBeenCalledWith(expect.anything(), buffer, expect.anything());
+      expect(playSpy).toHaveBeenCalledWith(expect.anything(), buffer, expect.anything());
+
+      engine.destroy();
     });
 
     it('passes opts.bus === "sfx" as AudioSource default bus', () => {
       const buffer = makeMockAudioBuffer();
-      const mockBackend = {
-        play: vi.fn(),
-        stop: vi.fn(),
-        setVolume: vi.fn(),
-        setBusVolume: vi.fn(),
-        setBusMute: vi.fn(),
-        getState: vi.fn(),
-        getActiveSourceCount: vi.fn(),
-        destroy: vi.fn(),
-      };
+
+      const engine = new WebAudioEngine();
+      const playSpy = vi.spyOn(engine, 'play');
 
       let storedPlaying = false;
       const clipHandle = 42;
@@ -705,13 +823,15 @@ import { WebAudioEngine } from '../web-audio-engine';
         // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
       ) as any;
 
-      audioTickSystem(mockWorld, mockBackend);
+      audioTickSystem(mockWorld, engine);
       storedPlaying = true;
-      audioTickSystem(mockWorld, mockBackend);
+      audioTickSystem(mockWorld, engine);
 
-      const playCallArgs = mockBackend.play.mock.calls[0] as unknown[];
+      const playCallArgs = playSpy.mock.calls[0] as unknown[];
       const opts = playCallArgs[2] as { bus: string };
       expect(opts.bus).toBe('sfx');
+
+      engine.destroy();
     });
   });
 
@@ -1920,6 +2040,717 @@ import { WebAudioEngine } from '../web-audio-engine';
 
       it('returns play-stop on true->false transition', () => {
         expect(detectEdge(true, false)).toBe('play-stop');
+      });
+    });
+  });
+}
+
+{
+  // --- from tick-state-instance-scoped.test.ts (w7/w8/w9) ---
+  //
+  // F25 de-singleton: tickStates/prevFrameEntities move from module-level
+  // singletons into WebAudioEngine instance fields. These RED tests verify
+  // that the CURRENT module singleton causes cross-engine interference.
+  //
+  // After w10+w11 (instance fields + narrow), these tests turn GREEN:
+  //   w7 (AC-09): two engines have independent edge detection
+  //   w8 (AC-10): after destroy, new engine starts with clean tick state
+  //   w9 (AC-11): engine B's cleanup does not corrupt engine A's state
+
+  function makeTickTestBuffer(): AudioBuffer {
+    return { length: 1024, sampleRate: 44100, numberOfChannels: 1 } as unknown as AudioBuffer;
+  }
+
+  function buildTickTestWorld(
+    entity: number,
+    playingGetter: () => boolean,
+    clipHandle: number,
+    mockResolver: { resolve: ReturnType<typeof vi.fn> },
+  ) {
+    const audioSourceId = (AudioSource as unknown as Component).id;
+    const entityId = (Entity as unknown as Component).id;
+    const selfColumn = new Map([['self', { view: new Uint32Array([entity]) }]]);
+    return {
+      sharedRefs: mockResolver,
+      get(_entity: number, _component: Component) {
+        return {
+          ok: true,
+          value: {
+            playing: playingGetter(),
+            clip: clipHandle,
+            loop: false,
+            volume: 1,
+            spatialBlend: 0,
+            bus: 'sfx',
+          },
+        };
+      },
+      _getGraph() {
+        return {
+          archetypes: [
+            undefined,
+            {
+              size: 1,
+              components: [entityId, audioSourceId].map((id) => ({ id })),
+              columns: new Map([[entityId, selfColumn]]),
+            },
+          ],
+        };
+      },
+    };
+  }
+
+  function makeTickMockCtx(): AudioContext {
+    const g = {
+      gain: { value: 1 },
+      connect: vi.fn().mockReturnValue(undefined),
+      disconnect: vi.fn(),
+      context: undefined as unknown as BaseAudioContext,
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 2,
+      channelCountMode: 'max' as const,
+      channelInterpretation: 'speakers' as const,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+    return {
+      state: 'running' as AudioContextState,
+      sampleRate: 48000,
+      destination: {
+        maxChannelCount: 2,
+        channelCount: 2,
+        channelCountMode: 'explicit' as const,
+        channelInterpretation: 'speakers' as const,
+        context: undefined as unknown as BaseAudioContext,
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        connect: vi.fn().mockReturnValue(undefined),
+        disconnect: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      } as unknown as AudioDestinationNode,
+      currentTime: 0,
+      listener: {
+        positionX: { value: 0 } as unknown as AudioParam,
+        positionY: { value: 0 } as unknown as AudioParam,
+        positionZ: { value: 0 } as unknown as AudioParam,
+        forwardX: { value: 0 } as unknown as AudioParam,
+        forwardY: { value: 0 } as unknown as AudioParam,
+        forwardZ: { value: -1 } as unknown as AudioParam,
+        upX: { value: 0 } as unknown as AudioParam,
+        upY: { value: 1 } as unknown as AudioParam,
+        upZ: { value: 0 } as unknown as AudioParam,
+      } as unknown as AudioListener,
+      resume: vi.fn().mockResolvedValue(undefined),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      createGain: vi.fn(() => ({ ...g }) as unknown as GainNode),
+      createBufferSource: vi.fn(
+        () =>
+          ({
+            buffer: null,
+            playbackRate: { value: 1 } as unknown as AudioParam,
+            detune: { value: 0 } as unknown as AudioParam,
+            loop: false,
+            loopStart: 0,
+            loopEnd: 0,
+            context: undefined as unknown as BaseAudioContext,
+            numberOfInputs: 0,
+            numberOfOutputs: 1,
+            channelCount: 2,
+            channelCountMode: 'max' as const,
+            channelInterpretation: 'speakers' as const,
+            connect: vi.fn().mockReturnValue(undefined),
+            disconnect: vi.fn(),
+            start: vi.fn(),
+            stop: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+            onended: null,
+          }) as unknown as AudioBufferSourceNode,
+      ),
+      createPanner: vi.fn(
+        () =>
+          ({
+            panningModel: 'equalpower' as const,
+            distanceModel: 'inverse' as const,
+            refDistance: 1,
+            maxDistance: 10000,
+            rolloffFactor: 1,
+            coneInnerAngle: 360,
+            coneOuterAngle: 360,
+            coneOuterGain: 0,
+            positionX: { value: 0 } as unknown as AudioParam,
+            positionY: { value: 0 } as unknown as AudioParam,
+            positionZ: { value: 0 } as unknown as AudioParam,
+            orientationX: { value: 1 } as unknown as AudioParam,
+            orientationY: { value: 0 } as unknown as AudioParam,
+            orientationZ: { value: 0 } as unknown as AudioParam,
+            context: undefined as unknown as BaseAudioContext,
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+            channelCount: 2,
+            channelCountMode: 'clamped-max' as const,
+            channelInterpretation: 'speakers' as const,
+            connect: vi.fn().mockReturnValue(undefined),
+            disconnect: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+          }) as unknown as PannerNode,
+      ),
+      decodeAudioData: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onstatechange: null,
+      baseLatency: 0,
+      outputLatency: 0,
+      getOutputTimestamp: vi.fn(),
+      createChannelMerger: vi.fn(),
+      createChannelSplitter: vi.fn(),
+      createDelay: vi.fn(),
+      createBiquadFilter: vi.fn(),
+      createConvolver: vi.fn(),
+      createDynamicsCompressor: vi.fn(),
+      createOscillator: vi.fn(),
+      createStereoPanner: vi.fn(),
+      createWaveShaper: vi.fn(),
+      createPeriodicWave: vi.fn(),
+      createIIRFilter: vi.fn(),
+      createScriptProcessor: vi.fn(),
+      createAnalyser: vi.fn(),
+      createMediaStreamDestination: vi.fn(),
+      createMediaStreamSource: vi.fn(),
+      createConstantSource: vi.fn(),
+      audioWorklet: undefined as unknown as AudioWorklet,
+    } as unknown as AudioContext;
+  }
+
+  describe('F25 tick state de-singleton (AC-09/AC-10/AC-11)', () => {
+    let OriginalAudioContext: typeof AudioContext;
+
+    beforeEach(() => {
+      OriginalAudioContext = globalThis.AudioContext;
+      vi.stubGlobal('document', {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      const mockCtor = vi.fn().mockImplementation(function AudioContextMock(this: unknown) {
+        return makeTickMockCtx();
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: vitest global mock
+      globalThis.AudioContext = mockCtor as any;
+    });
+
+    afterEach(() => {
+      globalThis.AudioContext = OriginalAudioContext;
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    // -------------------------------------------------------------------
+    // w7: AC-09 tick state instance-scoped
+    // -------------------------------------------------------------------
+    describe('AC-09: tick state instance-scoped (w7)', () => {
+      it('two WebAudioEngine instances have independent edge detection', () => {
+        const buffer = makeTickTestBuffer();
+        const clipHandle = 42;
+        const entityId = encodeEntity(0, 0);
+
+        const mockResolver = {
+          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        };
+
+        // Engine A: build tick history
+        const engineA = new WebAudioEngine();
+        let playingA = false;
+        const worldA = buildTickTestWorld(
+          entityId,
+          () => playingA,
+          clipHandle,
+          mockResolver,
+          // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        ) as any;
+
+        // Engine B: fresh, must NOT inherit A's tick state
+        const engineB = new WebAudioEngine();
+        let playingB = false;
+        const worldB = buildTickTestWorld(
+          entityId,
+          () => playingB,
+          clipHandle,
+          mockResolver,
+          // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        ) as any;
+
+        // Phase 1: A first tick, playing=false -> no edge (first observation)
+        playingA = false;
+        audioTickSystem(worldA, engineA);
+        expect(engineA.getActiveSourceCount()).toBe(0);
+
+        // Phase 2: A tick, playing=true -> false->true edge -> play
+        playingA = true;
+        audioTickSystem(worldA, engineA);
+        expect(engineA.getActiveSourceCount()).toBe(1);
+
+        // Phase 3: A tick, playing=false -> true->false edge -> stop
+        // This stores prevPlaying=false for entityId in tick state.
+        playingA = false;
+        audioTickSystem(worldA, engineA);
+        expect(engineA.getActiveSourceCount()).toBe(0);
+
+        // Phase 4: B FIRST tick, entity playing=true.
+        // Instance-scoped (desired): engineB.tickStates empty -> first obs
+        //   returns prev=current=true -> no edge -> no play.
+        // Module-shared (current): module tickStates[entityId].prevPlaying=false
+        //   -> false->true edge -> play called.
+        playingB = true;
+        audioTickSystem(worldB, engineB);
+
+        // DESIRED assertion (will FAIL with module singleton):
+        // B has no prior tick history -> no play triggered.
+        expect(engineB.getActiveSourceCount()).toBe(0);
+      });
+
+      it('module top-level does not expose tickStates/prevFrameEntities', async () => {
+        const tickModule = await import('../audio-tick-system');
+        expect('tickStates' in tickModule).toBe(false);
+        expect('prevFrameEntities' in tickModule).toBe(false);
+        expect(typeof tickModule.audioTickSystem).toBe('function');
+      });
+    });
+
+    // -------------------------------------------------------------------
+    // w8: AC-10 destroy then new backend starts clean
+    // -------------------------------------------------------------------
+    describe('AC-10: destroy then new backend starts clean (w8)', () => {
+      it('after WebAudioEngine.destroy(), a new engine starts with clean tick state', () => {
+        const buffer = makeTickTestBuffer();
+        const clipHandle = 42;
+        const entityId = encodeEntity(0, 0);
+
+        const mockResolver = {
+          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        };
+
+        // Engine A: build tick history then destroy
+        const engineA = new WebAudioEngine();
+        let playingA = true;
+        const worldA = buildTickTestWorld(
+          entityId,
+          () => playingA,
+          clipHandle,
+          mockResolver,
+          // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        ) as any;
+
+        // Tick A-1: first observation, playing=true -> no edge, prev=true stored
+        audioTickSystem(worldA, engineA);
+        expect(engineA.getActiveSourceCount()).toBe(0);
+
+        // Tick A-2: playing=false -> true->false edge -> stop, prev=false stored
+        playingA = false;
+        audioTickSystem(worldA, engineA);
+
+        // Destroy engine A (module singleton tickStates persists!)
+        engineA.destroy();
+
+        // Engine B: fresh instance
+        const engineB = new WebAudioEngine();
+        const playingB = true;
+        const worldB = buildTickTestWorld(
+          entityId,
+          () => playingB,
+          clipHandle,
+          mockResolver,
+          // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        ) as any;
+
+        // B FIRST tick, entity playing=true.
+        // Instance-scoped (desired): engineB.tickStates empty -> first obs
+        //   returns prev=current=true -> no edge -> no play.
+        // Module-shared (current): module tickStates[entityId].prevPlaying=false
+        //   -> false->true edge -> play called.
+        audioTickSystem(worldB, engineB);
+
+        // DESIRED: B starts clean, no false->true edge misdetection.
+        expect(engineB.getActiveSourceCount()).toBe(0);
+      });
+    });
+
+    // -------------------------------------------------------------------
+    // w9: AC-11 concurrent backends isolated
+    // -------------------------------------------------------------------
+    describe('AC-11: concurrent backends isolated (w9)', () => {
+      it("cleanupDespawnedEntities on engine B does not corrupt engine A's tick state", () => {
+        const buffer = makeTickTestBuffer();
+        const clipHandle = 42;
+        const entityA = encodeEntity(0, 0);
+        const entityB = encodeEntity(1, 0);
+
+        const mockResolver = {
+          resolve: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+        };
+
+        // Engine A tracks entityA
+        const engineA = new WebAudioEngine();
+        let playingA = false;
+        // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        const worldA = buildTickTestWorld(entityA, () => playingA, clipHandle, mockResolver) as any;
+
+        // Engine B tracks entityB (different entity)
+        const engineB = new WebAudioEngine();
+        const playingB = true;
+        // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
+        const worldB = buildTickTestWorld(entityB, () => playingB, clipHandle, mockResolver) as any;
+
+        // Tick A-1: entityA playing=false, first obs -> no edge
+        // Module singleton tickStates[entityA].prevPlaying = false
+        audioTickSystem(worldA, engineA);
+        expect(engineA.getActiveSourceCount()).toBe(0);
+
+        // Tick B-1: entityB playing=true, first obs -> no edge
+        // BUT cleanupDespawnedEntities sees prevFrameEntities={entityA} from A
+        // and currentEntityIds=[entityB].
+        // removed=[entityA] -> calls engineB.stop(entityA) (no-op on B)
+        // AND deletes tickStates[entityA] from the shared module singleton!
+        audioTickSystem(worldB, engineB);
+
+        // Tick A-2: entityA playing=true
+        // Instance-scoped (desired): engineA.tickStates still has entityA
+        //   with prevPlaying=false -> false->true edge -> play.
+        // Module-shared (current): tickStates[entityA] was DELETED by B's
+        //   cleanupDespawnedEntities -> first observation -> prev=current=true
+        //   -> NO edge -> play NOT called.
+        playingA = true;
+        audioTickSystem(worldA, engineA);
+
+        // DESIRED: engineA detects the false->true edge and plays.
+        // Currently FAILS because B's cleanup corrupted A's shared tick state.
+        expect(engineA.getActiveSourceCount()).toBe(1);
+      });
+    });
+  });
+}
+
+{
+  // --- from f24-onended-guard.test.ts (w16/w17) ---
+  //
+  // F24 onended self-reclaim + identity guard for non-loop sources.
+  // D-5: only non-loop sources attach node.onended; loop sources never
+  // naturally end, so no onended is needed.
+  //
+  // Research Finding 2: ActiveSource.node field is available for identity
+  // comparison (sources.get(id)?.node === node). Web Audio spec: node.stop()
+  // also triggers onended — the identity guard correctly no-ops when
+  // sources.get(id) returns undefined or a different node.
+  //
+  // RED (w16/w17): onended is null for all sources (guard not yet implemented).
+  // GREEN (w18): non-loop source gets guarded onended; loop source stays null.
+
+  function makeOnendedTestBuffer(): AudioBuffer {
+    return { length: 1024, sampleRate: 44100, numberOfChannels: 1 } as unknown as AudioBuffer;
+  }
+
+  function makeOnendedMockCtx(capturedNodes: AudioBufferSourceNode[]): AudioContext {
+    const g = {
+      gain: { value: 1 },
+      connect: vi.fn().mockReturnValue(undefined),
+      disconnect: vi.fn(),
+      context: undefined as unknown as BaseAudioContext,
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 2,
+      channelCountMode: 'max' as const,
+      channelInterpretation: 'speakers' as const,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+    return {
+      state: 'running' as AudioContextState,
+      sampleRate: 48000,
+      destination: {
+        maxChannelCount: 2,
+        channelCount: 2,
+        channelCountMode: 'explicit' as const,
+        channelInterpretation: 'speakers' as const,
+        context: undefined as unknown as BaseAudioContext,
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        connect: vi.fn().mockReturnValue(undefined),
+        disconnect: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      } as unknown as AudioDestinationNode,
+      currentTime: 0,
+      listener: {
+        positionX: { value: 0 } as unknown as AudioParam,
+        positionY: { value: 0 } as unknown as AudioParam,
+        positionZ: { value: 0 } as unknown as AudioParam,
+        forwardX: { value: 0 } as unknown as AudioParam,
+        forwardY: { value: 0 } as unknown as AudioParam,
+        forwardZ: { value: -1 } as unknown as AudioParam,
+        upX: { value: 0 } as unknown as AudioParam,
+        upY: { value: 1 } as unknown as AudioParam,
+        upZ: { value: 0 } as unknown as AudioParam,
+      } as unknown as AudioListener,
+      resume: vi.fn().mockResolvedValue(undefined),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      createGain: vi.fn(() => ({ ...g }) as unknown as GainNode),
+      createBufferSource: vi.fn(() => {
+        const node = {
+          buffer: null,
+          playbackRate: { value: 1 } as unknown as AudioParam,
+          detune: { value: 0 } as unknown as AudioParam,
+          loop: false,
+          loopStart: 0,
+          loopEnd: 0,
+          context: undefined as unknown as BaseAudioContext,
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          channelCount: 2,
+          channelCountMode: 'max' as const,
+          channelInterpretation: 'speakers' as const,
+          connect: vi.fn().mockReturnValue(undefined),
+          disconnect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+          onended: null,
+        } as unknown as AudioBufferSourceNode;
+        capturedNodes.push(node);
+        return node;
+      }),
+      createPanner: vi.fn(
+        () =>
+          ({
+            panningModel: 'equalpower' as const,
+            distanceModel: 'inverse' as const,
+            refDistance: 1,
+            maxDistance: 10000,
+            rolloffFactor: 1,
+            coneInnerAngle: 360,
+            coneOuterAngle: 360,
+            coneOuterGain: 0,
+            positionX: { value: 0 } as unknown as AudioParam,
+            positionY: { value: 0 } as unknown as AudioParam,
+            positionZ: { value: 0 } as unknown as AudioParam,
+            orientationX: { value: 1 } as unknown as AudioParam,
+            orientationY: { value: 0 } as unknown as AudioParam,
+            orientationZ: { value: 0 } as unknown as AudioParam,
+            context: undefined as unknown as BaseAudioContext,
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+            channelCount: 2,
+            channelCountMode: 'clamped-max' as const,
+            channelInterpretation: 'speakers' as const,
+            connect: vi.fn().mockReturnValue(undefined),
+            disconnect: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+          }) as unknown as PannerNode,
+      ),
+      decodeAudioData: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onstatechange: null,
+      baseLatency: 0,
+      outputLatency: 0,
+      getOutputTimestamp: vi.fn(),
+      createChannelMerger: vi.fn(),
+      createChannelSplitter: vi.fn(),
+      createDelay: vi.fn(),
+      createBiquadFilter: vi.fn(),
+      createConvolver: vi.fn(),
+      createDynamicsCompressor: vi.fn(),
+      createOscillator: vi.fn(),
+      createStereoPanner: vi.fn(),
+      createWaveShaper: vi.fn(),
+      createPeriodicWave: vi.fn(),
+      createIIRFilter: vi.fn(),
+      createScriptProcessor: vi.fn(),
+      createAnalyser: vi.fn(),
+      createMediaStreamDestination: vi.fn(),
+      createMediaStreamSource: vi.fn(),
+      createConstantSource: vi.fn(),
+      audioWorklet: undefined as unknown as AudioWorklet,
+    } as unknown as AudioContext;
+  }
+
+  type CapturedSourceNode = AudioBufferSourceNode;
+
+  describe('F24 onended guard (AC-06/AC-07)', () => {
+    let OriginalAudioContext: typeof AudioContext;
+
+    beforeEach(() => {
+      OriginalAudioContext = globalThis.AudioContext;
+      vi.stubGlobal('document', {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+    });
+
+    afterEach(() => {
+      globalThis.AudioContext = OriginalAudioContext;
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    // -------------------------------------------------------------------
+    // w16: AC-06 loop source does not attach onended
+    // -------------------------------------------------------------------
+    describe('AC-06: loop source does not attach onended (w16)', () => {
+      it('loop source has null onended after play', () => {
+        const capturedNodes: CapturedSourceNode[] = [];
+        const mockCtor = vi.fn().mockImplementation(function AudioContextMock() {
+          return makeOnendedMockCtx(capturedNodes);
+        });
+        globalThis.AudioContext = mockCtor as unknown as typeof AudioContext;
+
+        const engine = new WebAudioEngine();
+        const buf = makeOnendedTestBuffer();
+        engine.play(1, buf, { loop: true, volume: 1, spatialBlend: 0, bus: 'sfx' });
+
+        // D-5: loop source never naturally ends, so no onended is attached.
+        const node = capturedNodes[0] as CapturedSourceNode;
+        expect(node.onended).toBeNull();
+
+        // Source should remain in the bookkeeping map.
+        expect(engine.getActiveSourceCount()).toBe(1);
+
+        engine.destroy();
+      });
+
+      it('loop source activeSourceCount does not decrease over time (no auto-removal)', () => {
+        const capturedNodes: CapturedSourceNode[] = [];
+        const mockCtor = vi.fn().mockImplementation(function AudioContextMock() {
+          return makeOnendedMockCtx(capturedNodes);
+        });
+        globalThis.AudioContext = mockCtor as unknown as typeof AudioContext;
+
+        const engine = new WebAudioEngine();
+        const buf = makeOnendedTestBuffer();
+        engine.play(1, buf, { loop: true, volume: 1, spatialBlend: 0, bus: 'sfx' });
+
+        expect(engine.getActiveSourceCount()).toBe(1);
+
+        // The source should not be auto-removed — loop sources never trigger onended.
+        // Only explicit engine.stop() removes them.
+        expect(engine.getActiveSourceCount()).toBe(1);
+
+        engine.destroy();
+      });
+
+      it('non-loop source gets onended callback attached', () => {
+        const capturedNodes: CapturedSourceNode[] = [];
+        const mockCtor = vi.fn().mockImplementation(function AudioContextMock() {
+          return makeOnendedMockCtx(capturedNodes);
+        });
+        globalThis.AudioContext = mockCtor as unknown as typeof AudioContext;
+
+        const engine = new WebAudioEngine();
+        const buf = makeOnendedTestBuffer();
+        engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
+
+        const node = capturedNodes[0] as CapturedSourceNode;
+        // RED (pre-w18): onended is null (guard not yet implemented).
+        // GREEN (w18): onended = identity guard callback for non-loop sources.
+        expect(node.onended).not.toBeNull();
+
+        engine.destroy();
+      });
+    });
+
+    // -------------------------------------------------------------------
+    // w17: AC-07 race-condition identity guard
+    // -------------------------------------------------------------------
+    describe('AC-07: race-condition identity guard (w17)', () => {
+      it('quick-replace play(id) does not kill new source on old onended', () => {
+        const capturedNodes: CapturedSourceNode[] = [];
+        const mockCtor = vi.fn().mockImplementation(function AudioContextMock() {
+          return makeOnendedMockCtx(capturedNodes);
+        });
+        globalThis.AudioContext = mockCtor as unknown as typeof AudioContext;
+
+        const engine = new WebAudioEngine();
+        const buf = makeOnendedTestBuffer();
+
+        // First play: non-loop source — onended is attached (after w18).
+        engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
+        expect(engine.getActiveSourceCount()).toBe(1);
+        const oldNode = capturedNodes[0] as CapturedSourceNode;
+
+        // RED (pre-w18): onended is null (guard not yet implemented).
+        // GREEN (w18): onended = identity guard callback.
+        expect(oldNode.onended).not.toBeNull();
+
+        // Second play on same entityId: stop() deletes old source from
+        // the internal Map, then play() creates a new source.
+        engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
+        expect(engine.getActiveSourceCount()).toBe(1);
+        const newNode = capturedNodes[1] as CapturedSourceNode;
+
+        // Simulate async Web Audio onended callback on the OLD node.
+        // In real Web Audio, node.stop() also triggers onended. The identity
+        // guard must check: sources.get(1)?.node === oldNode?
+        // After quick-replace: sources.get(1).node === newNode !== oldNode → no-op.
+        const oldOnended = oldNode.onended as unknown as (() => void) | null;
+        if (oldOnended) {
+          oldOnended();
+        }
+
+        // New source must survive — identity guard correctly no-ops on old onended.
+        expect(engine.getActiveSourceCount()).toBe(1);
+        // The active source must be the new node, not the old one.
+        expect(newNode).not.toBe(oldNode);
+
+        engine.destroy();
+      });
+
+      it('onended after explicit stop() is a no-op (sources.get returns undefined)', () => {
+        const capturedNodes: CapturedSourceNode[] = [];
+        const mockCtor = vi.fn().mockImplementation(function AudioContextMock() {
+          return makeOnendedMockCtx(capturedNodes);
+        });
+        globalThis.AudioContext = mockCtor as unknown as typeof AudioContext;
+
+        const engine = new WebAudioEngine();
+        const buf = makeOnendedTestBuffer();
+
+        // Play a non-loop source.
+        engine.play(1, buf, { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' });
+        expect(engine.getActiveSourceCount()).toBe(1);
+        const node = capturedNodes[0] as CapturedSourceNode;
+        expect(node.onended).not.toBeNull();
+
+        // Explicit stop: delete from sources Map, then node.stop().
+        engine.stop(1);
+        expect(engine.getActiveSourceCount()).toBe(0);
+
+        // Simulate onended firing after explicit stop (Web Audio spec:
+        // node.stop() also triggers onended asynchronously).
+        // The guard: sources.get(1) returns undefined → no-op.
+        const handler = node.onended as unknown as (() => void) | null;
+        if (handler) {
+          handler();
+        }
+
+        // Should still be 0: guard correctly no-ops when source is gone.
+        expect(engine.getActiveSourceCount()).toBe(0);
+
+        engine.destroy();
       });
     });
   });

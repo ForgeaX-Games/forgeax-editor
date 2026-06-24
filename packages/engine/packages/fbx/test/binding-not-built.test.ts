@@ -8,6 +8,16 @@ const CUBE_FBX_PATH = new URL(
   import.meta.url,
 ).pathname;
 
+// cube.fbx's declared sub-assets (mirror of cube.fbx.meta.json). The importer
+// honours the GUID import-stable iron law: it only emits assets declared here,
+// resolved by (kind, sourceIndex). An empty list would (correctly) yield zero
+// assets, so the test must declare them.
+const CUBE_SUB_ASSETS = [
+  { guid: '019ecd87-179a-7435-b383-6846514b9535', kind: 'mesh', sourceIndex: 0 },
+  { guid: '019ecd87-179b-7356-a2c2-8f68a936ab6a', kind: 'material', sourceIndex: 0 },
+  { guid: '019ecd87-179b-773b-8679-4ee436fdd878', kind: 'scene', sourceIndex: 0 },
+] as const;
+
 /** Minimal fake ImportContext for tests. */
 function fakeCtx(source: string): ImportContext {
   return {
@@ -34,7 +44,7 @@ function fakeCtx(source: string): ImportContext {
         detail: { mimeType: 'image/png' as const, byteLength: 0, reason: 'mock' },
       },
     }),
-    subAssets: [],
+    subAssets: CUBE_SUB_ASSETS,
     importSettings: {},
   };
 }

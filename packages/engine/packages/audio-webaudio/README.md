@@ -27,24 +27,42 @@ const app = await createApp({
 
 ## Tick system registration
 
-Both tick systems must be registered in the ECS World schedule. If using `createApp({ audio: true })`, registration is automatic. When using the assemble form directly:
+Both tick systems (audioTickSystem + audioListenerSync) are auto-registered when using `createApp({ audio: true })`. When using the assemble form directly, register them manually in the ECS World schedule. Note the seam difference: `audioTickSystem` has no frame-order constraint, but listener sync reads `Transform.world` (written by `propagateTransforms`), so it MUST run `after: [PROPAGATE_TRANSFORMS_SYSTEM]` or it reads a stale (one-frame-late) pose.
 
 ```ts
-import { audioTickSystem, audioListenerSyncSystem } from '@forgeax/engine-audio-webaudio';
+import { audioTickSystem, syncListenerFromWorldMatrix } from '@forgeax/engine-audio-webaudio';
+import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-runtime';
+import { AudioListener } from '@forgeax/engine-audio';
+import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
 
 world.addSystem({
   name: 'audio-tick',
-  fn: (_qs, _cmd, world) => {
+  fn: () => {
     const backend = world.getResource('AudioEngine');
     if (backend) audioTickSystem(world, backend);
   },
 });
 
+// Listener sync: resolve the first AudioListener entity's Transform.world and
+// write it to the backend's Web Audio listener. backend.listener is a lazy
+// getter (builds the AudioContext on first access) -- touch it only when an
+// AudioListener entity exists so a headless host never forces context creation.
 world.addSystem({
   name: 'audio-listener-sync',
-  fn: (_qs, _cmd, world) => {
+  after: [PROPAGATE_TRANSFORMS_SYSTEM],
+  fn: () => {
     const backend = world.getResource('AudioEngine');
-    if (backend) audioListenerSyncSystem(world, backend);
+    if (!backend) return;
+    const query = createQueryState({ with: [AudioListener, Entity] });
+    queryRun(query, world, (bundle) => {
+      for (let i = 0; i < bundle.Entity.self.length; i++) {
+        const tf = world.get(bundle.Entity.self[i], Transform);
+        if (!tf.ok) continue;
+        const listener = backend.listener;
+        if (listener) syncListenerFromWorldMatrix(listener, tf.value.world);
+        break; // first AudioListener only (E-3)
+      }
+    });
   },
 });
 ```
@@ -73,7 +91,7 @@ source -> per-source GainNode (volume) -> [PannerNode?] -> bus GainNode -> maste
 
 - **PannerNode**: created when `AudioSource.spatialBlend > 0`.
 - **panningModel**: defaults to `'equalpower'` (CPU-friendly; `'HRTF'` is a future extension per OOS-7).
-- **Listener sync**: `audioListenerSyncSystem` reads the first `AudioListener` entity's `GlobalTransform` and writes position/orientation to `AudioContext.listener` AudioParams.
+- **Listener sync**: the audio-listener-sync system reads the first `AudioListener` entity's `Transform.world` (16-float column-major mat4, written by propagateTransforms) and syncs position/orientation to `AudioContext.listener` AudioParams. Auto-registered in canvas form (ECS addSystem, after propagateTransforms); assemble form hosts register it manually.
 
 ### Entity despawn cleanup (plan-strategy S-7)
 

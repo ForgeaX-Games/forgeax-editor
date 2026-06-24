@@ -285,6 +285,20 @@ export interface RenderSystem {
    * cascade owns the try/catch + errorRegistry.fire fan-out (D-3).
    */
   disposeFrameState(): void;
+
+  /**
+   * feat-20260622-s5 M3 / B-2 / w18: drop the device-bound state the recover()
+   * rebuild must shed before re-running the pipeline build against a fresh
+   * device. Two effects, both keyed to the lost device:
+   *   1. the per-frame render-graph's pendingDestroy queue (PooledTextures
+   *      minted by the lost device — clearPendingDestroy skips destroyTexture);
+   *   2. the post-process registry + its eager param UBOs (the WGSL re-registers
+   *      during the rebuild's buildReadyWebGPU; without this reset the tonemap
+   *      re-register throws `post-process-already-registered`, and the UBOs are
+   *      stale lost-device handles anyway).
+   * Idempotent and graph-optional (no-op when nothing has compiled yet).
+   */
+  resetForRecover(): void;
 }
 
 /**
@@ -302,6 +316,12 @@ export interface RenderSystem {
 export interface RenderSystemRuntime {
   readonly device: RhiDevice;
   readonly errorRegistry: RhiErrorListenerRegistry;
+  /**
+   * feat-20260622-s5-device-surface-self-heal-recover M2 / w8: health registry
+   * threaded into the record stage so `recordFrame` can fire `internal-fault`
+   * when surface reconfigure+retry both fail (A-IN-2).
+   */
+  readonly healthRegistry: import('./renderer').HealthListenerRegistry;
   // feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
   // per-MaterialShader pipeline cache lookup. Returns the cached pipeline
   // for `materialShaderId`, lazily building on first miss via
@@ -361,6 +381,18 @@ export interface RenderSystemRuntime {
    */
   readonly getParamSchema?: (materialShaderId: string) => readonly ParamSchemaEntry[] | undefined;
   /**
+   * feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): the per-shader
+   * material BindGroupLayout for the given material shader. A custom shader
+   * declaring >3 user-region textures (e.g. parallax `heightTexture`) owns a
+   * material BGL whose entry count + injection start differ from the built-in
+   * 18-entry layout; the record stage must create the material bind group
+   * against THIS layout so the entry count matches. Returns `undefined` when
+   * the shader is unregistered or resolves to the shared built-in layout
+   * (3-texture shaders), in which case the caller falls back to
+   * `pipelineState.materialBindGroupLayout`.
+   */
+  readonly getMaterialBindGroupLayout?: (materialShaderId: string) => BindGroupLayout | undefined;
+  /**
    * feat-20260527-sprite-nineslice M4 / w16 (D-5): per-Renderer metrics counter
    * surfaced through `renderer.metrics`. Record-stage soft-warns (e.g.
    * `nineslice.scale-too-small` when Transform.scale falls below the four
@@ -384,6 +416,16 @@ export interface RenderSystemRuntime {
    * supply it; the engine's own createRenderSystem populates it unconditionally.
    */
   readonly lookupPostProcess?: (id: string) => PostProcessShaderEntry | undefined;
+  /**
+   * feat-20260621-fullscreen-post-process-per-frame-uniform-params-l M-A2 / w8:
+   * per-shader params UBO accessor. Returns the eager-created (at register time,
+   * M-A1 / w5) GPU buffer for `id`, or `undefined` when the id has no params
+   * (param-less consumer) / is unregistered. dispatchFullscreenPass reads this to
+   * writeBuffer the per-frame snapshot bytes and bind the buffer at group(1)
+   * binding(2). Optional so test fixtures need not supply it; createRenderSystem
+   * populates it unconditionally (mirrors lookupPostProcess / getPostProcessPipeline).
+   */
+  readonly getPostProcessParamsBuffer?: (id: string) => Buffer | undefined;
   /**
    * feat-20260609-learn-render-4-5-framebuffers-demo-offscreen-rt-an M4 / T-10-a:
    * post-process render-pipeline lookup with eager-on-first-call build. Returns a
@@ -423,6 +465,17 @@ export interface RenderSystemRuntime {
     bgl: BindGroupLayout,
     colorFormat: GPUTextureFormat,
   ) => RenderPipeline | null;
+  /**
+   * feat-20260623-world-space-video-asset M4 / w16 (D-3): transient per-frame
+   * texture store for VideoAsset sources. Independent of {@link gpuStore} — the
+   * record stage routes a `MaterialSnapshot.videoTextureFields` field through
+   * this store (per-frame copyExternalImageToTexture upload + current-frame view)
+   * instead of `gpuStore.ensureResident` (whose static cache video must never
+   * enter, AC-08). Optional so test fixtures that drive recordFrame manually
+   * need not supply one — a video field then degrades to the default view
+   * (charter P3). The production createRenderer always wires it.
+   */
+  readonly dynamicTextureStore?: import('./dynamic-texture-store').DynamicTextureStore | undefined;
 }
 
 export interface RenderSystemInternals extends RenderSystemRuntime {
@@ -458,6 +511,7 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
         | {
             readonly ok: false;
             readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
+            readonly degradedToSlotCount: number;
           })
     | undefined;
   readonly meshSsboState?: { readonly slotCount: number } | undefined;
@@ -524,10 +578,10 @@ export interface PipelineState {
   // inner `.buffer` is replaced by `growMeshSsbo` (createRenderer.ts /
   // T-M2-05). Consumers must read `.buffer` to reach the underlying
   // `Buffer` handle (M3-04: `pipelineState.meshStorageBuffer.buffer` /
-  // `.materialUniformBuffer.buffer`); passing the wrapper directly to
-  // `getOrAssignHandleId` would bind the cache to the wrapper object id
-  // (which never changes) instead of the inner buffer id (which DOES
-  // change on grow), defeating the cache miss → re-bind path (R1
+  // `.materialUniformBuffer.buffer`); using the wrapper directly as a
+  // WeakMap chain key would bind the cache to the wrapper object identity
+  // (which never changes) instead of the inner buffer identity (which DOES
+  // change on grow), defeating the cache miss -> re-bind path (D-3
   // grep-gate guards this).
   readonly materialUniformBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
   readonly meshStorageBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
@@ -756,7 +810,7 @@ export interface PipelineState {
   /**
    * feat-20260520-directional-light-shadow-mapping M2 / w14 (D-1):
    * 1x1 depth32float fallback bound at viewBindGroup binding(3) when no
-   * shadow RT exists (no DirectionalLightShadow or allocation failed).
+   * shadow RT exists (castShadow:false or allocation failed).
    * Cleared to 1.0 (far plane) so comparison-sampler always returns fully lit.
    */
   readonly shadowFallbackTextureView: TextureView;
@@ -850,6 +904,38 @@ export interface PipelineState {
 }
 
 /**
+ * Configure a canvas surface from the two PipelineState format fields, applying
+ * the WebGL2-fallback gate (storage-buffer cap == 0 proxy): full WebGPU surface
+ * (sRGB view format + RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC usage) when
+ * storage buffers are available, single-format COLOR_TARGET-only surface on the
+ * GLES fallback. Single SSOT for the configure descriptor consumed by both the
+ * lazy first-frame path (ensureContextConfigured in createRenderer.ts) and the
+ * F2 surface-outdated reconfigure-and-retry branch (render-system-record.ts) so
+ * the two cannot drift (architecture-principles #1 SSOT). Returns the configure
+ * Result; callers own the `state.perPassResources.configured` flag + the
+ * `__forgeaxSwapChainFormat` probe write (those differ per call site).
+ */
+export function configureSurface(
+  context: RhiCanvasContext,
+  device: RhiDevice,
+  format: string,
+  colorAttachmentFormat: string,
+): Result<void, RhiError> {
+  const limitsHere = (device as { limits?: Readonly<Record<string, number>> }).limits;
+  const storageCap = limitsHere?.maxStorageBuffersPerShaderStage ?? 1;
+  const supportsViewFormats = storageCap > 0;
+  return context.configure({
+    device,
+    format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
+    alphaMode: 'opaque',
+    usage: supportsViewFormats ? 0x10 | 0x04 | 0x01 : 0x10,
+    ...(supportsViewFormats
+      ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
+      : {}),
+  });
+}
+
+/**
  * feat-20260529-rendergraph-pass-abstraction M3 / w11 (D-2):
  * per-pass mutable resource slots extracted from PipelineState per
  * research Finding 3 fact-based grouping (depth / shadow / tonemap / fxaa).
@@ -881,23 +967,14 @@ export interface PerPassResources {
   configured: boolean;
 
   // ── feat-20260519-tonemap-reinhard-mvp / M2 / T-M2.5 ──────────────────────
-
-  /**
-   * Tonemap fullscreen pipeline (feat-20260519-tonemap-reinhard-mvp / M2 /
-   * T-M2.5). Vertex stage imports `forgeax_view::common::fullscreen_triangle`
-   * (single-large-triangle SSOT in `common.wgsl`); fragment stage runs the
-   * luminance Reinhard 2002 extended formula in `tonemap.wgsl` and writes
-   * the result into the swap-chain `bgra8unorm-srgb` view.
-   *
-   * BindGroupLayout (3 entries, plan-strategy D-3):
-   *   @binding(0) hdr    : texture_2d<f32> (sampled HDR colour)
-   *   @binding(1) samp   : sampler         (filtering, linear, clamp-to-edge)
-   *   @binding(2) params : TonemapParams   (16 B std140; 4 f32)
-   */
-  readonly tonemapPipeline: RenderPipeline | null;
-  readonly tonemapBindGroupLayout: BindGroupLayout | null;
-  readonly tonemapSampler: Sampler | null;
-  readonly tonemapParamsBuffer: Buffer | null;
+  // feat-20260621 M-A3 (D-5): the dedicated tonemap pipeline / BGL / sampler /
+  // params-UBO fields are deleted — the built-in tonemap now flows through the
+  // unified fullscreen post-process channel (`postProcess.register(
+  // 'forgeax::tonemap', { source, params })` + the per-frame PostProcessParams
+  // channel). dispatchFullscreenPass owns the pipeline (getPostProcessPipeline
+  // cache), the BGL + sampler (buildFullscreenPostProcessPass), and the params
+  // UBO (eager-created at register). Only the HDR colour/depth attachments below
+  // remain here — they belong to the geometry pass, not the tonemap pass.
 
   /**
    * Lazy HDR colour + depth attachments for the opt-in tonemap path. Both
@@ -933,8 +1010,6 @@ export interface PerPassResources {
    * (a stale count=4 depth under a count=1 pipeline fails WebGPU validation).
    */
   hdrDepthSampleCount: number;
-  /** Cached tonemap BindGroup, recomputed when `hdrColorView` changes. */
-  tonemapBindGroup: BindGroup | null;
 
   // -- feat-20260528-fxaa-post-processing M2 / w7 ----------------------------------
   //
@@ -1051,7 +1126,7 @@ export interface PerPassResources {
    * AGENTS.md §Change stance exception for external-visible wire
    * protocols with known downstream consumers. Populated each frame
    * from `lights.lightViewProj[0]`. Null before the first extract with
-   * an active DirectionalLightShadow.
+   * an active shadow-casting DirectionalLight.
    */
   shadowLightSpaceMatrix: Float32Array | null;
   /**
@@ -1059,7 +1134,7 @@ export interface PerPassResources {
    * lightViewProj concatenation (4 × 16 = 64 f32, col-major) consumed by
    * `debugSampleShadowFactor` so the probe can pick the right cascade
    * geometrically (frustum containment). Null before the first extract
-   * with an active DirectionalLightShadow.
+   * with an active shadow-casting DirectionalLight.
    */
   shadowCsmLightViewProj: Float32Array | null;
 
@@ -1231,7 +1306,6 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     perFrameGraph: null,
     instanceBuffers: new Map(),
     warnedZeroLightStandard: false,
-    warnedShadowDisabled: false,
     warnedMultiLightDirectional: false,
     warnedMultiLightPoint: false,
     warnedMultiLightSpot: false,
@@ -1246,21 +1320,20 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // renderable guard for the runtime `nineslice.scale-too-small` metric
     // counter (`runtime.metrics.increment(...)` in render-system-record.ts).
     warnedNineSliceScaleEntities: new Set<number>(),
-    // feat-20260531-per-frame-bind-group-cache M2 / w7: per-frame
-    // bind group caches. viewBindGroupCache covers main (#1) and shadow
-    // (#3) variants with distinct keys. meshBindGroupCache keys on b0
-    // meshStorageBuffer handle (D-2 handle-set). Maps are per-RenderSystem
-    // (never cleared — handle stability ensures bounded size).
-    viewBindGroupCache: new Map(),
-    meshBindGroupCache: new Map(),
-    // M3 / w12: per-entity material and instances caches (entityKey-scoped)
-    materialBgCache: new Map(),
-    instancesBgCache: new Map(),
-    // M2 / w7: maps opaque RHI handle objects to sequential numeric ids.
-    // Single shared Map + counter across the RenderSystem lifetime; same
-    // GPU resource always maps to the same id (idempotent frame-to-frame).
-    handleToId: new Map(),
-    nextHandleId: 0,
+    // feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
+    // bind group caches as nested WeakMap chain roots. viewBindGroupCache
+    // covers main and shadow variants; meshBindGroupCache keys on inner
+    // buffer handles (D-3). Roots are init-time stable (never cleared).
+    viewBindGroupCache: new WeakMap(),
+    meshBindGroupCache: new WeakMap(),
+    // feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
+    // material and instances caches (outer Map<entityKey, WeakMap>).
+    materialBgPerEntity: new Map(),
+    instancesBgPerEntity: new Map(),
+    // cross-entity shared material cache (outer Map<shaderId, WeakMap>).
+    materialBgShared: new Map(),
+    // singleton material cache (flat Map<variant, BindGroup>; D-6).
+    singletonMaterialCache: new Map(),
     // feat-20260601-customizable-render-pipeline-seam M1 / w7: installed-pipeline state.
     // 0 = nothing installed yet (createRenderer dogfood installs the default before any
     // draw). activePipeline defaults to the built-in forward pipeline.
@@ -1299,6 +1372,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // post-process shader registry (id -> PostProcessShaderEntry), parallel to pipelineRegistry.
   // Dedups same-id register (Map.has -> throw), mirroring ShaderRegistry.registerMaterialShader.
   const postProcessRegistry = new Map<string, PostProcessShaderEntry>();
+  // D-3 / D-8: per-shader params UBO resource table (id -> GPU Buffer).
+  // Eager-created at register time when entry.params is present (byteSize >= 16,
+  // defaultValue.length === byteSize); reused frame-to-frame via queue.writeBuffer.
+  const postProcessParamsBuffers = new Map<string, Buffer>();
   // F-2 fix-up: expose registry lookup through the narrow runtime surface so
   // addFullscreenPass's execute closure (in render-graph-primitives.ts) can
   // resolve a registered shader id without reaching into RenderSystemInternals.
@@ -1309,6 +1386,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     postProcessRegistry.get(id);
   (internals as unknown as { lookupPostProcess: typeof lookupPostProcess }).lookupPostProcess =
     lookupPostProcess;
+  // feat-20260621 M-A2 / w8: expose the eager-created per-id params UBO through
+  // the narrow runtime surface so dispatchFullscreenPass can writeBuffer the
+  // per-frame snapshot + bind it at group(1) binding(2).
+  const getPostProcessParamsBuffer = (id: string): Buffer | undefined =>
+    postProcessParamsBuffers.get(id);
+  (
+    internals as unknown as { getPostProcessParamsBuffer: typeof getPostProcessParamsBuffer }
+  ).getPostProcessParamsBuffer = getPostProcessParamsBuffer;
   // feat-20260609 M4 / T-10-a: post-process pipeline cache (id|colorFormat -> RhiRenderPipeline).
   // Solves CONCERN-1: dispatcher previously passed `pipeline=null` to
   // built.createHandle because per-frame execute closures cannot await async
@@ -1399,7 +1484,8 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           skybox,
           skyboxCount,
           frustumStats,
-        } = extractFrame(world, internals.assets, internals.getPipelineState());
+          postProcessParams,
+        } = extractFrame(world, internals.assets, internals.getPipelineState(), internals.gpuStore);
         bindGroupCounts.createBindGroup = 0;
         bindGroupCounts.keys = [];
         lastFrustumStats.culled = frustumStats.culled;
@@ -1431,6 +1517,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           skylightCount,
           skybox,
           skyboxCount,
+          postProcessParams,
         );
       } catch (err) {
         const innerError =
@@ -1520,6 +1607,32 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             detail: { id },
           });
         }
+        // D-3: eager-create params UBO at register time + fail-fast
+        // byteSize / defaultValue validation (q5=A).
+        if (entry.params !== undefined) {
+          const { byteSize, defaultValue } = entry.params;
+          if (byteSize < 16 || defaultValue.length !== byteSize) {
+            throw new PostProcessError({
+              code: 'params-size-mismatch',
+              detail: { byteSize, actualLength: defaultValue.length },
+            });
+          }
+          const paramsBufferResult = internals.device.createBuffer({
+            label: `post-process-params-${id}`,
+            size: byteSize,
+            usage: 0x40 /* UNIFORM */ | 0x08 /* COPY_DST */,
+            mappedAtCreation: false,
+          });
+          if (!paramsBufferResult.ok) throw paramsBufferResult.error;
+          postProcessParamsBuffers.set(id, paramsBufferResult.value);
+          // Write initial defaultValue into the eager-created UBO.
+          const writeResult = internals.device.queue.writeBuffer(
+            paramsBufferResult.value,
+            0,
+            defaultValue,
+          );
+          if (!writeResult.ok) throw writeResult.error;
+        }
         postProcessRegistry.set(id, entry);
       },
     },
@@ -1536,7 +1649,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         graph.drain();
         frameState.perFrameGraph = null;
       }
-      disposeInstanceBuffers(frameState.instanceBuffers);
+      // feat-20260619 M4 (D-6): pass errorRegistry to disposeInstanceBuffers
+      // so destroy failures fire structured errors (unified per-frame +
+      // dispose error strategy).
+      disposeInstanceBuffers(frameState.instanceBuffers, internals.errorRegistry);
       // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-2: dispose the
       // cube_array shadow atlas owned by the RenderSystem closure. The atlas
       // is per-RenderSystem (= per Renderer) and is shared transparently
@@ -1548,6 +1664,18 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         frameState.pointShadowAtlas.dispose();
         frameState.pointShadowAtlas = null;
       }
+    },
+    resetForRecover(): void {
+      // feat-20260622-s5 M3 / B-2 / w18: recover() rebuild drops device-bound
+      // state minted by the lost device. (1) graph pendingDestroy (stale
+      // handles, skip device.destroyTexture); no-op when no graph compiled yet.
+      frameState.perFrameGraph?.clearPendingDestroy();
+      // (2) post-process registry + eager param UBOs: the rebuild's
+      // buildReadyWebGPU re-registers the engine tonemap, which would throw
+      // `post-process-already-registered` against a populated registry; the
+      // UBOs are stale lost-device handles released with the device.
+      postProcessRegistry.clear();
+      postProcessParamsBuffers.clear();
     },
   };
 }

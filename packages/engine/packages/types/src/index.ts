@@ -34,6 +34,9 @@
 // The legacy 1-arg form that lived here at M1 has been physically deleted
 // (M2 t10) so the package surface exposes a single Handle shape (charter F1
 // single-entry indexability; AC-03 grep gate).
+
+import type { Handle } from './handle';
+
 export * from './handle';
 
 // === Result<T, E> SSOT (tweak-20260612-result-into-types) ======================
@@ -1027,6 +1030,24 @@ export interface RenderPipelineAsset {
       readonly bias?: number | undefined;
       readonly intensity?: number | undefined;
     };
+    /**
+     * feat-20260621 M4': ordered registered post-process shader ids the built-in
+     * pipelines composite over the FINAL swap-chain image, after the fxaa pass
+     * and before the debug overlay. Each id must be registered via
+     * `renderer.postProcess.register(id, entry)` first. The effects run in array
+     * order; each samples the current swap-chain (copy) and writes it back, so a
+     * chain composes left-to-right. This is the AUGMENT path: the built-in 9-pass
+     * chain (shadow cascades, tonemap, bloom, fxaa) renders unchanged and the
+     * effects layer on top — unlike installing a wholly custom pipeline, which
+     * REPLACES the built-in graph (and would drop its shadow passes). `undefined`
+     * or `[]` adds zero passes (default frame byte-identical).
+     *
+     * WebGPU backend only: each effect reads the mid-frame swap-chain (copy +
+     * non-srgb storage-view write), which the WebGL2 fallback swap-chain does not
+     * support (no COPY_SRC, no non-srgb reinterpret view) — same constraint the
+     * built-in FXAA pass already carries. On a non-WebGPU device leave this empty.
+     */
+    readonly postEffects?: readonly string[];
   };
 }
 
@@ -1055,6 +1076,9 @@ export interface RenderPipelineAsset {
  *   - feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend w5 added
  *     `'render-pipeline'` variant (12 -> 13, minor add per AGENTS.md
  *     `Evolution contract`); RenderPipelineAsset with pipelineId + config.
+ *   - feat-20260623-world-space-video-asset M1 added `'video'` variant
+ *     (14 -> 15, minor add per AGENTS.md `Evolution contract`);
+ *     VideoAsset with `{ url }` descriptor, no width/height/duration.
  *
  * Exhaustive `switch (asset.kind)` type-guards against future additions
  * without default fallback (charter proposition 4 + proposition 3).
@@ -1070,6 +1094,7 @@ export interface RenderPipelineAsset {
  * | `'shader'` | `ShaderAsset` (material-shader registration SSOT, name + source + paramSchema) |
  * | `'font'` | `FontAsset` (MSDF atlas handle + glyph metrics) |
  * | `'render-pipeline'` | `RenderPipelineAsset` (installable pipeline logic id + config) |
+ * | `'video'` | `VideoAsset` (runtime-only `{ url }` descriptor, no width/height/duration) |
  */
 export type Asset =
   | MeshAsset
@@ -1084,32 +1109,245 @@ export type Asset =
   | AnimationClip
   | AudioClipAsset
   | FontAsset
-  | RenderPipelineAsset;
+  | RenderPipelineAsset
+  // === 1 new variant (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+  // Direct atlases[] form (plan-strategy D-7 one-cut); no intermediate single-`atlas` shape.
+  | TilesetAsset
+  // === 1 new variant (feat-20260623-world-space-video-asset M1) ===
+  // runtime-only { url } descriptor; no width/height/duration in payload.
+  | VideoAsset;
+
+// === Tileset asset POD shape (feat-20260608 M0 baseline rebuild) =================
+//
+// Decision anchors:
+//   - requirements §AC-01/03/04/05 (TilesetAsset 9 fields; atlases plural composite;
+//     M0 TilesetTileEntry single-field shape with M1 adding 5 optional + collider).
+//   - plan-strategy §D-5 (M0 baseline rebuild after main reverted feat-20260604).
+//   - plan-strategy §D-7 (`atlases: readonly Handle<TextureAsset,managed>[]` one-cut
+//     rename; no `atlas` single-form alias or dual-path).
+//   - plan-strategy §D-6 (AssetErrorCode count restoration -- M0 reintroduces
+//     `tileset-region-index-out-of-range`; M1 adds `tileset-tile-entry-malformed`).
+//   - charter F1 (AI users discover the schema via IDE autocomplete on the closed
+//     `Asset` union + `Handle<TilesetAsset>` returns from `AssetRegistry.register`).
+//   - charter P4 (atlases plural composite mirrors `MaterialAsset.passes[]` shape).
 
 /**
- * Runtime brand label per {@link Asset.kind} discriminant -- one string literal
- * per Asset union member. Consumers narrow with `switch (entry.brand)` or
- * `if (entry.brand === 'TextureAsset')`.
+ * Closed `TilesetTileCollider` union -- per-tile collider schema (M1
+ * extension; feat-20260608-tilemap-object-layer-rendering M1 / m1-t2).
  *
- * Mirrors the 13 Asset union kinds 1:1. The label differs from `Asset.kind`
- * string discriminate where the kind-string does not match the TS type name
- * (e.g. `'cube-texture'` maps to `'CubeTextureAsset'`, `'audio'` to
- * `'AudioClipAsset'`).
+ * Three discriminant variants (closed enum, charter P3):
+ *
+ *   - `{ type: 'none' }` -- no collider for this tile.
+ *   - `{ type: 'rect', rect: readonly [x, y, w, h] }` -- axis-aligned
+ *     rectangle in normalized cell coordinates `[0, 1]^2`. `w > 0`, `h > 0`,
+ *     `x + w <= 1`, `y + h <= 1` are enforced by `validateTilesetPayload`
+ *     (R-6 first-error path).
+ *   - `{ type: 'polygon', points: readonly [x, y][] }` -- convex/concave
+ *     polygon in normalized cell coordinates. `points.length >= 3` and
+ *     each point lies in `[0, 1]^2`.
+ *
+ * The engine validates this schema at register-time but does NOT consume
+ * it (plan-strategy §D-4 -- schema landed, consumer deferred to a future
+ * `feat-tilemap-physics-bridge` closed loop). AI users with a physics
+ * sidecar consume the schema directly via `tileset.tiles[i].collider`
+ * after `assets.register<TilesetAsset>(...)` resolves the handle.
+ *
+ * Exhaustive switch:
+ * ```ts
+ * switch (collider.type) {
+ *   case 'none': return null;
+ *   case 'rect': return collider.rect;
+ *   case 'polygon': return collider.points;
+ *   // No default branch -- TS guards completeness (charter P3).
+ * }
+ * ```
  */
-export type AssetBrand =
-  | 'MeshAsset'
-  | 'TextureAsset'
-  | 'CubeTextureAsset'
-  | 'SamplerAsset'
-  | 'MaterialAsset'
-  | 'SceneAsset'
-  | 'ShaderAsset'
-  | 'SkeletonAsset'
-  | 'SkinAsset'
-  | 'AnimationClip'
-  | 'AudioClipAsset'
-  | 'FontAsset'
-  | 'RenderPipelineAsset';
+export type TilesetTileCollider =
+  | { readonly type: 'none' }
+  | { readonly type: 'rect'; readonly rect: readonly [number, number, number, number] }
+  | { readonly type: 'polygon'; readonly points: readonly (readonly [number, number])[] };
+
+/**
+ * Rectangular sub-region within a tileset atlas (M1 schema extension on
+ * top of M0 baseline rebuild).
+ *
+ * Four required fields define the atlas-space rectangle in pixels:
+ * `x` / `y` top-left corner; `width` / `height` extent. `width + x` and
+ * `height + y` MUST stay within the parent atlas extent or
+ * `validateTilesetPayload` returns
+ * `AssetError { code: 'tileset-region-index-out-of-range' }`
+ * (charter P3 explicit failure at register-time).
+ *
+ * Optional `atlasIndex?: number` (M1; default 0) routes the region into
+ * `TilesetAsset.atlases[atlasIndex]` for multi-atlas tilesets. Out-of-range
+ * `atlasIndex` (`>= atlases.length` or negative) surfaces
+ * `AssetError { code: 'tileset-tile-entry-malformed', detail: { field: 'atlasIndex', scope: 'tileset-asset' } }`
+ * at register-time (plan-strategy §D-7 three-hop routing; R-6 first-error
+ * order places atlasIndex check between region rect bounds and per-tile
+ * entry field checks).
+ */
+export interface TilesetRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly atlasIndex?: number;
+}
+
+/**
+ * Per-tile entry in `TilesetAsset.tiles[]` (M1 schema extension on top of
+ * M0 baseline rebuild).
+ *
+ * Required `regionIndex` points into the parent `TilesetAsset.regions[]`
+ * array. M1 adds five optional fields for the variable-size + custom-pivot
+ * object-layer story (plan-strategy §M1):
+ *
+ *   - `widthCells?: number` -- multi-cell width in `Tilemap.cols/rows`
+ *     coordinate units (default 1; range `(0, 64]`). Anchored at the
+ *     cell that hosts the non-zero tileId entry; cells inside the
+ *     `widthCells x heightCells` footprint must stay 0 in `TileLayer.tiles[]`
+ *     (anchor convention, not enforced at register time).
+ *   - `heightCells?: number` -- multi-cell height (default 1; range `(0, 64]`).
+ *   - `pivotX?: number` -- normalized horizontal pivot in `[0, 1]` (default 0.5).
+ *     The pivot is the world-space anchor: `pivot_world_X = (cellX + pivotX) * tileSizeX`.
+ *     Quad center is offset by `(0.5 - pivotX) * widthCells * tileSizeX`
+ *     (plan-strategy §D-2 first-line geometry; M2 implementation).
+ *   - `pivotY?: number` -- normalized vertical pivot in `[0, 1]` (default 0.5).
+ *     For asi_world `.tsj` extension: `pivotY = 1.0` means quad bottom
+ *     anchors the cell, `pivotY = 0.0` means quad top (per-asset convention,
+ *     not Tiled native). The engine uses `effectivePivotY` for Y-sort.
+ *   - `collider?: TilesetTileCollider` -- 3-variant closed union schema
+ *     (charter P3). Engine validates the schema at register-time but does
+ *     NOT consume it (plan-strategy §D-4).
+ *
+ * All five fields are optional so unit-cell call sites `{ regionIndex: N }`
+ * remain backward compatible (charter F1).
+ *
+ * Out-of-range `regionIndex` (>= regions.length, or negative) surfaces
+ * `AssetError { code: 'tileset-region-index-out-of-range' }`. Out-of-range
+ * `widthCells / heightCells / pivotX / pivotY / collider` surface
+ * `AssetError { code: 'tileset-tile-entry-malformed', detail: { field, scope: 'tile-entry', tileEntryIndex } }`
+ * (plan-strategy §D-6 closed 7-variant `.detail.field` enum).
+ */
+export interface TilesetTileEntry {
+  readonly regionIndex: number;
+  readonly widthCells?: number;
+  readonly heightCells?: number;
+  readonly pivotX?: number;
+  readonly pivotY?: number;
+  readonly collider?: TilesetTileCollider;
+}
+
+/**
+ * Tileset asset (M0 baseline rebuild on origin/main).
+ *
+ * Nine fields:
+ *   - `kind`         -- discriminator literal `'tileset'`.
+ *   - `guid`         -- asset GUID (charter P5 identity SSOT).
+ *   - `atlases`      -- one or more managed handles to atlas textures.
+ *                       `atlases.length >= 1` enforced at register time.
+ *                       M0 reads `atlases[0]` exclusively (single-atlas form);
+ *                       M1 adds `regions[].atlasIndex` for multi-atlas routing.
+ *   - `tileWidth`/`tileHeight` -- per-cell pixel size (atlas grid stride).
+ *   - `columns`/`rows`        -- atlas grid layout (informational metadata).
+ *   - `regions`     -- array of atlas sub-rectangles (TilesetRegion).
+ *   - `tiles`       -- per-tile entries (TilesetTileEntry), 1-indexed via tile id
+ *                      sentinel where 0 means "empty" in `TileLayer.tiles`.
+ *
+ * Plural composite `atlases` (not single `atlas`) is the one-cut breaking
+ * rename versus the old feat-20260604 form (plan-strategy §D-7 + AGENTS.md
+ * §Change stance "optimal > compatible"); no deprecation alias survives.
+ *
+ * @example Register a tileset and spawn a Tilemap + TileLayer pair:
+ * ```ts
+ * const atlas = registry.register<TextureAsset>(atlasTexture).unwrap();
+ * const tileset = registry.register<TilesetAsset>({
+ *   kind: 'tileset',
+ *   guid: 'world/object_atlas',
+ *   atlases: [atlas],
+ *   tileWidth: 16,
+ *   tileHeight: 16,
+ *   columns: 8,
+ *   rows: 8,
+ *   regions: [{ x: 0, y: 0, width: 16, height: 16 }],
+ *   tiles: [{ regionIndex: 0 }],
+ * }).unwrap();
+ * ```
+ */
+export interface TilesetAsset {
+  readonly kind: 'tileset';
+  readonly guid: string;
+  readonly atlases: readonly Handle<'TextureAsset', 'shared'>[];
+  readonly tileWidth: number;
+  readonly tileHeight: number;
+  readonly columns: number;
+  readonly rows: number;
+  readonly regions: readonly TilesetRegion[];
+  readonly tiles: readonly TilesetTileEntry[];
+}
+
+// === AssetRef + AssetEnvelope (feat-20260622-asset-ref-graph-protocol-unification-refs-as-ssot M1 / w1) ===
+//
+// Decision anchors:
+//   - plan-strategy D-1: single envelope type AssetEnvelope = { guid, kind, name?,
+//     payload, refs } — ImportedAsset is upgraded to this shape; assetCatalog
+//     value type changes from Map<string, Asset> to Map<string, AssetEnvelope>.
+//   - plan-strategy D-2: scene refs are importer flat superset (mesh U material U
+//     texture U skeleton U skin); texture edges have sourceField=undefined (no
+//     per-entity origin).
+//   - plan-strategy D-3: sourceField is structured triple { componentName,
+//     fieldName, arrayIndex? } — consumers read via property access, not string
+//     parse (charter P3).
+//   - plan-strategy D-10: edge metadata (AssetRef) does NOT sink into Loader.load
+//     refs param — loader still receives GUID string projection.
+//   - plan-strategy OOS-1: Asset closed union unchanged; AssetEnvelope wraps it.
+//   - plan-strategy OOS-4: AssetErrorCode member set unchanged (21 members).
+//   - charter F1: single-entry indexability — refs field name cross-layer
+//     consistent (ImportedAsset.refs / AssetEnvelope.refs / pack-index refs).
+
+/**
+ * Structured edge metadata carried in an asset envelope's `refs[]`. Each entry
+ * records a GUID-level reference plus optional provenance: which scene entity
+ * field originated the reference (``sourceField``) and the entity's local id
+ * (``sceneEntityId``). Texture edges and other transitive references have no
+ * per-entity origin — ``sourceField`` is ``undefined`` for those (D-2).
+ *
+ * AI users consume ``sourceField`` via property access (``ref.sourceField?.componentName``
+ * / ``ref.sourceField?.fieldName`` / ``ref.sourceField?.arrayIndex``), never by
+ * parsing a concatenated string (charter P3).
+ */
+export interface AssetRef {
+  readonly guid: string;
+  readonly sourceField?: {
+    readonly componentName?: string;
+    readonly fieldName: string;
+    readonly arrayIndex?: number;
+  };
+  readonly sceneEntityId?: number;
+}
+
+/**
+ * Self-contained asset envelope — the single shape through which assets flow
+ * from import to catalog to recursive load (plan-strategy D-1).
+ *
+ * ``payload`` carries the closed ``Asset`` union member (mesh / texture / scene /
+ * material / etc.). ``refs`` is the authoritative reference graph — every GUID
+ * this asset transitively depends on, with optional edge metadata
+ * (``sourceField`` / ``sceneEntityId``). ``name`` is the per-asset display name
+ * (may be undefined; ``resolveName`` derives the final name via a three-argument
+ * XOR that also considers the package path).
+ */
+export interface AssetEnvelope<P = Asset> {
+  readonly guid: string;
+  readonly kind: string;
+  // Per-GUID stored display name -- the `storedName` argument resolveName feeds
+  // to deriveAssetName (the single home for the explicit name, replacing the
+  // retired storedNameOf side table). `undefined` = no explicit name (resolveName
+  // then applies the multi-asset basename fallback / no-package '' branch).
+  readonly name?: string;
+  readonly payload: P;
+  readonly refs: readonly AssetRef[];
+}
 
 // === Package interface (feat-20260618-asset-and-pack-name-fields M1 / w2) ======
 //
@@ -1311,8 +1549,9 @@ export interface SceneAsset {
    *
    * On disk: refs[] indices, mirror of `mounts[].source`.
    * Post-parseScenePayload: GUID strings (resolved via refs[]).
-   * Walked by `collectRefs(scene)` so `loadByGuid<SceneAsset>` recursively
-   * pulls each SkinAsset before `instantiate`.
+   * Enumerated in the scene envelope's `refs[]` (the recursion source) so
+   * `loadByGuid<SceneAsset>` recursively pulls each SkinAsset before
+   * `instantiate`.
    */
   readonly skinGuids?: readonly string[];
 }
@@ -1387,6 +1626,48 @@ export interface AnimationClip {
 export interface AudioClipAsset {
   readonly kind: 'audio';
   readonly buffer: AudioBuffer;
+}
+
+// === VideoAsset POD shape (feat-20260623-world-space-video-asset M1) ==========
+//
+// Decision anchors:
+//   - requirements AC-01 (VideoAsset is Asset closed-union 15th member;
+//     kind discriminator 'video'; payload { url: string }, no width/height/duration).
+//   - requirements constraint: payload must not inline video bytes, only a URL descriptor.
+//   - plan-strategy D-4 (VideoAsset descriptor naming aligns with TextureAsset/AudioClipAsset).
+//   - charter F1 (AI users discover the schema via IDE autocomplete on the closed
+//     `Asset` union + `Handle<VideoAsset>` returns from `AssetRegistry.register`).
+//   - plan-strategy D-5 (resolveTexLike identifies video kind via `payload.kind === 'video'`;
+//     video does not masquerade as 'texture').
+//
+// `refs` is always empty (isolated leaf) — VideoAsset carries no sub-asset
+// references (plan-strategy S6.3). The `url` field points to an external video
+// file; the runtime resolves it into an HTMLVideoElement via the host-provided
+// `VideoElementProvider` World Resource (plan-strategy D-1).
+
+/**
+ * Video asset POD shape -- pure `{url}` descriptor.
+ *
+ * `VideoAsset` is a runtime-only asset kind (OOS-1: no import/cook pipeline).
+ * The `url` field points to an external video file (e.g. `*.webm` / `*.mp4`);
+ * the engine does NOT decode video bytes -- it delegates to the host-side
+ * `HTMLVideoElement` via `VideoElementProvider` (plan-strategy D-1).
+ *
+ * `width` / `height` / `duration` are deliberately absent from the POD:
+ * the runtime reads them from `HTMLVideoElement.videoWidth` /
+ * `videoHeight` / `duration` after `loadedmetadata` fires (requirements
+ * constraint "payload must not inline video bytes").
+ *
+ * Consumers reference a VideoAsset via `MaterialAsset.paramValues` texture
+ * fields (e.g. `baseColorTexture`), sharing the same `texture2d` slot with
+ * static textures (charter P4 consistent abstraction). The extraction layer
+ * (render-system-extract `resolveTexLike`) identifies the video kind and
+ * routes to the per-frame transient texture pathway instead of the static
+ * `GpuResourceStore.ensureResident` cache (plan-strategy D-5).
+ */
+export interface VideoAsset {
+  readonly kind: 'video';
+  readonly url: string;
 }
 
 /**
@@ -1472,14 +1753,15 @@ export interface VertexAttributeMap {
 //   row all reference this module)
 
 /**
- * Closed `AssetErrorCode` union — 19 members (D-P1 + feat-20260518 D-1 minor
+ * Closed `AssetErrorCode` union — 22 members (D-P1 + feat-20260518 D-1 minor
  * evolution + feat-20260520-skylight-ibl-cubemap 5 members +
  * feat-20260523 mesh-upload-fix 1 member +
  * feat-20260523-shader-template-instance-split M1-T02 1 member +
  * feat-20260526-material-asset-multipass-renderstate M1 1 member +
  * feat-20260603-asset-import-loader-injection M1 2 members +
  * feat-20260604-hdr-equirect-cube-importer-loader M2 1 member +
- * feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 3 members;
+ * feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 3 members +
+ * feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 1 member;
  * requirements §G3 + AC-03 + AC-21 +
  * feat-20260518 AC-02 + bug-20260523 AC-01).
  * Exhaustive `switch (err.code)` needs no default fallback — TypeScript guards
@@ -1489,7 +1771,7 @@ export interface VertexAttributeMap {
  * Domain-separated from `RhiErrorCode 'asset-not-registered'` (which is a
  * render-time registry lookup miss, 18-member closed union in
  * `@forgeax/engine-rhi/src/errors.ts`). The two unions cover disjoint
- * lifecycle phases — AI users face only these 19 alternatives on the
+ * lifecycle phases — AI users face only these 22 alternatives on the
  * `engine.assets.loadByGuid(guid)` / `engine.assets.get(handle)` /
  * `engine.assets.register(payload).unwrap()` surface.
  *
@@ -1535,7 +1817,21 @@ export type AssetErrorCode =
   // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
   | 'mesh-renderer-material-count-mismatch'
   | 'mesh-asset-submeshes-empty'
-  | 'mesh-submesh-index-range-out-of-bounds';
+  | 'mesh-submesh-index-range-out-of-bounds'
+  // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+  // Tileset region rectangle out of atlas extent OR tile entry regionIndex out of
+  // regions array bounds (single closed code per plan-strategy §D-6 first-error
+  // ordering). 19 -> 20 baseline-restored.
+  | 'tileset-region-index-out-of-range'
+  // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+  // Tile entry optional field (widthCells / heightCells / pivotX / pivotY /
+  // collider) or top-level atlases / region.atlasIndex schema invariant
+  // breached at register time. `.detail.field` carries the closed 7-variant
+  // enum + `.scope?` is 'tile-entry' | 'tileset-asset' (plan-strategy §D-6;
+  // charter P3 closed enum + AI-grep affordance). 20 -> 21 M1 net add.
+  | 'tileset-tile-entry-malformed'
+  // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
+  | 'asset-invalidated';
 
 /**
  * Structured asset error -- four-field surface (`.code` / `.expected` /
@@ -1553,7 +1849,7 @@ export type AssetErrorCode =
  * the same content as `.code` + `.expected` + `.hint`; AI users prefer
  * field access on the structured triple.
  *
- * @example AI-user exhaustive switch on the 19 members (no default fallback)
+ * @example AI-user exhaustive switch on the 22 members (no default fallback)
  * ```ts
  * import { AssetError, type AssetErrorCode } from '@forgeax/engine-types';
  *
@@ -1632,7 +1928,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
     'circular parent chain detected; inspect parent handles — use err.detail.cycle to see the full path (e.g. "A -> B -> A")',
   // === 2 new hints (feat-20260603-asset-import-loader-injection M1 / w1) ===
   'loader-not-registered':
-    'no loader registered for this asset kind; wire it via wireDefaultLoaders(registry) or registry.register(loader) (the loader carries its own kind); err.detail.registeredKinds lists the kinds currently wired',
+    'no loader registered for this asset kind; register it via engine.assets.loaders.register(loader) (the loader carries its own kind); err.detail.registeredKinds lists the kinds currently wired',
   'asset-not-imported':
     'GUID is in the catalog but its DDC artefact is missing and no ImportTransport is wired (shipped form never falls back to a runtime import); add the asset to the build-time pre-import step instead of importing at runtime',
   // === 1 new hint (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
@@ -1645,6 +1941,15 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
     'MeshAsset.submeshes must have at least one entry; every mesh must declare at least one submesh; check MeshAsset registration payload for empty submeshes array',
   'mesh-submesh-index-range-out-of-bounds':
     'submesh indexOffset + indexCount exceeds the parent mesh index buffer length; check submesh index range bounds against MeshAsset.indices and MeshAsset.vertices; err.detail carries submeshIndex, indexOffset, indexCount, indexBufferLength, and meshAssetGuid',
+  // === 1 new hint (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+  'tileset-region-index-out-of-range':
+    'a TilesetAsset.regions[] rectangle escapes the atlas extent OR a TilesetAsset.tiles[].regionIndex points past TilesetAsset.regions.length; check regions[i] (x + width <= atlasWidth, y + height <= atlasHeight) and tiles[i].regionIndex in [0, regions.length); err.detail carries tilesetGuid, tileId, regionIndex, regionCount',
+  // === 1 new hint (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+  'tileset-tile-entry-malformed':
+    'a TilesetTileEntry optional field is out of range (widthCells / heightCells in (0, 64], pivotX / pivotY in [0, 1], collider rect/polygon in normalized [0,1]^2 with rect.length === 4 and polygon.points.length >= 3) OR a top-level field is out of range (atlases.length >= 1, region.atlasIndex in [0, atlases.length)); engine fail-fast at register-time. read err.detail.field (closed enum) + err.detail.scope (tile-entry | tileset-asset) + err.detail.tileEntryIndex to locate the offending entry; switch (err.detail.field) covers the 7 variants exhaustively without default',
+  // === 1 new hint (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
+  'asset-invalidated':
+    'The asset was invalidated during load; call loadByGuid(guid) again to retry with a fresh fetch',
 };
 
 // === Font error model SSOT (feat-20260531-world-space-msdf-text-rendering M2 / w6) ===
@@ -1778,6 +2083,67 @@ export interface AssetMaterialShaderRefBrokenDetail {
 }
 
 /**
+ * Detail for `tileset-region-index-out-of-range` (feat-20260608 M0 baseline rebuild).
+ *
+ * Carries the offending tileset GUID + tile-entry index + the rejected
+ * `regionIndex` + the live `regionCount` so AI consumers can pinpoint
+ * the malformed payload field via property access (charter P3 / P4).
+ *
+ * Surfaced by `validateTilesetPayload` along two paths:
+ *   - region rectangle escapes the parent atlas extent
+ *     (regionIndex == the offending rectangle index).
+ *   - `tiles[i].regionIndex` >= `regions.length` (or negative)
+ *     (tileId encodes which entry; regionIndex carries the rejected value).
+ */
+export interface AssetTilesetRegionIndexOutOfRangeDetail {
+  readonly code: 'tileset-region-index-out-of-range';
+  readonly tilesetGuid: string;
+  readonly tileId: number;
+  readonly regionIndex: number;
+  readonly regionCount: number;
+}
+
+/**
+ * Detail for `tileset-tile-entry-malformed` (feat-20260608 M1 schema
+ * extension; plan-strategy §D-6).
+ *
+ * Closed 7-variant `.field` enum locks the AI-grep affordance: switch
+ * (detail.field) over the union compiles without default (charter P3).
+ *
+ *   - `widthCells` -- `tiles[i].widthCells` out of `(0, 64]`.
+ *   - `heightCells` -- `tiles[i].heightCells` out of `(0, 64]`.
+ *   - `pivotX` -- `tiles[i].pivotX` out of `[0, 1]`.
+ *   - `pivotY` -- `tiles[i].pivotY` out of `[0, 1]`.
+ *   - `collider` -- `tiles[i].collider` schema invariant (rect.length !==
+ *     4 / rect dimension out of `[0, 1]^2` / polygon.points.length < 3 /
+ *     any point out of `[0, 1]^2` / type discriminator outside the closed
+ *     3-variant enum).
+ *   - `atlases` -- top-level `atlases.length < 1` (empty atlas list).
+ *   - `atlasIndex` -- `regions[i].atlasIndex` outside `[0, atlases.length)`.
+ *
+ * `.scope?` is `'tile-entry'` when the violation is in `tiles[i].*` (in
+ * which case `.tileEntryIndex` carries the offending `tiles[]` index) and
+ * `'tileset-asset'` when the violation is at the top level (atlases /
+ * region atlasIndex).
+ */
+export interface AssetTilesetTileEntryMalformedDetail {
+  readonly code: 'tileset-tile-entry-malformed';
+  readonly field:
+    | 'widthCells'
+    | 'heightCells'
+    | 'pivotX'
+    | 'pivotY'
+    | 'collider'
+    | 'atlases'
+    | 'atlasIndex';
+  readonly scope?: 'tileset-asset' | 'tile-entry';
+  readonly tileEntryIndex?: number;
+  readonly tilesetGuid: string;
+  readonly expected?: string;
+  readonly hint?: string;
+}
+
+/**
  * Discriminated detail union for AssetError, narrowed per AssetErrorCode.
  *
  * Variants:
@@ -1796,6 +2162,8 @@ export interface AssetMaterialShaderRefBrokenDetail {
  */
 export type AssetErrorDetail =
   | AssetMaterialShaderRefBrokenDetail
+  | AssetTilesetRegionIndexOutOfRangeDetail
+  | AssetTilesetTileEntryMalformedDetail
   | { readonly field: string; readonly got: unknown }
   | { readonly field: string; readonly value: unknown; readonly reason: string }
   | { readonly expectedCount: number; readonly actualCount: number; readonly meshAssetGuid: string }
@@ -1830,7 +2198,25 @@ export type AssetErrorDetail =
       readonly index: number;
       readonly refsLength: number;
     }
-  | { readonly vertexCount: number; readonly floatsPerVertex: number };
+  | { readonly vertexCount: number; readonly floatsPerVertex: number }
+  // feat-20260622 verify r1: sub-asset load-failure breadcrumb in structured
+  // form. The recursive loader composes the same provenance into the `.hint`
+  // string; this variant additionally exposes it for property access so AI
+  // users locate the broken edge without parsing the hint (charter P3,
+  // requirements section error-self-recovery). `sourceField`/`sceneEntityId`
+  // mirror the originating AssetRef edge; both undefined for transitive
+  // (texture) edges with no per-entity origin (D-2).
+  | {
+      readonly referencedByGuid: string;
+      readonly referencedByKind: string;
+      readonly subAssetGuid: string;
+      readonly sceneEntityId?: number;
+      readonly sourceField?: {
+        readonly componentName?: string;
+        readonly fieldName: string;
+        readonly arrayIndex?: number;
+      };
+    };
 
 // === Image importer error model SSOT (feat-20260515-learn-render-getting-started M2 T-M2-04) ===
 //
@@ -2728,10 +3114,9 @@ export const PHYSICS_ERROR_HINTS: Readonly<Record<PhysicsErrorCode, string>> = {
 //   - plan-strategy D-12 (kebab-case + closed union)
 //   - charter P3 (explicit failure: exhaustive switch without default)
 
-/** Closed union of runtime-layer error codes. 15 members (12 pre-feat-20260608-cluster-lighting + 3 hdrp-*). */
+/** Closed union of runtime-layer error codes. */
 export type RuntimeErrorCode =
   | 'shadow-invalid-config'
-  | 'shadow-disabled-by-missing-component'
   | 'skin-joint-count-exceeded'
   | 'skin-joint-despawned'
   | 'skin-joint-path-unresolved'
@@ -3978,7 +4363,8 @@ export interface PackIndexEntry {
 /** One row in the inspector's `assets[]` snapshot (JSON-RPC over WS). */
 export interface InspectEntry {
   readonly guid: string;
-  readonly brand: AssetBrand;
+  /** Asset kind discriminant string (e.g. `'mesh'`, `'texture'`, `'scene'`). */
+  readonly kind: string;
   /** Display name resolved by resolveName (empty string is legal). */
   readonly name: string;
 }
@@ -4026,8 +4412,8 @@ export interface InspectSnapshot {
  * into the types package (charter P4 — the runtime narrows; types stays
  * dependency-free).
  */
-export type LoaderAsyncResult =
-  | { readonly ok: true; readonly value: Asset }
+export type LoaderAsyncResult<P = Asset> =
+  | { readonly ok: true; readonly value: P }
   | { readonly ok: false; readonly error: unknown };
 
 /**
@@ -4035,7 +4421,11 @@ export type LoaderAsyncResult =
  * succeeded) or `undefined` (parse rejected); the asynchronous arm returns a
  * `Promise<LoaderAsyncResult>`.
  */
-export type LoaderOutput = Asset | undefined | Promise<LoaderAsyncResult>;
+export type LoaderOutput<P = Asset> =
+  | P
+  | undefined
+  | { readonly ok: false; readonly error: ParseErrorDetail }
+  | Promise<LoaderAsyncResult<P>>;
 
 /**
  * Capabilities the host wires into a {@link Loader} at load time. A loader
@@ -4055,12 +4445,7 @@ export type LoaderOutput = Asset | undefined | Promise<LoaderAsyncResult>;
  *     the pull-model `GpuResourceStore`). Typed `unknown` so types stays
  *     RHI-free.
  *
- * `reportParseError` is the scene loader's error-contextualization channel
- * (plan-strategy D-8 / research Finding 1): the previous inline `scene` arm
- * stashed a structured out-of-bounds-ref error on the registry so the caller
- * could build a precise `AssetError`. The extracted scene loader stays pure of
- * `this` by routing that detail back through the context instead. Optional —
- * only the scene loader uses it.
+ * F21 (feat-20260621): the error-contextualization callback has been removed.
  */
 export interface ParseErrorDetail {
   readonly localId: number;
@@ -4098,7 +4483,6 @@ export interface LoadContext {
    */
   getMaterialShaderTextureFieldNames?(shaderId: string): ReadonlySet<string> | undefined;
   readonly device: unknown;
-  reportParseError?(detail: ParseErrorDetail): void;
 }
 
 /**
@@ -4109,13 +4493,13 @@ export interface LoadContext {
  * produces the `Asset` POD (or a structured error / `undefined`). See the
  * module comment above for the sync vs async dispatch asymmetry.
  */
-export interface Loader {
+export interface Loader<P = Asset> {
   readonly kind: string;
   load(
     payload: Record<string, unknown>,
     refs: readonly string[] | undefined,
     ctx: LoadContext,
-  ): LoaderOutput;
+  ): LoaderOutput<P>;
 }
 
 // === Import contract SSOT (feat-20260603-asset-import-loader-injection M2 / w12) ===
@@ -4266,12 +4650,12 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
  * meta and stamps it here. `kind` mirrors the `Asset.kind` discriminant so the
  * DDC row and the runtime loader dispatch on the same string.
  */
-export interface ImportedAsset {
+export interface ImportedAsset<P = Asset> {
   readonly guid: string;
   readonly kind: string;
   readonly name?: string;
-  readonly payload: Asset;
-  readonly refs: readonly string[];
+  readonly payload: P;
+  readonly refs: readonly AssetRef[];
 }
 
 /**

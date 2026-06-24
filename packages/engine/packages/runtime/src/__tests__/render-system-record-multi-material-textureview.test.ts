@@ -177,13 +177,26 @@ const baseNavigator: Navigator = {
 } as Partial<Navigator> as Navigator;
 
 function buildManifestDataUrl(): string {
-  const materialShaderStub = (identifier: string) => ({
+  const materialShaderStub = (identifier: string, paramSchema = '[]') => ({
     identifier,
     sourcePath: `${identifier}.wgsl`,
     composedWgsl: '/* stub */',
-    paramSchema: '[]',
+    paramSchema,
     variants: [],
   });
+  // The standard-PBR shader declares baseColorTexture / metallicRoughnessTexture
+  // / normalTexture as texture2d params. Texture resolution is now schema-driven
+  // (derive(paramSchema).textureFieldNames is the SSOT), so the stub MUST carry
+  // the real schema -- an empty '[]' would yield zero user-region textures and
+  // collapse all 3 distinct-baseColor materials onto one bind group.
+  const pbrParamSchema = JSON.stringify([
+    { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
+    { name: 'metallic', type: 'f32', default: 0 },
+    { name: 'roughness', type: 'f32', default: 0.5 },
+    { name: 'baseColorTexture', type: 'texture2d' },
+    { name: 'metallicRoughnessTexture', type: 'texture2d' },
+    { name: 'normalTexture', type: 'texture2d' },
+  ]);
   const manifest = {
     schemaVersion: '1.0.0',
     entries: [
@@ -201,7 +214,7 @@ function buildManifestDataUrl(): string {
       },
     ],
     materialShaders: [
-      materialShaderStub('forgeax::default-standard-pbr'),
+      materialShaderStub('forgeax::default-standard-pbr', pbrParamSchema),
       materialShaderStub('forgeax::default-unlit'),
     ],
   };

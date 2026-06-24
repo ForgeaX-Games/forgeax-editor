@@ -15,6 +15,13 @@
 //   7. The per-frame render graph contains the 4 declarative bloom
 //      passes (bloom-bright / bloom-blur-h / bloom-blur-v / bloom-composite)
 //      — proves the bloom chain is wired in the compiled graph.
+//   8. bug-20260622 resize guard (AC-01/AC-02/AC-07): after the original
+//      frames, shrink the swap-chain texture and drive more frames without
+//      settling. The recompile drains the old-size bloom transient pool while
+//      a prior command buffer may still be in flight. Asserts zero NEW
+//      app.onError during the resize phase — the immediate-destroy regression
+//      raises "Destroyed texture used in a submit" through onuncapturederror.
+//      This is the only smoke that walks the resize-then-render bug path.
 //
 // Structural-only (OOS-3): no pixel readback. HDR float cross-device
 // rounding makes pixel diff unreliable. The bloom pipeline verdict is
@@ -99,16 +106,42 @@ globalThis.navigator.gpu.requestAdapter = async (opts) => {
   return adapter;
 };
 
+// bug-20260622: the swap-chain texture dimensions drive recordFrame's
+// targetW/targetH (read off getCurrentTexture().width/height). Switching the
+// returned texture to a smaller one mid-run makes the render-graph
+// setSwapChainSize() report needsRecompile -> recompile -> drainTransient(),
+// which retires the old-size bloom transient pool textures. The deferred-
+// destroy fix (pendingDestroy + reclaimRetiredTransients) must keep those
+// textures alive until the in-flight command buffer retires; the old buggy
+// path destroyed them immediately and the next queue.submit raised
+// "Destroyed texture used in a submit", surfaced via onuncapturederror ->
+// app.onError. This resize step is the only smoke that walks that path.
 let renderTarget;
+let renderTargetW = WIDTH;
+let renderTargetH = HEIGHT;
+let renderTargetFormat = 'rgba8unorm';
 function ensureRenderTarget(device, format) {
   if (renderTarget) return renderTarget;
+  renderTargetFormat = format;
   renderTarget = device.createTexture({
-    size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    size: { width: renderTargetW, height: renderTargetH, depthOrArrayLayers: 1 },
     format,
     usage: 0x10 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
   });
   return renderTarget;
+}
+function resizeRenderTarget(device, width, height) {
+  renderTargetW = width;
+  renderTargetH = height;
+  const next = device.createTexture({
+    size: { width, height, depthOrArrayLayers: 1 },
+    format: renderTargetFormat,
+    usage: 0x10 | 0x01,
+    viewFormats: ['rgba8unorm-srgb'],
+  });
+  renderTarget = next;
+  return next;
 }
 const mockCanvas = {
   tagName: 'CANVAS',
@@ -275,7 +308,7 @@ if (!startResult.ok) {
   process.exit(1);
 }
 
-// Run frames.
+// Run frames at the original size.
 let totalFrames = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const due = rafQueue.shift();
@@ -285,11 +318,42 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   totalFrames++;
 }
 
+// bug-20260622 resize step (AC-01/AC-02/AC-07): shrink the swap-chain texture
+// and immediately drive more frames WITHOUT settling. The first post-resize
+// frame recompiles the render graph (setSwapChainSize -> drainTransient) while
+// the prior frame's command buffer may still be in flight on the GPU. The
+// deferred-destroy fix must keep the retired transient textures alive until
+// reclaimRetiredTransients() observes onSubmittedWorkDone; the old buggy path
+// destroyed them synchronously and the next queue.submit raised
+// "Destroyed texture used in a submit", caught here via app.onError.
+const RESIZE_W = Math.max(1, Math.floor(WIDTH / 2));
+const RESIZE_H = Math.max(1, Math.floor(HEIGHT / 2));
+const onErrorBeforeResize = onErrorEvents.length;
+if (sharedDevice) {
+  resizeRenderTarget(sharedDevice, RESIZE_W, RESIZE_H);
+  mockCanvas.width = RESIZE_W;
+  mockCanvas.height = RESIZE_H;
+}
+console.log(`[smoke] resize ${WIDTH}x${HEIGHT} -> ${RESIZE_W}x${RESIZE_H}`);
+const RESIZE_FRAMES = 60;
+let resizeFrames = 0;
+for (let i = 0; i < RESIZE_FRAMES; i++) {
+  const due = rafQueue.shift();
+  if (!due) break;
+  fakeNow += 16.67;
+  due.cb(fakeNow);
+  resizeFrames++;
+  totalFrames++;
+}
+
 // Restore real performance.now and wait for any pending GPU work to settle.
 globalThis.performance.now = realPerformanceNow;
 await delay(2000);
 
-console.log(`[smoke] frames observed=${totalFrames}`);
+const onErrorAfterResize = onErrorEvents.length;
+console.log(
+  `[smoke] frames observed=${totalFrames} (resize phase=${resizeFrames}, onError pre-resize=${onErrorBeforeResize}, post-resize=${onErrorAfterResize})`,
+);
 
 // (d) Per-frame graph must contain the 4 declarative bloom passes.
 // Snapshot before app.stop() — feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle
@@ -332,6 +396,22 @@ if (missingBloomPasses.length > 0) {
   failures.push(`(d) bloom passes missing from per-frame graph: ${JSON.stringify(missingBloomPasses)} (actual: ${JSON.stringify(actualPassNames)})`);
 }
 
+// bug-20260622 (e): the resize phase must not surface any new GPU validation
+// error. A "Destroyed texture used in a submit" (immediate-destroy regression)
+// fans out through onuncapturederror -> app.onError, incrementing onErrorEvents
+// during the post-resize frames. onErrorBeforeResize === onErrorAfterResize
+// proves the deferred-destroy fix keeps retired transients alive across the
+// in-flight command buffer. resizeFrames > 0 guards against the resize phase
+// silently skipping (an empty rafQueue would make this assertion vacuous).
+if (resizeFrames === 0) {
+  failures.push('(e) resize phase ran 0 frames; resize smoke is vacuous (rafQueue drained early)');
+} else if (onErrorAfterResize !== onErrorBeforeResize) {
+  const resizeErrors = onErrorEvents.slice(onErrorBeforeResize);
+  failures.push(
+    `(e) resize introduced ${onErrorAfterResize - onErrorBeforeResize} app.onError event(s) (destroyed-texture-in-submit regression?): ${JSON.stringify(resizeErrors)}`,
+  );
+}
+
 if (failures.length > 0) {
   originalConsoleError(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) originalConsoleError(`  ${f}`);
@@ -340,7 +420,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - frames=${totalFrames}, app.onError=0, bloomPasses=${bloomPassNames.length}/4, backend=${app.renderer.backend}`);
+console.log(`[smoke] PASS - frames=${totalFrames}, app.onError=0, bloomPasses=${bloomPassNames.length}/4, resize=${WIDTH}x${HEIGHT}->${RESIZE_W}x${RESIZE_H} (${resizeFrames}f, 0 new onError), backend=${app.renderer.backend}`);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

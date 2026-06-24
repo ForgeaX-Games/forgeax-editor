@@ -28,7 +28,7 @@
       },
       "gate": {
         "enabled": false,
-        "reason": "placeholder smoke script; structural-only smoke (>=60 frames, onError=0)"
+        "reason": "smoke runs locally (>=60 frames, onError=0, pixel readback maxLuma>40); CI inclusion gated on dawn-node runner availability for learn-render examples"
       },
       "spike-report": {
         "enabled": false,

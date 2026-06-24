@@ -22,12 +22,24 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { ASSET_ERROR_HINTS, type AssetErrorCode } from '../index';
 
-describe('AssetErrorCode closed union - 10 members (feat-20260518 M1 w1 + feat-20260520 M1 t5 + M3.5 t56 + feat-20260523 M1-T02)', () => {
+describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-region-index-out-of-range + M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated)', () => {
   it('type-level: contains cubemap-handle-missing as a new member', () => {
     expectTypeOf<'cubemap-handle-missing'>().toMatchTypeOf<AssetErrorCode>();
   });
 
-  it('type-level: exhaustive switch covers all 19 members without default', () => {
+  it('type-level: contains tileset-region-index-out-of-range as the M0 baseline-restored member', () => {
+    expectTypeOf<'tileset-region-index-out-of-range'>().toMatchTypeOf<AssetErrorCode>();
+  });
+
+  it('type-level: contains tileset-tile-entry-malformed as the M1 new member', () => {
+    expectTypeOf<'tileset-tile-entry-malformed'>().toMatchTypeOf<AssetErrorCode>();
+  });
+
+  it('type-level: contains asset-invalidated as the feat-20260621 new member', () => {
+    expectTypeOf<'asset-invalidated'>().toMatchTypeOf<AssetErrorCode>();
+  });
+
+  it('type-level: exhaustive switch covers all 22 members without default', () => {
     function describeCode(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -73,6 +85,15 @@ describe('AssetErrorCode closed union - 10 members (feat-20260518 M1 w1 + feat-2
           return 'mesh-asset-submeshes-empty';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+        case 'tileset-region-index-out-of-range':
+          return 'tileset-region-index-out-of-range';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+        case 'tileset-tile-entry-malformed':
+          return 'tileset-tile-entry-malformed';
+        // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
+        case 'asset-invalidated':
+          return 'asset-invalidated';
       }
       // No default - TS guards union drift at compile time.
     }

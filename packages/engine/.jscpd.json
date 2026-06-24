@@ -1437,6 +1437,20 @@
         "apps/learn-render/5.advanced-lighting/6.hdr/scripts/smoke-dawn.mjs"
       ],
       "rationale": "feat-20260612-learn-render-5-6-7-hdr-bloom-demos M3/t14: 4.face-culling and 6.hdr smoke drivers share the dawn-node loader + mock canvas + first-person-camera-flavoured ECS spawn block. Charter F1 grep-anchor: each demo's smoke is self-contained; per-demo verdict (face-culling: visibility readback; 6.hdr: pinned perFramePassNames + FALSIFY mode) stays inline."
+    },
+    {
+      "files": [
+        "apps/learn-render/5.advanced-lighting/3.3.csm/scripts/smoke.mjs",
+        "apps/learn-render/5.advanced-lighting/3.1.shadow-mapping/3.full/scripts/smoke.mjs"
+      ],
+      "rationale": "feat-20260621-learn-render-5-3-production-shadow-demos M5: 3.3.csm (CSM) and 3.1.shadow-mapping/3.full (directional) dawn smokes share the dawn-node loader + mock canvas + wood-texture-catalog + floor/cube ECS spawn boilerplate (sibling 5.3 shadow demos with the canonical structural-only smoke shape). Charter F1 grep-anchor: each demo's smoke is self-contained alongside its src/main.ts; per-demo verdict stays inline (3.3.csm: 4 shadowCascade passes + post-effect pass via perFramePassNames + FALSIFY overlay-off / no-shadow controls; 3.1: shadowPresent + 4-criteria gate)."
+    },
+    {
+      "files": [
+        "apps/learn-render/5.advanced-lighting/3.3.csm/scripts/smoke-browser.mjs",
+        "apps/learn-render/5.advanced-lighting/3.1.shadow-mapping/3.full/scripts/smoke-browser.mjs"
+      ],
+      "rationale": "feat-20260621-learn-render-5-3-production-shadow-demos M5: 3.3.csm and 3.1.shadow-mapping/3.full Playwright browser smokes share the vite-spawn + Chrome-WebGPU launch + createRenderPipeline-capture harness (canonical browser-smoke shape from 8.deferred-shading). Charter F1 grep-anchor: each demo's browser smoke is self-contained; per-demo assertion stays inline (3.3.csm additionally asserts the overlay fullscreen post-process pipeline composed on top of URP)."
     }
   ]
 }

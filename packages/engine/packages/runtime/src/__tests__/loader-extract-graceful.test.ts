@@ -39,7 +39,6 @@ function makeCtx(opts: {
     fetchBinary: async () => ({ ok: false as const, error: new Error('no binary') }),
     resolveRef: async () => ({ ok: false as const, error: new Error('no ref') }),
     device: undefined,
-    reportParseError: () => {},
   };
   if (opts.shaderTextureFieldNames) {
     ctx.getMaterialShaderTextureFieldNames = opts.shaderTextureFieldNames;

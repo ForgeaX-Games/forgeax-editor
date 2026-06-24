@@ -64,7 +64,6 @@ import {
 import { resolveAssetHandle } from '../resolve-asset-handle';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { deriveVertexBufferLayout } from '../vertex-attribute-layout';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -388,7 +387,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     matHandle: Handle<'MaterialAsset', 'shared'>;
   } {
     const world = new World();
-    const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeMockShaderRegistry());
 
     // AABB: unit cube [-1,1] in each axis
     const aabb = new Float32Array([-1, -1, -1, 1, 1, 1]);
@@ -520,7 +519,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(4) entity with no position attribute (AABB is inverted-infinity) is always visible', () => {
       const world = new World();
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
 
       // Catalog a mesh with NO position attribute -> computeAABB returns empty box.
       // The entity should be always-visible even far away from camera.
@@ -2337,7 +2336,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Anchors:
   //   - requirements §AC-07 (BindGroup cache auto-invalidates after grow —
-  //     inner buffer handle id changes ⇒ buildBindGroupCacheKey ⇒ new key)
+  // feat-20260622-handle-to-id-allocator-elimination: after grow the
+  //   new inner buffer object is a fresh WeakMap chain key → cache miss)
   //   - requirements §AC-11 (dev mode console.info with `[mesh-ssbo]` prefix)
   //   - plan-strategy §2.D-3 (import.meta.env?.DEV optional-chain — dawn smoke
   //     defaults false)
@@ -2351,21 +2351,21 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       vi.restoreAllMocks();
     });
 
-    it('(a) inner buffer handle changes after grow — getOrAssignHandleId yields a NEW id (cache miss)', () => {
+    it('(a) inner buffer changes after grow — new WeakMap key → cache miss (AC-07)', () => {
       const { internals, ctrl } = makeInternalsWithRealController();
       const meshBeforeBuf = ctrl.state.mesh.buffer;
-      // Pretend a per-frame handle map has assigned id=1 to the pre-grow inner buffer.
-      const handleMap = new Map<object, number>();
-      handleMap.set(meshBeforeBuf as unknown as object, 1);
+      // Simulate a WeakMap chain root keyed by the pre-grow inner buffer.
+      const root = new WeakMap<object, unknown>();
+      root.set(meshBeforeBuf as unknown as object, { __leaf: 'bg-old' });
 
       ensureMeshSsboCapacity(internals, 1500);
 
       const meshAfterBuf = ctrl.state.mesh.buffer;
       expect(meshAfterBuf).not.toBe(meshBeforeBuf);
-      // The new inner buffer is NOT in the existing handle map ⇒ a fresh id
-      // would be assigned by the real `getOrAssignHandleId` ⇒ buildBindGroupCacheKey
-      // would compose a different key ⇒ meshBindGroupCache miss + rebuild.
-      expect(handleMap.has(meshAfterBuf as unknown as object)).toBe(false);
+      // AC-07: the new inner buffer is a different object, so WeakMap chain
+      // lookup naturally misses — no numeric id needed.
+      expect(root.has(meshAfterBuf as unknown as object)).toBe(false);
+      expect(root.has(meshBeforeBuf as unknown as object)).toBe(true);
     });
 
     it('(b) dev=true (vitest default) → console.info called once with `[mesh-ssbo]` + old + new + requested', () => {
@@ -2589,7 +2589,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //          research Finding 10 (validateMeshPayload :565-601) + Finding 5 (asset-invalid-value precedent).
 
   function reg(): AssetRegistry {
-    return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    return new AssetRegistry(makeMockShaderRegistry());
   }
 
   describe('validateMeshPayload topology rules (M5 w12 - AC-10)', () => {
@@ -3420,7 +3420,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return new AssetRegistry(
       // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
       { lookupMaterialShader: () => ({ ok: false }) } as any,
-      createDefaultLoaderRegistry(),
     );
   }
 

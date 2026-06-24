@@ -28,16 +28,22 @@ description: >-
 | 测试只在 **Windows** 失败，CRLF 污染 diff | `.gitattributes` 未强制 LF 或 grep/glob 路径分隔符 | [§windows-兼容性](#windows-兼容性) |
 | **天空盒（cubemap）渲染上下颠倒** | skybox.wgsl 含错误的 V-flip | [§天空盒-v-flip](#天空盒-v-flip) |
 | **方向光 CSM 阴影完全无遮挡**（diffuse 正常有明暗，shadow 项恒为 1 全亮；`shadowCascade0-3` pass 都在跑、light matrix 有效） | VS 发 `viewZ=-clipPos.w`（负）与正 `splitPlanes` 比较，cascade 选择全压到 layer 0 近 slab → 远处投影出 tile → 越界门返回 1.0 | [§csm-阴影全亮无遮挡](#csm-阴影全亮无遮挡) |
+| **方向光完全不投射阴影**（`castShadow` 开着但某些 mesh 不写入 shadow atlas） | mesh 的材质缺少 `ShadowCaster` pass（手写 `MaterialAsset` 只声明了 forward/deferred pass，没加 shadow-caster）——该 mesh 静默不进入 shadow depth pass | [§方向光阴影不出现-castshadow-与-shadowcaster-pass](#方向光阴影不出现-castshadow-与-shadowcaster-pass) |
 | **standard 材质冷启动黑几秒 / 无 IBL 处全黑** | 唯一环境光是异步 IBL cubemap 的 Skylight，cubemap 就绪前 ambient=0 | [§ambient-黑到-ibl-加载](#ambient-黑到-ibl-加载) |
 | **多 glTF mesh 文档材质错乱**（每节点绑了所有 mesh 的材质） | glTF bridge 未按 meshIndex 过滤材质 | [§gltf-bridge-多mesh材质串](#gltf-bridge-多mesh材质串) |
 | **pbr-skin pipeline 创建失败** (`Binding doesn't exist in pbr-mesh-array-bgl` / `Vertex attribute slot 5 not present`) | 标准 PBR pipeline-layout 被 skin shader 错误复用 (L1)；JOINTS_0/WEIGHTS_0 vertex 属性未上传 (L2) | [§pbr-skin-pipeline-build-fail](#pbr-skin-pipeline-build-fail) |
 | **skin browser 全黑而 dawn smoke 全绿**（`cube-vbo size=768` 不是 1152；slot 5 missing） | parse-gltf → bridge → mesh-loader → render-data → buildPipelineContext → extract 6 环节有断点 | [§skin-vertex-attribute-chain](#skin-vertex-attribute-chain) |
 | **`pnpm -F @forgeax/hello-skin dev` Fox 黑屏**，console `loadByGuid<SceneAsset> failed: AssetError code=asset-not-imported`，但 `smoke` (dawn) 全绿 | fresh worktree 漏 `pnpm build` / 端口被 sibling 占用 / submodule 未 init —— 99% 是环境，先证伪三连 | [§fox-demo-dev-加载报-asset-not-imported](#fox-demo-dev-加载报-asset-not-imported) |
 | **skin entity 静止不动**：hasSkin + AnimationPlayer 已挂，但 Fox 维持 bind-pose 静态；clip 时间轴在推、`Transform.world` 在变，画面就是不动 | palette UBO 没接 allocator / record dyn-offset 写死 0 / extract T-21 placeholder 没兑付 / **`MAX_JOINTS` off-by-one 256 vs 16320 BGL cap** / **browser-async pack-fetch 路径 SkinAsset 还没 register 就 instantiate**（`Skin.joints.length=0` + `JointCountMismatchError` 每帧；M2 fixup `e5e68b35` SceneAsset.skinGuids cross-edge 修；旧 silent-skip 改为 `'skin-asset-unresolved'` Result.err fail-fast） | [§skin-entity-静止不动](#skin-entity-静止不动) |
+| **FBX 骨骼动画整体扭曲 / 上下颠倒 / 动作乱抽**（bind-pose 关掉 AnimationPlayer 是完美直立人形，一开动画就崩） | FBX 动画提取链 bug：`WriteAnimationData` 直接读 `LclRotation` 原始**欧拉度数**当四元数（runtime slerp 它），且 `GetDstPropertyCount()=1` 只读 X 轴 Y/Z 恒 0；修法是每帧 `EvaluateLocalTransform(t).GetQ()`（需先 `SetCurrentAnimationStack`）—— 与 bind-pose 的 `WalkNode` 同一权威路径 | [§fbx-skin-动画扭曲](#fbx-skin-动画扭曲) |
 | `'webgpu-runtime-error'` 300 frame，`detail.error.name=SkinPaletteOverflowError needs=16384 cap=16320` 首帧即报 | `MAX_JOINTS=256 × 64 = 16384 B` 超过 PR #361 立的 `pbr-skin` BGL `@group(2)@binding(1)` 16320 B 容量 | [§skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b](#skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b) |
 | Edge 浏览器报 `EngineEnvironmentError: webgpu inner=adapter-unavailable`，全屏黑 | 浏览器配置整体禁了硬件 GL 栈，**不是引擎可修** | [§edge-webgpu-disabled](#edge-webgpu-disabled) |
 | wgpu-wasm WebGL2 fallback 路径 `wgpu error: Validation Error` panic（`pbr-pipeline-standard` storage/uniform mismatch · `msaaColor` `DownlevelFlags(VIEW_FORMATS)` · 类似形态） | 引擎在 fallback 路径上漏了 device-cap gate（写死单 axis variant key、graph 层 viewFormats 没按 cap 过滤、texture view-format reinterpret 没 gate） | [§wgpu-wasm-webgl2-fallback-cap-gates](#wgpu-wasm-webgl2-fallback-cap-gates) |
+| WebKit 上 mesh SSBO `ceiling 0 B`（伪 `mesh-ssbo-ceiling-reached`），场景全黑 | `downlevel_webgl2_defaults` 设 `maxStorageBufferBindingSize=0`，`growMeshSsbo` 读 0 当真实上限且超容后跳帧 | [§webkit-mesh-ssbo-ceiling-0](#webkit-mesh-ssbo-ceiling-0) |
+| WebKit 上 submit 后黑屏 / GPU 死、无任何 onError 事件 | wgpu submit 校验错误走 error-sink 静默投递，JS 侧不可见且无回调接住，GPU 进入不可恢复状态 | [§webkit-submit-黑屏-gpu死](#webkit-submit-黑屏-gpu死) |
+| WebKit Channel 3 e2e 探针 `panicked at .../storage.rs: Surface[Id(0,N)] does not exist` + `Unreachable code`，截图全黑（hello-triangle 同 binary 不 panic） | **探针装配 bug 非引擎**：探针跑有限循环后 `main()` 返回，无持久引用 hold renderer → WebKit GC-finalize wasm-bindgen wrapper → 析构 Rust 侧 Surface | [§webkit-probe-renderer-gc-finalize](#webkit-probe-renderer-gc-finalize) |
 | CI 上 grep `Vitest unit (PR + main)` 显示在 main push **未跑**；或 `vitest-browser` / `vitest-dawn` 不再嵌在 `primary-pnpm` 内被误以为消失；或 `cache-tsbuildinfo.outputs.cache-hit == 'true'` 失效但 typecheck step 仍 skip | feat-20260616 CI 形态：unit 改 if-gate（main push 用 coverage step 覆盖）+ vitest-browser/dawn 拆独立 job + cache-matched-key 替代 cache-hit（exact-hit + prefix-match 都跳）+ Playwright cache 三 job 共享 key | [§ci-form-2026-06-16](#ci-form-2026-06-16) |
+| **GPU 资源（buffer/texture/cubemap）单调增长**——长会话下资源计数持续上升、内存压力累积 | 四族对称释放缺失：A 族 store 无 per-handle evict、B 族 instance buffer delete 不 destroy、C 族 transient resize 后旧尺寸 stranded、D 族 handleToId 分配器已消除（feat-20260622，嵌套 WeakMap） | [§gpu-resource-单调增长](#gpu-resource-单调增长) |
 
 ---
 
@@ -222,7 +228,7 @@ grep -n "ndcY\|uv.y\" packages/shader/src/builtin/skybox.wgsl
 
 ## CSM 阴影全亮无遮挡
 
-**信号**：方向光 + `DirectionalLightShadow` + standard PBR（每材质带 `ShadowCaster` pass）场景**完全没有阴影**——diffuse 明暗正常（受光面/背光面对），唯独 shadow 项死掉。debug 采样所有点 `shadowFactor === 1.000`（全亮），即便正对太阳的遮挡点下方。`r.perFramePassNames` 含 `shadowCascade0-3`（CSM pass 在跑）、`r.directionalShadow.lightSpaceMatrix` 有效。
+**信号**：方向光 + standard PBR（每材质带 `ShadowCaster` pass）场景**完全没有阴影**——diffuse 明暗正常（受光面/背光面对），唯独 shadow 项死掉。debug 采样所有点 `shadowFactor === 1.000`（全亮），即便正对太阳的遮挡点下方。`r.perFramePassNames` 含 `shadowCascade0-3`（CSM pass 在跑）、`r.directionalShadow.lightSpaceMatrix` 有效。
 
 **根因**：**cascade 选择的 `viewZ` 符号不匹配**。VS 发 `out.viewZ = -clipPos.w`（相机前方为**负**——这是 cluster Z-slice 路径也依赖的故意约定），但 `pssmSplit` host 端产出**正**的 view-space split 深度。`_pickCascadeLayer` / `cascadeBlend` band 数学拿原始负 `viewZ` 跟正 `splitPlanes` 比 → 每个可见 fragment 都落进 cascade 0 的近 slab（约 0.1~1 单位深）→ 几单位外的物体投影出 [0,1] tile → `lighting-directional.wgsl` 的 NaN-safe 越界门返回 `1.0`（全亮）。整个 frame 看起来全受光。
 
@@ -236,6 +242,27 @@ grep -n "out.viewZ" packages/shader/src/default-standard-pbr*.wgsl
 关键陷阱：单测 `shadow-csm-shader.dawn.test.ts` 内嵌的 kernel 若复刻了**正** `viewZ` 直接比较，会复制 bug 并永绿——测试必须喂生产用的**负** `viewZ`。
 
 **修法**：在消费侧转一次 `viewDepth = -viewZ`，让 `_pickCascadeLayer` + blend band 都是正比正（VS 的负 viewZ 约定不动，cluster 路径不受影响）。源码 SSOT `packages/shader/src/lighting-directional.wgsl`；split 计算 `packages/runtime/src/render-system-extract.ts` `pssmSplit`。
+
+---
+
+## 方向光阴影不出现（castShadow 与 ShadowCaster pass）
+
+**信号**：场景有 `DirectionalLight`（`castShadow` 未设或为 `true`），`perFramePassNames` 含 `shadowCascade0-3`（shadow depth pass 在跑），但某个（或全部）mesh **完全不投射阴影**——其他 mesh 的阴影正常，或被遮挡面全亮。
+
+**根因（两候选，按常见顺序排）**：
+
+| 排序 | 根因 | 判定 | 修法 |
+|:--|:--|:--|:--|
+| **R1** | `DirectionalLight.castShadow` 被手动设为 `false` | `world.get(lightEntity, DirectionalLight).unwrap().castShadow === false` | 删掉 `castShadow: false`（走默认 true）或显式改回 `castShadow: true`。合并后（feat-20260621）shadow 字段全在同一个 `DirectionalLight` 组件上，不需要第二个组件 |
+| **R2** | mesh 的材质缺少 `ShadowCaster` pass——depth-only shadow pass 靠 `passKind='shadow-caster'` 筛选 entity；`Materials.standard(...)` 工厂自动产出该 pass，但手写 `MaterialAsset` 字面量如果只写了 `forward` / `deferred` pass，该 mesh 静默不进入 shadow depth pass | `material.passes` 数组里没有 `passKind='shadow-caster'` 的条目 | 在 `passes[]` 里加 `{ name: 'ShadowCaster', shader: 'forgeax::default-standard-pbr' }`，或改用 `Materials.standard(...)` 工厂构造材质。详见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §材质工厂 |
+
+**背景**：`DirectionalLight.castShadow` 是**灯侧开关**——控制引擎是否跑 shadow depth pass（populate shadow atlas）。ShadowCaster pass 是**材质/渲染侧开关**——控制某个 mesh 是否被画进该 atlas。两个条件必须同时满足才有阴影。`castShadow` 默认 `true`（合并后 zero-config 即开），所以 R1 只在手动改 `castShadow: false` 时触发。R2 在手写材质时最常见——忘记加 ShadowCaster pass，看着灯光、看着 shadow pass 在跑，就是没阴影。
+
+**不要**：在 demo 里把 mesh 的 material 换回 unlit 绕开问题——那只是躲，下一个 standard mesh 一样踩。素材质的 `passes[]` 数组才是 SSOT。
+
+**相邻条目**：
+- 同症状但全场景阴影全无（不是个别 mesh 没阴影）：见 [§CSM 阴影全亮无遮挡](#csm-阴影全亮无遮挡)（viewZ 符号不匹配）
+- 材质工厂用法：[`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §规范调用顺序
 
 ---
 
@@ -428,6 +455,40 @@ pnpm -F @forgeax/hello-skin smoke 2>&1 | grep -E "paletteWrites|distinctFullHash
 
 ---
 
+## fbx-skin 动画扭曲
+
+**信号**：`apps/hello/fbx-skin`（humanoid.fbx，80 joints，clips run/punch/shot）能渲染但**整体扭曲、上下颠倒、动作乱抽**。无 onError，dawn smoke 全绿。
+
+**先分层证伪 —— bind pose vs 动画**（交接文档 §逐层闸门协议，charter F2 image-untrustworthy）：临时关掉 `AnimationPlayer`（demo 里 `if (clip && !DEBUG)`），截图。
+- **bind pose = 完美直立人形** → 骨架 / IBM / 蒙皮权重 / 坐标转换 / palette / shader 全对，缺陷 100% 在**动画提取链**（本症状）。
+- bind pose 也扭 → 是 IBM / 列序 / 单位 / `M_i = jointWorld × IBM` 顺序，走 [§skin-vertex-attribute-chain] / hello-skin 家族。
+
+**根因（FBX 动画提取链两个叠加 bug，皆在 `@forgeax/engine-fbx`）**：
+1. **欧拉度数当四元数**：`binding.cc::WriteAnimationData` 读 `LclRotation` 曲线原始值（**欧拉角度数**），bridge 打包成 `[x,y,z,1]`，runtime `sampleChannel` 见 `elementCount===4` 当四元数 slerp。实时数据特征：rotation output `[62.93, 0, 0, 1]`（单位四元数分量不可能 >1）。
+2. **只读 X 轴**：`GetDstPropertyCount()` 对这些 curve node 返回 1，Y/Z 曲线永不读 → 全 channel 的 Y/Z 槽位恒 0。
+
+**判定**（绕开 vite，直接打 native addon）：
+```bash
+cd packages/fbx
+node -e "const b=require('./build/Release/fbx_binding.node');const d=JSON.parse(b.parseFbx('<abs>/forgeax-engine-assets/vendor/fbx-test/humanoid.fbx'));
+const c=d.clips[0];for(const ch of c.channels){if(ch.property==='rotation'&&ch.targetNode.endsWith('Hips')){console.log(ch.keyValues.slice(0,8));}}"
+# 坏：[62.93, 0, 0, 1, ...]（欧拉度数）  好：[0.2, 0.031, -0.022, 0.979, ...]（单位四元数）
+```
+
+**修法**：`WriteAnimationData` 改成每个 key time 采样 `node->EvaluateLocalTransform(t)` 再 `GetT/GetQ/GetS` 分解 —— 与 bind-pose 的 `WalkNode` **同一条权威路径**，输出真四元数（SDK 自己处理旋转顺序 / pre-post-rotation / pivot）。
+- **必须先 `scene->SetCurrentAnimationStack(animStack)`** —— 否则 `EvaluateLocalTransform(t)` 无视时间，永远返回 rest pose（数据全 identity/zero 就是漏了这句）。`WalkNode` 侥幸不需要是因为 rest pose == bind pose；二者顺序安全：`SceneToJson`（含 WalkNode）在 `WriteAnimationData` 之前跑完。
+- IR schema 顺势从 per-axis `keyTimesX/Y/Z` 收成扁平 `keyTimes` + 交错 `keyValues`（stride 3 T/S，4 rotation quat）—— SSOT，结构上消灭单轴 bug。bridge 重采样 + 四元数 nlerp 归一化；符号跨相邻 key 规范化保短弧连续。
+
+**坑（验证时极易踩）**：
+- **native 改完必须 `node-gyp rebuild`**：`FBX_SDK_ROOT=$HOME/.local/fbxsdk/current npx node-gyp rebuild`（SDK 在则可重建；否则 postinstall graceful-skip）。
+- **dist 陈旧陷阱**：`@forgeax/engine-fbx` 解析到 `dist/index.mjs`，改 `parse-animation-clip.ts` 后**必须 `pnpm --filter @forgeax/engine-fbx build`**，否则浏览器拿旧 schema 读不到 `keyValues` → 全 identity，看着像没改对。
+- **vite 全程缓存 import 结果**：`SetCurrentAnimationStack` 这类 native 改完后要 **kill vite + `rm -rf node_modules/.vite node_modules/.cache`** 再重启，否则 `/__forgeax-ddc/*.pack.json` 还是旧 body（`metaPackBodies` 是进程内 Map）。
+- CPU 侧蒙皮 AABB 自检（`palette[j]=jointWorld_j × IBM_j`，对每顶点 4-influence 加权变换求包围盒）是判定"数据对不对"的离线闸门：bind vs anim-f0 高度应都 ~160，塌成小 blob 说明数据仍坏。
+
+**Don't**：在 demo 里手动转 quat / 改 camera 绕过 —— 这是引擎 importer 的 bug，必须修 native（charter "Demo failures route to engine fixes"）。`fbx_binding.node` 是构建产物；CI `smoke-fbx-macos-arm64` 是 label-gated（标签从不存在 → 从没跑过），故此修目前仅本地 native 验证。
+
+---
+
 ## SkinPaletteOverflowError needs 16384 B exceeds 16320 B
 
 **信号**：浏览器跑 `apps/hello/skin` 首帧即 console 红：
@@ -599,3 +660,126 @@ flowchart TD
   G --> H["加回归测试: 先还原 fix 确认变红"]
   H --> I["CI 模式本地验证: 看退出码非测试行数"]
 ```
+
+---
+
+## webkit mesh SSBO ceiling 0
+
+**信号**：WebKit（Safari / WKWebView）上场景全黑（或仅少数 mesh 渲染，其余消失），console 报 `mesh-ssbo-ceiling-reached`。Chromium / Dawn 路径正常。
+
+**根因**：WebKit 的 wgpu-wasm WebGL2 回退路径（Channel 3）。`request_device` 请求 `downlevel_webgl2_defaults()` limits 预设，其 `max_storage_buffer_binding_size = 0`。`growMeshSsbo`（`createRenderer.ts`）过去直接读 `device.limits.maxStorageBufferBindingSize` 当上限，把 0 当真实上限——任何 mesh SSBO 请求都伪触 ceiling，调用点 `render-system-record.ts` 跳整帧（早期 `if (!ok) return`）。
+
+**判定**：
+
+```bash
+# 看 deriveStorageBufferCeiling 是否存在（bug-20260622 R5 M1 引入）
+grep -n "deriveStorageBufferCeiling" packages/runtime/src/createRenderer.ts
+# 若不存在 → 旧代码，WebKit 路径 ceiling=0 跳帧 = 此 bug
+```
+
+**修法**（引擎已修，bug-20260622 R5 M1-M2）：
+
+**(a) ceiling 派生** —— `createRenderer.ts` 新增 `deriveStorageBufferCeiling(device.limits)` helper（镜像 `SKIN_PALETTE_MAX_BINDING_BYTES` 的 0-floor 范式）：`maxStorageBufferBindingSize > 0` 直接取；`=== 0 || undefined` → 取 `maxBufferSize` → `maxUniformBufferBindingSize` → spec floor 128 MiB 兜底。
+
+**(b) 超容降级** —— `render-system-record.ts` 调用点从 `if (!ok) return`（跳整帧）改为截断渲染子集：`validatedOrdered.slice(0, degradedToSlotCount)` 只容纳放不下的实体，丢弃溢出 + fire `mesh-ssbo-capacity-exceeded` 结构化 RuntimeError（`.detail { requested, capacity, ceiling }`）。**行为变化**：ceiling 触顶从「跳帧(黑屏)」改为「渲染子集(非黑)」。
+
+**(c) AI 用户面**：零新增 API。`onError` 已订阅者无需改动即获降级信号；`switch (err.code)` 分支无需新增 case。
+
+源码 SSOT：`packages/runtime/src/createRenderer.ts` `deriveStorageBufferCeiling` + `growMeshSsbo`；`packages/runtime/src/render-system-record.ts` `ensureMeshSsboCapacity`。
+
+---
+
+## webkit submit 黑屏 GPU 死
+
+**信号**：WebKit（wgpu-wasm Channel 3）上 submit 后黑屏、GPU 死（后续 submit 全失败）、无任何 onError 事件、无 crash 日志。Chromium / Dawn 路径正常。
+
+**根因**：wgpu backend 的 `queue_submit`（`wgpu_core.rs`）返回 `Err` 时走 `handle_error_nolabel` 投递到 **error sink**（非同步、非 panic）。但引擎未注册 `on_uncaptured_error` 全局回调，该投递对 JS 侧完全静默——相当于「submit 失败被吞掉、GPU 进入不可恢复状态」。这是 error-sink 断连问题，不是 Rust panic（`catch_unwind` / `error_scope` 对此无效——wasm32 `panic=abort` 下 catch_unwind 不可用，`pop_error_scope` 异步破坏同步合约）。
+
+**判定**：
+
+```bash
+# 看 rhi.rs 是否有 on_uncaptured_error 注册（bug-20260622 R5 M4 引入）
+grep -n "on_uncaptured_error" packages/wgpu-wasm/src/rhi.rs
+# 若不存在 → 旧代码，submit 期 validation error 经 error-sink 静默投递 = 此 bug
+```
+
+**修法**（引擎已修，bug-20260622 R5 M3-M4）：
+
+**(a) `on_uncaptured_error` 全局回调** —— device 初始化时注册（镜像 `register_lost_callback`（`rhi.rs:934`）的 `Closure::wrap` 范式），回调把 wgpu error-sink 投递的 validation / OOM / internal error 写入 per-queue thread_local last-error 槽位。
+
+**(b) submit 错误扇出** —— Rust `submit()` 标 `#[wasm_bindgen(catch)]` 改返回 `Result`；调用 `self.inner.submit(...)` 后同步读 + 清空 last-error 槽位，命中则以稳定前缀 `[rhi-code:<code>]` 抛 JsValue 回 JS。TS shim `queue.ts` 按此前缀路由：`queue-submit-failed` → `queueSubmitFailed()`、其余 → `webgpuRuntimeError()`（复用 `RhiErrorCode` 既有成员，零新增）。
+
+**(c) AI 用户面**：submit 期校验错误从「panic(GPU 死)」改为「经 onError 返回 RhiError(实例存活)」。下一帧 submit 正常（AC-06）。`switch (err.code)` 分支无需新增 case。
+
+源码 SSOT：`packages/wgpu-wasm/src/rhi.rs` device init（`on_uncaptured_error`）+ `submit`；`packages/wgpu-wasm/src/rhi.rs` `classify_uncaptured_error` free helper；`packages/rhi-wgpu/src/queue.ts` `classifySubmitError`。
+
+---
+
+## webkit probe renderer GC finalize
+
+**信号**：WebKit（或任何 Channel 3 = navigator.gpu 缺失）下跑 Playwright e2e 探针，`panicked at .../wgpu-core/src/storage.rs:N: Surface[Id(0,N)] does not exist` + `RuntimeError: Unreachable code should not be executed`，截图全黑。**关键鉴别**：同一 binary 的 hello-triangle `index.ts` 走 `/` 不 panic；把 `index.ts` 字节拷贝换文件名也不 panic——panic 只在探针自己的 `.ts` 内容。
+
+**根因（探针装配 bug，非引擎）**：探针各 mode 跑**有限**循环（`for f<10 { draw; await rAF }`）后 `main()` 返回，**无任何持久引用 hold 住 renderer**。WebKit GC 回收 wasm-bindgen wrapper → FinalizationRegistry 析构掉 Rust 侧 `Surface` → 后续 present/lookup 命中已释放 slot（`Id(0,N)` 的 generation N = 释放后复用）。对比 `index.ts`：递归 `tick()` rAF 永久持有 renderer 闭包 → Surface 永不 GC，故永不 panic。
+
+**确定性鉴别法**：`Engine.create` 后加一行 `(window as any).__keepRenderer = renderer` → panic 消失；删 → 复现。能确定性翻转即坐实此根因。
+
+**修法（修探针，不动引擎）**：探针 `Engine.create` 后把 renderer 钉到模块生命周期（`win().__r5Renderer = renderer`，兼作 e2e 读取钩子）。正常 app 都跑持续 rAF 故无需此操作——只有「有限循环 + main 返回」的探针装配需要。
+
+**连带坑（修 panic 后才暴露，均非引擎）**：
+1. verify 脚本若只取 canvas 中心点判非黑 → 超容网格在下方带状渲染时假黑；改全画布网格扫描非黑计数。
+2. 探针若请求**第二个** adapter 触发坏 submit 且不传 `compatibleSurface` → GL 后端 adapter 枚举必 `adapter-unavailable`（`rhi-wgpu/src/index.ts` requestAdapter 需 compatible surface）。改用 `renderer.device`（引擎活设备）——也更贴合「同一 renderer 存活」语义。坏 submit 配方：`copyBufferToBuffer(buf,0,buf,0,64)` + submit 前 `destroyBuffer(buf)`。
+
+源码 SSOT：`apps/learn-render/1.getting-started/2.hello-triangle/src/r5-probe.ts`；`scripts/dev-verify/verify-webkit-r5-stability.mjs`。
+
+---
+
+## GPU 资源单调增长
+
+**信号**：长会话（持续 spawn/despawn 数分钟或场景切换多轮）下 GPU buffer / texture / cubemap 计数持续上升，内存压力指纹（系统监控 / devtools GPU memory timeline 斜率 > 0）。`gpuStore` 三 Map 的 `.size` 随帧上升且不回落。
+
+**根因（四族对称释放缺失）**：
+
+| 族 | 泄漏点 | 现场坐标 | 机制 |
+|:--|:--|:--|:--|
+| **A** | `GpuResourceStore` 缺 per-handle evict 原语 + `allocSharedRef` 未挂 `onLastRelease` 回调 | `gpu-resource-store.ts`（evictTexture / evictMesh / evictCubemap）+ `render-system-extract.ts` / `createRenderer.ts` / `glyph-text-layout-system.ts`（wiring 站点） | despawn 时 SharedRefStore 压 refcount 至 0，但 store 内的 GPU 资源永不释放——每次 spawn 建新 handle 进 Map，Map 只增不减 |
+| **B** | 每帧 `instanceBuffers.delete(key)` 前未 `buffer.destroy()` + fingerprint 失配 `set()` 新 buffer 前未 destroy 旧 `cached.buffer` | `render-system-record.ts`（F11 每帧轮询 delete + F12 三处 `instanceBuffers.set` 点：shadow / main / sprite） | 旧 buffer 被 delete/set 丢弃后 RHI 层 handle 仍存活——只有 JS 侧 GC 回收 GpuBuffer 包装，但 `GPUBuffer` 自身永不释放 |
+| **C** | resize（swapchain 尺寸变化）后旧尺寸的 transient texture 仍留在 `transientPool`，新尺寸产生新 key | `render-graph/src/graph.ts`（`transientPool` key 含尺寸 `${W}x${H}`，resize 后旧 key 永不被命中 → stranded） | 同 key 覆盖在当前代码流不可达（`transientPool.set` 仅在 `get`-miss 后执行），旧尺寸条目成实质 dead store |
+| **D** | `handleToId` 分配器已消除（feat-20260622-handle-to-id-allocator-elimination）。先前 `Map<object, number>`（S1a 改为 `WeakMap` 止血），现已整体替换为嵌套 WeakMap——handle 对象本身作 cache key，GC 自动回收 | 旧坐标 `render-system-record.ts` + `render-system.ts`（字段已删，符号 zero-survival） | 原 D 族泄漏面已闭合：无 handle→id 映射、无 string cache key、死 handle GC 自然回收 |
+
+**判定**：
+
+```bash
+# A 族 — grep store 三 Map 的 public evict 原语是否存在
+grep -n "evictTexture\|evictMesh\|evictCubemap\|releaseUnreferenced" packages/runtime/src/gpu-resource-store.ts
+
+# B 族 — instanceBuffers.delete 前是否有 buffer.destroy()
+grep -n "instanceBuffers.delete\|instanceBuffers.set" packages/runtime/src/render-system-record.ts
+
+# C 族 — resize 时是否调用 drainTransient()
+grep -n "drainTransient\|setSwapChainSize" packages/render-graph/src/graph.ts
+
+# D 族 — handleToId 分配器已消除（feat-20260622），确认符号 zero-survival
+grep -n "handleToId\|nextHandleId\|getOrAssignHandleId\|buildBindGroupCacheKey" packages/runtime/src/render-system-record.ts
+```
+
+**修法**：本 feat（`feat-20260619-gpu-resource-ownership-symmetric-release-primitive`）引入对称释放原语覆盖四族。
+
+> [!IMPORTANT]
+> **「用户要不要手动调」一栏先看**：B/C/D 三族修法**全在引擎内部**，用户 app 零改动——它们是引擎帧循环/resize/类型层的自动行为，下表描述的是引擎实现、不是用户 API。只有 A 族暴露了**可选**的显式 escape-hatch（`evict*` / `releaseUnreferenced`），且日常 despawn 已由事件式自动回收，用户**通常也不需调**。
+
+| 族 | 用户要手动调吗 | 修法（引擎实现） | 原语 |
+|:--|:--|:--|:--|
+| A | **否（日常自动）**；仅突变点（编目失效 / device 重建）可选显式调 | `evictTexture(handle)` / `evictMesh(handle)` / `evictCubemap(id)` — per-handle 显式 evict；`allocSharedRef(brand, pod, onLastRelease)` 三参闭包自动触发 evict；`releaseUnreferenced(liveSet)` 兜底 | Per-handle evict + event-driven + sweep |
+| B | **否（引擎帧循环自动）** | F11：每帧 `instanceBuffers.entries()` 遍历，`isDestroyed` gate + `buffer.destroy()` → `delete(key)`；F12：三处 set 前 `cached.buffer.destroy()` 再 set 新 buffer；`disposeInstanceBuffers` 统一 fire errorRegistry | Delete-before-destroy + set-before-overwrite |
+| C | **否（resize 自动）** | `drainTransient()` — resize 时清理旧尺寸 transient 条目（`compile()` 入口检测 `setSwapChainSize` 返 true 即调）；同 key 覆盖前 destroy 旧 PooledTexture（防御性 1 行 if） | Resize-drain + same-key guard |
+| D | **否（类型层自动 GC）** | `handleToId` 分配器已整体消除（feat-20260622-handle-to-id-allocator-elimination）——改用嵌套 WeakMap（`Map<entityKey, WeakMap<handle, BG>>`），handle 对象自身作 key，死 handle GC 自然回收 | 嵌套 WeakMap |
+
+所有错误路径统一为「吞错 + fire errorRegistry + 继续 sweep」——单条 destroy 失败不崩帧（charter P3 可观测）。
+
+**深入锚点**：`packages/runtime/README.md` §GPU-asset layers——对称释放 API 签名、两种错误约定、releaseUnreferenced 用途。
+
+**相邻条目**：
+- 同型 root cause：demolisher spawn/despawn 长会话压测 → 浏览器 OOM (`GPUBuffer` 外泄) → 同上四族
+- A 族前缀：见 worktree 本地假失败（环境层面 `ensureResident` 调不通 → store 空 → 症状不现——但 evict 后 store 空与 never-populated 行为一致）
+
+**纪律**：**在 demo 里调 `releaseUnreferenced(new Set())` 临时 flush 是 workaround，不是修正**——每帧 despawn 自动 evict 才是引擎的正确对称释放行为。A 族 wiring 在引擎层完成（`render-system-extract.ts` / `createRenderer.ts` / `glyph-text-layout-system.ts` 的 `allocSharedRef` 三参闭包），用户 app 代码**不**强制 wiring。```

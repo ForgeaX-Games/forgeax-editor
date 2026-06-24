@@ -45,6 +45,13 @@
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::shadow_pcf::{sample_shadow_2d}
 
+// feat-20260621-learn-render-5-3-production-shadow-demos M0 / AC-14:
+// compile-time upper bound on the PCF half-extent so the WGSL tap loops keep
+// a constant trip count (no dynamic loop bounds / shader variants). half=2
+// covers pcfKernelSize in {1,3,5} -> {1,9,25} taps; view.pcfKernelSize selects
+// the runtime radius via a per-iteration clip (plan-strategy D-1).
+const MAX_PCF_HALF : u32 = 2u;
+
 // Pick the cascade layer for a positive view-space depth -- walks
 // splitPlanes in order, returns the first split the depth falls below. Last
 // layer (count - 1) catches everything beyond splits[count-2]. cascadeCount=1
@@ -96,7 +103,8 @@ fn _atlasTileOrigin(layer : u32, count : u32) -> vec2<f32> {
   return vec2<f32>(f32(col) * inv, f32(row) * inv);
 }
 
-// Sample the shadow atlas with the LO 3.1.3 slope-scaled bias + 3x3 PCF,
+// Sample the shadow atlas with the LO 3.1.3 slope-scaled bias + dynamic PCF
+// kernel (driven by view.pcfKernelSize, MAX_PCF_HALF=2),
 // against the lightViewProj for the chosen cascade. The shader maps NDC
 // xy to that cascade's atlas tile in fragment space (matrix carries
 // clip-space; tile placement happens here so shadow_caster.gl_Position
@@ -118,7 +126,12 @@ fn _sampleShadowForCascade(
   let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
   let uv = tileUv * inv + tileOrigin;
   let currentDepth = projCoords.z;
-  let bias = max(0.05 * (1.0 - dot(normal, l)), 0.005);
+  // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t4
+  // (D-1): the slope-scaled bias is driven by the merged DirectionalLight's
+  // shadow fields carried in the View UBO -- normalBias scales the
+  // (1 - N.L) slope term, depthBias is the constant floor. Replaces the prior
+  // hardcoded max(0.05*(1-N.L), 0.005).
+  let bias = max(view.normalBias * (1.0 - dot(normal, l)), view.depthBias);
   let adjustedDepth = currentDepth - bias;
   // NaN-safe bounds: relational < and > do not reject NaN (NaN < 0 is
   // false), so a zero / degenerate lightViewProj matrix that produces
@@ -132,7 +145,7 @@ fn _sampleShadowForCascade(
   let texelDims = vec2<f32>(textureDimensions(shadowMap, 0));
   let texel = vec2<f32>(1.0 / texelDims.x, 1.0 / texelDims.y);
   // AC-07 (bug-20260619): the OOB guard above is in tile-local space, but the
-  // 9-tap PCF offset is applied in atlas space. For count>1 (inv<1) a fragment
+  // PCF tap offset is applied in atlas space. For count>1 (inv<1) a fragment
   // within one texel of a tile edge would sample into a NEIGHBOURING cascade's
   // tile, reading the wrong depth and producing a 1-texel seam at cascade
   // boundaries. Clamp every tap to this cascade's tile rect
@@ -140,15 +153,31 @@ fn _sampleShadowForCascade(
   // count<=1 (single full-atlas tile) this is a no-op widening of the bound.
   let tileLo = tileOrigin + texel;
   let tileHi = tileOrigin + vec2<f32>(inv) - texel;
+  // Variable-width PCF kernel driven by view.pcfKernelSize (feat-20260621
+  // 5.3-production-shadow-demos AC-14 merged with the DirectionalLightShadow
+  // merge). Constant trip count to MAX_PCF_HALF with a per-iteration clip to the
+  // runtime radius keeps the shader variant-free (no dynamic loop bound, legal
+  // for textureSampleCompareLevel uniform control flow). Host clamps
+  // view.pcfKernelSize to {1,3,5}; divisor = actual tap count, so pcfKernelSize=3
+  // -> half=1 -> 9 taps / 9.0 (result-identical to the prior hard-coded 3x3);
+  // pcfKernelSize=1 -> half=0 -> single centre tap (hard edge); pcfKernelSize=5
+  // -> half=2 -> 25-tap soft penumbra.
+  let kernel = clamp(u32(round(view.pcfKernelSize)), 1u, 2u * MAX_PCF_HALF + 1u);
+  let half = (kernel - 1u) / 2u;
+  let halfI = i32(half);
   var blocked = 0.0;
-  for (var x = -1; x <= 1; x++) {
-    for (var y = -1; y <= 1; y++) {
+  for (var x = -i32(MAX_PCF_HALF); x <= i32(MAX_PCF_HALF); x++) {
+    for (var y = -i32(MAX_PCF_HALF); y <= i32(MAX_PCF_HALF); y++) {
+      if (abs(x) > halfI || abs(y) > halfI) {
+        continue;
+      }
       let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
       let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, adjustedDepth);
       blocked = blocked + (1.0 - lit);
     }
   }
-  return 1.0 - blocked / 9.0;
+  let tapCount = f32((2u * half + 1u) * (2u * half + 1u));
+  return 1.0 - blocked / tapCount;
 }
 
 // `evalDirectional` evaluates the GGX direct-lighting term for the single

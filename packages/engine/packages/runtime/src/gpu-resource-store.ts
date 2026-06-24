@@ -78,6 +78,7 @@ import {
   type MeshRenderData,
   type TextureRenderData,
 } from './render-data';
+import type { RhiErrorListenerRegistry } from './renderer';
 
 // AssetError is constructed without importing the AssetRegistry's class; the
 // store builds the 4-field surface (.code / .expected / .hint / .detail)
@@ -234,6 +235,9 @@ export class GpuResourceStore {
   // Cube-POD register relay injected at `configureGpuDevice` (D-3); the store
   // never imports AssetRegistry, so CPU cataloguing flows through this fn.
   private registerCube: RegisterCube | undefined = undefined;
+  // Error registry injected by createRenderer; evict / releaseUnreferenced
+  // fire structured errors through this channel (feat-20260619 D-1/D-6).
+  private errorRegistry: RhiErrorListenerRegistry | undefined = undefined;
   // Hardware-probe caps injected at `configureGpuDevice`; guards the HDR cubemap
   // path (uploadCubemapFromEquirect) when `rgba16floatRenderable` is false.
   private caps: RhiCaps | undefined = undefined;
@@ -340,6 +344,175 @@ export class GpuResourceStore {
   }
 
   /**
+   * Set the error registry channel (wired by createRenderer). evict /
+   * releaseUnreferenced fire structured errors here instead of throwing -
+   * sweeps continue past individual failures (feat-20260619 D-1/D-6).
+   */
+  setErrorRegistry(registry: RhiErrorListenerRegistry): void {
+    this.errorRegistry = registry;
+  }
+
+  /**
+   * evictTexture / evictMesh / evictCubemap — per-handle evict primitives.
+   *
+   * Reuses destroyAll's isDestroyed dedup logic + cubemap wrapper
+   * shared-dedup (feat-20260619 D-1). Returns {freed, errors} so callers
+   * can consume the aggregate result (D-3). Key not present -> no-op
+   * returning {freed:0, errors:[]}.
+   */
+  evictTexture(handle: Handle<'TextureAsset', 'shared'>): { freed: number; errors: RhiError[] } {
+    const id = unwrapHandle(handle);
+    const entry = this.textureGpuHandles.get(id);
+    if (entry === undefined) return { freed: 0, errors: [] };
+
+    let freed = 0;
+    const errors: RhiError[] = [];
+
+    if (!entry.texture.isDestroyed) {
+      const r = entry.texture.destroy();
+      if (r.ok) {
+        freed = 1;
+      } else {
+        errors.push(r.error);
+        if (this.errorRegistry) this.errorRegistry.fire(r.error);
+      }
+    }
+
+    this.textureGpuHandles.delete(id);
+    return { freed, errors };
+  }
+
+  evictMesh(handle: Handle<'MeshAsset', 'shared'>): { freed: number; errors: RhiError[] } {
+    const id = unwrapHandle(handle);
+    const entry = this.meshGpuHandles.get(id);
+    if (entry === undefined) return { freed: 0, errors: [] };
+
+    let freed = 0;
+    const errors: RhiError[] = [];
+
+    const destroyBuf = (gpuBuf: GpuBuffer): void => {
+      if (!gpuBuf.isDestroyed) {
+        const r = gpuBuf.destroy();
+        if (r.ok) {
+          freed += 1;
+        } else {
+          errors.push(r.error);
+          if (this.errorRegistry) this.errorRegistry.fire(r.error);
+        }
+      }
+    };
+
+    destroyBuf(entry.vertexBuffer);
+    if (entry.indexBuffer !== null) destroyBuf(entry.indexBuffer);
+
+    this.meshGpuHandles.delete(id);
+    return { freed: freed > 0 ? 1 : 0, errors };
+  }
+
+  evictCubemap(id: number): { freed: number; errors: RhiError[] } {
+    const entry = this.cubemapGpuHandles.get(id);
+    if (entry === undefined) return { freed: 0, errors: [] };
+
+    let freed = 0;
+    const errors: RhiError[] = [];
+
+    // cubemap wrapper shared-dedup (D-1): sourceId and cubeId may share one
+    // GpuTexture wrapper. The isDestroyed gate ensures the underlying RHI
+    // texture is destroyed at most once, even when both entries are evicted.
+    if (!entry.texture.isDestroyed) {
+      const r = entry.texture.destroy();
+      if (r.ok) {
+        freed = 1;
+      } else {
+        errors.push(r.error);
+        if (this.errorRegistry) this.errorRegistry.fire(r.error);
+      }
+    }
+
+    this.cubemapGpuHandles.delete(id);
+    return { freed, errors };
+  }
+
+  /**
+   * releaseUnreferenced — iterate the three handle maps and evict entries
+   * whose key is NOT in `liveSet`.
+   *
+   * Iterates Map keys (not liveSet — store has no reverse index, D-8).
+   * IDs in liveSet that don't exist in the store are naturally ignored.
+   * Empty liveSet -> full release; second call -> no-op (maps empty,
+   * evict primitives are key-not-present no-op).
+   */
+  releaseUnreferenced(liveSet: Set<number>): { freed: number; errors: RhiError[] } {
+    let freed = 0;
+    const errors: RhiError[] = [];
+
+    for (const key of this.textureGpuHandles.keys()) {
+      if (!liveSet.has(key)) {
+        const entry = this.textureGpuHandles.get(key);
+        if (entry !== undefined) {
+          if (!entry.texture.isDestroyed) {
+            const r = entry.texture.destroy();
+            if (r.ok) {
+              freed += 1;
+            } else {
+              errors.push(r.error);
+              if (this.errorRegistry) this.errorRegistry.fire(r.error);
+            }
+          }
+          this.textureGpuHandles.delete(key);
+        }
+      }
+    }
+
+    for (const key of this.cubemapGpuHandles.keys()) {
+      if (!liveSet.has(key)) {
+        const entry = this.cubemapGpuHandles.get(key);
+        if (entry !== undefined) {
+          if (!entry.texture.isDestroyed) {
+            const r = entry.texture.destroy();
+            if (r.ok) {
+              freed += 1;
+            } else {
+              errors.push(r.error);
+              if (this.errorRegistry) this.errorRegistry.fire(r.error);
+            }
+          }
+          this.cubemapGpuHandles.delete(key);
+        }
+      }
+    }
+
+    for (const key of this.meshGpuHandles.keys()) {
+      if (!liveSet.has(key)) {
+        const entry = this.meshGpuHandles.get(key);
+        if (entry !== undefined) {
+          if (!entry.vertexBuffer.isDestroyed) {
+            const r = entry.vertexBuffer.destroy();
+            if (r.ok) {
+              freed += 1;
+            } else {
+              errors.push(r.error);
+              if (this.errorRegistry) this.errorRegistry.fire(r.error);
+            }
+          }
+          if (entry.indexBuffer !== null && !entry.indexBuffer.isDestroyed) {
+            const r = entry.indexBuffer.destroy();
+            if (r.ok) {
+              freed += 1;
+            } else {
+              errors.push(r.error);
+              if (this.errorRegistry) this.errorRegistry.fire(r.error);
+            }
+          }
+          this.meshGpuHandles.delete(key);
+        }
+      }
+    }
+
+    return { freed, errors };
+  }
+
+  /**
    * Prewarm the mipmap pipeline cache for the given texture formats (D-9).
    * Called from `createRenderer.ready` (already async): builds the one-time
    * mipmap shader module + per-format render pipeline into the mipmap-generator
@@ -375,6 +548,17 @@ export class GpuResourceStore {
       }
     }
     return ok(undefined);
+  }
+
+  /**
+   * Return the GpuTexture wrapper for a `Handle<TextureAsset>` if it has been
+   * made resident, else `undefined`.
+   *
+   * @internal — test-only seam for cow-survivor / AC-02 integration tests; not
+   * part of the engine's public API surface.
+   */
+  _getTextureGpuTexture(handle: Handle<'TextureAsset', 'shared'>): GpuTexture | undefined {
+    return this.textureGpuHandles.get(unwrapHandle(handle))?.texture;
   }
 
   /**

@@ -1,20 +1,26 @@
 // apps/hello/audio -- spacebar one-shot SFX + movable 3D listener demo
-// (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba / M3 / w15).
+// (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba / M3 / w15,
+//  updated feat-20260619 M3 w15: audioTickSystem is now auto-registered).
 //
 // What this demo exercises end-to-end:
-//   - createApp({ audio:true, input:true }) one-shot takeoff
-//   - Declarative ECS audio path: AudioSource.playing edge drives
-//     audioTickSystem (not imperative backend.play() bypass -- AC-07)
-//   - Spacebar re-arm one-shot state machine (D-3):
-//     cross-frame false->true edge per keypress via write-true-then-write-false
-//   - Listener sync via engine.listener getter (D-2) +
-//     syncListenerFromWorldMatrix for spatial panning (reads Transform.world)
+//   - createApp({ audio:true, input:true }) auto-registers audioTickSystem
+//     (M3 w15 — previously this was a wiring gap: tick was never registered
+//     and the declarative path did not actually fire).
+//   - Declarative ECS audio path: AudioSource.playing edge is now genuinely
+//     consumed by the auto-registered audioTickSystem (not imperative
+//     backend.play() bypass).
+//   - Spacebar re-arm one-shot state machine (D-3 / D-4):
+//     consumer-side edge write — cross-frame false->true edge per keypress
+//     via write-true-then-write-false. Not replaced by tick system (D-4).
+//   - Listener sync via createAppFromCanvas auto-registered ECS addSystem
+//     (M7 w25 — after propagateTransforms, reads current-frame Transform.world).
+//     Independent of tick system; no manual registration needed (D-7/D-8).
 //   - Overlay text readout (distance + L/R pan) as spatial audio
 //     verification anchor (charter F2 -- AC-11)
 //   - Pack-index asset resolution: sfx GUID -> relativeUrl -> decode ->
 //     registerWithGuid -> AudioSource.clip (AC-06 round-trip)
 //
-// D-3 one-shot edge mapping:
+// D-3 one-shot edge mapping (unchanged from original):
 //   audioTickSystem reads AudioSource.playing once per frame. A one-shot
 //   trigger needs a real false->true transition across TWO frames. The
 //   re-arm pattern: on spacebar up-edge, write playing=true; next frame
@@ -31,12 +37,8 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener, AudioSource } from '@forgeax/engine-audio';
-import {
-  loadAudioClipByGuid,
-  syncListenerFromWorldMatrix,
-  WebAudioEngine,
-} from '@forgeax/engine-audio-webaudio';
+import { AudioListener, AudioSource } from '@forgeax/engine-audio';
+import { loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
 import {
   Camera,
   DirectionalLight,
@@ -258,24 +260,8 @@ app.registerUpdate((_dt: number) => {
     }
   }
 
-  // --- Listener sync (D-2) ---
-  // Read the AudioListener entity's resolved Transform.world mat4 (written by
-  // the auto-wired propagateTransforms) and sync it to the Web Audio listener.
-  // Only runs in browser rAF (not headless). The world mat4 is the 16-float
-  // `world` column view materialised by `world.get`.
   const listenerTf = world.get(listenerEntity, Transform);
   const listenerWorld = listenerTf.ok ? listenerTf.value.world : undefined;
-  if (listenerWorld !== undefined) {
-    const audioBackend = world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)
-      ? world.getResource(AUDIO_ENGINE_RESOURCE_KEY)
-      : undefined;
-    if (audioBackend instanceof WebAudioEngine) {
-      const l = audioBackend.listener;
-      if (l) {
-        syncListenerFromWorldMatrix(l, listenerWorld);
-      }
-    }
-  }
 
   // --- Overlay readout (AC-11) ---
   if (overlayEl) {

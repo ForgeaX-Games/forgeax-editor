@@ -487,7 +487,7 @@ export interface InitOutput {
     readonly rhiwgpuinstance_requestAdapter: (a: number) => any;
     readonly rhiwgpuinstance_requestAdapterWithCanvas: (a: number, b: any) => any;
     readonly rhiwgpupipelinelayout_forgeaxToken: (a: number) => number;
-    readonly rhiwgpuqueue_submit: (a: number, b: any) => void;
+    readonly rhiwgpuqueue_submit: (a: number, b: any) => [number, number];
     readonly rhiwgpuqueue_writeBuffer: (a: number, b: number, c: bigint, d: number, e: number, f: number, g: bigint, h: number, i: bigint) => void;
     readonly rhiwgpuqueue_writeTexture: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: number, l: number, m: number, n: number, o: number) => void;
     readonly rhiwgpurenderpass_draw: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -522,9 +522,9 @@ export interface InitOutput {
     readonly rhiwgputextureview_forgeaxToken: (a: number) => number;
     readonly start: () => void;
     readonly validate: (a: number) => [number, number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__hb7e9f5f97901b76a: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h74d1ea49d56002ae: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h2a85786dfad17141: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___alloc_864af3eab0b4f693___string__String__alloc_864af3eab0b4f693___string__String______true_: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___wasm_bindgen_a677eb11d0f21513___JsValue__core_f4ce2b6cc8c3b44d___result__Result_____wasm_bindgen_a677eb11d0f21513___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___js_sys_574a212706f9bab0___Function_fn_wasm_bindgen_a677eb11d0f21513___JsValue_____wasm_bindgen_a677eb11d0f21513___sys__Undefined___js_sys_574a212706f9bab0___Function_fn_wasm_bindgen_a677eb11d0f21513___JsValue_____wasm_bindgen_a677eb11d0f21513___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

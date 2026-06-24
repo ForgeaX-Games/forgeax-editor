@@ -18,11 +18,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AssetRegistry, HANDLE_CUBE } from '../asset-registry';
 import { BUILTIN_CUBE, BuiltinAssetRegistry } from '../builtin-asset-registry';
+import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const ASSET_REGISTRY_SRC = readFileSync(
   fileURLToPath(new URL('../asset-registry.ts', import.meta.url)),
@@ -87,5 +89,936 @@ describe('D-15 AssetRegistry has no handle concept (AC-25, static source asserti
 
   it('holds no handle->guid reverse map (handleToGuid)', () => {
     expect(ASSET_REGISTRY_SRC).not.toMatch(/handleToGuid/);
+  });
+});
+
+// ── M3: invalidate / invalidateAll API + generation TDD helpers ───────────
+
+function makeMeshFixture(): MeshAsset {
+  return {
+    kind: 'mesh',
+    vertices: new Float32Array(36),
+    indices: new Uint16Array([0, 1, 2]),
+    attributes: {},
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' as const },
+    ],
+  } as unknown as MeshAsset;
+}
+
+function makeReg(): AssetRegistry {
+  return new AssetRegistry(makeMockShaderRegistry());
+}
+
+function parseGuid(s: string): AssetGuid {
+  const r = AssetGuid.parse(s);
+  if (!r.ok) throw new Error(`invalid test GUID: ${s}`);
+  return r.value;
+}
+
+describe('M3 invalidate(guid) (AC-03) [w6]', () => {
+  it('removes the catalogued asset after catalog then invalidate', () => {
+    const reg = makeReg();
+    const guid = 'a0000000-0000-4000-a000-000000000001';
+    const mesh = makeMeshFixture();
+    reg.catalog(guid, mesh);
+    expect(reg.lookup(guid)).toBeDefined();
+
+    (reg as unknown as { invalidate: (guid: string) => void }).invalidate(guid);
+
+    expect(reg.lookup(guid)).toBeUndefined();
+  });
+
+  it('is a no-op for a non-existent GUID', () => {
+    const reg = makeReg();
+    (reg as unknown as { invalidate: (guid: string) => void }).invalidate(
+      'a0000000-0000-4000-a000-000000000002',
+    );
+    expect(reg.lookup('a0000000-0000-4000-a000-000000000002')).toBeUndefined();
+  });
+
+  it('clears the targeted body+index entry but leaves bystander entries intact (AC-03)', async () => {
+    const originalFetch = globalThis.fetch;
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const targetGuid = 'a0000000-0000-4000-a000-000000000003';
+    const bystanderGuid = 'a0000000-0000-4000-a000-000000000004';
+    const targetUrl = '/packs/mesh-target.pack.json';
+    const bystanderUrl = '/packs/mesh-bystander.pack.json';
+    const packIndex = [
+      { guid: targetGuid, relativeUrl: targetUrl, kind: 'mesh' },
+      { guid: bystanderGuid, relativeUrl: bystanderUrl, kind: 'mesh' },
+    ];
+
+    function makePackFile(g: string): unknown {
+      return {
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid: g,
+            kind: 'mesh',
+            payload: {
+              vertices: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+              ],
+              indices: [0, 1, 2],
+              attributes: {},
+              submeshes: [
+                { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+              ],
+            },
+          },
+        ],
+      };
+    }
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === targetUrl) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(makePackFile(targetGuid)) });
+      }
+      if (url === bystanderUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(makePackFile(bystanderGuid)),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const internal = reg as unknown as {
+      packFileCache: Map<string, unknown>;
+      packIndexCache: Map<string, unknown> | undefined;
+      invalidate: (guid: string) => void;
+    };
+
+    try {
+      // Prod-load both GUIDs so packIndexCache holds both entries and
+      // packFileCache holds both bodies (keyed by relativeUrl).
+      const rt = await reg.loadByGuid<MeshAsset>(parseGuid(targetGuid));
+      const rb = await reg.loadByGuid<MeshAsset>(parseGuid(bystanderGuid));
+      expect(rt.ok).toBe(true);
+      expect(rb.ok).toBe(true);
+      expect(internal.packFileCache.has(targetUrl)).toBe(true);
+      expect(internal.packFileCache.has(bystanderUrl)).toBe(true);
+      expect(internal.packIndexCache?.get(targetGuid)).toBeDefined();
+      expect(internal.packIndexCache?.get(bystanderGuid)).toBeDefined();
+
+      internal.invalidate(targetGuid);
+
+      // Targeted clear: target body + index entry gone.
+      expect(internal.packFileCache.has(targetUrl)).toBe(false);
+      expect(internal.packIndexCache?.get(targetGuid)).toBeUndefined();
+
+      // Bystander survives: single-GUID invalidate must not evict unrelated
+      // cached bodies/index entries, and keeps the index Map alive (only
+      // invalidateAll nukes it to undefined).
+      expect(internal.packFileCache.has(bystanderUrl)).toBe(true);
+      expect(internal.packIndexCache?.get(bystanderGuid)).toBeDefined();
+      expect(internal.packIndexCache).not.toBeUndefined();
+
+      // Catalog entry removed + generation bumped (kept from round-1).
+      expect(reg.lookup(targetGuid)).toBeUndefined();
+    } finally {
+      if (originalFetch !== undefined) {
+        globalThis.fetch = originalFetch;
+      } else {
+        // biome-ignore lint/suspicious/noExplicitAny: test teardown
+        delete (globalThis as any).fetch;
+      }
+    }
+  });
+});
+
+describe('M3 invalidateAll() (AC-05 + AC-06) [w7]', () => {
+  it('clears all catalogued assets and returns clearedCount', () => {
+    const reg = makeReg();
+    const countBefore = reg as unknown as { assetCatalog: Map<string, unknown> };
+    const initialSize = countBefore.assetCatalog.size;
+    reg.catalog('a0000000-0000-4000-a000-000000000001', makeMeshFixture());
+    reg.catalog('a0000000-0000-4000-a000-000000000002', makeMeshFixture());
+    reg.catalog('a0000000-0000-4000-a000-000000000003', makeMeshFixture());
+
+    const result = (
+      reg as unknown as { invalidateAll: () => { clearedCount: number } }
+    ).invalidateAll();
+
+    // clearedCount includes builtins (constructor pre-populates 5 GUIDs).
+    expect(result.clearedCount).toBe(initialSize + 3);
+    expect(reg.lookup('a0000000-0000-4000-a000-000000000001')).toBeUndefined();
+    expect(reg.lookup('a0000000-0000-4000-a000-000000000002')).toBeUndefined();
+    expect(reg.lookup('a0000000-0000-4000-a000-000000000003')).toBeUndefined();
+  });
+
+  it('is idempotent: second call returns clearedCount 0', () => {
+    const reg = makeReg();
+    reg.catalog('a0000000-0000-4000-a000-000000000001', makeMeshFixture());
+
+    const internal = reg as unknown as {
+      invalidateAll: () => { clearedCount: number };
+      packIndexCache: Map<string, unknown> | undefined;
+    };
+
+    const first = internal.invalidateAll();
+    expect(first.clearedCount).toBeGreaterThan(0);
+
+    const second = internal.invalidateAll();
+    expect(second.clearedCount).toBe(0);
+    // No-op clear of an already-undefined index cache must not re-create a Map.
+    expect(internal.packIndexCache).toBeUndefined();
+  });
+
+  it('clears packFileCache and resets packIndexCache to undefined (AC-05, R2-1)', async () => {
+    const originalFetch = globalThis.fetch;
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000040';
+    const packIndex = [{ guid, relativeUrl: '/packs/mesh-all.pack.json', kind: 'mesh' }];
+    const packFile = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid,
+          kind: 'mesh',
+          payload: {
+            vertices: [
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+            ],
+            indices: [0, 1, 2],
+            attributes: {},
+            submeshes: [
+              { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/mesh-all.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packFile) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const internal = reg as unknown as {
+      packFileCache: Map<string, unknown>;
+      packIndexCache: Map<string, unknown> | undefined;
+      invalidateAll: () => { clearedCount: number };
+    };
+
+    try {
+      // Prod load populates both shared caches.
+      const r = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      expect(r.ok).toBe(true);
+      expect(internal.packFileCache.size).toBeGreaterThan(0);
+      expect(internal.packIndexCache).not.toBeUndefined();
+
+      internal.invalidateAll();
+
+      // Body cache fully cleared.
+      expect(internal.packFileCache.size).toBe(0);
+      // Index cache reset to undefined -- NOT an empty Map. An empty Map would
+      // short-circuit resolveCatalogEntry's `=== undefined` re-fetch guard
+      // (asset-registry.ts:2878) and reproduce the F17b pollution.
+      expect(internal.packIndexCache).toBeUndefined();
+    } finally {
+      if (originalFetch !== undefined) {
+        globalThis.fetch = originalFetch;
+      } else {
+        // biome-ignore lint/suspicious/noExplicitAny: test teardown
+        delete (globalThis as any).fetch;
+      }
+    }
+  });
+});
+
+describe('M3 generation drop: invalidate(guid) drops in-flight (AC-11) [w8]', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('returns asset-invalidated when invalidate is called during loadByGuid', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000010';
+    const packIndex = [{ guid, relativeUrl: '/packs/test-mesh.pack.json', kind: 'mesh' }];
+    const packFile = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid,
+          kind: 'mesh',
+          payload: {
+            vertices: [
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+            ],
+            indices: [0, 1, 2],
+            attributes: {},
+            submeshes: [
+              { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+            ],
+          },
+        },
+      ],
+    };
+
+    // Block the pack-file fetch so we can invalidate before it resolves.
+    let resolvePackFile!: (value: unknown) => void;
+    const packFilePromise = new Promise<unknown>((resolve) => {
+      resolvePackFile = resolve;
+    });
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/test-mesh.pack.json') {
+        return packFilePromise.then((v: unknown) => ({ ok: true, json: () => Promise.resolve(v) }));
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const loadPromise = reg.loadByGuid<MeshAsset>(parseGuid(guid));
+
+      // Invalidate while pack-file fetch is still blocked.
+      (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
+
+      // Now release the pack-file fetch.
+      resolvePackFile(packFile);
+
+      const result = await loadPromise;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('asset-invalidated');
+      }
+      // Catalog must NOT contain the asset (result was not written).
+      expect(reg.lookup(guid)).toBeUndefined();
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+describe('M3 generation drop: invalidateAll drops all in-flight (AC-12) [w9]', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('returns asset-invalidated for all in-flight loads after invalidateAll', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guidA = 'a0000000-0000-4000-a000-000000000010';
+    const guidB = 'a0000000-0000-4000-a000-000000000011';
+    const guidC = 'a0000000-0000-4000-a000-000000000012';
+
+    const packIndex = [
+      { guid: guidA, relativeUrl: '/packs/mesh-a.pack.json', kind: 'mesh' },
+      { guid: guidB, relativeUrl: '/packs/mesh-b.pack.json', kind: 'mesh' },
+      { guid: guidC, relativeUrl: '/packs/mesh-c.pack.json', kind: 'mesh' },
+    ];
+
+    function makePackFile(g: string): unknown {
+      return {
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid: g,
+            kind: 'mesh',
+            payload: {
+              vertices: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+              ],
+              indices: [0, 1, 2],
+              attributes: {},
+              submeshes: [
+                { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+              ],
+            },
+          },
+        ],
+      };
+    }
+
+    const resolvers: Array<(value: unknown) => void> = [];
+    const packFilePromises = [
+      '/packs/mesh-a.pack.json',
+      '/packs/mesh-b.pack.json',
+      '/packs/mesh-c.pack.json',
+    ].map(() => {
+      return new Promise<unknown>((resolve) => {
+        resolvers.push(resolve);
+      });
+    });
+
+    let resolverIdx = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url.startsWith('/packs/mesh-')) {
+        const p = packFilePromises[resolverIdx++];
+        if (p === undefined) throw new Error(`unexpected pack URL: ${url}`);
+        return p.then((v: unknown) => ({ ok: true, json: () => Promise.resolve(v) }));
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const loadA = reg.loadByGuid<MeshAsset>(parseGuid(guidA));
+      const loadB = reg.loadByGuid<MeshAsset>(parseGuid(guidB));
+      const loadC = reg.loadByGuid<MeshAsset>(parseGuid(guidC));
+
+      // All three are in-flight now. Invalidate all.
+      (reg as unknown as { invalidateAll: () => { clearedCount: number } }).invalidateAll();
+
+      // Now release all pack-file fetches.
+      resolvers[0]?.(makePackFile(guidA));
+      resolvers[1]?.(makePackFile(guidB));
+      resolvers[2]?.(makePackFile(guidC));
+
+      const results = await Promise.all([loadA, loadB, loadC]);
+      for (const r of results) {
+        expect(r.ok).toBe(false);
+        if (!r.ok) {
+          expect(r.error.code).toBe('asset-invalidated');
+        }
+      }
+
+      // Catalog must be empty.
+      expect(reg.lookup(guidA)).toBeUndefined();
+      expect(reg.lookup(guidB)).toBeUndefined();
+      expect(reg.lookup(guidC)).toBeUndefined();
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+describe('M3 integration: invalidate reload + generation match (AC-04 + AC-13) [w12]', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('AC-04: invalidate(guid) then loadByGuid re-fetches fresh bytes (not stale cache)', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000020';
+    const packUrl = '/packs/mesh-reload.pack.json';
+    const packIndex = [{ guid, relativeUrl: packUrl, kind: 'mesh' }];
+
+    // The service changes its response body between the two loads: the first
+    // pack-file request serves body-v1 (vertices[0] === 0), every subsequent
+    // request serves body-v2 (vertices[0] === 7). A genuine re-fetch after
+    // invalidate must observe body-v2; a stale-cache hit would still see v1.
+    function makePackBody(firstX: number): unknown {
+      return {
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid,
+            kind: 'mesh',
+            payload: {
+              vertices: [
+                firstX,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+              ],
+              indices: [0, 1, 2],
+              attributes: {},
+              submeshes: [
+                { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+              ],
+            },
+          },
+        ],
+      };
+    }
+    const BODY_V1_X = 0;
+    const BODY_V2_X = 7;
+
+    let packFetches = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === packUrl) {
+        packFetches += 1;
+        const body = packFetches === 1 ? makePackBody(BODY_V1_X) : makePackBody(BODY_V2_X);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      // First load: fetches body-v1, succeeds, writes to catalog.
+      const r1 = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      expect(r1.ok).toBe(true);
+      expect(reg.lookup(guid)).toBeDefined();
+      expect(packFetches).toBe(1);
+
+      // Invalidate the catalogued asset.
+      (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
+      expect(reg.lookup(guid)).toBeUndefined();
+
+      // Second load: must re-fetch the pack-file body (not serve packFileCache).
+      const r2 = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      expect(r2.ok).toBe(true);
+      expect(reg.lookup(guid)).toBeDefined();
+
+      // (a) the reload re-fetched the body -> packFetches incremented to 2.
+      expect(packFetches).toBe(2);
+      // (b) the reloaded payload is the FRESH body-v2 (vertices[0] === 7),
+      //     proving the stale cached body-v1 was NOT served.
+      if (r2.ok) {
+        expect(r2.value.vertices[0]).toBe(BODY_V2_X);
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('AC-13: invalidate then immediate reload -- generation matches, payload catalogued', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000021';
+    const packIndex = [{ guid, relativeUrl: '/packs/mesh-genmatch.pack.json', kind: 'mesh' }];
+    const packFile = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid,
+          kind: 'mesh',
+          payload: {
+            vertices: [
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+            ],
+            indices: [0, 1, 2],
+            attributes: {},
+            submeshes: [
+              { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/mesh-genmatch.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packFile) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      // Load, invalidate, reload immediately -- the new load picks up the
+      // updated generation and completes normally.
+      const r1 = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      expect(r1.ok).toBe(true);
+
+      (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
+
+      // Immediate reload after invalidate: new generation, catalog re-populated.
+      const r2 = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      expect(r2.ok).toBe(true);
+      expect(reg.lookup(guid)).toBeDefined();
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('invalidate(guid) during load: error has code, hint, and expected with GUID', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000030';
+    const packIndex = [{ guid, relativeUrl: '/packs/err-shape.pack.json', kind: 'mesh' }];
+
+    let resolvePackFile!: (value: unknown) => void;
+    const packFilePromise = new Promise<unknown>((resolve) => {
+      resolvePackFile = resolve;
+    });
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/err-shape.pack.json') {
+        return packFilePromise.then((v: unknown) => ({ ok: true, json: () => Promise.resolve(v) }));
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const loadPromise = reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
+
+      resolvePackFile({
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid,
+            kind: 'mesh',
+            payload: {
+              vertices: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+              ],
+              indices: [0, 1, 2],
+              attributes: {},
+              submeshes: [
+                { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+              ],
+            },
+          },
+        ],
+      });
+
+      const result = await loadPromise;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('asset-invalidated');
+        expect(result.error.hint).toBeTruthy();
+        expect(result.error.hint).toContain('invalidate');
+        expect(result.error.expected).toContain(guid.toLowerCase());
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('invalidateAll during load: error has code, hint, and expected', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'a0000000-0000-4000-a000-000000000031';
+    const packIndex = [{ guid, relativeUrl: '/packs/err-all.pack.json', kind: 'mesh' }];
+
+    let resolvePackFile!: (value: unknown) => void;
+    const packFilePromise = new Promise<unknown>((resolve) => {
+      resolvePackFile = resolve;
+    });
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/err-all.pack.json') {
+        return packFilePromise.then((v: unknown) => ({ ok: true, json: () => Promise.resolve(v) }));
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const loadPromise = reg.loadByGuid<MeshAsset>(parseGuid(guid));
+      (reg as unknown as { invalidateAll: () => { clearedCount: number } }).invalidateAll();
+
+      resolvePackFile({
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid,
+            kind: 'mesh',
+            payload: {
+              vertices: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+              ],
+              indices: [0, 1, 2],
+              attributes: {},
+              submeshes: [
+                { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+              ],
+            },
+          },
+        ],
+      });
+
+      const result = await loadPromise;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('asset-invalidated');
+        expect(result.error.hint).toBeTruthy();
+        expect(result.error.hint).toContain('invalidate');
+        expect(result.error.expected).toBeTruthy();
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+describe('AC-05 InspectEntry.kind (brand removed)', () => {
+  it('inspect() returns entries with .kind (not .brand)', () => {
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    const guid = AssetGuid.format(AssetGuid.random());
+    reg.catalog(guid, {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    });
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry).toBeDefined();
+    expect(entry?.kind).toBe('sampler');
+    expect(entry?.name).toBe('');
+    expect(entry).toHaveProperty('kind');
+    expect(entry).not.toHaveProperty('brand');
+  });
+
+  it('inspect().assets[].kind mirrors payload.kind', () => {
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    const payload = {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    };
+    const guid = AssetGuid.format(AssetGuid.random());
+    reg.catalog(guid, payload);
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry, 'inspect entry for sampler').toBeDefined();
+    expect(entry?.kind).toBe('sampler');
+  });
+});
+
+describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('engine-known kind (mesh) parses correctly via prod path', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'b0000000-0000-4000-a000-000000000010';
+    const packIndex = [{ guid, relativeUrl: '/packs/ac06-mesh.pack.json', kind: 'mesh' }];
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/ac06-mesh.pack.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '1.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid,
+                  kind: 'mesh',
+                  payload: {
+                    vertices: [
+                      0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                    indices: [0, 1, 2],
+                    attributes: {},
+                    submeshes: [
+                      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+                    ],
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.kind).toBe('mesh');
+  });
+
+  it('unmatched kind payload survives passthrough via prod loadByGuid', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'b0000000-0000-4000-a000-000000000011';
+    const customPayload = { fieldA: 42, fieldB: 'hello' };
+    const packIndex = [{ guid, relativeUrl: '/packs/ac06-unknown.pack.json', kind: 'host-custom' }];
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/ac06-unknown.pack.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '1.0.0',
+              kind: 'internal-text-package',
+              assets: [{ guid, kind: 'host-custom', payload: customPayload }],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid(parseGuid(guid));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry).toBeDefined();
+    expect(entry?.kind).toBe('host-custom');
+  });
+
+  it('dev-path catalog stores payload with kind faithfully', () => {
+    const reg = makeReg();
+    const guid = AssetGuid.format(AssetGuid.random());
+    const payload = {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    };
+    reg.catalog(guid, payload);
+
+    const stored = reg.lookup(guid);
+    expect(stored).toBeDefined();
+    expect(stored?.kind).toBe('sampler');
   });
 });

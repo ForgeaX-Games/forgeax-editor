@@ -20,7 +20,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   createDevImportTransport,
-  HANDLE_CUBE,
+  createPlaneGeometry,
   MeshFilter,
   MeshRenderer,
   perspective,
@@ -39,11 +39,27 @@ const BLINN_PHONG_SHADER_ID = 'learn-render::5-1-blinn-phong' as const;
 
 const PACK_INDEX_URL = '/pack-index.json';
 
-// Texture GUID from forgeax-engine-assets/learn-opengl/textures/container2.png.meta.json
-const CONTAINER2_GUID_STR = '019e3969-1d46-7945-a75a-ef97d537531e';
+// LO 5.1 renders a wood FLOOR plane lit from above. The whole point of the
+// chapter is the grazing-angle floor where Blinn-Phong's half-vector
+// specular visibly differs from Phong's reflect-vector specular. Texture
+// GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json.
+const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
+
+// Floor geometry: LO uses a 20x20 plane on the XZ plane at y=-0.5 with
+// normal +Y. createPlaneGeometry produces an XY plane facing +Z, so we
+// rotate it -90deg about X to lay it flat (normal -> +Y) so the floor
+// normal faces the overhead light at the origin.
+const FLOOR_SIZE = 20;
+const FLOOR_Y = -0.5;
+// quat for -90deg about X: (sin(-pi/4), 0, 0, cos(-pi/4)).
+const FLOOR_QUAT_X = Math.sin(-Math.PI / 4);
+const FLOOR_QUAT_W = Math.cos(-Math.PI / 4);
 
 // Blinn-Phong constants (lightPos, lightColor, shininess) are baked into
 // `blinn-phong.wgsl` as `const` because LO 5.1 never animates them.
+// LIGHT_POS is (0,0,0) — above the floor (FLOOR_Y=-0.5), so the floor's
+// +Y normal faces the light and the surface lights up (cube-at-origin
+// placed the light INSIDE the geometry, back-facing every visible face).
 // `viewPos` is read from the engine View UBO (`view.cameraPos`), which
 // the engine fills from the active Camera transform every frame. User
 // shaders cannot allocate additional @group(1) bindings above 6 — the
@@ -102,21 +118,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   // Parse texture GUID.
-  const container2GuidRes = AssetGuid.parse(CONTAINER2_GUID_STR);
-  if (!container2GuidRes.ok) {
+  const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
+  if (!woodGuidRes.ok) {
     console.error('[learn-render 5.1 blinn-phong] GUID parse failed');
     return;
   }
 
   // Load texture through the GUID asset pipeline.
-  const texRes = await assets.loadByGuid<TextureAsset>(container2GuidRes.value);
+  const texRes = await assets.loadByGuid<TextureAsset>(woodGuidRes.value);
   if (!texRes.ok) {
     const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
     if (bus !== undefined) bus.push({ code: texRes.error.code, hint: texRes.error.hint });
     console.error('[learn-render 5.1 blinn-phong] loadByGuid failed:', texRes.error.code);
     return;
   }
-  const container2Tex = texRes.value;
+  const woodTex = texRes.value;
 
   // Construct MaterialAsset POJO directly.
   const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
@@ -129,14 +145,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     ],
     paramValues: {
-      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2Tex)),
+      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
     },
   });
 
-  // Spawn cube: HANDLE_CUBE is 1x1x1, centered at origin.
+  // Floor plane: 20x20 on the XZ plane at y=-0.5, normal +Y facing the
+  // overhead light at the origin (LIGHT_POS in blinn-phong.wgsl). The
+  // procedural plane faces +Z, so rotate -90deg about X to lay it flat.
+  const floorRes = createPlaneGeometry(FLOOR_SIZE, FLOOR_SIZE);
+  if (!floorRes.ok) {
+    console.error('[learn-render 5.1 blinn-phong] createPlaneGeometry failed:', floorRes.error);
+    return;
+  }
+  const floorMesh = world.allocSharedRef('MeshAsset', floorRes.value);
   world.spawn(
-    { component: Transform, data: { posZ: 0 } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    {
+      component: Transform,
+      data: { posY: FLOOR_Y, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+    },
+    { component: MeshFilter, data: { assetHandle: floorMesh } },
     { component: MeshRenderer, data: { materials: [mat] } },
   ).unwrap();
 

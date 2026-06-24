@@ -33,6 +33,7 @@ import type {
   TextureView,
 } from '@forgeax/engine-rhi';
 
+import { derive, type ParamSchemaEntry } from '@forgeax/engine-types';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
 
 // Stub PipelineSpec used by the BGL-only call sites. The dispatcher only reads
@@ -104,57 +105,69 @@ export interface PbrPipelineLayoutBundle {
 // ─── Base entries (round-4 SSOT) ────────────────────────────────────────────
 
 /**
- * Base 7-entry PBR material BindGroupLayout descriptor (binding 0..6).
- * Mirrors the feat-20260518 D-4 + AC-06 ordering:
- *   0: material UBO (uniform, dynamic-offset)
- *   1: defaultSampler (filtering)
- *   2: baseColorTexture view (texture_2d float)
- *   3: metallicRoughnessSampler (filtering)
- *   4: metallicRoughnessTexture view (texture_2d float)
- *   5: normalSampler (filtering)
- *   6: normalTexture view (texture_2d float)
- *
- * Exported so the M4 round-4 record-stage assembler can pair this shape
- * with the 14-entry merger output (binding 7..13 from skylight-bind-group).
+ * The built-in standard-PBR material paramSchema's texture/user-region shape,
+ * used as the fallback when the material BGL is built without a registry
+ * (the caps-driven `buildPbrPipelineLayouts` seam). Declares the 3 standard
+ * user-region textures + a numeric UBO run; `derive()` collapses the numerics
+ * into binding 0 and emits sampler/texture pairs at 1..6 — byte-equivalent to
+ * the legacy fixed base-7. Kept here (not imported from the shader package) so
+ * `buildPbrPipelineLayouts` has no shader-registry dependency.
  */
-export function buildPbrMaterialBaseEntries(): GPUBindGroupLayoutEntry[] {
-  return [
-    {
+const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
+  { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
+  { name: 'metallic', type: 'f32', default: 0 },
+  { name: 'roughness', type: 'f32', default: 0.5 },
+  { name: 'baseColorTexture', type: 'texture2d' },
+  { name: 'metallicRoughnessTexture', type: 'texture2d' },
+  { name: 'normalTexture', type: 'texture2d' },
+];
+
+/**
+ * Build the PBR material BGL **user-region** from a paramSchema via the
+ * `derive()` SSOT (D-1). The user-region is binding 0 (the run-merged material
+ * UBO) followed by one sampler/texture pair per declared texture. Engine
+ * injection (IBL + lightmap) is appended AFTER this region by the caller via
+ * `appendInjection`, with start binding = `userRegion.length` — so a 4-texture
+ * custom schema (e.g. parallax + heightTexture) shifts the injection region by
+ * one sampler/texture pair automatically.
+ *
+ * The built-in `default-standard-pbr` paramSchema declares exactly 3 textures,
+ * so this derives to binding 0 UBO + 3 pairs = 7 entries, byte-equivalent to
+ * the legacy fixed base-7 (AC-06 bit-for-bit).
+ *
+ * One material-UBO convention is layered on top of the pure `derive()` output:
+ * binding 0 is patched to `{ type: 'uniform', hasDynamicOffset: true }` with
+ * `VERTEX | FRAGMENT` visibility. The material UBO is bound with a per-submesh
+ * dynamic offset (`render-system-record.ts setBindGroup(1, bg, [offset])`) and
+ * the vertex stage reads material params, so this is required for GPU
+ * validation. `derive()` stays FRAGMENT-only / no-dynamic-offset for its other
+ * consumers (it is the generic SSOT, not the material-UBO authority).
+ *
+ * @param paramSchema - the material shader's paramSchema (defaults to the
+ *   built-in standard-PBR shape when omitted, for the caps-driven seam).
+ */
+export function buildPbrMaterialUserRegionEntries(
+  paramSchema: readonly ParamSchemaEntry[] = DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA,
+): GPUBindGroupLayoutEntry[] {
+  const derived = derive(paramSchema);
+  // derive() returns the engine BindGroupLayoutEntry (exactOptionalPropertyTypes
+  // makes its optional fields `T | undefined`, structurally distinct from the
+  // DOM GPUBindGroupLayoutEntry surface). The two-step `as unknown as` is the
+  // sanctioned known-unsafe opt-in (AC-08 gate (j) allows it; single-step
+  // `as GPU...` is the forbidden shim-leak pattern).
+  const entries = derived.bglEntries.map((e) => ({ ...e })) as unknown as GPUBindGroupLayoutEntry[];
+  // Patch binding 0 (the material UBO) to the dynamic-offset, vertex-visible
+  // material-UBO contract. derive() emits binding 0 as the first numeric run's
+  // merged UBO; an empty schema has no binding-0 UBO and needs no patch.
+  const ubo = entries[0];
+  if (ubo !== undefined && ubo.binding === 0 && ubo.buffer !== undefined) {
+    entries[0] = {
       binding: 0,
       visibility: GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT,
       buffer: { type: 'uniform', hasDynamicOffset: true },
-    },
-    {
-      binding: 1,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      sampler: { type: 'filtering' },
-    },
-    {
-      binding: 2,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      texture: { sampleType: 'float', viewDimension: '2d' },
-    },
-    {
-      binding: 3,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      sampler: { type: 'filtering' },
-    },
-    {
-      binding: 4,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      texture: { sampleType: 'float', viewDimension: '2d' },
-    },
-    {
-      binding: 5,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      sampler: { type: 'filtering' },
-    },
-    {
-      binding: 6,
-      visibility: GPU_SHADER_STAGE_FRAGMENT,
-      texture: { sampleType: 'float', viewDimension: '2d' },
-    },
-  ];
+    };
+  }
+  return entries;
 }
 
 // ─── appendInjection — generic engine-injection BGL appender (M3 / w15) ──────

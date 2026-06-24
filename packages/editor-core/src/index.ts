@@ -1,13 +1,13 @@
 // @forgeax/editor-core — pure logic layer (no UI/React)
 //
 // Re-exports:
-//   Scene types (EntityId, EntityNode, SceneDocument, EntitySource)
-//   Scene pack (docToPack, packToDoc, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
+//   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
+//   Scene pack (sessionToPack, packToSession, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
 //   Instantiate (instantiateScene, buildNativeScene, etc.)
 //   glTF runtime (loadGltfRuntime, LoadedGltf, etc.)
 //   EditorCommand & types
 //   EditorBus & bus types
-//   Command document (createDocument, applyCommand, etc.)
+//   Command session (createEditSession, applyCommand, etc.)
 //   Component schema (listComponentSchemas, getComponentSchema, etc.)
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
 //   Anim (Clip, Track, Interp, etc.)
@@ -20,15 +20,16 @@ export type {
   EntityId,
   EntitySource,
   EntityNode,
-  SceneDocument,
+  EditSession,
+  SceneAsset,
 } from './types';
 
 export type { EditorCommand, CommandError, ApplyResult } from './types';
 
 // ── Scene pack ──
 export {
-  docToPack,
-  packToDoc,
+  sessionToPack,
+  packToSession,
   isScenePack,
   stableGuid,
   CUBE_GUID,
@@ -78,8 +79,13 @@ export type {
   HistoryStep,
 } from './bus';
 
-// ── Document ──
-export { createDocument, applyCommand, childrenOf, isSelfOrDescendant } from './document';
+// ── Edit session (authoring working state) ──
+export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
+export { makeEditSession, projectSessionAsset } from './edit-session';
+
+// ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
+export { schemaFingerprint, decideReloadTier } from './hot-reload';
+export type { ReloadTier, SchemaSource } from './hot-reload';
 
 // ── Schema ──
 export {
@@ -239,6 +245,7 @@ export {
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
+  hasPendingDiskSave,
   setAssetSelection,
   getAssetSelection,
   useAssetSelection,
@@ -261,3 +268,7 @@ export type { MenuItemDef } from './contextMenuService';
 
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './dock-bridge';
+
+// ── Project authoring (M3) ──
+export { openProject, type OpenProjectResult } from './open-project';
+export { createFetchReader } from './fetch-reader';

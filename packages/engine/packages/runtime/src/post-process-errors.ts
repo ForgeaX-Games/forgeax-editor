@@ -3,7 +3,7 @@
 //  feat-20260609-learn-render-4-5-framebuffers-demo-offscreen-rt-an M1 / T-2
 //  added 'fullscreen-input-not-found').
 //
-// Closed 6-member PostProcessErrorCode union + PostProcessError discriminated-union class.
+// Closed 8-member PostProcessErrorCode union + PostProcessError discriminated-union class.
 // Six failure channels split by error nature (charter P3 + plan-strategy D-4):
 // (feat-20260612-hdrp-ssao M2 / w10: +3 SSAO codes — plan-strategy D-3)
 //   - 'post-process-already-registered' (programmer error) -> postProcess.register THROWS a
@@ -50,7 +50,7 @@
 /**
  * Closed union of fullscreen post-process error codes.
  *
- * Exactly 3 members; AI users perform exhaustive `switch (err.code)` without a default
+ * Exactly 8 members; AI users perform exhaustive `switch (err.code)` without a default
  * and TS guards completeness (AC-08).
  *
  * | code | channel | trigger |
@@ -58,6 +58,11 @@
  * | `'post-process-already-registered'` | throw | a second `postProcess.register(id, entry)` under an already-registered `id` |
  * | `'post-process-not-found'` | throw / `Result.err` | `addFullscreenPass({shader: id})` where `id` resolves to no registered post-process |
  * | `'fullscreen-input-not-found'` | throw | `addFullscreenPass({reads: [key]})` where `key` is not a graph-declared color target |
+ * | `'ssao-radius-non-positive'` | throw | SSAO `radius <= 0` |
+ * | `'ssao-bias-negative'` | throw | SSAO `bias < 0` |
+ * | `'ssao-storage-buffer-unavailable'` | throw | device lacks storage-buffer support for the SSAO pass |
+ * | `'params-size-mismatch'` | throw | `postProcess.register({params})` with `byteSize < 16` or `defaultValue.length !== byteSize` (feat-20260621 M-A4 / D-4) |
+ * | `'params-update-size-mismatch'` | throw | per-frame data-driven write where `PostProcessParams.data` byteLength !== registered `params.byteSize` (feat-20260621 M-A4 / D-4) |
  */
 export type PostProcessErrorCode =
   | 'post-process-already-registered'
@@ -65,7 +70,9 @@ export type PostProcessErrorCode =
   | 'fullscreen-input-not-found'
   | 'ssao-radius-non-positive'
   | 'ssao-bias-negative'
-  | 'ssao-storage-buffer-unavailable';
+  | 'ssao-storage-buffer-unavailable'
+  | 'params-size-mismatch'
+  | 'params-update-size-mismatch';
 
 /**
  * Detail for `'post-process-already-registered'`: the post-process id that was already taken.
@@ -124,6 +131,33 @@ export interface SsaoStorageBufferUnavailableDetail {
 }
 
 /**
+ * Detail for `'params-size-mismatch'`: the register call's byteSize / defaultValue.length
+ * is invalid. Carries `byteSize` (the declared size) and `actualLength` (defaultValue.length).
+ * AI consumers read `.detail.byteSize` / `.detail.actualLength` after the code guard.
+ */
+export interface PostProcessParamsSizeMismatchDetail {
+  readonly byteSize: number;
+  readonly actualLength: number;
+}
+
+/**
+ * Detail for `'params-update-size-mismatch'`: the per-frame data-driven write
+ * (PostProcessParams.data) had a byteLength that did not equal the registered
+ * `params.byteSize`. Carries `byteSize` (registered) + `actualLength` (the
+ * supplied data byteLength). AI consumers read `.detail.byteSize` /
+ * `.detail.actualLength` after the code guard.
+ *
+ * NOTE (feat-20260621 M-A2): this code is wired here so dispatchFullscreenPass
+ * can fail-fast on a mismatched per-frame write; the full error-model
+ * formalization (expected/hint refinement, JSDoc member count, public
+ * PostProcessError union variant) is finished in M-A4.
+ */
+export interface PostProcessParamsUpdateSizeMismatchDetail {
+  readonly byteSize: number;
+  readonly actualLength: number;
+}
+
+/**
  * Conditional resolver from `PostProcessErrorCode` to its detail payload type. Used by the
  * constructor signature so `new PostProcessError({ code: 'X', detail })` narrows the
  * `detail` parameter to the variant payload at compile time.
@@ -141,7 +175,11 @@ export type PostProcessErrorDetailFor<C extends PostProcessErrorCode> =
             ? SsaoBiasNegativeDetail
             : C extends 'ssao-storage-buffer-unavailable'
               ? SsaoStorageBufferUnavailableDetail
-              : never;
+              : C extends 'params-size-mismatch'
+                ? PostProcessParamsSizeMismatchDetail
+                : C extends 'params-update-size-mismatch'
+                  ? PostProcessParamsUpdateSizeMismatchDetail
+                  : never;
 
 /**
  * Tagged union of `.detail` payloads. The variants are unique by structural fields
@@ -155,7 +193,9 @@ export type PostProcessErrorDetail =
   | FullscreenInputNotFoundDetail
   | SsaoRadiusNonPositiveDetail
   | SsaoBiasNegativeDetail
-  | SsaoStorageBufferUnavailableDetail;
+  | SsaoStorageBufferUnavailableDetail
+  | PostProcessParamsSizeMismatchDetail
+  | PostProcessParamsUpdateSizeMismatchDetail;
 
 const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = {
   'post-process-already-registered': 'each post-process id is registered at most once',
@@ -164,6 +204,8 @@ const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = 
   'ssao-radius-non-positive': 'SSAO radius must be > 0',
   'ssao-bias-negative': 'SSAO bias must be >= 0',
   'ssao-storage-buffer-unavailable': 'device supports storage buffers',
+  'params-size-mismatch': 'params.byteSize >= 16 and defaultValue.length === byteSize',
+  'params-update-size-mismatch': 'PostProcessParams.data byteLength === registered params.byteSize',
 };
 
 function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDetail): string {
@@ -210,6 +252,22 @@ function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDet
         '(WebGPU: StorageBufferBindingAccess feature; WebGL2: unavailable).'
       );
     }
+    case 'params-size-mismatch': {
+      const d = detail as PostProcessParamsSizeMismatchDetail;
+      return (
+        `params.byteSize is ${d.byteSize} but defaultValue.length is ${d.actualLength}. ` +
+        'The UBO byteSize must be >= 16 B and defaultValue.length must equal byteSize. ' +
+        'Pass a defaultValue Uint8Array whose .length matches byteSize exactly.'
+      );
+    }
+    case 'params-update-size-mismatch': {
+      const d = detail as PostProcessParamsUpdateSizeMismatchDetail;
+      return (
+        `PostProcessParams.data byteLength is ${d.actualLength} but the registered ` +
+        `params.byteSize is ${d.byteSize}. The per-frame data-driven write must match ` +
+        'the registered byteSize exactly; check the PostProcessParams.data you assign each frame.'
+      );
+    }
     default: {
       const exhaustive: never = code;
       return exhaustive;
@@ -245,7 +303,7 @@ type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorC
 };
 
 /**
- * Public PostProcessError type - discriminated union of the 3 variants.
+ * Public PostProcessError type - discriminated union of the 8 variants.
  *
  * ```ts
  * function recover(err: PostProcessError): string {
@@ -263,7 +321,9 @@ export type PostProcessError =
   | PostProcessErrorVariant<'fullscreen-input-not-found'>
   | PostProcessErrorVariant<'ssao-radius-non-positive'>
   | PostProcessErrorVariant<'ssao-bias-negative'>
-  | PostProcessErrorVariant<'ssao-storage-buffer-unavailable'>;
+  | PostProcessErrorVariant<'ssao-storage-buffer-unavailable'>
+  | PostProcessErrorVariant<'params-size-mismatch'>
+  | PostProcessErrorVariant<'params-update-size-mismatch'>;
 
 interface PostProcessErrorConstructor {
   new <C extends PostProcessErrorCode>(args: {

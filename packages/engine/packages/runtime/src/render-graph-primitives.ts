@@ -37,7 +37,7 @@
 //   addSkyboxPass    | engine-built-in | execute = recordSkyboxPass (private)
 //   addBloomPasses   | engine-built-in | execute = 4× private record* closures
 //   addSsaoPasses    | engine-built-in | execute = 2× private record* closures
-//   addTonemapPass   | engine-built-in | execute = recordTonemapPass (private)
+//   addTonemapPass   | engine-built-in | execute = dispatchFullscreenPass('forgeax::tonemap')
 //   addColorTarget    | engine-built-in (resource decl)
 //   addColorTargetAlias | engine-built-in (resource decl)
 //   addFullscreenPass | EXTENSION POINT (the only one)
@@ -79,7 +79,13 @@
 
 import { mat4 } from '@forgeax/engine-math';
 import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
-import type { RhiRenderPassEncoder, Sampler, TextureView } from '@forgeax/engine-rhi';
+import {
+  type Buffer,
+  RhiError,
+  type RhiRenderPassEncoder,
+  type Sampler,
+  type TextureView,
+} from '@forgeax/engine-rhi';
 import type { PassSelector } from '@forgeax/engine-types';
 import {
   buildFullscreenPostProcessPass,
@@ -104,7 +110,6 @@ import {
   recordPointShadowPass,
   recordShadowPass,
   recordSkyboxPass,
-  recordTonemapPass,
 } from './render-system-record';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 
@@ -871,9 +876,30 @@ export interface AddTonemapPassOptions {
 }
 
 /**
- * HDR -> LDR tonemap fullscreen pass. Implementation detail:
- * `recordTonemapPass` reads the resolved HDR view + writes the swap-chain LDR
- * sprite split sub-target (when active) or the swap-chain directly.
+ * Reserved post-process id for the engine built-in tonemap (feat-20260621 M-A3
+ * / D-5). Registered at boot via `postProcess.register(TONEMAP_POST_PROCESS_ID,
+ * { source, params })`; the extract stage bridges `Camera.exposure / whitePoint
+ * / tonemap` onto the params channel under this key (render-system-extract.ts).
+ */
+export const TONEMAP_POST_PROCESS_ID = 'forgeax::tonemap';
+
+/**
+ * HDR -> LDR tonemap fullscreen pass. feat-20260621 M-A3 (D-5): the built-in
+ * tonemap now flows through the SAME unified fullscreen post-process channel as
+ * any custom post-process — registered at boot via `postProcess.register(
+ * 'forgeax::tonemap', { source, params })`, its exposure/whitePoint/mode bridged
+ * onto the per-frame params channel by the extract stage, and dispatched here
+ * through `dispatchFullscreenPass`. This wrapper preserves two behaviours the
+ * generic `addFullscreenPass` lacks:
+ *   - the per-frame `tonemapActive` gate (`camera.tonemap === 'none'` ->
+ *     zero-overhead skip), and
+ *   - graceful degradation (charter §9) on the empty-manifest path: when
+ *     `forgeax::tonemap` was never registered (Camera-only world, no manifest)
+ *     fire a structured `shader-compile-failed` instead of letting the
+ *     dispatcher throw `post-process-not-found`.
+ * `writes: []` (not `['swapchain']`) keeps the graph dependency ordering
+ * byte-identical to the pre-M-A3 pass; the swap-chain write target is resolved
+ * inside `dispatchFullscreenPass` via the `'swapchain'` color key -> `ctx.view`.
  */
 export function addTonemapPass(
   graph: RenderGraph<RenderPipelineContext>,
@@ -883,17 +909,67 @@ export function addTonemapPass(
   graph.addPass(name, {
     reads: [opts.hdrComposited],
     writes: [],
-    execute: recordTonemapPass as (c: RenderPipelineContext) => void,
+    execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
+      // tonemapActive SSOT: derived from camera.tonemap (mirrors recordFrame's
+      // `camera.tonemap !== 'none'`); the `'none'` path is a zero-overhead skip.
+      if (ctx.camera.tonemap === 'none') return;
+      const registered = ctx.runtime.lookupPostProcess?.(TONEMAP_POST_PROCESS_ID);
+      if (registered === undefined) {
+        ctx.runtime.errorRegistry.fire(
+          new RhiError({
+            code: 'shader-compile-failed',
+            expected:
+              'manifest entries include pbr.wgsl + unlit.wgsl + tonemap.wgsl (engine SSOT triple)',
+            hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 3 engine entries; check vite plugin engineEntries option',
+          }),
+        );
+        return;
+      }
+      dispatchFullscreenPass(
+        ctx,
+        name,
+        TONEMAP_POST_PROCESS_ID,
+        'swapchain',
+        [opts.hdrComposited],
+        resolveCtx,
+      );
+    },
   });
 }
 
 export interface AddFullscreenPassOptions {
-  /** Registered post-process shader id (via renderer.postProcess.register) — currently `'fxaa'` only. */
+  /**
+   * Registered post-process shader id (via renderer.postProcess.register). The
+   * built-in `'fxaa'` id is a hardwired dispatcher branch; any other id is an
+   * AI-user effect whose WGSL declares `vs_main` + `fs_main` and samples the
+   * input at `@group(1) @binding(0)` texture + `@binding(1)` sampler. With
+   * `compositeOverSwapchain` this is how an effect layers over URP's final image
+   * (see RenderPipelineAsset.config.postEffects).
+   */
   readonly shader: string;
-  /** Graph resource key the pass writes (intermediate scratch RT for FXAA). */
+  /** Graph resource key the pass writes (intermediate scratch RT for FXAA / the composite scratch). */
   readonly color: string;
   /** Graph resource keys the pass samples. Empty = sample swap-chain via copyTextureToTexture. */
   readonly reads?: readonly string[] | undefined;
+  /**
+   * feat-20260621 M4': composite-over-swap-chain mode. When true, the pass
+   * copies the CURRENT swap-chain into the `color` scratch target (so the effect
+   * samples the already-composited final image), samples that scratch, then
+   * writes the result back into the swap-chain through its non-srgb storage view
+   * (R-COLORSPACE: the swap-chain is already sRGB-encoded, so writing through the
+   * srgb view would double-encode). This is the generalisation of the built-in
+   * `'fxaa'` copy idiom to AI-user effects — the mechanism that lets a built-in
+   * pipeline layer a registered effect on top of its final image WITHOUT
+   * replacing the pipeline (and dropping its shadow / tonemap passes). `color`
+   * MUST be a `graph.addColorTarget` declared with the swap-chain storage format
+   * + COPY_DST | TEXTURE_BINDING usage (it is both copy dst and sampled input);
+   * `reads` stays empty.
+   *
+   * WebGPU backend only: the mid-frame swap-chain copy + non-srgb storage-view
+   * write are not supported on the WebGL2 fallback swap-chain (no COPY_SRC, no
+   * non-srgb reinterpret view) — the same constraint `recordFxaaPass` carries.
+   */
+  readonly compositeOverSwapchain?: boolean | undefined;
 }
 
 /**
@@ -931,7 +1007,15 @@ export function addFullscreenPass(
     reads,
     writes: [opts.color],
     execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
-      dispatchFullscreenPass(ctx, name, opts.shader, opts.color, reads, resolveCtx);
+      dispatchFullscreenPass(
+        ctx,
+        name,
+        opts.shader,
+        opts.color,
+        reads,
+        resolveCtx,
+        opts.compositeOverSwapchain ?? false,
+      );
     },
   });
 }
@@ -983,6 +1067,7 @@ function dispatchFullscreenPass(
   color: string,
   reads: readonly string[],
   resolveCtx?: ResolveContext,
+  compositeOverSwapchain = false,
 ): void {
   if (shader === 'fxaa') {
     recordFxaaPass(ctx as unknown as _InternalRenderPipelineContext);
@@ -997,15 +1082,35 @@ function dispatchFullscreenPass(
     });
   }
 
-  // Resolve reads[0] -> graph-owned color target view (M1 / T-3 patch).
-  // reads === [] preserves the legacy swap-chain sample path (used by
-  // tonemap-style passes that read the framebuffer directly); reads with
-  // a key MUST resolve through the graph compile output, otherwise the
-  // dispatcher throws fullscreen-input-not-found (charter P3 fail-fast).
+  // feat-20260621 M4' composite-over-swap-chain: copy the current swap-chain
+  // into the `color` scratch target BEFORE sampling, so the effect reads the
+  // already-composited final image (shadows + tonemap + fxaa). Generalises the
+  // built-in FXAA copy idiom. The `color` key is BOTH the copy dst and the
+  // sampled input (resolve its GPU texture via `${color}::tex` for the copy,
+  // its TextureView via `${color}` for the bind group).
   let inputView: TextureView | null;
-  if (reads.length === 0) {
+  if (compositeOverSwapchain) {
+    const scratchTex = resolveCtx?.resolve(`${color}::tex`);
+    const scratchView = resolveCtx?.resolve(color);
+    if (scratchTex === undefined || scratchView === undefined) {
+      throw new PostProcessError({
+        code: 'fullscreen-input-not-found',
+        detail: { readsKey: color, passName: name },
+      });
+    }
+    ctx.encoder.copyTextureToTexture(
+      { texture: ctx.currentTexture as never, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } },
+      { texture: scratchTex as never, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } },
+      { width: ctx.targetW, height: ctx.targetH, depthOrArrayLayers: 1 },
+    );
+    inputView = scratchView as TextureView;
+  } else if (reads.length === 0) {
+    // reads === [] preserves the legacy swap-chain sample path (used by
+    // tonemap-style passes that read the framebuffer directly).
     inputView = ctx.view;
   } else {
+    // reads with a key MUST resolve through the graph compile output, otherwise
+    // the dispatcher throws fullscreen-input-not-found (charter P3 fail-fast).
     const readsKey = reads[0] as string;
     const resolved = resolveCtx?.resolve(readsKey);
     if (resolved === undefined) {
@@ -1018,9 +1123,24 @@ function dispatchFullscreenPass(
   }
   if (inputView === null) return;
 
-  // Resolve the write target through the graph; fall back to ctx.view when
-  // the pass writes to the swap-chain (no addColorTarget declaration).
-  const writeView = (resolveCtx?.resolve(color) as TextureView | undefined) ?? ctx.view;
+  // feat-20260621 M4' composite-over-swap-chain write target: the swap-chain's
+  // NON-srgb storage view (R-COLORSPACE — the scratch holds an already-sRGB-
+  // encoded copy, so writing through the srgb view would double-encode; mirrors
+  // recordFxaaPass). Otherwise resolve the declared color through the graph and
+  // fall back to ctx.view (swap-chain srgb view) for normal post passes.
+  let writeView: TextureView | null | undefined;
+  let writeFormat = 'rgba8unorm-srgb';
+  if (compositeOverSwapchain) {
+    const storageViewRes = ctx.runtime.device.createTextureView(ctx.currentTexture, {});
+    if (!storageViewRes.ok) {
+      ctx.runtime.errorRegistry.fire(storageViewRes.error);
+      return;
+    }
+    writeView = storageViewRes.value;
+    writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
+  } else {
+    writeView = (resolveCtx?.resolve(color) as TextureView | undefined) ?? ctx.view;
+  }
   if (writeView === null || writeView === undefined) return;
 
   const built = buildFullscreenPostProcessPass(
@@ -1028,11 +1148,38 @@ function dispatchFullscreenPass(
     entry,
   );
   if (built === null) return;
+
+  // feat-20260621 M-A2 / w8: per-frame data-driven params channel. When the
+  // entry declares params, look up the per-id eager-created UBO + the per-frame
+  // bytes from the PostProcessParams snapshot, fail-fast on a byteLength
+  // mismatch, then writeBuffer + bind the UBO at group(1) binding(2). When
+  // entry.params is undefined this whole block is skipped and the BGL degrades
+  // to 2-entry (param-less zero-regression, R-A7).
+  let paramsBuffer: Buffer | null = null;
+  if (entry.params !== undefined) {
+    const ubo = ctx.runtime.getPostProcessParamsBuffer?.(shader);
+    if (ubo !== undefined) {
+      const data = ctx.postProcessParams.get(shader);
+      if (data !== undefined) {
+        if (data.byteLength !== entry.params.byteSize) {
+          throw new PostProcessError({
+            code: 'params-update-size-mismatch',
+            detail: { byteSize: entry.params.byteSize, actualLength: data.byteLength },
+          });
+        }
+        const writeResult = ctx.runtime.device.queue.writeBuffer(ubo, 0, data);
+        if (!writeResult.ok) return;
+      }
+      paramsBuffer = ubo;
+    }
+  }
+
   const bindGroup = createFullscreenBindGroup(
     ctx.runtime.device,
     built.bindGroupLayout,
     inputView,
     built.sampler,
+    paramsBuffer,
   );
   if (bindGroup === null) return;
 
@@ -1058,13 +1205,18 @@ function dispatchFullscreenPass(
   // FXAA's rgba8unorm storage-view path is unaffected: it routes through
   // `recordFxaaPass` (the if(shader==='fxaa') branch above) and never reaches
   // this dispatcher line.
+  // The PSO target format MUST equal the render-pass attachment format. For
+  // the composite-over-swap-chain path that is the non-srgb storage format
+  // (writeFormat); otherwise the backend-aware colorAttachmentFormat.
   const lookupPipeline = ctx.runtime.getPostProcessPipeline;
   if (lookupPipeline === undefined) return;
-  const postColorFormat = (ctx.pipelineState?.colorAttachmentFormat ??
-    'rgba8unorm-srgb') as unknown as GPUTextureFormat;
+  const postColorFormat = (compositeOverSwapchain
+    ? writeFormat
+    : (ctx.pipelineState?.colorAttachmentFormat ??
+      'rgba8unorm-srgb')) as unknown as GPUTextureFormat;
   const pipeline = lookupPipeline(shader, built.bindGroupLayout, postColorFormat);
   if (pipeline === null) return;
-  const handle = built.createHandle(name, pipeline);
+  const handle = built.createHandle(name, pipeline, paramsBuffer);
 
   // Open a render pass writing into the resolved color target. Fullscreen
   // post-process passes are non-MSAA, depth-less, single-attachment.
@@ -1074,7 +1226,11 @@ function dispatchFullscreenPass(
   // pipeline declares a single bind group at slot 0).
   const pass = ctx.encoder.beginRenderPass(
     buildBeginRenderPassDescriptor(
-      { colorFormats: ['rgba8unorm-srgb'], depthFormat: undefined, sampleCount: 1 },
+      {
+        colorFormats: [writeFormat as unknown as GPUTextureFormat],
+        depthFormat: undefined,
+        sampleCount: 1,
+      },
       { colorViews: [writeView] },
       'post-process',
     ) as never,

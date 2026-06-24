@@ -16,9 +16,29 @@ description: >-
 
 per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU 纹理：通过 `graph.addColorTarget(name, desc)` 声明 RT（transient / persistent / MSAA），`graph.addColorTargetAlias(name, source)` 折叠逻辑名到物理纹理（如 bloom composite 的 `hdrComposited`），再通过 7 个**公共图元**声明 pass 拓扑与读写依赖。`graph.compile({ device, backendKind, caps })` 分配物理纹理（keyed by `{format, w, h, usage, sampleCount}` pool）、做拓扑排序 + barrier 插入；`graph.execute(ctx)` 按序跑每个 pass 的闭包。
 
-绝大多数后处理你**不用碰 graph**——它们是 `Camera` 组件上的 f32 列：`tonemap`（色调映射模式）/ `exposure` / `antialias`（`'none' | 'fxaa' | 'msaa'`）/ `bloom` + `bloomThreshold` 等，引擎据此往 per-frame graph 里增删内建图元。天空盒同理：spawn 一个 `SkyboxBackground`（cubemap handle + mode），引擎在 shadow 与 main 之间插一个 skybox pass。只有当你要**换掉整条管线拓扑**（自定义 pass 链、deferred 等）才实现 `RenderPipeline` 接缝（`buildGraph(ctx, data)` 建图 + `execute(ctx)` 跑图），用 `renderer.registerPipeline(id, impl)` 登记、`renderer.installPipeline(handle)` 装上。`renderer.perFramePassNames` 让你内省当前帧实际有哪些 pass。
+绝大多数后处理你**不用碰 graph**——它们是 `Camera` 组件上的 f32 列：`tonemap`（色调映射模式）/ `exposure` / `antialias`（`'none' | 'fxaa' | 'msaa'`）/ `bloom` + `bloomThreshold` 等，引擎据此往 per-frame graph 里增删内建图元。天空盒同理：spawn 一个 `SkyboxBackground`（cubemap handle + mode），引擎在 shadow 与 main 之间插一个 skybox pass。只有当你要**换掉整条管线拓扑**（自定义 pass 链、deferred 等）才实现 `RenderPipeline` 接缝（`buildGraph(ctx, data)` 建图 + `execute(ctx)` 跑图），用 `renderer.registerPipeline(id, impl)` 登记、`renderer.installPipeline(asset)` 装上（`asset` 是 `RenderPipelineAsset` POJO，直收，无 register round-trip）。`renderer.perFramePassNames` 让你内省当前帧实际有哪些 pass。
 
 自定义 fullscreen 后处理走 `addFullscreenPass`——它是 7 个图元中**唯一的扩展点**（其余 6 个是引擎内置，不接受用户 execute 闭包）。两步：① `renderer.postProcess.register('mypkg::vignette', { source, params?, reads? })` 登记 WGSL；② 在管线 `buildGraph` 里调 `addFullscreenPass(graph, 'vignette', { shader: 'mypkg::vignette', color, reads? })`。
+
+> [!IMPORTANT]
+> **想在 URP 之上加一个全屏后处理、又保留阴影/tonemap/bloom？用 `config.postEffects`，别装自定义管线。** `installPipeline` 装一条自定义管线是**整体替换** URP——你的 `buildGraph` 没声明 `addShadowPass` / `shadowDepth`，阴影就被静默丢弃（shadow demo 会渲染出零阴影）。正道是把注册的 effect id 经 URP 的 install config 传入：`renderer.installPipeline({ kind:'render-pipeline', pipelineId: URP_PIPELINE_ID, config: { postEffects: ['mypkg::overlay'] } })`。URP 在 fxaa 之后、debug-overlay 之前按序把每个 effect 经 `addFullscreenPass(..., { compositeOverSwapchain: true })` 叠加（copy swap-chain → scratch → 采样 → 写回 non-srgb storage view），内建 9-pass 链原封不动（AUGMENT，非 REPLACE）。空列表 = 零额外 pass（默认帧不变）。仅 WebGPU 后端（同 FXAA 的帧中 swap-chain 读限制）。worked example：`apps/learn-render/5.advanced-lighting/3.3.csm/`（CSM cascade overlay）。
+>
+> effect 的 WGSL 契约（无 params UBO 时）——`vs_main` 画全屏三角，`fs_main` 采样 `@group(1)` 的场景纹理 + sampler：
+> ```wgsl
+> struct VOut { @builtin(position) position : vec4<f32>, @location(0) uv : vec2<f32> };
+> @vertex fn vs_main(@builtin(vertex_index) i : u32) -> VOut {
+>   var x = -1.0; var y = -1.0;
+>   if (i == 1u) { x = 3.0; } if (i == 2u) { y = 3.0; }
+>   var o : VOut; o.position = vec4<f32>(x, y, 0.0, 1.0);
+>   o.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5); return o;
+> }
+> @group(1) @binding(0) var sceneTexture : texture_2d<f32>;
+> @group(1) @binding(1) var sceneSampler : sampler;
+> @fragment fn fs_main(in : VOut) -> @location(0) vec4<f32> {
+>   let c = textureSample(sceneTexture, sceneSampler, in.uv).rgb;
+>   return vec4<f32>(c * vec3<f32>(1.0, 0.95, 0.9), 1.0); // example: warm tint
+> }
+> ```
 
 ## 核心 API 速查
 
@@ -35,7 +55,7 @@ per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU
 | `RenderPipeline` | runtime | `{ buildGraph(ctx, data), execute(ctx) }` | 自定义管线接缝（即 forgeax 版 SRP） |
 | `standardForwardPipeline` | runtime | `RenderPipeline` | 内建前向管线，dogfood worked example |
 | `renderer.registerPipeline(id, impl)` | runtime | `(string, RenderPipeline) => void` | 登记一个管线逻辑 |
-| `renderer.installPipeline(handle)` | runtime | `=> Result<void, PipelineError>` | 装上由 `RenderPipelineAsset` handle 绑定的管线 |
+| `renderer.installPipeline(asset)` | runtime | `(RenderPipelineAsset) => Result<void, PipelineError>` | 装上管线：直收 `RenderPipelineAsset` POJO（`{kind:'render-pipeline', pipelineId, config?}`，D-19 无 register round-trip）；`config.postEffects` 走 URP 叠加后处理 |
 | `new RenderGraph()` + `addColorTarget` / `addColorTargetAlias` / `addPass` / `compile` / `execute` | render-graph | class + 方法 | 声明式建图：RT 声明 + pass 拓扑 + 编译分配 + 执行 |
 | `graph.addScenePass(g, name, opts)` | runtime | 图元（`color` + `depth` + optional `reads` + optional `filter`） | 把 ECS scene 渲染进 graph-owned colour+depth RT |
 | `graph.addShadowPass(g, name, opts)` | runtime | 图元（`depth`） | 写阴影深度 RT |
@@ -60,7 +80,7 @@ flowchart TD
   REG --> BUILD["在 buildGraph 里调 addFullscreenPass（或标准管线已链入 FXAA）"]
   PIPE --> RG["graph.addColorTarget(...) -> addScenePass / addShadowPass / ... -> compile(device, opts) -> execute(ctx)"]
   RG --> REG_P["renderer.registerPipeline(id, impl)"]
-  REG_P --> INS["assets.register RenderPipelineAsset -> renderer.installPipeline(handle)"]
+  REG_P --> INS["renderer.installPipeline({kind:'render-pipeline', pipelineId, config?})"]
   CAM --> DR["renderer.draw(world) / app.start()"]
   SKY --> DR
   BUILD --> DR
@@ -126,15 +146,20 @@ const myPipeline: RenderPipeline = {
   execute(ctx) { /* graph.execute(ctx) */ },
 };
 renderer.registerPipeline('my-game::forward', myPipeline);
-// then assets.register a RenderPipelineAsset and renderer.installPipeline(handle)
+// then install the RenderPipelineAsset POJO directly (no register round-trip):
+// renderer.installPipeline({ kind: 'render-pipeline', pipelineId: 'my-game::forward' })
 ```
 
 ```ts
 // E) custom fullscreen post-process (the ONE extension point)
-//    step 1: register the WGSL source
+//    step 1: register the WGSL source + params schema. The WGSL declares the
+//    params UBO at @group(1) @binding(2) (3-entry BGL: texture@0 + sampler@1 +
+//    buffer@2). register eager-creates the per-id UBO (byteSize >= 16, init =
+//    defaultValue); byteSize < 16 or defaultValue.length !== byteSize throws
+//    PostProcessError{code:'params-size-mismatch'} at register (fail-fast).
 renderer.postProcess.register('mypkg::vignette', {
   source: vignetteWGSL,
-  params: { byteSize: 16, defaultValue: new Float32Array([0.5, 0, 0, 0]) },
+  params: { byteSize: 16, defaultValue: new Uint8Array(16) },
   reads: ['hdrComposited'],
 });
 //    step 2: reference it from buildGraph via addFullscreenPass
@@ -145,7 +170,15 @@ addFullscreenPass(graph, 'vignette', {
   color: 'vignetteOut',
   reads: ['hdrComposited'],
 });
+//    step 3 (per-frame params, DATA-DRIVEN — not an imperative setter):
+//    spawn a PostProcessParams component keyed by the shader id; change `data`
+//    each frame and the engine uploads it (extract -> snapshot ->
+//    dispatchFullscreenPass queue.writeBuffer). data.byteLength must equal the
+//    registered byteSize or it throws PostProcessError{code:'params-update-size-mismatch'}.
+world.spawn(PostProcessParams({ shader: 'mypkg::vignette', data: Float32Array.of(0.5, 0, 0, 0) }));
 ```
+
+> **内建 tonemap 也走这条通道**（feat-20260621 / D-5）：`Camera.exposure` / `whitePoint` / `tonemap` 仍是 AI 用户面入口（不变），但引擎内部把它们桥接成 `forgeax::tonemap` 的数据驱动 params——没有专用 tonemap pipeline / BGL / UBO 了。`entry.params === undefined`（如 FXAA）时 BGL 退化 2-entry，零回归。
 
 ## 踩坑
 

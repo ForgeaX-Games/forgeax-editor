@@ -23,10 +23,22 @@
 //   [125]      cascadeBlend    f32          (align 4, size 4)
 //   [126..147] tail padding    f32[22]      (struct tail 16 B align)
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const VIEW_UBO_FLOAT_COUNT = 148;
 const VIEW_UBO_BYTES = 592;
+
+// feat-20260621-merge-directionallightshadow-into-directionallight M3:
+// the merged DirectionalLight's shadow tail-pad slots — depthBias [126]/byte504,
+// normalBias [127]/byte508, pcfKernelSize [128]/byte512 (zero byte-layout growth;
+// three previously-zero tail-pad floats are consumed). The 5.3-production-shadow-
+// demos AC-14 pcfKernelSize lane moved from [126] to [128] when depthBias/normalBias
+// merged in ahead of it.
+const OFFSET_DEPTH_BIAS = 126; // byte 504
+const OFFSET_NORMAL_BIAS = 127; // byte 508
+const OFFSET_PCF_KERNEL_SIZE = 128; // byte 512
 
 const F32_BYTES = 4;
 
@@ -177,5 +189,54 @@ describe('View UBO std140 layout (w14)', () => {
       // Total UBO bytes must be 16B-aligned for uniform buffer binding.
       expect(VIEW_UBO_BYTES % 16).toBe(0);
     });
+  });
+});
+
+// feat-20260621-learn-render-5-3-production-shadow-demos M0 / AC-14: the host
+// record stage must write pcfKernelSize into the tail-pad slot [126], and the
+// WGSL View struct must declare the matching `pcfKernelSize : f32` immediately
+// after cascadeBlend (single SSOT, append-at-tail, plan-strategy D-0). These
+// are read against the real source the compiler/host use (mirrors the
+// shadow-csm-tile-consistency antipattern guard: never re-declare and test a
+// formula against itself). RED until M0-T-IMPL-RECORD + M0-T-IMPL-WGSL-STRUCT
+// land; the slot was previously a zero tail-pad float (no record write existed).
+describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
+  const recordSrc = readFileSync(
+    fileURLToPath(new URL('../render-system-record.ts', import.meta.url)),
+    'utf8',
+  );
+  const wgslSrc = readFileSync(
+    fileURLToPath(new URL('../../../shader/src/common.wgsl', import.meta.url)),
+    'utf8',
+  );
+
+  it('shadow tail-pad slots [126..128], layout unchanged (148 f32 / 592 B)', () => {
+    expect(OFFSET_DEPTH_BIAS * F32_BYTES).toBe(504);
+    expect(OFFSET_NORMAL_BIAS * F32_BYTES).toBe(508);
+    expect(OFFSET_PCF_KERNEL_SIZE * F32_BYTES).toBe(512);
+    expect(OFFSET_DEPTH_BIAS).toBeGreaterThan(OFFSET_CASCADE_BLEND);
+    expect(OFFSET_PCF_KERNEL_SIZE).toBeLessThan(VIEW_UBO_FLOAT_COUNT);
+    // The float count / byte size invariant must NOT grow (D-0).
+    expect(VIEW_UBO_FLOAT_COUNT).toBe(148);
+    expect(VIEW_UBO_BYTES).toBe(592);
+  });
+
+  it('record writes the merged shadow tail-pad floats [126]/[127]/[128]', () => {
+    expect(recordSrc).toMatch(/viewPayload\[126\]\s*=\s*lights\.depthBias/);
+    expect(recordSrc).toMatch(/viewPayload\[127\]\s*=\s*lights\.normalBias/);
+    expect(recordSrc).toMatch(
+      /viewPayload\[128\]\s*=\s*clampPcfKernelSize\(lights\.pcfKernelSize\)/,
+    );
+  });
+
+  it('record does NOT grow VIEW_PAYLOAD_FLOATS past 148', () => {
+    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*148/);
+  });
+
+  it('common.wgsl View struct declares depthBias/normalBias/pcfKernelSize after cascadeBlend', () => {
+    const m = wgslSrc.match(
+      /cascadeBlend\s*:\s*f32\s*,\s*depthBias\s*:\s*f32\s*,\s*normalBias\s*:\s*f32\s*,\s*pcfKernelSize\s*:\s*f32\s*,/,
+    );
+    expect(m).not.toBeNull();
   });
 });

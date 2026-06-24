@@ -1,8 +1,15 @@
-// SceneDocument ↔ engine-native scene pack codec.
+// EditSession ↔ engine-native scene pack codec.
 //
-// The editor's interactive authoring model is a SceneDocument (inline materials,
-// names, euler rotation — convenient for editing + AI). On disk we persist the
-// engine's NATIVE pack format instead of a Studio `scene.json`:
+// The editor's interactive authoring model is an EditSession (its authored
+// entity map carries inline materials, names, euler rotation — convenient for
+// editing + AI). On disk we persist the engine's NATIVE pack format instead of a
+// Studio `scene.json`:
+//
+// NOTE (plan-strategy D-6): sessionToPack / packToSession are the editor's
+// authoring-convenience codec. The durable writeback chain for a materialised
+// instance is the direct `collectSceneAsset(world, instance)` →
+// `serializeSceneAssetToPack` path (engine M2); this codec stays for seeding new
+// scenes + the disk-watch reload of authoring data.
 //
 //   { schemaVersion, kind:'internal-text-package', assets: [
 //       { guid, kind:'scene',    payload:{kind:'scene', nodes}, refs:[guid…] },
@@ -20,7 +27,8 @@
 // `Name` component, so the round-trip preserves Hierarchy names + the `Player`
 // gameplay convention.
 
-import type { SceneDocument, EntityId, TransformData, MeshData, MaterialData, LightData, ColliderData } from './types';
+import { makeEditSession } from './edit-session';
+import type { EditSession, EntityId, EntityNode, TransformData, MeshData, MaterialData, LightData, ColliderData } from './types';
 
 // Engine built-in mesh GUIDs (asset-registry.ts BUILTIN_MESH_GUIDS).
 export const CUBE_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
@@ -137,7 +145,7 @@ function eulerToQuat(rx: number, ry: number, rz: number): [number, number, numbe
   ];
 }
 
-/** SceneDocument → native scene pack JSON.
+/** EditSession → native scene pack JSON.
  *
  *  `sceneGuid` pins the scene asset's identity. The scene's GUID is a STABLE
  *  identity (referenced by `forge.json defaultScene`, by sibling level packs,
@@ -146,7 +154,7 @@ function eulerToQuat(rx: number, ry: number, rz: number): [number, number, numbe
  *  path-derived stable GUID for a brand-new scene). Only when no GUID is given
  *  do we fall back to an order-derived value, which is unstable across edits and
  *  must never be persisted for a scene that something else references. */
-export function docToPack(doc: SceneDocument, sceneGuid?: string): ScenePack {
+export function sessionToPack(doc: EditSession, sceneGuid?: string): ScenePack {
   const matAssets = new Map<string, PackAsset>(); // guid → asset
   const matGuidByKey = new Map<string, string>();
   const sceneRefs: string[] = [];
@@ -193,7 +201,7 @@ export function docToPack(doc: SceneDocument, sceneGuid?: string): ScenePack {
       // rejects the obsolete singular `material` field (the
       // MeshRenderer-field-unknown error → whole-scene instantiate aborts →
       // FALLBACK). Persist the plural array form the engine expects (matches the
-      // working cow-survivor packs). packToDoc reads both for back-compat.
+      // working cow-survivor packs). packToSession reads both for back-compat.
       c.MeshRenderer = { materials: [refIdx(mg)] };
     }
     if (collider?.shape && collider.shape !== 'none') c.Collider = { shape: collider.shape, ...(collider.radius !== undefined ? { radius: collider.radius } : {}) };
@@ -235,11 +243,11 @@ export function docToPack(doc: SceneDocument, sceneGuid?: string): ScenePack {
   return { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [sceneAsset, ...matAssets.values()] };
 }
 
-/** Native scene pack JSON → SceneDocument (inline materials reconstructed). */
-export function packToDoc(pack: ScenePack): SceneDocument {
+/** Native scene pack JSON → EditSession (inline materials reconstructed). */
+export function packToSession(pack: ScenePack): EditSession {
   const scene = pack.assets.find((a) => a.kind === 'scene');
   const matByGuid = new Map(pack.assets.filter((a) => a.kind === 'material').map((a) => [a.guid, a.payload as Parameters<typeof payloadToMat>[0]]));
-  const entities: Record<number, SceneDocument['entities'][number]> = {};
+  const entities: Record<number, EntityNode> = {};
   const order: EntityId[] = [];
   let nextId = 1;
   // Engine #316 renamed SceneAsset.nodes -> entities. Read both: the new
@@ -277,8 +285,8 @@ export function packToDoc(pack: ScenePack): SceneDocument {
       // Shadow: engine #479 merged the separate DirectionalLightShadow component
       // INTO DirectionalLight (castShadow + cascade fields). Read BOTH the new
       // merged `dl.castShadow` AND the legacy standalone `DirectionalLightShadow`
-      // component so a pre-#479 pack opened in the editor self-heals: packToDoc
-      // sets castShadow → docToPack re-saves the merged form the new engine
+      // component so a pre-#479 pack opened in the editor self-heals: packToSession
+      // sets castShadow → sessionToPack re-saves the merged form the new engine
       // accepts. Without this, opening an old pack silently drops its shadow.
       const castShadow = !!dl.castShadow || cc.DirectionalLightShadow !== undefined;
       docComps.Light = { type: 'directional', color: rgbaToHex([dl.colorR, dl.colorG, dl.colorB]), intensity: num(dl.intensity, 1), directionX: num(dl.directionX, -0.4), directionY: num(dl.directionY, -1), directionZ: num(dl.directionZ, -0.3), ...(castShadow ? { castShadow: true } : {}) };
@@ -298,10 +306,10 @@ export function packToDoc(pack: ScenePack): SceneDocument {
     const ent = entities[docId];
     if (pd !== undefined && ent) ent.parent = pd;
   }
-  return { version: '1', nextId, entities, order };
+  return makeEditSession(entities, order, nextId);
 }
 
-/** True if a parsed JSON object looks like a native scene pack (vs a SceneDocument). */
+/** True if a parsed JSON object looks like a native scene pack (vs an EditSession). */
 export function isScenePack(obj: unknown): obj is ScenePack {
   return !!obj && typeof obj === 'object' && (obj as { kind?: string }).kind === 'internal-text-package' && Array.isArray((obj as { assets?: unknown }).assets);
 }

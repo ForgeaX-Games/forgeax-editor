@@ -28,12 +28,14 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  PostProcessParams,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
+  createBoxGeometry,
   createDevImportTransport,
   perspective,
 } from '@forgeax/engine-runtime';
-import type { MaterialAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -56,6 +58,21 @@ const PACK_INDEX_URL = '/pack-index.json';
 // Grep-able constant so AI users land on the per-pixel exposure scalar.
 const LO_EXPOSURE = 1.0;
 
+// Q/E keyboard exposure tuning (feat-20260621 M-B2 / R-B5). Clamp lower bound
+// strictly > 0 (exposure 0 would collapse exp(-c*0) to 0 -> black); upper bound
+// kept reasonable so highlights still recover. Step per key event.
+const EXPOSURE_MIN = 0.1;
+const EXPOSURE_MAX = 10.0;
+const EXPOSURE_STEP = 0.1;
+
+// 16 B params UBO: [exposure(f32), pad, pad, pad]. Pack the live exposure into
+// the first f32 slot the ExposureParams WGSL struct reads (M-B2 data-driven).
+function packExposureBytes(exposure: number): Uint8Array {
+  const buf = new ArrayBuffer(16);
+  new Float32Array(buf)[0] = exposure;
+  return new Uint8Array(buf);
+}
+
 // Texture GUID from forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json
 // Wood floor + walls cover the LO tunnel interior.
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
@@ -71,14 +88,33 @@ const TUNNEL_SCALE_Z = 50.0;
 const TUNNEL_POS_Z = -25.0;
 
 // 4 lights along the tunnel depth (z=0 = entrance, z=-50 = far end).
-//   bright white at the far end (intensity=4.0; emissiveIntensity ratio
-//   to the dim lights = 4.0/0.5 = 8x; plan-decisions D-3 floor was 25x
-//   on the strong-light intensity scalar; PointLight intensity here is
-//   left at engine default and the brightness comes from the emissive
-//   light-box surface; the strength ratio between strong vs weak
-//   light-box emissive intensity -- 4.0 vs 0.5 -- is the AI-grep target).
-const STRONG_LIGHT_EMISSIVE_INTENSITY = 4.0;
-const WEAK_LIGHT_EMISSIVE_INTENSITY = 0.5;
+//
+// feat-20260621 M-B1 (R-B1/R-B2): the overbright source is now PHYSICAL point
+// lighting, faithful to LearnOpenGL section 5.6 -- a strong white PointLight at
+// the far end illuminates the wood tunnel walls via inverse-square attenuation,
+// pushing far-wall radiance > 1.0 in the rgba16float offscreen. The emissive
+// light-box cubes are DEMOTED to mere position markers (emissiveIntensity well
+// under 1.0): LO also draws a small light cube, but it is not the overbright
+// source. AI-grep targets: `intensity: 200` (strong PointLight, far above the
+// engine default of 1) + the demoted `LIGHT_BOX_EMISSIVE_INTENSITY`.
+//
+// Strong far-end PointLight: intensity ~200 + range ~60m. With the engine's
+// KHR_lights_punctual quartic falloff `max(min(1-(d^2/range^2)^2,1),0)/max(d^2,1e-4)`,
+// at the ~5m tunnel-wall distance this lands far-wall radiance well above 1.0
+// (standard PBR evalPoint writes raw to rgba16float, no clamp) -- the physical
+// prerequisite for the LDR-burn / HDR-recover contrast (R-B1, plan D-2).
+const STRONG_LIGHT_INTENSITY = 200.0;
+const STRONG_LIGHT_RANGE = 60.0;
+
+// Weak coloured fill PointLights along the tunnel depth (LO uses similar
+// coloured fills). intensity ~12, range ~20m -- visible colour cast without
+// dominating the far-end overbright.
+const WEAK_LIGHT_INTENSITY = 12.0;
+const WEAK_LIGHT_RANGE = 20.0;
+
+// Light-box emissive: DEMOTED to a dim position marker only (R-B2/AC-B4). Far
+// below 1.0 so it never manufactures the overbright -- the PointLights do.
+const LIGHT_BOX_EMISSIVE_INTENSITY = 0.4;
 
 // Light positions (LO layout: one strong at far end + three weak fanned
 // across the tunnel, each visible as a small emissive cube box).
@@ -94,11 +130,13 @@ const LIGHT_BOX_SCALE = 0.25;
 
 // Strong light is white; weak lights are saturated R/G/B for visual
 // distinction (LearnOpenGL uses similar coloured fills along the tunnel).
+// PointLight.color is linear [0,1] per channel -- the magnitude comes from
+// the intensity scalar, not from color values > 1 (those belong to emissive).
 const STRONG_LIGHT_COLOR: readonly [number, number, number] = [1.0, 1.0, 1.0];
 const WEAK_LIGHT_COLORS: ReadonlyArray<readonly [number, number, number]> = [
-  [1.5, 0.0, 0.0], // red
-  [0.0, 1.5, 0.0], // green
-  [0.0, 0.0, 1.5], // blue
+  [1.0, 0.0, 0.0], // red
+  [0.0, 1.0, 0.0], // green
+  [0.0, 0.0, 1.0], // blue
 ];
 
 // First-person camera entry pose: looking down the tunnel along -Z.
@@ -154,14 +192,27 @@ fn vs_main(@builtin(vertex_index) i : u32) -> FullscreenOutput {
   return out;
 }
 
+// HDR exposure params UBO (16 B std140; feat-20260621 M-B2 data-driven channel).
+// params.exposure occupies the first f32 slot; the rest is padding. The value
+// is driven per-frame by the PostProcessParams ECS component (Q/E keyboard ->
+// world.set -> extract snapshot -> engine queue.writeBuffer), NOT a hardcoded
+// literal -- this dogfoods the unified post-process params channel (R-B3).
+struct ExposureParams {
+  exposure : f32,
+  pad0 : f32,
+  pad1 : f32,
+  pad2 : f32,
+};
+
 @group(1) @binding(0) var hdrTexture : texture_2d<f32>;
 @group(1) @binding(1) var hdrSampler : sampler;
+@group(1) @binding(2) var<uniform> params : ExposureParams;
 
 @fragment
 fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
-  let exposure : f32 = 1.0;
   let hdrColor = textureSample(hdrTexture, hdrSampler, in.uv).rgb;
-  let mapped = vec3<f32>(1.0, 1.0, 1.0) - exp(-hdrColor * exposure);
+  // LearnOpenGL section 5.6 EXACT exposure tonemap equation (R-B4):
+  let mapped = vec3<f32>(1.0, 1.0, 1.0) - exp(-hdrColor * params.exposure);
   return vec4<f32>(mapped, 1.0);
 }
 `;
@@ -207,6 +258,71 @@ fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
 }
 `;
 
+// Floats per procedural-mesh vertex (position3 + normal3 + uv2 + tangent4).
+// createBoxGeometry emits this 12-float interleaved stride.
+const FLOATS_PER_VERTEX = 12;
+// Byte offsets of the normal x/y/z floats inside one 12-float vertex.
+const NORMAL_FLOAT_OFFSET = 3;
+
+// Return a copy of `mesh` with its surface turned inside-out: every normal is
+// negated (so an enclosing box lights its INTERIOR -- the wall normals now face
+// the tunnel axis where the point lights sit, giving NdotL > 0) and every
+// triangle is re-wound (so the flipped faces still pass the pipeline-default
+// `frontFace='ccw'` + `cullMode='back'` test when viewed from inside).
+//
+// Why this and not a renderState/cull tweak (verify round 1 V1 root cause): the
+// standard PBR forward shader is single-sided -- `NdotL = max(dot(N,L), 0)`
+// with no front-facing flip. The built-in cube (createBoxGeometry) has OUTWARD
+// normals, so the camera-inside tunnel walls have normals pointing AWAY from
+// the interior lights -> dot(N,L) < 0 -> diffuse+specular clamp to 0 -> black,
+// under EVERY cull/frontFace combination (cull changes visibility, not
+// lighting). Flipping the normals is the fix; the winding reversal keeps the
+// now-inward faces visible under default back-face culling.
+//
+// Both the interleaved `vertices` buffer (the render-record consumer:
+// gpu-resource-store writeBuffer(vbo, 0, mesh.vertices)) AND the derived
+// `attributes.normal` view are negated to keep them consistent (charter SSOT).
+function negateInPlace(buf: Float32Array, start: number, count: number): void {
+  for (let i = start; i < start + count; i++) {
+    buf[i] = -(buf[i] as number);
+  }
+}
+
+function invertMesh(mesh: MeshAsset): MeshAsset {
+  const vertices = mesh.vertices.slice();
+  for (let base = 0; base < vertices.length; base += FLOATS_PER_VERTEX) {
+    negateInPlace(vertices, base + NORMAL_FLOAT_OFFSET, 3);
+  }
+
+  // createBoxGeometry emits a Float32Array normal attribute; narrow before the
+  // numeric negate (VertexAttributeMap allows ArrayBuffer | Float32Array | ...).
+  const srcNormal = mesh.attributes.normal;
+  let normal: Float32Array | undefined;
+  if (srcNormal instanceof Float32Array) {
+    normal = srcNormal.slice();
+    negateInPlace(normal, 0, normal.length);
+  }
+
+  const srcIndices = mesh.indices;
+  if (srcIndices === undefined) {
+    throw new Error('[learn-render 5.6 hdr] invertMesh requires an indexed mesh');
+  }
+  // Reverse triangle winding: swap the 2nd and 3rd index of every triangle.
+  const indices = srcIndices.slice();
+  for (let t = 0; t + 2 < indices.length; t += 3) {
+    const tmp = indices[t + 1] as number;
+    indices[t + 1] = indices[t + 2] as number;
+    indices[t + 2] = tmp;
+  }
+
+  return {
+    ...mesh,
+    vertices,
+    indices,
+    attributes: normal === undefined ? mesh.attributes : { ...mesh.attributes, normal },
+  };
+}
+
 // 3. bootstrap
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -242,7 +358,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const assets = renderer.assets;
   assets.configurePackIndex(PACK_INDEX_URL);
 
-  // Wood texture for the tunnel walls + floor (HANDLE_CUBE inside-out).
+  // Wood texture for the tunnel walls + floor (inward-facing box interior;
+  // see invertMesh below).
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
   if (!woodGuidRes.ok) {
     console.error('[learn-render 5.6 hdr] wood GUID parse failed');
@@ -256,7 +373,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const woodTex = woodTexRes.value;
 
   // Tunnel material: standard PBR wood baseColor, matte finish (rough +
-  // non-metal) so the bright lights paint clear specular highlights.
+  // non-metal) so the bright interior point lights paint clear highlights.
   const tunnelMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     Materials.standard({
@@ -267,9 +384,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }),
   );
 
-  // Tunnel = HANDLE_CUBE scaled long along Z. Camera sits inside; back-
-  // face culling plus the inside-out scale makes the cube interior the
-  // visible scene (LO 5.6 corridor).
+  // Tunnel mesh = an INWARD-facing unit box (verify round 1 V1 fix). The camera
+  // sits inside the box; the built-in HANDLE_CUBE has outward normals, so its
+  // inner walls have normals pointing AWAY from the interior point lights and
+  // the single-sided PBR shader (`NdotL = max(dot(N,L), 0)`) renders them black
+  // under every cull/frontFace combination (the prior renderState/cull attempt
+  // was misdiagnosed -- cull only affects visibility, not lighting). `invertMesh`
+  // negates the wall normals so they face the tunnel axis (NdotL > 0 -> lit) and
+  // re-winds the triangles so the now-inward faces survive default back-face
+  // culling. The Transform scale (5x5x50) stretches the unit box into the LO 5.6
+  // corridor; positive scale does not change normal direction.
+  const tunnelMeshRes = createBoxGeometry(1, 1, 1);
+  if (!tunnelMeshRes.ok) {
+    console.error('[learn-render 5.6 hdr] createBoxGeometry failed:', tunnelMeshRes.error.code);
+    return;
+  }
+  const tunnelMeshHandle = world.allocSharedRef('MeshAsset', invertMesh(tunnelMeshRes.value));
   world
     .spawn(
       {
@@ -283,22 +413,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           scaleZ: TUNNEL_SCALE_Z,
         },
       },
-      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshFilter, data: { assetHandle: tunnelMeshHandle } },
       { component: MeshRenderer, data: { materials: [tunnelMat] } },
     )
     .unwrap();
 
-  // Strong white light at the far end of the tunnel. emissiveIntensity =
-  // 4.0 -> per-channel emissive output substantially exceeds 1.0, which
-  // is the whole point of HDR (rgba16float offscreen preserves the
-  // signal; LDR passthrough clamps it; LO exposure tonemaps it).
-  const strongMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+  // Strong white PointLight at the far end of the tunnel (R-B1). intensity ~200
+  // + range ~60m drives the wood far-wall radiance > 1.0 in the rgba16float
+  // offscreen via inverse-square attenuation -- the physical overbright source
+  // (NOT emissive self-illumination). The companion light-box cube is a dim
+  // position marker (emissiveIntensity 0.4, well under 1.0; R-B2/AC-B4).
+  const strongMarkerMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     Materials.standard({
       baseColor: [1.0, 1.0, 1.0, 1.0],
       roughness: 0.4,
       emissive: STRONG_LIGHT_COLOR,
-      emissiveIntensity: STRONG_LIGHT_EMISSIVE_INTENSITY,
+      emissiveIntensity: LIGHT_BOX_EMISSIVE_INTENSITY,
     }),
   );
   world
@@ -315,7 +446,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [strongMat] } },
+      { component: MeshRenderer, data: { materials: [strongMarkerMat] } },
     )
     .unwrap();
   world.spawn(
@@ -327,23 +458,34 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         posZ: STRONG_LIGHT_POS[2],
       },
     },
-    { component: PointLight, data: {} },
+    {
+      component: PointLight,
+      data: {
+        colorR: STRONG_LIGHT_COLOR[0],
+        colorG: STRONG_LIGHT_COLOR[1],
+        colorB: STRONG_LIGHT_COLOR[2],
+        intensity: STRONG_LIGHT_INTENSITY,
+        range: STRONG_LIGHT_RANGE,
+      },
+    },
   );
 
-  // Three weak coloured lights along the tunnel depth (R/G/B). Each
-  // emissiveIntensity = 0.5 stays under 1.0, so the LDR mode preserves
-  // colour but loses bright-end detail at the strong light only.
+  // Three weak coloured PointLights along the tunnel depth (R/G/B fill). Each
+  // intensity ~12 + range ~20m casts a visible colour wash on the wood without
+  // dominating the far-end overbright. The companion light-box cube is a dim
+  // emissive marker (0.4, under 1.0) so the LDR mode preserves colour but only
+  // burns to white at the strong far light (R-B2/AC-B4).
   for (let i = 0; i < WEAK_LIGHT_POSITIONS.length; i++) {
     const pos = WEAK_LIGHT_POSITIONS[i];
     const color = WEAK_LIGHT_COLORS[i];
     if (pos === undefined || color === undefined) continue;
-    const weakMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    const weakMarkerMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
       'MaterialAsset',
       Materials.standard({
         baseColor: [1.0, 1.0, 1.0, 1.0],
         roughness: 0.4,
         emissive: color,
-        emissiveIntensity: WEAK_LIGHT_EMISSIVE_INTENSITY,
+        emissiveIntensity: LIGHT_BOX_EMISSIVE_INTENSITY,
       }),
     );
     world
@@ -360,7 +502,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [weakMat] } },
+        { component: MeshRenderer, data: { materials: [weakMarkerMat] } },
       )
       .unwrap();
     world.spawn(
@@ -368,7 +510,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         component: Transform,
         data: { posX: pos[0], posY: pos[1], posZ: pos[2] },
       },
-      { component: PointLight, data: {} },
+      {
+        component: PointLight,
+        data: {
+          colorR: color[0],
+          colorG: color[1],
+          colorB: color[2],
+          intensity: WEAK_LIGHT_INTENSITY,
+          range: WEAK_LIGHT_RANGE,
+        },
+      },
     );
   }
 
@@ -407,6 +558,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     )
     .unwrap();
 
+  // feat-20260621 M-B2 (R-B3): data-driven exposure. Spawn a PostProcessParams
+  // entity keyed by the HDR exposure shader id; the live exposure (Q/E keyboard)
+  // is packed into its `data` each change -> extract snapshot -> engine uploads
+  // to the eager-created params UBO. No imperative setter (charter P4 / D-9).
+  const exposureParamsEntity = world
+    .spawn({
+      component: PostProcessParams,
+      data: { shader: HDR_EXPOSURE_POSTPROCESS_ID, data: packExposureBytes(LO_EXPOSURE) },
+    })
+    .unwrap();
+
   // First-person controls so AI users can walk down the tunnel and
   // compare HDR vs LDR detail at different distances from the strong
   // light.
@@ -424,6 +586,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   try {
     renderer.postProcess.register(HDR_EXPOSURE_POSTPROCESS_ID, {
       source: HDR_LO_EXPOSURE_WGSL,
+      // feat-20260621 M-B2: declare the 16 B exposure params UBO so the engine
+      // eager-creates it + wires the 3-entry @group(1) BGL (texture@0 +
+      // sampler@1 + buffer@2). Default = LO exposure 1.0.
+      params: { byteSize: 16, defaultValue: packExposureBytes(LO_EXPOSURE) },
       reads: ['offscreenHdr'],
     });
     renderer.registerPipeline(HDR_PIPELINE_ID, makeHdrPipeline('hdr'));
@@ -478,12 +644,32 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     let activeKey: '1' | '2' = '1';
+    // Live exposure (feat-20260621 M-B2 / R-B5/R-B6): Q lowers, E raises. The
+    // value drives the PostProcessParams.data each change; HUD shows it live.
+    let exposure = LO_EXPOSURE;
     const hudElement = document.getElementById('hud');
-    if (hudElement !== null) {
-      hudElement.innerText = `hdr (exposure=${LO_EXPOSURE}) | press 1 = HDR, 2 = LDR`;
-    }
+    const renderHud = (): void => {
+      if (hudElement === null) return;
+      const displayName = hdrDisplayNameByKey(activeKey) ?? 'hdr';
+      hudElement.innerText = `hdr: ${displayName} (exposure=${exposure.toFixed(2)}) | press 1 = HDR, 2 = LDR, Q/E = exposure -/+`;
+    };
+    renderHud();
     window.addEventListener('keydown', (event: KeyboardEvent) => {
       const key = event.key;
+      // Q/E exposure tuning (R-B5): does not collide with 1/2 (mode) or WASD +
+      // mouse (first-person). Lower-cased so Shift-held still works.
+      const lower = key.toLowerCase();
+      if (lower === 'q' || lower === 'e') {
+        const next = lower === 'e' ? exposure + EXPOSURE_STEP : exposure - EXPOSURE_STEP;
+        exposure = Math.min(EXPOSURE_MAX, Math.max(EXPOSURE_MIN, next));
+        // Data-driven update: write the new 16 B params into the component; the
+        // engine uploads it to the eager-created UBO next frame (no setter).
+        world.set(exposureParamsEntity, PostProcessParams, {
+          data: packExposureBytes(exposure),
+        });
+        renderHud();
+        return;
+      }
       if (key === activeKey) return;
       const installResult = installHdrPipelineByKey(key);
       if (!installResult.ok) {
@@ -495,10 +681,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         return;
       }
       activeKey = key as '1' | '2';
-      const displayName = hdrDisplayNameByKey(key);
-      if (hudElement !== null && displayName !== null) {
-        hudElement.innerText = `hdr: ${displayName} (exposure=${LO_EXPOSURE}) | press 1 = HDR, 2 = LDR`;
-      }
+      renderHud();
     });
   }
 

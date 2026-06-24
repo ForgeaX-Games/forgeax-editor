@@ -23,6 +23,12 @@ function emptySkin(): SkinPod {
   };
 }
 
+// GUID import-stable iron law: every emitted asset must be declared in
+// subAssets[]. These tests declare a mesh + scene pair (and the single-scene
+// variant) so toAssetPack resolves the declared GUID per (kind, sourceIndex).
+const MESH_SUB = { guid: 'guid-mesh-0', kind: 'mesh', sourceIndex: 0 };
+const SCENE_SUB = { guid: 'guid-scene-0', kind: 'scene', sourceIndex: 0 };
+
 describe('toAssetPack name plumbing (AC-10)', () => {
   it('multi-asset FBX: mesh name from MeshPod.name', () => {
     const mesh: MeshPod = {
@@ -43,6 +49,7 @@ describe('toAssetPack name plumbing (AC-10)', () => {
       skeleton: emptySkeleton(),
       skin: emptySkin(),
       animationClips: [],
+      subAssets: [MESH_SUB, SCENE_SUB],
     });
     const meshAsset = assets.find((a) => a.kind === 'mesh');
     expect(meshAsset).toBeDefined();
@@ -70,6 +77,7 @@ describe('toAssetPack name plumbing (AC-10)', () => {
       skeleton: emptySkeleton(),
       skin: emptySkin(),
       animationClips: [],
+      subAssets: [MESH_SUB, SCENE_SUB],
     });
     const sceneAsset = assets.find((a) => a.kind === 'scene');
     expect(sceneAsset).toBeDefined();
@@ -89,6 +97,7 @@ describe('toAssetPack name plumbing (AC-10)', () => {
       skeleton: emptySkeleton(),
       skin: emptySkin(),
       animationClips: [],
+      subAssets: [SCENE_SUB],
     });
     expect(assets).toHaveLength(1);
     expect(assets[0]?.name).toBeUndefined();
@@ -112,6 +121,7 @@ describe('toAssetPack name plumbing (AC-10)', () => {
       skeleton: emptySkeleton(),
       skin: emptySkin(),
       animationClips: [],
+      subAssets: [MESH_SUB, SCENE_SUB],
     });
     const meshAsset = assets.find((a) => a.kind === 'mesh');
     expect(meshAsset).toBeDefined();

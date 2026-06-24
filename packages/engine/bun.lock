@@ -63,6 +63,23 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/hello/asi-world": {
+      "name": "@forgeax/hello-asi-world",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@types/node": "^25.8.0",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
     "apps/hello/audio": {
       "name": "@forgeax/hello-audio",
       "version": "0.0.0",
@@ -497,6 +514,38 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/hello/tilemap": {
+      "name": "@forgeax/hello-tilemap",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/hello/tilemap-object-layer": {
+      "name": "@forgeax/hello-tilemap-object-layer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/hello/tonemap": {
       "name": "@forgeax/hello-tonemap",
       "version": "0.0.0",
@@ -574,6 +623,26 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/hello/video-texture": {
+      "name": "@forgeax/video-texture",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "playwright": "^1.55.0",
+        "pngjs": "^7.0.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -1077,6 +1146,59 @@
         "vite": "8.0.10",
       },
     },
+    "apps/learn-render/5.advanced-lighting/3.1.shadow-mapping/3.full": {
+      "name": "@forgeax/app-learn-render-5-advanced-lighting-3-1-shadow-mapping-3-full",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
+    "apps/learn-render/5.advanced-lighting/3.2.point-shadows": {
+      "name": "@forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
+    "apps/learn-render/5.advanced-lighting/3.3.csm": {
+      "name": "@forgeax/app-learn-render-5-advanced-lighting-3-3-csm",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
     "apps/learn-render/5.advanced-lighting/4.normal-mapping": {
       "name": "@forgeax/app-learn-render-5-advanced-lighting-4-normal-mapping",
       "version": "0.0.0",
@@ -1091,6 +1213,26 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
+    "apps/learn-render/5.advanced-lighting/5.parallax-mapping": {
+      "name": "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@types/node": "^25.8.0",
         "@webgpu/types": "^0.1.70",
         "vite": "8.0.10",
       },
@@ -1635,6 +1777,15 @@
         "@forgeax/engine-rhi-wgpu": "workspace:*",
       },
     },
+    "packages/rhi-null": {
+      "name": "@forgeax/engine-rhi-null",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+      },
+    },
     "packages/rhi-webgpu": {
       "name": "@forgeax/engine-rhi-webgpu",
       "version": "0.0.0",
@@ -1665,6 +1816,7 @@
         "@forgeax/engine-pack": "workspace:^",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-null": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -2048,7 +2200,15 @@
 
     "@forgeax/app-learn-render-5-advanced-lighting-2-gamma-correction": ["@forgeax/app-learn-render-5-advanced-lighting-2-gamma-correction@workspace:apps/learn-render/5.advanced-lighting/2.gamma-correction"],
 
+    "@forgeax/app-learn-render-5-advanced-lighting-3-1-shadow-mapping-3-full": ["@forgeax/app-learn-render-5-advanced-lighting-3-1-shadow-mapping-3-full@workspace:apps/learn-render/5.advanced-lighting/3.1.shadow-mapping/3.full"],
+
+    "@forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows": ["@forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows@workspace:apps/learn-render/5.advanced-lighting/3.2.point-shadows"],
+
+    "@forgeax/app-learn-render-5-advanced-lighting-3-3-csm": ["@forgeax/app-learn-render-5-advanced-lighting-3-3-csm@workspace:apps/learn-render/5.advanced-lighting/3.3.csm"],
+
     "@forgeax/app-learn-render-5-advanced-lighting-4-normal-mapping": ["@forgeax/app-learn-render-5-advanced-lighting-4-normal-mapping@workspace:apps/learn-render/5.advanced-lighting/4.normal-mapping"],
+
+    "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping": ["@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping@workspace:apps/learn-render/5.advanced-lighting/5.parallax-mapping"],
 
     "@forgeax/app-learn-render-5-advanced-lighting-6-hdr": ["@forgeax/app-learn-render-5-advanced-lighting-6-hdr@workspace:apps/learn-render/5.advanced-lighting/6.hdr"],
 
@@ -2110,6 +2270,8 @@
 
     "@forgeax/engine-rhi-debug": ["@forgeax/engine-rhi-debug@workspace:packages/rhi-debug"],
 
+    "@forgeax/engine-rhi-null": ["@forgeax/engine-rhi-null@workspace:packages/rhi-null"],
+
     "@forgeax/engine-rhi-webgpu": ["@forgeax/engine-rhi-webgpu@workspace:packages/rhi-webgpu"],
 
     "@forgeax/engine-rhi-wgpu": ["@forgeax/engine-rhi-wgpu@workspace:packages/rhi-wgpu"],
@@ -2133,6 +2295,8 @@
     "@forgeax/engine-wgpu-wasm": ["@forgeax/engine-wgpu-wasm@workspace:packages/wgpu-wasm"],
 
     "@forgeax/hello-app": ["@forgeax/hello-app@workspace:apps/hello/app"],
+
+    "@forgeax/hello-asi-world": ["@forgeax/hello-asi-world@workspace:apps/hello/asi-world"],
 
     "@forgeax/hello-audio": ["@forgeax/hello-audio@workspace:apps/hello/audio"],
 
@@ -2182,6 +2346,10 @@
 
     "@forgeax/hello-text": ["@forgeax/hello-text@workspace:apps/hello/text"],
 
+    "@forgeax/hello-tilemap": ["@forgeax/hello-tilemap@workspace:apps/hello/tilemap"],
+
+    "@forgeax/hello-tilemap-object-layer": ["@forgeax/hello-tilemap-object-layer@workspace:apps/hello/tilemap-object-layer"],
+
     "@forgeax/hello-tonemap": ["@forgeax/hello-tonemap@workspace:apps/hello/tonemap"],
 
     "@forgeax/hello-topology": ["@forgeax/hello-topology@workspace:apps/hello/topology"],
@@ -2203,6 +2371,8 @@
     "@forgeax/rhi-debug-viewer": ["@forgeax/rhi-debug-viewer@workspace:apps/rhi-debug-viewer"],
 
     "@forgeax/template-game-default": ["@forgeax/template-game-default@workspace:templates/game-default"],
+
+    "@forgeax/video-texture": ["@forgeax/video-texture@workspace:apps/hello/video-texture"],
 
     "@hapi/hoek": ["@hapi/hoek@9.3.0", "", {}, "sha512-/c6rf4UJlmHlC9b5BaNvzAcFv7HZ2QHaV0D4/HNlBdvFnvQq8RI4kYdhyPCl7Xj+oWvTWQ8ujhqS53LIgAe6KQ=="],
 

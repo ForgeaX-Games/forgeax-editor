@@ -11,10 +11,9 @@
 // what the device sees.
 
 import { describe, expect, it } from 'vitest';
-import { mergeSkylightIntoMaterialBgl } from './ibl/skylight-bind-group';
 import {
   appendInjection,
-  buildPbrMaterialBaseEntries,
+  buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
 } from './pbr-pipeline';
 import type { PipelineSpec } from './pipeline-spec';
@@ -74,16 +73,19 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('pbr-material-merged', () => {
-    it('18 entries: base 7 + skylight 7 + lightmap 4', () => {
+    it('18 entries: user-region 7 (derived) + ibl 7 + lightmap 4', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-material-merged',
       });
-      const base = buildPbrMaterialBaseEntries();
-      const afterSky = mergeSkylightIntoMaterialBgl(base);
+      // Post-M2 (D-1): user-region comes from derive(paramSchema).bglEntries
+      // (built-in standard-PBR 3-texture fallback), then IBL + lightmap are
+      // appended at start = userRegion.length.
+      const userRegion = buildPbrMaterialUserRegionEntries();
+      const afterIbl = [...userRegion, ...appendInjection(userRegion, 'ibl')];
       const expected = {
         label: 'pbr-material-skylight-bgl',
-        entries: [...afterSky, ...appendInjection(afterSky, 'lightmap')],
+        entries: [...afterIbl, ...appendInjection(afterIbl, 'lightmap')],
       };
       expect(out).toEqual(expected);
       expect(out.entries.length).toBe(18);
@@ -181,7 +183,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
       });
       expect(out).toEqual({
         label: 'unlit-material-bgl',
-        entries: buildPbrMaterialBaseEntries(),
+        entries: buildPbrMaterialUserRegionEntries(),
       });
       expect(out.entries.length).toBe(7);
     });

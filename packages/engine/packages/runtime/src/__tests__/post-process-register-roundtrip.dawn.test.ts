@@ -124,6 +124,47 @@ describe('feat-20260604 M3 F-2 fix-up: postProcess.register + addFullscreenPass 
     expect(err.detail?.id).toBe('test::roundtrip-B');
   });
 
+  it('renderer.postProcess.register throws params-size-mismatch when params.byteSize < 16 (live fail-fast)', async () => {
+    // feat-20260621 AC-A3: the eager params-UBO guard must fire on the REAL
+    // register() path (not just on a hand-constructed PostProcessError). byteSize
+    // below the 16B std140 minimum is a programmer error caught at register time,
+    // before any frame draws.
+    const r = await setupRenderer();
+    let caught: unknown = null;
+    try {
+      r.postProcess.register('test::roundtrip-params-too-small', {
+        source: 'fn main() {}',
+        params: { byteSize: 8, defaultValue: new Uint8Array(8) },
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught, 'register with byteSize < 16 must throw').not.toBeNull();
+    const err = caught as { code?: string; detail?: { byteSize?: number; actualLength?: number } };
+    expect(err.code).toBe('params-size-mismatch');
+    expect(err.detail?.byteSize).toBe(8);
+  });
+
+  it('renderer.postProcess.register throws params-size-mismatch when defaultValue.length !== byteSize (live fail-fast)', async () => {
+    // Same guard, second branch: declared byteSize and the seed defaultValue
+    // disagree — the eager UBO write would corrupt; register() must reject.
+    const r = await setupRenderer();
+    let caught: unknown = null;
+    try {
+      r.postProcess.register('test::roundtrip-params-length-mismatch', {
+        source: 'fn main() {}',
+        params: { byteSize: 16, defaultValue: new Uint8Array(12) },
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught, 'register with mismatched defaultValue length must throw').not.toBeNull();
+    const err = caught as { code?: string; detail?: { byteSize?: number; actualLength?: number } };
+    expect(err.code).toBe('params-size-mismatch');
+    expect(err.detail?.byteSize).toBe(16);
+    expect(err.detail?.actualLength).toBe(12);
+  });
+
   it('addFullscreenPass referencing unregistered id throws post-process-not-found via dispatcher', async () => {
     // The dispatcher's lookup-and-throw branch is the load-bearing AC-08 path.
     // Build a minimal RenderGraph with a single fullscreen pass referencing an

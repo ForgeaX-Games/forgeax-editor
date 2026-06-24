@@ -18,6 +18,7 @@
 // touch the handle (charter §F4 explicit failure: any future shape
 // change to handle bookkeeping flips the second-destroy branch).
 
+import { SharedRefStore } from '@forgeax/engine-ecs';
 import type { Buffer, Result, RhiCaps, RhiDevice, Texture } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import {
@@ -26,6 +27,7 @@ import {
   type MeshAsset,
   type TextureAsset,
   toShared,
+  unwrapHandle,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -468,5 +470,689 @@ describe('disposeInstanceBuffers (feat-20260612 M4 / w14)', () => {
     >();
     expect(() => disposeInstanceBuffers(map)).not.toThrow();
     expect(map.size).toBe(0);
+  });
+});
+
+// ── M1 feat-20260619-gpu-resource-ownership-symmetric-release-primitive ──
+//
+// w1: AC-01 evict primitives basic unit tests (red phase)
+// w2: AC-01 cubemap wrapper shared-dedup unit tests (red phase)
+// w3: AC-03 releaseUnreferenced idempotent unit tests (red phase)
+// w4: AC-04 aggregate failure unit tests (red phase)
+
+// ── Helpers for A-family evict tests ──
+
+function evictableTextureStore(): {
+  store: GpuResourceStore;
+  probe: DeviceProbe;
+  handle: ReturnType<typeof toShared<'TextureAsset'>>;
+  tex: GpuTexture;
+} {
+  const probe = freshProbe();
+  const store = configuredStore(probe);
+  const handle = toShared<'TextureAsset'>(3001);
+
+  const res = store.ensureResident(handle, texturePodFixture());
+  expect(res.ok).toBe(true);
+
+  const tex = store._getTextureGpuTexture(handle);
+  expect(tex).toBeDefined();
+  if (tex === undefined) throw new Error('unreachable');
+  expect(tex.isDestroyed).toBe(false);
+
+  return { store, probe, handle, tex };
+}
+
+function evictableMeshStore(): {
+  store: GpuResourceStore;
+  probe: DeviceProbe;
+  handle: ReturnType<typeof toShared<'MeshAsset'>>;
+  vbo: GpuBuffer;
+  ibo: GpuBuffer;
+} {
+  const probe = freshProbe();
+  const store = configuredStore(probe);
+  const handle = toShared<'MeshAsset'>(3002);
+
+  const res = store.ensureResident(handle, meshPodFixture());
+  expect(res.ok).toBe(true);
+
+  const entry = store.getMeshGpuHandles(handle);
+  expect(entry).toBeDefined();
+  if (entry === undefined) throw new Error('unreachable');
+  expect(entry.vertexBuffer.isDestroyed).toBe(false);
+  expect(entry.indexBuffer).not.toBeNull();
+  if (entry.indexBuffer === null) throw new Error('unreachable');
+
+  return {
+    store,
+    probe,
+    handle,
+    vbo: entry.vertexBuffer,
+    ibo: entry.indexBuffer,
+  };
+}
+
+describe('evictTexture / evictMesh / evictCubemap (feat-20260619 M1 / w1)', () => {
+  it('evictTexture: removes entry from Map + isDestroyed === true', () => {
+    const { store, probe, handle, tex } = evictableTextureStore();
+    const baselineDestroyed = probe.destroyedTextures;
+
+    const r = store.evictTexture(handle);
+    expect(r.freed).toBe(1);
+    expect(r.errors).toEqual([]);
+
+    expect(tex.isDestroyed).toBe(true);
+    expect(store._getTextureGpuTexture(handle)).toBeUndefined();
+    expect(store.getTextureGpuView(handle)).toBeUndefined();
+    expect(probe.destroyedTextures - baselineDestroyed).toBe(1);
+  });
+
+  it('evictTexture: double evict is no-op (freed=0, no error)', () => {
+    const { store, handle } = evictableTextureStore();
+
+    const r1 = store.evictTexture(handle);
+    expect(r1.freed).toBe(1);
+
+    const r2 = store.evictTexture(handle);
+    expect(r2.freed).toBe(0);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it('evictTexture: non-existent key is no-op', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const handle = toShared<'TextureAsset'>(9999);
+
+    const r = store.evictTexture(handle);
+    expect(r.freed).toBe(0);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('evictMesh: removes entry + both vbo and ibo destroyed', () => {
+    const { store, probe, handle, vbo, ibo } = evictableMeshStore();
+    const baselineDestroyed = probe.destroyedBuffers;
+
+    const r = store.evictMesh(handle);
+    expect(r.freed).toBe(1);
+    expect(r.errors).toEqual([]);
+
+    expect(vbo.isDestroyed).toBe(true);
+    expect(ibo.isDestroyed).toBe(true);
+    expect(store.getMeshGpuHandles(handle)).toBeUndefined();
+    // vbo + ibo = 2 buffer destroys
+    expect(probe.destroyedBuffers - baselineDestroyed).toBe(2);
+  });
+
+  it('evictMesh: double evict is no-op', () => {
+    const { store, handle } = evictableMeshStore();
+
+    const r1 = store.evictMesh(handle);
+    expect(r1.freed).toBe(1);
+
+    const r2 = store.evictMesh(handle);
+    expect(r2.freed).toBe(0);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it('evictMesh: non-existent key is no-op', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const handle = toShared<'MeshAsset'>(9999);
+
+    const r = store.evictMesh(handle);
+    expect(r.freed).toBe(0);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('evictCubemap: non-existent key is no-op', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+
+    const r = store.evictCubemap(9999);
+    expect(r.freed).toBe(0);
+    expect(r.errors).toEqual([]);
+  });
+});
+
+describe('evictCubemap wrapper shared-dedup (feat-20260619 M1 / w2)', () => {
+  it('evictCubemap on sourceId destroys wrapper; cubeId entry remains but is destroyed', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+
+    // Construct a cubemap with two entries sharing one GpuTexture wrapper
+    // (mirrors uploadCubemapFromEquirect's dual set at sourceId + cubeId).
+    const srcHandle = toShared<'TextureAsset'>(4001);
+    const cubeHandle = toShared<'CubeTextureAsset'>(4002);
+    const sourceId = unwrapHandle(srcHandle);
+    const cubeId = unwrapHandle(cubeHandle);
+
+    // Create a GpuTexture wrapper directly
+    const device = makeMockDevice() as unknown as RhiDevice;
+    const gpuTex = new GpuTexture(device, {} as unknown as Texture);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
+    const storeAny = store as any;
+    const sharedView = { __mock: 'cubemap-view' };
+    const sharedFaceViews = [
+      { __mock: 'face-0' },
+      { __mock: 'face-1' },
+      { __mock: 'face-2' },
+      { __mock: 'face-3' },
+      { __mock: 'face-4' },
+      { __mock: 'face-5' },
+    ];
+    storeAny.cubemapGpuHandles.set(sourceId, {
+      texture: gpuTex,
+      view: sharedView,
+      faceViews: sharedFaceViews,
+    });
+    storeAny.cubemapGpuHandles.set(cubeId, {
+      texture: gpuTex,
+      view: sharedView,
+      faceViews: sharedFaceViews,
+    });
+
+    expect(gpuTex.isDestroyed).toBe(false);
+    expect(storeAny.cubemapGpuHandles.has(sourceId)).toBe(true);
+    expect(storeAny.cubemapGpuHandles.has(cubeId)).toBe(true);
+
+    // Evict sourceId
+    const r1 = store.evictCubemap(srcHandle);
+    expect(r1.freed).toBe(1);
+    expect(r1.errors).toEqual([]);
+
+    expect(gpuTex.isDestroyed).toBe(true);
+    expect(storeAny.cubemapGpuHandles.has(sourceId)).toBe(false);
+    // cubeId entry still exists but wrapper is destroyed
+    expect(storeAny.cubemapGpuHandles.has(cubeId)).toBe(true);
+
+    // Evict cubeId: isDestroyed gate makes this no-op
+    const r2 = store.evictCubemap(cubeHandle);
+    expect(r2.freed).toBe(0);
+    expect(r2.errors).toEqual([]);
+    expect(storeAny.cubemapGpuHandles.has(cubeId)).toBe(false);
+  });
+});
+
+describe('releaseUnreferenced (feat-20260619 M1 / w3)', () => {
+  it('releases entries not in liveSet; keeps entries in liveSet', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const keepHandle = toShared<'TextureAsset'>(5001);
+    const evictHandle = toShared<'TextureAsset'>(5002);
+
+    store.ensureResident(keepHandle, texturePodFixture());
+    store.ensureResident(evictHandle, texturePodFixture());
+
+    const keepId = unwrapHandle(keepHandle);
+    const liveSet = new Set<number>([keepId]);
+
+    const r = store.releaseUnreferenced(liveSet);
+    expect(r.freed).toBe(1);
+    expect(r.errors).toEqual([]);
+
+    // kept entry is intact
+    expect(store._getTextureGpuTexture(keepHandle)).toBeDefined();
+    expect(store._getTextureGpuTexture(keepHandle)?.isDestroyed).toBe(false);
+
+    // evicted entry is gone
+    expect(store._getTextureGpuTexture(evictHandle)).toBeUndefined();
+  });
+
+  it('ignores ids in liveSet that do not exist in store', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const handle = toShared<'TextureAsset'>(5003);
+    store.ensureResident(handle, texturePodFixture());
+
+    const liveSet = new Set<number>([unwrapHandle(handle), 99999]);
+
+    const r = store.releaseUnreferenced(liveSet);
+    // Only the resident texture should be kept; external id is ignored.
+    expect(r.freed).toBe(0);
+    expect(store._getTextureGpuTexture(handle)).toBeDefined();
+  });
+
+  it('empty liveSet releases everything; second call is no-op', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const h1 = toShared<'TextureAsset'>(5101);
+    const h2 = toShared<'TextureAsset'>(5102);
+    const h3 = toShared<'MeshAsset'>(5103);
+
+    store.ensureResident(h1, texturePodFixture());
+    store.ensureResident(h2, texturePodFixture());
+    store.ensureResident(h3, meshPodFixture());
+
+    const r1 = store.releaseUnreferenced(new Set());
+    // 2 textures (1 each) + 1 mesh (vbo + ibo = 2 buffer frees) = 4
+    expect(r1.freed).toBe(4);
+
+    // Everything gone
+    expect(store._getTextureGpuTexture(h1)).toBeUndefined();
+    expect(store._getTextureGpuTexture(h2)).toBeUndefined();
+    expect(store.getMeshGpuHandles(h3)).toBeUndefined();
+
+    // Second call: no-op (Map already empty)
+    const r2 = store.releaseUnreferenced(new Set());
+    expect(r2.freed).toBe(0);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it('is idempotent: calling twice with same liveSet gives same result', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+    const keepHandle = toShared<'TextureAsset'>(5201);
+    const evictHandle = toShared<'TextureAsset'>(5202);
+
+    store.ensureResident(keepHandle, texturePodFixture());
+    store.ensureResident(evictHandle, texturePodFixture());
+
+    const liveSet = new Set<number>([unwrapHandle(keepHandle)]);
+
+    const r1 = store.releaseUnreferenced(liveSet);
+    expect(r1.freed).toBe(1);
+
+    const r2 = store.releaseUnreferenced(liveSet);
+    expect(r2.freed).toBe(0);
+    expect(r2.errors).toEqual([]);
+  });
+});
+
+describe('evict aggregate failure (feat-20260619 M1 / w4)', () => {
+  function makeFailingMockDevice(): {
+    device: MinimalDevice;
+    failTex: Texture;
+    failBuf: Buffer;
+  } {
+    const destroyedBufs = new WeakSet<Buffer>();
+    const destroyedTexs = new WeakSet<Texture>();
+    const failTex = {} as unknown as Texture;
+    const failBuf = {} as unknown as Buffer;
+
+    const device: MinimalDevice = {
+      destroyBuffer(buf: Buffer): Result<void, RhiError> {
+        if (buf === failBuf) {
+          return err(
+            new RhiError({
+              code: 'destroy-after-destroy',
+              expected: 'buffer not yet destroyed',
+              hint: 'injected test failure',
+            }),
+          );
+        }
+        if (destroyedBufs.has(buf)) {
+          return err(
+            new RhiError({
+              code: 'destroy-after-destroy',
+              expected: 'GPU buffer handle has not been destroyed yet',
+              hint: 'object already destroyed; track lifecycle in caller',
+            }),
+          );
+        }
+        destroyedBufs.add(buf);
+        return ok(undefined);
+      },
+      destroyTexture(tex: Texture): Result<void, RhiError> {
+        if (tex === failTex) {
+          return err(
+            new RhiError({
+              code: 'destroy-after-destroy',
+              expected: 'texture not yet destroyed',
+              hint: 'injected test failure',
+            }),
+          );
+        }
+        if (destroyedTexs.has(tex)) {
+          return err(
+            new RhiError({
+              code: 'destroy-after-destroy',
+              expected: 'GPU texture handle has not been destroyed yet',
+              hint: 'object already destroyed; track lifecycle in caller',
+            }),
+          );
+        }
+        destroyedTexs.add(tex);
+        return ok(undefined);
+      },
+    };
+
+    return { device, failTex, failBuf };
+  }
+
+  it('single evictTexture failure: errors collected, freed counts remaining', () => {
+    const { device, failTex } = makeFailingMockDevice();
+
+    // Build two GpuTexture wrappers: one that will fail, one normal.
+    const goodTex = new GpuTexture(device as unknown as RhiDevice, {} as unknown as Texture);
+    const badTex = new GpuTexture(device as unknown as RhiDevice, failTex);
+
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+
+    const goodHandle = toShared<'TextureAsset'>(6001);
+    const badHandle = toShared<'TextureAsset'>(6002);
+    const goodId = unwrapHandle(goodHandle);
+    const badId = unwrapHandle(badHandle);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
+    const storeAny = store as any;
+    storeAny.textureGpuHandles.set(goodId, {
+      texture: goodTex,
+      view: { __mock: 'view-good' },
+    });
+    storeAny.textureGpuHandles.set(badId, {
+      texture: badTex,
+      view: { __mock: 'view-bad' },
+    });
+
+    // Evict the good handle first
+    const rGood = store.evictTexture(goodHandle);
+    expect(rGood.freed).toBe(1);
+    expect(rGood.errors).toEqual([]);
+    expect(goodTex.isDestroyed).toBe(true);
+
+    // Evict the bad handle
+    const rBad = store.evictTexture(badHandle);
+    expect(rBad.freed).toBe(0);
+    expect(rBad.errors.length).toBe(1);
+    expect(rBad.errors[0]?.code).toBe('destroy-after-destroy');
+    // Sweep continued — bad handle entry removed
+    expect(storeAny.textureGpuHandles.has(badId)).toBe(false);
+  });
+
+  it('single evictMesh failure: errors collected, freed counts remaining buffers', () => {
+    const { device, failBuf } = makeFailingMockDevice();
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+
+    const handle = toShared<'MeshAsset'>(6003);
+    const id = unwrapHandle(handle);
+
+    const goodVbo = new GpuBuffer(device as unknown as RhiDevice, {} as unknown as Buffer);
+    const badIbo = new GpuBuffer(device as unknown as RhiDevice, failBuf);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
+    const storeAny = store as any;
+    storeAny.meshGpuHandles.set(id, {
+      vertexBuffer: goodVbo,
+      indexBuffer: badIbo,
+      vboBytes: 256,
+      iboBytes: 256,
+      indexCount: 6,
+      indexFormat: 'uint16',
+      layout: '12F',
+      vertexCount: 4,
+      indexed: true,
+      topology: 'triangle-list',
+      submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 0, topology: 'triangle-list' }],
+    });
+
+    const r = store.evictMesh(handle);
+    // vbo destroyed ok but ibo failed — freed counts 0 (only vbo, but treat mesh as atomic evict)
+    // The plan says evict counts freed per-resource, mesh has two buffers.
+    // Per w5 design: evictMesh frees 1 (the mesh entry), errors collects both buffer failures.
+    // Actually, let's check: D-1 says "read Result (ok→freed++; err→fire+errors.push)"
+    // For mesh: two buffers → two destroy calls. freed counts successful destroys.
+    expect(r.freed).toBe(1); // vbo ok
+    expect(r.errors.length).toBe(1); // ibo failed
+    expect(r.errors[0]?.code).toBe('destroy-after-destroy');
+    expect(goodVbo.isDestroyed).toBe(true);
+    expect(storeAny.meshGpuHandles.has(id)).toBe(false);
+  });
+
+  it('releaseUnreferenced with mixed failures: errors collected, sweep continues', () => {
+    const { device, failTex } = makeFailingMockDevice();
+    const probe = freshProbe();
+    const store = configuredStore(probe);
+
+    const badHandle = toShared<'TextureAsset'>(6010);
+    const goodHandle = toShared<'MeshAsset'>(6011);
+    const badId = unwrapHandle(badHandle);
+    const goodId = unwrapHandle(goodHandle);
+
+    const badTex = new GpuTexture(device as unknown as RhiDevice, failTex);
+    const goodVbo = new GpuBuffer(device as unknown as RhiDevice, {} as unknown as Buffer);
+    const goodIbo = new GpuBuffer(device as unknown as RhiDevice, {} as unknown as Buffer);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
+    const storeAny = store as any;
+    storeAny.textureGpuHandles.set(badId, {
+      texture: badTex,
+      view: { __mock: 'view-bad' },
+    });
+    storeAny.meshGpuHandles.set(goodId, {
+      vertexBuffer: goodVbo,
+      indexBuffer: goodIbo,
+      vboBytes: 256,
+      iboBytes: 256,
+      indexCount: 6,
+      indexFormat: 'uint16',
+      layout: '12F',
+      vertexCount: 4,
+      indexed: true,
+      topology: 'triangle-list',
+      submeshes: [{ indexOffset: 0, indexCount: 6, vertexCount: 0, topology: 'triangle-list' }],
+    });
+
+    const r = store.releaseUnreferenced(new Set());
+    // badTex fails (1 error), goodVbo+goodIbo both succeed — freed counts each
+    // per-resource destroy, so 2 buffer destroys = freed 2. bad tex = 0 frees, 1 error.
+    expect(r.freed).toBe(2); // 2 buffer frees (vbo + ibo), 0 texture frees
+    expect(r.errors.length).toBe(1);
+    expect(r.errors[0]?.code).toBe('destroy-after-destroy');
+    expect(goodVbo.isDestroyed).toBe(true);
+    expect(goodIbo.isDestroyed).toBe(true);
+  });
+});
+
+// ── M2 w7: AC-02 event-driven recycle closed-loop integration test ──
+//
+// Validates the full chain: SharedRefStore.alloc(brand, pod, onLastRelease)
+// -> release (rc 1->0) -> onLastRelease callback fires -> gpuStore.evictX.
+//
+// Scope per task description:
+//   (1) Three resource types (TextureAsset / MeshAsset / CubeTextureAsset)
+//       each construct one alloc -> retain -> release-to-rc=0 ->
+//       onLastRelease triggers evict -> assert wrapper.isDestroyed===true.
+//   (2) Covers "no manual evict needed" — entity despawn path auto-recycles.
+//   (3) Negative assertion: onLastRelease NOT wired -> resource is NOT evicted
+//       (stays resident in store).
+//
+// These tests wire the callback directly in the test (independent of w8's
+// engine-location wiring). They will go red in this commit (red phase of TDD)
+// and turn green when w8 completes the wiring.
+
+describe('event-driven recycle closed-loop (feat-20260619 M2 / w7, AC-02)', () => {
+  // Helper: create a GpuResourceStore with configured device and probe,
+  // using the same mock infrastructure from earlier describe blocks.
+  function evictCapturingStore(): {
+    store: GpuResourceStore;
+    probe: DeviceProbe;
+    sharedRefs: SharedRefStore;
+  } {
+    const probe = freshProbe();
+    const store = new GpuResourceStore();
+    store.configureGpuDevice(
+      makeStoreMockDevice(probe),
+      shaderFactory,
+      makeRegisterCube() as never,
+      mockCaps,
+    );
+    return { store, probe, sharedRefs: new SharedRefStore() };
+  }
+
+  it('TextureAsset: allocWithOnLastRelease -> release to rc=0 -> evictTexture fires, wrapper destroyed', () => {
+    const { store, probe, sharedRefs } = evictCapturingStore();
+    const baselineDestroyed = probe.destroyedTextures;
+
+    // Step 1: allocSharedRef with onLastRelease that calls evictTexture
+    const payload: TextureAsset = texturePodFixture();
+    const handle = sharedRefs.alloc('TextureAsset', payload, (p: TextureAsset) => {
+      void p;
+      // Use the most-recently-minted handle — alloc returns the handle but
+      // the callback closure captures it via the sharedRefs alloc cycle.
+      void store.evictTexture(handle);
+    });
+
+    // Step 2: ensureResident so GPU resources are materialised in the store
+    const residentRes = store.ensureResident(handle, payload);
+    expect(residentRes.ok).toBe(true);
+
+    const tex = store._getTextureGpuTexture(handle);
+    expect(tex).toBeDefined();
+    if (tex === undefined) return;
+    expect(tex.isDestroyed).toBe(false);
+
+    // Step 3: retain (rc 2) then release twice to hit rc 0 (alloc grants rc=1)
+    // The alloc already grants rc=1. We need to verify the callback fires when
+    // rc transitions 1->0, so just release once.
+    const releaseRes = sharedRefs.release(handle);
+    expect(releaseRes.ok).toBe(true);
+
+    // rc now 0 => onLastRelease callback fired => evictTexture called
+    expect(tex.isDestroyed).toBe(true);
+    expect(store._getTextureGpuTexture(handle)).toBeUndefined();
+    expect(store.getTextureGpuView(handle)).toBeUndefined();
+    expect(probe.destroyedTextures - baselineDestroyed).toBe(1);
+  });
+
+  it('MeshAsset: allocWithOnLastRelease -> release to rc=0 -> evictMesh fires, vbo+ibo destroyed', () => {
+    const { store, probe, sharedRefs } = evictCapturingStore();
+    const baselineDestroyed = probe.destroyedBuffers;
+
+    const payload: MeshAsset = meshPodFixture();
+    const handle = sharedRefs.alloc('MeshAsset', payload, (p: MeshAsset) => {
+      void p;
+      void store.evictMesh(handle);
+    });
+
+    const residentRes = store.ensureResident(handle, payload);
+    expect(residentRes.ok).toBe(true);
+
+    const entry = store.getMeshGpuHandles(handle);
+    expect(entry).toBeDefined();
+    if (entry === undefined) return;
+    expect(entry.vertexBuffer.isDestroyed).toBe(false);
+    expect(entry.indexBuffer).not.toBeNull();
+    if (entry.indexBuffer === null) return;
+
+    const releaseRes = sharedRefs.release(handle);
+    expect(releaseRes.ok).toBe(true);
+
+    // rc 0 => onLastRelease => evictMesh called
+    expect(entry.vertexBuffer.isDestroyed).toBe(true);
+    expect(entry.indexBuffer.isDestroyed).toBe(true);
+    expect(store.getMeshGpuHandles(handle)).toBeUndefined();
+    expect(probe.destroyedBuffers - baselineDestroyed).toBe(2);
+  });
+
+  it('CubeTextureAsset: allocWithOnLastRelease -> release to rc=0 -> evictCubemap fires', () => {
+    const { store, sharedRefs } = evictCapturingStore();
+
+    let cubeIdNum = 0;
+    const cubePayload: CubeTextureAsset = {
+      kind: 'cube-texture',
+      width: 64,
+      height: 64,
+      format: 'rgba8unorm',
+      faces: [],
+    };
+    const cubeHandle = sharedRefs.alloc('CubeTextureAsset', cubePayload, (p: CubeTextureAsset) => {
+      void p;
+      void store.evictCubemap(cubeIdNum);
+    });
+    cubeIdNum = unwrapHandle(cubeHandle);
+
+    // Directly seed a cubemap entry into the store (simulating uploadCubemapFromEquirect
+    // with the matching sourceId). We don't test the full equirect upload path;
+    // we only verify the evict callback chain.
+    const device = makeMockDevice() as unknown as RhiDevice;
+    const gpuTex = new GpuTexture(device, {} as unknown as Texture);
+
+    // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
+    const storeAny = store as any;
+    storeAny.cubemapGpuHandles.set(cubeIdNum, {
+      texture: gpuTex,
+      view: { __mock: 'cubemap-view' },
+      faceViews: [
+        { __mock: 'face-0' },
+        { __mock: 'face-1' },
+        { __mock: 'face-2' },
+        { __mock: 'face-3' },
+        { __mock: 'face-4' },
+        { __mock: 'face-5' },
+      ],
+    });
+
+    expect(gpuTex.isDestroyed).toBe(false);
+    expect(storeAny.cubemapGpuHandles.has(cubeIdNum)).toBe(true);
+
+    // Release to rc=0 -> onLastRelease callback fires -> evictCubemap
+    const releaseRes = sharedRefs.release(cubeHandle);
+    expect(releaseRes.ok).toBe(true);
+
+    expect(gpuTex.isDestroyed).toBe(true);
+    expect(storeAny.cubemapGpuHandles.has(cubeIdNum)).toBe(false);
+  });
+
+  it('negative: no onLastRelease callback -> resource NOT evicted on release', () => {
+    const { store, sharedRefs } = evictCapturingStore();
+
+    // Allocate WITHOUT onLastRelease
+    const payload: TextureAsset = texturePodFixture();
+    const handle = sharedRefs.alloc('TextureAsset', payload);
+
+    const residentRes = store.ensureResident(handle, payload);
+    expect(residentRes.ok).toBe(true);
+
+    const tex = store._getTextureGpuTexture(handle);
+    expect(tex).toBeDefined();
+    if (tex === undefined) return;
+    expect(tex.isDestroyed).toBe(false);
+
+    // Release to rc=0
+    const releaseRes = sharedRefs.release(handle);
+    expect(releaseRes.ok).toBe(true);
+
+    // Resource still resident — no callback, no evict
+    expect(tex.isDestroyed).toBe(false);
+    expect(store._getTextureGpuTexture(handle)).toBeDefined();
+  });
+
+  it('retain -> release retains rc>0: no premature evict at rc 2->1', () => {
+    const { store, sharedRefs } = evictCapturingStore();
+
+    const payload: TextureAsset = texturePodFixture();
+    const handle = sharedRefs.alloc('TextureAsset', payload, (p: TextureAsset) => {
+      void p;
+      void store.evictTexture(handle);
+    });
+
+    store.ensureResident(handle, payload);
+    const tex = store._getTextureGpuTexture(handle);
+    expect(tex).toBeDefined();
+    if (tex === undefined) return;
+
+    // retain (rc 1->2)
+    const retainRes = sharedRefs.retain(handle);
+    expect(retainRes.ok).toBe(true);
+    expect(sharedRefs.refcount(handle)).toBe(2);
+
+    // release to rc=2->1 (NOT 1->0, callback should NOT fire)
+    const releaseRes = sharedRefs.release(handle);
+    expect(releaseRes.ok).toBe(true);
+    expect(sharedRefs.refcount(handle)).toBe(1);
+
+    // Resource still resident — callback not triggered at rc 2->1
+    expect(tex.isDestroyed).toBe(false);
+    expect(store._getTextureGpuTexture(handle)).toBeDefined();
+
+    // Final release to rc=0 -> callback fires
+    const finalRes = sharedRefs.release(handle);
+    expect(finalRes.ok).toBe(true);
+    expect(tex.isDestroyed).toBe(true);
+    expect(store._getTextureGpuTexture(handle)).toBeUndefined();
   });
 });

@@ -166,6 +166,40 @@ export function growColumn(col: Column, newCapacity: number): Column {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Buffer-write input normalization (feat-20260621 V2 / AC-A4)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a `'buffer'` / `'buffer<N>'` write payload to a `Uint8Array` view
+ * over its raw bytes. The write surface (`FieldInputType<'buffer'>`) accepts
+ * any `AllowSharedBufferSource` (Float32Array / ArrayBuffer / Uint8Array / any
+ * TypedArray); the column store and read side speak `Uint8Array` only. This is
+ * the single ingestion point that bridges the two — a strict superset of the
+ * prior Uint8Array-only behavior (an existing `Uint8Array` caller round-trips
+ * through `new Uint8Array(buffer, byteOffset, byteLength)`, same bytes, same
+ * length), so existing callers see zero behavior change.
+ *
+ * Returns `null` for non-buffer-source inputs (e.g. a forced cast feeding a
+ * number) so callers keep their existing "no-op / alloc(0)" branch for raw
+ * that is not a real buffer view.
+ */
+export function normalizeBufferWrite(raw: unknown): Uint8Array | null {
+  if (raw instanceof Uint8Array) {
+    return raw;
+  }
+  if (ArrayBuffer.isView(raw)) {
+    return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (raw instanceof ArrayBuffer) {
+    return new Uint8Array(raw);
+  }
+  if (typeof SharedArrayBuffer !== 'undefined' && raw instanceof SharedArrayBuffer) {
+    return new Uint8Array(raw);
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Hot/cold classification
 // ────────────────────────────────────────────────────────────────────────────
 

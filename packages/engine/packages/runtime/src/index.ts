@@ -31,6 +31,10 @@ export { createRenderer } from './createRenderer';
 export type {
   MaterialResolvedEmptyPassesDetail,
   MaterialSkinAttrMissingDetail,
+  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
+  // closed RecoverErrorCode union re-exported so AI users `switch (err.code)`
+  // exhaustively on the recover() failure result (peer to RuntimeErrorCode).
+  RecoverErrorCode,
   RuntimeError,
   RuntimeErrorCode,
   ShadowInvalidConfigDetail,
@@ -49,12 +53,18 @@ export {
   MaterialSkinAttrMissingError,
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
-  ShadowDisabledByMissingComponentError,
+  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
+  // RecoverError class re-exported so AI users `instanceof RecoverError` the
+  // recover() failure (peer convention to SkinMaterialMismatchError etc.).
+  RecoverError,
   ShadowInvalidConfigError,
   SkeletonResolveFailedError,
   SkinMaterialMismatchError,
   SkinPaletteOverflowError,
   SkyboxCubemapNotReadyError,
+  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+  // double-miss error class (instanceof + .code/.hint property access).
+  VideoUploadUnsupportedError,
 } from './errors';
 
 /**
@@ -93,6 +103,18 @@ export const Engine = {
 } as const;
 
 export type {
+  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
+  // health channel types re-exported for parity with the onLost / onError
+  // channels (RendererLostInfo / RendererLostListener / RhiErrorDetail
+  // variants below). `switch (snap.reason)` narrows `snap.detail` to the
+  // matching HealthDetail* interface; AI users import these to annotate the
+  // callback + name extracted detail variants. The HealthListenerRegistry
+  // mechanism stays internal (peer LostListenerRegistry is also unexported).
+  HealthChangeListener,
+  HealthDetailDeviceLost,
+  HealthDetailInternalFault,
+  HealthReason,
+  HealthSnapshot,
   Renderer,
   RendererBackend,
   RendererLostInfo,
@@ -270,16 +292,17 @@ export {
   Children,
   cameraProjectionFromF32,
   DirectionalLight,
-  DirectionalLightShadow,
   Instances,
   type InstancesData,
   Layer,
   MeshFilter,
   MeshRenderer,
+  markTileLayerDirty,
   Name,
   orthographic,
   PointLight,
   PointLightShadow,
+  PostProcessParams,
   perspective,
   SceneInstance,
   type SceneInstanceOverrideRecord,
@@ -298,6 +321,8 @@ export {
   SpriteRegionOverride,
   skyboxModeFromF32,
   spritePlaybackModeFromU32,
+  TileLayer,
+  Tilemap,
   TONEMAP_ACES_FILMIC,
   TONEMAP_AGX,
   TONEMAP_CINEON,
@@ -429,6 +454,8 @@ export { GpuResourceStore } from './gpu-resource-store';
  *   wireDefaultLoaders(loaders);
  */
 export { LoaderRegistry } from './loader-registry';
+// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — pickTile cell-level query
+export { type PickTileError, type PickTileHit, pickTile } from './pick-tile';
 /**
  * RenderSystem (D-S2 — feat-20260509-ecs-render-bridge-mvp).
  *
@@ -504,9 +531,31 @@ export {
   TRANSPARENT_SORT_MODE_LAYER_Z,
   type TransparentSortConfig,
 } from './systems/transparent-sort-config';
+// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — tile-bits SSOT
+export { decodeTileBits, encodeTileBits } from './tile-bits';
+// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — chunk-extract system
+export {
+  encodeTilemapLayerValue,
+  resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
+  tilemapChunkExtractSystem,
+} from './tilemap-chunk-extract-system';
+// ─── VideoElementProvider host bridge (M3 / w9) ─────────────────────────
+export {
+  VIDEO_ELEMENT_PROVIDER_KEY,
+  type VideoElementProvider,
+} from './video-element-provider';
+
+// ─── VideoPlayer component (M3 / w7) ────────────────────────────────────
+export { VideoPlayer } from './video-player';
+// ─── video high-perf upload capability probe (M4 / w17) ──────────────────
+// The single per-frame video upload + AC-10 failure path lives in the record
+// stage (videoTextureView); this module only exports the AC-09 capability probe.
+export { probeVideoHighPerfUpload, type VideoCapabilityDevice } from './video-player-system';
 export {
   audioLoaderPlaceholder,
   createDefaultLoaderRegistry,
+  videoLoader,
   wireDefaultLoaders,
 } from './wire-default-loaders';
 
@@ -710,4 +759,14 @@ export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 // post-narrowing public ctx face from `@forgeax/engine-runtime` directly.
 export type { RenderPipelineContext } from './render-pipeline-context';
 export { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
+// feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
+// chain (plan-strategy D-1: pure-data collection + pack serialization;
+// handle→GUID reverse lookup via caller-supplied Map built from
+// AssetRegistry.inspect()).
+//
+// collectSceneAsset reads live component values from a materialised
+// SceneInstance back into a SceneAsset POD. serializeSceneAssetToPack
+// serializes the POD into a valid internal-text-package JSON object
+// suitable for disk write via forge.json / file system writer.
+export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
 // cache-bust-marker for feat-20260615-fbx-importer-via-sdk PR-CI run on bf1d383f / 05a331cd (post-rebase tsbuildinfo restore-keys staleness)

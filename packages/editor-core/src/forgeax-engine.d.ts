@@ -10,6 +10,18 @@
 declare module '@forgeax/engine-runtime';
 declare module '@forgeax/engine-ecs';
 declare module '@forgeax/engine-gltf';
+// engine-types: SceneAsset / SceneEntity / LocalEntityId are imported here as
+// `import type` (edit-session.ts, open-project.ts, scene-types.ts, types.ts).
+// Declared with an explicit surface (not a bare `declare module`) so these
+// names resolve in TYPE space — a bare declaration only supplies value-space
+// `any`, which trips TS2709 when used as a type. Until the engine ships real
+// .d.ts, CI's engine dist (no .d.ts, deploy.sh runs `pnpm -r build` only)
+// would otherwise trip TS7016. Mirrors the editor root shim.
+declare module '@forgeax/engine-types' {
+  export type SceneAsset = any;
+  export type SceneEntity = any;
+  export type LocalEntityId = any;
+}
 
 // engine-project is imported here (store.ts) for both values
 // (loadGameProject, FORGE_JSON, GameProjectError) AND types

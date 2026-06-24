@@ -2,10 +2,26 @@
 // apps/learn-render/5.advanced-lighting/6.hdr/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 5.6 - HDR dawn-node smoke.
-// Structural-only: registers two custom RenderPipeline (HDR exposure +
-// LDR passthrough), drives >=150 frames per mode (>=300 total),
-// asserts perFramePassNames is exactly ['main', 'postHdr'] and
-// onError == 0.
+// Registers two custom RenderPipeline (HDR exposure + LDR passthrough),
+// drives >=150 frames per mode (>=300 total), asserts perFramePassNames is
+// exactly ['main', 'postHdr'], onError == 0, AND reads a tunnel floor-wall
+// pixel to assert the wall surface actually renders + is lit (criterion (e)).
+//
+// Wall-pixel gate (verify round 1 V1): the structural assertions read zero
+// scene pixels, so they cannot catch a missing-walls regression. Criterion (e)
+// samples a wall pixel (NOT the far-end marker cube, which would mask the
+// defect) and requires it non-black. The tunnel mesh is an INWARD-facing box
+// (invertMesh, mirroring src/index.ts): the single-sided PBR shader clamps
+// NdotL=max(dot(N,L),0) to 0 on the outward-normal HANDLE_CUBE inner walls, so
+// a camera-inside tunnel built from the plain cube renders black. Flipping the
+// wall normals (and re-winding triangles) makes the interior point lights give
+// NdotL > 0 -> lit walls -> non-black pixel.
+//
+// WALL FALSIFY mode (env FORGEAX_HDR_WALL_FALSIFY=1): builds the tunnel from the
+// OUTWARD-normal box instead. The interior walls then render black, criterion
+// (e) FAILs, and the smoke exits non-zero -- proving the wall-pixel gate has
+// discriminating power (it is not pinned to an always-non-black sample). NOT in
+// CI; the default path uses the inward mesh and must be GREEN.
 //
 // FALSIFY mode (env FORGEAX_LEARN_RENDER_5_6_HDR_SMOKE_FALSIFY=1):
 // skips installPipeline so the URP default 9-pass chain runs instead;
@@ -31,6 +47,11 @@ const HEIGHT = 512;
 
 const FALSIFY = process.env.FORGEAX_LEARN_RENDER_5_6_HDR_SMOKE_FALSIFY === '1';
 
+// Wall-pixel discrimination falsify: build the tunnel from the OUTWARD-normal
+// box so its interior walls render black -> criterion (e) FAILs (proves the
+// wall-pixel gate is discriminating). NOT in CI.
+const WALL_FALSIFY = process.env.FORGEAX_HDR_WALL_FALSIFY === '1';
+
 const hereDir = fileURLToPath(import.meta.url).replace(/\/[^/]+$/, '');
 const APP_ROOT = resolve(hereDir, '..');
 const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
@@ -39,8 +60,49 @@ const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 
-// Mirror src/index.ts inline WGSL (kept in sync by hand). Grep
-// `exp(-hdrColor * exposure)` finds both src/index.ts and this smoke.
+// Mirror src/index.ts inline WGSL (kept in sync by hand; C3/C-B3). The exposure
+// is data-driven via the @group(1) @binding(2) params UBO (feat-20260621 M-B2) —
+// NOT a hardcoded `let exposure : f32 = 1.0;` literal. Grep
+// `exp(-hdrColor * params.exposure)` finds both src/index.ts and this smoke.
+//
+// FALSIFY mode (AC-B10 mirror discrimination): set FORGEAX_HDR_FALSIFY=1 to read
+// the params UBO at the WRONG binding (binding(1), the sampler slot) instead of
+// binding(2). That makes the WGSL incompatible with the 3-entry BGL the engine
+// composes for `entry.params !== undefined`, so the smoke FAILs — proving the
+// mirror is sensitive to the params channel actually being wired. NOT in CI.
+const HDR_FALSIFY = process.env.FORGEAX_HDR_FALSIFY === '1';
+const HDR_PARAMS_BINDING = HDR_FALSIFY ? 1 : 2;
+
+// 16 B params: [exposure(f32), pad, pad, pad] — mirrors src/index.ts.
+function packExposureBytes(exposure) {
+  const buf = new ArrayBuffer(16);
+  new Float32Array(buf)[0] = exposure;
+  return new Uint8Array(buf);
+}
+
+// Read one RGBA8 pixel from a texture at (px, py). copyTextureToBuffer requires
+// bytesPerRow to be a 256-byte multiple, so we copy a 1x1 region into a 256 B
+// buffer and read the first 4 bytes. Returns [r, g, b, a] in 0..255.
+async function readPixelRGBA8(device, texture, px, py) {
+  const readbackBuffer = device.createBuffer({
+    size: 256,
+    usage: 0x0001 | 0x0008, // MAP_READ | COPY_DST
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture, origin: { x: px, y: py, z: 0 } },
+    { buffer: readbackBuffer, bytesPerRow: 256, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([encoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
+  await readbackBuffer.mapAsync(0x0001); // MAP_READ
+  const bytes = new Uint8Array(readbackBuffer.getMappedRange().slice(0, 4));
+  const out = [bytes[0], bytes[1], bytes[2], bytes[3]];
+  readbackBuffer.unmap();
+  readbackBuffer.destroy?.();
+  return out;
+}
 const HDR_LO_EXPOSURE_WGSL = `
 struct FullscreenOutput {
   @builtin(position) position : vec4<f32>,
@@ -58,13 +120,19 @@ fn vs_main(@builtin(vertex_index) i : u32) -> FullscreenOutput {
   out.uv = vec2<f32>(u, v);
   return out;
 }
+struct ExposureParams {
+  exposure : f32,
+  pad0 : f32,
+  pad1 : f32,
+  pad2 : f32,
+};
 @group(1) @binding(0) var hdrTexture : texture_2d<f32>;
 @group(1) @binding(1) var hdrSampler : sampler;
+@group(1) @binding(${HDR_PARAMS_BINDING}) var<uniform> params : ExposureParams;
 @fragment
 fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
-  let exposure : f32 = 1.0;
   let hdrColor = textureSample(hdrTexture, hdrSampler, in.uv).rgb;
-  let mapped = vec3<f32>(1.0, 1.0, 1.0) - exp(-hdrColor * exposure);
+  let mapped = vec3<f32>(1.0, 1.0, 1.0) - exp(-hdrColor * params.exposure);
   return vec4<f32>(mapped, 1.0);
 }
 `;
@@ -202,14 +270,46 @@ const {
   addFullscreenPass,
   addScenePass,
   Camera,
+  createBoxGeometry,
   createRenderer,
   HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   PointLight,
+  PostProcessParams,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = enginePkg;
+
+// Mirror src/index.ts invertMesh: turn a box inside-out (negate normals + re-wind
+// triangles) so its INTERIOR walls light under the single-sided PBR shader. The
+// interleaved `vertices` (12-float stride: pos3+normal3+uv2+tangent4) is the
+// render-record consumer; negate the normal floats at offset 3..5 per vertex.
+function invertMesh(mesh) {
+  const vertices = mesh.vertices.slice();
+  for (let base = 0; base < vertices.length; base += 12) {
+    vertices[base + 3] = -vertices[base + 3];
+    vertices[base + 4] = -vertices[base + 4];
+    vertices[base + 5] = -vertices[base + 5];
+  }
+  const normalAttr =
+    mesh.attributes.normal instanceof Float32Array ? mesh.attributes.normal.slice() : undefined;
+  if (normalAttr !== undefined) {
+    for (let i = 0; i < normalAttr.length; i++) normalAttr[i] = -normalAttr[i];
+  }
+  const indices = mesh.indices.slice();
+  for (let t = 0; t + 2 < indices.length; t += 3) {
+    const tmp = indices[t + 1];
+    indices[t + 1] = indices[t + 2];
+    indices[t + 2] = tmp;
+  }
+  return {
+    ...mesh,
+    vertices,
+    indices,
+    attributes: normalAttr === undefined ? mesh.attributes : { ...mesh.attributes, normal: normalAttr },
+  };
+}
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
@@ -308,12 +408,27 @@ const strongMat = world.allocSharedRef('MaterialAsset', {
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.4,
+    // feat-20260621 M-B1 (R-B2): light-box emissive DEMOTED to a dim marker;
+    // the overbright comes from the strong PointLight below, not self-emission.
     emissive: [1.0, 1.0, 1.0],
-    emissiveIntensity: 4.0,
+    emissiveIntensity: 0.4,
   },
 });
 
-// Tunnel
+// Tunnel: inward-facing box so the interior walls light (mirrors src/index.ts).
+// WALL_FALSIFY uses the OUTWARD box -> black walls -> criterion (e) FAILs.
+const tunnelMeshRes = createBoxGeometry(1, 1, 1);
+if (!tunnelMeshRes.ok) {
+  console.error('[smoke] FAIL - createBoxGeometry failed:', tunnelMeshRes.error.code);
+  process.exit(1);
+}
+const tunnelMesh = WALL_FALSIFY ? tunnelMeshRes.value : invertMesh(tunnelMeshRes.value);
+const tunnelMeshHandle = world.allocSharedRef('MeshAsset', tunnelMesh);
+if (WALL_FALSIFY) {
+  console.warn(
+    '[learn-render-6-hdr] WALL_FALSIFY mode: outward-normal tunnel (interior walls render black)',
+  );
+}
 world
   .spawn(
     {
@@ -324,7 +439,7 @@ world
         scaleX: 5, scaleY: 5, scaleZ: 50,
       },
     },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshFilter, data: { assetHandle: tunnelMeshHandle } },
     { component: MeshRenderer, data: { materials: [tunnelMat] } },
   )
   .unwrap();
@@ -353,7 +468,12 @@ world.spawn(
       scaleX: 1, scaleY: 1, scaleZ: 1,
     },
   },
-  { component: PointLight, data: {} },
+  // feat-20260621 M-B1 (R-B1): strong far-end PointLight is the physical
+  // overbright source (intensity ~200 + range ~60m -> far-wall radiance > 1.0).
+  {
+    component: PointLight,
+    data: { colorR: 1.0, colorG: 1.0, colorB: 1.0, intensity: 200.0, range: 60.0 },
+  },
 );
 
 // Camera
@@ -387,6 +507,13 @@ const LDR_PIPELINE_ID = 'learn-render-5-6-hdr::ldr';
 
 const OFFSCREEN_HDR_KEY = 'offscreenHdr';
 const OFFSCREEN_DEPTH_KEY = 'hdrDepth';
+
+// feat-20260621 M-B2: data-driven exposure params entity (drives the HDR
+// exposure shader's @group(1) @binding(2) UBO via the unified channel).
+world.spawn({
+  component: PostProcessParams,
+  data: { shader: HDR_EXPOSURE_POSTPROCESS_ID, data: packExposureBytes(1.0) },
+});
 
 function makeHdrPipeline(mode) {
   return {
@@ -434,6 +561,9 @@ function makeHdrPipeline(mode) {
 try {
   renderer.postProcess.register(HDR_EXPOSURE_POSTPROCESS_ID, {
     source: HDR_LO_EXPOSURE_WGSL,
+    // feat-20260621 M-B2: 16 B exposure params UBO (data-driven channel), mirrors
+    // src/index.ts. defaultValue = [exposure=1.0, 0, 0, 0].
+    params: { byteSize: 16, defaultValue: packExposureBytes(1.0) },
     reads: [OFFSCREEN_HDR_KEY],
   });
   renderer.registerPipeline(HDR_PIPELINE_ID, makeHdrPipeline('hdr'));
@@ -466,12 +596,35 @@ if (!FALSIFY) {
 
 const frameStart = Date.now();
 let framesObserved = 0;
+// Await each frame's GPU work so the standard-PBR material's async PSO compile
+// resolves (a synchronous loop leaves it 'rhi-not-available' -> skip-draw ->
+// black scene; mirrors 5.1 advanced-lighting smoke header). Prerequisite for
+// the wall-pixel readback below to observe real geometry.
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
   world.update();
   const r = renderer.draw(world);
   if (!r.ok) console.error(`[smoke] draw hdr frame ${i} error: ${r.error.code}`);
   framesObserved++;
+  await sharedDevice.queue.onSubmittedWorkDone();
 }
+
+// --- Wall-pixel discrimination gate (verify round 1 V1) ---
+// The structural assertions (backend / frames / passNames / onError) read ZERO
+// scene pixels, so a GREEN structural smoke cannot catch the missing-walls
+// defect. After the HDR-mode frames, sample a TUNNEL-WALL pixel that is NOT the
+// far-end marker cube: the floor strip just below center (x=WIDTH/2,
+// y=HEIGHT*0.82) lands on the wood floor wall, which a working LO 5.6 scene
+// lights via the point light(s). The far-wall CENTER pixel is deliberately
+// avoided -- it is occluded by the emissive marker cube and would pass even
+// when every wall is missing (false positive). This gate requires an actual
+// lit wall surface to be non-black.
+const wallSampleX = Math.floor(WIDTH / 2);
+const wallSampleY = Math.floor(HEIGHT * 0.82);
+const wallPixel = await readPixelRGBA8(sharedDevice, renderTarget, wallSampleX, wallSampleY);
+const wallLuma = wallPixel[0] + wallPixel[1] + wallPixel[2];
+console.log(
+  `[smoke] tunnel floor-wall pixel (${wallSampleX},${wallSampleY}) rgba=[${wallPixel.join(', ')}] (sum=${wallLuma})`,
+);
 
 if (!FALSIFY) {
   const installLdr = renderer.installPipeline({
@@ -531,6 +684,21 @@ if (!passNamesEqual) {
   );
 }
 
+// (e) Tunnel wall pixel must be non-black: the inward-facing wall surface renders
+// and is lit by the interior point lights (verify round 1 V1). FALSIFY skips
+// installPipeline so the wall is not in our offscreen target -- the readback is
+// only meaningful on the real HDR path. WALL_FALSIFY uses the outward box, so a
+// black pixel here is EXPECTED and (e) must fail (discrimination proof).
+const WALL_PIXEL_MIN_SUM = 8; // sum of R+G+B; black is 0
+if (!FALSIFY && wallLuma < WALL_PIXEL_MIN_SUM) {
+  failures.push(
+    `(e) tunnel wall pixel rgb sum=${wallLuma} < ${WALL_PIXEL_MIN_SUM} ` +
+      '(interior wall surface not rendered/lit; expected lit wood wall). ' +
+      'On the default path this is a regression; under FORGEAX_HDR_WALL_FALSIFY=1 ' +
+      'it is the expected discrimination failure (outward-normal walls go black).',
+  );
+}
+
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) console.error(`  ${f}`);
@@ -542,7 +710,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, perFramePassNames=[main, postHdr], wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, perFramePassNames=[main, postHdr], floor-wall pixel sum=${wallLuma} (non-black), wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

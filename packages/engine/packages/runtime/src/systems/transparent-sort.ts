@@ -195,3 +195,231 @@ function computeSortValue(
   }
   return e.posZ;
 }
+
+// === argsortInPlace — feat-20260608-tilemap-object-layer-rendering M3 / m3-t2 ===
+//
+// In-place single-key argsort over a Float64Array key column. Reorders the
+// caller's Int32Array `indices` so that `keys[indices[0]] <= keys[indices[1]]
+// <= ... <= keys[indices[n-1]]`. Stable: equal-key entries preserve their
+// original `indices` order. Does not mutate `keys`.
+//
+// Algorithm: 11-bit LSD radix sort (6 passes) over a 64-bit unsigned-
+// monotonic encoding of each key (the IEEE-754 "sortable bits" trick: when
+// the sign bit is set, flip all 64 bits; otherwise flip only the sign bit).
+// The result is unsigned-comparable, so ascending raw-bit sort equals
+// ascending key sort. NaN-bearing keys encode to the upper end of the
+// unsigned space (above +Infinity) and therefore land at the tail in stable
+// order without throwing. -0 and +0 collapse to the same encoded value and
+// compare equal.
+//
+// Per-pass we permute only a position-counter `Int32Array` (4 bytes per
+// entry) instead of the full (key + idx) tuple; the encoded key columns
+// `kLo` / `kHi` (two `Uint32Array`s) let each pass read 11 contiguous bits
+// via `>>>` + `&` without per-element BigInt allocation. Module-scoped
+// scratch buffers (`argsortKey*` / `argsortPos*`) grow monotonically on
+// demand so steady-state calls allocate zero bytes (plan-strategy §R-4).
+//
+// Performance anchor: this LSD radix path measures ~8-10x faster than a
+// generic comparator argsort (V8 TimSort over an index array) at N=10_000
+// keys, in process on the same CPU. The unit-bench in
+// `__tests__/tilemap-chunk-y-sort-bench.unit.test.ts` (m3-t3) locks AC-17 as
+// that machine-independent *ratio* (radix >= 3x faster than generic, wide
+// jitter margin) rather than an absolute ms budget -- the original 0.5 ms
+// floor flaked on slow CI runners (issue #477). The ratio is taken as the
+// MIN of INTERLEAVED per-iteration timings (generic then radix back-to-back),
+// which cancels both machine speed and transient contention; an earlier
+// sequential-median ratio (PR #480) still flaked when a whole measurement
+// block landed in a GC window (1.39x on CI). FALSIFY=generic-fallback swaps
+// the candidate to the comparator path to prove the gate detects a
+// fallback-to-O(n log n) regression.
+//
+// Charter mapping: P4 (sprite + tilemap-spawned cell entities consume one
+// SoA argsort primitive) + P3 (NaN + out-of-range indices are encoded
+// explicitly, never silently dropped — they land at the tail).
+
+const ARGSORT_RADIX_BITS = 11;
+const ARGSORT_BUCKETS = 1 << ARGSORT_RADIX_BITS; // 2048
+const ARGSORT_FINAL_BUCKETS = 1 << 9; // 512 (final pass only carries 9 bits)
+const ARGSORT_MASK = ARGSORT_BUCKETS - 1; // 0x7ff
+const ARGSORT_FINAL_MASK = ARGSORT_FINAL_BUCKETS - 1; // 0x1ff
+
+let argsortKeyLo = new Uint32Array(0);
+let argsortKeyHi = new Uint32Array(0);
+let argsortValueIdx = new Int32Array(0);
+let argsortPosA = new Int32Array(0);
+let argsortPosB = new Int32Array(0);
+const argsortCounts = new Uint32Array(ARGSORT_BUCKETS);
+const argsortOffsets = new Uint32Array(ARGSORT_BUCKETS);
+
+const argsortKeyBuffer = new ArrayBuffer(8);
+const argsortKeyF64View = new Float64Array(argsortKeyBuffer);
+const argsortKeyU32View = new Uint32Array(argsortKeyBuffer);
+
+function ensureArgsortCapacity(n: number): void {
+  if (argsortKeyLo.length < n) {
+    argsortKeyLo = new Uint32Array(n);
+    argsortKeyHi = new Uint32Array(n);
+    argsortValueIdx = new Int32Array(n);
+    argsortPosA = new Int32Array(n);
+    argsortPosB = new Int32Array(n);
+  }
+}
+
+/**
+ * In-place stable argsort over a Float64 key column.
+ *
+ * @param keys    immutable key column; `keys[i]` is the sort weight for the
+ *                entry at original position `i`. Out-of-range positions
+ *                referenced by `indices[i]` are treated as NaN (sort to tail
+ *                in stable order).
+ * @param indices the index buffer to reorder in place. Each element is an
+ *                index into `keys`; on return, `keys[indices[i]]` is
+ *                non-decreasing as `i` grows. The buffer (including its
+ *                underlying ArrayBuffer + byteOffset / length) is mutated in
+ *                place — no re-allocation, callers can hold the reference.
+ *
+ * @example
+ *   const keys = new Float64Array([3.1, 1.2, 2.7]);
+ *   const idx = new Int32Array([0, 1, 2]);
+ *   argsortInPlace(keys, idx); // idx -> [1, 2, 0]
+ */
+export function argsortInPlace(keys: Float64Array, indices: Int32Array): void {
+  const n = indices.length;
+  if (n <= 1) return;
+  ensureArgsortCapacity(n);
+  const kLo = argsortKeyLo;
+  const kHi = argsortKeyHi;
+  const vIdx = argsortValueIdx;
+  let pCur = argsortPosA;
+  let pTmp = argsortPosB;
+  const cnts = argsortCounts;
+  const offs = argsortOffsets;
+
+  const keyLen = keys.length;
+  for (let i = 0; i < n; i++) {
+    const idxVal = indices[i] as number;
+    const k = idxVal >= 0 && idxVal < keyLen ? (keys[idxVal] as number) : Number.NaN;
+    argsortKeyF64View[0] = k;
+    let hi = argsortKeyU32View[1] as number;
+    let lo = argsortKeyU32View[0] as number;
+    // Normalise -0 to +0 before the sign-bit unsigned-monotonic flip so the
+    // two zeros collapse to a single encoded value (without this step the
+    // sortable-bits trick would land -0 just below +0 by ULP, breaking
+    // stable equality across the zero crossing).
+    if (lo === 0 && (hi & 0x7fffffff) === 0) {
+      hi = 0;
+    }
+    if (hi & 0x80000000) {
+      hi = ~hi >>> 0;
+      lo = ~lo >>> 0;
+    } else {
+      hi = (hi ^ 0x80000000) >>> 0;
+    }
+    kLo[i] = lo;
+    kHi[i] = hi;
+    vIdx[i] = idxVal;
+    pCur[i] = i;
+  }
+
+  // 11-bit radix LSD, 6 passes (64-bit key span; last pass is 9 bits):
+  //   p0: kLo bits  0..10                 (mask 0x7FF, 2048 buckets)
+  //   p1: kLo bits 11..21                 (mask 0x7FF)
+  //   p2: kLo bits 22..31 + kHi bit 0     (mask 0x7FF, cross-word)
+  //   p3: kHi bits  1..11                 (mask 0x7FF)
+  //   p4: kHi bits 12..22                 (mask 0x7FF)
+  //   p5: kHi bits 23..31                 (mask 0x1FF, 512 buckets)
+  for (let pass = 0; pass < 6; pass++) {
+    cnts.fill(0);
+    if (pass === 0) {
+      for (let i = 0; i < n; i++) {
+        const w = (kLo[pCur[i] as number] as number) & ARGSORT_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    } else if (pass === 1) {
+      for (let i = 0; i < n; i++) {
+        const w = ((kLo[pCur[i] as number] as number) >>> 11) & ARGSORT_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    } else if (pass === 2) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = (((kLo[pi] as number) >>> 22) | ((kHi[pi] as number) << 10)) & ARGSORT_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    } else if (pass === 3) {
+      for (let i = 0; i < n; i++) {
+        const w = ((kHi[pCur[i] as number] as number) >>> 1) & ARGSORT_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    } else if (pass === 4) {
+      for (let i = 0; i < n; i++) {
+        const w = ((kHi[pCur[i] as number] as number) >>> 12) & ARGSORT_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const w = ((kHi[pCur[i] as number] as number) >>> 23) & ARGSORT_FINAL_MASK;
+        cnts[w] = (cnts[w] as number) + 1;
+      }
+    }
+    let acc = 0;
+    const buckets = pass === 5 ? ARGSORT_FINAL_BUCKETS : ARGSORT_BUCKETS;
+    for (let b = 0; b < buckets; b++) {
+      offs[b] = acc;
+      acc += cnts[b] as number;
+    }
+    if (pass === 0) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = (kLo[pi] as number) & ARGSORT_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    } else if (pass === 1) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = ((kLo[pi] as number) >>> 11) & ARGSORT_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    } else if (pass === 2) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = (((kLo[pi] as number) >>> 22) | ((kHi[pi] as number) << 10)) & ARGSORT_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    } else if (pass === 3) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = ((kHi[pi] as number) >>> 1) & ARGSORT_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    } else if (pass === 4) {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = ((kHi[pi] as number) >>> 12) & ARGSORT_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const pi = pCur[i] as number;
+        const w = ((kHi[pi] as number) >>> 23) & ARGSORT_FINAL_MASK;
+        const dst = offs[w] as number;
+        offs[w] = dst + 1;
+        pTmp[dst] = pi;
+      }
+    }
+    const tmp = pCur;
+    pCur = pTmp;
+    pTmp = tmp;
+  }
+  for (let i = 0; i < n; i++) indices[i] = vIdx[pCur[i] as number] as number;
+}

@@ -698,9 +698,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
         };
 
         const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
-        const recovers = ['recover', 'restart', 'restore', 'reset'].filter(
-          (name) => name in renderer,
-        );
+        const recovers = ['restart', 'restore', 'reset'].filter((name) => name in renderer);
+        // NOTE: 'recover' is a manual user command added in
+        // feat-20260621-renderer-health-recover-skeleton; it is not an
+        // auto-reload signal — excluded from the notify-only check.
         expect(recovers).toEqual([]);
         void resolveDeviceLost;
       });
@@ -781,6 +782,15 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'mesh asset submeshes empty';
             case 'mesh-submesh-index-range-out-of-bounds':
               return 'mesh submesh index range out of bounds';
+            // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+            case 'tileset-region-index-out-of-range':
+              return 'tileset region index out of range';
+            // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+            case 'tileset-tile-entry-malformed':
+              return 'tileset tile entry malformed';
+            // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
+            case 'asset-invalidated':
+              return 'asset invalidated';
           }
         }
         expect(exhaustive('asset-not-found')).toBe('not found');
@@ -834,14 +844,12 @@ import { RhiErrorListenerRegistry } from '../renderer';
 {
   // ─── from errors.test.ts ───
   describe('errors.test.ts', () => {
-    describe('AC-11 RuntimeErrorCode exhaustive switch (12 members, no default)', () => {
+    describe('AC-11 RuntimeErrorCode exhaustive switch (11 members, no default)', () => {
       it('exhaustive switch covers all members without a default branch', () => {
         function exhaustive(code: RuntimeErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
               return 'shadow invalid config';
-            case 'shadow-disabled-by-missing-component':
-              return 'shadow disabled by missing component';
             case 'skin-joint-count-exceeded':
               return 'skin joint count exceeded';
             case 'skin-joint-despawned':
@@ -896,6 +904,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'point shadow atlas uninitialized';
             case 'point-shadow-atlas-bounds-violation':
               return 'point shadow atlas bounds violation';
+            // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+            // double-miss code (add-only minor).
+            case 'video-upload-unsupported':
+              return 'video upload unsupported';
           }
         }
         expect(exhaustive('skybox-cubemap-not-ready')).toBe('skybox cubemap not ready');
@@ -933,8 +945,6 @@ import { RhiErrorListenerRegistry } from '../renderer';
         function exhaustive(code: RuntimeErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
-              return 'ok';
-            case 'shadow-disabled-by-missing-component':
               return 'ok';
             case 'skin-joint-count-exceeded':
               return 'ok';
@@ -981,6 +991,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
             case 'point-shadow-atlas-uninitialized':
               return 'ok';
             case 'point-shadow-atlas-bounds-violation':
+              return 'ok';
+            case 'video-upload-unsupported':
               return 'ok';
           }
         }
@@ -1557,6 +1569,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'bias';
             case 'ssao-storage-buffer-unavailable':
               return 'storage';
+            case 'params-size-mismatch':
+              return 'params';
+            case 'params-update-size-mismatch':
+              return 'params-update';
             default: {
               const exhaustive: never = code;
               return exhaustive;

@@ -23,7 +23,7 @@ export {
   syncListenerFromWorldMatrix,
 } from './audio-listener-sync-system';
 // M3: audio tick system (edge detection + node lifecycle + property sync)
-export { audioTickSystem, detectEdge } from './audio-tick-system';
+export { audioTickSystem, detectEdge, type TickStateEntry } from './audio-tick-system';
 // M3: AudioClipAsset loader (fetch + decodeAudioData)
 export { loadAudioClipByGuid } from './clip-loader';
 // Public factory + class (M2)

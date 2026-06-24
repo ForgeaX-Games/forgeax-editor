@@ -1,36 +1,42 @@
 import type {
   ApplyResult,
   EditorCommand,
+  EditSession,
   EntityId,
   EntityNode,
-  SceneDocument,
 } from './types';
 
-export function createDocument(): SceneDocument {
-  return { version: '1', nextId: 1, entities: {}, order: [] };
-}
+// createEditSession (the former `createDocument`) lives in edit-session.ts next
+// to the EditSession factory + engine-POD projection; re-export it here so the
+// long-standing `./document` import path keeps resolving.
+export { createEditSession } from './edit-session';
 
 function clone<T>(v: T): T {
   return structuredClone(v);
 }
 
 /**
- * Apply one command to `doc` in place and return its inverse (for Undo) or a
+ * Apply one command to `session` in place and return its inverse (for Undo) or a
  * structured error. The inverse is itself a legal EditorCommand — so Undo/Redo
  * needs no special machinery (it is "just dispatch another command").
+ *
+ * `session` is the editor's EditSession (plan-strategy D-6): mutations land on
+ * its authoring `entities`/`order`/`nextLocalId`; the engine `SceneAsset`
+ * projection (`session.asset`) is a fresh derived getter and needs no explicit
+ * rebuild here.
  */
-export function applyCommand(doc: SceneDocument, cmd: EditorCommand): ApplyResult {
+export function applyCommand(doc: EditSession, cmd: EditorCommand): ApplyResult {
   switch (cmd.kind) {
     case 'spawnEntity': {
       // Honor a provided _id so undo→redo / destroy-inverse restore the SAME id
       // (stable references matter for deixis handles & ledger replay). Otherwise
       // allocate a fresh id.
       const reuse = cmd._id !== undefined && !doc.entities[cmd._id];
-      const id = reuse ? (cmd._id as EntityId) : doc.nextId++;
-      if (reuse && id >= doc.nextId) doc.nextId = id + 1;
+      const id = reuse ? (cmd._id as EntityId) : doc.nextLocalId++;
+      if (reuse && id >= doc.nextLocalId) doc.nextLocalId = id + 1;
       const parent = cmd.parent ?? null;
       if (parent !== null && !doc.entities[parent]) {
-        if (!reuse) doc.nextId--; // roll back id reservation
+        if (!reuse) doc.nextLocalId--; // roll back id reservation
         return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
       }
       const node: EntityNode = {
@@ -153,7 +159,7 @@ export function applyCommand(doc: SceneDocument, cmd: EditorCommand): ApplyResul
 }
 
 /** Stable child list for an entity (or root when parent === null). */
-export function childrenOf(doc: SceneDocument, parent: EntityId | null): EntityId[] {
+export function childrenOf(doc: EditSession, parent: EntityId | null): EntityId[] {
   return doc.order.filter((id) => doc.entities[id]?.parent === parent);
 }
 
@@ -161,7 +167,7 @@ export function childrenOf(doc: SceneDocument, parent: EntityId | null): EntityI
  * True if `candidate` is `node` itself or anywhere in its subtree. Used to block
  * a reparent that would put a node inside its own subtree (cycle / orphan).
  */
-export function isSelfOrDescendant(doc: SceneDocument, node: EntityId, candidate: EntityId): boolean {
+export function isSelfOrDescendant(doc: EditSession, node: EntityId, candidate: EntityId): boolean {
   if (node === candidate) return true;
   for (const c of childrenOf(doc, node)) {
     if (isSelfOrDescendant(doc, c, candidate)) return true;

@@ -28,11 +28,23 @@ description: >-
 | `@group(0)` | `@binding(3)` | `texture_depth_2d` | shadow map |
 | `@group(0)` | `@binding(4)` | `sampler_comparison` | shadow sampler |
 | `@group(1)` | `@binding(0)` | `var<uniform> material : Material` | 材质 UBO：baseColor + metallic/roughness + channelMap |
-| `@group(1)` | `@binding(1..N)` | texture + sampler 对 | 材质贴图槽（baseColor / metallicRoughness / normal / skylight 等） |
+| `@group(1)` | `@binding(1..N)` | texture + sampler 对 | 材质贴图槽，**由 `paramSchema` 派生**：每个 `type:'texture2d'` 字段按声明顺序生成一对 **sampler-first**（sampler 在奇数 binding，texture 在 +1）。内置 PBR 是 baseColor/metallicRoughness/normal（binding 1..6），自定义 shader 声明几张就有几对——见下方派生规则 |
 | `@group(2)` | `@binding(0)` | `array<Mesh>` | 逐 mesh 的 worldFromLocal mat4（storage 或 uniform） |
 | `@group(3)` | `@binding(0)` | `array<InstanceData>` | **逐 instance 的 localFromInstance mat4**（storage 或 uniform）。Vertex shader 通过 `@builtin(instance_index)` 索引。写支持 instancing 的自定义 vertex shader 时，用 `@group(3)` 取 instancing transform——引擎 record 阶段自动填充该通道（feat-20260604） |
 
 > `@group(3)` 是 per-instance transform 通道 SSOT：5 条 vertex shader 全部在 `vs_main` 中从 `instances[instance_index]` 读取，引擎 record 阶段在 `render-system-record.ts` 写入——你不必手动管理，只要 vertex shader 正确的 `@group(3) @binding(0)` 声明即可。
+
+> [!IMPORTANT]
+> **`@group(1)` 材质 BGL 由 `paramSchema` 逐 shader 派生（feat-20260621）。** 自定义 shader 声明**任意张**贴图字段（`type:'texture2d'`）即自动获得对应槽位 + 端到端绑定，**无需改引擎**。规则（`derive(paramSchema)` SSOT，`packages/types/src/derive-paramschema.ts`）：
+> - 连续 numeric 字段（color/f32/vec*）合并进 `@binding(0)` 一个 std140 UBO；
+> - 每个 `texture2d` 字段按**声明顺序**生成 sampler（奇 binding）+ texture（+1）对，从 binding 1 起；
+> - 引擎注入区（IBL irradiance/prefilter/brdfLut + emissive/AO）紧跟在用户区之后动态起始——**用户 shader 的 binding 不得超过用户区末尾**（内置 PBR 是 6，再往上是引擎注入区，会撞 IBL）。
+>
+> 内置材质 BGL 行为不变（仍是 3 贴图 / binding 1..6）。worked example：LO 5.5 parallax demo 声明 baseColor/normal/**height** 三张贴图，`heightTexture` 落在 binding 5/6，引擎自动绑定（`apps/learn-render/5.advanced-lighting/5.parallax-mapping/`）。
+>
+> **naga filtering 反射坑**：只用 `textureSampleLevel`（显式 LOD）采样的贴图会被 naga 反射成 `unfilterable-float` + `non-filtering`，与 `derive` 期望的 `filtering` 不符，build 时 binding 校验报 `material-shader-binding-mismatch`。修法：让该贴图至少有一次 `textureSample`（隐式 LOD，须在 uniform control flow 内）使其反射为 `filtering`。
+
+> **自定义 fullscreen post-process WGSL 的 binding 约定**（feat-20260621，与材质 shader 不同）：post-process fragment shader 在 `@group(1)` 上声明——`@binding(0)` 输入纹理 `texture_2d<f32>`、`@binding(1)` `sampler`、`@binding(2)` `var<uniform> params`（当 `postProcess.register` 声明了 `params` 时；无 params 则只有 binding 0/1 的 2-entry BGL）。`@group(0)` 是预留的空 view-BGL。内建 `tonemap.wgsl` 即按此布局（`@group(1) @binding(2) var<uniform> params : TonemapParams`）。注册 + 数据驱动每帧更新（`PostProcessParams` 组件）见 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md) §自定义 fullscreen 后处理。
 
 ## 核心 API 速查
 

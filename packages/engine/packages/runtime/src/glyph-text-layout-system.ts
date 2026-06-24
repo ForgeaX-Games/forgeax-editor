@@ -213,7 +213,7 @@ function processEntity(
     // A color change re-keys the per-(font, tint) material; re-resolve and
     // re-bind it in place so the tint follows the authoring edit (the mesh
     // handle stays stable, only MeshRenderer.material is overwritten).
-    const materialId = resolveTextMaterial(world, assets, gt, font);
+    const materialId = resolveTextMaterial(world, assets, gt, font, gpuStore);
     if (materialId !== cached.materialHandleId) {
       world.set(entity, MeshRenderer, {
         materials: [materialId] as unknown as never,
@@ -241,7 +241,7 @@ function processEntity(
   // `forgeax::msdf-text` shader + atlas texture + sampler are bound to this
   // text entity (plan D-7). Without this the MeshRenderer would carry material
   // handle 0 -> default mid-grey unlit, and the atlas would never be sampled.
-  const materialId = resolveTextMaterial(world, assets, gt, font);
+  const materialId = resolveTextMaterial(world, assets, gt, font, gpuStore);
 
   world.addComponent(entity, { component: MeshFilter, data: { assetHandle: bake.value.handle } });
   world.addComponent(entity, {
@@ -269,6 +269,7 @@ function resolveTextMaterial(
   assets: AssetRegistry,
   gt: GlyphTextData,
   font: FontAsset,
+  gpuStore: GpuResourceStore,
 ): number {
   const key = `${gt.fontHandle}|${gt.colorR},${gt.colorG},${gt.colorB},${gt.colorA}`;
   const cached = fontMaterialCache.get(key);
@@ -280,8 +281,14 @@ function resolveTextMaterial(
   // carry the column handle ids the render path reads.
   const atlasPayload = assets.lookup(font.atlas);
   const samplerPayload = assets.lookup(font.sampler);
-  const atlasHandle =
-    atlasPayload !== undefined ? world.allocSharedRef('TextureAsset', atlasPayload) : undefined;
+  let atlasHandle: Handle<'TextureAsset', 'shared'> | undefined;
+  if (atlasPayload !== undefined) {
+    atlasHandle = world.allocSharedRef('TextureAsset', atlasPayload, () => {
+      // atlasHandle is always assigned at this point (alloc just returned it)
+      const h = atlasHandle;
+      if (h !== undefined) gpuStore.evictTexture(h);
+    });
+  }
   const samplerHandle =
     samplerPayload !== undefined ? world.allocSharedRef('SamplerAsset', samplerPayload) : undefined;
 

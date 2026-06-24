@@ -122,6 +122,33 @@ export function tonemapFromF32(value: number): Tonemap {
 }
 
 /**
+ * Inverse of {@link tonemapFromF32}: map the closed `Tonemap` string-literal
+ * union to the u32 mode the tonemap WGSL `params.mode` switch reads. SSOT for
+ * the mode encoding shared by the extract-stage built-in tonemap provider
+ * (feat-20260621 M-A3 / w13: `Camera.tonemap` -> `forgeax::tonemap` 16B data)
+ * and any other consumer. `'none'` maps to 0 (the tonemap pass never dispatches
+ * on the LDR path, so 0 is only ever a placeholder).
+ */
+export function tonemapToU32(mode: Tonemap): number {
+  switch (mode) {
+    case 'reinhard-extended':
+      return TONEMAP_REINHARD_EXTENDED;
+    case 'linear':
+      return TONEMAP_LINEAR;
+    case 'cineon':
+      return TONEMAP_CINEON;
+    case 'aces-filmic':
+      return TONEMAP_ACES_FILMIC;
+    case 'agx':
+      return TONEMAP_AGX;
+    case 'neutral':
+      return TONEMAP_NEUTRAL;
+    default:
+      return TONEMAP_NONE;
+  }
+}
+
+/**
  * Anti-alias mode discriminator literal union
  * (feat-20260528-fxaa-post-processing / w2;
  *  feat-20260604-learn-render-4-10-anti-aliasing-msaa adds `'msaa'`).

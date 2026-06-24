@@ -27,8 +27,14 @@ import {
   ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioBackend,
+  AudioListener,
 } from '@forgeax/engine-audio';
-import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
+import {
+  audioTickSystem,
+  createWebAudioBackend,
+  syncListenerFromWorldMatrix,
+  WebAudioEngine,
+} from '@forgeax/engine-audio-webaudio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import {
   createQueryState,
@@ -52,10 +58,12 @@ import {
   createRenderer,
   EngineEnvironmentError,
   type PostProcessError,
+  PROPAGATE_TRANSFORMS_SYSTEM,
   type Renderer,
   type RuntimeError,
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
+  Transform,
 } from '@forgeax/engine-runtime';
 import { createDebugDrawOnReady } from '@forgeax/engine-runtime/debug-draw-glue';
 import { registerStatesPlugin } from '@forgeax/engine-state';
@@ -275,11 +283,35 @@ async function createAppFromCanvas(
     // acquireCanvasContext only calls canvas.getContext('webgpu') (no recorded
     // RHI calls), so forwarding the real instance's bound method is safe and
     // keeps the recorder proxy out of the swap-chain config path.
+    // The forwarded context's `configure({ device })` reverse-looks-up the raw
+    // GPUDevice in rhi-webgpu's RAW_DEVICE_MAP keyed on the RhiDevice that
+    // makeRhiDevice registered. The renderer threads the proxied device (from
+    // the requestAdapter -> requestDevice proxy chain) here, which is a
+    // different JS object -> the lookup misses and configure returns
+    // rhi-not-available ("CanvasConfiguration.device must be a RhiDevice
+    // produced by ..."). Unwrap the proxy to the registered device via the
+    // _realDevice escape hatch (same fix as wrapCreateShaderModule).
     const realRhiRec = realRhi as unknown as Record<string, unknown>;
     if (typeof realRhiRec.acquireCanvasContext === 'function') {
-      extras.acquireCanvasContext = (
-        realRhiRec.acquireCanvasContext as (c: unknown) => unknown
-      ).bind(realRhi);
+      const boundAcquire = (realRhiRec.acquireCanvasContext as (c: unknown) => unknown).bind(
+        realRhi,
+      );
+      extras.acquireCanvasContext = (canvasArg: unknown): unknown => {
+        const ctxRes = boundAcquire(canvasArg) as {
+          ok: boolean;
+          value?: { configure(desc: Record<string, unknown>): unknown };
+        };
+        if (!ctxRes.ok || ctxRes.value === undefined) return ctxRes;
+        const realCtx = ctxRes.value;
+        const wrappedCtx: Record<string, unknown> = Object.create(realCtx as object);
+        wrappedCtx.configure = (desc: Record<string, unknown>): unknown => {
+          const dev = desc.device as { _realDevice?: unknown } | undefined;
+          const realDevice = dev?._realDevice;
+          const unwrapped = realDevice !== undefined ? { ...desc, device: realDevice } : desc;
+          return realCtx.configure(unwrapped);
+        };
+        return { ...ctxRes, value: wrappedCtx };
+      };
     }
 
     // Inject the wrapped RHI instance via the explicit rhi escape hatch.
@@ -451,7 +483,12 @@ async function createAppFromCanvas(
     });
   }
   if (audioBackend !== undefined) {
-    Object.assign(buildArgs, { audioBackend });
+    Object.assign(buildArgs, {
+      audioBackend,
+      audioBackendDispose: () => {
+        audioBackend.destroy();
+      },
+    });
   }
   if (opts?.maxDt !== undefined) {
     Object.assign(buildArgs, { maxDt: opts.maxDt });
@@ -486,6 +523,50 @@ async function createAppFromCanvas(
     built.value.registerUpdate(() => {
       syncCameraAspect(world, canvas.width, canvas.height);
     });
+
+    // feat-20260619 M7: auto-register audio listener-sync system (D-7).
+    // Runs as an ECS addSystem (after propagateTransforms) — NOT via
+    // registerUpdate — so it reads the CURRENT frame's Transform.world
+    // mat4, not the previous frame. The audioTickSystem (D-2) has no
+    // frame-order constraint and uses registerUpdate; listener sync
+    // MUST use the ECS DAG seam because Transform.world is written by
+    // propagateTransforms inside world.update().
+    //
+    // The closure lives in the app layer (D-8): audio-webaudio has no
+    // dependency on runtime, so the query+world.get path must be
+    // constructed where both packages are visible. Only canvas-form
+    // apps receive this system (assemble form hosts manage their own
+    // sync). The queryRun/bundle pattern follows syncCameraAspect's
+    // structure (create-app.ts:524-538).
+    if (audioBackend !== undefined && audioBackend instanceof WebAudioEngine) {
+      const backend = audioBackend;
+      world.addSystem({
+        name: 'audio-listener-sync',
+        after: [PROPAGATE_TRANSFORMS_SYSTEM],
+        queries: [],
+        fn: () => {
+          const query = createQueryState({ with: [AudioListener, Entity] });
+          queryRun(query, world, (bundle) => {
+            const entitySelf = bundle.Entity.self;
+            for (let i = 0; i < entitySelf.length; i++) {
+              const entity = (entitySelf[i] ?? 0) as EntityHandle;
+              const tf = world.get(entity, Transform);
+              if (!tf.ok) continue;
+              // backend.listener is a lazy getter that builds the AudioContext
+              // on first access (ensureContext -> new AudioContext). Touch it
+              // ONLY when an AudioListener entity actually exists, so a
+              // headless host (dawn-node smoke: AudioEngine resource present
+              // but no AudioListener entity, no AudioContext global) never
+              // forces context creation and crashes.
+              const listener = backend.listener;
+              if (listener === undefined) break;
+              syncListenerFromWorldMatrix(listener, tf.value.world);
+              break;
+            }
+          });
+        },
+      });
+    }
   }
   return built;
 }
@@ -566,6 +647,14 @@ interface BuildAppArgs {
   readonly cleanup?: (onErrorDispatch: (err: AppError) => void) => void;
   readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
+  /**
+   * feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 / F23:
+   * canvas form wraps createWebAudioBackend().destroy() into this callback
+   * so app.stop() chains into WebAudioEngine.destroy(); assemble form
+   * intentionally does NOT set it (host owns backend lifecycle, OOS-5).
+   * Parallel pattern to cleanup (input auto-detach).
+   */
+  readonly audioBackendDispose?: () => void;
   /** I-2: live FORGEAX_ENGINE_RHI_DEBUG=1 recorder proxy from createAppFromCanvas. */
   readonly debugRhi?: DebugRhiInstance;
   /** I-2: production DebugRhiAdapter wired to the recorder + replay device. */
@@ -591,6 +680,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     audioBackend,
     physics,
     cleanup,
+    audioBackendDispose,
     maxDt,
     silenceUnhandledErrors,
     debugRhi,
@@ -697,6 +787,11 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     rendererDispose: () => {
       renderer.dispose();
     },
+    // feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 /
+    // F23: canvas form wraps createWebAudioBackend().destroy() into
+    // audioBackendDispose; assemble form does NOT pass this (host owns
+    // backend lifecycle, OOS-5). Same shape as rendererDispose.
+    ...(audioBackendDispose !== undefined ? { audioBackendDispose } : {}),
   });
 
   // M4 (w13) device-lost internal subscription. R-1 timing contract:
@@ -828,5 +923,21 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   if (!readyResult.ok) {
     return err(readyResult.error);
   }
+
+  // feat-20260619 M3: auto-register audioTickSystem (D-2).
+  // Registered via registerUpdate (FIFO per-frame seam) after both
+  // AUDIO_ENGINE_RESOURCE_KEY and ASSET_REGISTRY_RESOURCE_KEY are inserted,
+  // so the tick system can resolve them on the first frame without error.
+  // The audioBackend reference is captured by closure, avoiding a per-frame
+  // world.getResource lookup. The 1-frame delay from registerUpdate FIFO
+  // ordering (tick before consumer edge-write) is harmless -- edge detection
+  // uses cross-frame diff and only shifts phase, never drops edges.
+  // Only registered when audioBackend !== undefined (AC-12 reverse).
+  if (audioBackend !== undefined) {
+    stub.registerUpdate(() => {
+      audioTickSystem(world, audioBackend);
+    });
+  }
+
   return ok(stub);
 }

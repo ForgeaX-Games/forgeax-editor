@@ -32,6 +32,14 @@ export interface InstanceBufferCacheEntry {
 }
 
 /**
+ * Minimal error-registry surface accepted by disposeInstanceBuffers —
+ * only needs `fire`, matching RhiErrorListenerRegistry (feat-20260619 D-6).
+ */
+export interface InstanceBufferCacheErrorSink {
+  fire(e: { code: string }): void;
+}
+
+/**
  * Walk an instance-buffer cache Map, destroy every entry's GpuBuffer, then
  * clear the Map. Called from `Renderer.dispose()` (M-5) as the per-frame
  * instance-buffer release step in the dispose chain
@@ -47,16 +55,25 @@ export interface InstanceBufferCacheEntry {
  * make progress (mirrors `GpuResourceStore.destroyAll`'s policy;
  * plan-strategy D-3 / D-8).
  *
+ * feat-20260619 M4 (D-6): the optional `errorRegistry` parameter unifies
+ * the dispose path with the per-frame path — destroy failures fire
+ * errorRegistry + sweep continues. Callers that lack an error registry
+ * (unit tests of the helper itself) omit the parameter safely.
+ *
  * Per-frame Map.delete cleanup at the record stage keeps its existing
  * 'just delete the key' semantics (plan-strategy D-7 + OOS-11): the
  * per-frame path bumps fingerprints when the archetype version changes,
  * letting the next record stage replace the entry; only the dispose
  * exit path walks-then-destroys.
  */
-export function disposeInstanceBuffers(map: Map<number, InstanceBufferCacheEntry>): void {
+export function disposeInstanceBuffers(
+  map: Map<number, InstanceBufferCacheEntry>,
+  errorRegistry?: InstanceBufferCacheErrorSink,
+): void {
   for (const entry of map.values()) {
     if (!entry.buffer.isDestroyed) {
-      entry.buffer.destroy();
+      const r = entry.buffer.destroy();
+      if (!r.ok && errorRegistry) errorRegistry.fire(r.error);
     }
   }
   map.clear();

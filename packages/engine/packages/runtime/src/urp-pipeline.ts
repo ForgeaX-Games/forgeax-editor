@@ -112,7 +112,7 @@ export const urpPipeline: RenderPipeline = {
       usage: 0x10, // RENDER_ATTACHMENT
     });
 
-    // Shadow depth atlas target. ECS-driven size (DirectionalLightShadow.mapSize
+    // Shadow depth atlas target. ECS-driven size (DirectionalLight.mapSize
     // per-cascade) x tilesPerSide. cascadeCount (1..4) drives the atlas tile
     // grid: tilesPerSide = ceil(sqrt(cascadeCount)), atlasSize = tilesPerSide *
     // mapSize. N=4 => 2x2 tiles => atlasSize = 2 * mapSize (e.g. 4096x4096 for
@@ -120,7 +120,7 @@ export const urpPipeline: RenderPipeline = {
     // written or read (D-5).
     //
     // recordFrame projects both fields onto data; we read them here to size
-    // the atlas. Falls back to 1024 x 1 cascade when no DirectionalLightShadow
+    // the atlas. Falls back to 1024 x 1 cascade when castShadow:false
     // is wired (the shadow pass is gated downstream on shadowMapSize > 0 so a
     // fallback texture is harmless).
     const shadowMapSize =
@@ -315,6 +315,36 @@ export const urpPipeline: RenderPipeline = {
     //    copyTextureToTexture (R-COLORSPACE: write through the swap-chain's
     //    non-srgb storage view to avoid double sRGB encoding).
     addFullscreenPass(graph, 'fxaa', { shader: 'fxaa', color: 'fxaaIntermediate' });
+
+    // 9.b feat-20260621 M4' post-URP post-process effects: ordered registered
+    // effect ids the install-time config requests, composited over the FINAL
+    // swap-chain image (after fxaa, before the debug overlay). Each effect
+    // copies the swap-chain into a shared scratch target, samples it, and writes
+    // back through the swap-chain non-srgb storage view (copyFromSwapchain) — so
+    // the built-in 9-pass chain (shadow cascades + tonemap + bloom + fxaa) runs
+    // unchanged and the effects layer on top. AUGMENT, not REPLACE: a shadow
+    // demo keeps its shadows while adding a debug overlay. `undefined`/`[]` adds
+    // zero passes (default frame byte-identical, no scratch target declared).
+    const postEffects = data.config?.postEffects ?? [];
+    for (let i = 0; i < postEffects.length; i++) {
+      const effectId = postEffects[i] as string;
+      // One scratch target per effect (mirrors fxaaIntermediate). It is the
+      // pass `color` (graph writer -> no dangling-read) AND the copy-dst +
+      // sampled input; the effect reads the prior swap-chain state, so chaining
+      // N effects composes left-to-right (effect i sees effect i-1's output).
+      const scratchKey = `postEffectScratch${i}`;
+      graph.addColorTarget(scratchKey, {
+        format: swapChainStorageFormat,
+        size: 'swapchain',
+        sample: 1,
+        usage: 0x04 | 0x02, // TEXTURE_BINDING | COPY_DST
+      });
+      addFullscreenPass(graph, `post-effect-${i}`, {
+        shader: effectId,
+        color: scratchKey,
+        compositeOverSwapchain: true,
+      });
+    }
 
     // 10. DebugOverlay: immediate-mode debug line/sphere/aabb/frustum overlay.
     //    Reads the swap-chain via ctx.view (not a graph resource), writes

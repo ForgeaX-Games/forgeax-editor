@@ -349,4 +349,58 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
     // Total: 1 texture (image arm) + 6 gltf thin = 7.
     expect(entries).toHaveLength(7);
   });
+
+  // fix(fbx) regression: an `.hdr` equirect `cube-texture` sidecar produces no
+  // build-time assets (imageImporter folds only `kind:'image'`; the faces ride
+  // the runtime IBL cook). generateBundle's fail-fast must treat this as a
+  // legitimate skip, not throw `import-produced-no-assets` -- else any demo
+  // shipping an .hdr skylight (learn-render-3, 6.pbr, template-game-default)
+  // fails the build. The catalog still folds the row to kind:'texture'.
+  it('(f) .hdr equirect cube-texture rides runtime IBL cook: build succeeds, texture row kept', async () => {
+    const HDR_GUID = '019ee3e0-4be6-7f22-88f2-653ebbc5a207';
+    const hdrBytes = await readFile(
+      join(WORKTREE_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures', 'newport_loft.hdr'),
+    );
+    await writeFile(join(assetsDir, 'newport_loft.hdr'), hdrBytes);
+    await writeFile(
+      join(assetsDir, 'newport_loft.hdr.meta.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: 'newport_loft.hdr',
+        importSettings: {
+          colorSpace: 'linear',
+          mipmap: 'auto',
+          addressMode: 'clamp-to-edge',
+          filterMode: 'linear',
+          cubeFaceSize: 512,
+          specularMipLevels: 5,
+        },
+        subAssets: [{ guid: HDR_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+      }),
+    );
+
+    // Must NOT throw (the pre-import skip clause handles the HDR-cook case).
+    await viteBuild({
+      root: tmpRoot,
+      logLevel: 'silent',
+      configFile: false,
+      build: {
+        outDir: distDir,
+        emptyOutDir: true,
+        write: true,
+        rollupOptions: { input: { main: 'main.js' } },
+      },
+      plugins: [pluginPack({ roots: [assetsDir] })],
+    });
+
+    const entries = await readPackIndex();
+    // build-catalog D-1 folds the .hdr cube-texture to a kind:'texture' row
+    // pointing at the .hdr source (runtime textureLoader picks it up).
+    const hdrRow = entries.find((e) => e.guid.toLowerCase() === HDR_GUID);
+    expect(hdrRow).toBeDefined();
+    expect(hdrRow?.kind).toBe('texture');
+    expect(hdrRow?.sourcePath.toLowerCase().endsWith('.hdr')).toBe(true);
+  });
 });

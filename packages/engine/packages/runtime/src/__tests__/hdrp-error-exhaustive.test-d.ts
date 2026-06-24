@@ -1,12 +1,17 @@
 // feat-20260608-cluster-lighting M5 / w19: exhaustive switch type-level test.
-// AC-19: TS exhaustive switch on RuntimeErrorCode must compile with
-// the 3 new hdrp-* members added (12 -> 15). Any missing case = typecheck red.
+// AC-19: TS exhaustive switch on RuntimeErrorCode must compile.
+// Any missing case = typecheck red.
 //
 // AC-20: .detail discriminated union narrowing. Each case arm narrows
 // the detail to the per-code variant. No `as` casts needed.
 //
 // This file is *.test-d.ts — a type-only compile check. vitest does not
 // execute it; tsc validates it during pnpm typecheck.
+//
+// feat-20260621-merge-directionallightshadow-into-directionallight M4:
+// 'shadow-disabled-by-missing-component' + ShadowDisabledByMissingComponentError
+// removed from the closed union (the two-component warning is meaningless after
+// DirectionalLightShadow merged into DirectionalLight with castShadow toggle).
 
 import type { RuntimeError, RuntimeErrorCode } from '../errors';
 
@@ -16,14 +21,13 @@ import type { RuntimeError, RuntimeErrorCode } from '../errors';
 // error TS2304 / "not all constituents of type RuntimeErrorCode are handled".
 // Adding a `default` arm would defeat the exhaustive check.
 //
-// Member count is 21 post feat-20260612 (added 3 deferred-path codes).
+// Member count is 21 post feat-20260623 (added video-upload-unsupported;
+// 20 post feat-20260621 removed shadow-disabled-by-missing-component).
 
 function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
   switch (code) {
     case 'shadow-invalid-config':
       return 'shadow-invalid-config';
-    case 'shadow-disabled-by-missing-component':
-      return 'shadow-disabled-by-missing-component';
     case 'skin-joint-count-exceeded':
       return 'skin-joint-count-exceeded';
     case 'skin-joint-despawned':
@@ -78,6 +82,10 @@ function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
       return 'point-shadow-atlas-uninitialized';
     case 'point-shadow-atlas-bounds-violation':
       return 'point-shadow-atlas-bounds-violation';
+    // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+    // double-miss code (add-only minor).
+    case 'video-upload-unsupported':
+      return 'video-upload-unsupported';
   }
 }
 
@@ -91,9 +99,6 @@ function narrowRuntimeError(err: RuntimeError): void {
     case 'shadow-invalid-config':
       void err.detail.field; // string
       void err.detail.value; // number
-      break;
-    case 'shadow-disabled-by-missing-component':
-      // No detail on this class
       break;
     case 'skin-joint-count-exceeded':
       void err.detail.jointCount; // number
@@ -194,6 +199,10 @@ function narrowRuntimeError(err: RuntimeError): void {
       void err.detail.value; // number
       void err.detail.max; // number
       break;
+    // feat-20260623-world-space-video-asset M3 / w11: AC-10 double-miss.
+    // No detail on VideoUploadUnsupportedError.
+    case 'video-upload-unsupported':
+      break;
   }
 }
 
@@ -207,11 +216,11 @@ export type _ExhaustiveSwitchChecks = {
   _narrow: typeof narrowRuntimeError;
 };
 
-// ── Member count assertion: 15 is the post-M5 count ──────────────────────────
+// ── Member count assertion: 21 is the post-feat-20260623 count ────────────────
 //
 // The primary guard is the exhaustive switch above — any missing member causes
 // a compile error. This `satisfies` assertion provides a secondary signal:
-// if someone removes one of the 15 case arms without adding a default, the
+// if someone removes one of the 20 case arms without adding a default, the
 // exhaustive check still fires; this assertion catches the inverse (an arm
 // is present but the literal is wrong, or the code string regressed).
 const _caseCount = exhaustiveSwitchOnCode satisfies (_s: RuntimeErrorCode) => string;

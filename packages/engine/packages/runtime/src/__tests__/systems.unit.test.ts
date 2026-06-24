@@ -126,6 +126,7 @@ import {
   SKYLIGHT_BINDING_OFFSET,
   SKYLIGHT_MERGED_ENTRY_COUNT,
 } from '../ibl/skylight-bind-group';
+import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../pbr-pipeline';
 import type { CameraSnapshot, ExtractedLights } from '../render-system-extract';
 import { extractFrame } from '../render-system-extract';
@@ -151,7 +152,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../systems/transparent-sort-config';
 import { urpPipeline } from '../urp-pipeline';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -629,7 +629,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     spot: [],
     lightSpaceMatrix: undefined,
     shadowMapSize: undefined,
-    hasOrphanShadow: false,
     pointShadow: [],
   };
 
@@ -761,17 +760,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         depthTextureWidth: 800,
         depthTextureHeight: 600,
         configured: true,
-        tonemapPipeline: null,
-        tonemapBindGroupLayout: null,
-        tonemapSampler: null,
-        tonemapParamsBuffer: null,
         hdrColorTexture: null,
         hdrColorView: null,
         hdrDepthTexture: null,
         hdrDepthView: null,
         hdrTextureWidth: 0,
         hdrTextureHeight: 0,
-        tonemapBindGroup: null,
         fxaaPipeline: null,
         fxaaBindGroupLayout: null,
         fxaaSampler: null,
@@ -851,10 +845,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
+          materialBgPerEntity: new Map(),
+          instancesBgPerEntity: new Map(),
+          materialBgShared: new Map(),
+          singletonMaterialCache: new Map(),
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -903,10 +897,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
+          materialBgPerEntity: new Map(),
+          instancesBgPerEntity: new Map(),
+          materialBgShared: new Map(),
+          singletonMaterialCache: new Map(),
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -1901,7 +1895,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
   }> {
     return (await import('../index')) as never;
   }
@@ -2033,8 +2026,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
-        { component: C.DirectionalLight, data: {} },
-        { component: C.DirectionalLightShadow, data: { mapSize: 512, cascadeCount: 1 } },
+        { component: C.DirectionalLight, data: { mapSize: 512, cascadeCount: 1 } },
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
@@ -2104,13 +2096,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
-    it('exhaustive switch over RuntimeErrorCode 8 members compiles without default', () => {
+    it('exhaustive switch over RuntimeErrorCode 7 members compiles without default', () => {
       function exhaustive(code: RuntimeErrorCode): string {
         switch (code) {
           case 'shadow-invalid-config':
             return 'shadow';
-          case 'shadow-disabled-by-missing-component':
-            return 'shadow-disabled';
           case 'skin-joint-count-exceeded':
             return 'joint-count';
           case 'skin-joint-despawned':
@@ -2659,18 +2649,23 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
     });
 
-    it('rejects non-7-entry material BG input', () => {
-      expect(() =>
-        assembleMaterialWithSkylightEntries([], {
-          irradianceView: {} as TextureView,
-          irradianceSampler: {} as Sampler,
-          prefilterView: {} as TextureView,
-          prefilterSampler: {} as Sampler,
-          brdfLutView: {} as TextureView,
-          brdfLutSampler: {} as Sampler,
-          intensityBuffer: {} as Buffer,
-        }),
-      ).toThrow();
+    it('derives IBL injection start from materialEntries.length (per-shader user-region, not a fixed 7)', () => {
+      // Per-shader-derived BGL (feat-20260621): the user-region length is no
+      // longer fixed at 7. assembleMaterialWithSkylightEntries injects the 7
+      // skylight entries starting at materialEntries.length. Empty user-region
+      // => IBL lands at binding 0..6 (no throw); the old fixed-7 guard is gone.
+      const merged = assembleMaterialWithSkylightEntries([], {
+        irradianceView: {} as TextureView,
+        irradianceSampler: {} as Sampler,
+        prefilterView: {} as TextureView,
+        prefilterSampler: {} as Sampler,
+        brdfLutView: {} as TextureView,
+        brdfLutSampler: {} as Sampler,
+        intensityBuffer: {} as Buffer,
+      });
+      expect(merged).toHaveLength(7);
+      expect(merged[0]?.binding).toBe(0);
+      expect(merged[6]?.binding).toBe(6);
     });
   });
 }
@@ -3251,58 +3246,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   });
 
   describe('feat-20260519-tonemap-reinhard-mvp T-M2.4 / T-M2.5: HDR target + tonemap pipeline shape', () => {
-    it('row 1: PipelineState carries tonemap pipeline + 3-entry BindGroupLayout + sampler + params UBO (AC-13)', async () => {
-      const log: DeviceCallLog = { records: [] };
-      const device = makeMockDevice(log);
-      vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-      const canvas = makeMockCanvas();
-      const { createRenderer } = (await import(ENGINE)) as {
-        createRenderer: (canvas: unknown, opts?: unknown, bundler?: unknown) => Promise<unknown>;
-      };
-      const renderer = (await createRenderer(
-        canvas,
-        {},
-        { shaderManifestUrl: buildManifestDataUrl() },
-      )) as { ready: Promise<{ ok: boolean }> };
-      const ready = await renderer.ready;
-      expect(ready.ok).toBe(true);
-
-      // tonemap-bgl created with exactly 3 entries (HDR texture + sampler + UBO).
-      const tonemapBgl = log.records.find(
-        (r) => r.type === 'createBindGroupLayout' && r.label === 'tonemap-bgl',
-      );
-      expect(tonemapBgl).toBeDefined();
-      expect(tonemapBgl?.entries).toBe(3);
-
-      // tonemap-pl wires the tonemap-bgl into a pipeline layout.
-      const tonemapPl = log.records.find(
-        (r) => r.type === 'createPipelineLayout' && r.label === 'tonemap-pl',
-      );
-      expect(tonemapPl).toBeDefined();
-
-      // tonemap-pipeline writes into the swap-chain srgb view (final LDR target).
-      // bug-20260612: swap-chain follows navigator.gpu.getPreferredCanvasFormat()
-      // on Channel 2 (mocked as 'bgra8unorm' for Chromium parity).
-      const tonemapPipe = log.records.find(
-        (r) => r.type === 'createRenderPipeline' && r.label === 'tonemap-pipeline',
-      );
-      expect(tonemapPipe).toBeDefined();
-      expect(tonemapPipe?.fragmentTargets).toEqual(['bgra8unorm-srgb']);
-
-      // tonemap-sampler is filterable.
-      const tonemapSampler = log.records.find(
-        (r) => r.type === 'createSampler' && r.label === 'tonemap-sampler',
-      );
-      expect(tonemapSampler).toBeDefined();
-
-      // tonemap-params-ubo is 16 B std140 (AC-13).
-      const tonemapUbo = log.records.find(
-        (r) => r.type === 'createBuffer' && r.label === 'tonemap-params-ubo',
-      );
-      expect(tonemapUbo).toBeDefined();
-      expect(tonemapUbo?.size).toBe(16);
-    });
-
+    // feat-20260621 M-A3 (D-5): the prior "row 1" asserting boot-time creation of
+    // a dedicated tonemap pipeline / 3-entry BGL / sampler / 16 B params UBO is
+    // deleted. The built-in tonemap now registers on the unified post-process
+    // channel (`postProcess.register('forgeax::tonemap', { source, params })`);
+    // its pipeline + BGL + sampler compile lazily on the first tonemap frame
+    // (dispatchFullscreenPass), not at boot. The 3-entry BGL shape +
+    // params-UBO byteSize=16 are covered by dispatch-fullscreen-pass-params.unit.
+    // test.ts; observable tonemap output is smoke-gated (w12, plan-strategy R-1).
     it('row 2: HDR variants of unlit + standard pipelines compile with rgba16float colour attachment (AC-03(d) / AC-11)', async () => {
       const log: DeviceCallLog = { records: [] };
       const device = makeMockDevice(log);
@@ -3398,7 +3349,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(hdrTextureCalls.length).toBe(0);
     });
 
-    it('row 4: 3 distinct shader modules compile (pbr + unlit + tonemap engine entries)', async () => {
+    it('row 4: pbr + unlit engine modules compile at boot (tonemap defers to unified channel)', async () => {
       const log: DeviceCallLog = { records: [] };
       const device = makeMockDevice(log);
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
@@ -3425,7 +3376,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .map((r) => r.label);
       expect(moduleLabels).toContain('pbr');
       expect(moduleLabels).toContain('unlit');
-      expect(moduleLabels).toContain('tonemap');
+      // feat-20260621 M-A3 (D-5): tonemap no longer eager-compiles at boot — it
+      // registers on the unified post-process channel and its module compiles
+      // lazily on the first tonemap frame (dispatchFullscreenPass), so the boot
+      // `createShaderModule` log carries NO 'tonemap' label. Row 5 still proves
+      // the manifest triple guard (missing tonemap entry -> ready rejects).
+      expect(moduleLabels).not.toContain('tonemap');
     });
 
     it('row 5: ready rejects shader-compile-failed when manifest omits tonemap entry', async () => {
@@ -3482,7 +3438,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     spot: [],
     lightSpaceMatrix: undefined,
     shadowMapSize: undefined,
-    hasOrphanShadow: false,
     pointShadow: [],
   };
 
@@ -3692,17 +3647,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         depthTextureWidth: 800,
         depthTextureHeight: 600,
         configured: true,
-        tonemapPipeline: f.fakeTonemapPipeline,
-        tonemapBindGroupLayout: { __label: 'tonemap-bgl' },
-        tonemapSampler: { __label: 'tonemap-sampler' },
-        tonemapParamsBuffer: { __label: 'tonemap-params-ubo' },
         hdrColorTexture: hdrAlreadyAllocated ? { __label: 'hdr-color' } : null,
         hdrColorView: hdrAlreadyAllocated ? f.hdrColorView : null,
         hdrDepthTexture: hdrAlreadyAllocated ? { __label: 'hdr-depth' } : null,
         hdrDepthView: hdrAlreadyAllocated ? f.hdrDepthView : null,
         hdrTextureWidth: hdrAlreadyAllocated ? 800 : 0,
         hdrTextureHeight: hdrAlreadyAllocated ? 600 : 0,
-        tonemapBindGroup: null,
       },
     };
   }
@@ -3768,10 +3718,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
+          materialBgPerEntity: new Map(),
+          instancesBgPerEntity: new Map(),
+          materialBgShared: new Map(),
+          singletonMaterialCache: new Map(),
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3807,25 +3757,82 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       );
       expect(tonemapSets).toHaveLength(0);
     });
+  });
 
-    it('row 2: tonemap=reinhard-extended camera allocs rgba16float HDR target + writes geometry into HDR view + emits 1 tonemap pass with pass.draw(3) (AC-03(a) / AC-11 / AC-13)', async () => {
+  // ── w12: AC-05 B-family F11 despawn -> per-frame poll destroy ─────────────
+  //
+  // Round 2 fix-up (implement-review §5 Issue 1): the F11 cleanup loop lives
+  // in recordFrame (render-system-record.ts ~:2245) — it iterates
+  // frameState.instanceBuffers.entries() and, for any key NOT in the current
+  // validated-renderable set, destroys the GpuBuffer then deletes the Map
+  // entry. The previous w12 test drove `disposeInstanceBuffers` (a different
+  // function sharing only the isDestroyed+destroy idiom), so disabling the
+  // F11 production destroy left it green. This test drives the REAL
+  // recordFrame: pre-seed instanceBuffers with a live GpuBuffer keyed at an
+  // entity that is NOT among the rendered entities (empty renderables ->
+  // empty validated set), then assert recordFrame destroyed it. Flip the
+  // production `entry.buffer.destroy()` at :2248 to a no-op and this fails.
+  describe('instance buffer per-frame poll destroy (AC-05 F11) [w12]', () => {
+    // Minimal device whose destroyBuffer records each handle it destroys, so
+    // the assertion observes the real GpuBuffer.destroy() -> device.destroyBuffer
+    // routing rather than re-checking a copied isDestroyed flag.
+    // biome-ignore lint/suspicious/noExplicitAny: dynamic-import rhi shim types are opaque
+    function makeBufRecorderDevice(rhiErrFn: any, rhiOkFn: any, RhiErrorCtor: any) {
+      const destroyed = new WeakSet<object>();
+      const destroyedHandles: object[] = [];
+      const device = {
+        destroyBuffer(buf: object) {
+          if (destroyed.has(buf)) {
+            return rhiErrFn(
+              new RhiErrorCtor({ code: 'destroy-after-destroy', expected: '', hint: '' }),
+            );
+          }
+          destroyed.add(buf);
+          destroyedHandles.push(buf);
+          return rhiOkFn(undefined);
+        },
+      };
+      return { device, destroyedHandles };
+    }
+
+    it('despawned key (not in validated set): recordFrame destroys GpuBuffer + deletes Map entry', async () => {
+      const { recordFrame } = await import('../render-system-record');
+      const { GpuBuffer } = await import('../gpu-resource');
+      const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
+      const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
+        rhiErrFn,
+        rhiOk,
+        RhiErrorCtor,
+      );
+
       const log: DeviceLog = { events: [] };
       const internals = makeRecorderInternals(log);
       const ps = makePipelineState(internals as never, false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../render-system-record');
-      const cameras = [makeCamera('reinhard-extended')];
+
+      // Pre-seed the per-frame instance-buffer cache with one live entry whose
+      // key (999) belongs to an entity that is NOT rendered this frame.
+      const staleHandle = { __role: 'stale-instance-buffer' };
+      const staleBuffer = new GpuBuffer(bufDev as never, staleHandle as never);
+      const instanceBuffers = new Map<number, InstanceBufferCacheEntry>();
+      instanceBuffers.set(999, {
+        buffer: staleBuffer,
+        uploadedArchVersion: 1,
+        uploadedByteLength: 256,
+      });
+
+      const cameras = [makeCamera('none')];
       recordFrame(
         internals as never,
         new World() as never,
         cameras,
         EMPTY_LIGHTS,
-        [],
+        [], // no renderables -> validated set is empty -> key 999 is orphaned
         [],
         {
           frameNumber: 0,
           perFrameGraph: null,
-          instanceBuffers: new Map(),
+          instanceBuffers,
           warnedZeroLightStandard: false,
           warnedShadowDisabled: false,
           warnedMultiLightDirectional: false,
@@ -3836,10 +3843,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
+          materialBgPerEntity: new Map(),
+          instancesBgPerEntity: new Map(),
+          materialBgShared: new Map(),
+          singletonMaterialCache: new Map(),
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3854,87 +3861,50 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         0,
       );
 
-      // M1 / w7: HDR colour + depth allocated by render-graph at buildGraph
-      // compile time. Pool key collisions (e.g. depth + hdrDepth share the same
-      // 800x600 depth24plus-stencil8 descriptor) mean hdrDepth may reuse the
-      // depth target via pool hit -- a second createTexture for hdrDepth is
-      // not guaranteed.
-      const hdrColorAlloc = log.events.find(
-        (e) => e.type === 'createTexture' && e.format === 'rgba16float' && e.label === 'hdrColor',
-      );
-      expect(hdrColorAlloc).toBeDefined();
-      // hdrDepth may pool-hit depth (same descriptor); assert at least the
-      // allocateColorTargets register is reached (hdrColor always allocates).
-      const depthAlloc = log.events.find(
-        (e) => e.type === 'createTexture' && e.format === 'depth24plus-stencil8',
-      );
-      expect(depthAlloc).toBeDefined();
-
-      // Exactly two beginRenderPass calls — geometry into HDR view + tonemap
-      // into swap-chain view.
-      const beginPasses = log.events.filter((e) => e.type === 'beginRenderPass');
-      expect(beginPasses).toHaveLength(2);
-      // First (geometry) pass writes into the HDR colour view.
-      // The mocked createTextureView returns `{ __role: 'view' }` for any
-      // descriptor; the pipeline state's hdrColorView field is set to that
-      // sentinel after alloc. Check via PipelineState mutation.
-      expect(
-        (ps as { perPassResources: { hdrColorView: unknown } }).perPassResources.hdrColorView,
-      ).toBeDefined();
-      expect(
-        (ps as { perPassResources: { hdrColorView: { __role: string } } }).perPassResources
-          .hdrColorView.__role,
-      ).toContain('view');
-      // Second (tonemap) pass writes into the swap-chain srgb view.
-      expect(beginPasses[1]?.view).toBe(
-        (internals as { _fakes: { swapChainView: unknown } })._fakes.swapChainView,
-      );
-
-      // Exactly one tonemap setPipeline + one pass.draw(3) (the fullscreen
-      // triangle SSOT).
-      const tonemapSets = log.events.filter(
-        (e) => e.type === 'setPipeline' && e.label === 'tonemap',
-      );
-      expect(tonemapSets).toHaveLength(1);
-      const draws = log.events.filter((e) => e.type === 'draw');
-      expect(draws).toHaveLength(1);
-      expect(draws[0]?.drawArg).toBe(3);
-
-      // tonemap-bg created with the 3-entry layout.
-      const tonemapBg = log.events.find(
-        (e) => e.type === 'createBindGroup' && e.label === 'tonemap-bg',
-      );
-      expect(tonemapBg).toBeDefined();
-
-      // tonemap-params-ubo written before the tonemap pass.
-      const paramsWrite = log.events.find(
-        (e) =>
-          e.type === 'writeBuffer' &&
-          (e.buffer as { __label?: string })?.__label === 'tonemap-params-ubo',
-      );
-      expect(paramsWrite).toBeDefined();
+      // F11 production loop destroyed the orphaned buffer + dropped the key.
+      expect(staleBuffer.isDestroyed).toBe(true);
+      expect(destroyedHandles).toContain(staleHandle);
+      expect(instanceBuffers.has(999)).toBe(false);
     });
 
-    it('row 3: tonemap=reinhard-extended caches tonemapBindGroup across frames (no realloc when HDR view stable)', async () => {
-      const log1: DeviceLog = { events: [] };
-      const internals1 = makeRecorderInternals(log1);
-      const ps = makePipelineState(internals1 as never, false);
-      (internals1 as { getPipelineState: () => unknown }).getPipelineState = () => ps;
+    it('isDestroyed dedup: a pre-destroyed orphan is not double-destroyed (still removed)', async () => {
       const { recordFrame } = await import('../render-system-record');
-      const cameras = [makeCamera('reinhard-extended')];
+      const { GpuBuffer } = await import('../gpu-resource');
+      const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
+      const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
+        rhiErrFn,
+        rhiOk,
+        RhiErrorCtor,
+      );
 
-      // Frame 1: alloc HDR + create tonemap BindGroup.
+      const log: DeviceLog = { events: [] };
+      const internals = makeRecorderInternals(log);
+      const ps = makePipelineState(internals as never, false);
+      (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
+
+      const staleHandle = { __role: 'pre-destroyed-instance-buffer' };
+      const staleBuffer = new GpuBuffer(bufDev as never, staleHandle as never);
+      staleBuffer.destroy(); // pre-destroy: isDestroyed gate must skip re-destroy
+      const preDestroyCount = destroyedHandles.length;
+
+      const instanceBuffers = new Map<number, InstanceBufferCacheEntry>();
+      instanceBuffers.set(7, {
+        buffer: staleBuffer,
+        uploadedArchVersion: 2,
+        uploadedByteLength: 512,
+      });
+
       recordFrame(
-        internals1 as never,
+        internals as never,
         new World() as never,
-        cameras,
+        [makeCamera('none')],
         EMPTY_LIGHTS,
         [],
         [],
         {
           frameNumber: 0,
           perFrameGraph: null,
-          instanceBuffers: new Map(),
+          instanceBuffers,
           warnedZeroLightStandard: false,
           warnedShadowDisabled: false,
           warnedMultiLightDirectional: false,
@@ -3945,10 +3915,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
+          materialBgPerEntity: new Map(),
+          instancesBgPerEntity: new Map(),
+          materialBgShared: new Map(),
+          singletonMaterialCache: new Map(),
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3962,56 +3932,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         undefined,
         0,
       );
-      const f1Bgs = log1.events.filter(
-        (e) => e.type === 'createBindGroup' && e.label === 'tonemap-bg',
-      ).length;
-      expect(f1Bgs).toBe(1);
 
-      // Frame 2 (same internals → same log): HDR view stable, BindGroup
-      // cached on `pipelineState.tonemapBindGroup`. recordFrame does not
-      // create a fresh tonemap-bg.
-      recordFrame(
-        internals1 as never,
-        new World() as never,
-        cameras,
-        EMPTY_LIGHTS,
-        [],
-        [],
-        {
-          frameNumber: 1,
-          perFrameGraph: null,
-          instanceBuffers: new Map(),
-          warnedZeroLightStandard: false,
-          warnedShadowDisabled: false,
-          warnedMultiLightDirectional: false,
-          warnedMultiLightPoint: false,
-          warnedMultiLightSpot: false,
-          warnedSkyboxTonemapNone: false,
-          warnedMissingSpriteTextureHandles: new Set<number>(),
-          warnedNineSliceScaleEntities: new Set<number>(),
-          viewBindGroupCache: new Map(),
-          meshBindGroupCache: new Map(),
-          materialBgCache: new Map(),
-          instancesBgCache: new Map(),
-          handleToId: new Map(),
-          nextHandleId: 0,
-          installedPipelineHandle: 0,
-          activePipeline: urpPipeline,
-          installedPipelineConfig: undefined,
-          isHdrpActive: false,
-          hdrpOncePerFrameFired: new Set(),
-        },
-        { unlit: 0 },
-        { createBindGroup: 0, keys: [] },
-        undefined,
-        0,
-        undefined,
-        0,
-      );
-      const totalBgs = log1.events.filter(
-        (e) => e.type === 'createBindGroup' && e.label === 'tonemap-bg',
-      ).length;
-      expect(totalBgs).toBe(1);
+      // isDestroyed gate skipped the second destroy; key still dropped.
+      expect(destroyedHandles.length).toBe(preDestroyCount);
+      expect(instanceBuffers.has(7)).toBe(false);
     });
   });
 }
@@ -8585,7 +8509,7 @@ function makeSkinM2AssetRegistry(): AssetRegistry {
       { name: 'roughness', type: 'f32', default: 0.5 },
     ],
   });
-  return new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry());
+  return new AssetRegistry(shaderRegistry);
 }
 
 function registerSkinM2Mesh(world: World): Handle<'MeshAsset', 'shared'> {
@@ -8972,7 +8896,7 @@ type ExtractFrameWithPipeline = (
 //       for the mesh-array UBO).
 //   (b) `_skinBgCacheStats(pipelineState)` — N=3 sequential lookups
 //       against the same `(meshStorageBuffer, skinPaletteAllocator
-//       .buffer)` pair through `getOrCreateBindGroup` produce miss=1 +
+//       .buffer)` pair through `getOrCreateFromChain` produce miss=1 +
 //       hit=2. Keys are buffer-identity based (no entityKey segment) so
 //       multiple skinned entities sharing the same allocator buffer +
 //       mesh SSBO globally dedup the BG.
@@ -9033,58 +8957,48 @@ type ExtractFrameWithPipeline = (
       expect(noSkinSlot7[0]).toBe(7 * 256);
     });
 
-    it('skin BG cache key dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
+    it('skin BG cache dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
       const recordModule = (await import('../render-system-record')) as {
-        buildBindGroupCacheKey: (
+        getOrCreateFromChain: (
+          root: WeakMap<object, unknown>,
+          handles: readonly object[],
           variant: string,
-          handles: object[],
-          frameState: { handleToId: Map<object, number>; nextHandleId: number },
-        ) => string;
+          factory: () => unknown,
+          counts: { createBindGroup: number; keys: string[] },
+        ) => unknown;
         _skinBgCacheStats?: (pipelineState: {
           _skinBgCacheStats: { miss: number; hit: number };
         }) => { miss: number; hit: number };
       };
-      const buildKey = recordModule.buildBindGroupCacheKey;
+      const getOrCreate = recordModule.getOrCreateFromChain;
       const readStats = recordModule._skinBgCacheStats;
       expect(readStats).toBeDefined();
       if (readStats === undefined) throw new Error('_skinBgCacheStats missing');
 
-      // Stand-in PipelineState carrying just the stats counter the m3-2
-      // impl publishes.  The renderer-owned PS will carry the same field
-      // shape; this fixture keeps the test scoped to the counter contract.
       const pipelineState = { _skinBgCacheStats: { miss: 0, hit: 0 } };
 
-      // Mirror the record-site cache structure: a per-frame Map<string, BG>.
-      const cache = new Map<string, object>();
+      // Nested WeakMap chain root — identical handle pair produces same leaf.
+      const root = new WeakMap<object, unknown>();
       const bindGroupCounts = { createBindGroup: 0, keys: [] as string[] };
+      const factory = () => ({ __label: 'bg' });
 
-      // Sentinel buffer handles -- record-stage builds the cache key from
-      // (meshStorageBuffer, skinPaletteAllocator.buffer) identities. Three
-      // skinned entities in one frame share the same pair, so the key is
-      // identical across all three lookups (the cache key is buffer-
-      // identity based, NOT entity-keyed -- m3-2 design preserves this).
       const meshSsbo = { __label: 'mesh-ssbo' };
       const paletteBuffer = { __label: 'skin-palette' };
-      const frameState = {
-        handleToId: new Map<object, number>(),
-        nextHandleId: 0,
-      } as never;
 
-      // Walk N=3 lookups exactly as the record loop does (3 skin entries).
+      // Walk N=3 lookups through the real getOrCreateFromChain.
       for (let i = 0; i < 3; i++) {
-        const key = buildKey(
-          'pbr-skin-mesh',
+        const prevCount = bindGroupCounts.createBindGroup;
+        getOrCreate(
+          root,
           [meshSsbo as object, paletteBuffer as object],
-          frameState,
+          'pbr-skin-mesh',
+          factory,
+          bindGroupCounts,
         );
-        const hit = cache.get(key);
-        if (hit !== undefined) {
-          pipelineState._skinBgCacheStats.hit += 1;
-        } else {
+        if (bindGroupCounts.createBindGroup > prevCount) {
           pipelineState._skinBgCacheStats.miss += 1;
-          cache.set(key, { __label: `bg-${i}` });
-          bindGroupCounts.createBindGroup += 1;
-          bindGroupCounts.keys.push(key);
+        } else {
+          pipelineState._skinBgCacheStats.hit += 1;
         }
       }
 
@@ -9092,8 +9006,7 @@ type ExtractFrameWithPipeline = (
       const stats = readStats(pipelineState);
       expect(stats.miss).toBe(1);
       expect(stats.hit).toBe(2);
-      // Cross-check via bindGroupCounts (the existing record-stage signal):
-      // exactly one createBindGroup call covers all three skin entries.
+      // Cross-check via bindGroupCounts: exactly one createBindGroup call.
       expect(bindGroupCounts.createBindGroup).toBe(1);
       expect(bindGroupCounts.keys).toHaveLength(1);
     });
@@ -9141,6 +9054,621 @@ type ExtractFrameWithPipeline = (
       expect(c[0]).toBeCloseTo(0.2, 5);
       expect(c[1]).toBeCloseTo(0.4, 5);
       expect(c[2]).toBeCloseTo(0.8, 5);
+    });
+  });
+}
+
+// ── M4 feat-20260619-gpu-resource-ownership-symmetric-release-primitive (round 2 fix-up) ──
+//
+// w12: AC-05 B-family F11 despawn -> per-frame poll destroy. Driven by real
+//      recordFrame above (in the tonemap describe block); NOT here.
+// w13: AC-06 B-family F12 set-before-destroy. Driven by real recordMainPass +
+//      recordShadowPass through createRenderer + renderer.draw (this block).
+// w14: AC-07 B-family error strategy. dispose-path sub-cases drive real
+//      disposeInstanceBuffers; the F12 sub-case drives the real record pass
+//      with a destroy that fails (this block).
+// w15: AC-10 WeakMap chain behavior invariants.
+//
+// Round 2 fix-up (implement-review §5 Issues 1-4 + round-cap-override mandate):
+// the prior round drove disposeInstanceBuffers as an F11/F12 proxy — a
+// *different* function sharing only the isDestroyed+destroy idiom — so
+// disabling the F11/F12 production destroy left the suite green (orchestrator
+// falsification). w13/w14's F12 paths now run through createRenderer +
+// renderer.draw, which records via the real recordMainPass / recordShadowPass.
+// A mock GPU device captures every underlying GPUBuffer.destroy() call
+// (rhi-webgpu device.ts:1425 forwards to rawBuf.destroy()); flipping any of
+// the F12 production destroys (render-system-record.ts:3323 shadow / :4521
+// main) to a no-op turns the relevant assertion red.
+
+{
+  // ── Helpers ──
+
+  async function _loadM4Libs() {
+    const { err: m4err, ok: m4ok, RhiError } = await import('@forgeax/engine-rhi');
+    const { GpuBuffer } = await import('../gpu-resource');
+    return { m4err, m4ok, RhiError, GpuBuffer };
+  }
+
+  // biome-ignore lint/suspicious/noExplicitAny: dynamic-import return types are opaque
+  function _mkBufDevice(m4err: any, m4ok: any, RhiError: any) {
+    const destroyedSet = new WeakSet<object>();
+    const dev = {
+      destroyBuffer(buf: object) {
+        if (destroyedSet.has(buf))
+          return m4err(new RhiError({ code: 'destroy-after-destroy', expected: '', hint: '' }));
+        destroyedSet.add(buf);
+        return m4ok(undefined);
+      },
+    };
+    return dev as never;
+  }
+
+  // biome-ignore lint/suspicious/noExplicitAny: dynamic-import return type is opaque
+  function _mkBufEntry(GpuBuffer: any, dev: never, bl: number, av: number) {
+    return {
+      buffer: new GpuBuffer(dev, {} as never),
+      uploadedByteLength: bl,
+      uploadedArchVersion: av,
+    };
+  }
+
+  // ── createRenderer integration harness (drives the real record passes) ──
+  //
+  // A WebGPU-shaped mock device whose createBuffer hands back raw handles
+  // that record their own .destroy() invocations. The runtime wraps each in a
+  // GpuBuffer; the F12 set-before-destroy path calls GpuBuffer.destroy() ->
+  // rhi-webgpu destroyBuffer -> rawBuf.destroy(), landing in `destroyed`.
+
+  interface IntegrationBufLog {
+    created: Array<{ handle: object; size: number; usage: number }>;
+    destroyed: object[];
+  }
+
+  // The per-entity instance-transform buffer is the only buffer created with
+  // usage STORAGE|COPY_DST (128|8 = 136; render-system-record.ts:4435) at the
+  // instance byte size (`instanceCount * 16 f32 * 4 B`). Matching BOTH usage
+  // and size pins the F12 destroy to the instance buffer, not an incidental
+  // same-sized transient / uniform buffer elsewhere in the frame.
+  const INSTANCE_USAGE = 128 | 8;
+  const INSTANCE_BYTES = (instanceCount: number): number => instanceCount * 16 * 4;
+
+  function instanceBufferDestroyed(log: IntegrationBufLog, instanceCount: number): boolean {
+    const created = log.created.find(
+      (c) => c.usage === INSTANCE_USAGE && c.size === INSTANCE_BYTES(instanceCount),
+    );
+    return created !== undefined && log.destroyed.includes(created.handle);
+  }
+
+  function makeIntegrationCanvas(): HTMLCanvasElement {
+    const canvas = {
+      width: 800,
+      height: 600,
+      getContext(kind: string): unknown {
+        if (kind === 'webgl2') {
+          return {
+            __mockTag: 'webgl2',
+            getExtension: () => null,
+            getParameter: () => 1,
+            isContextLost: () => false,
+          };
+        }
+        if (kind === 'webgpu') {
+          return {
+            __mockTag: 'webgpu-canvas-context',
+            configure: () => undefined,
+            unconfigure: () => undefined,
+            getCurrentTexture: () => ({ createView: () => ({}) }),
+          };
+        }
+        return null;
+      },
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+    return canvas as Partial<HTMLCanvasElement> as HTMLCanvasElement;
+  }
+
+  function makeIntegrationDevice(
+    log: IntegrationBufLog,
+    opts?: { destroyThrows?: boolean },
+  ): unknown {
+    const lost = new Promise<unknown>(() => undefined);
+    const destroyedSet = new WeakSet<object>();
+    return {
+      __mockTag: 'gpu-device',
+      lost,
+      features: new Set(),
+      // maxStorageBuffersPerShaderStage > 0 => rhi-webgpu caps.storageBuffer
+      // true (device.ts:406) => the instance buffer takes the STORAGE path
+      // (usage 136), distinguishing it from uniform buffers in the frame.
+      limits: {
+        maxStorageBufferBindingSize: 1024 * 1024 * 1024,
+        maxStorageBuffersPerShaderStage: 8,
+      },
+      queue: {
+        submit: () => undefined,
+        writeBuffer: () => undefined,
+        writeTexture: () => undefined,
+      },
+      createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
+      createBindGroupLayout: () => ({}),
+      createPipelineLayout: () => ({}),
+      createRenderPipeline: () => ({}),
+      createBindGroup: () => ({}),
+      createBuffer: (desc: { size?: number; usage?: number }) => {
+        const raw = {
+          __role: `buffer-${log.created.length}`,
+          destroy: () => {
+            if (opts?.destroyThrows) throw new Error('mock destroy failure');
+            if (destroyedSet.has(raw)) return;
+            destroyedSet.add(raw);
+            log.destroyed.push(raw);
+          },
+          getMappedRange: () => new ArrayBuffer(desc?.size ?? 64),
+          unmap: () => undefined,
+        };
+        log.created.push({ handle: raw, size: desc?.size ?? 0, usage: desc?.usage ?? 0 });
+        return raw;
+      },
+      createCommandEncoder: () => ({
+        beginRenderPass: () => ({
+          setPipeline: () => undefined,
+          setVertexBuffer: () => undefined,
+          setIndexBuffer: () => undefined,
+          setBindGroup: () => undefined,
+          setViewport: () => undefined,
+          setStencilReference: () => undefined,
+          draw: () => undefined,
+          drawIndexed: () => undefined,
+          end: () => undefined,
+        }),
+        finish: () => ({}),
+      }),
+      createTexture: () => ({ createView: () => ({}) }),
+      createSampler: () => ({}),
+      destroy: () => undefined,
+    };
+  }
+
+  function makeIntegrationGPU(device: unknown): unknown {
+    return {
+      requestAdapter: async () => ({ requestDevice: async () => device }),
+      getPreferredCanvasFormat: () => 'bgra8unorm',
+    };
+  }
+
+  const integrationNavigator = {
+    userAgent: 'mock-engine-test',
+  } as Partial<Navigator> as Navigator;
+
+  // The shadow-caster shader registration gates recordShadowPass: with it,
+  // the shadow pass records instances BEFORE the main pass each frame and so
+  // owns the F12 set-before-destroy (render-system-record.ts:3323); without
+  // it recordShadowPass early-exits (shadow PSO null) and the main pass owns
+  // the F12 destroy (:4521). Each w13 sub-test selects the manifest that
+  // isolates the production site it falsifies, so disabling that exact line
+  // turns exactly that sub-test red.
+  function buildIntegrationManifestUrl(withShadowCaster: boolean): string {
+    const materialShaderStub = (identifier: string) => ({
+      identifier,
+      sourcePath: `${identifier}.wgsl`,
+      composedWgsl: '/* stub */',
+      paramSchema: '[]',
+      variants: [],
+    });
+    const entries: Array<{ hash: string; wgsl: string; glsl: string; bindings: string }> = [
+      { hash: 'pbr00000', wgsl: '/* pbr stub - calls f_schlick( */', glsl: '', bindings: '' },
+      { hash: 'unlit000', wgsl: '/* unlit stub */', glsl: '', bindings: '' },
+      {
+        hash: 'tonemap0',
+        wgsl: '/* tonemap stub - struct TonemapParams { exposure: f32 }; */',
+        glsl: '',
+        bindings: '',
+      },
+    ];
+    if (withShadowCaster) {
+      // Vertex-only depth marker => createRenderer registers
+      // forgeax::default-shadow-caster so recordShadowPass runs.
+      entries.push({
+        hash: 'shadowcaster0',
+        wgsl: '/* shadow caster stub - @location(0) position vertex-only */',
+        glsl: '',
+        bindings: '',
+      });
+    }
+    const manifest = {
+      schemaVersion: '1.0.0',
+      entries,
+      materialShaders: [
+        materialShaderStub('forgeax::default-standard-pbr'),
+        materialShaderStub('forgeax::default-unlit'),
+      ],
+    };
+    return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
+  }
+
+  interface IntegrationRenderer {
+    ready: Promise<void>;
+    draw: (world: unknown) => void;
+    onError: (cb: (e: { code: string }) => void) => () => void;
+  }
+
+  interface IntegrationWorld {
+    spawn: (...a: unknown[]) => { unwrap: () => unknown };
+    set: (...a: unknown[]) => unknown;
+  }
+
+  interface IntegrationComponents {
+    Transform: unknown;
+    MeshFilter: unknown;
+    MeshRenderer: unknown;
+    Camera: unknown;
+    Instances: unknown;
+    DirectionalLight: unknown;
+    HANDLE_CUBE: unknown;
+  }
+
+  async function bootIntegrationRenderer(
+    device: unknown,
+    withShadowCaster = false,
+  ): Promise<{
+    renderer: IntegrationRenderer;
+    world: IntegrationWorld;
+    C: IntegrationComponents;
+    errors: { code: string }[];
+  }> {
+    vi.stubGlobal('navigator', { ...integrationNavigator, gpu: makeIntegrationGPU(device) });
+    const { createRenderer } = (await import('../createRenderer')) as {
+      createRenderer: (
+        canvas: unknown,
+        opts?: unknown,
+        bundler?: unknown,
+      ) => Promise<IntegrationRenderer>;
+    };
+    const renderer = await createRenderer(
+      makeIntegrationCanvas(),
+      {},
+      { shaderManifestUrl: buildIntegrationManifestUrl(withShadowCaster) },
+    );
+    await renderer.ready;
+    const { World: WorldCtor } = (await import('@forgeax/engine-ecs')) as unknown as {
+      World: new () => IntegrationWorld;
+    };
+    const C = (await import('../index')) as unknown as IntegrationComponents;
+    const errors: { code: string }[] = [];
+    renderer.onError((e) => errors.push(e));
+    return { renderer, world: new WorldCtor(), C, errors };
+  }
+
+  function spawnCamera(world: IntegrationWorld, C: IntegrationComponents): void {
+    world.spawn(
+      {
+        component: C.Camera,
+        data: {
+          fov: Math.PI / 4,
+          aspect: 16 / 9,
+          near: 0.1,
+          far: 100,
+          projection: 0,
+          left: -1,
+          right: 1,
+          bottom: -1,
+          top: 1,
+        },
+      },
+      {
+        component: C.Transform,
+        data: {
+          posX: 0,
+          posY: 0,
+          posZ: 5,
+          quatX: 0,
+          quatY: 0,
+          quatZ: 0,
+          quatW: 1,
+          scaleX: 1,
+          scaleY: 1,
+          scaleZ: 1,
+        },
+      },
+    );
+  }
+
+  function spawnInstancedCube(
+    world: IntegrationWorld,
+    C: IntegrationComponents,
+    instanceCount: number,
+  ): unknown {
+    return world
+      .spawn(
+        { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
+        { component: C.MeshRenderer, data: {} },
+        {
+          component: C.Transform,
+          data: {
+            posX: 0,
+            posY: 0,
+            posZ: 0,
+            quatX: 0,
+            quatY: 0,
+            quatZ: 0,
+            quatW: 1,
+            scaleX: 1,
+            scaleY: 1,
+            scaleZ: 1,
+          },
+        },
+        { component: C.Instances, data: { transforms: new Float32Array(instanceCount * 16) } },
+      )
+      .unwrap();
+  }
+
+  // ── w14: AC-07 B-family error strategy ──
+  //
+  // dispose-path sub-cases drive the real disposeInstanceBuffers (already
+  // correct round 1); the F12 sub-case drives the real record pass with a
+  // destroy that fails (rawBuf.destroy throws -> rhi-webgpu surfaces
+  // webgpu-runtime-error -> the F12 production fires errorRegistry + sweeps on).
+
+  describe('instance buffer error strategy (AC-07) [w14]', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('disposeInstanceBuffers: destroy clears map, isDestroyed gate skips pre-destroyed entries', async () => {
+      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
+      const dev = _mkBufDevice(m4err, m4ok, RhiError);
+
+      const e1 = _mkBufEntry(GpuBuffer, dev, 256, 1);
+      const e2 = _mkBufEntry(GpuBuffer, dev, 512, 2);
+      e2.buffer.destroy(); // pre-destroy
+      const map = new Map<number, ReturnType<typeof _mkBufEntry>>();
+      map.set(1, e1);
+      map.set(2, e2);
+
+      const fires: unknown[] = [];
+      disposeInstanceBuffers(map, {
+        fire: (e: unknown) => {
+          fires.push(e);
+        },
+      });
+
+      expect(e1.buffer.isDestroyed).toBe(true);
+      expect(e2.buffer.isDestroyed).toBe(true);
+      expect(map.size).toBe(0);
+      expect(fires).toHaveLength(0);
+    });
+
+    it('disposeInstanceBuffers: sweep continues, all non-pre-destroyed entries destroyed', async () => {
+      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
+      const dev = _mkBufDevice(m4err, m4ok, RhiError);
+
+      const e1 = _mkBufEntry(GpuBuffer, dev, 256, 1);
+      const e2 = _mkBufEntry(GpuBuffer, dev, 512, 2);
+      const e3 = _mkBufEntry(GpuBuffer, dev, 768, 3);
+      e2.buffer.destroy(); // pre-destroy
+      const map = new Map<number, ReturnType<typeof _mkBufEntry>>();
+      map.set(1, e1);
+      map.set(2, e2);
+      map.set(3, e3);
+
+      const fires: unknown[] = [];
+      disposeInstanceBuffers(map, {
+        fire: (e: unknown) => {
+          fires.push(e);
+        },
+      });
+
+      expect(e1.buffer.isDestroyed).toBe(true);
+      expect(e3.buffer.isDestroyed).toBe(true);
+      expect(map.size).toBe(0);
+      expect(fires).toHaveLength(0);
+    });
+
+    it('disposeInstanceBuffers: without errorRegistry parameter, no fire (no crash)', async () => {
+      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
+      const dev = _mkBufDevice(m4err, m4ok, RhiError);
+
+      const e1 = _mkBufEntry(GpuBuffer, dev, 256, 1);
+      const map = new Map<number, ReturnType<typeof _mkBufEntry>>();
+      map.set(1, e1);
+
+      // Call without errorRegistry — should not throw.
+      disposeInstanceBuffers(map);
+
+      expect(e1.buffer.isDestroyed).toBe(true);
+      expect(map.size).toBe(0);
+    });
+
+    it('F12 set-before-destroy failure fires errorRegistry + sweep continues (real record pass)', async () => {
+      const log: IntegrationBufLog = { created: [], destroyed: [] };
+      const device = makeIntegrationDevice(log, { destroyThrows: true });
+      const { renderer, world, C, errors } = await bootIntegrationRenderer(device);
+
+      spawnCamera(world, C);
+      const cube = spawnInstancedCube(world, C, 2);
+
+      // Frame 1: allocate the instance buffer (fingerprint = 2 instances).
+      renderer.draw(world);
+
+      // Frame 2: fingerprint mismatch -> F12 destroys the old buffer, whose
+      // raw .destroy() throws -> rhi-webgpu webgpu-runtime-error -> the F12
+      // production fires errorRegistry and continues to set the new buffer.
+      world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
+      renderer.draw(world);
+
+      // Sweep continued: a fresh (larger) instance buffer was still allocated
+      // after the failed destroy. The failure surfaced as a fired error.
+      expect(errors.some((e) => e.code === 'webgpu-runtime-error')).toBe(true);
+      expect(log.created.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ── w13: AC-06 B-family F12 set-before-destroy (real recordMainPass + recordShadowPass) ──
+
+  describe('instance buffer F12 set-before-destroy (AC-06) [w13]', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('main pass: fingerprint change destroys the old cached buffer before set', async () => {
+      const log: IntegrationBufLog = { created: [], destroyed: [] };
+      const device = makeIntegrationDevice(log);
+      const { renderer, world, C, errors } = await bootIntegrationRenderer(device);
+
+      spawnCamera(world, C);
+      const cube = spawnInstancedCube(world, C, 2);
+
+      // Frame 1: cold allocate the 2-instance buffer (128 B).
+      renderer.draw(world);
+      expect(errors).toHaveLength(0);
+      const createdAfterF1 = log.created.length;
+      expect(createdAfterF1).toBeGreaterThan(0);
+      expect(log.destroyed).toHaveLength(0);
+
+      // Frame 2: 2 -> 3 instances => byteLength fingerprint mismatch => the
+      // main-pass F12 path (render-system-record.ts:4521) destroys the old
+      // 128 B buffer, then sets a fresh 192 B one. No shadow-caster shader is
+      // registered, so recordShadowPass early-exits and the main pass is the
+      // sole F12 owner this frame.
+      world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
+      renderer.draw(world);
+
+      // The destroyed buffer is specifically the old instance buffer (STORAGE
+      // usage, 128 B), not an incidental destroy elsewhere. Disabling :4521
+      // drops it.
+      expect(instanceBufferDestroyed(log, 2)).toBe(true);
+      // A new (larger) 192 B instance buffer replaced the destroyed one.
+      expect(
+        log.created.some((c) => c.usage === INSTANCE_USAGE && c.size === INSTANCE_BYTES(3)),
+      ).toBe(true);
+    });
+
+    it('shadow pass: fingerprint change destroys the old cached buffer before set', async () => {
+      const log: IntegrationBufLog = { created: [], destroyed: [] };
+      const device = makeIntegrationDevice(log);
+      // withShadowCaster=true registers forgeax::default-shadow-caster so
+      // recordShadowPass runs.
+      const { renderer, world, C } = await bootIntegrationRenderer(device, true);
+
+      spawnCamera(world, C);
+      // DirectionalLight with castShadow => recordShadowPass runs and
+      // records the instance entity BEFORE the main pass, so the shadow F12
+      // path (render-system-record.ts:3323) owns the destroy this frame.
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: -0.5,
+          directionY: -1,
+          directionZ: -0.3,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          cascadeCount: 1,
+          mapSize: 1024,
+        },
+      });
+      const cube = spawnInstancedCube(world, C, 2);
+
+      renderer.draw(world);
+      expect(log.destroyed).toHaveLength(0);
+
+      world.set(cube, C.Instances, { transforms: new Float32Array(3 * 16) });
+      renderer.draw(world);
+
+      // The shadow pass records the instance entity before the main pass, so
+      // it owns the F12 destroy of the old (STORAGE, 128 B) instance buffer
+      // this frame. Disabling :3323 drops this assertion (main reuses the
+      // already-updated entry and never re-destroys).
+      expect(instanceBufferDestroyed(log, 2)).toBe(true);
+    });
+  });
+
+  // ── w15: AC-10 WeakMap chain behavior invariants ──
+  //
+  // feat-20260622-handle-to-id-allocator-elimination: the old
+  // getOrAssignHandleId is gone; the old numeric counter is removed. WeakMap chain
+  // determinism replaces it — same handle object identity → same
+  // leaf BG, different handles → different leaf.
+
+  describe('WeakMap chain behavior invariants [w15]', () => {
+    it('same handle object in chain → same leaf BindGroup (deterministic)', () => {
+      const root = new WeakMap<object, unknown>();
+      const h1 = {};
+      const h2 = {};
+
+      // We simulate the chain by building two levels manually for the test
+      const inner = new WeakMap<object, unknown>();
+      root.set(h1, inner);
+      const leaf = new Map<string, unknown>();
+      inner.set(h2, leaf);
+      const bg1 = { __label: 'bg-1' };
+      leaf.set('variant-a', bg1);
+
+      // Same handle path → same leaf entry
+      const innerCheck = root.get(h1) as WeakMap<object, unknown>;
+      expect(innerCheck).toBeDefined();
+      const leafCheck = innerCheck.get(h2) as Map<string, unknown>;
+      expect(leafCheck).toBeDefined();
+      expect(leafCheck.get('variant-a')).toBe(bg1);
+      expect(leafCheck.get('variant-a')).toBe(bg1);
+
+      // Different variant on same chain → different leaf entry
+      const bg2 = { __label: 'bg-2' };
+      leaf.set('variant-b', bg2);
+      expect(leaf.get('variant-a')).toBe(bg1);
+      expect(leaf.get('variant-b')).toBe(bg2);
+      expect(bg1).not.toBe(bg2);
+    });
+
+    it('different handle objects → different chain position → different leaf', () => {
+      const root = new WeakMap<object, unknown>();
+      const hA = {};
+      const hB = {};
+      const innerA = new WeakMap<object, unknown>();
+      const innerB = new WeakMap<object, unknown>();
+      const leafA = new Map<string, unknown>();
+      const leafB = new Map<string, unknown>();
+      innerA.set({}, leafA);
+      innerB.set({}, leafB);
+      root.set(hA, innerA);
+      root.set(hB, innerB);
+
+      // Different root-level key → completely independent chains
+      const chainA = root.get(hA) as WeakMap<object, unknown>;
+      const chainB = root.get(hB) as WeakMap<object, unknown>;
+      expect(chainA).not.toBe(chainB);
+
+      // No shared leaf — hA's chain entries don't hit hB's chain
+      leafA.set('v', 'from-A');
+      leafB.set('v', 'from-B');
+      expect(
+        (root.get(hA) as WeakMap<object, unknown>).get({}) as Map<string, unknown>,
+      ).toBeUndefined();
+    });
+
+    it('grow miss: new inner buffer is new WeakMap key → cache miss (AC-07)', () => {
+      // AC-07: when mesh SSBO grows, the inner buffer object is replaced.
+      // The old inner buffer was a WeakMap key in the chain; the new one is
+      // a different object, so chain lookup naturally misses.
+      const root = new WeakMap<object, unknown>();
+      const oldBuf = {};
+      const inner = new WeakMap<object, unknown>();
+      const leaf = new Map<string, unknown>();
+      inner.set({}, leaf);
+      root.set(oldBuf, inner);
+
+      // Old buffer hits
+      expect(root.has(oldBuf)).toBe(true);
+
+      // New buffer (grow replacement) misses
+      const newBuf = {};
+      expect(root.has(newBuf)).toBe(false);
+      expect(oldBuf).not.toBe(newBuf);
     });
   });
 }

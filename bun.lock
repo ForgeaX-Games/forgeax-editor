@@ -172,6 +172,7 @@
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -430,6 +431,9 @@
     "packages/engine/packages/rhi-debug": {
       "name": "@forgeax/engine-rhi-debug",
       "version": "0.0.0",
+      "bin": {
+        "forgeax-rhi-debug": "./dist/cli.mjs",
+      },
       "dependencies": {
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
@@ -439,6 +443,7 @@
         "@types/node": "^20.14.0",
         "@types/pngjs": "^6.0.5",
         "@webgpu/types": "^0.1.70",
+        "webgpu": "^0.4.0",
       },
       "peerDependencies": {
         "@forgeax/engine-rhi-webgpu": "workspace:*",
@@ -504,6 +509,17 @@
         "@webgpu/types": "^0.1.70",
       },
     },
+    "packages/engine/packages/state": {
+      "name": "@forgeax/engine-state",
+      "version": "0.0.0",
+      "bin": {
+        "forgeax-engine-console-state": "./dist/cli-state.mjs",
+      },
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+    },
     "packages/engine/packages/types": {
       "name": "@forgeax/engine-types",
       "version": "0.0.0",
@@ -537,6 +553,20 @@
       },
       "peerDependencies": {
         "@forgeax/engine-pack": "workspace:*",
+        "vite": "^7",
+      },
+    },
+    "packages/engine/packages/vite-plugin-rhi-debug": {
+      "name": "@forgeax/engine-vite-plugin-rhi-debug",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@types/node": "^20.14.0",
+        "vite": "8.0.10",
+      },
+      "peerDependencies": {
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "vite": "^7",
       },
     },
@@ -642,6 +672,7 @@
         "@types/node": "^20.0.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
+        "@webgpu/types": "^0.1.70",
         "typescript": "^5.6.3",
         "vite": "^6.0.5",
       },
@@ -928,9 +959,13 @@
 
     "@forgeax/engine-shader-compiler": ["@forgeax/engine-shader-compiler@workspace:packages/engine/packages/shader-compiler"],
 
+    "@forgeax/engine-state": ["@forgeax/engine-state@workspace:packages/engine/packages/state"],
+
     "@forgeax/engine-types": ["@forgeax/engine-types@workspace:packages/engine/packages/types"],
 
     "@forgeax/engine-vite-plugin-pack": ["@forgeax/engine-vite-plugin-pack@workspace:packages/engine/packages/vite-plugin-pack"],
+
+    "@forgeax/engine-vite-plugin-rhi-debug": ["@forgeax/engine-vite-plugin-rhi-debug@workspace:packages/engine/packages/vite-plugin-rhi-debug"],
 
     "@forgeax/engine-vite-plugin-shader": ["@forgeax/engine-vite-plugin-shader@workspace:packages/engine/packages/vite-plugin-shader"],
 

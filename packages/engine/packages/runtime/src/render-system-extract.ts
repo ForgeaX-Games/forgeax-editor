@@ -119,13 +119,13 @@ import type { AssetRegistry } from './asset-registry';
 import {
   Camera,
   DirectionalLight,
-  DirectionalLightShadow,
   Instances,
   Layer,
   MeshFilter,
   MeshRenderer,
   PointLight,
   PointLightShadow,
+  PostProcessParams,
   Skin,
   SkyboxBackground,
   Skylight,
@@ -139,6 +139,7 @@ import {
   bloomEnabledFromF32,
   cameraProjectionFromF32,
   tonemapFromF32,
+  tonemapToU32,
 } from './components/camera';
 import {
   JointCountMismatchError,
@@ -382,41 +383,57 @@ export interface ExtractedLights {
    * projection matrices (one per cascade, length 4 pre-allocated). Each matrix
    * is a column-major 16-float mat4 with atlas tile UV inset baked in
    * (plan-strategy D-3). cascadeCount < 4: unused slots are zero matrices.
-   * Undefined when no DirectionalLightShadow component.
+   * Undefined when castShadow=false or no directional light.
    */
   readonly lightViewProj: readonly Float32Array[] | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: view-space z depths
    * of the PSSM split planes (length 4, Float32Array). cascadeCount < 4:
-   * unused slots are 0.0f. Undefined when no DirectionalLightShadow component.
+   * unused slots are 0.0f. Undefined when castShadow=false or no directional
+   * light.
    */
   readonly splitPlanes: Float32Array | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: effective cascade count
-   * from the DirectionalLightShadow component (1..4). Undefined when shadow
-   * component absent.
+   * from the DirectionalLight component (1..4). Undefined when castShadow=false
+   * or no directional light.
    */
   readonly cascadeCount: number | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: cascade blend width
-   * from the DirectionalLightShadow component (0..0.5). Undefined when shadow
-   * component absent.
+   * from the DirectionalLight component (0..0.5). Undefined when castShadow=false
+   * or no directional light.
    */
   readonly cascadeBlend: number | undefined;
   /**
    * feat-20260520-directional-light-shadow-mapping M1c / w8:
-   * shadowMapSize from DirectionalLightShadow.mapSize. Drives shadow RT
+   * shadowMapSize from DirectionalLight.mapSize. Drives shadow RT
    * lazy-allocate (idempotency: same size -> no rebuild). Undefined when
-   * no DirectionalLightShadow component.
+   * castShadow=false or no directional light.
    */
   readonly shadowMapSize: number | undefined;
   /**
-   * feat-20260520-directional-light-shadow-mapping verify round 1 fix:
-   * true when a DirectionalLightShadow entity exists but no DirectionalLight
-   * entity does — i.e. orphan shadow (AC-22). The record stage fires
-   * ShadowDisabledByMissingComponentError once per RenderSystem lifecycle.
+   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
+   * depthBias from the merged DirectionalLight (constant shadow-bias floor).
+   * Populated when castShadow=true on the first-hit directional light;
+   * undefined otherwise.
    */
-  readonly hasOrphanShadow: boolean;
+  readonly depthBias: number | undefined;
+  /**
+   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
+   * normalBias from the merged DirectionalLight (slope-based shadow-bias
+   * coefficient).
+   * Populated when castShadow=true on the first-hit directional light;
+   * undefined otherwise.
+   */
+  readonly normalBias: number | undefined;
+  /**
+   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
+   * pcfKernelSize from the merged DirectionalLight (PCF kernel width, odd>=1).
+   * Populated when castShadow=true on the first-hit directional light;
+   * undefined otherwise.
+   */
+  readonly pcfKernelSize: number | undefined;
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M1 / T-M1-7:
    * shadow-casting point lights (PointLight + PointLightShadow + Transform
@@ -646,6 +663,39 @@ export interface MaterialSnapshot {
    * vec/color params, string (GUID) for texture2d/sampler params.
    */
   readonly paramSnapshot?: Readonly<Record<string, number | number[] | string>> | undefined;
+  /**
+   * User-region texture handles keyed by paramSchema field name
+   * (feat-20260621-learn-render-5-5-parallax M2 / w7). The SSOT carrier for
+   * EVERY texture the shader's `derive(paramSchema).textureFieldNames`
+   * declares — `baseColorTexture` / `metallicRoughnessTexture` /
+   * `normalTexture` for built-in standard-PBR, plus any custom field such as
+   * `heightTexture` (LO 5.5 parallax). The record stage iterates this map to
+   * assemble the user-region bind group per the per-shader BGL (w8), so a 4th
+   * (or Nth) texture flows end-to-end without a hardcoded field list.
+   *
+   * Populated by iterating `textureFieldNames`; absent keys mean the
+   * paramValue was missing / mis-typed (record falls back to default white).
+   * `emissiveTexture` / `occlusionTexture` are NOT here — they live in the
+   * engine-injection lightmap region (their named fields below feed
+   * `appendInjection('lightmap')`, not the user-region).
+   */
+  readonly textureHandles?: ReadonlyMap<string, Handle<'TextureAsset', 'shared'>> | undefined;
+  /**
+   * User-region texture field names whose paramValue resolved to a VideoAsset
+   * (kind `'video'`) rather than a static TextureAsset
+   * (feat-20260623-world-space-video-asset M4 / w14, D-5). The video GUID
+   * occupies the same texture2d paramValues slot a static texture would (P4:
+   * one binding shape), but extract routes it here instead of `textureHandles`
+   * so the record stage pulls the current-frame view from the transient
+   * DynamicTextureStore (D-3) instead of `GpuResourceStore.ensureResident`
+   * (which has no `video` arm; AC-08). Each entry also carries the resolved
+   * clip handle so the record stage can key the per-frame upload.
+   *
+   * Producer/consumer split (charter P5 / AC-07 gate): extract owns the
+   * asset->snapshot translation; record consumes this POD field only — it never
+   * reaches back into the MaterialAsset to learn a field is video-sourced.
+   */
+  readonly videoTextureFields?: ReadonlyMap<string, Handle<'VideoAsset', 'shared'>> | undefined;
   readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
   /**
@@ -804,6 +854,14 @@ export interface ExtractedFrame {
    * those that were removed from renderables by frustum culling.
    */
   readonly frustumStats: { readonly culled: number; readonly total: number };
+  /**
+   * Per-frame post-process params snapshot collected from PostProcessParams
+   * entities (D-1: data-driven params channel). Maps shader id to the
+   * raw data bytes (Uint8Array = FieldValueType<'buffer'>). Last-one-wins
+   * when multiple entities bear the same shader id.
+   * Empty map when no PostProcessParams entities exist.
+   */
+  readonly postProcessParams: ReadonlyMap<string, Uint8Array>;
 }
 
 /**
@@ -890,6 +948,98 @@ type WorldInternalView = World & {
 };
 
 /**
+ * The user-region texture fields the built-in standard-PBR material declares.
+ * Used as the fallback texture-field set when the shader id is not registered
+ * (cross-worktree shader-late-register, plan R-4) so a built-in material still
+ * resolves its 3 textures. Mirrors `derive(default-standard-pbr).textureFieldNames`.
+ */
+const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+];
+
+/**
+ * feat-20260623-world-space-video-asset M4 / w14 (D-5): if a user-region
+ * texture field's paramValue is an embedded GUID string that catalogues to a
+ * VideoAsset (`kind === 'video'`), mint a `VideoAsset`-branded column handle for
+ * it and return that handle; otherwise return undefined (the field is a static
+ * texture / sampler / scalar and flows through the normal TextureAsset path).
+ *
+ * The video GUID occupies the same texture2d paramValues slot a static texture
+ * would (P4: identical binding shape) — extract just routes it to a different
+ * GPU lifecycle (the transient DynamicTextureStore, D-3) instead of the static
+ * `ensureResident` cache, whose switch has no `video` arm (AC-08). Minting a
+ * brand-`VideoAsset` handle keeps the snapshot self-describing: the record stage
+ * sees a video handle and resolves the per-frame view without reaching back into
+ * the asset (charter P5).
+ *
+ * A `number` paramValue (already a minted column handle) is not a GUID string so
+ * it cannot be a freshly-catalogued video; it passes through as undefined here.
+ */
+function resolveVideoFieldHandle(
+  value: unknown,
+  world: World,
+  assetsRef: AssetRegistry,
+): Handle<'VideoAsset', 'shared'> | undefined {
+  if (typeof value !== 'string') return undefined;
+  const payload = assetsRef.lookup(value);
+  if (payload === undefined || payload.kind !== 'video') return undefined;
+  return world.allocSharedRef('VideoAsset', payload) as Handle<'VideoAsset', 'shared'>;
+}
+
+/**
+ * feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): collect the
+ * user-region texture handles for a material by iterating the shader's
+ * `derive(paramSchema).textureFieldNames` SSOT (via
+ * `AssetRegistry.materialShaderTextureFieldNames`). Each declared texture
+ * field whose paramValue resolves to a handle lands in the returned map keyed
+ * by field name; this is the single path through which any number of user-region
+ * textures (3 standard or 4+ custom, e.g. parallax `heightTexture`) flow.
+ *
+ * When the shader is not registered the built-in 3-field set is used so
+ * standard materials still resolve. `emissiveTexture` / `occlusionTexture`
+ * are engine-injection (lightmap) textures and are NOT part of this set.
+ *
+ * feat-20260623-world-space-video-asset M4 / w14 (D-5): a field whose paramValue
+ * catalogues to a VideoAsset is routed into `videoOut` (a VideoAsset-branded
+ * handle) instead of the TextureAsset map, so the record stage pulls its view
+ * from the transient DynamicTextureStore (D-3) rather than the static
+ * ensureResident cache (AC-08). The video GUID still has to be in this
+ * `textureFieldNames` traversal set or it is never inspected (R-7) — that
+ * membership is asserted in w13.
+ */
+function collectUserRegionTextureHandles(
+  pv: Readonly<Record<string, number | number[] | string | undefined>>,
+  shaderId: string | undefined,
+  assetsRef: AssetRegistry,
+  world: World,
+  resolveTex: (
+    value: unknown,
+    brand: 'TextureAsset',
+  ) => Handle<'TextureAsset', 'shared'> | undefined,
+  videoOut: Map<string, Handle<'VideoAsset', 'shared'>>,
+): Map<string, Handle<'TextureAsset', 'shared'>> {
+  const fields =
+    (shaderId !== undefined ? assetsRef.materialShaderTextureFieldNames(shaderId) : undefined) ??
+    BUILTIN_USER_REGION_TEXTURE_FIELDS;
+  const out = new Map<string, Handle<'TextureAsset', 'shared'>>();
+  for (const field of fields) {
+    // D-5: a video-kind paramValue is routed to the transient path (videoOut),
+    // NOT minted as a TextureAsset (which would crash the record-stage
+    // ensureResident, AC-08). A static field falls through to resolveTex.
+    const videoHandle = resolveVideoFieldHandle(pv[field], world, assetsRef);
+    if (videoHandle !== undefined) {
+      videoOut.set(field, videoHandle);
+      continue;
+    }
+    const handle = resolveTex(pv[field], 'TextureAsset');
+    if (handle !== undefined) out.set(field, handle);
+  }
+  return out;
+}
+
+/**
  * feat-20260608 M5 amend / w11-a: resolve a single MaterialAsset handle into
  * a per-submesh MaterialSnapshot. Used by the extractFrame archetype loop to
  * build `RenderableSnapshot.materials[]` for indices >= 1 (the entity-level
@@ -908,6 +1058,7 @@ function resolveMaterialSnapshot(
   handleRaw: number,
   world: World,
   assetsRef: AssetRegistry,
+  gpuStore?: import('./gpu-resource-store').GpuResourceStore,
 ): MaterialSnapshot {
   if (handleRaw === 0) return defaultMaterialSnapshot();
   const tagged = toShared<'MaterialAsset'>(handleRaw);
@@ -955,19 +1106,45 @@ function resolveMaterialSnapshot(
     if (typeof value === 'string') {
       const payload = assetsRef.lookup(value);
       if (payload === undefined) return undefined;
+      // feat-20260619 M2 / w8 (Issue 6 fix-up): wire onLastRelease for
+      // TextureAsset brand matched by this resolver, mirroring the
+      // resolveParamHandle wiring at :2220. Other brands (SamplerAsset)
+      // bypass — their lifecycle is releaseUnreferenced-fallback.
+      if (gpuStore !== undefined && brand === 'TextureAsset') {
+        let handle: Handle<'TextureAsset', 'shared'> = -1 as unknown as Handle<
+          'TextureAsset',
+          'shared'
+        >;
+        handle = world.allocSharedRef(brand, payload, () => {
+          gpuStore.evictTexture(handle);
+        }) as Handle<'TextureAsset', 'shared'>;
+        return handle as Handle<B, 'shared'>;
+      }
       return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
     }
     return undefined;
   };
-  const baseColorTextureHandle = resolveTexLike(pv.baseColorTexture, 'TextureAsset');
-  const metallicRoughnessTextureHandle = resolveTexLike(
-    pv.metallicRoughnessTexture,
-    'TextureAsset',
+  // feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): iterate the
+  // shader's derive(paramSchema).textureFieldNames SSOT instead of a hardcoded
+  // user-region field list, so an Nth texture (e.g. parallax heightTexture)
+  // resolves through the same path. emissive/occlusion are engine-injection
+  // (lightmap) textures, NOT in textureFieldNames, so they keep named reads.
+  const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
+  const textureHandles = collectUserRegionTextureHandles(
+    pv,
+    firstPassShader,
+    assetsRef,
+    world,
+    resolveTexLike,
+    videoTextureFields,
   );
-  const normalTextureHandle = resolveTexLike(pv.normalTexture, 'TextureAsset');
   const samplerHandle = resolveTexLike(pv.sampler, 'SamplerAsset');
   const emissiveTextureHandle = resolveTexLike(pv.emissiveTexture, 'TextureAsset');
   const occlusionTextureHandle = resolveTexLike(pv.occlusionTexture, 'TextureAsset');
+  // Named user-region fields are derived from the map (sprite + legacy reads).
+  const baseColorTextureHandle = textureHandles.get('baseColorTexture');
+  const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
+  const normalTextureHandle = textureHandles.get('normalTexture');
   const emissivePv = pv.emissive as readonly number[] | undefined;
   return {
     baseColor,
@@ -976,6 +1153,8 @@ function resolveMaterialSnapshot(
     shadingModel: inferredShadingModel,
     materialShaderId: firstPassShader,
     paramSnapshot: paramSnap,
+    ...(textureHandles.size > 0 && { textureHandles }),
+    ...(videoTextureFields.size > 0 && { videoTextureFields }),
     ...(baseColorTextureHandle !== undefined && { baseColorTexture: baseColorTextureHandle }),
     ...(metallicRoughnessTextureHandle !== undefined && {
       metallicRoughnessTexture: metallicRoughnessTextureHandle,
@@ -1016,7 +1195,7 @@ export interface ExtractPipelineSurface {
  *   C_i = λ·n·(f/n)^(i/m) + (1-λ)·(n + i/m·(f-n))
  *   where i = 1..m, n = nearPlane, f = farPlane, m = cascadeCount
  *
- * Uses the DirectionalLightShadow component's nearPlane/farPlane (not camera
+ * Uses the DirectionalLight component's nearPlane/farPlane (not camera
  * near/far — D-8). Returns strictly monotonic view-space z depths (positive).
  *
  * When `farPlane <= nearPlane + ε` (ε=1e-6), throws ShadowInvalidConfigError
@@ -1211,6 +1390,7 @@ export function extractFrame(
   world: World,
   assets?: AssetRegistry | null,
   pipelineState?: ExtractPipelineSurface | null,
+  gpuStore?: import('./gpu-resource-store').GpuResourceStore,
 ): ExtractedFrame {
   // feat-20260612 M2 / m2-6 / D-9: reset the palette allocator cursor at
   // extractFrame entry so each frame starts with a fresh slice budget. Same
@@ -1302,6 +1482,22 @@ export function extractFrame(
   // deg -> cos (D-S2); range -> 1/range^2 (D-S5).
   let directional: DirectionalLightSnapshot | undefined;
   let directionalCount = 0;
+  // feat-20260621 M2: capture shadow fields from the first-hit DirectionalLight.
+  // castShadow defaults to true; the CSM path is gated on firstHitCastShadow !== false.
+  let firstHitCastShadow: boolean | undefined;
+  let firstHitShadowFields:
+    | {
+        cascadeCount: number;
+        splitLambda: number;
+        cascadeBlend: number;
+        mapSize: number;
+        depthBias: number;
+        normalBias: number;
+        nearPlane: number;
+        farPlane: number;
+        pcfKernelSize: number;
+      }
+    | undefined;
   queryRun(directionalLightQuery, world, (bundle) => {
     const l = bundle.DirectionalLight;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
@@ -1320,6 +1516,18 @@ export function extractFrame(
       if (directional === undefined) {
         // First hit wins; record-stage N>1 fail-fast (M3 / w19) flags duplicates.
         directional = snapshot;
+        firstHitCastShadow = (l.castShadow[i] ?? 1) !== 0;
+        firstHitShadowFields = {
+          cascadeCount: l.cascadeCount[i] ?? 4,
+          splitLambda: l.splitLambda[i] ?? 0.75,
+          cascadeBlend: l.cascadeBlend[i] ?? 0.2,
+          mapSize: l.mapSize[i] ?? 2048,
+          depthBias: l.depthBias[i] ?? 0.005,
+          normalBias: l.normalBias[i] ?? 0.05,
+          nearPlane: l.nearPlane[i] ?? 0.1,
+          farPlane: l.farPlane[i] ?? 50,
+          pcfKernelSize: l.pcfKernelSize[i] ?? 3,
+        };
       }
     }
   });
@@ -1468,19 +1676,20 @@ export function extractFrame(
     };
   }
 
-  if (directional !== undefined) {
+  // feat-20260621 M2: CSM computation gated on castShadow from the
+  // merged DirectionalLight. castShadow defaults to true (first-hit-wins
+  // semantics, D-6 no cardinality cap). The independent shadowQuery and
+  // orphanShadowQuery are removed; shadow fields live on DirectionalLight.
+  if (directional !== undefined && firstHitCastShadow !== false) {
     const dirSnapshot = directional;
-    const shadowQuery = createQueryState({ with: [DirectionalLightShadow, Entity] });
-    queryRun(shadowQuery, world, (bundle) => {
-      if (bundle.Entity.self.length === 0) return;
-      const s = bundle.DirectionalLightShadow;
-      const i = 0; // cardinality=1: first hit only
-      const mapSize = s.mapSize?.[i] ?? 2048;
-      const cc = s.cascadeCount?.[i] ?? 4;
-      const sl = s.splitLambda?.[i] ?? 0.75;
-      const cb = s.cascadeBlend?.[i] ?? 0.2;
-      const sNear = s.nearPlane?.[i] ?? 0.1;
-      const sFar = s.farPlane?.[i] ?? 50;
+    const sf = firstHitShadowFields;
+    if (sf !== undefined) {
+      const mapSize = sf.mapSize;
+      const cc = sf.cascadeCount;
+      const sl = sf.splitLambda;
+      const cb = sf.cascadeBlend;
+      const sNear = sf.nearPlane;
+      const sFar = sf.farPlane;
       shadowMapSize = mapSize;
       cascadeCount = Math.round(cc);
       cascadeBlend = cb;
@@ -1636,22 +1845,7 @@ export function extractFrame(
       }
 
       lightViewProj = resultLightViewProjs;
-    });
-  }
-
-  // feat-20260520-directional-light-shadow-mapping verify round 1 fix
-  // (AC-22): detect orphan DirectionalLightShadow — entity exists but has
-  // no DirectionalLight on the same entity. The record stage fires
-  // ShadowDisabledByMissingComponentError once per RenderSystem lifecycle.
-  let hasOrphanShadow = false;
-  {
-    const orphanShadowQuery = createQueryState({ with: [DirectionalLightShadow, Entity] });
-    queryRun(orphanShadowQuery, world, (bundle) => {
-      if (bundle.Entity.self.length === 0) return;
-      if (directional === undefined) {
-        hasOrphanShadow = true;
-      }
-    });
+    }
   }
 
   // feat-20260613-csm M3 / w14 (plan-strategy §D-7): pad the up-to-4
@@ -1760,7 +1954,9 @@ export function extractFrame(
     cascadeCount,
     cascadeBlend,
     shadowMapSize,
-    hasOrphanShadow,
+    depthBias: firstHitCastShadow !== false ? firstHitShadowFields?.depthBias : undefined,
+    normalBias: firstHitCastShadow !== false ? firstHitShadowFields?.normalBias : undefined,
+    pcfKernelSize: firstHitCastShadow !== false ? firstHitShadowFields?.pcfKernelSize : undefined,
     pointShadow: pointShadowSnapshots,
   };
 
@@ -1935,6 +2131,41 @@ export function extractFrame(
     // path stays acknowledged.
     void bundle.Layer;
     void bundle.SortKey;
+    // feat-20260608-tilemap-object-layer-rendering M3 / m3-t5: tilemap-spawned
+    // per-cell render entities (the ones `tilemap-chunk-extract-system`
+    // pushes via `spawnDerivedRenderEntities`) reach this loop via the same
+    // archetype edge that carries any sprite entity -- they all wear
+    // `MeshFilter.assetHandle === HANDLE_QUAD` + a `forgeax::sprite`-shaded
+    // material asset + the sprite-bucket `paramValues.region` rectangle.
+    // For the per-entity Y-sort path (requirements §AC-12 / §AC-13):
+    //
+    //   sortKey = -(Transform.posY - effectivePivotY * |Transform.scaleY|)
+    //
+    // with `effectivePivotY = effectivePivotYForTilemapFlip(pivotY, pivotX,
+    // flipV, flipDiagonal)` from `tilemap-chunk-extract-system` (the SAME
+    // helper drives `spawnDerivedRenderEntities`, so the value the sort
+    // uses matches the value baked into `Transform.posY` -- charter P4
+    // single SSOT for the post-flip pivot). Sprite entities reuse the same
+    // formula but skip the flip composition (their pivot stays raw); both
+    // bucket types therefore feed one `transparentSortEntries` argsort
+    // step + share the `argsortInPlace` radix LSD primitive (plan-strategy
+    // §D-1 / §D-3). The detection lives on the material side -- detect a
+    // tilemap-spawned entity by `MeshFilter.assetHandle === HANDLE_QUAD`
+    // plus the `forgeax::sprite` shader id on `MeshRenderer.material`'s
+    // first pass + non-empty `paramValues.region`; no new public ECS
+    // marker component lands (charter F1 minimum surface).
+    //
+    // Why no live sort-bucket construction here yet: the sprite bucket
+    // dispatch list currently flows through the queue-ordered
+    // `DispatchEntry[]` path (see `dispatch.push` below), which sorts by
+    // pass `queue` value -- transparent-Y mode is therefore consumed via
+    // `transparentSortEntries(entries, world)` from the systems barrel
+    // when an AI user wires `setTransparentSortConfig` to mode=1. The
+    // m3-t10 hello demo + m4-t2 asi-world migration exercise the integrated
+    // path end-to-end with the per-entity formula above; the unit-level
+    // contract is verified by
+    // `__tests__/transparent-sort-tilemap-sprite-interleave.test.ts`
+    // (m3-t4).
     // feat-20260527-sprite-nineslice M4 / w17 (AC-14): SpriteRegionOverride
     // per-entity UV sub-rectangle. When the entity carries this component the
     // 4-float `[uMin, vMin, uW, vH]` override displaces the asset-side
@@ -2205,7 +2436,9 @@ export function extractFrame(
               if (assets === null || assets === undefined) return undefined;
               const payload = assets.lookup(raw);
               if (payload === undefined) return undefined;
-              handle = world.allocSharedRef('TextureAsset', payload);
+              handle = world.allocSharedRef('TextureAsset', payload, () => {
+                if (gpuStore) gpuStore.evictTexture(handle);
+              });
             } else if (typeof raw === 'number') {
               handle = raw as unknown as Handle<'TextureAsset', 'shared'>;
             } else {
@@ -2243,19 +2476,50 @@ export function extractFrame(
               if (assets === null || assets === undefined) return undefined;
               const payload = assets.lookup(raw);
               if (payload === undefined) return undefined;
+              if (gpuStore !== undefined && brand === 'TextureAsset') {
+                let handle: Handle<'TextureAsset', 'shared'> = -1 as unknown as Handle<
+                  'TextureAsset',
+                  'shared'
+                >;
+                handle = world.allocSharedRef(brand, payload, () => {
+                  gpuStore.evictTexture(handle);
+                }) as Handle<'TextureAsset', 'shared'>;
+                return handle as Handle<B, 'shared'>;
+              }
               return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
             }
             return undefined;
           };
-          const baseColorTextureHandle = validateTextureHandle(
-            'baseColorTexture',
-            pv.baseColorTexture,
-          );
-          const metallicRoughnessTextureHandle = validateTextureHandle(
-            'metallicRoughnessTexture',
-            pv.metallicRoughnessTexture,
-          );
-          const normalTextureHandle = validateTextureHandle('normalTexture', pv.normalTexture);
+          // feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): iterate the
+          // shader's derive(paramSchema).textureFieldNames SSOT so the Nth
+          // user-region texture (e.g. parallax heightTexture) is validated +
+          // carried, replacing the hardcoded 3-field list. validateTextureHandle
+          // already drops fields a shader doesn't declare as a texture.
+          const userRegionFields =
+            (firstPassShader !== undefined && assets !== null && assets !== undefined
+              ? assets.materialShaderTextureFieldNames(firstPassShader)
+              : undefined) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
+          const textureHandles = new Map<string, Handle<'TextureAsset', 'shared'>>();
+          const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
+          for (const field of userRegionFields) {
+            // D-5: a video-kind paramValue routes to the transient path
+            // (videoTextureFields), NOT validateTextureHandle (which drops
+            // kind!=='texture', the R-7 silent-fail path). Static fields fall
+            // through to validateTextureHandle unchanged.
+            const videoHandle =
+              assets !== null && assets !== undefined
+                ? resolveVideoFieldHandle(pv[field], world, assets)
+                : undefined;
+            if (videoHandle !== undefined) {
+              videoTextureFields.set(field, videoHandle);
+              continue;
+            }
+            const handle = validateTextureHandle(field, pv[field]);
+            if (handle !== undefined) textureHandles.set(field, handle);
+          }
+          const baseColorTextureHandle = textureHandles.get('baseColorTexture');
+          const metallicRoughnessTextureHandle = textureHandles.get('metallicRoughnessTexture');
+          const normalTextureHandle = textureHandles.get('normalTexture');
           const samplerHandle = resolveParamHandle(pv.sampler, 'SamplerAsset');
           const emissiveTextureHandle = validateTextureHandle(
             'emissiveTexture',
@@ -2351,6 +2615,8 @@ export function extractFrame(
               shadingModel: inferredShadingModel,
               materialShaderId: firstPassShader,
               paramSnapshot: paramSnap,
+              ...(textureHandles.size > 0 && { textureHandles }),
+              ...(videoTextureFields.size > 0 && { videoTextureFields }),
               ...(baseColorTextureHandle !== undefined && {
                 baseColorTexture: baseColorTextureHandle,
               }),
@@ -2608,7 +2874,7 @@ export function extractFrame(
         if (assets !== undefined && assets !== null && materialsView !== undefined) {
           for (let mi = 1; mi < materialsView.length; mi++) {
             const subHandle = materialsView[mi] ?? 0;
-            materialsArr.push(resolveMaterialSnapshot(subHandle, world, assets));
+            materialsArr.push(resolveMaterialSnapshot(subHandle, world, assets, gpuStore));
           }
         }
         const baseRenderable: RenderableSnapshot = {
@@ -2730,6 +2996,44 @@ export function extractFrame(
   // per plan-strategy D-3.
   dispatch = sortDispatchByQueue(dispatch);
 
+  // D-1: collect PostProcessParams entities into Map<shaderId, Uint8Array>.
+  // Last-one-wins when multiple entities bear the same shader id (mirrors
+  // Camera.exposure -> CameraSnapshot pattern; extract stage only reads).
+  const postProcessParams: Map<string, Uint8Array> = new Map();
+  const postProcessParamsQuery = createQueryState({ with: [PostProcessParams, Entity] });
+  queryRun(postProcessParamsQuery, world, (bundle) => {
+    for (let i = 0; i < bundle.Entity.self.length; i++) {
+      const entity = bundle.Entity.self[i] as EntityHandle;
+      const read = world.get(entity, PostProcessParams);
+      if (!read.ok) continue;
+      postProcessParams.set(read.value.shader, read.value.data);
+    }
+  });
+
+  // feat-20260621 M-A3 / w13 (D-5): engine built-in tonemap data-driven
+  // provider. The engine bridges the active camera's `Camera.exposure /
+  // whitePoint / tonemap` onto the SAME unified params channel custom
+  // post-processes use — `Camera.exposure` stays the AI-user-facing SSOT (D-5),
+  // the engine itself acts as the provider for the `'forgeax::tonemap'` shader
+  // id. The 16B layout is byte-identical to the prior recordTonemapPass packing
+  // (render-system-record.ts pre-w14): Float32 [exposure, whitePoint, _, pad]
+  // with the mode u32 occupying the third 4-byte slot via tonemapToU32 (SSOT in
+  // camera.ts). Run AFTER the user-entity collection above so the engine's
+  // built-in provider is authoritative for its own reserved key (a user entity
+  // can never shadow `'forgeax::tonemap'`). The single active camera mirrors
+  // recordFrame's `activeCameras[0]` selection.
+  const tonemapCamera = cameras[0];
+  if (tonemapCamera !== undefined) {
+    const tonemapBytes = new ArrayBuffer(16);
+    const tonemapF32 = new Float32Array(tonemapBytes);
+    const tonemapU32 = new Uint32Array(tonemapBytes);
+    tonemapF32[0] = tonemapCamera.exposure;
+    tonemapF32[1] = tonemapCamera.whitePoint;
+    tonemapU32[2] = tonemapToU32(tonemapCamera.tonemap);
+    tonemapF32[3] = 0;
+    postProcessParams.set('forgeax::tonemap', new Uint8Array(tonemapBytes));
+  }
+
   return {
     cameras,
     lights,
@@ -2740,6 +3044,7 @@ export function extractFrame(
     skybox,
     skyboxCount,
     frustumStats: { culled: frustumCulled, total: frustumTotal },
+    postProcessParams,
   };
 }
 

@@ -1,8 +1,7 @@
 // @forgeax/engine-runtime — error classes (public surface).
 //
-// Closed-union RuntimeErrorCode + 9 error classes:
-//   - ShadowInvalidConfigError          — DirectionalLightShadow field validation (mapSize < 1, cascadeCount ∉ {1..4}, splitLambda ∉ [0,1], cascadeBlend ∉ [0,0.5])
-//   - ShadowDisabledByMissingComponentError — once-warn when shadow/light are mismatched
+// Closed-union RuntimeErrorCode + 8 error classes:
+//   - ShadowInvalidConfigError          — DirectionalLight / PointLightShadow field validation (mapSize < 1, cascadeCount ∉ {1..4}, splitLambda ∉ [0,1], cascadeBlend ∉ [0,0.5])
 //   - SkinJointCountExceededError       — skin joint count > MAX_JOINTS (256)
 //   - SkinJointDespawnedError           — skin joint Entity despawned at extract time
 //   - SkinJointPathUnresolvedError      — jointPath Name lookup failed
@@ -75,8 +74,7 @@ import type { RhiError } from '@forgeax/engine-rhi';
  *
  * | code | class | trigger |
  * |:--|:--|:--|
- * | `'shadow-invalid-config'` | `ShadowInvalidConfigError` | `DirectionalLightShadow` or `PointLightShadow` validation fail (mapSize<1 / farPlane<=nearPlane) |
- * | `'shadow-disabled-by-missing-component'` | `ShadowDisabledByMissingComponentError` | once-warn when shadow/light are on different entities |
+ * | `'shadow-invalid-config'` | `ShadowInvalidConfigError` | `DirectionalLight` shadow fields or `PointLightShadow` validation fail (mapSize<1 / farPlane<=nearPlane) |
  * | `'skin-joint-count-exceeded'` | `SkinJointCountExceededError` | skin joint count exceeds MAX_JOINTS (256) |
  * | `'skin-joint-despawned'` | `SkinJointDespawnedError` | skin joint Entity despawned at extract time |
  * | `'skin-joint-path-unresolved'` | `SkinJointPathUnresolvedError` | jointPath Name lookup failed at post-spawn |
@@ -85,8 +83,8 @@ import type { RhiError } from '@forgeax/engine-rhi';
  * | `'skin-palette-overflow'` | `SkinPaletteOverflowError` | palette buffer exceeds device maxStorageBufferBindingSize |
  * | `'material-resolved-empty-passes'` | `MaterialResolvedEmptyPassesError` | material parent chain walk resolves to zero passes (missing-parent or no-pass-in-chain) |
  * | `'skybox-cubemap-not-ready'` | `SkyboxCubemapNotReadyError` | cubemap asset not uploaded yet when SkyboxBackground spawns (degrade to clear colour + fire structured error) |
- * | `'mesh-ssbo-capacity-exceeded'` | `MeshSsboCapacityExceededError` | post-grow mesh SSBO capacity still cannot accommodate the requested slot count (defensive fallback under degenerate conditions) |
- * | `'mesh-ssbo-ceiling-reached'` | `MeshSsboCeilingReachedError` | the requested mesh SSBO slot count would exceed `device.limits.maxStorageBufferBindingSize`; grow refuses to allocate (frame is skipped) |
+ * | `'mesh-ssbo-capacity-exceeded'` | `MeshSsboCapacityExceededError` | post-grow mesh SSBO capacity still cannot accommodate the requested slot count (defensive fallback under degenerate conditions; frame renders subset) |
+ * | `'mesh-ssbo-ceiling-reached'` | `MeshSsboCeilingReachedError` | the requested mesh SSBO slot count would exceed `device.limits.maxStorageBufferBindingSize`; grow refuses to allocate (frame renders subset) |
  * | `'hdrp-caps-insufficient'` | `HdrpCapsInsufficientError` | install-time: `device.caps.maxStorageBuffersPerShaderStage < 4`; HDRP cannot run on this device |
  * | `'hdrp-light-budget-exceeded'` | `HdrpLightBudgetExceededError` | per-frame fail-soft: light count exceeds HDRP budget (256); truncate to 256 |
  * | `'hdrp-index-list-overflow'` | `HdrpIndexListOverflowError` | per-frame fail-soft: cluster binner light index list overflow (>65536); continue rendering |
@@ -96,7 +94,6 @@ import type { RhiError } from '@forgeax/engine-rhi';
  */
 export type RuntimeErrorCode =
   | 'shadow-invalid-config'
-  | 'shadow-disabled-by-missing-component'
   | 'skin-joint-count-exceeded'
   | 'skin-joint-despawned'
   | 'skin-joint-path-unresolved'
@@ -125,6 +122,13 @@ export type RuntimeErrorCode =
   // bidirectional Skin <-> pbr-skin material mismatch detected at extract.
   | 'skin-material-mismatch'
   | 'material-skin-attr-missing'
+  // feat-20260623-world-space-video-asset M3 / w11 (add-only minor): AC-10
+  // capability double-miss. Fired by the per-frame record stage (videoTextureView)
+  // when neither the general copyExternalImageToTexture path (no host
+  // HTMLVideoElement) nor the high-perf GPUExternalTexture path is available;
+  // the engine surfaces this structured failure on the error channel instead of
+  // silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
+  | 'video-upload-unsupported'
   // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
   // subset union covering the three new fail-fast checks at extractFrame
   // hasSkin time (skeleton handle resolution / SkinAsset.joints.length vs
@@ -167,7 +171,7 @@ export type SkinExtractErrorCode =
 /**
  * Detail for `RuntimeErrorCode 'shadow-invalid-config'`.
  *
- * Emitted by `DirectionalLightShadow.validate` when a field value violates
+ * Emitted by `DirectionalLight.validate` shadow-field path when a field value violates
  * runtime constraints (e.g. mapSize < 1, cascadeCount not in {1..4}).
  * AI users access `.detail.field` / `.detail.value` / `.detail.min` /
  * `.detail.max` via property access — no string parsing.
@@ -186,7 +190,7 @@ export interface ShadowInvalidConfigDetail {
 /**
  * Structured error for shadow component config validation failures.
  *
- * Emitted by `DirectionalLightShadow.validate()` (mapSize / cascadeCount /
+ * Emitted by `DirectionalLight.validate()` shadow-field path (mapSize / cascadeCount /
  * splitLambda / cascadeBlend / farPlane) and `PointLightShadow.validate()`
  * (mapSize / farPlane > nearPlane / pcfKernelSize); both shadow component
  * types share this single error class so `switch (err.code)` on
@@ -224,12 +228,17 @@ export class ShadowInvalidConfigError extends Error {
     // Integer-typed fields get an "integer in [min, max]" hint when a range
     // is supplied. Expand this set as new integer-typed shadow fields land.
     const isInteger = field === 'cascadeCount' || field === 'pcfKernelSize';
+    // pcfKernelSize must be odd (kernel is symmetric around the center tap).
+    // Naming "odd" in the hint stops an AI retry from looping min->min+1 (4->6).
+    const isOdd = field === 'pcfKernelSize';
     const hint =
       max !== undefined
         ? isInteger
           ? `set ${field} to an integer in [${min}, ${max}]; got ${value}`
           : `set ${field} to a value in [${min}, ${max}]; got ${value}`
-        : `set ${field} to a value ${comparator} ${min}; got ${value}`;
+        : isOdd
+          ? `set ${field} to an odd integer ${comparator} ${min}; got ${value}`
+          : `set ${field} to a value ${comparator} ${min}; got ${value}`;
     const expected =
       max !== undefined ? `${field} in [${min}, ${max}]` : `${field} ${comparator} ${min}`;
     super(
@@ -241,43 +250,6 @@ export class ShadowInvalidConfigError extends Error {
     this.hint = hint;
     this.expected = expected;
     this.detail = { field, value, min, ...(max !== undefined ? { max } : {}) };
-  }
-}
-
-// ── ShadowDisabledByMissingComponentError ─────────────────────────────────
-
-/**
- * Once-warn fired when DirectionalLightShadow is on a different entity than
- * DirectionalLight (AC-04 / AC-22).
- *
- * `.code = 'shadow-disabled-by-missing-component'` (closed RuntimeErrorCode):
- *   - `missing.kind === 'shadow'`  → AC-04: DirectionalLight present, DirectionalLightShadow absent
- *   - `missing.kind === 'light'`   → AC-22: DirectionalLightShadow present, DirectionalLight absent
- *
- * Fires at most once per World lifecycle (dedup latch in extractFrame).
- */
-export class ShadowDisabledByMissingComponentError extends Error {
-  readonly code = 'shadow-disabled-by-missing-component' as const;
-  readonly expected: string;
-  readonly hint: string;
-
-  constructor(missingKind: 'shadow' | 'light') {
-    const hint =
-      missingKind === 'shadow'
-        ? 'Spawn DirectionalLightShadow on the same entity as DirectionalLight; shadows are disabled until both components co-exist'
-        : 'Spawn DirectionalLight on the same entity as DirectionalLightShadow; shadow is orphaned and disabled until a DirectionalLight is on the same entity';
-    const expected =
-      missingKind === 'shadow'
-        ? 'DirectionalLightShadow on same entity as DirectionalLight'
-        : 'DirectionalLight on same entity as DirectionalLightShadow';
-    super(
-      missingKind === 'shadow'
-        ? 'DirectionalLight present without DirectionalLightShadow — shadows disabled'
-        : 'DirectionalLightShadow present without DirectionalLight — shadows disabled',
-    );
-    this.name = 'ShadowDisabledByMissingComponentError';
-    this.expected = expected;
-    this.hint = hint;
   }
 }
 
@@ -459,6 +431,41 @@ export class VertexStorageBufferUnavailableError extends Error {
       'this device does not support vertex-stage storage buffers; skinning requires vertex-stage storage buffer access (OOS-uniform-palette fallback not implemented)';
     super('vertex-stage storage buffer unavailable — skinning cannot operate');
     this.name = 'VertexStorageBufferUnavailableError';
+    this.expected = expected;
+    this.hint = hint;
+  }
+}
+
+// ── VideoUploadUnsupportedError ─────────────────────────────────────────
+
+/**
+ * Structured error for `RuntimeErrorCode 'video-upload-unsupported'`
+ * (feat-20260623-world-space-video-asset M3 / w11 — AC-10).
+ *
+ * Fired by the per-frame record stage (`videoTextureView`) when a VideoPlayer
+ * entity can reach neither video upload path this frame: the general
+ * `copyExternalImageToTexture` path (no host HTMLVideoElement resolved via
+ * `VideoElementProvider`) AND the high-perf `GPUExternalTexture` path
+ * (capability absent). The engine surfaces this explicit failure rather than
+ * silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
+ *   - `.code = 'video-upload-unsupported'`
+ *   - `.expected` — at least one upload path available (host element or
+ *     GPUExternalTexture capability)
+ *   - `.hint` — actionable recovery: use a static texture or switch backend
+ *   - `.detail` — undefined (no narrowed detail variant)
+ */
+export class VideoUploadUnsupportedError extends Error {
+  readonly code = 'video-upload-unsupported' as const;
+  readonly expected: string;
+  readonly hint: string;
+
+  constructor() {
+    const expected =
+      'at least one video upload path available: a host HTMLVideoElement (general copyExternalImageToTexture path) or GPUExternalTexture capability (high-perf path)';
+    const hint =
+      'this backend exposes no usable video upload path; render a static texture instead, or switch to a WebGPU backend that supports video texture upload';
+    super('video upload unsupported — no general or high-perf path available');
+    this.name = 'VideoUploadUnsupportedError';
     this.expected = expected;
     this.hint = hint;
   }
@@ -705,9 +712,9 @@ export interface MeshSsboCeilingReachedDetail {
  * Structured error for mesh-SSBO grow refused because the request exceeds
  * `device.limits.maxStorageBufferBindingSize`.
  *
- * Emitted by `growMeshSsbo` (D-5: fire, never throw). The frame is skipped
- * — no `writeBuffer`, no `draw` (AC-08). Four-field surface aligned with
- * `SkinPaletteOverflowError`:
+ * Emitted by `growMeshSsbo` (D-5: fire, never throw). The frame renders a
+ * degraded subset (truncated to pre-grow capacity) per plan-strategy D-2 —
+ * no black frame. Four-field surface aligned with `SkinPaletteOverflowError`:
  *   - `.code = 'mesh-ssbo-ceiling-reached'`
  *   - `.expected` — requested * stride <= device.limits.maxStorageBufferBindingSize
  *   - `.hint` — reduce per-frame entity count or pick a higher-tier adapter
@@ -1018,7 +1025,6 @@ export class GbufferAttachmentCountMismatchError extends Error {
  */
 export type RuntimeError =
   | ShadowInvalidConfigError
-  | ShadowDisabledByMissingComponentError
   | SkinJointCountExceededError
   | SkinJointDespawnedError
   | SkinJointPathUnresolvedError
@@ -1045,7 +1051,9 @@ export type RuntimeError =
   | JointEntityDanglingError
   // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-4: ShadowAtlas P3.
   | PointShadowAtlasUninitializedError
-  | PointShadowAtlasBoundsViolationError;
+  | PointShadowAtlasBoundsViolationError
+  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability double-miss.
+  | VideoUploadUnsupportedError;
 
 /**
  * Structured signal carrier for the `EngineEnvironmentError.detail` field.
@@ -1416,5 +1424,84 @@ export class PointShadowAtlasBoundsViolationError extends Error {
     this.expected = expected;
     this.hint = hint;
     this.detail = { axis, value, max };
+  }
+}
+
+// ── RecoverError (feat-20260621-renderer-health-recover-skeleton M1) ─────────
+
+/**
+ * Closed union of recover() error codes.
+ *
+ * Exactly 4 members (feat-20260622-s5 M3 / D-2 add-only minor; the S3
+ * skeleton shipped the first two):
+ *   - `'recover-not-needed'` — health state is `'alive'`, no recovery required
+ *     (also returned after a successful recover: the renderer is alive again,
+ *     so a second recover() is a no-op signal — A-AC-08 idempotency)
+ *   - `'recover-not-implemented'` — **reserved**. The S3 skeleton returned this
+ *     for any degraded state; M3 implements recover() so this code is no longer
+ *     produced. Kept in the union (not deleted) so consumers' exhaustive
+ *     switches stay valid — AGENTS.md Change stance: `*ErrorCode` unions evolve
+ *     add-only minor, never remove a member
+ *   - `'recover-adapter-unavailable'` — rebuild requested a new adapter but
+ *     `requestAdapter` returned no adapter (driver / GPU may have been reset)
+ *   - `'recover-device-unavailable'` — an adapter was obtained but
+ *     `requestDevice` failed or threw (device creation is driver-dependent)
+ *
+ * On both failure codes the health state stays `'device-lost'` (recover() never
+ * fakes the renderer back to `'alive'` on failure — A-AC-07). recover() is a
+ * single idempotent attempt: no retry loop, no backoff, no timer (A-OOS-1).
+ *
+ * AI users exhaustively switch without default; TS guards completeness.
+ */
+// biome-ignore format: single-line union keeps the A-AC-09 grep gate (exactly 4 `recover-*` literals on the definition line) stable
+export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented' | 'recover-adapter-unavailable' | 'recover-device-unavailable';
+
+/**
+ * Structured error for `Renderer.recover()` failures.
+ *
+ * Carries the standard 3-field surface per AGENTS.md error model:
+ *   - `.code: RecoverErrorCode` — closed union discriminant
+ *   - `.expected: string` — expected-state description
+ *   - `.hint: string` — actionable recovery guidance
+ *
+ * No `.detail` field: each code has fixed semantics with no variable data.
+ */
+export class RecoverError extends Error {
+  readonly code: RecoverErrorCode;
+  readonly expected: string;
+  readonly hint: string;
+
+  constructor(code: RecoverErrorCode) {
+    let message: string;
+    let expected: string;
+    let hint: string;
+    switch (code) {
+      case 'recover-not-needed':
+        message = 'recover-not-needed: renderer is not in a degraded state';
+        expected =
+          'renderer is healthy; call health() first to confirm degraded state before calling recover()';
+        hint = 'call health() first to confirm degraded state before calling recover()';
+        break;
+      case 'recover-not-implemented':
+        message = 'recover-not-implemented: self-heal recovery is not yet implemented';
+        expected = 'recovery is not yet implemented; self-heal lands in S5';
+        hint = 'self-heal recovery lands in S5; health().reason still reflects the degraded state';
+        break;
+      case 'recover-adapter-unavailable':
+        message = 'recover-adapter-unavailable: requestAdapter returned no adapter during rebuild';
+        expected = 'requestAdapter returned null; driver/GPU may have been reset';
+        hint = 'retry recover() after a host-chosen delay; adapter availability is transient';
+        break;
+      case 'recover-device-unavailable':
+        message = 'recover-device-unavailable: requestDevice failed or threw during rebuild';
+        expected = 'requestDevice failed or threw';
+        hint = 'retry recover() after a host-chosen delay; device creation is driver-dependent';
+        break;
+    }
+    super(message);
+    this.code = code;
+    this.expected = expected;
+    this.hint = hint;
+    this.name = 'RecoverError';
   }
 }

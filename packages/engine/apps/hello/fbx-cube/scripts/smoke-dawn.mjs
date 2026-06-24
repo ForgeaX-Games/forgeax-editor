@@ -98,8 +98,13 @@ console.log(`[hello-fbx-cube] backend=${renderer.backend}`);
 const assets = renderer.assets;
 if (!assets) { console.error('[smoke] FAIL - AssetRegistry null'); process.exit(1); }
 
-// Import cube.fbx via fbxImporter
+// Import cube.fbx via fbxImporter. The importer honours the GUID import-stable
+// iron law: it only emits sub-assets declared in ctx.subAssets[]. Read them from
+// the meta sidecar (SSOT) so this smoke exercises the same declared-GUID path as
+// the dev server / build pre-import, not a subAssets:[] shortcut that produces
+// nothing.
 const CUBE_FBX = resolve(here, '..', '..', '..', '..', 'forgeax-engine-assets', 'vendor', 'fbx-test', 'cube.fbx');
+const CUBE_META = JSON.parse(readFileSync(`${CUBE_FBX}.meta.json`, 'utf8'));
 let results;
 try {
   results = await fbxImporter.import({
@@ -107,7 +112,7 @@ try {
     readSource: async () => ({ ok: true, value: new Uint8Array(0) }),
     readSibling: async () => ({ ok: false, error: { code: 'source-read-failed' } }),
     decodeImage: async () => ({ ok: false, error: { code: 'image-decode-failed' } }),
-    subAssets: [],
+    subAssets: CUBE_META.subAssets,
     importSettings: {},
   });
 } catch (err) {

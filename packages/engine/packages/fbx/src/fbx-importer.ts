@@ -82,6 +82,15 @@ export const fbxImporter: Importer = {
     const skin = parseSkin(doc);
     const animationClips = parseAnimationClips(doc);
 
-    return toAssetPack({ meshes, scene, materials, textures, skeleton, skin, animationClips });
+    return toAssetPack({
+      meshes,
+      scene,
+      materials,
+      textures,
+      skeleton,
+      skin,
+      animationClips,
+      subAssets: ctx.subAssets,
+    });
   },
 };

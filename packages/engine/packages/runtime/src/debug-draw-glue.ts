@@ -43,9 +43,12 @@ async function resolveCreateShaderModule(): Promise<CreateShaderModule> {
       : undefined;
   const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
 
-  const backendPkg = hasWebGPU ? '@forgeax/engine-rhi-webgpu' : '@forgeax/engine-rhi-wgpu';
+  // Literal import specifiers (not a variable) so Vite can statically analyze
+  // each branch — mirrors createRenderer's channel-2/channel-3 split.
   // biome-ignore lint/suspicious/noExplicitAny: dynamic import result shape
-  const backend = (await import(backendPkg)) as Record<string, any>;
+  const backend: Record<string, any> = hasWebGPU
+    ? await import('@forgeax/engine-rhi-webgpu')
+    : await import('@forgeax/engine-rhi-wgpu');
 
   if (!hasWebGPU && typeof backend.ensureReady === 'function') {
     await backend.ensureReady();

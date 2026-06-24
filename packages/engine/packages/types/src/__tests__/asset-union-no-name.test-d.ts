@@ -2,13 +2,14 @@
 // + POD no-name constraint (OOS-2).
 //
 // Three assertions guard the SSOT boundary:
-// (a) Asset union exhaustive switch covers all 13 kind discriminants
+// (a) Asset union exhaustive switch covers all 15 kind discriminants
 //     without default fallback -- TS compile-error on drift.
 // (b) Type-level: exhaustiveSwitch returns string (proves all cases present).
-// (c) grep: none of the 13 Asset union member interfaces (MeshAsset /
+// (c) grep: none of the 15 Asset union member interfaces (MeshAsset /
 //     TextureAsset / CubeTextureAsset / SamplerAsset / MaterialAsset /
 //     SceneAsset / ShaderAsset / SkeletonAsset / SkinAsset / AnimationClip /
-//     AudioClipAsset / FontAsset / RenderPipelineAsset) has gained a `name`
+//     AudioClipAsset / FontAsset / RenderPipelineAsset / TilesetAsset /
+//     VideoAsset) has gained a `name`
 //     field -- only ShaderAsset.name is allowed (registration identifier,
 //     orthogonal to resolveName display name per D-8). The check scans
 //     each Asset member interface block between `export interface <N>Asset`
@@ -60,6 +61,10 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'FontAsset';
     case 'render-pipeline':
       return 'RenderPipelineAsset';
+    case 'tileset':
+      return 'TilesetAsset';
+    case 'video':
+      return 'VideoAsset';
     default: {
       const _exhaustiveCheck: never = asset;
       return _exhaustiveCheck;
@@ -67,7 +72,7 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
   }
 }
 
-// The 13 Asset union member interface names, matching export declarations.
+// The 14 Asset union member interface names, matching export declarations.
 const ASSET_MEMBER_NAMES = [
   'MeshAsset',
   'TextureAsset',
@@ -82,6 +87,8 @@ const ASSET_MEMBER_NAMES = [
   'AudioClipAsset',
   'FontAsset',
   'RenderPipelineAsset',
+  'TilesetAsset',
+  'VideoAsset',
 ] as const;
 
 /**
@@ -136,8 +143,8 @@ function countNameFieldsPerAssetInterface(): Map<string, number> {
   return result;
 }
 
-describe('M1 Asset union cardinality grep gate (13 members, OOS-2 POD no-name)', () => {
-  it('(a) exhaustive switch over Asset.kind covers all 13 discriminants', () => {
+describe('M1 Asset union cardinality grep gate (15 members, OOS-2 POD no-name)', () => {
+  it('(a) exhaustive switch over Asset.kind covers all 15 discriminants', () => {
     const result = exhaustiveAssetKindSwitch({ kind: 'mesh' } as Asset);
     expect(typeof result).toBe('string');
   });

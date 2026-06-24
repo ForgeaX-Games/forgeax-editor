@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 // hello-fbx-cube browser e2e smoke (M3 / t38).
 //
-// Playwright + chromium + WebGPU: typed-array roundtrip + non-black canvas.
-// Mirrors hello-skin smoke-browser.mjs shape.
+// Playwright + chromium + WebGPU: exercises the dev-server import -> pack-body
+// -> typed-array roundtrip -> scene-instantiate path that dawn-node smoke skips.
+// Asserts canvas present, WebGPU backend, scene instantiated, no draw errors.
+// (Pixel non-blackness is NOT asserted: headless WebGPU does not composite into
+// screenshots reliably on all machines; see hello/level-switch for the
+// page.screenshot()-based visual gate where a renderer runner is available.)
+// Mirrors hello-fbx-skin smoke-browser.mjs shape.
 
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
@@ -54,10 +59,13 @@ try {
     process.exit(1);
   }
 
-  // Check for mesh import log
-  const meshLog = logs.find((l) => l.includes('mesh imported'));
-  if (!meshLog) {
-    console.error('[smoke] FAIL - mesh import log not found');
+  // Check for scene-instantiated log. main.ts logs this only after
+  // loadByGuid<SceneAsset> + instantiate both succeed (both early-return on
+  // failure), so its presence proves the dev-server import -> pack-body ->
+  // typed-array roundtrip -> scene instantiate path completed end-to-end.
+  const sceneLog = logs.find((l) => l.includes('scene root entity='));
+  if (!sceneLog) {
+    console.error('[smoke] FAIL - scene-instantiated log not found');
     process.exit(1);
   }
 
@@ -68,11 +76,12 @@ try {
     process.exit(1);
   }
 
-  // Check for typed-array survival: Float32Array/Uint16Array prototype intact
-  // This is validated implicitly by the mesh import succeeding (if typed arrays
-  // lost prototypes, registerWithGuid would fail-fast at GPU upload).
+  // Typed-array survival (Float32Array/Uint16Array prototypes intact across the
+  // JSON.stringify(pack) -> fetch -> JSON.parse dev-server path) is validated
+  // implicitly by scene instantiate succeeding: if typed arrays lost prototypes,
+  // registerWithGuid would fail-fast at GPU upload before this log.
 
-  console.log(`[smoke] PASS - backend=webgpu, meshLog=${meshLog}`);
+  console.log(`[smoke] PASS - backend=webgpu, sceneLog=${sceneLog}`);
 } finally {
   await browser.close();
   await server.close();

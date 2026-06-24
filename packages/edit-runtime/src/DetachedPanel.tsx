@@ -13,7 +13,9 @@ import {
   LauncherPanel,
   AssetInspectorPanel,
 } from '@forgeax/editor-panels';
-import { announcePopoutClosing, announcePopoutGeom } from '@forgeax/editor-shared';
+import { SystemsPanel } from './panels/systems-panel';
+import { InspectorWithAddComponent } from './panels/inspector';
+import { announcePopoutClosing, announcePopoutGeom, getSceneId } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import type { SyncPanelId } from '@forgeax/editor-core';
 
@@ -24,7 +26,7 @@ import type { SyncPanelId } from '@forgeax/editor-core';
 // over a BroadcastChannel (see store.initSync), so edits here drive the same
 // scene the main window renders — what you change is what plays.
 
-const TITLE: Record<SyncPanelId, string> = {
+const TITLE: Record<string, string> = {
   hierarchy: 'Hierarchy',
   assets: 'Assets',
   inspector: 'Inspector',
@@ -35,11 +37,12 @@ const TITLE: Record<SyncPanelId, string> = {
   matgraph: 'Mat Graph',
   launcher: 'Launcher',
   'asset-inspector': 'Asset Inspector',
+  systems: 'Systems',
 };
-const BODY: Record<SyncPanelId, () => ReactNode> = {
+const BODY: Record<string, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
   assets: () => <AssetsPanel />,
-  inspector: () => <InspectorPanel />,
+  inspector: () => <InspectorWithAddComponent />,
   history: () => <HistoryPanel />,
   capabilities: () => <CapabilitiesPanel />,
   material: () => <MaterialPanel />,
@@ -47,6 +50,7 @@ const BODY: Record<SyncPanelId, () => ReactNode> = {
   timeline: () => <TimelinePanel />,
   matgraph: () => <MaterialGraphPanel />,
   'asset-inspector': () => <AssetInspectorPanel />,
+  systems: () => <SystemsPanel world={null} sceneId={getSceneId() ?? 'default'} />,
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {

@@ -78,7 +78,7 @@ import {
   UPSTREAM_ENTRY_LOADERS,
 } from '../asset-registry';
 import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
-import { createDevImportTransport } from '../dev-import-transport';
+import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
 import { createEngineMetrics } from '../engine-metrics';
 import { createBoxGeometry, meshFromInterleaved } from '../geometry/box';
 import { createPlaneGeometry } from '../geometry/plane';
@@ -86,11 +86,7 @@ import { GpuResourceStore } from '../gpu-resource-store';
 import { LoaderRegistry } from '../loader-registry';
 import { getOrCreateMipmapPipeline, mipmapCacheSize, numMipLevels } from '../mipmap-generator';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
-import {
-  audioLoaderPlaceholder,
-  createDefaultLoaderRegistry,
-  wireDefaultLoaders,
-} from '../wire-default-loaders';
+import { audioLoaderPlaceholder, wireDefaultLoaders } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 vi.mock('@forgeax/engine-rhi-webgpu', async () => {
@@ -289,66 +285,40 @@ function makeStubGPU(): unknown {
 }
 
 {
-  // --- from asset-registry.test.ts ---
-  const TEXTURE_GUID = '00000000-0000-7000-8000-0000000000aa';
+  // M3 w9: AssetRegistry now internally builds its own LoaderRegistry via
+  // createDefaultLoaderRegistry(). The public readonly `loaders` field gives
+  // host code direct access to register custom loaders. This test verifies
+  // the pre-wired contract: default kinds (mesh, scene, texture, etc.) are
+  // registered, and unregistered kinds (sampler/render-pipeline/shader) are
+  // deliberately absent.
+  describe('AssetRegistry public readonly loaders field (M3 w9)', () => {
+    it('loaders is a public readonly field pre-wired with default kinds', () => {
+      const assets = new AssetRegistry(makeMockShaderRegistry());
+      expect(assets.loaders).toBeDefined();
+      // Default loader set (10 kinds) includes mesh, scene, texture, font.
+      expect(assets.loaders.get('mesh')).toBeDefined();
+      expect(assets.loaders.get('texture')).toBeDefined();
+      expect(assets.loaders.get('font')).toBeDefined();
+      // Deliberately NOT registered: sampler, render-pipeline, shader.
+      expect(assets.loaders.get('sampler')).toBeUndefined();
+      expect(assets.loaders.get('render-pipeline')).toBeUndefined();
+      expect(assets.loaders.get('shader')).toBeUndefined();
+      // registeredKinds includes the default set.
+      const kinds = assets.loaders.registeredKinds();
+      expect(kinds).toContain('mesh');
+      expect(kinds).toContain('texture');
+    });
 
-  const PACK_INDEX_FIXTURE = [
-    {
-      guid: TEXTURE_GUID,
-      relativeUrl: '/assets/tex.bin',
-      kind: 'texture',
-      sourcePath: 'assets/tex.bin',
-      metadata: {
+    it('host can register a custom kind via assets.loaders.register', () => {
+      const assets = new AssetRegistry(makeMockShaderRegistry());
+      assets.loaders.register({
         kind: 'texture',
-        width: 1,
-        height: 1,
-        format: 'rgba8unorm',
-        colorSpace: 'srgb',
-        mipmap: false,
-      },
-    },
-  ];
-
-  describe('AssetRegistry loader-not-registered fail-fast (w10 / AC-04)', () => {
-    let originalFetch: typeof globalThis.fetch | undefined;
-
-    beforeEach(() => {
-      originalFetch = globalThis.fetch;
-    });
-    afterEach(() => {
-      if (originalFetch) globalThis.fetch = originalFetch;
-      vi.restoreAllMocks();
-    });
-
-    it('returns err(loader-not-registered) with .detail.registeredKinds when no loader is wired', async () => {
-      // Mock fetch so the prod path resolves the catalog, then routes the texture
-      // entry to the upstream-branch loader path.
-      globalThis.fetch = vi.fn(async (url: string | URL) => {
-        const u = String(url);
-        if (u.includes('pack-index.json')) {
-          return new Response(JSON.stringify(PACK_INDEX_FIXTURE), { status: 200 });
-        }
-        return new Response('', { status: 404 });
-      }) as unknown as typeof globalThis.fetch;
-
-      // Empty LoaderRegistry: no 'texture' loader registered -> fail-fast.
-      const emptyLoaders = new LoaderRegistry();
-      emptyLoaders.register({ kind: 'mesh', load: () => undefined });
-      const assets = new AssetRegistry(makeMockShaderRegistry(), emptyLoaders);
-      assets.configurePackIndex('/pack-index.json');
-
-      const guid = AssetGuid.parse(TEXTURE_GUID);
-      expect(guid.ok).toBe(true);
-      if (!guid.ok) return;
-      const r = await assets.loadByGuid(guid.value);
-      expect(r.ok).toBe(false);
-      if (r.ok) return;
-      expect(r.error).toBeInstanceOf(AssetError);
-      const e = r.error as AssetError;
-      expect(e.code).toBe('loader-not-registered');
-      expect(e.detail?.kind).toBe('texture');
-      expect(e.detail?.registeredKinds).toEqual(['mesh']);
-      expect(e.hint.length).toBeGreaterThan(0);
+        load: () => ({
+          ok: false,
+          error: new AssetError({ code: 'asset-parse-failed', expected: 'x', hint: 'x' }),
+        }),
+      });
+      expect(assets.loaders.get('texture')).toBeDefined();
     });
   });
 
@@ -434,12 +404,12 @@ function makeStubGPU(): unknown {
     });
   });
 
-  // A LoadContext that records reportParseError and serves canned binaries / refs.
+  // A LoadContext that serves canned binaries / refs.
   function mockCtx(opts?: {
     binaries?: Record<string, Uint8Array>;
     refs?: Record<string, number>;
-  }): LoadContext & { lastParseError?: unknown } {
-    const ctx: LoadContext & { lastParseError?: unknown } = {
+  }): LoadContext {
+    const ctx: LoadContext = {
       fetchBinary: async (url: string) => {
         const b = opts?.binaries?.[url];
         return b !== undefined
@@ -453,13 +423,7 @@ function makeStubGPU(): unknown {
           : { ok: false as const, error: new Error(`no ref for ${guid}`) };
       },
       device: undefined,
-      reportParseError: (detail) => {
-        ctx.lastParseError = detail;
-      },
     };
-    if (opts?.resolveRefSync) {
-      ctx.resolveRefSync = opts.resolveRefSync;
-    }
     return ctx;
   }
 
@@ -503,15 +467,22 @@ function makeStubGPU(): unknown {
       expect(out).toMatchObject({ kind: 'scene' });
     });
 
-    it('sceneLoader routes a refs out-of-bounds error via ctx.reportParseError (D-8)', () => {
+    it('sceneLoader returns structured error { ok: false } on refs out-of-bounds (F21)', () => {
       const ctx = mockCtx();
       const out = sceneLoader.load(
         { entities: [{ localId: 7, components: { MeshFilter: { assetHandle: 5 } } }] },
         ['guid-a'], // length 1; index 5 is out of bounds
         ctx,
       );
-      expect(out).toBeUndefined();
-      expect(ctx.lastParseError).toMatchObject({ localId: 7, index: 5, refsLength: 1 });
+      expect(out).toBeDefined();
+      // F21: sceneLoader now returns { ok: false, error: ParseErrorDetail }
+      // instead of writing to ctx.reportParseError.
+      const errResult = out as {
+        ok: boolean;
+        error?: { localId: number; index: number; refsLength: number };
+      };
+      expect(errResult.ok).toBe(false);
+      expect(errResult.error).toMatchObject({ localId: 7, index: 5, refsLength: 1 });
     });
 
     it('materialLoader carries parentGuid resolved from refs index', () => {
@@ -555,8 +526,8 @@ function makeStubGPU(): unknown {
       );
       expect(out).toMatchObject({ kind: 'material' });
       // baseColorTexture refs-index 0 is OOB (refs.length=0), so
-      // reportParseError fires and the field is dropped. The loader
-      // still returns a valid material asset — no throw, no undefined.
+      // the field is dropped. The loader still returns a valid material
+      // asset -- no throw, no undefined.
     });
 
     it('skeletonLoader rejects ibm byteLength / jointCount mismatch', () => {
@@ -749,18 +720,19 @@ function makeStubGPU(): unknown {
     'texture',
     'font',
     'audio',
+    'video',
   ] as const;
 
   const UNREGISTERED_STUBS = ['sampler', 'render-pipeline', 'shader'] as const;
 
   describe('wireDefaultLoaders (w5)', () => {
-    it('registers the 9 real loaders + audio placeholder = 10 kinds', () => {
+    it('registers the 9 real loaders + audio placeholder + video loader = 11 kinds', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
-      expect(reg.registeredKinds()).toHaveLength(10);
+      expect(reg.registeredKinds()).toHaveLength(11);
     });
 
     it('does NOT register sampler / render-pipeline / shader (AC-02 exclusion)', () => {
@@ -800,7 +772,7 @@ function makeStubGPU(): unknown {
   // --- from asset-registry-aabb.test.ts ---
   describe('AssetRegistry.register AABB computation (M2 w6)', () => {
     it('(a) mesh with position Float32Array attribute computes tight AABB', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // 4 vertices: (-1,-1,0), (1,-1,0), (1,1,0), (-1,1,0)
       // 12 floats per vertex: pos(3) + normal(3) + uv(2) + tangent(4)
       const vertices = new Float32Array([
@@ -886,7 +858,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(b) mesh with position as ArrayBuffer (cast to Float32Array) still computes AABB', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const vertices = new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0,
         1, 0, 0, 0, 0,
@@ -923,7 +895,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c) mesh with no position attribute gets inverted-infinity empty box AABB', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const vertices = new Float32Array(48); // 4 verts * 12F
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
@@ -956,7 +928,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(d) mesh with empty vertices (0 verts, 0 indices) gets empty box AABB', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(0),
@@ -983,7 +955,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(e) single-point mesh AABB degenerates to a point box', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const vertices = new Float32Array([5, 10, -3, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
       const positions = new Float32Array([5, 10, -3]);
       const result = reg.catalog(AssetGuid.random(), {
@@ -1016,7 +988,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(f) catalog-with-guid path also computes AABB from position attribute', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const vertices = new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0,
       ]);
@@ -1050,7 +1022,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(g) non-mesh assets catalog without AABB computation interference', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'material',
         passes: [{ name: 'forward', shader: 'test::standard' }],
@@ -1182,7 +1154,7 @@ function makeStubGPU(): unknown {
     reg: AssetRegistry;
     metrics: ReturnType<typeof createEngineMetrics>;
   } {
-    const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeShaderRegistryWithSprite());
     const metrics = createEngineMetrics();
     reg.setMetrics(metrics);
     return { reg, metrics };
@@ -1338,7 +1310,7 @@ function makeStubGPU(): unknown {
   // moved to World.allocSharedRef.
   describe('w11 - catalog + lookup round-trip (AC-09b)', () => {
     it('lookup(guid) returns the catalogued payload', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
@@ -1351,7 +1323,7 @@ function makeStubGPU(): unknown {
     });
 
     it('catalog returns the normalized payload (mesh with computed aabb)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
@@ -1368,7 +1340,7 @@ function makeStubGPU(): unknown {
 
   describe('w11 - lookup miss', () => {
     it('lookup(unknown guid) returns undefined', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const unknownGuidResult = AssetGuid.parse(GUID_B);
       if (!unknownGuidResult.ok) throw new Error('expected ok');
       expect(reg.lookup(unknownGuidResult.value)).toBeUndefined();
@@ -1377,7 +1349,7 @@ function makeStubGPU(): unknown {
 
   describe('w11 - loadByGuid ok / err paths', () => {
     it('loadByGuid(catalogued guid) returns Ok(payload)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
@@ -1392,7 +1364,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid(uncatalogued guid) returns Promise<Err>', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const unknownGuidResult = AssetGuid.parse(GUID_B);
       if (!unknownGuidResult.ok) throw new Error('expected ok');
       const unknownGuid = unknownGuidResult.value;
@@ -1408,14 +1380,14 @@ function makeStubGPU(): unknown {
 {
   // --- from asset-registry-material-validate.test.ts ---
   describe('AssetRegistry constructor injection (feat-20260527 M1 / w3)', () => {
-    it('(a) new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry()) compiles and creates instance', () => {
+    it('(a) new AssetRegistry(shaderRegistry) compiles and creates instance', () => {
       const sr = makeMockShaderRegistry();
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       expect(reg).toBeInstanceOf(AssetRegistry);
     });
 
     it('(b) catalog<MaterialAsset> with minimal MaterialAsset returns ok + lookup resolves', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = { kind: 'material' };
       const guid = AssetGuid.random();
       const h = reg.catalog<MaterialAsset>(guid, asset);
@@ -1426,7 +1398,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c) catalog<MaterialAsset> with passes[] + paramValues returns ok + lookup resolves', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1452,7 +1424,7 @@ function makeStubGPU(): unknown {
 
   describe('MaterialAsset registration validation (feat-20260527 M2 / w5)', () => {
     it('(d) multi-pass material satisfying all paramSchemas union -> success', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1482,7 +1454,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(e) multi-pass material missing param from one pass shader -> AssetError', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // test::unlit requires baseColorTexture (no default), metallic is from test::standard
       const asset: MaterialAsset = {
         kind: 'material',
@@ -1519,7 +1491,7 @@ function makeStubGPU(): unknown {
 
     it('(f) shader not found in ShaderRegistry -> AssetError with detail.shaderKey', () => {
       const sr = makeMockShaderRegistry();
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1543,7 +1515,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(g) extra params in paramValues silently ignored -> success', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1567,7 +1539,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(h) empty passes[] -> AssetError', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [],
@@ -1582,7 +1554,7 @@ function makeStubGPU(): unknown {
 
     it('(i) catalog<MaterialAsset> with a guid runs the same validation as catalog', () => {
       const sr = makeMockShaderRegistry();
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       // Test invalid: shader not found
       const asset: MaterialAsset = {
         kind: 'material',
@@ -1605,7 +1577,7 @@ function makeStubGPU(): unknown {
 
     it('(i-2) catalog<MaterialAsset> with valid material succeeds', () => {
       const sr = makeMockShaderRegistry();
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1629,7 +1601,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(j) type mismatch in paramValues -> AssetError', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // baseColor is 'color' type (expects number[]), metallic is 'f32' (expects number)
       const asset: MaterialAsset = {
         kind: 'material',
@@ -1655,7 +1627,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(k) material with no passes[] (undefined) but with kind="material" -> valid (inherits from parent)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
         // passes undefined -> valid (inherits from parent at resolve time)
@@ -1668,7 +1640,7 @@ function makeStubGPU(): unknown {
 
     it('(l) param with default value — missing in paramValues does not error', () => {
       const sr = makeMockShaderRegistry();
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       // forgeax::default-standard-pbr has baseColor/metallic/roughness all with
       // defaults -> omitting them should not error. texture2d/sampler are always
       // optional regardless of defaults.
@@ -1710,7 +1682,7 @@ function makeStubGPU(): unknown {
           { name: 'sampler', type: 'sampler' },
         ],
       });
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1737,7 +1709,7 @@ function makeStubGPU(): unknown {
         source: 'fn main() {}',
         paramSchema: [],
       });
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
       const asset: MaterialAsset = {
         kind: 'material',
         passes: [
@@ -1770,7 +1742,7 @@ function makeStubGPU(): unknown {
           { name: 'roughness', type: 'f32', default: 0.5 },
         ],
       });
-      const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(sr);
 
       // Simulate Step 1b ShaderAsset cataloguing.
       const guid = AssetGuid.random();
@@ -1798,7 +1770,7 @@ function makeStubGPU(): unknown {
   // --- from asset-registry-mesh-fail-fast.test.ts ---
   describe('AssetRegistry.register fail-fast (M1 t4 - kind:mesh non-12F vertices)', () => {
     it('(1) vertices not divisible by 12 returns Result.err mesh-vertex-stride-mismatch', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(9), // 9 floats = 3 verts * 3F (position-only, not 12F)
@@ -1826,7 +1798,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(2) empty mesh (0 vertices, 0 indices) returns Result.ok', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(0),
@@ -1849,7 +1821,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(3) maxIndex+1 !== vertexCount triggers gate (vertices 12-divisible but indices max mismatch)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // vertices.length=24 = 2 verts * 12F, but indices max=0 means only vertex 0 is referenced
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
@@ -1875,7 +1847,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(4) after catalog Result.err, inspect().assets does not contain new entry', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const beforeAssets = reg.inspect().assets.length;
       reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
@@ -1895,7 +1867,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(5) compliant 12F mesh register returns Result.ok with handle', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(36), // 3 verts * 12F
@@ -1918,7 +1890,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(6) AC-08 narrowing: access result.error.detail.floatsPerVertex with type-safe cast', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(11), // 11 floats, not divisible by 12
@@ -1943,7 +1915,7 @@ function makeStubGPU(): unknown {
     });
 
     it('indices with reference beyond vertices count triggers gate (super-set indices case)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // vertices.length=12 = 1 vert * 12F, but indices reference verts [0,1,2] (max=2, implies 3 verts)
       const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
@@ -1986,7 +1958,7 @@ function makeStubGPU(): unknown {
 
   describe('w6 - AssetRegistry catalog + lookup round-trip for SceneAsset', () => {
     it('catalog(sceneAsset) is resolvable to the same POD via lookup', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const scene = makeSceneAsset();
       const guid = AssetGuid.random();
       reg.catalog<SceneAsset>(guid, scene);
@@ -1997,20 +1969,20 @@ function makeStubGPU(): unknown {
       expect(looked.entities.length).toBe(2);
     });
 
-    it('inspect() reports brand `SceneAsset` for a catalogued scene', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    it('inspect() reports kind `scene` for a catalogued scene', () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const guid = AssetGuid.format(AssetGuid.random());
       reg.catalog<SceneAsset>(guid, makeSceneAsset());
       const snap = reg.inspect();
       const entry = snap.assets.find((a) => a.guid === guid.toLowerCase());
       expect(entry).toBeDefined();
-      expect(entry?.brand).toBe('SceneAsset');
+      expect(entry?.kind).toBe('scene');
     });
   });
 
   describe('w6 - catalog + loadByGuid path for SceneAsset', () => {
     it('loadByGuid<SceneAsset>(guid) returns Ok(payload) after catalog', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parsed = AssetGuid.parse(SCENE_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const guid = parsed.value;
@@ -2023,7 +1995,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid for an uncatalogued GUID returns Err(asset-not-found)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parsed = AssetGuid.parse(SCENE_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<SceneAsset>(parsed.value);
@@ -2035,7 +2007,7 @@ function makeStubGPU(): unknown {
 
   describe('w6 - parseAssetPayload `scene` dispatch round-trip', () => {
     it('reconstructs SceneAsset POD from a serialised pack payload', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       // Internal `parseAssetPayload` is private at the TS surface (not part of
       // the AI-user-facing API); the test reaches it through a structural
       // view-cast that pins the method shape. AI users never write this —
@@ -2120,7 +2092,7 @@ function makeStubGPU(): unknown {
 
   describe('validateSpriteSlices fail-fast (feat-20260527-sprite-nineslice M2 / w4)', () => {
     it('(1) slices contains a negative number -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       const asset = spriteAssetWithSlices([-0.1, 0.2, 0.2, 0.2]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
@@ -2135,7 +2107,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(2) slices.x + slices.z >= region.zw[0] -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       // region.zw[0] = 1.0 ; left + right = 0.6 + 0.6 = 1.2 >= 1.0
       const asset = spriteAssetWithSlices([0.6, 0, 0.6, 0]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
@@ -2152,7 +2124,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(3) slices.y + slices.w >= region.zw[1] -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       // region.zw[1] = 1.0 ; top + bottom = 0.6 + 0.5 = 1.1 >= 1.0
       const asset = spriteAssetWithSlices([0, 0.6, 0, 0.5]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
@@ -2166,7 +2138,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(4) slices contains NaN -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       const asset = spriteAssetWithSlices([Number.NaN, 0.1, 0.1, 0.1]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
@@ -2178,7 +2150,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(5) slices contains Infinity -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       const asset = spriteAssetWithSlices([0.1, Number.POSITIVE_INFINITY, 0.1, 0.1]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
@@ -2190,7 +2162,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(6) slices length !== 4 -> AssetError(asset-invalid-value)', () => {
-      const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeShaderRegistryWithSprite());
       const asset = spriteAssetWithSlices([0.1, 0.1, 0.1]);
       const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
@@ -2675,7 +2647,7 @@ function makeStubGPU(): unknown {
       name,
       handle,
     }) => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       // feat-20260614 M8: the registry holds no handle->guid map (guidOf is
       // gone). Builtins are first-class GUID-addressable catalogue rows, so the
@@ -2699,7 +2671,7 @@ function makeStubGPU(): unknown {
       name,
       handle,
     }) => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const derived = await deriveBuiltin(name);
       const loaded = await reg.loadByGuid(derived);
@@ -2872,7 +2844,7 @@ function makeStubGPU(): unknown {
 
   describe('builtin mesh pack loading (w9)', () => {
     it('loadByGuid(BUILTIN_HANDLE_CUBE) returns mesh with vertex data byte-equal to procedural', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const cube = cubeRef();
 
       setupMockFetch(reg, [
@@ -2894,7 +2866,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid(BUILTIN_HANDLE_QUAD) returns mesh with vertex data byte-equal to procedural', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const quad = quadRef();
 
       setupMockFetch(reg, [
@@ -2915,7 +2887,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid(BUILTIN_HANDLE_TRIANGLE) returns mesh with vertex data byte-equal to procedural', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const tri = triangleRef();
 
       setupMockFetch(reg, [
@@ -2936,7 +2908,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid with unknown GUID returns asset-not-imported (M4 shipped form, AC-22)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       setupMockFetch(reg, []);
 
@@ -3296,7 +3268,7 @@ function makeStubGPU(): unknown {
 
   describe('w10 - catalog + loadByGuid path for FontAsset', () => {
     it('(a) loadByGuid<FontAsset>(guid) returns Ok(payload) after catalog', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parsed = AssetGuid.parse(FONT_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const guid = parsed.value;
@@ -3321,7 +3293,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(b) loadByGuid for an uncatalogued font GUID returns Err(asset-not-found)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parsed = AssetGuid.parse(FONT_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<FontAsset>(parsed.value);
@@ -3331,7 +3303,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c) empty glyphs FontAsset is valid', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parsed = AssetGuid.parse(FONT_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const guid = parsed.value;
@@ -3485,11 +3457,7 @@ function makeStubGPU(): unknown {
       const transport: ImportTransport = {
         fetchPack: vi.fn().mockResolvedValue({ ok: true }),
       };
-      const reg = new AssetRegistry(
-        makeMockShaderRegistry(),
-        createDefaultLoaderRegistry(),
-        transport,
-      );
+      const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
 
       reg.configurePackIndex('/pack-index.json');
 
@@ -3510,7 +3478,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-22) no transport wired + DDC miss -> asset-not-imported fail-fast', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       reg.configurePackIndex('/pack-index.json');
 
@@ -3532,11 +3500,7 @@ function makeStubGPU(): unknown {
       const transport: ImportTransport = {
         fetchPack: vi.fn().mockResolvedValue({ ok: false }),
       };
-      const reg = new AssetRegistry(
-        makeMockShaderRegistry(),
-        createDefaultLoaderRegistry(),
-        transport,
-      );
+      const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
 
       reg.configurePackIndex('/pack-index.json');
 
@@ -3557,11 +3521,7 @@ function makeStubGPU(): unknown {
       const transport: ImportTransport = {
         fetchPack: vi.fn().mockResolvedValue({ ok: true }),
       };
-      const reg = new AssetRegistry(
-        makeMockShaderRegistry(),
-        createDefaultLoaderRegistry(),
-        transport,
-      );
+      const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
 
       reg.configurePackIndex('/pack-index.json');
 
@@ -3631,7 +3591,7 @@ function makeStubGPU(): unknown {
     });
 
     it('resolveGuid (dev/fallback, no packIndexUrl) still returns asset-not-found', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const parsed = AssetGuid.parse(UNKNOWN_GUID);
       if (!parsed.ok) throw new Error('expected ok');
@@ -3670,11 +3630,13 @@ function makeStubGPU(): unknown {
   );
 
   describe('w16 createRenderer transport injection (AC-03 / AC-05 / AC-08)', () => {
-    it('(AC-05) createRenderer threads transport into the AssetRegistry third ctor slot', () => {
+    it('(AC-05) createRenderer threads transport into the AssetRegistry ctor', () => {
       // The AssetRegistry constructor is wired with the injected transport as the
-      // third positional argument (D-3: ctor-readonly single injection point).
+      // second positional argument (D-3: ctor-readonly single injection point).
+      // The loaders are now self-contained: AssetRegistry internally builds its
+      // own LoaderRegistry via createDefaultLoaderRegistry() (M3 w9).
       expect(createRendererSrc).toMatch(
-        /new AssetRegistry\(\s*shaderRegistry,\s*loaders,\s*internals\.importTransport\b/,
+        /new AssetRegistry\(\s*shaderRegistry,\s*internals\.importTransport\b/,
       );
       // The injection arrives through a dedicated non-RendererOptions internal
       // parameter named `importTransport` on createRenderer.
@@ -3763,11 +3725,7 @@ function makeStubGPU(): unknown {
           return Promise.resolve({ ok: true });
         }),
       };
-      const reg = new AssetRegistry(
-        makeMockShaderRegistry(),
-        createDefaultLoaderRegistry(),
-        transport,
-      );
+      const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
       reg.configurePackIndex('/pack-index.json');
 
       mockGlobalFetch((url: string) => {
@@ -3791,7 +3749,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(b AC-08) shipped form (no transport): same unimported row -> asset-not-imported fail-fast', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       mockGlobalFetch((url: string) => {
@@ -3823,14 +3781,12 @@ function makeStubGPU(): unknown {
         detail: { code: 'image-decode-failed', reason: 'corrupt bytes', path: IMPORTED_BIN_URL },
       } as unknown as ImageError;
 
-      const loaders = new LoaderRegistry();
-      loaders.register({
+      const transport: ImportTransport = { fetchPack: vi.fn().mockResolvedValue({ ok: true }) };
+      const reg = new AssetRegistry(makeMockShaderRegistry(), transport);
+      reg.loaders.register({
         kind: 'texture',
         load: () => Promise.resolve({ ok: false as const, error: decodeError }),
       });
-
-      const transport: ImportTransport = { fetchPack: vi.fn().mockResolvedValue({ ok: true }) };
-      const reg = new AssetRegistry(makeMockShaderRegistry(), loaders, transport);
       reg.configurePackIndex('/pack-index.json');
 
       mockGlobalFetch((url: string) => {
@@ -3932,7 +3888,7 @@ function makeStubGPU(): unknown {
     // === Arm (a): raw .hdr (shipped form) -> asset-not-imported (D-1 sentinel) ===
 
     it('raw .hdr relativeUrl, shipped form -> err(asset-not-imported) -- runtime no longer decodes HDR', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       let fetchCallCount = 0;
@@ -3982,7 +3938,7 @@ function makeStubGPU(): unknown {
     // === Arm (b): imported .bin -> ok + format === 'rgba16float' (AC-03) ===
 
     it('imported .bin relativeUrl -> ok with format === rgba16float', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       const binWidth = 2;
@@ -4254,7 +4210,7 @@ function makeStubGPU(): unknown {
     // --------------- AC-03: successful parent preload ---------------
 
     it('(AC-03) child with parent ref (no passes) — parent loaded first, passesOf/paramValueOf inherits parent passes', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4312,7 +4268,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-03) parent already catalogued — idempotent fast-path, child resolves correctly', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4387,7 +4343,7 @@ function makeStubGPU(): unknown {
     // --------------- AC-04: parent GUID not in pack-index ---------------
 
     it('(AC-04) parent GUID not in pack-index — loadByGuid returns Err(asset-not-imported)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4441,7 +4397,7 @@ function makeStubGPU(): unknown {
     // --------------- AC-05: parent ref points to non-material kind ---------------
 
     it('(AC-05) parent ref points to mesh kind — loadByGuid returns Err(asset-parse-failed)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4517,7 +4473,7 @@ function makeStubGPU(): unknown {
     // --------------- AC-08: same pack + different pack ---------------
 
     it('(AC-08) parent and child in same pack file — recursive load works', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4587,7 +4543,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-08) parent and child in different pack files — recursive load works', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4644,7 +4600,7 @@ function makeStubGPU(): unknown {
     // --------------- W6: error boundary tests ---------------
 
     it('(w6) parent load failure error hint has correct prefix format "loading parent material <GUID> for child <GUID>: "', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4699,7 +4655,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(w6) parent GUID not a valid UUID format —loadByGuid returns Err(asset-parse-failed)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         return;
@@ -4767,6 +4723,376 @@ function makeStubGPU(): unknown {
         expect(result.error.hint).toContain(INVALID_GUID);
         expect(result.error.hint).toContain('not a valid UUID format');
       }
+    });
+  });
+
+  // feat-20260622 M5 / w16 (R5): AC-10 parent breadcrumb literal-form contract.
+  // The material parent edge currently loads via the independent "Path B"
+  // preload (asset-registry.ts), which carries the precise breadcrumb hint
+  // `loading parent material <PARENT> for child <CHILD>` that downstream code
+  // asserts on. M5 (w17) folds Path B into the unified envelope.refs for-loop;
+  // these tests lock the exact contract BEFORE the fold so the move is verified
+  // to preserve it. They must be green pre-fold (against current Path B) and
+  // stay green post-fold (against the unified for-loop sourceField==='parent' /
+  // parent-edge branch).
+  describe('(w16) AC-10 material parent breadcrumb literal-form contract', () => {
+    let originalFetch: typeof globalThis.fetch | undefined;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      if (originalFetch !== undefined) {
+        globalThis.fetch = originalFetch;
+      } else {
+        // biome-ignore lint/suspicious/noExplicitAny: test teardown requires deleting globalThis.fetch
+        delete (globalThis as any).fetch;
+      }
+    });
+
+    it('(w16) parent load failure: hint contains parent GUID, child GUID, and the literal substrings "loading parent material" + "for child"', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      // Child catalogued, parent absent from index -> parent load fails.
+      const CATALOG_PARENT_MISSING = [
+        {
+          guid: CHILD_GUID,
+          relativeUrl: '/assets/child.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/child.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG_PARENT_MISSING) });
+        }
+        if (url === '/assets/child.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CHILD_PACK) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuid = AssetGuid.parse(CHILD_GUID);
+      if (!childGuid.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const hint = result.error.hint ?? '';
+      // Literal form: `loading parent material X for child Y` (research Finding 7;
+      // NOT the buildSceneChildContext "sub-asset X referenced by ..." form).
+      expect(hint).toContain('loading parent material');
+      expect(hint).toContain('for child');
+      expect(hint).toContain(PARENT_GUID);
+      expect(hint).toContain(CHILD_GUID);
+      expect(hint).toContain(`loading parent material ${PARENT_GUID} for child ${CHILD_GUID}`);
+    });
+
+    it('(w16) parent load failure: error CODE propagates from the parent load (not replaced with a generic code)', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      // Parent absent from index -> parent load is a catalog miss, which (no
+      // import transport) yields `asset-not-imported`. The child load must
+      // surface THAT code, not a flattened generic `asset-parse-failed`.
+      const CATALOG_PARENT_MISSING = [
+        {
+          guid: CHILD_GUID,
+          relativeUrl: '/assets/child.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/child.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG_PARENT_MISSING) });
+        }
+        if (url === '/assets/child.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CHILD_PACK) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuid = AssetGuid.parse(CHILD_GUID);
+      if (!childGuid.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      // Propagated code from the parent catalog miss (AC-22 shipped form).
+      expect(result.error.code).toBe('asset-not-imported');
+    });
+
+    it('(w16) parent edge load failure carries enough info to identify the parent GUID', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      // Parent present in index but its pack file 404s -> parent load fails
+      // mid-fetch. The breadcrumb must still name the parent GUID so an AI user
+      // can locate the failing parent edge.
+      const CATALOG_PARENT_FETCH_FAILS = [
+        {
+          guid: PARENT_GUID,
+          relativeUrl: '/assets/parent.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/parent.pack.json',
+        },
+        {
+          guid: CHILD_GUID,
+          relativeUrl: '/assets/child.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/child.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(CATALOG_PARENT_FETCH_FAILS),
+          });
+        }
+        if (url === '/assets/child.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CHILD_PACK) });
+        }
+        // parent.pack.json fetch fails
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuid = AssetGuid.parse(CHILD_GUID);
+      if (!childGuid.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const hint = result.error.hint ?? '';
+      expect(hint).toContain(`loading parent material ${PARENT_GUID} for child ${CHILD_GUID}`);
+    });
+
+    it('(w16) parent ref points to non-material kind: hint preserves the literal parent breadcrumb + "not \'material\'"', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      const GUID_NON_MATERIAL_CHILD = '00000000-0000-7000-8000-000000000005';
+      const CATALOG_WITH_MESH = [
+        {
+          guid: NON_MATERIAL_GUID,
+          relativeUrl: '/assets/mesh.pack.json',
+          kind: 'mesh',
+          sourcePath: 'assets/mesh.pack.json',
+          submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+        },
+        {
+          guid: GUID_NON_MATERIAL_CHILD,
+          relativeUrl: '/assets/child-nonmat-parent.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/child-nonmat-parent.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG_WITH_MESH) });
+        }
+        if (url === '/assets/mesh.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(MESH_PACK) });
+        }
+        if (url === '/assets/child-nonmat-parent.pack.json') {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(CHILD_WITH_NON_MATERIAL_PARENT_PACK),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuid = AssetGuid.parse(GUID_NON_MATERIAL_CHILD);
+      if (!childGuid.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('asset-parse-failed');
+      const hint = result.error.hint ?? '';
+      expect(hint).toContain(
+        `loading parent material ${NON_MATERIAL_GUID} for child ${GUID_NON_MATERIAL_CHILD}`,
+      );
+      expect(hint).toContain("not 'material'");
+    });
+  });
+
+  // feat-20260622 M5 / w18: end-to-end material-with-parent load + Path B
+  // deletion verification. Proves the parent edge now flows through the unified
+  // envelope.refs for-loop (w17 fold) end-to-end, and that the independent Path
+  // B early-return block is gone from the source.
+  describe('(w18) material-with-parent end-to-end + Path B deletion', () => {
+    let originalFetch: typeof globalThis.fetch | undefined;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      if (originalFetch !== undefined) {
+        globalThis.fetch = originalFetch;
+      } else {
+        // biome-ignore lint/suspicious/noExplicitAny: test teardown requires deleting globalThis.fetch
+        delete (globalThis as any).fetch;
+      }
+    });
+
+    it('(w18a) child material with parent edge: both child and parent end up in the catalog, child.payload.parent set to the parent AssetGuid', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(PACK_INDEX_FIXTURE) });
+        }
+        if (url === '/assets/parent.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(PARENT_PACK) });
+        }
+        if (url === '/assets/child.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CHILD_PACK) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuidParsed = AssetGuid.parse(CHILD_GUID);
+      const parentGuidParsed = AssetGuid.parse(PARENT_GUID);
+      if (!childGuidParsed.ok || !parentGuidParsed.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuidParsed.value);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // Child catalogued with parent stamped as the parent AssetGuid (renderer
+      // field read by walkMaterialPassesOverSharedRefs), NOT the parentGuid
+      // string intermediate.
+      const childInCatalog = reg.lookup(childGuidParsed.value) as MaterialAsset | undefined;
+      expect(childInCatalog?.kind).toBe('material');
+      expect(childInCatalog?.parent).toBeDefined();
+      expect(AssetGuid.format(childInCatalog?.parent as AssetGuid).toLowerCase()).toBe(
+        PARENT_GUID.toLowerCase(),
+      );
+
+      // Parent catalogued by the unified for-loop recursion (formerly Path B's
+      // independent preload).
+      const parentInCatalog = reg.lookup(parentGuidParsed.value) as MaterialAsset | undefined;
+      expect(parentInCatalog?.kind).toBe('material');
+      expect(parentInCatalog?.passes?.length).toBe(1);
+
+      // Inheritance still resolves end-to-end through the catalogued chain.
+      const walk = resolveMaterialChain(reg, result.value);
+      expect(walk.ok).toBe(true);
+      if (!walk.ok) return;
+      expect(walk.value.passes.length).toBe(1);
+      expect(walk.value.paramValues.baseColor).toEqual([0.8, 0.2, 0.1, 1]);
+      expect(walk.value.paramValues.roughness).toBe(0.3);
+    });
+
+    it('(w18b) parent load failure -> error breadcrumb matches "loading parent material X for child Y" (post-fold contract preserved)', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      const CATALOG_PARENT_MISSING = [
+        {
+          guid: CHILD_GUID,
+          relativeUrl: '/assets/child.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/child.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG_PARENT_MISSING) });
+        }
+        if (url === '/assets/child.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CHILD_PACK) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const childGuidParsed = AssetGuid.parse(CHILD_GUID);
+      if (!childGuidParsed.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(childGuidParsed.value);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.hint ?? '').toContain(
+        `loading parent material ${PARENT_GUID} for child ${CHILD_GUID}`,
+      );
+    });
+
+    it('(w18c) Path B independent early-return block is deleted from asset-registry.ts source', () => {
+      const src = readFileSync(
+        fileURLToPath(new URL('../asset-registry.ts', import.meta.url)),
+        'utf-8',
+      );
+      // The unique parent breadcrumb literal must NOT appear inside an
+      // independent `loadByGuid<MaterialAsset>(parentGuid` preload anymore —
+      // that whole Path B early-return is folded into the unified for-loop.
+      expect(src).not.toContain('loadByGuid<MaterialAsset>(parentGuid');
+      // No early-return that registers a separately rebuilt `resolvedAsset`.
+      expect(src).not.toContain('return this.registerParsedAsset<T>(guid, resolvedAsset');
+      // The `loading parent material` literal now lives only in the unified
+      // for-loop branch (template form `for child ${guidKey}`). The old Path B
+      // used `for child ${guidKey}` against a `parentGuidStr` local — confirm
+      // the new template references `${subGuidKey}` (the for-loop edge GUID).
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: matching the literal source text, which deliberately contains the `${...}` placeholders.
+      expect(src).toContain('loading parent material ${subGuidKey} for child ${guidKey}');
+    });
+
+    it('(w18d) material WITHOUT a parent still loads (no parent edge in refs[]; unified for-loop has nothing to recurse on)', async () => {
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      if (typeof reg.configurePackIndex !== 'function') return;
+      reg.configurePackIndex('/pack-index.json');
+
+      // PARENT_PACK is a standalone material with passes and no parent ref.
+      const CATALOG_STANDALONE = [
+        {
+          guid: PARENT_GUID,
+          relativeUrl: '/assets/parent.pack.json',
+          kind: 'material',
+          sourcePath: 'assets/parent.pack.json',
+        },
+      ];
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/pack-index.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(CATALOG_STANDALONE) });
+        }
+        if (url === '/assets/parent.pack.json') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(PARENT_PACK) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock requires unsafe cast
+      globalThis.fetch = fetchMock as any;
+
+      const guidParsed = AssetGuid.parse(PARENT_GUID);
+      if (!guidParsed.ok) throw new Error('expected ok');
+      const result = await reg.loadByGuid<MaterialAsset>(guidParsed.value);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.kind).toBe('material');
+      expect(result.value.parent).toBeUndefined();
+      expect(result.value.passes?.length).toBe(1);
     });
   });
 }
@@ -4838,7 +5164,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid(known-guid) after configurePackIndex returns Ok(Handle) via fetch', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       // Configure prod pack-index URL
       if (typeof reg.configurePackIndex !== 'function') {
@@ -4880,7 +5206,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid(unknown-guid) after configurePackIndex returns Err(asset-not-imported) (M4 shipped form)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
         console.warn('AssetRegistry.configurePackIndex not yet implemented (w23 pending)');
@@ -4912,7 +5238,7 @@ function makeStubGPU(): unknown {
     });
 
     it('loadByGuid without configurePackIndex falls back to synchronous Map lookup (M2 behavior)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const guidResult = AssetGuid.parse(GUID_KNOWN);
       if (!guidResult.ok) throw new Error('expected ok');
       // Not configured — M2 behavior: resolveGuid returns Err if not in map
@@ -5068,7 +5394,7 @@ function makeStubGPU(): unknown {
     const PARENT_GUID = '00000000-0000-7000-8000-000000000001';
 
     it('(AC-01) payload with parent=0 + valid refs[0] and no passes -> returns MaterialAsset with parentGuid', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5091,7 +5417,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-02) payload without passes and without parent -> returns undefined (fail-fast)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5105,7 +5431,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-07) payload.parent index out of bounds (N >= refs.length) -> returns undefined', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5120,7 +5446,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-07) payload.parent with refs undefined -> returns undefined', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5135,7 +5461,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-07) payload.parent is number but refs[N] is not a string -> returns undefined', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5150,7 +5476,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(AC-06) payload with parent ref + valid passes -> returns MaterialAsset with both passes and parentGuid', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5183,7 +5509,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(regression) payload with passes and without parent ref -> returns MaterialAsset with passes, no parentGuid', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = makeParseFn(reg);
 
       const payload = {
@@ -5363,7 +5689,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(a) dev source JPG (not .bin), shipped form -> Result.err(asset-not-imported) before source fetch', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       let fetchCallCount = 0;
@@ -5391,7 +5717,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(b) dev source JPG 404 (not .bin), shipped form -> Result.err(asset-not-imported) before source fetch', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       let fetchCallCount = 0;
@@ -5417,7 +5743,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c) dev source JPG corrupt (not .bin), shipped form -> Result.err(asset-not-imported) before source fetch', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       let fetchCallCount = 0;
@@ -5443,7 +5769,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(d) import sub-branch fetch raw RGBA .bin -> Result.ok(TextureAsset POD)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       // 4x4 RGBA = 64 bytes; meta width=4, height=4 -- byte length must align.
@@ -5478,7 +5804,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(e) import sub-branch fetch RGBA 404 -> Result.err(asset-fetch-failed)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       const fetchMock = vi.fn().mockImplementation((url: string) => {
@@ -5501,7 +5827,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(f) pack-index entry kind=texture but metadata absent -> Result.err(image-meta-missing)', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       reg.configurePackIndex('/pack-index.json');
 
       const fetchMock = vi.fn().mockImplementation((url: string) => {
@@ -5554,7 +5880,7 @@ function makeStubGPU(): unknown {
 
   describe('w1 - parseScenePayload refs normal paths (AC-01)', () => {
     it('replaces number field values with refs[N] GUID string', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A, GUID_B];
       const payload = {
@@ -5579,7 +5905,7 @@ function makeStubGPU(): unknown {
     });
 
     it('replaces refs index 0 (valid zero-index)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A];
       const payload = {
@@ -5598,7 +5924,7 @@ function makeStubGPU(): unknown {
     });
 
     it('keeps non-integer number fields unchanged (float values are not refs indices)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A];
       const payload = {
@@ -5625,7 +5951,7 @@ function makeStubGPU(): unknown {
     });
 
     it('keeps non-handle integer fields unchanged (Transform posX=0, ChildOf.parent=0)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A];
       const payload = {
@@ -5658,7 +5984,7 @@ function makeStubGPU(): unknown {
     });
 
     it('multiple nodes all resolve refs correctly', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A, GUID_B];
       const payload = {
@@ -5692,7 +6018,7 @@ function makeStubGPU(): unknown {
 
   describe('w2 - parseScenePayload refs error paths (AC-02, AC-08)', () => {
     it('returns undefined when refs index is out of bounds (N >= refs.length)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A]; // length=1, valid indices: 0 only
       const payload = {
@@ -5708,7 +6034,7 @@ function makeStubGPU(): unknown {
     });
 
     it('returns undefined when refs is empty and handle field references index 0', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs: string[] = [];
       const payload = {
@@ -5724,7 +6050,7 @@ function makeStubGPU(): unknown {
     });
 
     it('stops on first error (AC-08): only first out-of-bounds node triggers failure', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A]; // length=1
       const payload = {
@@ -5746,7 +6072,7 @@ function makeStubGPU(): unknown {
     });
 
     it('returns undefined when index is negative', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A];
       const payload = {
@@ -5762,7 +6088,7 @@ function makeStubGPU(): unknown {
     });
 
     it('backward compat: parseScenePayload without refs returns SceneAsset with numbers unchanged', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const payload = {
         entities: [
@@ -5785,7 +6111,7 @@ function makeStubGPU(): unknown {
     });
 
     it('ignores all integer fields without refs and keeps them as-is (non-handle integers)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const fn = accessParseScenePayload(reg);
       const refs = [GUID_A];
       const payload = {
@@ -5812,13 +6138,13 @@ function makeStubGPU(): unknown {
 
   describe('w2 - fetchPackFile wrapping produces AssetError for failed parse', () => {
     it('loadByGuid returns asset-parse-failed when scene refs index is out of bounds', async () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const guid = AssetGuid.parse('00000000-0000-7000-8000-000000000099');
       if (!guid.ok) throw new Error('expected ok');
 
       // Register a pack file with a scene containing out-of-bounds refs.
-      // The parseAssetPayload will return undefined, then fetchPackFile wraps
-      // it as asset-parse-failed.
+      // parseAssetPayload returns { ok: false, error }, then fetchPackFile
+      // wraps it as asset-parse-failed.
       const badPayload = {
         entities: [
           {
@@ -5850,13 +6176,19 @@ function makeStubGPU(): unknown {
       const internal = reg as any as {
         parseAssetPayload(kind: string, payload: Record<string, unknown>, refs?: string[]): unknown;
       };
-      const result = internal.parseAssetPayload('scene', badPayload, packEntry.refs);
-      expect(result).toBeUndefined();
+      // F21: scene refs out-of-bounds returns the structured error inline via
+      // the LoaderOutput { ok: false, error } arm (no instance-slot side effect).
+      const result = internal.parseAssetPayload('scene', badPayload, packEntry.refs) as {
+        ok: false;
+        error: { index: number; refsLength: number };
+      };
+      expect(result.ok).toBe(false);
+      expect(result.error.index).toBe(5);
     });
 
     it('parseScenePayload returns structured ParseSceneError on refs out-of-bounds (F-2 / AC-02)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      // biome-ignore lint/suspicious/noExplicitAny: access lastParseSceneError
+      const reg = new AssetRegistry(makeMockShaderRegistry());
+      // biome-ignore lint/suspicious/noExplicitAny: private method access
       const internal = reg as any;
       const badPayload = {
         entities: [
@@ -5867,11 +6199,20 @@ function makeStubGPU(): unknown {
         ],
       };
       const refs = ['guid-a', 'guid-b']; // length=2, 5 is out of bounds
-      const result = internal.parseAssetPayload('scene', badPayload, refs);
-      expect(result).toBeUndefined();
-      // Verify lastParseSceneError contains structured detail
-      const err = internal.lastParseSceneError;
-      expect(err).toBeDefined();
+      // F21: the structured error is the return value's `error` field, not a
+      // shared instance slot.
+      const result = internal.parseAssetPayload('scene', badPayload, refs) as {
+        ok: false;
+        error: {
+          localId: number;
+          component: string;
+          field: string;
+          index: number;
+          refsLength: number;
+        };
+      };
+      expect(result.ok).toBe(false);
+      const err = result.error;
       expect(err.localId).toBe(42);
       expect(err.component).toBe('MeshFilter');
       expect(err.field).toBe('assetHandle');
@@ -5912,7 +6253,7 @@ function makeStubGPU(): unknown {
 
   describe('w13 - M4 catalog rgba16float round-trip (AC-09 / D-5)', () => {
     it('catalog(rgba16float pod) -> lookup returns ok with format=rgba16float', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parseResult = AssetGuid.parse(GUID_RGBA16F);
       if (!parseResult.ok) throw new Error('GUID parse failed');
       const guid = parseResult.value;
@@ -5932,7 +6273,7 @@ function makeStubGPU(): unknown {
     });
 
     it('catalog(rgba16float pod) is re-resolvable via lookup (same payload object)', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const parseResult = AssetGuid.parse(GUID_RGBA16F);
       if (!parseResult.ok) throw new Error('GUID parse failed');
       const guid = parseResult.value;
@@ -5990,7 +6331,7 @@ function makeStubGPU(): unknown {
         posY: 'f32',
         posZ: 'f32',
       });
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       // Pre-register mesh asset so resolveGuid finds it.
       const meshGuid = parseGuid(MESH_GUID_STR);
@@ -6065,7 +6406,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(b) Skin.skeleton field resolves correctly', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const skelGuid = parseGuid(SKELETON_GUID_STR);
       reg.catalog(skelGuid, {
@@ -6112,7 +6453,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(c) same GUID referenced by multiple nodes resolves to the same Handle number', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const meshGuid = parseGuid(MESH_GUID_STR);
       reg.catalog(meshGuid, {
@@ -6171,7 +6512,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(d) nodes without handle fields pass through unchanged', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const asset = buildTestAsset([
         { localId: 0, components: { Transform: { posX: 1, posY: 2, posZ: 3 } } },
@@ -6201,7 +6542,7 @@ function makeStubGPU(): unknown {
 
   describe('w5 - _resolveSceneGuids error path', () => {
     it('(e) unregistered GUID returns asset-not-found with hint containing GUID, localId, and field', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       const asset = buildTestAsset([
         {
@@ -6235,7 +6576,7 @@ function makeStubGPU(): unknown {
     });
 
     it('(f) stop-on-first-error: only the first unregistered GUID among multiple nodes is reported', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
 
       // Register the first GUID but not the second — first node (localId=1) should
       // fail before reaching localId=2
@@ -6293,6 +6634,383 @@ function makeStubGPU(): unknown {
       expect(e.hint).toContain('1'); // localId of the first failing node
       // Must NOT contain the second GUID (stopped before reaching it)
       expect(e.hint).not.toContain(SECOND_UNREGISTERED.slice(0, 8)); // prefix match sufficient
+    });
+
+    describe('w10 - M3 reverse-decode from envelope.refs + buildSceneChildContext from edge lookup', () => {
+      const MATERIAL2_GUID_STR = 'e1e2e3e4-a5a6-4b7c-8d9e-0a1b2c3d4e5f';
+      const MATERIAL3_GUID_STR = 'd1d2d3d4-b5b6-4c7d-8e9f-0a1b2c3d4e5f';
+      const TEXTURE_GUID_STR = 'cccccccc-aaaa-bbbb-cccc-dddddddddddd';
+
+      function makeTestMesh(): MeshAsset {
+        return {
+          kind: 'mesh',
+          vertices: new Float32Array(0),
+          indices: new Uint16Array(0),
+          attributes: { position: new Float32Array(0) },
+          submeshes: [
+            { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' as const },
+          ],
+        };
+      }
+
+      function makeTestMaterial(): MaterialAsset {
+        return {
+          kind: 'material',
+          passes: [{ name: 'forward', shader: 'test::dummy' }],
+          paramValues: {},
+        };
+      }
+
+      function registerAsset<T extends Asset>(reg: AssetRegistry, guidStr: string, asset: T): void {
+        const guid = parseGuid(guidStr);
+        reg.catalog(guid, asset);
+      }
+
+      it('(a) per-field equivalence: scalar handle + array handle resolve correctly via envelope.refs', () => {
+        const reg = new AssetRegistry(makeMockShaderRegistry());
+
+        registerAsset(reg, MESH_GUID_STR, makeTestMesh());
+        registerAsset(reg, MATERIAL_GUID_STR, makeTestMaterial());
+        registerAsset(reg, MATERIAL2_GUID_STR, makeTestMaterial());
+        registerAsset(reg, MATERIAL3_GUID_STR, makeTestMaterial());
+
+        // Build a scene and catalogue it with refs that carry edge metadata
+        const sceneGuidStr = '00001111-2222-3333-4444-555566667777';
+        const sceneGuid = parseGuid(sceneGuidStr);
+        const sceneAsset = buildTestAsset([
+          {
+            localId: 0,
+            components: {
+              Transform: { posX: 1, posY: 0, posZ: 0 },
+              MeshFilter: { assetHandle: MESH_GUID_STR },
+              MeshRenderer: {
+                materials: [MATERIAL_GUID_STR, MATERIAL2_GUID_STR, MATERIAL3_GUID_STR],
+              },
+            },
+          },
+        ]);
+
+        // Catalogue the scene WITH refs edge metadata (envelope.refs path)
+        const refs: import('@forgeax/engine-types').AssetRef[] = [
+          {
+            guid: MESH_GUID_STR,
+            sourceField: { componentName: 'MeshFilter', fieldName: 'assetHandle' },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MATERIAL_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 0,
+            },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MATERIAL2_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 1,
+            },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MATERIAL3_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 2,
+            },
+            sceneEntityId: 0,
+          },
+        ];
+        reg.catalog(sceneGuid, sceneAsset, refs);
+
+        const world = new World();
+        defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+        defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+        // biome-ignore lint/suspicious/noExplicitAny: private helper access
+        const internal = reg as any as {
+          _resolveSceneGuids(
+            scene: SceneAsset,
+            world: World,
+            sceneGuidKey?: string,
+          ): { ok: true; value: SceneAsset } | { ok: false; error: unknown };
+        };
+        const result = internal._resolveSceneGuids(sceneAsset, world, sceneGuidStr.toLowerCase());
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const resolvedAsset = result.value;
+        expect(resolvedAsset.kind).toBe('scene');
+        expect(resolvedAsset.entities.length).toBe(1);
+
+        const resolvedComp = resolvedAsset.entities[0]?.components as Record<
+          string,
+          Record<string, unknown>
+        >;
+        // Scalar handle
+        expect(resolvedComp.MeshFilter?.assetHandle).toBeTypeOf('number');
+        // Array handles — all 3 slots
+        const mats = resolvedComp.MeshRenderer?.materials as readonly unknown[] | undefined;
+        expect(Array.isArray(mats)).toBe(true);
+        expect(mats?.length).toBe(3);
+        expect(mats?.[0]).toBeTypeOf('number');
+        expect(mats?.[1]).toBeTypeOf('number');
+        expect(mats?.[2]).toBeTypeOf('number');
+        // Each slot has a distinct material GUID → distinct handle
+        expect(mats?.[0]).not.toBe(mats?.[1]);
+        expect(mats?.[1]).not.toBe(mats?.[2]);
+      });
+
+      it('(b) arrayIndex lossless: array<handle<MaterialAsset>> of 3 → each slot gets correct GUID', () => {
+        const reg = new AssetRegistry(makeMockShaderRegistry());
+
+        registerAsset(reg, MATERIAL_GUID_STR, makeTestMaterial());
+        registerAsset(reg, MATERIAL2_GUID_STR, makeTestMaterial());
+        registerAsset(reg, MATERIAL3_GUID_STR, makeTestMaterial());
+
+        const sceneGuidStr = '00001111-2222-3333-4444-555566667777';
+        const sceneGuid = parseGuid(sceneGuidStr);
+        const sceneAsset = buildTestAsset([
+          {
+            localId: 0,
+            components: {
+              MeshRenderer: {
+                materials: [MATERIAL_GUID_STR, MATERIAL2_GUID_STR, MATERIAL3_GUID_STR],
+              },
+            },
+          },
+        ]);
+
+        const refs: import('@forgeax/engine-types').AssetRef[] = [
+          {
+            guid: MATERIAL_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 0,
+            },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MATERIAL2_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 1,
+            },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MATERIAL3_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 2,
+            },
+            sceneEntityId: 0,
+          },
+        ];
+        reg.catalog(sceneGuid, sceneAsset, refs);
+
+        const world = new World();
+        defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+        // biome-ignore lint/suspicious/noExplicitAny: private helper access
+        const internal = reg as any as {
+          _resolveSceneGuids(
+            scene: SceneAsset,
+            world: World,
+            sceneGuidKey?: string,
+          ): { ok: true; value: SceneAsset } | { ok: false; error: unknown };
+        };
+        const result = internal._resolveSceneGuids(sceneAsset, world, sceneGuidStr.toLowerCase());
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const resolvedComp = result.value.entities[0]?.components as Record<
+          string,
+          Record<string, unknown>
+        >;
+        const mats = resolvedComp.MeshRenderer?.materials as readonly number[] | undefined;
+        expect(mats?.length).toBe(3);
+        // Verify each slot is a number (resolved handle) and distinct
+        expect(typeof mats?.[0]).toBe('number');
+        expect(typeof mats?.[1]).toBe('number');
+        expect(typeof mats?.[2]).toBe('number');
+        // Different GUIDs → different handles
+        expect(mats?.[0]).not.toBe(mats?.[1]);
+        expect(mats?.[1]).not.toBe(mats?.[2]);
+        expect(mats?.[0]).not.toBe(mats?.[2]);
+      });
+
+      it('(c) dedup contract: same GUID from multiple entities → same handle', () => {
+        const reg = new AssetRegistry(makeMockShaderRegistry());
+
+        registerAsset(reg, MESH_GUID_STR, makeTestMesh());
+
+        const sceneGuidStr = '00001111-2222-3333-4444-555566667777';
+        const sceneGuid = parseGuid(sceneGuidStr);
+        const sceneAsset = buildTestAsset([
+          {
+            localId: 0,
+            components: { MeshFilter: { assetHandle: MESH_GUID_STR } },
+          },
+          {
+            localId: 1,
+            components: { MeshFilter: { assetHandle: MESH_GUID_STR } },
+          },
+        ]);
+
+        const refs: import('@forgeax/engine-types').AssetRef[] = [
+          {
+            guid: MESH_GUID_STR,
+            sourceField: { componentName: 'MeshFilter', fieldName: 'assetHandle' },
+            sceneEntityId: 0,
+          },
+          {
+            guid: MESH_GUID_STR,
+            sourceField: { componentName: 'MeshFilter', fieldName: 'assetHandle' },
+            sceneEntityId: 1,
+          },
+        ];
+        reg.catalog(sceneGuid, sceneAsset, refs);
+
+        const world = new World();
+        defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+
+        // biome-ignore lint/suspicious/noExplicitAny: private helper access
+        const internal = reg as any as {
+          _resolveSceneGuids(
+            scene: SceneAsset,
+            world: World,
+            sceneGuidKey?: string,
+          ): { ok: true; value: SceneAsset } | { ok: false; error: unknown };
+        };
+        const result = internal._resolveSceneGuids(sceneAsset, world, sceneGuidStr.toLowerCase());
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const comp0 = (
+          result.value.entities[0]?.components as Record<string, Record<string, unknown>>
+        ).MeshFilter;
+        const comp1 = (
+          result.value.entities[1]?.components as Record<string, Record<string, unknown>>
+        ).MeshFilter;
+        // Same GUID → same handle (one allocSharedRef per unique payload)
+        expect(comp0?.assetHandle).toBe(comp1?.assetHandle);
+        expect(comp0?.assetHandle).toBeTypeOf('number');
+      });
+
+      it('(d) breadcrumb from envelope.refs: buildSceneChildContext returns correct sceneEntityId + componentField', () => {
+        const reg = new AssetRegistry(makeMockShaderRegistry());
+
+        registerAsset(reg, MESH_GUID_STR, makeTestMesh());
+
+        const sceneGuidStr = '00001111-2222-3333-4444-555566667777';
+        const sceneGuid = parseGuid(sceneGuidStr);
+        const sceneAsset = buildTestAsset([
+          {
+            localId: 5,
+            components: { MeshFilter: { assetHandle: MESH_GUID_STR } },
+          },
+        ]);
+
+        const refs: import('@forgeax/engine-types').AssetRef[] = [
+          {
+            guid: MESH_GUID_STR,
+            sourceField: { componentName: 'MeshFilter', fieldName: 'assetHandle' },
+            sceneEntityId: 5,
+          },
+        ];
+        reg.catalog(sceneGuid, sceneAsset, refs);
+
+        // biome-ignore lint/suspicious/noExplicitAny: private helper access
+        const internal = reg as any as {
+          buildSceneChildContext(
+            scene: SceneAsset,
+            subGuidKey: string,
+          ): { sceneEntityId?: number; componentField?: string } | undefined;
+        };
+
+        const ctx = internal.buildSceneChildContext(sceneAsset, MESH_GUID_STR.toLowerCase());
+
+        expect(ctx).toBeDefined();
+        expect(ctx?.sceneEntityId).toBe(5);
+        expect(ctx?.componentField).toBe('MeshFilter.assetHandle');
+      });
+
+      it('(e) texture edge: sourceField=undefined → buildSceneChildContext returns componentField undefined', () => {
+        const reg = new AssetRegistry(makeMockShaderRegistry());
+
+        registerAsset(reg, MATERIAL_GUID_STR, makeTestMaterial());
+
+        const textureGuid = parseGuid(TEXTURE_GUID_STR);
+        reg.catalog(textureGuid, {
+          kind: 'texture',
+          // biome-ignore lint/suspicious/noExplicitAny: test fixture uses minimal texture shape
+          texture: {} as any,
+        });
+
+        const sceneGuidStr = '00001111-2222-3333-4444-555566667777';
+        const sceneGuid = parseGuid(sceneGuidStr);
+        const sceneAsset = buildTestAsset([
+          {
+            localId: 0,
+            components: {
+              MeshRenderer: { materials: [MATERIAL_GUID_STR] },
+            },
+          },
+        ]);
+
+        // Scene refs include a texture edge (flat superset per D-2) with
+        // sourceField=undefined — texture has no per-entity origin.
+        const refs: import('@forgeax/engine-types').AssetRef[] = [
+          {
+            guid: MATERIAL_GUID_STR,
+            sourceField: {
+              componentName: 'MeshRenderer',
+              fieldName: 'materials',
+              arrayIndex: 0,
+            },
+            sceneEntityId: 0,
+          },
+          {
+            guid: TEXTURE_GUID_STR,
+            // sourceField intentionally omitted — texture edge, D-2
+            sceneEntityId: undefined,
+          },
+        ];
+        reg.catalog(sceneGuid, sceneAsset, refs);
+
+        // biome-ignore lint/suspicious/noExplicitAny: private helper access
+        const internal = reg as any as {
+          buildSceneChildContext(
+            scene: SceneAsset,
+            subGuidKey: string,
+          ): { sceneEntityId?: number; componentField?: string } | undefined;
+        };
+
+        // Look up the material GUID — should find sceneEntityId + componentField
+        const materialCtx = internal.buildSceneChildContext(
+          sceneAsset,
+          MATERIAL_GUID_STR.toLowerCase(),
+        );
+        expect(materialCtx).toBeDefined();
+        expect(materialCtx?.componentField).toBe('MeshRenderer.materials[0]');
+
+        // Look up the texture GUID — sourceField=undefined → componentField undefined
+        const textureCtx = internal.buildSceneChildContext(
+          sceneAsset,
+          TEXTURE_GUID_STR.toLowerCase(),
+        );
+        expect(textureCtx).toBeDefined();
+        expect(textureCtx?.sceneEntityId).toBeUndefined();
+        expect(textureCtx?.componentField).toBeUndefined();
+      });
     });
   });
 }

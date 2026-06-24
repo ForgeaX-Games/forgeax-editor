@@ -23,14 +23,14 @@ import {
   derive,
   KNOWN_PASS_KINDS,
   type MaterialRenderState,
+  type ParamSchemaEntry,
   type PrimitiveTopology,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { createHdrpBindGroupLayoutDescriptor } from './hdrp-buffers';
-import { mergeSkylightIntoMaterialBgl } from './ibl/skylight-bind-group';
 import {
   appendInjection,
-  buildPbrMaterialBaseEntries,
+  buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
   type PbrCaps,
 } from './pbr-pipeline';
@@ -434,6 +434,11 @@ export function buildPipelineDescriptor(
  *      `sampleType` is derived from `spec.attachments` (plan §R3 fix):
  *      `'depth32float'` → `'depth'`; `'r32float'` → `'unfilterable-float'`;
  *      else → `'float'`.
+ *    - `'fullscreen-post-with-params'` — 3 entries: the same texture@0 +
+ *      sampler@1 as `'fullscreen-post'`, plus a `buffer@2` uniform for the
+ *      per-frame params UBO (feat-20260621 D-2: `entry.params !== undefined`
+ *      passes route here; the layout stays group(1), q3=B). `'fullscreen-post'`
+ *      stays byte-identical so param-less consumers degrade with no change.
  */
 export type BglKind =
   | 'pbr-view'
@@ -443,7 +448,8 @@ export type BglKind =
   | 'pbr-skin-mesh-array'
   | 'unlit-material'
   | 'hdrp-7-slot'
-  | 'fullscreen-post';
+  | 'fullscreen-post'
+  | 'fullscreen-post-with-params';
 
 /**
  * Output shape of {@link buildBindGroupLayoutDescriptor}: matches the RHI
@@ -492,12 +498,41 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
  * @returns a WebGPU bind-group-layout descriptor (entries + label)
  * @see plan-strategy §3.2 · plan-decisions D-13 · requirements AC-02
  */
+/**
+ * Resolve the material paramSchema for a per-shader user-region BGL derivation.
+ *
+ * Priority (D-1): explicit `options.materialParamSchema` > registry lookup of
+ * `spec.shader.id` > `undefined` (the user-region builder then falls back to
+ * the built-in standard-PBR 3-texture schema, byte-equivalent to base-7).
+ */
+function resolveMaterialParamSchema(
+  spec: PipelineSpec,
+  options: { registry?: ShaderRegistry; materialParamSchema?: readonly ParamSchemaEntry[] },
+): readonly ParamSchemaEntry[] | undefined {
+  if (options.materialParamSchema !== undefined) return options.materialParamSchema;
+  if (options.registry !== undefined) {
+    const lookup = options.registry.lookupMaterialShader(spec.shader.id);
+    if (lookup.ok) return lookup.value.paramSchema;
+  }
+  return undefined;
+}
+
 export function buildBindGroupLayoutDescriptor(
   spec: PipelineSpec,
   options: {
     kind: BglKind;
     registry?: ShaderRegistry;
     caps?: PbrCaps;
+    /**
+     * Material paramSchema for the per-shader user-region derivation
+     * (`'pbr-material-merged'` / `'unlit-material'`). When supplied it is the
+     * authoritative source for the user-region BGL shape (D-1); when omitted,
+     * `buildPbrMaterialUserRegionEntries` falls back to the built-in
+     * standard-PBR 3-texture schema (byte-equivalent to the legacy base-7), so
+     * the caps-driven `buildPbrPipelineLayouts` seam keeps working unchanged.
+     * A registry + resolvable shader id takes precedence over this field.
+     */
+    materialParamSchema?: readonly ParamSchemaEntry[];
   },
 ): BindGroupLayoutDescriptorOutput {
   switch (options.kind) {
@@ -562,42 +597,31 @@ export function buildBindGroupLayoutDescriptor(
       };
     }
     case 'pbr-material-merged': {
-      // Material BGL: base 7 + Skylight 7 + lightmap 4 = 18 entries.
-      // The reflection (deriveBglShapeFromShader) is invoked when a registry
-      // is supplied so the BGL hash flow stays parallel with cacheKeyOf;
-      // the actual entries come from the SSOT helpers in pbr-pipeline.ts
-      // (the merge sequence is fixed by feat-20260613 fix-issue-5).
-      const baseEntries = buildPbrMaterialBaseEntries();
-      const afterSkylight = mergeSkylightIntoMaterialBgl(baseEntries);
-      const merged = [...afterSkylight, ...appendInjection(afterSkylight, 'lightmap')];
-      // Touch reflection to keep the shader-axis as a true input — mismatches
-      // surface as `'shader-bgl-reflection-mismatch'` upstream (M5+); for M3
-      // the reflection result is currently advisory (the merged entries are
-      // the authoritative shape).
-      if (options.registry !== undefined) {
-        const lookup = options.registry.lookupMaterialShader(spec.shader.id);
-        if (lookup.ok) {
-          deriveBglShapeFromShader(lookup.value, spec.shader.variantSet);
-        }
-      }
+      // Material BGL: per-shader user-region (derive(paramSchema).bglEntries)
+      // + IBL injection (7) + lightmap injection (4). The user-region size is
+      // the only variable; injection start = userRegion.length so a 4-texture
+      // custom schema shifts IBL/lightmap by one sampler/texture pair (D-1).
+      // For the built-in 3-texture standard-PBR schema this is 7 + 7 + 4 = 18,
+      // bit-for-bit the legacy fixed layout (D-2 / AC-06).
+      //
+      // Schema source priority (D-1): explicit materialParamSchema option >
+      // registry lookup of spec.shader.id > built-in standard-PBR fallback.
+      const resolvedSchema = resolveMaterialParamSchema(spec, options);
+      const userRegion = buildPbrMaterialUserRegionEntries(resolvedSchema);
+      const afterIbl = [...userRegion, ...appendInjection(userRegion, 'ibl')];
+      const merged = [...afterIbl, ...appendInjection(afterIbl, 'lightmap')];
       return {
         label: 'pbr-material-skylight-bgl',
         entries: merged,
       };
     }
     case 'unlit-material': {
-      // Unlit material BGL: base 7 entries only. No Skylight injection (D-5
-      // round-4: unlit demos do not pay for IBL state).
-      const baseEntries = buildPbrMaterialBaseEntries();
-      if (options.registry !== undefined) {
-        const lookup = options.registry.lookupMaterialShader(spec.shader.id);
-        if (lookup.ok) {
-          deriveBglShapeFromShader(lookup.value, spec.shader.variantSet);
-        }
-      }
+      // Unlit material BGL: per-shader user-region only. No IBL/lightmap
+      // injection (D-5 round-4: unlit demos do not pay for IBL state).
+      const resolvedSchema = resolveMaterialParamSchema(spec, options);
       return {
         label: 'unlit-material-bgl',
-        entries: baseEntries,
+        entries: buildPbrMaterialUserRegionEntries(resolvedSchema),
       };
     }
     case 'hdrp-7-slot': {
@@ -622,36 +646,65 @@ export function buildBindGroupLayoutDescriptor(
       // (depth32float) need `sampleType: 'depth'`; r32float needs
       // `'unfilterable-float'`; everything else (rgba8unorm-srgb, rgba16float,
       // bgra8unorm, …) is filterable `'float'`.
-      const inputFormat: GPUTextureFormat | undefined =
-        spec.attachments.depthFormat ?? spec.attachments.colorFormats[0];
-      const sampleType: GPUTextureSampleType =
-        inputFormat === 'depth32float' ||
-        inputFormat === 'depth24plus' ||
-        inputFormat === 'depth24plus-stencil8' ||
-        inputFormat === 'depth16unorm'
-          ? 'depth'
-          : inputFormat === 'r32float'
-            ? 'unfilterable-float'
-            : 'float';
       return {
         label: 'fullscreen-post-bgl',
+        entries: buildFullscreenPostInputEntries(spec),
+      };
+    }
+    case 'fullscreen-post-with-params': {
+      // feat-20260621 D-2: the same input texture@0 + sampler@1 as
+      // 'fullscreen-post', plus binding 2 = per-frame params UBO (uniform).
+      // The first two entries reuse buildFullscreenPostInputEntries so the
+      // sampleType derivation stays a single SSOT; 'fullscreen-post' is
+      // untouched (param-less zero-regression, R-A7).
+      return {
+        label: 'fullscreen-post-with-params-bgl',
         entries: [
+          ...buildFullscreenPostInputEntries(spec),
           {
-            binding: 0,
+            binding: 2,
             visibility: GPU_SHADER_STAGE_FRAGMENT,
-            texture: { sampleType, viewDimension: '2d' },
-          },
-          {
-            binding: 1,
-            visibility: GPU_SHADER_STAGE_FRAGMENT,
-            sampler: {
-              type: sampleType === 'depth' ? 'comparison' : 'filtering',
-            },
+            buffer: { type: 'uniform' },
           },
         ],
       };
     }
   }
+}
+
+/**
+ * The shared texture@0 + sampler@1 entries for fullscreen post-process BGLs.
+ * sampleType is derived from `spec.attachments` (R3 fix): depth attachments →
+ * `'depth'` + `'comparison'` sampler; `'r32float'` → `'unfilterable-float'`;
+ * else → `'float'` + `'filtering'`. Both `'fullscreen-post'` and
+ * `'fullscreen-post-with-params'` reuse this so the derivation is one SSOT.
+ */
+function buildFullscreenPostInputEntries(spec: PipelineSpec): GPUBindGroupLayoutEntry[] {
+  const inputFormat: GPUTextureFormat | undefined =
+    spec.attachments.depthFormat ?? spec.attachments.colorFormats[0];
+  const sampleType: GPUTextureSampleType =
+    inputFormat === 'depth32float' ||
+    inputFormat === 'depth24plus' ||
+    inputFormat === 'depth24plus-stencil8' ||
+    inputFormat === 'depth16unorm'
+      ? 'depth'
+      : inputFormat === 'r32float'
+        ? 'unfilterable-float'
+        : 'float';
+  return [
+    {
+      binding: 0,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      texture: { sampleType, viewDimension: '2d' },
+    },
+    {
+      binding: 1,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      sampler: {
+        type: sampleType === 'depth' ? 'comparison' : 'filtering',
+      },
+    },
+  ];
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1385,6 +1438,10 @@ export function buildSpecConstTable(
 
     // sprite LDR S1 (storage / non-srgb format; matches sprite-pass attachment
     // view created from raw swap-chain view — see SPRITE_ATTACHMENTS jsdoc above)
+    // feat-20260608 M2 m2-t6 (D-8): cullMode 'none' — H/V flip via negative
+    // scaleX/scaleY (tilemap per-cell entity TRS) inverts winding; 'back' would
+    // cull the flipped quad. Alpha-blend transparent bucket runs back-to-front
+    // already, so 'none' adds no overdraw cost.
     {
       shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
       attachments: SPRITE_ATTACHMENTS_LDR_S1,
@@ -1392,7 +1449,7 @@ export function buildSpecConstTable(
       renderState: {
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
-        cullMode: 'back',
+        cullMode: 'none',
         blend: {
           color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
           alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -1400,6 +1457,7 @@ export function buildSpecConstTable(
       },
     },
     // sprite LDR S4 (storage / non-srgb format; see comment above)
+    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
     {
       shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
       attachments: SPRITE_ATTACHMENTS_LDR_S4,
@@ -1407,7 +1465,7 @@ export function buildSpecConstTable(
       renderState: {
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
-        cullMode: 'back',
+        cullMode: 'none',
         blend: {
           color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
           alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -1415,6 +1473,7 @@ export function buildSpecConstTable(
       },
     },
     // sprite HDR S1
+    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
     {
       shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_HDR_S1,
@@ -1422,7 +1481,7 @@ export function buildSpecConstTable(
       renderState: {
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
-        cullMode: 'back',
+        cullMode: 'none',
         blend: {
           color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
           alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -1430,6 +1489,7 @@ export function buildSpecConstTable(
       },
     },
     // sprite HDR S4
+    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
     {
       shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_HDR_S4,
@@ -1437,7 +1497,7 @@ export function buildSpecConstTable(
       renderState: {
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
-        cullMode: 'back',
+        cullMode: 'none',
         blend: {
           color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
           alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },

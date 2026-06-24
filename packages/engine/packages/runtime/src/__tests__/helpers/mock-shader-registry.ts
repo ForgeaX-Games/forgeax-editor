@@ -96,5 +96,23 @@ export function makeMockShaderRegistry(): ShaderRegistry {
     source: 'fn main() {}',
     paramSchema: [],
   });
+  // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild:
+  // forgeax::sprite registered in the mock so resolveTilesetMaterial inside
+  // tilemap-chunk-extract-system can register a per-tile material in unit
+  // tests (paramSchema mirrors packages/shader/src/sprite.wgsl.meta.json).
+  sr.registerMaterialShader('forgeax::sprite', {
+    source: 'fn main() {}',
+    paramSchema: [
+      { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
+      { name: 'texture', type: 'texture2d' },
+      { name: 'sampler', type: 'sampler', default: null },
+      { name: 'region', type: 'vec4', default: [0.0, 0.0, 1.0, 1.0] },
+      { name: 'pivot', type: 'vec2', default: [0.5, 0.5] },
+      { name: 'flipX', type: 'f32', default: 0.0 },
+      { name: 'flipY', type: 'f32', default: 0.0 },
+      { name: 'slices', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
+      { name: 'sliceMode', type: 'f32', default: 0.0 },
+    ],
+  });
   return sr;
 }

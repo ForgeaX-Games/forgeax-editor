@@ -28,7 +28,7 @@ import {
   HANDLE_CUBE,
   meshFromInterleaved,
 } from '@forgeax/engine-runtime';
-import type { EntityId, SceneDocument } from '@forgeax/editor-core';
+import type { EntityId, EditSession } from '@forgeax/editor-core';
 import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
 import type { EngineSync } from './sync';
 
@@ -559,7 +559,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
 
   /** Nearest visible doc entity hit by the ray (or null). */
   function pick(origin: Vec3, dir: Vec3): EntityId | null {
-    const doc: SceneDocument = bus.doc;
+    const doc: EditSession = bus.doc;
     let best: EntityId | null = null, bestT = Infinity;
     for (const id of doc.order) {
       const node = doc.entities[id];

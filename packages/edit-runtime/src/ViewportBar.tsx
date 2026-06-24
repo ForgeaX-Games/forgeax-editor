@@ -13,6 +13,7 @@
 import { useEffect } from 'react';
 import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-shared';
 import { SceneBadge } from './SceneBadge';
+import { DirtyIndicator } from './components/dirty-indicator';
 
 export function ViewportBar() {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live
@@ -60,6 +61,8 @@ export function ViewportBar() {
         onClick={() => setGizmoMode('rotate')} title="Rotate (E)">⟳</button>
       <button type="button" className={`vp-btn${gizmoMode === 'scale' ? ' on' : ''}`}
         onClick={() => setGizmoMode('scale')} title="Scale (R)">⤢</button>
+      <span className="vp-sep" />
+      <DirtyIndicator />
       <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-save"
         onClick={() => void saveDocToDisk()} title="Save scene (⌘S)">

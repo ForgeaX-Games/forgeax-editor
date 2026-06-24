@@ -417,7 +417,27 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     }
 
     const runResult = await runImport(runMeta, importerRegistry, fsForImport);
-    if (!runResult.ok || 'skipped' in runResult.value) return [];
+    // `.hdr` equirect cube-texture metas produce nothing at import time (the
+    // faces ride the runtime IBL cook; see the generateBundle path for the full
+    // rationale). The catalog already folds the row to `kind:'texture'` pointing
+    // at the .hdr source, so skip rather than surfacing a 422. Mirrors the
+    // build-mode exemption to keep dev and build behaviour identical.
+    if (
+      !runResult.ok &&
+      runResult.error.code === 'import-produced-no-assets' &&
+      meta.source.toLowerCase().endsWith('.hdr') &&
+      meta.subAssets.every((s) => s.kind === 'cube-texture')
+    ) {
+      return [];
+    }
+    // Fail-fast (architecture-principles §5): a failed import must not collapse
+    // to an empty result that the route can only report as a generic
+    // `import-failed`. Throw the structured ImportError so the dev route can
+    // surface `.code` + `detail.reason` (e.g. `fbx-binding-not-built` -> "set
+    // FBX_SDK_ROOT") in the 422 body and the browser console, instead of the
+    // opaque `asset-not-imported` the runtime otherwise reports.
+    if (!runResult.ok) throw runResult.error;
+    if ('skipped' in runResult.value) return [];
 
     const { pack, bins } = runResult.value;
     const allEntries: PackIndexEntry[] = [];
@@ -846,7 +866,31 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             );
             inFlightMetaImports.set(metaPath, inflightMeta);
           }
-          resultEntries = await inflightMeta;
+          try {
+            resultEntries = await inflightMeta;
+          } catch (e) {
+            // startMetaImport throws the structured ImportError on a real
+            // import failure (fail-fast). Surface `.code` + `detail.reason`
+            // so AI/human users see the actual cause (e.g.
+            // `fbx-binding-not-built`) instead of a generic `import-failed`.
+            const err = e as {
+              code?: string;
+              hint?: string;
+              detail?: { reason?: string };
+            };
+            res.statusCode = 422;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(
+              JSON.stringify({
+                error: 'import-failed',
+                guid,
+                code: err.code ?? 'import-internal-error',
+                reason: err.detail?.reason ?? (e instanceof Error ? e.message : String(e)),
+                hint: err.hint ?? 'importer threw while converting the source',
+              }),
+            );
+            return;
+          }
           // Filter to the requested GUID's row.
           const requested = resultEntries.find((e) => e.guid.toLowerCase() === guidLower);
           resultEntries = requested !== undefined ? [requested] : [];
@@ -1061,17 +1105,50 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
       const runResult = await runImport(runMeta, importerRegistry, fsForImport);
       if (!runResult.ok) {
-        // Surface real import failures as a warning so silent fall-through
-        // (where the .pack.json never overlays the catalog and the runtime
-        // ends up reading the source .gltf as JSON, returning asset-not-found)
-        // becomes visible at build time. Pre-existing behaviour treated this
-        // as `continue` without logging; AGENTS.md "Demo failures route to
-        // engine fixes" mandates we surface the gap.
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[forgeax-pack] runImport failed for ${metaPath}: ${runResult.error.code} - ${runResult.error.hint?.slice(0, 100) ?? ''}`,
+        const reason =
+          (runResult.error.detail as { reason?: string } | undefined)?.reason ??
+          runResult.error.hint ??
+          '';
+        // `importer-not-registered` is a legitimate skip: this build simply
+        // does not wire that importer (e.g. an .hdr sidecar in a build that
+        // registers only the image importer), so the catalog keeps the source
+        // sourcePath as the runtime fallback. Warn and continue.
+        if (runResult.error.code === 'importer-not-registered') {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[forgeax-pack] no importer registered for ${metaPath}; keeping source fallback (${reason})`,
+          );
+          continue;
+        }
+        // `.hdr` equirect cube-texture sub-assets are intentionally NOT produced
+        // at build time: imageImporter folds only `kind:'image'` rows, and the
+        // cube faces ride the runtime IBL multi-face cook (image-importer.ts D-6,
+        // build-catalog.ts D-1). runImport therefore reports
+        // import-produced-no-assets for these metas. The catalog already folded
+        // the row to `kind:'texture'` pointing at the .hdr source, so this is a
+        // legitimate skip (the equirect texture loads at runtime), not a broken
+        // wired import. Warn and continue.
+        if (
+          runResult.error.code === 'import-produced-no-assets' &&
+          meta.source.toLowerCase().endsWith('.hdr') &&
+          meta.subAssets.every((s) => s.kind === 'cube-texture')
+        ) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[forgeax-pack] ${metaPath}: .hdr equirect cube-texture rides the runtime IBL cook; no build-time DDC emitted (${reason})`,
+          );
+          continue;
+        }
+        // Any other failure means a WIRED importer failed to convert the source
+        // (e.g. fbx-binding-not-built surfacing as import-internal-error). The
+        // .pack.json DDC never overlays the catalog, so the build would emit a
+        // pack-index pointing at the raw source and ship a guaranteed
+        // blank-screen demo with only a stderr warning. Fail-fast
+        // (architecture-principles §5 + AGENTS.md "demo failures route to engine
+        // fixes") so the gap can never be mistaken for a green build.
+        throw new Error(
+          `[forgeax-pack] pre-import failed for ${metaPath}: ${runResult.error.code} - ${reason}`,
         );
-        continue;
       }
       if ('skipped' in runResult.value) {
         // Skip shader sidecars in pre-import; the catalog keeps the original

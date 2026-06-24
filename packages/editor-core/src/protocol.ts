@@ -228,7 +228,7 @@ export type VagPreviewReloadMessage = z.infer<typeof VagPreviewReloadSchema>;
 // ── 16. VAG_SPAWN_ENTITY ─────────────────────────────────────────────────────
 // Producer: EditMode.tsx:226 (after import-scene). Two modes:
 //   mode='reference' — payload.entity carries a single ECS spawn cmd seed
-//   mode='full'      — payload.doc carries an entire SceneDocument tree
+//   mode='full'      — payload.doc carries an entire EditSession tree
 // entity / doc / name are kept loosely shaped (z.unknown / z.string?) since
 // the engine-side ECS schemas evolve independently — this schema asserts
 // the message envelope, not the engine doc structure.

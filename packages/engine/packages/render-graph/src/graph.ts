@@ -149,7 +149,11 @@ export interface InternalizedGraph {
 // ── Compile options ──────────────────────────────────────────────
 
 export interface CompileOptions {
-  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2';
+  // D-6: second independent literal union (NOT derived from RhiCaps['backendKind']);
+  // add-only '|null' member so passthrough callers forwarding
+  // device.caps.backendKind type-check. Deriving from RhiCaps to collapse the
+  // duplicate is a known OOS follow-on (architecture-principles #2 Derive).
+  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null';
   readonly caps: RhiCaps;
   /**
    * RHI device interface handle for real GPU texture allocation (D-1).
@@ -175,8 +179,8 @@ interface PooledTexture {
   readonly view: unknown; // opaque RHI TextureView handle
 }
 
-/** A subset of RhiDevice surface that drain() needs to release pooled textures. */
-type DrainDevice = Pick<RhiDevice, 'destroyTexture'>;
+/** A subset of RhiDevice surface needed by drain() and reclaim to release pooled textures. */
+type DrainDevice = Pick<RhiDevice, 'destroyTexture' | 'queue'>;
 
 function poolKey(meta: {
   format: string;
@@ -195,6 +199,14 @@ export class RenderGraph<Ctx = unknown> {
 
   /** Transient texture pool: keyed by descriptor, reused across compiles (D-2). */
   private readonly transientPool = new Map<string, PooledTexture>();
+  /**
+   * Pending-destroy queue (bug-20260622): old transient textures awaiting GPU
+   * retirement before actual device.destroyTexture. drainTransient() and
+   * setTransientEntry() push here instead of destroying immediately;
+   * reclaimRetiredTransients() (called post-queue.submit in recordFrame) drains
+   * the queue when the GPU signals onSubmittedWorkDone.
+   */
+  private readonly pendingDestroy: PooledTexture[] = [];
   /** Persistent textures: keyed by resource name, kept across compiles. */
   private readonly persistentTextures = new Map<string, PooledTexture>();
   /** Swap-chain size for resolving 'swapchain' / 'half-swapchain' sizes. */
@@ -326,6 +338,18 @@ export class RenderGraph<Ctx = unknown> {
 
     const resolvedBuffers = this.resolveBuffers(caps);
 
+    // Phase 6.5: resize drain (AC-09, plan-strategy D-4). When swap-chain
+    // dimensions have changed since the last compile, release all old-size
+    // transient pool textures before allocating new ones. Without this step,
+    // old-dimension pool entries are stranded (key includes WxH, resize
+    // produces new keys and the old ones are never accessed again).
+    if (
+      this.swapChainWidth !== this.compiledWidth ||
+      this.swapChainHeight !== this.compiledHeight
+    ) {
+      this.drainTransient();
+    }
+
     // Phase 7: GPU allocation for color targets (D-1).
     const resolvedTextures = this.allocateColorTargets(device);
 
@@ -369,16 +393,161 @@ export class RenderGraph<Ctx = unknown> {
     if (device === null) {
       this.transientPool.clear();
       this.persistentTextures.clear();
+      this.pendingDestroy.length = 0;
       return;
     }
     for (const pooled of this.transientPool.values()) {
-      device.destroyTexture(pooled.texture as Texture);
+      try {
+        device.destroyTexture(pooled.texture as Texture);
+      } catch {
+        // swallow-and-continue: per-handle destroy failures do not
+        // interrupt the drain chain (docstring tolerance contract).
+      }
     }
     this.transientPool.clear();
+    // bug-20260622 D-6: drain teardown path — destroy any pendingDestroy
+    // items left over (Renderer.dispose() has no in-flight frames).
+    for (const pooled of this.pendingDestroy) {
+      try {
+        device.destroyTexture(pooled.texture as Texture);
+      } catch {
+        // swallow-and-continue: per-handle destroy failures do not
+        // interrupt the drain chain (docstring tolerance contract).
+      }
+    }
+    this.pendingDestroy.length = 0;
     for (const pooled of this.persistentTextures.values()) {
-      device.destroyTexture(pooled.texture as Texture);
+      try {
+        device.destroyTexture(pooled.texture as Texture);
+      } catch {
+        // swallow-and-continue: per-handle destroy failures do not
+        // interrupt the drain chain (docstring tolerance contract).
+      }
     }
     this.persistentTextures.clear();
+  }
+
+  /**
+   * Release every transient-pool texture while keeping persistentTextures
+   * intact (AC-09: resize drain, plan-strategy D-4).
+   *
+   * Walks `transientPool` values and forwards each `PooledTexture.texture`
+   * opaque handle to `device.destroyTexture(...)`, then clears the transient
+   * pool. Mirror of `drain()` but scoped to the transient pool only.
+   *
+   * Persistent textures survive `drainTransient` — they are only released by
+   * the full `drain()` on teardown. `drainTransient` is an internal helper
+   * called by `compile()` when swap-chain size changes; it is NOT a public API
+   * (callers should use `drain()` for teardown).
+   *
+   * Idempotent (architecture-principles §6): a second drainTransient on an
+   * already-cleared transient pool is a no-op.
+   */
+  private drainTransient(): void {
+    const device = this.lastDevice;
+    if (device === null) {
+      this.transientPool.clear();
+      return;
+    }
+    // bug-20260622 D-1: push old transient textures into pendingDestroy
+    // queue instead of destroying immediately. The GPU may still hold
+    // references from a prior in-flight command buffer.
+    for (const pooled of this.transientPool.values()) {
+      this.pendingDestroy.push(pooled);
+    }
+    this.transientPool.clear();
+  }
+
+  /**
+   * Guarded transient pool insert (AC-08, plan-strategy D-4).
+   *
+   * Before overwriting a key in the transient pool, destroys the old pooled
+   * texture via `device.destroyTexture(...)` to prevent stranded GPU textures.
+   * The guard is defensive: in current production code flow this code path is
+   * unreachable (set() only follows a get() miss inside allocateColorTargets),
+   * but the single-line guard costs almost nothing and closes the symmetry gap
+   * (every GPU resource allocation has a paired destroy).
+   *
+   * When `lastDevice` is null (no device ever stashed), the old entry is
+   * silently dropped without destroy (mirrors drainTransient's null-device
+   * fast path).
+   */
+  private setTransientEntry(key: string, pooled: PooledTexture): void {
+    const old = this.transientPool.get(key);
+    if (old) {
+      // bug-20260622 D-1: push into pendingDestroy queue instead of
+      // destroying immediately — the old texture may still be referenced
+      // by an in-flight command buffer.
+      this.pendingDestroy.push(old);
+    }
+    this.transientPool.set(key, pooled);
+  }
+
+  /**
+   * bug-20260622 D-2: reclaim pool textures queued in pendingDestroy after
+   * the GPU has retired all prior command buffers.
+   *
+   * Takes a snapshot of pendingDestroy, then calls
+   * `lastDevice.queue.onSubmittedWorkDone()`. When the promise resolves,
+   * the snapshot items are actually destroyed via
+   * `device.destroyTexture(...)` and removed from the queue.
+   *
+   * Idempotent (architecture-principles D-4): a second reclaim on an
+   * already-drained pendingDestroy is a no-op. When lastDevice is null
+   * (no device ever stashed), pendingDestroy is cleared directly.
+   *
+   * Per-handle destroy errors are tolerated (swallow-and-continue,
+   * plan-strategy D-5) — a stale-handle destroy-after-destroy does not
+   * interrupt the reclaim chain.
+   */
+  async reclaimRetiredTransients(): Promise<void> {
+    const device = this.lastDevice;
+    if (device === null) {
+      this.pendingDestroy.length = 0;
+      return;
+    }
+    if (this.pendingDestroy.length === 0) return;
+
+    // Snapshot the queue; items added after this point are handled by the
+    // next reclaim call (D-4: no race with concurrent push from same-frame
+    // drainTransient).
+    const snapshot = this.pendingDestroy.splice(0);
+
+    // Wait for all prior GPU work to complete.
+    await device.queue.onSubmittedWorkDone();
+
+    // Destroy snapshot items.
+    for (const pooled of snapshot) {
+      try {
+        device.destroyTexture(pooled.texture as Texture);
+      } catch {
+        // swallow-and-continue: per-handle destroy errors are tolerated
+        // (docstring contract) — a stale handle does not interrupt the
+        // reclaim chain for subsequent items.
+      }
+    }
+  }
+
+  /**
+   * Drop the pendingDestroy queue WITHOUT calling device.destroyTexture
+   * (feat-20260622-s5 M3 / B-2 / B-AC-02).
+   *
+   * Used on the device-lost recover() rebuild path: the queue holds
+   * PooledTexture handles minted against the now-lost device, so calling
+   * destroyTexture on them against the freshly-rebuilt device is meaningless
+   * (the old GPUDevice owns them; spec retires its resources implicitly when
+   * it is lost). recover() calls this after `gpuStore.destroyAll()` and before
+   * `tryCreateWebGPURenderer` so no stale handle reaches the new device.
+   *
+   * device-lost is an upstream judgement (createRenderer's health state); the
+   * graph stays RHI-pure and takes no device parameter — it only exposes the
+   * clear entry. Same effect as the existing null-device fast paths in drain()
+   * / reclaimRetiredTransients() (`pendingDestroy.length = 0`), surfaced as a
+   * method recover() can call directly. Idempotent: a second call on an
+   * already-empty queue is a no-op.
+   */
+  clearPendingDestroy(): void {
+    this.pendingDestroy.length = 0;
   }
 
   /**
@@ -629,7 +798,7 @@ export class RenderGraph<Ctx = unknown> {
       };
 
       if (lifetime === 'transient') {
-        this.transientPool.set(key, pooled);
+        this.setTransientEntry(key, pooled);
       } else {
         this.persistentTextures.set(entry.key, pooled);
       }

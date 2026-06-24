@@ -24,6 +24,7 @@ import type { AudioBackend, AudioPlayOptions, BusName } from '@forgeax/engine-au
 import { AudioSource } from '@forgeax/engine-audio';
 import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
 import { Entity as EntityComponent } from '@forgeax/engine-ecs';
+import { WebAudioEngine } from './web-audio-engine';
 
 // ---------------------------------------------------------------------------
 // Edge detection helpers (exported for unit testing - w20)
@@ -76,7 +77,7 @@ interface WorldInternalView {
  * Per-entity tick state: previous-frame `playing` value for edge detection.
  * Lives inside the tick system closure, not in ECS columns.
  */
-interface TickStateEntry {
+export interface TickStateEntry {
   prevPlaying: boolean;
 }
 
@@ -97,6 +98,12 @@ interface TickStateEntry {
  * @param backend AudioBackend instance (WebAudioEngine or mock)
  */
 export function audioTickSystem(world: World, backend: AudioBackend): void {
+  // F25 de-singleton (D-1): narrow backend to WebAudioEngine for access
+  // to instance-scoped tick states. Non-WebAudioEngine backends (no
+  // production callers exist -- research Finding 3) fall through as no-op
+  // since no tick state management is possible without the private fields.
+  const engine = backend instanceof WebAudioEngine ? backend : null;
+  if (!engine) return;
   const worldInternal = world as unknown as WorldInternalView;
   const typedWorld = world as unknown as {
     get(
@@ -137,7 +144,7 @@ export function audioTickSystem(world: World, backend: AudioBackend): void {
 
       const row = snapRes.value as Record<string, unknown>;
       const playing = row.playing === true;
-      const prev = getPrevState(entity, playing);
+      const prev = getPrevState(engine, entity, playing);
 
       const edge = detectEdge(prev, playing);
       if (edge === 'play-start') {
@@ -170,20 +177,18 @@ export function audioTickSystem(world: World, backend: AudioBackend): void {
   }
 
   // M4 (w31): detect despawned entities and clean up their audio nodes.
-  cleanupDespawnedEntities(currentEntityIds, backend);
+  cleanupDespawnedEntities(engine, currentEntityIds, backend);
 }
 
 // ---------------------------------------------------------------------------
 // Per-entity state management (edge detection window)
 // ---------------------------------------------------------------------------
 
-const tickStates = new Map<number, TickStateEntry>();
-
-function getPrevState(entity: EntityHandle, current: boolean): boolean {
+function getPrevState(engine: WebAudioEngine, entity: EntityHandle, current: boolean): boolean {
   const eid = entity as number;
-  const entry = tickStates.get(eid);
+  const entry = engine._tickStates.get(eid);
   if (!entry) {
-    tickStates.set(eid, { prevPlaying: current });
+    engine._tickStates.set(eid, { prevPlaying: current });
     return current; // first observation: no edge
   }
   const prev = entry.prevPlaying;
@@ -196,29 +201,26 @@ function getPrevState(entity: EntityHandle, current: boolean): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Set of entity IDs observed in the previous frame. Used to detect
- * despawned entities (entities that were in prevFrameEntities but are
- * absent in the current frame).
- */
-const prevFrameEntities = new Set<number>();
-
-/**
  * After processing all current-frame entities, clean up any that
  * disappeared between frames (despawn detection per AC-12).
  *
  * Calls backend.stop() for each removed entity and purges its
  * tick state entry to prevent unbounded memory growth.
  */
-function cleanupDespawnedEntities(currentEntityIds: number[], backend: AudioBackend): void {
-  const removed = detectRemovedEntities([...prevFrameEntities], currentEntityIds);
+function cleanupDespawnedEntities(
+  engine: WebAudioEngine,
+  currentEntityIds: number[],
+  backend: AudioBackend,
+): void {
+  const removed = detectRemovedEntities([...engine._prevFrameEntities], currentEntityIds);
   for (const eid of removed) {
     backend.stop(eid);
-    tickStates.delete(eid);
+    engine._tickStates.delete(eid);
   }
   // Replace previous-frame set with current for the next tick.
-  prevFrameEntities.clear();
+  engine._prevFrameEntities.clear();
   for (const id of currentEntityIds) {
-    prevFrameEntities.add(id);
+    engine._prevFrameEntities.add(id);
   }
 }
 

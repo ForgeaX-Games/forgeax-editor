@@ -22,7 +22,7 @@
 // feat-20260517-merge-mesh-renderer-material-renderer M2 / w7: the legacy
 // dual material-binding component + its data-shape re-export are
 // physically deleted; material asset binding is now carried by the
-// merged `MeshRenderer` component (`{ material: 'handle<MaterialAsset>' }`
+// merged `MeshRenderer` component (`{ material: 'shared<MaterialAsset>' }`
 // schema; see `./mesh-renderer.ts` JSDoc for the migration rationale +
 // AGENTS.md §Breaking changes 2026-05-17 row).
 
@@ -64,7 +64,6 @@ export {
 export { Children } from './children';
 export { ChildOf } from './child-of';
 export { DirectionalLight } from './directional-light';
-export { DirectionalLightShadow } from './directional-light-shadow';
 export { Instances, type InstancesData } from './instances';
 export { Layer } from './layer';
 export { MeshFilter } from './mesh-filter';
@@ -72,6 +71,7 @@ export { MeshRenderer } from './mesh-renderer';
 export { Name } from './name';
 export { PointLight } from './point-light';
 export { PointLightShadow } from './point-light-shadow';
+export { PostProcessParams } from './post-process-params';
 export {
   SceneInstance,
   type SceneInstanceOverrideRecord,
@@ -95,4 +95,7 @@ export {
   spritePlaybackModeFromU32,
 } from './sprite-playback-mode';
 export { SpriteRegionOverride } from './sprite-region-override';
+// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild
+export { TileLayer, markTileLayerDirty } from './tile-layer';
+export { Tilemap } from './tilemap';
 export { Transform } from './transform';

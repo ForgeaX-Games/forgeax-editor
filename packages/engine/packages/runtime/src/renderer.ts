@@ -18,7 +18,7 @@ import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
 import type { EngineMetrics } from './engine-metrics';
-import type { RuntimeError } from './errors';
+import type { RecoverError, RuntimeError } from './errors';
 import type { GpuResourceStore } from './gpu-resource-store';
 import type { PipelineError } from './pipeline-errors';
 import type { PostProcessError } from './post-process-errors';
@@ -323,12 +323,55 @@ export interface Renderer {
    */
   onError(listener: RendererErrorListener): () => void;
   /**
+   * Pull-style health snapshot. Returns the canonical `HealthSnapshot` from the
+   * registry's last-fired state, or the alive baseline when never fired. No
+   * second store — derived from `HealthListenerRegistry.getLastSnapshot()` per
+   * D-4 SSOT.
+   *
+   * AI users consume via `switch (snap.reason)`; TS narrows `snap.detail` to
+   * the per-reason detail type without `as` casts.
+   */
+  health(): HealthSnapshot;
+  /**
+   * Attempt a single idempotent device rebuild (feat-20260622-s5 M3).
+   *
+   * Only acts in the `device-lost` health state; `alive` returns
+   * `recover-not-needed` (also returned after a successful rebuild — the
+   * renderer is alive again, so a second recover() is a no-op signal).
+   * Rebuild sequence: `gpuStore.destroyAll()` + `context.unconfigure()` ->
+   * clear the render-graph pendingDestroy queue (B-2) -> re-acquire device via
+   * the same backend pack (`requestAdapter` -> `requestDevice`) -> rebuild
+   * Shader/Pipeline -> re-attach the device.lost fan-out -> `fire('alive')`.
+   * CPU POD caches (AssetRegistry catalog/payload, pack cache) survive; only
+   * GPU resources are released and re-uploaded on the next draw via
+   * `ensureResident` (A-AC-12).
+   *
+   * Async because device acquisition is async (`requestAdapter` /
+   * `requestDevice`). A single attempt: no retry loop, no backoff, no timer
+   * (A-OOS-1). On failure resolves `Result.err` (`recover-adapter-unavailable`
+   * / `recover-device-unavailable`) and leaves `health().reason ===
+   * 'device-lost'` — recover() never fakes the renderer back to `alive`
+   * (A-AC-07). The host owns the retry cadence (call recover() again after a
+   * host-chosen delay).
+   */
+  recover(): Promise<Result<void, RecoverError>>;
+  /**
+   * Push-style health subscription with unsubscribe.
+   *
+   * Delegates to `HealthListenerRegistry.add(cb)` — late-attach replay fires
+   * the callback immediately when a snapshot has already been emitted, so
+   * late-subscribing callers still see the current state (AC-07).
+   *
+   * @returns unsubscribe function
+   */
+  onHealthChange(cb: HealthChangeListener): () => void;
+  /**
    * feat-20260520-directional-light-shadow-mapping M1c / w8:
    * debugReadback reads the shadow depth texture (depth32float) into a 5-
    * pixel POD { center, corners: {tl,tr,bl,br}, mapSize }. Uses
    * copyTextureToBuffer + mapAsync + Float32Array direct read. Returns null
    * when no shadow RT is allocated (shadow pass hasn't run yet, or no
-   * DirectionalLightShadow component).
+   * DirectionalLight with castShadow).
    *
    * AI users consume per-pixel depth values as [0,1] floats; no 24-in-32
    * unorm decode needed (depth32float, D-2 round-3).
@@ -348,7 +391,7 @@ export interface Renderer {
    * lights.directionalShadow exposes shadow configuration (mapSize,
    * lightSpaceMatrix) for Inspector consumption. Null when the renderer
    * has no active shadow system (shader manifest empty or no
-   * DirectionalLightShadow component).
+   * DirectionalLight with castShadow).
    */
   readonly directionalShadow?: {
     readonly mapSize: number;
@@ -442,6 +485,81 @@ export interface Renderer {
    */
   _internal_getPipelineState(): unknown;
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Renderer health / recover surface (feat-20260621-renderer-health-recover-skeleton M1)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Closed union of renderer health states.
+ *
+ * 3 members per plan-strategy D-1:
+ *   - `'alive'` — healthy baseline (registry not yet fired)
+ *   - `'device-lost'` — device loss detected
+ *   - `'internal-fault'` — internal renderer fault
+ *
+ * AI users exhaustively switch on `HealthReason` without default; TS guards
+ * completeness.
+ */
+export type HealthReason = 'alive' | 'device-lost' | 'internal-fault';
+
+/** Detail for `HealthReason 'device-lost'`. */
+export interface HealthDetailDeviceLost {
+  readonly lostReason: 'unknown' | 'destroyed';
+  readonly message: string;
+}
+
+/** Detail for `HealthReason 'internal-fault'`. */
+export interface HealthDetailInternalFault {
+  readonly message: string;
+}
+
+/**
+ * Pull-style health snapshot — discriminated union by `reason`.
+ *
+ * Per plan-strategy D-2: `switch(snap.reason)` narrows `snap.detail` to the
+ * per-reason detail type automatically, with zero `as` casts. `alive` has no
+ * `.detail` field; `device-lost` / `internal-fault` have a required `.detail`
+ * of the respective variant.
+ *
+ *   - `recoverable` — derived from `reason` via `deriveRecoverable`
+ */
+export type HealthSnapshot =
+  | { readonly reason: 'alive'; readonly recoverable: boolean }
+  | {
+      readonly reason: 'device-lost';
+      readonly detail: HealthDetailDeviceLost;
+      readonly recoverable: boolean;
+    }
+  | {
+      readonly reason: 'internal-fault';
+      readonly detail: HealthDetailInternalFault;
+      readonly recoverable: boolean;
+    };
+
+/**
+ * Maps `HealthReason` to recoverable boolean per the derive table
+ * (requirements section "range"):
+ *
+ *   | reason         | recoverable |
+ *   |:---------------|:-----------|
+ *   | `'alive'`      | false       |
+ *   | `'device-lost'`| true        |
+ *   | `'internal-fault'` | false   |
+ */
+export function deriveRecoverable(reason: HealthReason): boolean {
+  switch (reason) {
+    case 'alive':
+      return false;
+    case 'device-lost':
+      return true;
+    case 'internal-fault':
+      return false;
+  }
+}
+
+/** Callback type for `Renderer.onHealthChange`. */
+export type HealthChangeListener = (snapshot: HealthSnapshot) => void;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Internal — shared listener-registry helper (used by both backends).
@@ -549,5 +667,61 @@ export class RhiErrorListenerRegistry {
 
   clear(): void {
     this.listeners.length = 0;
+  }
+}
+
+/**
+ * Internal helper: fan-out registry for the `Renderer.onHealthChange` channel
+ * (feat-20260621-renderer-health-recover-skeleton M1).
+ *
+ * 3rd isomorph of the `LostListenerRegistry` / `RhiErrorListenerRegistry` pattern
+ * (plan-strategy D-5 / OOS-5: do not extract a generic base class). Replicates:
+ *   - `fired` / `lastSnapshot` for late-attach replay
+ *   - `add(listener)` returns unsubscribe function
+ *   - `fire(snapshot)` with try/catch isolation (console.error on throw)
+ *   - `clear()` detaches listeners, does not reset `fired` / `lastSnapshot`
+ *   - `getLastSnapshot()` — public getter returning last fired snapshot or
+ *     `{ reason: 'alive', recoverable: false }` baseline
+ */
+export class HealthListenerRegistry {
+  private readonly listeners = new Set<HealthChangeListener>();
+  private fired = false;
+  private lastSnapshot: HealthSnapshot | null = null;
+
+  add(listener: HealthChangeListener): () => void {
+    this.listeners.add(listener);
+    if (this.fired && this.lastSnapshot) {
+      try {
+        listener(this.lastSnapshot);
+      } catch (err) {
+        console.error('[HealthListenerRegistry] late-attach listener threw:', err);
+      }
+    }
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  fire(snapshot: HealthSnapshot): void {
+    this.fired = true;
+    this.lastSnapshot = snapshot;
+    for (const listener of this.listeners) {
+      try {
+        listener(snapshot);
+      } catch (err) {
+        console.error('[HealthListenerRegistry] listener threw:', err);
+      }
+    }
+  }
+
+  clear(): void {
+    this.listeners.clear();
+  }
+
+  getLastSnapshot(): HealthSnapshot {
+    if (this.fired && this.lastSnapshot) {
+      return this.lastSnapshot;
+    }
+    return { reason: 'alive', recoverable: false };
   }
 }

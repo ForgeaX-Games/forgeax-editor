@@ -22,6 +22,7 @@
 // - P4 consistent abstraction: implements AudioBackend interface, parallel to InputBackend
 
 import type { AudioBackend, AudioPlayOptions, AudioState, BusName } from '@forgeax/engine-audio';
+import type { TickStateEntry } from './audio-tick-system';
 
 interface ActiveSource {
   node: AudioBufferSourceNode;
@@ -53,6 +54,14 @@ export class WebAudioEngine implements AudioBackend {
     ['sfx', false],
     ['music', false],
   ]);
+
+  // F25 de-singleton: per-entity tick state lives on the engine instance,
+  // not in module-level singletons. audioTickSystem reads these via same-package
+  // narrow (D-1). Each WebAudioEngine owns its own tick history.
+  /** @internal */
+  readonly _tickStates = new Map<number, TickStateEntry>();
+  /** @internal */
+  readonly _prevFrameEntities = new Set<number>();
 
   constructor() {
     // Lazy: AudioContext is NOT created here (D-3 / AC-01).
@@ -192,6 +201,17 @@ export class WebAudioEngine implements AudioBackend {
 
     // Bookkeeping
     this.sources.set(entityId, { node, sourceGain, panner, bus: opts.bus });
+
+    // F24: attach onended for non-loop sources with identity guard (D-5).
+    // Loop sources never naturally end — no onended needed.
+    if (!opts.loop) {
+      node.onended = () => {
+        const current = this.sources.get(entityId);
+        if (current?.node === node) {
+          this.stop(entityId);
+        }
+      };
+    }
   }
 
   stop(entityId: number): void {

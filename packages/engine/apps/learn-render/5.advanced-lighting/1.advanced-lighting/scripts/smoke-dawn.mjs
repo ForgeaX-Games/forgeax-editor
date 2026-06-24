@@ -2,7 +2,17 @@
 // apps/learn-render/5.advanced-lighting/1.advanced-lighting/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 5.advanced-lighting 1.advanced-lighting dawn-node smoke.
-// Structural-only: >=60 frames, onError=0, no pixel readback.
+// >=60 frames, onError=0, AND pixel readback (the floor must be lit, not just
+// ambient). The pixel check exists because the structural-only predecessor
+// stayed green while the demo rendered an all-black frame: a custom material
+// shader lit a cube from a light placed at the cube's own center, so every
+// visible face was back-lit and only the 0.05*tex ambient term survived.
+//
+// IMPORTANT: the custom material shader compiles its PSO asynchronously
+// (getMaterialShaderPipeline returns 'rhi-not-available' until the device
+// finishes the compile). A purely synchronous draw loop never lets that
+// resolve, so this harness awaits queue.onSubmittedWorkDone() between frames
+// to give the compile a chance to land before readback.
 //
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-5-1-blinn-phong] backend=<backend>`
@@ -22,7 +32,7 @@ const hereDir = fileURLToPath(import.meta.url).replace(/\/[^/]+$/, '');
 const APP_ROOT = resolve(hereDir, '..');
 const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
 const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
-const CONTAINER2_SRC_PATH = resolve(TEXTURES_DIR, 'container2.png');
+const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 
 // --- 1. dawn.node binding setup ---
 
@@ -120,9 +130,9 @@ const mockCanvas = {
 
 // --- 3. Asset fixtures check ---
 
-if (!existsSync(CONTAINER2_SRC_PATH)) {
+if (!existsSync(WOOD_SRC_PATH)) {
   console.error(
-    `[smoke] FAIL - asset fixture missing: ${CONTAINER2_SRC_PATH}`,
+    `[smoke] FAIL - asset fixture missing: ${WOOD_SRC_PATH}`,
   );
   console.error(
     '  rerun: git submodule update --init --recursive (forgeax-engine-assets submodule must be checked out)',
@@ -137,8 +147,8 @@ const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
+  createPlaneGeometry,
   createRenderer,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -146,17 +156,17 @@ const {
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
-const container2DecodeRes = await decodeImageFromFile(CONTAINER2_SRC_PATH);
-if (!container2DecodeRes.ok) {
+const woodDecodeRes = await decodeImageFromFile(WOOD_SRC_PATH);
+if (!woodDecodeRes.ok) {
   console.error(
     '[smoke] FAIL - decodeImageFromFile failed:',
-    container2DecodeRes.error.code,
+    woodDecodeRes.error.code,
   );
   process.exit(1);
 }
-const { decoded: container2Decoded } = container2DecodeRes.value;
+const { decoded: woodDecoded } = woodDecodeRes.value;
 console.log(
-  `[learn-render-5-1-blinn-phong] decoded container2=${container2Decoded.width}x${container2Decoded.height} ${container2Decoded.mime}`,
+  `[learn-render-5-1-blinn-phong] decoded wood=${woodDecoded.width}x${woodDecoded.height} ${woodDecoded.mime}`,
 );
 
 const { buildEngineShaderManifest } = await import(
@@ -231,29 +241,29 @@ shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
   paramSchema: JSON.parse(blinnPhongEntry.paramSchema),
 });
 
-// Register texture under its GUID.
-const container2GuidRes = AssetGuid.parse('019e3969-1d46-7945-a75a-ef97d537531e');
-if (!container2GuidRes.ok) {
+// Register texture under its GUID (wood.png, the LO 5.1 floor texture).
+const woodGuidRes = AssetGuid.parse('019e3969-1d48-7c3b-ac24-6d68f457065f');
+if (!woodGuidRes.ok) {
   console.error('[smoke] FAIL - GUID parse failed');
   process.exit(1);
 }
 
-const container2TexAsset = {
+const woodTexAsset = {
   kind: 'texture',
-  width: container2Decoded.width,
-  height: container2Decoded.height,
-  format: container2Decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
-  data: container2Decoded.bytes,
-  colorSpace: container2Decoded.colorSpace,
-  mipmap: container2Decoded.mipmap,
+  width: woodDecoded.width,
+  height: woodDecoded.height,
+  format: woodDecoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+  data: woodDecoded.bytes,
+  colorSpace: woodDecoded.colorSpace,
+  mipmap: woodDecoded.mipmap,
 };
 
 const world = new World();
 
 // Catalogue the texture under its GUID, then mint a shared-ref column handle.
-assets.catalog(container2GuidRes.value, container2TexAsset);
-const container2Handle = world.allocSharedRef('TextureAsset', container2TexAsset);
-console.log(`[learn-render-5-1-blinn-phong] registered container2 handle id=${container2Handle}`);
+assets.catalog(woodGuidRes.value, woodTexAsset);
+const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
+console.log(`[learn-render-5-1-blinn-phong] registered wood handle id=${woodHandle}`);
 
 // Register material with the custom shader.
 const matHandle = world.allocSharedRef('MaterialAsset', {
@@ -266,22 +276,30 @@ const matHandle = world.allocSharedRef('MaterialAsset', {
     },
   ],
   paramValues: {
-    baseColorTexture: unwrapHandle(container2Handle),
+    baseColorTexture: unwrapHandle(woodHandle),
   },
 });
 
-// Spawn cube: HANDLE_CUBE is 1x1x1, centered at origin.
+// Floor plane: 20x20 on XZ at y=-0.5, normal +Y facing the overhead light
+// at the origin (LIGHT_POS in blinn-phong.wgsl). The procedural plane faces
+// +Z, so rotate -90deg about X (quat = (sin(-pi/4),0,0,cos(-pi/4))).
+const floorRes = createPlaneGeometry(20, 20);
+if (!floorRes.ok) {
+  console.error('[smoke] FAIL - createPlaneGeometry failed:', floorRes.error.code);
+  process.exit(1);
+}
+const floorHandle = world.allocSharedRef('MeshAsset', floorRes.value);
 world
   .spawn(
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+        posX: 0, posY: -0.5, posZ: 0,
+        quatX: Math.sin(-Math.PI / 4), quatY: 0, quatZ: 0, quatW: Math.cos(-Math.PI / 4),
         scaleX: 1, scaleY: 1, scaleZ: 1,
       },
     },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshFilter, data: { assetHandle: floorHandle } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
   )
   .unwrap();
@@ -304,6 +322,12 @@ world.spawn(
 
 // --- 5. Draw frames ---
 
+const device = sharedDevice;
+if (!device) {
+  console.error('[smoke] FAIL - no shared device captured for readback');
+  process.exit(1);
+}
+
 const frameStart = Date.now();
 let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
@@ -312,19 +336,64 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   const r = renderer.draw(world);
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
+  // Await each frame's GPU work so the custom material shader's async PSO
+  // compile resolves (a synchronous loop leaves it perpetually
+  // 'rhi-not-available' -> skip-draw -> black; see file header).
+  await device.queue.onSubmittedWorkDone();
 }
-const device = sharedDevice;
-if (!device) {
-  console.error('[smoke] FAIL - no shared device captured for readback');
-  process.exit(1);
-}
-await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(
   `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`,
 );
 
-// --- 6. Verdict (structural-only) ---
+// --- 6. Pixel readback ---
+//
+// The floor must be LIT, not just ambient. A back-lit surface (light behind
+// every visible face, the cube-at-origin regression) caps at 0.05*tex ~=
+// 10/255; a diffuse-lit wood floor peaks ~100+/255. Threshold 40/255 sits
+// between the two so it falsifies the regression without compositor jitter.
+const SMOKE_LIT_LUMA = Number.parseInt(process.env.SMOKE_LIT_LUMA ?? '40', 10);
+
+const bytesPerPixel = 4;
+const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+const readbackBuffer = device.createBuffer({
+  size: bytesPerRow * HEIGHT,
+  usage: 0x01 | 0x08,
+});
+{
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([enc.finish()]);
+}
+try {
+  await readbackBuffer.mapAsync(0x01);
+} catch (err) {
+  console.error(
+    `[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`,
+  );
+  process.exit(1);
+}
+const mapped = readbackBuffer.getMappedRange();
+const pixelBytes = new Uint8Array(mapped.slice(0));
+readbackBuffer.unmap();
+readbackBuffer.destroy();
+
+let maxLuma = 0;
+for (let y = 0; y < HEIGHT; y++) {
+  for (let x = 0; x < WIDTH; x++) {
+    const off = y * bytesPerRow + x * bytesPerPixel;
+    const l = Math.max(pixelBytes[off] ?? 0, pixelBytes[off + 1] ?? 0, pixelBytes[off + 2] ?? 0);
+    if (l > maxLuma) maxLuma = l;
+  }
+}
+console.log(`[smoke] maxLuma=${maxLuma} (threshold=${SMOKE_LIT_LUMA})`);
+
+// --- 7. Verdict ---
 
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs}`);
@@ -338,6 +407,10 @@ if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
+if (maxLuma <= SMOKE_LIT_LUMA)
+  failures.push(
+    `(d) maxLuma=${maxLuma} <= ${SMOKE_LIT_LUMA} — surface unlit (only ambient survives; light back-facing all visible geometry)`,
+  );
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
@@ -350,7 +423,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 3 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, RhiError count=0, maxLuma=${maxLuma}, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

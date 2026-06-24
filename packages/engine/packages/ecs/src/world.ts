@@ -37,7 +37,7 @@ import {
   getRemoveEdge,
 } from './archetype-graph';
 import { BufferPool } from './buffer-pool';
-import { arrayCountColumnName, type FieldView } from './column';
+import { arrayCountColumnName, type FieldView, normalizeBufferWrite } from './column';
 import { createCommandBuffer, flushCommands } from './commands';
 import {
   type ArrayMeta,
@@ -118,6 +118,46 @@ import {
 } from './schedule';
 import { SharedRefStore } from './shared-ref-store';
 import { UniqueRefStore } from './unique-ref-store';
+
+/**
+ * C-R2 (feat-20260622-s5 / studio-issues): one structured, non-fatal record of
+ * a SceneAsset payload field that did NOT match the target component's schema.
+ *
+ * Scene data is loader-fed and may carry a stale / deprecated / typo'd field
+ * (an editor renames a field, an old `.pack.json` lags). `world.instantiateScene`
+ * does NOT blank the whole scene over one such field (#478 lesson: a
+ * prod-silent strip re-introduced an invisible-entity class) and does NOT abort
+ * fatally. Instead it skips the unknown key (no write, no input mutation) and
+ * surfaces this record on the success value's `diagnostics[]` — observable in
+ * production (NOT NODE_ENV-gated), consumed by property access (no string parse):
+ *
+ *   const r = world.instantiateScene(handle);
+ *   if (r.ok) for (const d of r.value.diagnostics)
+ *     console.warn(`unknown field ${d.component}.${d.field} on localId ${d.localId}`);
+ *
+ * Direct `world.spawn` / `world.addComponent` / `Commands.spawn` stay fail-fast
+ * with `SpawnDataUnknownFieldError` — those are explicit API calls where a typo
+ * is a programming error, not loader-fed data.
+ */
+export type SceneInstantiateDiagnostic = {
+  /** Component name (schema key) the unknown field appeared under. */
+  readonly component: string;
+  /** The offending field name not declared in the component schema. */
+  readonly field: string;
+  /** LocalEntityId (within its owning SceneAsset) of the carrying entity. */
+  readonly localId: number;
+};
+
+/**
+ * Success value of `world.instantiateScene`. `root` is the synthetic scene-root
+ * EntityHandle (carries `SceneInstance`); `diagnostics` is the (possibly empty)
+ * list of non-fatal unknown-field records aggregated across this scene and every
+ * recursively mounted sub-scene (C-R2). Empty array = no diagnostics.
+ */
+export type SceneInstantiateOk = {
+  readonly root: EntityHandle;
+  readonly diagnostics: readonly SceneInstantiateDiagnostic[];
+};
 
 /**
  * Union of all EcsError types that World methods can return via Result.
@@ -1296,28 +1336,30 @@ export class World {
         //   - `'buffer'`  — variable capacity; release the prior slot then
         //     alloc a fresh one sized to the new payload's byteLength (mirrors
         //     the `array<T>` set path's release-then-alloc D-5 ordering).
-        //   Non-Uint8Array raw on either shape is treated as a no-op (column
-        //   slot stays unchanged); AI users encounter this only when types
-        //   are forced via casts.
+        //   raw is normalized from any AllowSharedBufferSource view to a
+        //   Uint8Array over its bytes (feat-20260621 V2 / AC-A4). Non-buffer
+        //   raw (a forced cast feeding e.g. a number) normalizes to null and
+        //   is treated as a no-op (column slot stays unchanged).
         const isFixedBuffer = fieldType !== 'buffer';
-        if (raw instanceof Uint8Array) {
+        const bytes = normalizeBufferWrite(raw);
+        if (bytes !== null) {
           if (isFixedBuffer) {
             // feat-20260602: fixed `buffer<N>` lives inline as a stride-N u8
             // column (arity = N bytes). Write the payload straight into the
             // row window -- no BufferPool slot.
             const expected = bufferFieldByteLength(fieldType);
-            if (raw.byteLength !== expected) {
-              return err(new FixedSizeMismatchError(fieldName, expected, raw.byteLength));
+            if (bytes.byteLength !== expected) {
+              return err(new FixedSizeMismatchError(fieldName, expected, bytes.byteLength));
             }
             const arity = col.arity;
-            (col.view as Uint8Array).set(raw.subarray(0, arity), rec.row * arity);
+            (col.view as Uint8Array).set(bytes.subarray(0, arity), rec.row * arity);
           } else {
             // Variable `'buffer'` set: release prior slot via SSOT helper
             // (feat-20260614 D-2) then alloc fresh sized to the new payload
             // (verify round 1 B2 fix path). The helper zeroes the column on
             // release; sentinel slot id 0 is a no-op.
             this.releaseManagedFieldOnRow(arch, component, rec.row, fieldName);
-            const allocR = this.bufferPool.alloc(raw.byteLength);
+            const allocR = this.bufferPool.alloc(bytes.byteLength);
             if (!allocR.ok) {
               const ctx: ErrorContext = {
                 severity: Severity.Error,
@@ -1328,7 +1370,7 @@ export class World {
               continue;
             }
             const slot = allocR.value;
-            slot.view.set(raw);
+            slot.view.set(bytes);
             col.view[rec.row] = slot.id;
           }
         }
@@ -2631,21 +2673,24 @@ export class World {
         //     column (arity = N). Copy any provided payload straight into the
         //     row window (truncate to N); no BufferPool slot.
         //   - `'buffer'`  — variable capacity; alloc one BufferPool slot sized
-        //     to the provided payload's byteLength (Uint8Array). Missing /
-        //     non-Uint8Array raw -> alloc(0) zero-length live view (verify
-        //     round 1 B2 fix path; pre-fix the bare keyword routed
-        //     `bufferFieldByteLength('buffer')` -> NaN -> alloc(NaN) ->
-        //     managed-buffer-out-of-bounds, dropping the payload bytes
-        //     silently). Failures route to Layer 3 ErrorHandler; column slot
-        //     stays at 0 (sentinel) so subsequent release short-circuits.
+        //     to the provided payload's byteLength. Missing / non-buffer raw
+        //     -> alloc(0) zero-length live view (verify round 1 B2 fix path;
+        //     pre-fix the bare keyword routed `bufferFieldByteLength('buffer')`
+        //     -> NaN -> alloc(NaN) -> managed-buffer-out-of-bounds, dropping
+        //     the payload bytes silently). Failures route to Layer 3
+        //     ErrorHandler; column slot stays at 0 (sentinel) so subsequent
+        //     release short-circuits.
+        //   raw is normalized from any AllowSharedBufferSource view to a
+        //   Uint8Array over its bytes (feat-20260621 V2 / AC-A4).
+        const bytes = normalizeBufferWrite(raw);
         if (fieldType !== 'buffer') {
           const arity = col.arity;
-          if (raw instanceof Uint8Array) {
-            const copyLen = Math.min(raw.byteLength, arity);
-            (col.view as Uint8Array).set(raw.subarray(0, copyLen), row * arity);
+          if (bytes !== null) {
+            const copyLen = Math.min(bytes.byteLength, arity);
+            (col.view as Uint8Array).set(bytes.subarray(0, copyLen), row * arity);
           }
         } else {
-          const allocBytes = raw instanceof Uint8Array ? raw.byteLength : 0;
+          const allocBytes = bytes !== null ? bytes.byteLength : 0;
           const allocR = this.bufferPool.alloc(allocBytes);
           if (!allocR.ok) {
             const ctx: ErrorContext = {
@@ -2657,10 +2702,10 @@ export class World {
             continue;
           }
           const slot = allocR.value;
-          if (raw instanceof Uint8Array) {
+          if (bytes !== null) {
             // allocBytes is the payload's exact byteLength so no truncation.
-            const copyLen = Math.min(raw.byteLength, slot.view.byteLength);
-            slot.view.set(raw.subarray(0, copyLen));
+            const copyLen = Math.min(bytes.byteLength, slot.view.byteLength);
+            slot.view.set(bytes.subarray(0, copyLen));
           }
           col.view[row] = slot.id;
         }
@@ -3440,16 +3485,24 @@ export class World {
    * @example
    *   const r = world.instantiateScene(handle);
    *   if (!r.ok) return r;
-   *   const root = r.value;
+   *   const { root, diagnostics } = r.value;
+   *   for (const d of diagnostics) // C-R2: unknown-field records, non-fatal
+   *     console.warn(`unknown field ${d.component}.${d.field} on localId ${d.localId}`);
    *   const inst = world.get(root, SceneInstance).value;
    *   const member = inst.mapping[0]; // first member entity
    */
   instantiateScene(
     handle: Handle<'SceneAsset', 'shared'>,
     parent?: EntityHandle,
-  ): Result<EntityHandle, EcsError> {
+  ): Result<SceneInstantiateOk, EcsError> {
     const stack = new Set<number>();
-    return this._instantiateSceneRec(handle, parent, stack);
+    // C-R2: collect non-fatal unknown-field diagnostics across this scene and
+    // every recursively mounted sub-scene. The internal recursion writes into
+    // this accumulator; only the public entry packages it onto the success value.
+    const diagnostics: SceneInstantiateDiagnostic[] = [];
+    const r = this._instantiateSceneRec(handle, parent, stack, diagnostics);
+    if (!r.ok) return r;
+    return ok({ root: r.value, diagnostics });
   }
 
   /**
@@ -3461,6 +3514,7 @@ export class World {
     handle: Handle<'SceneAsset', 'shared'>,
     parent: EntityHandle | undefined,
     stack: Set<number>,
+    diagnostics: SceneInstantiateDiagnostic[],
   ): Result<EntityHandle, EcsError> {
     const handleKey = unwrapHandle(handle);
     if (stack.has(handleKey)) {
@@ -3484,7 +3538,7 @@ export class World {
     const asset = resolved.value;
     stack.add(handleKey);
     try {
-      return this._instantiateSceneAsset(handle, asset, parent, stack);
+      return this._instantiateSceneAsset(handle, asset, parent, stack, diagnostics);
     } finally {
       stack.delete(handleKey);
     }
@@ -3514,6 +3568,7 @@ export class World {
     asset: SceneAsset,
     parent: EntityHandle | undefined,
     stack: Set<number>,
+    diagnostics: SceneInstantiateDiagnostic[],
   ): Result<EntityHandle, EcsError> {
     const sceneInstanceToken = resolveComponent('SceneInstance');
     if (sceneInstanceToken === undefined) {
@@ -3527,7 +3582,21 @@ export class World {
     const ownEntities = asset.entities;
     const ownMounts = asset.mounts ?? [];
     const memberSum = ownMounts.reduce((s, m) => s + m.memberCount, 0);
-    const totalSlots = ownEntities.length + ownMounts.length + memberSum;
+    const countBaseline = ownEntities.length + ownMounts.length + memberSum;
+    // C-R1 (studio-issues #6): mapping table must be sized to maxLocalId+1,
+    // not to the entity count. An editor scene may have non-contiguous
+    // localIds (deleted entities leave gaps); sizing to count means any
+    // localId >= count is a silent Uint32Array OOB no-op -> entity spawns
+    // but is unreachable by localId -> users report "character can't move".
+    // Take the max of count-baseline and id-range so both packed and
+    // sparse scenes work without over-allocation in the common case.
+    let maxLocalId = ownEntities.reduce((m, e) => Math.max(m, e.localId as unknown as number), -1);
+    for (const mount of ownMounts) {
+      maxLocalId = Math.max(maxLocalId, mount.localId as unknown as number);
+      const last = (mount.memberFirst as unknown as number) + mount.memberCount - 1;
+      maxLocalId = Math.max(maxLocalId, last);
+    }
+    const totalSlots = Math.max(countBaseline, maxLocalId + 1);
 
     // R2/Bonus: namespace-overlap fail-fast (AC-05 /
     // pack-mount-localid-overlap). Each LocalEntityId in
@@ -3611,7 +3680,7 @@ export class World {
 
       // Spawn the mount entity (carries mount.components).
       const mountLid = mount.localId as unknown as number;
-      const mountSpawnRes = this._spawnMountEntity(mount, mapping);
+      const mountSpawnRes = this._spawnMountEntity(mount, mapping, diagnostics);
       if (!mountSpawnRes.ok) return mountSpawnRes;
       const mountEntity = mountSpawnRes.value;
       mapping[mountLid] = mountEntity as unknown as number;
@@ -3622,8 +3691,10 @@ export class World {
       const childHandle = childHandleRes.value;
 
       // Recursively instantiate the child. Its synthetic root attaches as a
-      // child of the mount entity.
-      const childRes = this._instantiateSceneRec(childHandle, mountEntity, stack);
+      // child of the mount entity. The child writes its own unknown-field
+      // diagnostics into the SAME accumulator, so they bubble to the top-level
+      // instantiateScene result (C-R2 recursive aggregation).
+      const childRes = this._instantiateSceneRec(childHandle, mountEntity, stack, diagnostics);
       if (!childRes.ok) return childRes;
 
       // R2/B-2: cross-check mount.memberCount === child.totalSlots BEFORE
@@ -3701,7 +3772,7 @@ export class World {
       const node = ownEntities[idx];
       if (node === undefined) continue;
       const lid = node.localId as unknown as number;
-      const compDataRes = this._buildSceneEntityComponentDatas(node, mapping);
+      const compDataRes = this._buildSceneEntityComponentDatas(node, mapping, diagnostics);
       if (!compDataRes.ok) return compDataRes;
       const sp = (this.spawn as (...c: ComponentData[]) => Result<EntityHandle, EcsError>)(
         ...compDataRes.value,
@@ -3853,12 +3924,25 @@ export class World {
     return ok(rootEntity);
   }
 
-  /** @internal Build ComponentData[] for one SceneEntity, remapping localIds. */
+  /** @internal Build ComponentData[] for one SceneEntity, remapping localIds.
+   *
+   * C-R2 (feat-20260622-s5 M6): unknown fields on a SceneAsset payload are NOT
+   * fatal. Unlike `world.spawn` (an explicit API call where a typo is a
+   * programming error -> `SpawnDataUnknownFieldError`), scene data is loader-fed
+   * and may carry a stale / deprecated / typo'd field. The remap below builds a
+   * fresh `remappedRaw` and simply SKIPS keys absent from the schema (no input
+   * mutation — the source `raw` is never deleted-from), recording each skipped
+   * key as a non-fatal `SceneInstantiateDiagnostic` into the passed accumulator.
+   * All known fields still write through, so one bad field cannot blank the
+   * entity or the scene (C-AC-02/03/04).
+   */
   _buildSceneEntityComponentDatas(
     node: import('@forgeax/engine-types').SceneEntity,
     mapping: Uint32Array,
+    diagnostics: SceneInstantiateDiagnostic[],
   ): Result<ComponentData[], EcsError> {
     const out: ComponentData[] = [];
+    const nodeLocalId = node.localId as unknown as number;
     for (const compName of Object.keys(node.components)) {
       const token = resolveComponent(compName);
       if (token === undefined) {
@@ -3866,22 +3950,17 @@ export class World {
       }
       const raw = node.components[compName] ?? {};
       const schema = token.schema as Record<string, string>;
-      // bug-20260615: validate raw keys against schema BEFORE remap +
-      // fillComponentDefaults so a SceneAsset payload typo surfaces as
-      // SpawnDataUnknownFieldError (was silently dropped via the
-      // `if (fieldType === undefined) continue` arm below pre-fix).
-      const keyErr = validateComponentDataKeys(token, raw as Record<string, unknown>);
-      if (keyErr !== null) {
-        return err(keyErr as unknown as EcsError);
-      }
       const remappedRaw: Record<string, unknown> = {};
       for (const fieldName of Object.keys(raw)) {
         const fieldType = schema[fieldName];
-        // Defensive guard kept (validateComponentDataKeys above already
-        // rejects unknown keys, but the schema lookup pattern below assumes
-        // a defined fieldType; the continue is now unreachable).
-        /* istanbul ignore next -- unreachable: validateComponentDataKeys above already errored */
-        if (fieldType === undefined) continue;
+        // C-R2: unknown key -> skip (do not copy into remappedRaw, do not
+        // mutate the source `raw`) and record a structured diagnostic. The
+        // downstream `spawn` only sees schema-valid keys, so its own
+        // validateComponentDataKeys gate stays green.
+        if (fieldType === undefined) {
+          diagnostics.push({ component: compName, field: fieldName, localId: nodeLocalId });
+          continue;
+        }
         const value = (raw as Record<string, unknown>)[fieldName];
         if (fieldType === 'entity' && typeof value === 'number') {
           // localId -> live Entity. Slots not yet spawned hold ENTITY_NULL_RAW
@@ -3986,12 +4065,13 @@ export class World {
   _spawnMountEntity(
     mount: SceneInstanceMount,
     mapping: Uint32Array,
+    diagnostics: SceneInstantiateDiagnostic[],
   ): Result<EntityHandle, EcsError> {
     const fakeNode: import('@forgeax/engine-types').SceneEntity = {
       localId: mount.localId,
       components: mount.components ?? {},
     };
-    const cdRes = this._buildSceneEntityComponentDatas(fakeNode, mapping);
+    const cdRes = this._buildSceneEntityComponentDatas(fakeNode, mapping, diagnostics);
     if (!cdRes.ok) return cdRes;
     // R2/B-1: ensure Transform is attached so propagateTransforms can walk
     // through this entity. Layer-2 defaults supply identity TRS; the

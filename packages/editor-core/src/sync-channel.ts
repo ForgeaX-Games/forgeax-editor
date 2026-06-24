@@ -17,7 +17,7 @@
 //             ledger entries.
 import { z } from 'zod';
 import type { CommandOrigin, HistoryStep } from './bus';
-import type { EditorCommand, EntityId, SceneDocument } from './types';
+import type { EditorCommand, EntityId, EditSession } from './types';
 
 // Panel IDs are defined in @forgeax/editor-shared (SSOT). To avoid a
 // dep cycle (core → shared → core), we inline the list here instead of
@@ -25,7 +25,7 @@ import type { EditorCommand, EntityId, SceneDocument } from './types';
 // major editor feature work), and the runtime cost of a second source
 // for an 8-element const array is negligible.
 
-/** The 10 dockable business panels of the forgeax editor. */
+/** The 11 dockable business panels of the forgeax editor. */
 const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -37,6 +37,7 @@ const EDITOR_PANELS = [
   'matgraph',
   'launcher',
   'asset-inspector',
+  'systems',
 ] as const;
 
 /** Union type of all editor panel IDs. */
@@ -47,9 +48,15 @@ export type EditorRole = 'main' | 'popout';
 /** The dockable panels that can be popped out. */
 export type SyncPanelId = EditorPanelId;
 
-/** A full editor-state snapshot the main window broadcasts to popouts. */
+/** A full editor-state snapshot the main window broadcasts to popouts.
+ *
+ *  `doc` carries the EditSession's authoring state (entities / order /
+ *  nextLocalId). NOTE: BroadcastChannel uses structuredClone, which DROPS the
+ *  EditSession's `asset` getter — the receiver (store.ts applySnapshot) revives
+ *  it via `makeEditSession` so `bus.doc.asset` is live again on the popout side.
+ *  The engine `SceneAsset` POD is a derived projection, never the wire payload. */
 export interface EditorSnapshot {
-  doc: SceneDocument;
+  doc: EditSession;
   selection: EntityId[];
   gizmo: 'translate' | 'rotate' | 'scale';
   history: HistoryStep[];
@@ -68,7 +75,7 @@ export type EditorSyncMsg =
   | { t: 'undo' }
   | { t: 'redo' }
   | { t: 'jumpTo'; target: number }
-  | { t: 'replaceDoc'; doc: SceneDocument }
+  | { t: 'replaceDoc'; doc: EditSession }
   // selection / gizmo flow BOTH ways (echoed back inside the snapshot too)
   | { t: 'selection'; ids: EntityId[] }
   | { t: 'gizmo'; mode: 'translate' | 'rotate' | 'scale' }
@@ -117,7 +124,7 @@ export function getEditorRole(search?: string): EditorRole {
 // to the AUTHORITATIVE bus with zero shape check. A version-skewed or corrupt
 // message (e.g. a stale popout after a code update) could drive the bus into a
 // bad state. We validate the ENVELOPE (discriminant + scalar fields) here;
-// heavy payloads (snap/cmd/doc — SceneDocument / EditorCommand trees that evolve
+// heavy payloads (snap/cmd/doc — EditSession / EditorCommand trees that evolve
 // independently) stay loose (object-presence only) so legit docs are never
 // rejected, mirroring the VAG_SPAWN_ENTITY z.unknown() approach.
 const GizmoModeZ = z.enum(['translate', 'rotate', 'scale']);

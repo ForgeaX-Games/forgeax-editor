@@ -122,6 +122,13 @@ export interface RenderPipelineContext {
   readonly skylight: SkylightSnapshot | undefined;
   readonly skylightCount: number;
   readonly skybox: SkyboxSnapshot | undefined;
+  /**
+   * Per-frame post-process params snapshot collected from PostProcessParams
+   * entities (D-1: data-driven params channel). Maps shader id to raw
+   * bytes (Uint8Array). dispatchFullscreenPass queries this map per-shader.
+   * Empty when no PostProcessParams entities exist.
+   */
+  readonly postProcessParams: ReadonlyMap<string, Uint8Array>;
 
   // ── MSAA (feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9-w10) ──
   /**
@@ -201,9 +208,9 @@ export interface RenderPipelineData {
   readonly shadowMapSize: number | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M3 / w12: effective cascade count
-   * from DirectionalLightShadow (1..4). Drives atlas tilesPerSide / atlasSize
-   * and the N-pass addShadowPass loop in urp-pipeline. undefined when no
-   * DirectionalLightShadow is wired (fallback single 1024px shadow pass).
+   * from DirectionalLight.cascadeCount (1..4). Drives atlas tilesPerSide /
+   * atlasSize and the N-pass addShadowPass loop in urp-pipeline. undefined when
+   * castShadow is disabled (fallback single 1024px shadow pass).
    */
   readonly cascadeCount: number | undefined;
 }

@@ -91,6 +91,11 @@ apps/**/*.tsbuildinfo
 
 .playwright-cli/
 
+# Per-worktree private Playwright browser cache (PLAYWRIGHT_BROWSERS_PATH) used
+# by hello-*/fbx smoke:browser to sidestep the shared ~/Library/Caches/ms-playwright
+# lock when multiple worktrees install browsers concurrently.
+.pw-browsers/
+
 # M8 stray debug capture dirs from unit tests
 .forgeax-debug/
 packages/*/.forgeax-debug/

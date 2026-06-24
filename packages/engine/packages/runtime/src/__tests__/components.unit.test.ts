@@ -89,7 +89,6 @@ import { PickError } from '../pick-errors';
 import { extractFrame } from '../render-system-extract';
 import type { Renderer } from '../renderer';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -264,9 +263,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.autoAspect).toBe('bool');
     });
 
-    it('DirectionalLight has 7 f32 fields (direction x/y/z + color r/g/b + intensity)', () => {
+    it('DirectionalLight has 17 fields: 7 light f32 + castShadow bool + 9 merged shadow f32', () => {
+      // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(DirectionalLight.schema).length).toBe(7);
+      expect(Object.keys(DirectionalLight.schema).length).toBe(17);
+      // 7 light fields
       expect(DirectionalLight.schema.directionX).toBe('f32');
       expect(DirectionalLight.schema.directionY).toBe('f32');
       expect(DirectionalLight.schema.directionZ).toBe('f32');
@@ -274,6 +275,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(DirectionalLight.schema.colorG).toBe('f32');
       expect(DirectionalLight.schema.colorB).toBe('f32');
       expect(DirectionalLight.schema.intensity).toBe('f32');
+      // shadow gate + 9 merged shadow fields
+      expect(DirectionalLight.schema.castShadow).toBe('bool');
+      expect(DirectionalLight.schema.mapSize).toBe('f32');
+      expect(DirectionalLight.schema.cascadeCount).toBe('f32');
+      expect(DirectionalLight.schema.splitLambda).toBe('f32');
+      expect(DirectionalLight.schema.cascadeBlend).toBe('f32');
+      expect(DirectionalLight.schema.depthBias).toBe('f32');
+      expect(DirectionalLight.schema.normalBias).toBe('f32');
+      expect(DirectionalLight.schema.nearPlane).toBe('f32');
+      expect(DirectionalLight.schema.farPlane).toBe('f32');
+      expect(DirectionalLight.schema.pcfKernelSize).toBe('f32');
     });
 
     it('all 5 components are frozen tokens with auto-incrementing .id', () => {
@@ -1066,7 +1078,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function makeScene(): Scene {
     const world = new World();
-    const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeMockShaderRegistry());
     const mesh = registerBox(world, assets);
     const material = registerMaterial(world, assets);
     return { world, assets, mesh, material };
@@ -1798,12 +1810,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value);
+      const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
       expect(t.posX).toBe(1.5);
       // overrides stay empty - no setSceneOverride was called. M3 reads them
       // from the SceneInstanceState payload via getSceneInstanceState.
-      const stateRes = world.getSceneInstanceState(r.value);
+      const stateRes = world.getSceneInstanceState(r.value.root);
       expect(stateRes.ok).toBe(true);
       if (!stateRes.ok) return;
       expect(stateRes.value.overrides.size).toBe(0);
@@ -1829,7 +1841,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value);
+      const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
       expect(t.posY).toBe(7.0);
     });
@@ -1857,7 +1869,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value);
+      const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
       expect(t.posY).toBe(0); // f32 -> 0
       expect(t.posZ).toBe(0); // f32 -> 0
@@ -1887,7 +1899,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value);
+      const e = firstNodeEntity(world, r.value.root);
       const slot = world.get(e, TargetSlot).unwrap();
       // Read-side: ENTITY_NULL_RAW storage maps back to null; layer 3 silent
       // path must NOT emit any error code.
@@ -1920,7 +1932,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value);
+      const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
       expect(t.posX).toBe(1.5); // layer 1 wins (explicit beats default 99)
       expect(t.posY).toBe(7.0); // layer 2 wins (component default beats type 0)
@@ -3409,7 +3421,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
@@ -3453,7 +3464,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const meshHandle = world.allocSharedRef('MeshAsset', {
@@ -3492,7 +3502,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {

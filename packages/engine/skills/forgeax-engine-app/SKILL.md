@@ -159,6 +159,148 @@ app.stop() → 宿主同时在 DOM 清除 overlay
 
 参见 `apps/hello/video-cutscene/src/main.ts`（≤ 200 LoC，完整端到端示例）。
 
+## Renderer health / recover
+
+Renderer 提供三个健康面动词：`health()` 拉取当前快照，`onHealthChange(cb)` 推送健康变化，`recover()` 显式触发设备重建。device-lost 恢复是单次幂等操作——重试节奏留宿主（引擎内无退避/定时器/计数器）。
+
+### 三动词速查
+
+| 动词 | 形态 | 用途 |
+|:--|:--|:--|
+| `renderer.health()` | `() => HealthSnapshot` | 拉取当前健康快照：`reason`（降级态判别元）+ `detail?`（per-reason 窄化）+ `recoverable`（是否可尝试恢复） |
+| `renderer.recover()` | `() => Promise<Result<void, RecoverError>>` | 命令式触发恢复——device-lost 态执行：销毁所有 GPU 资源 → 清理 pendingDestroy → 重建 device → 复装监听器 → 重建 Shader/Pipeline → 重配 canvas context。**成功返 `Result.ok` + fire `'alive'`**；失败返 err（`.code` 可判别 adapter/device 两路失败）。alive 态调用返 `'recover-not-needed'`。**异步**——device 重获取（`requestAdapter` / `requestDevice`）是异步操作 |
+| `renderer.onHealthChange(cb)` | `(cb: HealthChangeListener) => () => void` | 推送式订阅：low-frequency 事件，推优先于轮询；返回 unsubscribe |
+
+`recover()` 直接调用，不需自己开关——alive 态调返 `'recover-not-needed'`（安全 no-op）。宿主自行决定重试节奏（引擎不做内部重试、不持定时器/计数器、不在 `HealthReason` 加 `'recovering'` 态）。
+
+### HealthReason closed union（3 成员）
+
+```ts
+type HealthReason = 'alive' | 'device-lost' | 'internal-fault';
+```
+
+| reason | 含义 | recoverable |
+|:--|:--|:--|
+| `'alive'` | 健康基线（registry 未 fire） | `false` |
+| `'device-lost'` | device 丢失已检测到 | `true` |
+| `'internal-fault'` | 内部渲染器故障 | `false` |
+
+AI 用户消费走 `switch (snap.reason)` 穷举，TS 守完整性：
+
+```ts
+const snap = renderer.health();
+switch (snap.reason) {
+  case 'alive':
+    // snap has no detail field in this branch
+    break;
+  case 'device-lost':
+    // TS narrows snap.detail to HealthDetailDeviceLost
+    console.warn(`Device lost (${snap.detail.lostReason}): ${snap.detail.message}`);
+    break;
+  case 'internal-fault':
+    // TS narrows snap.detail to HealthDetailInternalFault
+    console.warn(`Internal fault: ${snap.detail.message}`);
+    break;
+}
+```
+
+### RecoverError closed union（4 成员）
+
+```ts
+type RecoverErrorCode =
+  | 'recover-not-needed'
+  | 'recover-not-implemented'
+  | 'recover-adapter-unavailable'
+  | 'recover-device-unavailable';
+```
+
+| code | 触发 | .hint |
+|:--|:--|:--|
+| `'recover-not-needed'` | 健康态调 `recover()`（`health().reason === 'alive'`） | "call health() first to confirm degraded state before calling recover()" |
+| `'recover-not-implemented'` | **reserved**——S3 骨架曾返回此码；实现后不再生产，保留不删避免 breaking | "self-heal recovery is now implemented; this code should not appear in production" |
+| `'recover-adapter-unavailable'` | `requestAdapter` 返 null（driver/GPU 被重置） | "retry recover() after a host-chosen delay; adapter availability is transient" |
+| `'recover-device-unavailable'` | `requestDevice` 失败或抛错 | "retry recover() after a host-chosen delay; device creation is driver-dependent" |
+
+`RecoverError` 只携 `.code` / `.expected` / `.hint`——**无 `.detail` 字段**（每个 code 语义固定无可变载荷；不同于 `RhiError` / `AssetError`，勿在 `RecoverError` 上访问 `err.detail`）。
+
+消费走 `switch (err.code)` 穷举（4 case + 零 `default`），TS 守完整性：
+
+```ts
+const res = await renderer.recover();
+if (!res.ok) {
+  switch (res.error.code) {
+    case 'recover-not-needed':
+      // 健康态，无需恢复
+      break;
+    case 'recover-not-implemented':
+      // reserved——不应出现在生产路径
+      console.warn('Unexpected reserved code; health unchanged.');
+      break;
+    case 'recover-adapter-unavailable':
+      // requestAdapter 失败——稍后重试
+      console.warn('Adapter unavailable; retry after delay.');
+      break;
+    case 'recover-device-unavailable':
+      // requestDevice 失败——稍后重试
+      console.warn('Device unavailable; retry after delay.');
+      break;
+  }
+}
+```
+
+### HealthSnapshot 形状
+
+```ts
+type HealthSnapshot =
+  | { readonly reason: 'alive'; readonly recoverable: boolean }
+  | { readonly reason: 'device-lost'; readonly detail: HealthDetailDeviceLost; readonly recoverable: boolean }
+  | { readonly reason: 'internal-fault'; readonly detail: HealthDetailInternalFault; readonly recoverable: boolean };
+```
+
+`HealthSnapshot` 是按 `reason` 判别的 discriminated union——`switch(snap.reason)` case 内 `snap.detail` 自动窄化为该 reason 专属类型，无需 `as`。`alive` 分支无 `detail` 字段；降级 reason 下 `detail` 必填。
+
+### onHealthChange 语义
+
+- **late-attach replay**：health 已变化（已 fire）后才注册的回调，注册时立即以当前快照 replay 一次
+- **unsubscribe**：`onHealthChange` 返回 unsubscribe 函数，调用后该 cb 不再收到变化
+- **listener-throw 隔离**：一个回调抛异常不影响其他回调，不影响 fire 流程
+- **replay 与 onLost/onError 关系**：三信道独立——`onLost` 是终端事件，`onError` 是逐 draw 事件流，`onHealthChange` 是健康态变化这一降维聚合面
+
+### 典范用法
+
+```ts
+// 监控 device-lost：推式订阅 + 尝试恢复（重试节奏由宿主决定）
+renderer.onHealthChange(async (snap) => {
+  if (snap.reason === 'device-lost') {
+    console.warn('Renderer degraded:', snap.detail.message);
+    if (snap.recoverable) {
+      const res = await renderer.recover();
+      if (res.ok) {
+        console.log('Recovered -- renderer is alive again.');
+      } else {
+        switch (res.error.code) {
+          case 'recover-adapter-unavailable':
+          case 'recover-device-unavailable':
+            // Host-chosen: setTimeout(() => recover(), 1000) or show reload button
+            console.warn('Recovery failed:', res.error.code, res.error.hint);
+            break;
+        }
+      }
+    }
+  }
+});
+
+// 帧尾拉取：UI 提示 / 日志
+const snap = renderer.health();
+if (snap.reason !== 'alive') {
+  showDegradationBanner(snap.reason);
+}
+
+// device-lost 态 draw() 静默返 err（不每帧 fire onError 刷屏，canvas 保持上一帧）
+```
+
+**device-lost 态 draw 行为**：`draw()` 在 `health().reason === 'device-lost'` 时静默返回错误，不每帧触发 `onError`（相对 S3 每帧 fire 收窄），canvas 保留上一帧内容。宿主收 `onHealthChange('device-lost')` 后自行决定调 `recover()` 的节奏，不再需要 `location.reload()`。
+
 ## 深入
 
 - 引导 / 主循环状态机 / AppError 5 成员 / onError fan-out / 资源化接线：见 `packages/app/README.md` §One-screen takeoff · §AppError 5-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`

@@ -31,7 +31,6 @@ import {
 import { HANDLE_CUBE } from '../index';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from render-system-extract.test.ts ───
@@ -529,7 +528,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-05 core signal: child no-passes inherits passes from parent via extract', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
@@ -556,7 +555,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-06 shoot-76 equivalent: N children inherit from 1 parent', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
@@ -590,7 +589,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-06 paramValues shallow-merge: child overrides parent, parent-only key retained', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS], undefined, {
@@ -623,7 +622,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('no-parent regression: material without parent still extracts correctly', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const mat = registerMaterial(world, assets, [FORWARD_UNLIT_PASS], undefined, {
@@ -748,7 +747,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     assets: AssetRegistry;
   } {
     const world = new World();
-    const assets = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeShaderRegistryWithSprite());
     const mesh = registerSpriteMesh(world);
     const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
@@ -957,6 +956,173 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(cam.clearG).toBe(0);
       expect(cam.clearB).toBe(0);
       expect(cam.clearA).toBe(1);
+    });
+  });
+}
+
+// ─── M2 / w3: extract MaterialSnapshot carries a 4th texture (heightTexture) ───
+//
+// feat-20260621-learn-render-5-5-parallax-mapping-demo-aligned-wit M2 / w3
+//
+// A custom parallax shader declares heightTexture (the 4th user-region texture).
+// The extract stage must iterate derive(paramSchema).textureFieldNames so the
+// heightTexture handle flows into the MaterialSnapshot. Today extract hardcodes
+// the 3 standard texture fields, so the 4th texture's handle is silently
+// dropped — this test is RED until w7 wires the iteration. Post-w7 the snapshot
+// carries the handle under MaterialSnapshot.textureHandles (a field-name keyed
+// map that holds every declared user-region texture handle).
+{
+  function makeShaderRegistryWithParallax(): ShaderRegistry {
+    const mockDevice: ShaderRegistryDevice = {
+      createShaderModule() {
+        return {
+          ok: true,
+          value: undefined,
+          unwrap: () => undefined,
+          unwrapOr: (d: unknown) => d,
+        } as unknown as ReturnType<ShaderRegistryDevice['createShaderModule']>;
+      },
+    };
+    const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
+    sr.registerMaterialShader('learn-render::5-5-parallax', {
+      source: 'fn main() {}',
+      paramSchema: [
+        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
+        { name: 'metallic', type: 'f32', default: 0.0 },
+        { name: 'roughness', type: 'f32', default: 0.5 },
+        { name: 'heightScale', type: 'f32', default: 0.1 },
+        { name: 'algoMode', type: 'f32', default: 0.0 },
+        { name: 'baseColorTexture', type: 'texture2d' },
+        { name: 'metallicRoughnessTexture', type: 'texture2d' },
+        { name: 'normalTexture', type: 'texture2d' },
+        { name: 'heightTexture', type: 'texture2d' },
+      ],
+    });
+    return sr;
+  }
+
+  const PARALLAX_PASS: MaterialPassDescriptor = {
+    name: 'Forward',
+    shader: 'learn-render::5-5-parallax',
+  };
+
+  function identityTx() {
+    return {
+      posX: 0,
+      posY: 0,
+      posZ: 0,
+      quatX: 0,
+      quatY: 0,
+      quatZ: 0,
+      quatW: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+    };
+  }
+
+  function registerQuadMesh(world: World): Handle<'MeshAsset', 'shared'> {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
+      kind: 'mesh',
+      vertices: new Float32Array([
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+        1, 0, 0, 0, 0,
+      ]),
+      indices: new Uint16Array([0, 1, 2]),
+      attributes: { position: positions },
+      aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
+      submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 36, topology: 'triangle-list' }],
+    });
+  }
+
+  function makeTextureHandle(world: World): Handle<'TextureAsset', 'shared'> {
+    return world.allocSharedRef<'TextureAsset', import('@forgeax/engine-types').TextureAsset>(
+      'TextureAsset',
+      {
+        kind: 'texture',
+        width: 1,
+        height: 1,
+        format: 'rgba8unorm',
+        data: new Uint8Array([255, 255, 255, 255]),
+        colorSpace: 'linear',
+        mipmap: false,
+      },
+    );
+  }
+
+  describe('render-system-extract heightTexture (4th texture) snapshot pass-through (M2 w3)', () => {
+    it('MaterialSnapshot.textureHandles carries heightTexture handle (non-undefined, matches input)', () => {
+      const world = new World();
+      const assets = new AssetRegistry(makeShaderRegistryWithParallax());
+      const mesh = registerQuadMesh(world);
+
+      const baseColorHandle = makeTextureHandle(world);
+      const normalHandle = makeTextureHandle(world);
+      const heightHandle = makeTextureHandle(world);
+
+      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        kind: 'material',
+        passes: [PARALLAX_PASS],
+        paramValues: {
+          baseColor: [1, 1, 1, 1],
+          heightScale: 0.1,
+          algoMode: 0,
+          baseColorTexture: baseColorHandle,
+          normalTexture: normalHandle,
+          heightTexture: heightHandle,
+        },
+      } as MaterialAsset);
+
+      world
+        .spawn(
+          { component: Transform, data: { ...identityTx(), posZ: 5 } },
+          {
+            component: Camera,
+            data: {
+              fov: Math.PI / 4,
+              aspect: 1,
+              near: 0.1,
+              far: 100,
+              projection: 0,
+              left: -1,
+              right: 1,
+              bottom: -1,
+              top: 1,
+            },
+          },
+        )
+        .unwrap();
+      world
+        .spawn(
+          { component: Transform, data: identityTx() },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [matHandle] } },
+        )
+        .unwrap();
+      propagateTransforms(world);
+
+      const frame = extractFrame(world, assets);
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'learn-render::5-5-parallax',
+      );
+      expect(renderable).toBeDefined();
+      // The 4th texture handle must survive extract under the field-name keyed
+      // map MaterialSnapshot.textureHandles (added + populated by w7). Read via
+      // a structural cast so this test compiles in the red phase before the
+      // field lands; the runtime assertion stays RED until w7 wires extract.
+      const snap = renderable?.material as
+        | {
+            readonly textureHandles?: ReadonlyMap<string, Handle<'TextureAsset', 'shared'>>;
+            readonly materialShaderId?: string;
+          }
+        | undefined;
+      const heightFromSnap = snap?.textureHandles?.get('heightTexture');
+      expect(heightFromSnap).toBeDefined();
+      expect(heightFromSnap).toBe(heightHandle);
+      // The standard fields also land in the same map (single SSOT path).
+      expect(snap?.textureHandles?.get('baseColorTexture')).toBe(baseColorHandle);
+      expect(snap?.textureHandles?.get('normalTexture')).toBe(normalHandle);
     });
   });
 }

@@ -149,7 +149,7 @@ describe('AssetErrorCode closed union - 5 members', () => {
     void _bogus;
   });
 
-  it('type-level: exhaustive switch with no default compiles for all 19 members', () => {
+  it('type-level: exhaustive switch with no default compiles for all 22 members', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -195,6 +195,15 @@ describe('AssetErrorCode closed union - 5 members', () => {
           return 'mesh-asset-submeshes-empty';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+        case 'tileset-region-index-out-of-range':
+          return 'tileset-region-index-out-of-range';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+        case 'tileset-tile-entry-malformed':
+          return 'tileset-tile-entry-malformed';
+        // === 1 new code (feat-20260621-asset-registry-robustness M2 / w4) ===
+        case 'asset-invalidated':
+          return 'asset-invalidated';
       }
       // No default - TS guards union drift at compile time.
     }
@@ -793,7 +802,7 @@ describe('AssetErrorCode - 1 new member (M1-T02)', () => {
     expectTypeOf<'material-shader-ref-broken'>().toMatchTypeOf<AssetErrorCode>();
   });
 
-  it('exhaustive switch on AssetErrorCode (now 19 members) compiles', () => {
+  it('exhaustive switch on AssetErrorCode (now 22 members) compiles', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -838,6 +847,15 @@ describe('AssetErrorCode - 1 new member (M1-T02)', () => {
           return 'mesh-asset-submeshes-empty';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'mesh-submesh-index-range-out-of-bounds';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
+        case 'tileset-region-index-out-of-range':
+          return 'tileset-region-index-out-of-range';
+        // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
+        case 'tileset-tile-entry-malformed':
+          return 'tileset-tile-entry-malformed';
+        // === 1 new code (feat-20260621-asset-registry-robustness M2 / w4) ===
+        case 'asset-invalidated':
+          return 'asset-invalidated';
       }
     }
     expect(describe('material-shader-ref-broken')).toBe('ref-broken');
@@ -1909,16 +1927,16 @@ describe('Submesh interface', () => {
   });
 });
 
-describe('AssetErrorCode — 19 members', () => {
-  it('ASSET_ERROR_HINTS has exactly 19 keys (runtime guard, not hardcoded)', () => {
+describe('AssetErrorCode — 22 members', () => {
+  it('ASSET_ERROR_HINTS has exactly 22 keys (runtime guard, not hardcoded)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys).toHaveLength(19);
+    expect(keys).toHaveLength(22);
   });
 
-  it('all 19 codes are distinct', () => {
+  it('all 22 codes are distinct', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
     const set = new Set(keys);
-    expect(set.size).toBe(19);
+    expect(set.size).toBe(22);
   });
 
   it('three new codes (feat-20260608 M1 w2) are present with hint strings', () => {
@@ -1930,16 +1948,31 @@ describe('AssetErrorCode — 19 members', () => {
     expect(ASSET_ERROR_HINTS['mesh-submesh-index-range-out-of-bounds'].length).toBeGreaterThan(0);
   });
 
-  it('all 19 codes have non-empty hint strings', () => {
+  it('M0 baseline-restored code tileset-region-index-out-of-range has a hint string', () => {
+    expect(ASSET_ERROR_HINTS['tileset-region-index-out-of-range']).toBeDefined();
+    expect(ASSET_ERROR_HINTS['tileset-region-index-out-of-range'].length).toBeGreaterThan(0);
+  });
+
+  it('M1 new code tileset-tile-entry-malformed has a hint string', () => {
+    expect(ASSET_ERROR_HINTS['tileset-tile-entry-malformed']).toBeDefined();
+    expect(ASSET_ERROR_HINTS['tileset-tile-entry-malformed'].length).toBeGreaterThan(0);
+  });
+
+  it('new code asset-invalidated has a hint string', () => {
+    expect(ASSET_ERROR_HINTS['asset-invalidated']).toBeDefined();
+    expect(ASSET_ERROR_HINTS['asset-invalidated'].length).toBeGreaterThan(0);
+  });
+
+  it('all 22 codes have non-empty hint strings', () => {
     for (const [code, hint] of Object.entries(ASSET_ERROR_HINTS)) {
       expect(hint.length, `hint for ${code} must be non-empty`).toBeGreaterThan(0);
     }
   });
 
-  // Type-level: verify exhaustive switch on 19-member AssetErrorCode compiles
+  // Type-level: verify exhaustive switch on 22-member AssetErrorCode compiles
   // without default case. TS compiler validates union completeness at compile
   // time — this function exists solely for tsc type-checking.
-  it('switch on AssetErrorCode with all 19 cases compiles without default', () => {
+  it('switch on AssetErrorCode with all 22 cases compiles without default', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -1980,6 +2013,12 @@ describe('AssetErrorCode — 19 members', () => {
           return 'submeshes empty';
         case 'mesh-submesh-index-range-out-of-bounds':
           return 'index oob';
+        case 'tileset-region-index-out-of-range':
+          return 'tileset region index oob';
+        case 'tileset-tile-entry-malformed':
+          return 'tileset tile entry malformed';
+        case 'asset-invalidated':
+          return 'invalidated';
       }
     }
     // Runtime: verify function returns for each code

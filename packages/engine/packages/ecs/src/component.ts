@@ -404,6 +404,15 @@ export type FieldValueType<T extends SchemaFieldType> = T extends 'bool'
  * with no Float32Array wrapper boilerplate at the call site, and short
  * prefixes pad the row tail with zero (writeArrayField D-3 contract).
  *
+ * Asymmetric on `buffer` / `buffer<N>`: the read side returns `Uint8Array`,
+ * but the write side accepts any `AllowSharedBufferSource` (Float32Array /
+ * ArrayBuffer / Uint8Array / any TypedArray). The ECS buffer-write ingestion
+ * point (`World.writeRow` / `World.set`) normalizes any view to `Uint8Array`
+ * over its raw bytes before storing (feat-20260621 V2 / AC-A4). This lets AI
+ * users write typed param payloads directly, e.g.
+ * `world.set(e, PostProcessParams, { data: Float32Array.of(exposure,0,0,0) })`,
+ * without manual byte-reinterpret boilerplate at the call site.
+ *
  * Every other arm matches FieldValueType verbatim (no widening): handles
  * are already arrays-of-handle, scalars stay number, etc.
  */
@@ -414,9 +423,9 @@ export type FieldInputType<T extends SchemaFieldType> = T extends 'bool'
     : T extends 'string'
       ? string
       : T extends 'buffer'
-        ? Uint8Array
+        ? AllowSharedBufferSource
         : T extends `buffer<${number}>`
-          ? Uint8Array
+          ? AllowSharedBufferSource
           : T extends `array<shared<${infer Target}>, ${number}>`
             ? readonly Handle<Target, 'shared'>[]
             : T extends `array<shared<${infer Target}>>`
@@ -678,7 +687,7 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    * Optional cardinality bound for this component type (plan-strategy D-3).
    *
    * When set to a positive integer (canonical first consumer:
-   * `DirectionalLightShadow` with `cardinality = 1`), `world.spawn` and
+   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
    * `world.addComponent` enforce that at most `cardinality` entities carry
    * this component at any time. Violations return
    * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.
@@ -1038,7 +1047,7 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * Optional cardinality bound for this component type (plan-strategy D-3).
    *
    * When set to a positive integer (canonical first consumer:
-   * `DirectionalLightShadow` with `cardinality = 1`), `world.spawn` and
+   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
    * `world.addComponent` enforce that at most `cardinality` entities carry
    * this component at any time. Violations return
    * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.

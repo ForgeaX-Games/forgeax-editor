@@ -96,7 +96,12 @@ console.log(`[hello-fbx-skin] backend=${renderer.backend}`);
 const assets = renderer.assets;
 if (!assets) { console.error('[smoke] FAIL - AssetRegistry null'); process.exit(1); }
 
+// The importer honours the GUID import-stable iron law: it only emits sub-assets
+// declared in ctx.subAssets[]. Read them from the meta sidecar (SSOT) so this
+// smoke exercises the same declared-GUID path as the dev server / build
+// pre-import, not a subAssets:[] shortcut that produces nothing.
 const HUMANOID_FBX = resolve(here, '..', '..', '..', '..', 'forgeax-engine-assets', 'vendor', 'fbx-test', 'humanoid.fbx');
+const HUMANOID_META = JSON.parse(readFileSync(`${HUMANOID_FBX}.meta.json`, 'utf8'));
 let results;
 try {
   results = await fbxImporter.import({
@@ -104,7 +109,7 @@ try {
     readSource: async () => ({ ok: true, value: new Uint8Array(0) }),
     readSibling: async () => ({ ok: false, error: { code: 'source-read-failed' } }),
     decodeImage: async () => ({ ok: false, error: { code: 'image-decode-failed' } }),
-    subAssets: [],
+    subAssets: HUMANOID_META.subAssets,
     importSettings: {},
   });
 } catch (err) {

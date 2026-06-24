@@ -78,6 +78,16 @@ export interface CleanupFunnelOptions {
    * device-lost recovery surface unchanged in this feat.
    */
   readonly rendererDispose?: () => void;
+  /**
+   * feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 / F23:
+   * fired on `reason === 'stop'` so app.stop() chains into
+   * WebAudioEngine.destroy() (web-audio-engine.ts:269-298). Same shape as
+   * rendererDispose: only on `stop` (host-initiated shutdown), not on
+   * device-lost / exception (OOS-2). The funnel's `invoked` latch +
+   * destroy's own ctx===undefined short-circuit (Finding 6) make
+   * double-stop a guaranteed no-op.
+   */
+  readonly audioBackendDispose?: () => void;
 }
 
 /**
@@ -95,7 +105,7 @@ export interface CleanupFunnelOptions {
  *      (input-attach.ts:97-104) so repeat invocations are no-ops.
  */
 export function makeCleanupFunnel(opts: CleanupFunnelOptions): CleanupFunnel {
-  const { loop, inputCleanup, dispatch, setLastError, rendererDispose } = opts;
+  const { loop, inputCleanup, dispatch, setLastError, rendererDispose, audioBackendDispose } = opts;
   let invoked = false;
   return ({ reason, lastError }: CleanupArgs): void => {
     if (lastError !== undefined) {
@@ -123,6 +133,13 @@ export function makeCleanupFunnel(opts: CleanupFunnelOptions): CleanupFunnel {
       // AC-08: chain into the M5 Renderer.dispose() 6-step cascade. Only
       // on `stop` (host-initiated shutdown); device-lost is OOS-1.
       rendererDispose();
+    }
+    if (reason === 'stop' && audioBackendDispose !== undefined) {
+      // feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 /
+      // F23: chain into WebAudioEngine.destroy(). Only on `stop`
+      // (host-initiated shutdown); device-lost / exception skip
+      // audio resource reclaim (OOS-2). Same shape as rendererDispose.
+      audioBackendDispose();
     }
   };
 }

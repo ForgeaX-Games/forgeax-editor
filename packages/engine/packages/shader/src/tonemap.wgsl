@@ -24,10 +24,17 @@
 // constant is also exposed via `@forgeax/engine-shader#TONEMAP_LUMINANCE_EPSILON`
 // so the TS-equivalence test in tonemap-shader.test.ts uses the same value.
 //
-// Bindings (group 0):
+// Bindings (group 1):
 //   @binding(0) hdr   : texture_2d<f32>      // sampled HDR color attachment
 //   @binding(1) samp  : sampler              // filterable sampler
 //   @binding(2) params: TonemapParams (UBO)  // exposure + whitePoint
+//
+// feat-20260621 M-A3 / w16 (D-5): the built-in tonemap flows through the SAME
+// unified fullscreen post-process channel as custom post-processes
+// (`postProcess.register('forgeax::tonemap', { source, params })`). That channel
+// binds the input-texture + sampler + params UBO at group(1) (group(0) is the
+// reserved empty view-BGL), so all three bindings moved from group(0) to
+// group(1). The binding numbers (0/1/2) are unchanged.
 //
 // `TonemapParams` is std140-aligned to 16 B (4 f32). The host writes a
 // Float32Array of length 4 each frame: [exposure, whitePoint, 0, 0].
@@ -44,9 +51,9 @@ struct TonemapParams {
   pad1       : f32,
 };
 
-@group(0) @binding(0) var hdr  : texture_2d<f32>;
-@group(0) @binding(1) var samp : sampler;
-@group(0) @binding(2) var<uniform> params : TonemapParams;
+@group(1) @binding(0) var hdr  : texture_2d<f32>;
+@group(1) @binding(1) var samp : sampler;
+@group(1) @binding(2) var<uniform> params : TonemapParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index : u32) -> FullscreenOutput {

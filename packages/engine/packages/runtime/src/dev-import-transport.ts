@@ -39,7 +39,28 @@ export function createDevImportTransport(): ImportTransport {
     > {
       try {
         const response = await fetch(`/__import/${guid}`, { method: 'POST' });
-        if (!response.ok) return { ok: false };
+        if (!response.ok) {
+          // The ImportTransport contract has no error channel (returns only
+          // ok:false), so the runtime would otherwise report a generic
+          // `asset-not-imported`. Surface the dev server's structured failure
+          // body (e.g. `code: fbx-binding-not-built`, reason, hint) to the
+          // console so the actual cause is visible to AI/human users.
+          try {
+            const fail = (await response.json()) as {
+              code?: string;
+              reason?: string;
+              hint?: string;
+            };
+            console.warn(
+              `[forgeax] import failed for ${guid} (HTTP ${response.status}): ` +
+                `${fail.code ?? 'import-failed'} - ${fail.reason ?? ''}` +
+                (fail.hint ? ` | hint: ${fail.hint}` : ''),
+            );
+          } catch {
+            // Non-JSON error body; nothing extra to surface.
+          }
+          return { ok: false };
+        }
         try {
           const body = (await response.json()) as unknown;
           if (Array.isArray(body)) return { ok: true, entries: body as readonly PackIndexEntry[] };

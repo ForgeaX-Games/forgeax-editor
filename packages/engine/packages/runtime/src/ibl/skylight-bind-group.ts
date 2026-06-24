@@ -258,39 +258,41 @@ export function assembleMaterialWithSkylightEntries(
   skylight: SkylightBindGroupResources,
   emissiveAo?: EmissiveAoBindGroupResources | undefined,
 ): BindGroupEntry[] {
-  if (materialEntries.length !== 7) {
-    throw new Error(
-      `assembleMaterialWithSkylightEntries: expected 7 material BG entries, got ${materialEntries.length}`,
-    );
-  }
+  // IBL injection start = end of the user-region. The user-region IS
+  // `materialEntries` (UBO binding 0 + N sampler/texture pairs), so its length
+  // is the injection start — was a hardcoded 7, now per-shader (a 4-texture
+  // parallax material's user-region is 9 entries, so IBL lands at 9). This
+  // mirrors the BGL-side `appendInjection(userRegion, 'ibl')` (D-1 / D-8),
+  // which likewise reads `bgl.length`.
+  const iblStart = materialEntries.length;
   const result: BindGroupEntry[] = [
     ...materialEntries,
     {
-      binding: SKYLIGHT_BINDING_START,
+      binding: iblStart,
       resource: { kind: 'textureView', value: skylight.irradianceView },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 1,
+      binding: iblStart + 1,
       resource: { kind: 'sampler', value: skylight.irradianceSampler },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 2,
+      binding: iblStart + 2,
       resource: { kind: 'textureView', value: skylight.prefilterView },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 3,
+      binding: iblStart + 3,
       resource: { kind: 'sampler', value: skylight.prefilterSampler },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 4,
+      binding: iblStart + 4,
       resource: { kind: 'textureView', value: skylight.brdfLutView },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 5,
+      binding: iblStart + 5,
       resource: { kind: 'sampler', value: skylight.brdfLutSampler },
     },
     {
-      binding: SKYLIGHT_BINDING_START + 6,
+      binding: iblStart + 6,
       resource: { kind: 'buffer', value: { buffer: skylight.intensityBuffer } },
     },
   ];
