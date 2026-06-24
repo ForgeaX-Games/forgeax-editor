@@ -36,7 +36,7 @@ import {
   PointLight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
@@ -119,14 +119,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const assets = renderer.assets;
   assets.configurePackIndex('/pack-index.json');
 
-  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
-  if (!cubeAsset.ok) {
-    console.error('[learn-render 2.lighting 3.materials] HANDLE_CUBE asset unavailable');
-    return;
-  }
+  // HANDLE_CUBE is the builtin procedural cube; MeshFilter uses it directly.
 
-  // feat-20260527 M1 / w4: pass-based MaterialAsset via register<MaterialAsset>
-  const objectMatHandle = assets.register<MaterialAsset>({
+  // feat-20260527 M1 / w4: pass-based MaterialAsset minted via allocSharedRef
+  const objectMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -141,13 +137,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       metallic: OBJECT_METALLIC,
       roughness: OBJECT_ROUGHNESS,
     },
-  }).unwrap();
+  });
 
-  const lampMatHandle = assets.register<MaterialAsset>({
+  const lampMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
     paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0] },
-  }).unwrap();
+  });
 
   // Spawn the object cube at origin (LO: model = identity).
   world
@@ -279,7 +275,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
     name: 'learn-render-materials-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
-    fn: (queryResults) => {
+    fn: (world, queryResults) => {
       const snapshot = renderer.input.snapshot(world);
       if (snapshot === undefined) return;
       scrollFov.apply(snapshot.mouse.wheelDelta);

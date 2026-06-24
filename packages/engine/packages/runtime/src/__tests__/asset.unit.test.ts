@@ -55,14 +55,13 @@ import type {
   MaterialPassDescriptor,
   SamplerAsset,
 } from '@forgeax/engine-types';
-import { AssetError, toManaged, toUnmanaged, unwrapHandle } from '@forgeax/engine-types';
+import { AssetError, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { deriveBuiltin } from '../../../pack/src/builtin';
 import * as assetRegistryModule from '../asset-registry';
 import {
   AssetRegistry,
   animationClipLoader,
-  BUILTIN_FLOATS_PER_VERTEX,
   cubeTextureLoader,
   fontLoader,
   HANDLE_CUBE,
@@ -78,6 +77,7 @@ import {
   textureLoader,
   UPSTREAM_ENTRY_LOADERS,
 } from '../asset-registry';
+import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
 import { createDevImportTransport } from '../dev-import-transport';
 import { createEngineMetrics } from '../engine-metrics';
 import { createBoxGeometry, meshFromInterleaved } from '../geometry/box';
@@ -85,6 +85,7 @@ import { createPlaneGeometry } from '../geometry/plane';
 import { GpuResourceStore } from '../gpu-resource-store';
 import { LoaderRegistry } from '../loader-registry';
 import { getOrCreateMipmapPipeline, mipmapCacheSize, numMipLevels } from '../mipmap-generator';
+import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
 import {
   audioLoaderPlaceholder,
   createDefaultLoaderRegistry,
@@ -437,7 +438,6 @@ function makeStubGPU(): unknown {
   function mockCtx(opts?: {
     binaries?: Record<string, Uint8Array>;
     refs?: Record<string, number>;
-    resolveRefSync?: (guid: string) => number | undefined;
   }): LoadContext & { lastParseError?: unknown } {
     const ctx: LoadContext & { lastParseError?: unknown } = {
       fetchBinary: async (url: string) => {
@@ -519,28 +519,29 @@ function makeStubGPU(): unknown {
       expect(out).toMatchObject({ kind: 'material', parentGuid: 'parent-guid' });
     });
 
-    it('materialLoader resolves heightTexture from refs index via D-5 graceful fallback (M4 / w22)', () => {
+    it('materialLoader resolves heightTexture from refs index to its GUID (M4 / w22, D-19)', () => {
       // feat-20260613-material-paramschema-driven-binding M4 / w22:
       // the legacy hardcoded texture-field allowlist Set has been deleted.
       // When the shader is not yet registered (mock ctx returns undefined
       // from getMaterialShaderTextureFieldNames), the loader falls back to
       // a graceful "try every int paramValue in [0, refs.length)" walk and
-      // resolves heightTexture (any field name) to the refs[] handle.
-      const ctx = mockCtx({
-        resolveRefSync: (guid: string) => {
-          return guid === 'height-guid' ? 42 : undefined;
-        },
-      });
+      // resolves heightTexture (any field name) to the refs[] entry.
+      //
+      // feat-20260614 M8 (D-19): the embedded sub-asset ref is stored as its
+      // GUID string verbatim (dash-form) -- the ECS/render side resolves the
+      // GUID -> column handle at use time via world.allocSharedRef; the loader
+      // no longer mints a numeric handle (resolveRefSync is deleted). Mirrors
+      // the sibling `parentGuid` contract (refs index -> GUID string).
       const out = materialLoader.load(
         {
           passes: [{ shader: 'test' }],
           paramValues: { heightTexture: 0 },
         },
         ['height-guid'],
-        ctx,
+        mockCtx(),
       );
       expect(out).toMatchObject({ kind: 'material' });
-      expect((out as Record<string, unknown>)?.paramValues?.heightTexture).toBe(42);
+      expect((out as Record<string, unknown>)?.paramValues?.heightTexture).toBe('height-guid');
     });
 
     it('materialLoader returns normally when paramValues has no heightTexture field', () => {
@@ -853,7 +854,7 @@ function makeStubGPU(): unknown {
         0, // vertex 3: pos=(-1, 1,0)
       ]);
       const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]);
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2, 2, 3, 0]),
@@ -870,11 +871,10 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const asset = reg.get(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          expect(asset.value.kind).toBe('mesh');
-          const aabb = (asset.value as { aabb: Float32Array }).aabb;
+        // catalog returns the normalized payload (mesh with computed AABB).
+        {
+          expect(result.value.kind).toBe('mesh');
+          const aabb = (result.value as { aabb: Float32Array }).aabb;
           expect(aabb[0]).toBeCloseTo(-1, 5); // minX
           expect(aabb[1]).toBeCloseTo(-1, 5); // minY
           expect(aabb[2]).toBeCloseTo(0, 5); // minZ
@@ -892,7 +892,7 @@ function makeStubGPU(): unknown {
         1, 0, 0, 0, 0,
       ]);
       const positionBuf = new Float32Array([0, 0, 0, 2, 0, 0, 0, 3, 0]).buffer; // ArrayBuffer
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2]),
@@ -909,10 +909,8 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const asset = reg.get(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          const aabb = (asset.value as { aabb: Float32Array }).aabb;
+        {
+          const aabb = (result.value as { aabb: Float32Array }).aabb;
           // Floats from ArrayBuffer view: Float32Array wrapping same bytes
           expect(aabb[0]).toBeCloseTo(0, 5); // minX
           expect(aabb[1]).toBeCloseTo(0, 5); // minY
@@ -927,7 +925,7 @@ function makeStubGPU(): unknown {
     it('(c) mesh with no position attribute gets inverted-infinity empty box AABB', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const vertices = new Float32Array(48); // 4 verts * 12F
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1, 2, 2, 3, 0]),
@@ -944,10 +942,8 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const asset = reg.get(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          const aabb = (asset.value as { aabb: Float32Array }).aabb;
+        {
+          const aabb = (result.value as { aabb: Float32Array }).aabb;
           // inverted-infinity empty box: min components > max components
           expect(aabb[0]).toBe(Infinity); // minX
           expect(aabb[1]).toBe(Infinity); // minY
@@ -961,7 +957,7 @@ function makeStubGPU(): unknown {
 
     it('(d) mesh with empty vertices (0 verts, 0 indices) gets empty box AABB', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
@@ -978,10 +974,8 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const asset = reg.get(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          const aabb = (asset.value as { aabb: Float32Array }).aabb;
+        {
+          const aabb = (result.value as { aabb: Float32Array }).aabb;
           expect(aabb[0]).toBe(Infinity);
           expect(aabb[3]).toBe(-Infinity);
         }
@@ -992,7 +986,7 @@ function makeStubGPU(): unknown {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const vertices = new Float32Array([5, 10, -3, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
       const positions = new Float32Array([5, 10, -3]);
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0]),
@@ -1009,10 +1003,8 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const asset = reg.get(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          const aabb = (asset.value as { aabb: Float32Array }).aabb;
+        {
+          const aabb = (result.value as { aabb: Float32Array }).aabb;
           expect(aabb[0]).toBeCloseTo(5, 5);
           expect(aabb[1]).toBeCloseTo(10, 5);
           expect(aabb[2]).toBeCloseTo(-3, 5);
@@ -1023,14 +1015,14 @@ function makeStubGPU(): unknown {
       }
     });
 
-    it('(f) registerWithGuid path also computes AABB from position attribute', () => {
+    it('(f) catalog-with-guid path also computes AABB from position attribute', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const vertices = new Float32Array([
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0,
       ]);
       const positions = new Float32Array([0, 0, 0, 5, 5, 0]);
       const guid = AssetGuid.random();
-      const handle = reg.registerWithGuid(guid, {
+      const cataloged = reg.catalog(guid, {
         kind: 'mesh',
         vertices,
         indices: new Uint16Array([0, 1]),
@@ -1045,10 +1037,9 @@ function makeStubGPU(): unknown {
           },
         ],
       });
-      const asset = reg.get(handle);
-      expect(asset.ok).toBe(true);
-      if (asset.ok) {
-        const aabb = (asset.value as { aabb: Float32Array }).aabb;
+      expect(cataloged.ok).toBe(true);
+      if (cataloged.ok) {
+        const aabb = (cataloged.value as { aabb: Float32Array }).aabb;
         expect(aabb[0]).toBeCloseTo(0, 5);
         expect(aabb[1]).toBeCloseTo(0, 5);
         expect(aabb[2]).toBeCloseTo(0, 5);
@@ -1058,9 +1049,9 @@ function makeStubGPU(): unknown {
       }
     });
 
-    it('(g) non-mesh assets register without AABB computation interference', () => {
+    it('(g) non-mesh assets catalog without AABB computation interference', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'material',
         passes: [{ name: 'forward', shader: 'test::standard' }],
         paramValues: { baseColor: [1, 0, 0], metallic: 0, roughness: 0.5 },
@@ -1073,15 +1064,15 @@ function makeStubGPU(): unknown {
 {
   // --- from asset-registry-builtin-nineslice.test.ts ---
   const arMod = assetRegistryModule as unknown as {
-    HANDLE_NINESLICE_QUAD?: Handle<'MeshAsset', 'unmanaged'>;
+    HANDLE_NINESLICE_QUAD?: Handle<'MeshAsset', 'shared'>;
   };
 
   describe('BUILTIN_NINESLICE_QUAD builtin mesh (M2 / w7, D-2)', () => {
     it('(a) BUILTIN_NINESLICE_QUAD vertex count = 16 (4x4 grid)', () => {
-      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>).toBeDefined();
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = reg.get<MeshAsset>(
-        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>,
+      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>).toBeDefined();
+      const mesh = resolveAssetHandle<MeshAsset>(
+        new World(),
+        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>,
       );
       expect(mesh.ok).toBe(true);
       if (mesh.ok) {
@@ -1091,10 +1082,10 @@ function makeStubGPU(): unknown {
     });
 
     it('(b) BUILTIN_NINESLICE_QUAD index count = 54 (9 sub-quads x 6 idx)', () => {
-      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>).toBeDefined();
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = reg.get<MeshAsset>(
-        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>,
+      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>).toBeDefined();
+      const mesh = resolveAssetHandle<MeshAsset>(
+        new World(),
+        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>,
       );
       expect(mesh.ok).toBe(true);
       if (mesh.ok) {
@@ -1109,10 +1100,10 @@ function makeStubGPU(): unknown {
       // Anchored on HANDLE_QUAD's existing 12F stride; HANDLE_NINESLICE_QUAD
       // funnels through the same meshFromInterleaved expansion path so the
       // sprite-pipeline binding table / vertex layout is untouched.
-      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>).toBeDefined();
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const mesh = reg.get<MeshAsset>(
-        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>,
+      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>).toBeDefined();
+      const mesh = resolveAssetHandle<MeshAsset>(
+        new World(),
+        arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>,
       );
       expect(mesh.ok).toBe(true);
       if (mesh.ok) {
@@ -1123,8 +1114,8 @@ function makeStubGPU(): unknown {
     });
 
     it('(d) HANDLE_NINESLICE_QUAD raw id === 5 (adjacent to HANDLE_SPHERE=4)', () => {
-      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>).toBeDefined();
-      const id = unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>);
+      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>).toBeDefined();
+      const id = unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>);
       expect(id).toBe(5);
       // Sanity: HANDLE_QUAD=3, HANDLE_SPHERE=4, no other builtin between.
       expect(unwrapHandle(HANDLE_QUAD)).toBe(3);
@@ -1137,14 +1128,14 @@ function makeStubGPU(): unknown {
       // them in one prompt (plan-strategy AI User Friendliness §2 naming).
       expect(typeof HANDLE_QUAD).toBeDefined();
       expect(typeof HANDLE_SPHERE).toBeDefined();
-      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>).toBeDefined();
+      expect(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>).toBeDefined();
       // Three distinct ids (no aliasing).
       expect(unwrapHandle(HANDLE_QUAD)).not.toBe(unwrapHandle(HANDLE_SPHERE));
       expect(unwrapHandle(HANDLE_QUAD)).not.toBe(
-        unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>),
+        unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>),
       );
       expect(unwrapHandle(HANDLE_SPHERE)).not.toBe(
-        unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'unmanaged'>),
+        unwrapHandle(arMod.HANDLE_NINESLICE_QUAD as Handle<'MeshAsset', 'shared'>),
       );
     });
   });
@@ -1197,32 +1188,36 @@ function makeStubGPU(): unknown {
     return { reg, metrics };
   }
 
+  // feat-20260614 M8 (D-19): the sprite material references its sampler by an
+  // embedded GUID string, resolved by detectTileNeedsRepeatSampler against the
+  // catalogue. Catalog the sampler under a fresh GUID and return that GUID.
   function registerSampler(
     reg: AssetRegistry,
     addressModeU: GPUAddressMode,
     addressModeV: GPUAddressMode = addressModeU,
-  ): Handle<'SamplerAsset', 'unmanaged'> {
+  ): string {
     const samplerAsset: SamplerAsset = {
       kind: 'sampler',
       addressModeU,
       addressModeV,
     };
-    const r = reg.register<SamplerAsset>(samplerAsset);
-    if (!r.ok) throw new Error('sampler register failed');
-    return r.value;
+    const guid = AssetGuid.format(AssetGuid.random());
+    const r = reg.catalog<SamplerAsset>(guid, samplerAsset);
+    if (!r.ok) throw new Error('sampler catalog failed');
+    return guid;
   }
 
   describe('D-9 tile-mode sampler soft-warn (M4 / w18)', () => {
     it('(1) sliceMode=1 + sampler.addressMode=clamp-to-edge -> counter +=1, no throw', () => {
       const { reg, metrics } = setupRegistryWithMetrics();
-      const samplerHandle = registerSampler(reg, 'clamp-to-edge');
-      const matRes = reg.register<MaterialAsset>({
+      const samplerGuid = registerSampler(reg, 'clamp-to-edge');
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
           sliceMode: 1,
           slices: [0.25, 0.25, 0.25, 0.25],
-          sampler: samplerHandle as unknown as number,
+          sampler: samplerGuid,
         },
       });
       expect(matRes.ok).toBe(true);
@@ -1231,14 +1226,14 @@ function makeStubGPU(): unknown {
 
     it('(2) sliceMode=1 + sampler.addressMode=repeat -> counter NOT incremented', () => {
       const { reg, metrics } = setupRegistryWithMetrics();
-      const samplerHandle = registerSampler(reg, 'repeat');
-      const matRes = reg.register<MaterialAsset>({
+      const samplerGuid = registerSampler(reg, 'repeat');
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
           sliceMode: 1,
           slices: [0.25, 0.25, 0.25, 0.25],
-          sampler: samplerHandle as unknown as number,
+          sampler: samplerGuid,
         },
       });
       expect(matRes.ok).toBe(true);
@@ -1247,14 +1242,14 @@ function makeStubGPU(): unknown {
 
     it('(3) sliceMode=0 (stretch) + sampler.addressMode=clamp -> counter NOT incremented', () => {
       const { reg, metrics } = setupRegistryWithMetrics();
-      const samplerHandle = registerSampler(reg, 'clamp-to-edge');
-      const matRes = reg.register<MaterialAsset>({
+      const samplerGuid = registerSampler(reg, 'clamp-to-edge');
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
           sliceMode: 0,
           slices: [0.25, 0.25, 0.25, 0.25],
-          sampler: samplerHandle as unknown as number,
+          sampler: samplerGuid,
         },
       });
       expect(matRes.ok).toBe(true);
@@ -1263,7 +1258,7 @@ function makeStubGPU(): unknown {
 
     it('(4) sliceMode=1 with no sampler bound -> counter NOT incremented (no resolution)', () => {
       const { reg, metrics } = setupRegistryWithMetrics();
-      const matRes = reg.register<MaterialAsset>({
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
@@ -1277,14 +1272,14 @@ function makeStubGPU(): unknown {
 
     it('asymmetric sampler (U=repeat, V=clamp) still fires (both axes required)', () => {
       const { reg, metrics } = setupRegistryWithMetrics();
-      const samplerHandle = registerSampler(reg, 'repeat', 'clamp-to-edge');
-      const matRes = reg.register<MaterialAsset>({
+      const samplerGuid = registerSampler(reg, 'repeat', 'clamp-to-edge');
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
           sliceMode: 1,
           slices: [0.25, 0.25, 0.25, 0.25],
-          sampler: samplerHandle as unknown as number,
+          sampler: samplerGuid,
         },
       });
       expect(matRes.ok).toBe(true);
@@ -1298,14 +1293,14 @@ function makeStubGPU(): unknown {
       // assertion in asset-registry-sprite-slices-validate.test.ts (which
       // implicitly captures the union via .code === 'asset-invalid-value').
       const { reg } = setupRegistryWithMetrics();
-      const samplerHandle = registerSampler(reg, 'clamp-to-edge');
-      const matRes = reg.register<MaterialAsset>({
+      const samplerGuid = registerSampler(reg, 'clamp-to-edge');
+      const matRes = reg.catalog<MaterialAsset>(AssetGuid.random(), {
         kind: 'material',
         passes: [SPRITE_PASS],
         paramValues: {
           sliceMode: 1,
           slices: [0.25, 0.25, 0.25, 0.25],
-          sampler: samplerHandle as unknown as number,
+          sampler: samplerGuid,
         },
       });
       expect(matRes.ok).toBe(true);
@@ -1336,100 +1331,67 @@ function makeStubGPU(): unknown {
     };
   }
 
-  describe('w11 - registerWithGuid + resolveGuid round-trip (AC-09b)', () => {
-    it('resolveGuid(guid) returns Ok(Handle) after registerWithGuid', () => {
+  // feat-20260614 M8: the AssetRegistry holds no handle concept. The
+  // guid->payload direction (catalog + lookup + loadByGuid-returns-payload) is
+  // the surviving contract; the handle->guid reverse (guidOf) and
+  // guid->handle (resolveGuid) round-trips are gone. Column handle minting
+  // moved to World.allocSharedRef.
+  describe('w11 - catalog + lookup round-trip (AC-09b)', () => {
+    it('lookup(guid) returns the catalogued payload', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
       const mesh = makeMesh();
-      const handle = reg.registerWithGuid<TypesMeshAsset>(guid, mesh);
-      const result = reg.resolveGuid<TypesMeshAsset>(guid);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value).toBe(handle);
-      }
+      const cataloged = reg.catalog<TypesMeshAsset>(guid, mesh);
+      expect(cataloged.ok).toBe(true);
+      const looked = reg.lookup(guid);
+      expect(looked).toBeDefined();
+      expect(looked?.kind).toBe('mesh');
     });
 
-    it('get(handle) after registerWithGuid returns the original asset', () => {
+    it('catalog returns the normalized payload (mesh with computed aabb)', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
       const mesh = makeMesh();
-      const handle = reg.registerWithGuid<TypesMeshAsset>(guid, mesh);
-      const got = reg.get<TypesMeshAsset>(handle);
-      expect(got.ok).toBe(true);
-      if (got.ok) {
-        expect(got.value).toBe(mesh);
+      const cataloged = reg.catalog<TypesMeshAsset>(guid, mesh);
+      expect(cataloged.ok).toBe(true);
+      if (cataloged.ok) {
+        expect(cataloged.value.kind).toBe('mesh');
+        // The returned payload deep-equals the catalogued one on lookup.
+        expect(reg.lookup(guid)).toBe(cataloged.value);
       }
     });
   });
 
-  describe('w11 - guidOf(handle) returns AssetGuid (AC-09c)', () => {
-    it('guidOf(handle) returns the same guid used in registerWithGuid', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const parseResult = AssetGuid.parse(GUID_A);
-      if (!parseResult.ok) throw new Error('expected ok');
-      const guid = parseResult.value;
-      const handle = reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
-      const retrieved = reg.guidOf(handle);
-      expect(retrieved).toBeDefined();
-      if (retrieved !== undefined) {
-        expect(AssetGuid.equals(retrieved, guid)).toBe(true);
-      }
-    });
-
-    it('guidOf(unknown handle) returns undefined', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const fakeHandle = toUnmanaged<'MeshAsset'>(99999);
-      const result = reg.guidOf(fakeHandle);
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe('w11 - resolveGuid error paths', () => {
-    it('resolveGuid(unknown guid) returns Err', () => {
+  describe('w11 - lookup miss', () => {
+    it('lookup(unknown guid) returns undefined', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const unknownGuidResult = AssetGuid.parse(GUID_B);
       if (!unknownGuidResult.ok) throw new Error('expected ok');
-      const unknownGuid = unknownGuidResult.value;
-      const result = reg.resolveGuid<TypesMeshAsset>(unknownGuid);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        const error: AssetError = result.error;
-        expect(error.code).toBe('asset-not-found');
-      }
-    });
-
-    it('registerWithGuid(duplicate guid) throws AssetError', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const parseResult = AssetGuid.parse(GUID_A);
-      if (!parseResult.ok) throw new Error('expected ok');
-      const guid = parseResult.value;
-      reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
-      expect(() => {
-        reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
-      }).toThrow();
+      expect(reg.lookup(unknownGuidResult.value)).toBeUndefined();
     });
   });
 
   describe('w11 - loadByGuid ok / err paths', () => {
-    it('loadByGuid(registered guid) returns Promise<Ok<Handle>>', async () => {
+    it('loadByGuid(catalogued guid) returns Ok(payload)', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parseResult = AssetGuid.parse(GUID_A);
       if (!parseResult.ok) throw new Error('expected ok');
       const guid = parseResult.value;
-      reg.registerWithGuid<TypesMeshAsset>(guid, makeMesh());
+      reg.catalog<TypesMeshAsset>(guid, makeMesh());
       const result = await reg.loadByGuid<TypesMeshAsset>(guid);
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const handle: Handle<'MeshAsset', 'unmanaged'> = result.value;
-        expect(typeof handle).toBe('number');
+        // loadByGuid now returns the PAYLOAD, not a handle.
+        expect(result.value.kind).toBe('mesh');
+        expect(result.value).toBe(reg.lookup(guid));
       }
     });
 
-    it('loadByGuid(unregistered guid) returns Promise<Err>', async () => {
+    it('loadByGuid(uncatalogued guid) returns Promise<Err>', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const unknownGuidResult = AssetGuid.parse(GUID_B);
       if (!unknownGuidResult.ok) throw new Error('expected ok');
@@ -1452,18 +1414,18 @@ function makeStubGPU(): unknown {
       expect(reg).toBeInstanceOf(AssetRegistry);
     });
 
-    it('(b) register<MaterialAsset> with minimal MaterialAsset returns ok handle', () => {
+    it('(b) catalog<MaterialAsset> with minimal MaterialAsset returns ok + lookup resolves', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const asset: MaterialAsset = { kind: 'material' };
-      const h = reg.register<MaterialAsset>(asset);
+      const guid = AssetGuid.random();
+      const h = reg.catalog<MaterialAsset>(guid, asset);
       expect(h.ok).toBe(true);
       if (h.ok) {
-        const mat = reg.get(h.value);
-        expect(mat.ok).toBe(true);
+        expect(reg.lookup(guid)?.kind).toBe('material');
       }
     });
 
-    it('(c) register<MaterialAsset> with passes[] + paramValues returns ok handle', () => {
+    it('(c) catalog<MaterialAsset> with passes[] + paramValues returns ok + lookup resolves', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const asset: MaterialAsset = {
         kind: 'material',
@@ -1477,14 +1439,13 @@ function makeStubGPU(): unknown {
         ],
         paramValues: { baseColor: [1, 0, 0, 1] },
       };
-      const h = reg.register<MaterialAsset>(asset);
+      const guid = AssetGuid.random();
+      const h = reg.catalog<MaterialAsset>(guid, asset);
       expect(h.ok).toBe(true);
       if (h.ok) {
-        const mat = reg.get(h.value);
-        expect(mat.ok).toBe(true);
-        if (mat.ok) {
-          expect(mat.value.kind).toBe('material');
-        }
+        const mat = reg.lookup(guid);
+        expect(mat).toBeDefined();
+        expect(mat?.kind).toBe('material');
       }
     });
   });
@@ -1516,7 +1477,7 @@ function makeStubGPU(): unknown {
           lightIntensity: 1.0,
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(true);
     });
 
@@ -1546,7 +1507,7 @@ function makeStubGPU(): unknown {
           // baseColorTexture missing — required by test::unlit (no default)
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('asset-invalid-value');
@@ -1571,7 +1532,7 @@ function makeStubGPU(): unknown {
         ],
         paramValues: {},
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('asset-invalid-value');
@@ -1601,7 +1562,7 @@ function makeStubGPU(): unknown {
           anotherExtra: 'hello',
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(true);
     });
 
@@ -1612,14 +1573,14 @@ function makeStubGPU(): unknown {
         passes: [],
         paramValues: { baseColor: [1, 0, 0, 1] },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('asset-invalid-value');
       }
     });
 
-    it('(i) registerWithGuid<MaterialAsset> same validation as register', () => {
+    it('(i) catalog<MaterialAsset> with a guid runs the same validation as catalog', () => {
       const sr = makeMockShaderRegistry();
       const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
       // Test invalid: shader not found
@@ -1635,19 +1596,14 @@ function makeStubGPU(): unknown {
         ],
         paramValues: {},
       };
-      expect(() =>
-        reg.registerWithGuid<MaterialAsset>(
-          // Use a fake AssetGuid - the Uint8Array representation
-          new Uint8Array([
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-            0x0f, 0x10,
-          ]) as unknown as import('@forgeax/engine-pack/guid').AssetGuid,
-          asset,
-        ),
-      ).toThrow();
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('asset-invalid-value');
+      }
     });
 
-    it('(i-2) registerWithGuid<MaterialAsset> with valid material succeeds', () => {
+    it('(i-2) catalog<MaterialAsset> with valid material succeeds', () => {
       const sr = makeMockShaderRegistry();
       const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
       const asset: MaterialAsset = {
@@ -1666,14 +1622,10 @@ function makeStubGPU(): unknown {
           roughness: 0.5,
         },
       };
-      const handle = reg.registerWithGuid<MaterialAsset>(
-        new Uint8Array([
-          0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-          0x20,
-        ]) as unknown as import('@forgeax/engine-pack/guid').AssetGuid,
-        asset,
-      );
-      expect(handle).toBeDefined();
+      const guid = AssetGuid.random();
+      const result = reg.catalog<MaterialAsset>(guid, asset);
+      expect(result.ok).toBe(true);
+      expect(reg.lookup(guid)?.kind).toBe('material');
     });
 
     it('(j) type mismatch in paramValues -> AssetError', () => {
@@ -1695,7 +1647,7 @@ function makeStubGPU(): unknown {
           roughness: 0.5,
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('asset-invalid-value');
@@ -1709,7 +1661,7 @@ function makeStubGPU(): unknown {
         // passes undefined -> valid (inherits from parent at resolve time)
         paramValues: { baseColor: [1, 0, 0, 1] },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       // undefined passes is valid — material can inherit passes from parent
       expect(result.ok).toBe(true);
     });
@@ -1734,7 +1686,7 @@ function makeStubGPU(): unknown {
           // baseColor/metallic/roughness/channelMap all have defaults -> omission ok
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(true);
     });
   });
@@ -1775,7 +1727,7 @@ function makeStubGPU(): unknown {
           normalTexture: '00000000-0000-0000-0000-000000000003',
         },
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(true);
     });
 
@@ -1797,7 +1749,7 @@ function makeStubGPU(): unknown {
           },
         ],
       };
-      const result = reg.register<MaterialAsset>(asset);
+      const result = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(result.ok).toBe(true);
     });
 
@@ -1807,7 +1759,7 @@ function makeStubGPU(): unknown {
       expect(() => JSON.parse('{not-json}')).toThrow(SyntaxError);
     });
 
-    it('(d) ShaderAsset registered via registerWithGuid is retrievable', () => {
+    it('(d) ShaderAsset catalogued by GUID is retrievable via lookup', () => {
       const sr = makeMockShaderRegistry();
       // Register as Step 1b does: first in ShaderRegistry, then in AssetRegistry
       sr.registerMaterialShader('test::shader-asset-pbr', {
@@ -1820,12 +1772,9 @@ function makeStubGPU(): unknown {
       });
       const reg = new AssetRegistry(sr, createDefaultLoaderRegistry());
 
-      // Simulate Step 1b ShaderAsset registration with pre-computed UUIDv5
-      const guid = new Uint8Array([
-        0x94, 0xd8, 0x5c, 0xe4, 0x65, 0x0c, 0x54, 0xb1, 0xa8, 0x6a, 0xea, 0xf2, 0x26, 0x96, 0xec,
-        0xbc,
-      ]) as unknown as import('@forgeax/engine-pack/guid').AssetGuid;
-      const handle = reg.registerWithGuid(guid, {
+      // Simulate Step 1b ShaderAsset cataloguing.
+      const guid = AssetGuid.random();
+      const cataloged = reg.catalog(guid, {
         kind: 'shader' as const,
         name: 'test::shader-asset-pbr',
         source: 'fn main() {}',
@@ -1835,13 +1784,12 @@ function makeStubGPU(): unknown {
           { name: 'roughness', type: 'f32', default: 0.5 },
         ],
       });
+      expect(cataloged.ok).toBe(true);
 
-      // get by handle should return the registered ShaderAsset
-      const result = reg.get(handle);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.kind).toBe('shader');
-      }
+      // lookup by guid should return the catalogued ShaderAsset
+      const result = reg.lookup(guid);
+      expect(result).toBeDefined();
+      expect(result?.kind).toBe('shader');
     });
   });
 }
@@ -1851,7 +1799,7 @@ function makeStubGPU(): unknown {
   describe('AssetRegistry.register fail-fast (M1 t4 - kind:mesh non-12F vertices)', () => {
     it('(1) vertices not divisible by 12 returns Result.err mesh-vertex-stride-mismatch', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(9), // 9 floats = 3 verts * 3F (position-only, not 12F)
         indices: new Uint16Array([0, 1, 2]),
@@ -1879,7 +1827,7 @@ function makeStubGPU(): unknown {
 
     it('(2) empty mesh (0 vertices, 0 indices) returns Result.ok', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
@@ -1895,14 +1843,15 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(typeof result.value).toBe('number');
+        // catalog returns the normalized payload (no handle).
+        expect(result.value.kind).toBe('mesh');
       }
     });
 
     it('(3) maxIndex+1 !== vertexCount triggers gate (vertices 12-divisible but indices max mismatch)', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       // vertices.length=24 = 2 verts * 12F, but indices max=0 means only vertex 0 is referenced
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(24),
         indices: new Uint16Array([0, 0, 0]),
@@ -1925,10 +1874,10 @@ function makeStubGPU(): unknown {
       }
     });
 
-    it('(4) after register Result.err, inspect().handles does not contain new entry', () => {
+    it('(4) after catalog Result.err, inspect().assets does not contain new entry', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const beforeHandles = reg.inspect().handles.length;
-      reg.register({
+      const beforeAssets = reg.inspect().assets.length;
+      reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(9),
         indices: new Uint16Array([0, 1, 2]),
@@ -1942,12 +1891,12 @@ function makeStubGPU(): unknown {
           },
         ],
       });
-      expect(reg.inspect().handles.length).toBe(beforeHandles);
+      expect(reg.inspect().assets.length).toBe(beforeAssets);
     });
 
     it('(5) compliant 12F mesh register returns Result.ok with handle', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(36), // 3 verts * 12F
         indices: new Uint16Array([0, 1, 2]),
@@ -1963,13 +1912,14 @@ function makeStubGPU(): unknown {
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(typeof result.value).toBe('number');
+        // catalog returns the normalized payload (no handle).
+        expect(result.value.kind).toBe('mesh');
       }
     });
 
     it('(6) AC-08 narrowing: access result.error.detail.floatsPerVertex with type-safe cast', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(11), // 11 floats, not divisible by 12
         indices: new Uint16Array([0, 1, 2]),
@@ -1995,7 +1945,7 @@ function makeStubGPU(): unknown {
     it('indices with reference beyond vertices count triggers gate (super-set indices case)', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       // vertices.length=12 = 1 vert * 12F, but indices reference verts [0,1,2] (max=2, implies 3 verts)
-      const result = reg.register({
+      const result = reg.catalog(AssetGuid.random(), {
         kind: 'mesh',
         vertices: new Float32Array(12),
         indices: new Uint16Array([0, 1, 2]),
@@ -2034,46 +1984,45 @@ function makeStubGPU(): unknown {
     };
   }
 
-  describe('w6 - AssetRegistry register + get round-trip for SceneAsset', () => {
-    it('register(sceneAsset) returns a Handle that get() resolves to the same POD', () => {
+  describe('w6 - AssetRegistry catalog + lookup round-trip for SceneAsset', () => {
+    it('catalog(sceneAsset) is resolvable to the same POD via lookup', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const scene = makeSceneAsset();
-      const handle = reg.register<SceneAsset>(scene).unwrap();
-      const lookup = reg.get<SceneAsset>(handle);
-      expect(lookup.ok).toBe(true);
-      if (!lookup.ok) return;
-      expect(lookup.value.kind).toBe('scene');
-      expect(lookup.value.entities.length).toBe(2);
+      const guid = AssetGuid.random();
+      reg.catalog<SceneAsset>(guid, scene);
+      const looked = reg.lookup(guid) as SceneAsset | undefined;
+      expect(looked).toBeDefined();
+      if (looked === undefined) return;
+      expect(looked.kind).toBe('scene');
+      expect(looked.entities.length).toBe(2);
     });
 
-    it('inspect() reports brand `SceneAsset` for a registered scene', () => {
+    it('inspect() reports brand `SceneAsset` for a catalogued scene', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const handle = reg.register<SceneAsset>(makeSceneAsset()).unwrap();
-      const id = unwrapHandle(handle);
+      const guid = AssetGuid.format(AssetGuid.random());
+      reg.catalog<SceneAsset>(guid, makeSceneAsset());
       const snap = reg.inspect();
-      const entry = snap.handles.find((h) => h.id === id);
+      const entry = snap.assets.find((a) => a.guid === guid.toLowerCase());
       expect(entry).toBeDefined();
       expect(entry?.brand).toBe('SceneAsset');
     });
   });
 
-  describe('w6 - registerWithGuid + loadByGuid path for SceneAsset', () => {
-    it('loadByGuid<SceneAsset>(guid) returns Ok(Handle) after registerWithGuid', async () => {
+  describe('w6 - catalog + loadByGuid path for SceneAsset', () => {
+    it('loadByGuid<SceneAsset>(guid) returns Ok(payload) after catalog', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parsed = AssetGuid.parse(SCENE_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const guid = parsed.value;
-      reg.registerWithGuid<SceneAsset>(guid, makeSceneAsset());
+      reg.catalog<SceneAsset>(guid, makeSceneAsset());
       const result = await reg.loadByGuid<SceneAsset>(guid);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      const lookup = reg.get<SceneAsset>(result.value);
-      expect(lookup.ok).toBe(true);
-      if (!lookup.ok) return;
-      expect(lookup.value.kind).toBe('scene');
+      // loadByGuid now returns the PAYLOAD, not a handle.
+      expect(result.value.kind).toBe('scene');
     });
 
-    it('loadByGuid for an unregistered GUID returns Err(asset-not-found)', async () => {
+    it('loadByGuid for an uncatalogued GUID returns Err(asset-not-found)', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parsed = AssetGuid.parse(SCENE_GUID);
       if (!parsed.ok) throw new Error('expected ok');
@@ -2173,7 +2122,7 @@ function makeStubGPU(): unknown {
     it('(1) slices contains a negative number -> AssetError(asset-invalid-value)', () => {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       const asset = spriteAssetWithSlices([-0.1, 0.2, 0.2, 0.2]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2189,7 +2138,7 @@ function makeStubGPU(): unknown {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       // region.zw[0] = 1.0 ; left + right = 0.6 + 0.6 = 1.2 >= 1.0
       const asset = spriteAssetWithSlices([0.6, 0, 0.6, 0]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2206,7 +2155,7 @@ function makeStubGPU(): unknown {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       // region.zw[1] = 1.0 ; top + bottom = 0.6 + 0.5 = 1.1 >= 1.0
       const asset = spriteAssetWithSlices([0, 0.6, 0, 0.5]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2219,7 +2168,7 @@ function makeStubGPU(): unknown {
     it('(4) slices contains NaN -> AssetError(asset-invalid-value)', () => {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       const asset = spriteAssetWithSlices([Number.NaN, 0.1, 0.1, 0.1]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2231,7 +2180,7 @@ function makeStubGPU(): unknown {
     it('(5) slices contains Infinity -> AssetError(asset-invalid-value)', () => {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       const asset = spriteAssetWithSlices([0.1, Number.POSITIVE_INFINITY, 0.1, 0.1]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2243,7 +2192,7 @@ function makeStubGPU(): unknown {
     it('(6) slices length !== 4 -> AssetError(asset-invalid-value)', () => {
       const reg = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
       const asset = spriteAssetWithSlices([0.1, 0.1, 0.1]);
-      const r = reg.register<MaterialAsset>(asset);
+      const r = reg.catalog<MaterialAsset>(AssetGuid.random(), asset);
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.error).toBeInstanceOf(AssetError);
@@ -2719,39 +2668,50 @@ function makeStubGPU(): unknown {
     { name: 'HANDLE_SPHERE', handle: HANDLE_SPHERE },
   ] as const;
 
-  describe('builtin GUID <-> handle SSOT (Tier 0 guard)', () => {
+  describe('builtin GUID -> payload SSOT (Tier 0 guard)', () => {
     it.each(
       BUILTINS,
-    )('guidOf($name) equals pack deriveBuiltin($name) — inlined literal matches the SSOT', async ({
+    )('deriveBuiltin($name) GUID is catalogued and lookup-resolves to the builtin payload', async ({
       name,
       handle,
     }) => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
-      const guid = reg.guidOf(handle);
-      // The forward assertion: builtins are now first-class GUID-addressable
-      // assets, so guidOf no longer returns undefined (was the Tier 0 gap).
-      expect(guid).toBeDefined();
-      if (guid === undefined) return;
-
+      // feat-20260614 M8: the registry holds no handle->guid map (guidOf is
+      // gone). Builtins are first-class GUID-addressable catalogue rows, so the
+      // surviving direction is GUID -> payload via lookup. The payload resolved
+      // from the column handle (two-tier) must be the same object the derived
+      // GUID looks up.
       const derived = await deriveBuiltin(name);
-      expect(AssetGuid.format(guid)).toBe(AssetGuid.format(derived));
+      const cataloged = reg.lookup(derived);
+      expect(cataloged).toBeDefined();
+      if (cataloged === undefined) return;
+
+      const fromHandle = resolveAssetHandle(new World(), handle as Handle<string, 'shared'>);
+      expect(fromHandle.ok).toBe(true);
+      if (!fromHandle.ok) return;
+      expect(fromHandle.value).toBe(cataloged);
     });
 
     it.each(
       BUILTINS,
-    )('resolveGuid round-trips the derived $name GUID back to its builtin handle', async ({
+    )('loadByGuid round-trips the derived $name GUID back to its builtin payload', async ({
       name,
       handle,
     }) => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
       const derived = await deriveBuiltin(name);
-      const resolved = reg.resolveGuid(derived);
+      const loaded = await reg.loadByGuid(derived);
 
-      expect(resolved.ok).toBe(true);
-      if (!resolved.ok) return;
-      expect(resolved.value).toBe(handle);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      // loadByGuid returns the PAYLOAD; it must match the payload resolved from
+      // the builtin column handle via the two-tier resolver.
+      const fromHandle = resolveAssetHandle(new World(), handle as Handle<string, 'shared'>);
+      expect(fromHandle.ok).toBe(true);
+      if (!fromHandle.ok) return;
+      expect(loaded.value).toBe(fromHandle.value);
     });
   });
 }
@@ -2925,13 +2885,11 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const loaded = reg.get<MeshAsset>(result.value);
-        expect(loaded.ok).toBe(true);
-        if (loaded.ok) {
-          expect(loaded.value.kind).toBe('mesh');
-          expect(float32Equal(loaded.value.vertices, cube.vertices)).toBe(true);
-          expect(indicesEqual(loaded.value.indices, cube.indices)).toBe(true);
-        }
+        // loadByGuid now returns the payload directly.
+        const loaded = result.value;
+        expect(loaded.kind).toBe('mesh');
+        expect(float32Equal(loaded.vertices, cube.vertices)).toBe(true);
+        expect(indicesEqual(loaded.indices, cube.indices)).toBe(true);
       }
     });
 
@@ -2949,13 +2907,10 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const loaded = reg.get<MeshAsset>(result.value);
-        expect(loaded.ok).toBe(true);
-        if (loaded.ok) {
-          expect(loaded.value.kind).toBe('mesh');
-          expect(float32Equal(loaded.value.vertices, quad.vertices)).toBe(true);
-          expect(indicesEqual(loaded.value.indices, quad.indices)).toBe(true);
-        }
+        const loaded = result.value;
+        expect(loaded.kind).toBe('mesh');
+        expect(float32Equal(loaded.vertices, quad.vertices)).toBe(true);
+        expect(indicesEqual(loaded.indices, quad.indices)).toBe(true);
       }
     });
 
@@ -2973,13 +2928,10 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        const loaded = reg.get<MeshAsset>(result.value);
-        expect(loaded.ok).toBe(true);
-        if (loaded.ok) {
-          expect(loaded.value.kind).toBe('mesh');
-          expect(float32Equal(loaded.value.vertices, tri.vertices)).toBe(true);
-          expect(indicesEqual(loaded.value.indices, tri.indices)).toBe(true);
-        }
+        const loaded = result.value;
+        expect(loaded.kind).toBe('mesh');
+        expect(float32Equal(loaded.vertices, tri.vertices)).toBe(true);
+        expect(indicesEqual(loaded.indices, tri.indices)).toBe(true);
       }
     });
 
@@ -3063,8 +3015,8 @@ function makeStubGPU(): unknown {
   // feat-20260601-gpu-resource-store-extraction M1: uploadCubemapFromEquirect
   // moved to GpuResourceStore. The store holds no registry reference (D-2/D-3);
   // the cube POD register-relay is injected at configureGpuDevice (D-3) and the
-  // source POD is passed to the call. Tests construct the relay as
-  // `(pod) => reg.register(pod)` over a real registry (not a store import).
+  // source POD is passed to the call. feat-20260614 M8: column handles are
+  // minted by the World, so the relay is `(world, pod) => ok(world.allocSharedRef(...))`.
 
   interface SubmitProbe {
     submitCalls: number;
@@ -3140,29 +3092,28 @@ function makeStubGPU(): unknown {
     it('(a) returns Handle<CubeTextureAsset> for valid equirect TextureAsset', async () => {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const world = new World();
       const store = new GpuResourceStore();
       const equirect = makeEquirect();
-      // biome-ignore lint/suspicious/noExplicitAny: register narrows on kind
-      const regRes = reg.register(equirect as any);
-      expect(regRes.ok).toBe(true);
-      if (!regRes.ok) return;
+      // feat-20260614 M8: column handles are minted by the World, not the
+      // registry. The cube register-relay also mints via world.allocSharedRef.
+      const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: shader factory shim
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
-      const result = await store.uploadCubemapFromEquirect(regRes.value, equirect);
+      const result = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
       expect(result.ok).toBe(true);
     });
 
     it('(c) rejects non-HDR-float input with invalid-source-format', async () => {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const world = new World();
       const store = new GpuResourceStore();
       const ldr: TextureAsset = {
         kind: 'texture',
@@ -3173,28 +3124,26 @@ function makeStubGPU(): unknown {
         colorSpace: 'srgb',
         mipmap: false,
       };
-      // biome-ignore lint/suspicious/noExplicitAny: register narrows on kind
-      const regRes = reg.register(ldr as any);
-      if (!regRes.ok) return;
+      const sourceHandle = world.allocSharedRef('TextureAsset', ldr);
       store.configureGpuDevice(
         device,
         undefined,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
-      const result = await store.uploadCubemapFromEquirect(regRes.value, ldr);
+      const result = await store.uploadCubemapFromEquirect(world, sourceHandle, ldr);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('invalid-source-format');
       }
     });
 
-    it('(d) source POD fetch surfaces asset-not-found for unregistered handle', () => {
-      // Pull-model migration: the cube upload takes a source POD, so a missing
-      // source surfaces at the registry get the caller runs first.
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const bogus = toUnmanaged<'TextureAsset'>(99999);
-      const podRes = reg.get<TextureAsset>(bogus);
+    it('(d) source POD fetch surfaces asset-not-found for unresolvable handle', () => {
+      // Pull-model migration: the cube upload takes a source POD; a missing
+      // source surfaces when the caller resolves the handle to a payload first.
+      const world = new World();
+      const bogus = toShared<'TextureAsset'>(99999);
+      const podRes = resolveAssetHandle<TextureAsset>(world, bogus);
       expect(podRes.ok).toBe(false);
       if (!podRes.ok) {
         expect(podRes.error.code).toBe('asset-not-found');
@@ -3206,26 +3155,24 @@ function makeStubGPU(): unknown {
     it('(b1) second uploadCubemapFromEquirect with same source does NOT re-dispatch', async () => {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const world = new World();
       const store = new GpuResourceStore();
       const equirect = makeEquirect();
-      // biome-ignore lint/suspicious/noExplicitAny: register narrows on kind
-      const regRes = reg.register(equirect as any);
-      if (!regRes.ok) return;
+      const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: shader factory shim
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
-      const r1 = await store.uploadCubemapFromEquirect(regRes.value, equirect);
+      const r1 = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
       const firstSubmits = probe.submitCalls;
       expect(firstSubmits).toBeGreaterThanOrEqual(1);
 
-      const r2 = await store.uploadCubemapFromEquirect(regRes.value, equirect);
+      const r2 = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
       // Second call returns the cached handle without dispatching again.
       expect(probe.submitCalls).toBe(firstSubmits);
 
@@ -3311,8 +3258,8 @@ function makeStubGPU(): unknown {
   function makeFontAsset(): FontAsset {
     return {
       kind: 'font',
-      atlas: toManaged<'TextureAsset'>(0),
-      sampler: toManaged<'SamplerAsset'>(0),
+      atlas: toUnique<'TextureAsset'>(0),
+      sampler: toUnique<'SamplerAsset'>(0),
       glyphs: {
         72: {
           advance: 64,
@@ -3347,35 +3294,33 @@ function makeStubGPU(): unknown {
     };
   }
 
-  describe('w10 - registerWithGuid + loadByGuid path for FontAsset', () => {
-    it('(a) loadByGuid<FontAsset>(guid) returns Ok(Handle) after registerWithGuid', async () => {
+  describe('w10 - catalog + loadByGuid path for FontAsset', () => {
+    it('(a) loadByGuid<FontAsset>(guid) returns Ok(payload) after catalog', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parsed = AssetGuid.parse(FONT_GUID);
       if (!parsed.ok) throw new Error('expected ok');
       const guid = parsed.value;
       const fontAsset = makeFontAsset();
-      reg.registerWithGuid<FontAsset>(guid, fontAsset);
+      reg.catalog<FontAsset>(guid, fontAsset);
       const result = await reg.loadByGuid<FontAsset>(guid);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      const lookup = reg.get<FontAsset>(result.value);
-      expect(lookup.ok).toBe(true);
-      if (!lookup.ok) return;
+      // loadByGuid now returns the payload directly.
+      const loaded = result.value;
       // AC-05: atlas + sampler handle + glyphs Record + common block
-      expect(lookup.value.kind).toBe('font');
-      expect(lookup.value.glyphs[72]?.advance).toBe(64);
-      expect(lookup.value.glyphs[105]?.bearingY).toBe(0);
-      expect(lookup.value.common.lineHeight).toBe(72);
-      expect(lookup.value.common.distanceRange).toBe(4);
-      expect(lookup.value.common.atlasWidth).toBe(1024);
-      expect(lookup.value.notdef?.advance).toBe(48);
-      // AC-17: Handle<FontAsset> narrowing — get returns FontAsset, not Asset
-      // This is a compile-time assertion; no `as` cast needed here
-      const atlasId = unwrapHandle(lookup.value.atlas);
+      expect(loaded.kind).toBe('font');
+      expect(loaded.glyphs[72]?.advance).toBe(64);
+      expect(loaded.glyphs[105]?.bearingY).toBe(0);
+      expect(loaded.common.lineHeight).toBe(72);
+      expect(loaded.common.distanceRange).toBe(4);
+      expect(loaded.common.atlasWidth).toBe(1024);
+      expect(loaded.notdef?.advance).toBe(48);
+      // AC-17: FontAsset.atlas is a sub-asset reference handle inside the payload
+      const atlasId = unwrapHandle(loaded.atlas);
       expect(typeof atlasId).toBe('number');
     });
 
-    it('(b) loadByGuid for an unregistered font GUID returns Err(asset-not-found)', async () => {
+    it('(b) loadByGuid for an uncatalogued font GUID returns Err(asset-not-found)', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parsed = AssetGuid.parse(FONT_GUID);
       if (!parsed.ok) throw new Error('expected ok');
@@ -3392,8 +3337,8 @@ function makeStubGPU(): unknown {
       const guid = parsed.value;
       const fontAsset: FontAsset = {
         kind: 'font',
-        atlas: toManaged<'TextureAsset'>(0),
-        sampler: toManaged<'SamplerAsset'>(0),
+        atlas: toUnique<'TextureAsset'>(0),
+        sampler: toUnique<'SamplerAsset'>(0),
         glyphs: {},
         common: {
           lineHeight: 72,
@@ -3404,15 +3349,13 @@ function makeStubGPU(): unknown {
           atlasHeight: 1024,
         },
       };
-      reg.registerWithGuid<FontAsset>(guid, fontAsset);
+      reg.catalog<FontAsset>(guid, fontAsset);
       const result = await reg.loadByGuid<FontAsset>(guid);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      const lookup = reg.get<FontAsset>(result.value);
-      expect(lookup.ok).toBe(true);
-      if (!lookup.ok) return;
-      expect(lookup.value.kind).toBe('font');
-      expect(Object.keys(lookup.value.glyphs).length).toBe(0);
+      const loaded = result.value;
+      expect(loaded.kind).toBe('font');
+      expect(Object.keys(loaded.glyphs).length).toBe(0);
     });
   });
 }
@@ -3440,16 +3383,15 @@ function makeStubGPU(): unknown {
       expect(HANDLE_TRIANGLE).toBe(2);
     });
 
-    it('Handle brand structurally matches toUnmanaged<MeshAsset>(3)', () => {
-      // Brand identity check: HANDLE_QUAD === toUnmanaged<'MeshAsset'>(3)
+    it('Handle brand structurally matches toShared<MeshAsset>(3)', () => {
+      // Brand identity check: HANDLE_QUAD === toShared<'MeshAsset'>(3)
       // (the factory is the AC-01-exemption single brand-creation site).
-      const reconstructed: Handle<'MeshAsset', 'unmanaged'> = toUnmanaged<'MeshAsset'>(3);
+      const reconstructed: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(3);
       expect(HANDLE_QUAD).toBe(reconstructed);
     });
 
     it('AssetRegistry pre-populates HANDLE_QUAD with a 12-floats-per-vertex MeshAsset', () => {
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const res = reg.get<TypesMeshAsset>(HANDLE_QUAD);
+      const res = resolveAssetHandle<TypesMeshAsset>(new World(), HANDLE_QUAD);
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const quad = res.value;
@@ -3480,8 +3422,7 @@ function makeStubGPU(): unknown {
       // (1x1 / 1 segment / 1 segment) — zero new layout discriminator and
       // the AI user can reason about UV / face count by reading
       // packages/runtime/src/geometry/plane.ts.
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const res = reg.get<TypesMeshAsset>(HANDLE_QUAD);
+      const res = resolveAssetHandle<TypesMeshAsset>(new World(), HANDLE_QUAD);
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const quad = res.value;
@@ -4088,12 +4029,8 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      // loadByGuid returns a Handle; resolve to the POD via get().
-      const handle: Handle<'TextureAsset', 'unmanaged'> = result.value;
-      const got = reg.get<TextureAsset>(handle);
-      expect(got.ok).toBe(true);
-      if (!got.ok) return;
-      const tex: TextureAsset = got.value;
+      // loadByGuid returns the payload directly.
+      const tex: TextureAsset = result.value;
       expect(tex.format).toBe('rgba16float');
       expect(tex.colorSpace).toBe('linear');
       expect(tex.width).toBe(binWidth);
@@ -4288,6 +4225,16 @@ function makeStubGPU(): unknown {
     ],
   };
 
+  // feat-20260614 M8: passesOf/paramValueOf are gone. The material parent-chain
+  // walk now runs over a World column handle via walkMaterialPassesOverSharedRefs;
+  // the child payload (returned by loadByGuid) is minted into a fresh World and
+  // its parent chain resolved against the AssetRegistry catalogue (D-19).
+  function resolveMaterialChain(reg: AssetRegistry, childPayload: MaterialAsset) {
+    const world = new World();
+    const childHandle = world.allocSharedRef('MaterialAsset', childPayload);
+    return walkMaterialPassesOverSharedRefs(world, childHandle, reg);
+  }
+
   describe('loadByGuid prod :: material parent inheritance (feat-20260528 M2 / w4)', () => {
     let originalFetch: typeof globalThis.fetch | undefined;
 
@@ -4347,32 +4294,24 @@ function makeStubGPU(): unknown {
       if (!result.ok) return;
 
       // resolve the child material — should inherit parent passes
-      const passesResult = reg.passesOf(result.value);
-      expect(passesResult.ok).toBe(true);
-      if (!passesResult.ok) return;
+      const walk = resolveMaterialChain(reg, result.value);
+      expect(walk.ok).toBe(true);
+      if (!walk.ok) return;
 
       // Inherited parent passes
-      expect(passesResult.value.length).toBe(1);
-      if (passesResult.value[0]) {
-        expect(passesResult.value[0].name).toBe('Forward');
-        expect(passesResult.value[0].shader).toBe('test::standard');
+      expect(walk.value.passes.length).toBe(1);
+      if (walk.value.passes[0]) {
+        expect(walk.value.passes[0].name).toBe('Forward');
+        expect(walk.value.passes[0].shader).toBe('test::standard');
       }
 
       // Child paramValues override parent: baseColor + roughness from child, metallic from parent
-      const bcResult = reg.paramValueOf(result.value, 'baseColor');
-      expect(bcResult.ok).toBe(true);
-      if (bcResult.ok) expect(bcResult.value).toEqual([0.8, 0.2, 0.1, 1]);
-
-      const mResult = reg.paramValueOf(result.value, 'metallic');
-      expect(mResult.ok).toBe(true);
-      if (mResult.ok) expect(mResult.value).toBe(0);
-
-      const rResult = reg.paramValueOf(result.value, 'roughness');
-      expect(rResult.ok).toBe(true);
-      if (rResult.ok) expect(rResult.value).toBe(0.3);
+      expect(walk.value.paramValues.baseColor).toEqual([0.8, 0.2, 0.1, 1]);
+      expect(walk.value.paramValues.metallic).toBe(0);
+      expect(walk.value.paramValues.roughness).toBe(0.3);
     });
 
-    it('(AC-03) parent already registered — idempotent fast-path, child resolves correctly', async () => {
+    it('(AC-03) parent already catalogued — idempotent fast-path, child resolves correctly', async () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
       if (typeof reg.configurePackIndex !== 'function') {
@@ -4381,15 +4320,11 @@ function makeStubGPU(): unknown {
 
       reg.configurePackIndex('/pack-index.json');
 
-      // Pre-register the parent manually (simulates parent already loaded)
+      // Pre-catalogue the parent (simulates parent already loaded). feat-20260614
+      // M8: the registry holds no handle maps; "already loaded" == catalogued.
       const parentGuid = AssetGuid.parse(PARENT_GUID);
       if (!parentGuid.ok) throw new Error('expected ok');
-
-      // Register parent directly into the internal maps
-      // biome-ignore lint/suspicious/noExplicitAny: test needs access to internal state
-      const internal = reg as any;
-      const parentHandle = internal.nextHandle++; // mocks registerWithGuid internals to set up parent
-      internal.assets.set(parentHandle, {
+      reg.catalog<MaterialAsset>(parentGuid.value, {
         kind: 'material',
         passes: [
           {
@@ -4405,10 +4340,8 @@ function makeStubGPU(): unknown {
           roughness: 0.8,
         },
       } as MaterialAsset);
-      internal.guidToHandle.set(PARENT_GUID.toLowerCase(), parentHandle);
-      internal.handleToGuid.set(parentHandle, parentGuid.value);
 
-      // Now request child — loadByGuid should see parent via fast-path
+      // Now request child — loadByGuid should see parent via the catalogue fast-path
       const fetchMock = vi.fn().mockImplementation((url: string) => {
         if (url === '/pack-index.json') {
           return Promise.resolve({
@@ -4431,33 +4364,24 @@ function makeStubGPU(): unknown {
       if (!childGuid.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
 
-      // Parent already registered via guidToHandle — loadByGuid fast-path
-      // returns existing Handle, then loadByGuidProd injects it into child.
+      // Parent already catalogued — loadByGuidProd resolves it from the catalogue.
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 
-      const passesResult = reg.passesOf(result.value);
-      expect(passesResult.ok).toBe(true);
-      if (!passesResult.ok) return;
+      const walk = resolveMaterialChain(reg, result.value);
+      expect(walk.ok).toBe(true);
+      if (!walk.ok) return;
 
       // Inherited parent passes
-      expect(passesResult.value.length).toBe(1);
-      if (passesResult.value[0]) {
-        expect(passesResult.value[0].name).toBe('Forward');
+      expect(walk.value.passes.length).toBe(1);
+      if (walk.value.passes[0]) {
+        expect(walk.value.passes[0].name).toBe('Forward');
       }
 
       // Child paramValues override parent
-      const bcResult = reg.paramValueOf(result.value, 'baseColor');
-      expect(bcResult.ok).toBe(true);
-      if (bcResult.ok) expect(bcResult.value).toEqual([0.8, 0.2, 0.1, 1]);
-
-      const mResult = reg.paramValueOf(result.value, 'metallic');
-      expect(mResult.ok).toBe(true);
-      if (mResult.ok) expect(mResult.value).toBe(0);
-
-      const rResult = reg.paramValueOf(result.value, 'roughness');
-      expect(rResult.ok).toBe(true);
-      if (rResult.ok) expect(rResult.value).toBe(0.3);
+      expect(walk.value.paramValues.baseColor).toEqual([0.8, 0.2, 0.1, 1]);
+      expect(walk.value.paramValues.metallic).toBe(0);
+      expect(walk.value.paramValues.roughness).toBe(0.3);
     });
 
     // --------------- AC-04: parent GUID not in pack-index ---------------
@@ -4642,33 +4566,24 @@ function makeStubGPU(): unknown {
       if (!childGuid.ok) throw new Error('expected ok');
       const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
 
-      // Same pack: parent entry fetched from same pack file, registered first.
+      // Same pack: parent entry fetched from same pack file, catalogued first.
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 
-      const passesResult = reg.passesOf(result.value);
-      expect(passesResult.ok).toBe(true);
-      if (!passesResult.ok) return;
+      const walk = resolveMaterialChain(reg, result.value);
+      expect(walk.ok).toBe(true);
+      if (!walk.ok) return;
 
       // Parent passes inherited
-      expect(passesResult.value.length).toBe(1);
-      if (passesResult.value[0]) {
-        expect(passesResult.value[0].shader).toBe('test::standard');
+      expect(walk.value.passes.length).toBe(1);
+      if (walk.value.passes[0]) {
+        expect(walk.value.passes[0].shader).toBe('test::standard');
       }
 
       // Child roughness overrides parent (0.2 vs 0.6), other params from parent
-      const bcResult = reg.paramValueOf(result.value, 'baseColor');
-      expect(bcResult.ok).toBe(true);
-      if (bcResult.ok) expect(bcResult.value).toEqual([0.3, 0.3, 0.3, 1]);
-      expect(reg.paramValueOf(result.value, 'metallic').ok).toBe(true);
-      if (reg.paramValueOf(result.value, 'metallic').ok) {
-        expect(
-          (reg.paramValueOf(result.value, 'metallic') as { ok: true; value: unknown }).value,
-        ).toBe(0.2);
-      }
-      const rResult = reg.paramValueOf(result.value, 'roughness');
-      expect(rResult.ok).toBe(true);
-      if (rResult.ok) expect(rResult.value).toBe(0.2);
+      expect(walk.value.paramValues.baseColor).toEqual([0.3, 0.3, 0.3, 1]);
+      expect(walk.value.paramValues.metallic).toBe(0.2);
+      expect(walk.value.paramValues.roughness).toBe(0.2);
     });
 
     it('(AC-08) parent and child in different pack files — recursive load works', async () => {
@@ -4709,27 +4624,21 @@ function makeStubGPU(): unknown {
       const result = await reg.loadByGuid<MaterialAsset>(childGuid.value);
 
       // Different pack files: parent fetched from parent.pack.json, child from
-      // child.pack.json. Both registered.
+      // child.pack.json. Both catalogued.
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 
-      const passesResult = reg.passesOf(result.value);
-      expect(passesResult.ok).toBe(true);
-      if (!passesResult.ok) return;
+      const walk = resolveMaterialChain(reg, result.value);
+      expect(walk.ok).toBe(true);
+      if (!walk.ok) return;
 
       // Parent passes inherited
-      expect(passesResult.value.length).toBe(1);
+      expect(walk.value.passes.length).toBe(1);
 
       // Child paramValues override parent
-      const bcResult = reg.paramValueOf(result.value, 'baseColor');
-      expect(bcResult.ok).toBe(true);
-      if (bcResult.ok) expect(bcResult.value).toEqual([0.8, 0.2, 0.1, 1]);
-      const mResult = reg.paramValueOf(result.value, 'metallic');
-      expect(mResult.ok).toBe(true);
-      if (mResult.ok) expect(mResult.value).toBe(0);
-      const rResult = reg.paramValueOf(result.value, 'roughness');
-      expect(rResult.ok).toBe(true);
-      if (rResult.ok) expect(rResult.value).toBe(0.3);
+      expect(walk.value.paramValues.baseColor).toEqual([0.8, 0.2, 0.1, 1]);
+      expect(walk.value.paramValues.metallic).toBe(0);
+      expect(walk.value.paramValues.roughness).toBe(0.3);
     });
 
     // --------------- W6: error boundary tests ---------------
@@ -4965,13 +4874,8 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(typeof result.value).toBe('number');
-        // The handle should now resolve to the mesh asset
-        const asset = reg.get<MeshAsset>(result.value);
-        expect(asset.ok).toBe(true);
-        if (asset.ok) {
-          expect(asset.value.kind).toBe('mesh');
-        }
+        // loadByGuid returns the payload directly (no handle).
+        expect(result.value.kind).toBe('mesh');
       }
     });
 
@@ -5560,18 +5464,17 @@ function makeStubGPU(): unknown {
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      const asset = reg.get<TextureAsset>(result.value);
-      expect(asset.ok).toBe(true);
-      if (!asset.ok) return;
-      expect(asset.value.kind).toBe('texture');
-      expect(asset.value.width).toBe(4);
-      expect(asset.value.height).toBe(4);
-      expect(asset.value.format).toBe('rgba8unorm');
-      expect(asset.value.colorSpace).toBe('linear');
-      expect(asset.value.mipmap).toBe(false);
-      expect(asset.value.data.byteLength).toBe(4 * 4 * 4);
-      expect(asset.value.data[0]).toBe(0);
-      expect(asset.value.data[63]).toBe(63);
+      // loadByGuid returns the payload directly.
+      const asset = result.value;
+      expect(asset.kind).toBe('texture');
+      expect(asset.width).toBe(4);
+      expect(asset.height).toBe(4);
+      expect(asset.format).toBe('rgba8unorm');
+      expect(asset.colorSpace).toBe('linear');
+      expect(asset.mipmap).toBe(false);
+      expect(asset.data.byteLength).toBe(4 * 4 * 4);
+      expect(asset.data[0]).toBe(0);
+      expect(asset.data[63]).toBe(63);
     });
 
     it('(e) import sub-branch fetch RGBA 404 -> Result.err(asset-fetch-failed)', async () => {
@@ -6007,41 +5910,40 @@ function makeStubGPU(): unknown {
     };
   }
 
-  describe('w13 - M4 registerWithGuid rgba16float round-trip (AC-09 / D-5)', () => {
-    it('registerWithGuid(rgba16float pod) -> get(handle) returns ok with format=rgba16float', () => {
+  describe('w13 - M4 catalog rgba16float round-trip (AC-09 / D-5)', () => {
+    it('catalog(rgba16float pod) -> lookup returns ok with format=rgba16float', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parseResult = AssetGuid.parse(GUID_RGBA16F);
       if (!parseResult.ok) throw new Error('GUID parse failed');
       const guid = parseResult.value;
 
       const pod = makeRgba16FloatTexture();
-      const handle: Handle<'TextureAsset', 'unmanaged'> = reg.registerWithGuid<TextureAsset>(
-        guid,
-        pod,
-      );
+      const cataloged = reg.catalog<TextureAsset>(guid, pod);
+      expect(cataloged.ok).toBe(true);
 
-      const got = reg.get<TextureAsset>(handle);
-      expect(got.ok).toBe(true);
-      if (!got.ok) return;
-      expect(got.value.format).toBe('rgba16float');
-      expect(got.value.colorSpace).toBe('linear');
-      expect(got.value.width).toBe(1);
-      expect(got.value.height).toBe(1);
-      expect(got.value.data.length).toBe(8);
+      const got = reg.lookup(guid) as TextureAsset | undefined;
+      expect(got).toBeDefined();
+      if (got === undefined) return;
+      expect(got.format).toBe('rgba16float');
+      expect(got.colorSpace).toBe('linear');
+      expect(got.width).toBe(1);
+      expect(got.height).toBe(1);
+      expect(got.data.length).toBe(8);
     });
 
-    it('registerWithGuid(rgba16float pod) is re-resolvable via resolveGuid', () => {
+    it('catalog(rgba16float pod) is re-resolvable via lookup (same payload object)', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const parseResult = AssetGuid.parse(GUID_RGBA16F);
       if (!parseResult.ok) throw new Error('GUID parse failed');
       const guid = parseResult.value;
 
-      const handle = reg.registerWithGuid<TextureAsset>(guid, makeRgba16FloatTexture());
+      const cataloged = reg.catalog<TextureAsset>(guid, makeRgba16FloatTexture());
+      expect(cataloged.ok).toBe(true);
 
-      const resolved = reg.resolveGuid<TextureAsset>(guid);
-      expect(resolved.ok).toBe(true);
-      if (resolved.ok) {
-        expect(resolved.value).toBe(handle);
+      const resolved = reg.lookup(guid);
+      expect(resolved).toBeDefined();
+      if (cataloged.ok) {
+        expect(resolved).toBe(cataloged.value);
       }
     });
   });
@@ -6092,7 +5994,7 @@ function makeStubGPU(): unknown {
 
       // Pre-register mesh asset so resolveGuid finds it.
       const meshGuid = parseGuid(MESH_GUID_STR);
-      reg.registerWithGuid(meshGuid, {
+      reg.catalog(meshGuid, {
         kind: 'mesh',
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
@@ -6110,7 +6012,7 @@ function makeStubGPU(): unknown {
       // Also register material and MeshRenderer in world so we verify
       // multi-handle-type detection (MeshFilter + MeshRenderer both have handle fields).
       const materialGuid = parseGuid(MATERIAL_GUID_STR);
-      reg.registerWithGuid(materialGuid, {
+      reg.catalog(materialGuid, {
         kind: 'material',
         passes: [{ name: 'forward', shader: 'test::dummy' }],
         paramValues: {},
@@ -6130,8 +6032,8 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'handle<MeshAsset>' });
-      defineComponent('MeshRenderer', { materials: 'array<handle<MaterialAsset>>' });
+      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+      defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
 
       // Private function access for unit-test isolation (same pattern as parseAssetPayload in
       // asset-registry-scene.test.ts).
@@ -6166,7 +6068,7 @@ function makeStubGPU(): unknown {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
       const skelGuid = parseGuid(SKELETON_GUID_STR);
-      reg.registerWithGuid(skelGuid, {
+      reg.catalog(skelGuid, {
         kind: 'skeleton',
         inverseBindMatrices: new Float32Array(3 * 16),
         jointCount: 3,
@@ -6183,7 +6085,7 @@ function makeStubGPU(): unknown {
 
       const world = new World();
       defineComponent('Skin', {
-        skeleton: 'handle<SkeletonAsset>',
+        skeleton: 'shared<SkeletonAsset>',
         joints: 'array<entity>',
       });
 
@@ -6213,7 +6115,7 @@ function makeStubGPU(): unknown {
       const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
 
       const meshGuid = parseGuid(MESH_GUID_STR);
-      reg.registerWithGuid(meshGuid, {
+      reg.catalog(meshGuid, {
         kind: 'mesh',
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
@@ -6244,7 +6146,7 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'handle<MeshAsset>' });
+      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6311,7 +6213,7 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'handle<MeshAsset>' });
+      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6338,7 +6240,7 @@ function makeStubGPU(): unknown {
       // Register the first GUID but not the second — first node (localId=1) should
       // fail before reaching localId=2
       const meshGuid = parseGuid(MESH_GUID_STR);
-      reg.registerWithGuid(meshGuid, {
+      reg.catalog(meshGuid, {
         kind: 'mesh',
         vertices: new Float32Array(0),
         indices: new Uint16Array(0),
@@ -6371,7 +6273,7 @@ function makeStubGPU(): unknown {
       ]);
 
       const world = new World();
-      defineComponent('MeshFilter', { assetHandle: 'handle<MeshAsset>' });
+      defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6429,7 +6331,7 @@ function makeStubGPU(): unknown {
     it('rejects format=rgba8unorm-srgb + decoded colorSpace=linear (mismatch)', async () => {
       const store = new GpuResourceStore();
       const pod = makeTexture('rgba8unorm-srgb', 'srgb');
-      const handle = toUnmanaged<'TextureAsset'>(1);
+      const handle = toShared<'TextureAsset'>(1);
       const decoded = makeDecoded('linear');
       const res = await store.uploadTexture(handle, pod, decoded);
       expect(res.ok).toBe(false);
@@ -6446,7 +6348,7 @@ function makeStubGPU(): unknown {
     it('rejects format=rgba8unorm + decoded colorSpace=srgb (mismatch reversed)', async () => {
       const store = new GpuResourceStore();
       const pod = makeTexture('rgba8unorm', 'linear');
-      const handle = toUnmanaged<'TextureAsset'>(1);
+      const handle = toShared<'TextureAsset'>(1);
       const decoded = makeDecoded('srgb');
       const res = await store.uploadTexture(handle, pod, decoded);
       expect(res.ok).toBe(false);
@@ -6459,12 +6361,12 @@ function makeStubGPU(): unknown {
       expect(res.error.detail.formatColorSpaceConflict?.expected).toBe('linear');
     });
 
-    it('asset-not-found path: registry get against unregistered handle (caller-side POD fetch)', () => {
+    it('asset-not-found path: resolve against an unresolvable handle (caller-side POD fetch)', () => {
       // Pull-model migration: the store takes a POD, so a missing asset surfaces
-      // at the registry `get` the caller runs before reaching the store.
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const fake = toUnmanaged<'TextureAsset'>(0xdeadbeef);
-      const podRes = reg.get<TextureAsset>(fake);
+      // when the caller resolves the handle to a payload before reaching the store.
+      const world = new World();
+      const fake = toShared<'TextureAsset'>(0xdeadbeef);
+      const podRes = resolveAssetHandle<TextureAsset>(world, fake);
       expect(podRes.ok).toBe(false);
       if (podRes.ok) return;
       expect(podRes.error.code).toBe('asset-not-found');

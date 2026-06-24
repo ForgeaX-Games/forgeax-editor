@@ -3,7 +3,7 @@
 > 你是 forgeax 引擎的**主用户**（AGENTS.md §Core rule）。本 rule 是**常驻路由**——按任务名挑一个 `forgeax-engine-*` skill load 其正文；它**不教 API**，API 教学在各 skill 正文。
 
 > [!IMPORTANT]
-> **不要预先 load 全部 `forgeax-engine-*` skill。** 上下文有限。任务来时按下表选 1 个 load；自然跨域才 load 第 2 个。skill 名字+description 已常驻。
+> **不要预先 load 全 12 个 skill。** 上下文有限。任务来时按下表选 1 个 load；自然跨域才 load 第 2 个。skill 名字+description 已常驻。
 
 ## 任务 → skill 索引
 
@@ -20,6 +20,7 @@
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |
 | immediate-mode 调试可视化：line / sphere / aabb / frustum | `forgeax-engine-debug-draw` |
+| 状态机 / defineState / setNextState / 状态 scoped 实体 / OnEnter/OnExit | `forgeax-engine-state` |
 | 底层后端（贡献者）：opaque handle / capability / 双实现 | `forgeax-engine-rhi` |
 | 渲染 / 测试 / CI 出错 — 症状→根因→修法 | `forgeax-engine-debug` |
 | RHI 录帧 / replay / 离线 per-draw inspect (capture→inspect→dispose) — 查 bindings+drawCall+RT PNG 定位渲染症状 | `forgeax-engine-rhi-debug` |

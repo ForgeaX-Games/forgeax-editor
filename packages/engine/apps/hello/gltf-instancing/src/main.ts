@@ -24,7 +24,6 @@ import {
   type MaterialAsset,
   type MeshAsset,
   type SceneAsset,
-  unwrapHandle,
 } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import gltfUrl from '../assets/instanced-box.gltf?url';
@@ -72,6 +71,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
 
   assets.configurePackIndex('/instanced-box-pack-index.json');
+  const world = new World();
 
   const gltfRes = await fetch(gltfUrl);
   const gltfJson = (await gltfRes.json()) as unknown;
@@ -97,27 +97,25 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const meshAsset = meshIrToPod(getOrThrow(docResult.value.meshes, 0, 'mesh[0]'));
   const materialAsset = materialIrToPod(getOrThrow(docResult.value.materials, 0, 'material[0]'));
-  const meshHandle = assets.registerWithGuid<MeshAsset>(meshGuid, meshAsset);
-  const matHandle = assets.registerWithGuid<MaterialAsset>(materialGuid, materialAsset);
+  // catalog stores GUID->payload (so loadByGuid resolves); allocSharedRef
+  // mints the user-tier column handle the bridge ctx needs.
+  assets.catalog<MeshAsset>(meshGuid, meshAsset);
+  assets.catalog<MaterialAsset>(materialGuid, materialAsset);
+  const matHandle = world.allocSharedRef('MaterialAsset', materialAsset);
   // Bridge ctx: route the mesh slot to HANDLE_CUBE so the v1 engine's
-  // pre-uploaded GPU buffers back the drawcall. The freshly registered
-  // meshHandle stays in the registry for loadByGuid<MeshAsset> below
+  // pre-uploaded GPU buffers back the drawcall. The freshly catalogued
+  // mesh stays in the registry for loadByGuid<MeshAsset> below
   // (charter P4 consistent abstraction; OOS-13 custom mesh GPU upload).
   const sceneAssetWithHandles = gltfDocToSceneAsset(docResult.value, {
     meshHandles: new Map([[0, HANDLE_CUBE]]),
     materialHandles: new Map([[0, matHandle]]),
   });
-  assets.registerWithGuid<SceneAsset>(sceneGuid, sceneAssetWithHandles);
+  assets.catalog<SceneAsset>(sceneGuid, sceneAssetWithHandles);
 
   const meshRes = await assets.loadByGuid<MeshAsset>(meshGuid);
   if (!meshRes.ok) {
     console.error('[gltf-instancing] loadByGuid<MeshAsset> failed:', meshRes.error);
     return;
-  }
-  if (unwrapHandle(meshRes.value) !== unwrapHandle(meshHandle)) {
-    console.warn(
-      `[gltf-instancing] meshHandle drift: load=${unwrapHandle(meshRes.value)} register=${unwrapHandle(meshHandle)}`,
-    );
   }
 
   const matRes = await assets.loadByGuid<MaterialAsset>(materialGuid);
@@ -126,14 +124,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const world = new World();
-
   const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuid);
   if (!sceneRes.ok) {
     console.error('[gltf-instancing] loadByGuid<SceneAsset> failed:', sceneRes.error);
     return;
   }
-  const instRes = assets.instantiate<SceneAsset>(sceneRes.value, world);
+  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
   if (!instRes.ok) {
     console.error(
       '[gltf-instancing] scene instantiate failed:',

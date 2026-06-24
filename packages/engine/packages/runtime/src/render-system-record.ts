@@ -37,6 +37,7 @@
 //     against `device.caps.storageBuffer` (D-5 cap-gate: backends
 //     lacking storage buffer support emit `RhiError 'feature-not-enabled'`).
 
+import type { World } from '@forgeax/engine-ecs';
 import { type Mat4, mat3, mat4, vec3 } from '@forgeax/engine-math';
 import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
 import {
@@ -53,12 +54,12 @@ import {
 import type {
   Handle,
   MaterialRenderState,
+  MeshAsset,
   PassSelector,
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
-import type { AssetRegistry } from './asset-registry';
+import { toShared } from '@forgeax/engine-types';
 import { bin } from './cluster-binner';
 import type { Tonemap } from './components/camera';
 import {
@@ -119,6 +120,7 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
 } from './render-system-extract';
+import { resolveAssetHandle } from './resolve-asset-handle';
 import { ShadowAtlas } from './shadow-atlas';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 import { matchPass } from './systems/pass-selector';
@@ -854,13 +856,13 @@ const BUILTIN_MESH_ID_MAX = 5;
 const NINESLICE_QUAD_RAW_ID = 5;
 
 function residentTextureView(
-  assets: AssetRegistry,
+  world: World,
   store: GpuResourceStore,
   runtime: RenderSystemRuntime,
-  handle: Handle<'TextureAsset', 'unmanaged'>,
+  handle: Handle<'TextureAsset', 'shared'>,
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
 ): any | undefined {
-  const podRes = assets.get<TextureAsset>(handle);
+  const podRes = resolveAssetHandle<TextureAsset>(world, handle);
   if (!podRes.ok) return undefined;
   const residentRes = store.ensureResident(handle, podRes.value);
   if (!residentRes.ok) {
@@ -1186,6 +1188,7 @@ export function warnMultiLightSpot(
 
 export function recordFrame(
   internals: RenderSystemInternals,
+  world: World,
   cameras: CameraSnapshot[],
   lights: ExtractedLights,
   renderables: RenderableSnapshot[],
@@ -2119,9 +2122,7 @@ export function recordFrame(
     for (let rIdx = 0; rIdx < renderables.length; rIdx++) {
       const r = renderables[rIdx];
       if (r === undefined) continue;
-      const assetRes = internals.assets.get<import('@forgeax/engine-types').MeshAsset>(
-        toUnmanaged<'MeshAsset'>(r.assetHandle),
-      );
+      const assetRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(r.assetHandle));
       if (!assetRes.ok) {
         internals.errorRegistry.fire(
           new RhiError({
@@ -2141,7 +2142,7 @@ export function recordFrame(
       // the POD fetched above (assetRes.value) is passed in, store holds no
       // registry ref (D-2). A first-access miss builds the GPU buffers; later
       // frames hit the O(1) cache.
-      const meshAssetHandle = toUnmanaged<'MeshAsset'>(r.assetHandle);
+      const meshAssetHandle = toShared<'MeshAsset'>(r.assetHandle);
       let meshHandles = internals.gpuStore.getMeshGpuHandles(meshAssetHandle);
       if (meshHandles === undefined && r.assetHandle > BUILTIN_MESH_ID_MAX) {
         const residentRes = internals.gpuStore.ensureResident(meshAssetHandle, assetRes.value);
@@ -2765,6 +2766,7 @@ export function recordFrame(
     // 0-consumed `skyboxCount` residual is dropped.
     const passCtx: _InternalRenderPipelineContext = {
       assets: internals.assets,
+      world,
       store: internals.gpuStore,
       pipelineState,
       runtime: internals,
@@ -2972,6 +2974,22 @@ export function recordShadowPass(
   // feat-20260609 M2: filter entities by pass selector.
   const matchedIndices =
     selector !== undefined ? buildMatchedRenderableIndices(dispatch, selector) : null;
+
+  // bug-20260619-csm RC-3 (AC-10, D-3): map each renderable to its
+  // ShadowCaster pass shader so the depth pass selects the per-entity PSO
+  // (mirrors the forward pass's per-entity PSO selection — charter P4).
+  // A material with a custom ShadowCaster shader (e.g. an alpha-test cutout
+  // that calls `discard`) gets its own fragment-carrying PSO; default
+  // casters resolve to `forgeax::default-shadow-caster` (vertex-only), so
+  // there is no regression for the built-in materials. Built from the
+  // dispatch entries tagged `LightMode: 'ShadowCaster'` (extract already
+  // populates `materialShaderId` per pass).
+  const shadowShaderByRenderableIdx = new Map<number, string>();
+  for (const de of dispatch) {
+    if (de.tags.LightMode === 'ShadowCaster' && de.materialShaderId !== undefined) {
+      shadowShaderByRenderableIdx.set(de.renderableIndex, de.materialShaderId);
+    }
+  }
 
   if (shadowPipeline !== null && shadowView !== null && validated.length > 0) {
     // feat-20260529-rendergraph-pass-abstraction M4 / w14 (RD-4 verification
@@ -3200,6 +3218,7 @@ export function recordShadowPass(
           { colorFormats: [], depthFormat: 'depth32float', sampleCount: 1 },
           { colorViews: [], depthView: shadowView },
           'shadow-caster',
+          { depthLoadOp: cascadeIndex === 0 ? 'clear' : 'load' },
         ) as never,
       );
 
@@ -3229,6 +3248,12 @@ export function recordShadowPass(
       // setVertexBuffer / setIndexBuffer call.
       let shadowLastVertexBuffer: GpuBuffer | null = null;
       let shadowLastIndexBuffer: GpuBuffer | null = null;
+      // bug-20260619-csm RC-3 (D-3): track the currently-bound shadow PSO so
+      // per-entity setPipeline only fires on change (same de-dup discipline as
+      // vertex/index buffers above). The default-shadow-caster PSO is already
+      // bound by the setPipeline call above; the loop switches to a custom
+      // ShadowCaster PSO when a material supplies one.
+      let shadowLastPipeline: typeof shadowPipeline = shadowPipeline;
 
       for (let i = 0; i < validated.length; i++) {
         const entry = validated[i];
@@ -3236,6 +3261,37 @@ export function recordShadowPass(
 
         // feat-20260609 M2: skip entities that don't match the pass selector.
         if (matchedIndices !== null && !matchedIndices.has(entry.renderableIndex)) continue;
+
+        // bug-20260619-csm RC-3 (AC-10, D-3): resolve the per-entity shadow
+        // PSO from its ShadowCaster shader id. Default casters keep the
+        // vertex-only `forgeax::default-shadow-caster` PSO bound above; a
+        // material with a custom ShadowCaster shader (cutout alpha-test) gets
+        // its own fragment-carrying PSO so `discard` runs in the depth pass.
+        const entryShadowShaderId = shadowShaderByRenderableIdx.get(entry.renderableIndex);
+        let entryShadowPipeline = shadowPipeline;
+        if (
+          entryShadowShaderId !== undefined &&
+          entryShadowShaderId !== 'forgeax::default-shadow-caster'
+        ) {
+          // Custom ShadowCaster PSO; same cache path as the default above
+          // (passKind 'shadow-caster'). On a cache miss (async build in
+          // flight / build failure) fall back to the default PSO so the
+          // caster still writes depth rather than dropping its draw.
+          entryShadowPipeline =
+            runtime.getMaterialShaderPipeline?.(
+              entryShadowShaderId,
+              false, // isHdr — shadow depth pass is always LDR
+              undefined, // renderState
+              'triangle-list', // topology — shadow PSO targets triangle-list
+              undefined, // indexFormat
+              undefined, // variantSet — shadow caster has no variant axes
+              'shadow-caster', // passKind
+            ) ?? shadowPipeline;
+        }
+        if (entryShadowPipeline !== shadowLastPipeline && entryShadowPipeline !== null) {
+          shadowPass.setPipeline(entryShadowPipeline);
+          shadowLastPipeline = entryShadowPipeline;
+        }
 
         // feat-20260604-mesh-topology-debug-draw M5 / w14 (AC-09, D-A6): the
         // shadow caster PSO is triangle-list; it only projects triangle faces.
@@ -3880,7 +3936,7 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
 export function recordMainPass(c: _InternalRenderPipelineContext, selector?: PassSelector): void {
   const {
     runtime,
-    assets,
+    world,
     store,
     pipelineState,
     encoder,
@@ -4042,10 +4098,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // Skylight.intensity value; fallback keeps intensity=0 (createSkylightFallback
     // seed) so ambient = 0 even when the same buffer is shared.
     let activeViews: { irr: unknown; pref: unknown; brdf: unknown } | undefined;
-    // Default to fallback intensity = 0 on every frame so a transition
-    // from active -> no-skylight does not leak the prior intensity.
-    // The active branch below overwrites this with the user's intensity
-    // when it lands.
+    // Per-frame Skylight uniform: std140 16 B = [intensity, colorR, colorG,
+    // colorB]. Default to all-zero so a transition from "has Skylight" ->
+    // "no Skylight" does not leak the prior frame's ambient (intensity 0
+    // muzzles everything, including the white fallback irradiance cube).
     {
       const zeroPayload = new Float32Array([0, 0, 0, 0]);
       runtime.device.queue.writeBuffer(
@@ -4056,6 +4112,21 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       );
     }
     if (skylight !== undefined && skylightCount >= 1) {
+      // A Skylight exists. Write its intensity + color regardless of whether
+      // a cubemap is bound: with a cubemap the IBL views below light the
+      // ambient; WITHOUT one, the white fallback irradiance cube + this color
+      // give an instant solid-color ambient (downstream integration #4) with
+      // no async precompute. The white fallback only contributes when a
+      // Skylight is present because the zero-payload above sets intensity 0
+      // when no Skylight exists.
+      const [cr, cg, cb] = skylight.color;
+      const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb]);
+      runtime.device.queue.writeBuffer(
+        // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
+        skylightFallback.intensityBuffer as any,
+        0,
+        uniformPayload,
+      );
       // biome-ignore lint/suspicious/noExplicitAny: device is the opaque RhiDevice
       const cache = getOrCreateIblCache(runtime.device as any);
       if (
@@ -4068,18 +4139,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           pref: cache.prefilterView,
           brdf: cache.brdfLutView,
         };
-        // Per-frame intensity rewrite when active. std140: 16 B (one f32
-        // + 12 B pad). The same buffer is used in fallback at intensity=0,
-        // so falling back later naturally resets ambient to 0 once
-        // skylightCount returns to 0 -- but the next active frame writes
-        // the user's intensity back in.
-        const intensityPayload = new Float32Array([skylight.intensity, 0, 0, 0]);
-        runtime.device.queue.writeBuffer(
-          // biome-ignore lint/suspicious/noExplicitAny: opaque Buffer handle
-          skylightFallback.intensityBuffer as any,
-          0,
-          intensityPayload,
-        );
       }
     }
     const skylightResources =
@@ -4174,10 +4233,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // baseline; the runtime / errorRegistry-bound debug-pink override
         // stays here because the helper is a pure POD writer.
         const matHandleRaw = entry.source.material.baseColorTexture as
-          | Handle<'TextureAsset', 'unmanaged'>
+          | Handle<'TextureAsset', 'shared'>
           | undefined;
         if (matHandleRaw !== undefined) {
-          const view = residentTextureView(assets, store, runtime, matHandleRaw);
+          const view = residentTextureView(world, store, runtime, matHandleRaw);
           if (view === undefined) {
             const rawId = matHandleRaw as unknown as number;
             if (!frameState.warnedMissingSpriteTextureHandles.has(rawId)) {
@@ -4750,11 +4809,11 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       let perSubmeshBg: BindGroup | null = null;
       if (entry.source.material.shadingModel === 'sprite') {
         const spriteTexHandle = entry.source.material.baseColorTexture as
-          | Handle<'TextureAsset', 'unmanaged'>
+          | Handle<'TextureAsset', 'shared'>
           | undefined;
         let spriteTexView = pipelineState.defaultWhiteTextureView;
         if (spriteTexHandle !== undefined) {
-          const view = residentTextureView(assets, store, runtime, spriteTexHandle);
+          const view = residentTextureView(world, store, runtime, spriteTexHandle);
           if (view !== undefined) spriteTexView = view as never;
         }
         const spriteSampler =
@@ -4887,31 +4946,31 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           let smBaseColorView = pipelineState.fallbackTextureView;
           const smBcHandle = submeshMaterial.baseColorTexture;
           if (smBcHandle !== undefined) {
-            const view = residentTextureView(assets, store, runtime, smBcHandle);
+            const view = residentTextureView(world, store, runtime, smBcHandle);
             if (view !== undefined) smBaseColorView = view as never;
           }
           let smMRView: unknown = pipelineState.defaultWhiteTextureView;
           const smMRHandle = submeshMaterial.metallicRoughnessTexture;
           if (smMRHandle !== undefined) {
-            const view = residentTextureView(assets, store, runtime, smMRHandle);
+            const view = residentTextureView(world, store, runtime, smMRHandle);
             if (view !== undefined) smMRView = view;
           }
           let smNormalView: unknown = pipelineState.defaultNormalTextureView;
           const smNormalHandle = submeshMaterial.normalTexture;
           if (smNormalHandle !== undefined) {
-            const view = residentTextureView(assets, store, runtime, smNormalHandle);
+            const view = residentTextureView(world, store, runtime, smNormalHandle);
             if (view !== undefined) smNormalView = view;
           }
           let smEmissiveView: unknown = pipelineState.defaultWhiteTextureView;
           const smEmissiveHandle = submeshMaterial.emissiveTexture;
           if (smEmissiveHandle !== undefined) {
-            const view = residentTextureView(assets, store, runtime, smEmissiveHandle);
+            const view = residentTextureView(world, store, runtime, smEmissiveHandle);
             if (view !== undefined) smEmissiveView = view;
           }
           let smOcclusionView: unknown = pipelineState.defaultWhiteTextureView;
           const smOcclusionHandle = submeshMaterial.occlusionTexture;
           if (smOcclusionHandle !== undefined) {
-            const view = residentTextureView(assets, store, runtime, smOcclusionHandle);
+            const view = residentTextureView(world, store, runtime, smOcclusionHandle);
             if (view !== undefined) smOcclusionView = view;
           }
           const smBaseEntries = [
@@ -5332,11 +5391,11 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // skylightResources in scope from above). Texture view is resolved
         // from the sprite material's baseColorTexture handle.
         const spriteTexHandle = spriteEntry.source.material.baseColorTexture as
-          | Handle<'TextureAsset', 'unmanaged'>
+          | Handle<'TextureAsset', 'shared'>
           | undefined;
         let spriteTexView = pipelineState.defaultWhiteTextureView;
         if (spriteTexHandle !== undefined) {
-          const tv = residentTextureView(assets, store, runtime, spriteTexHandle);
+          const tv = residentTextureView(world, store, runtime, spriteTexHandle);
           if (tv !== undefined) spriteTexView = tv as never;
         }
         const spritePassBaseMaterialEntries = [

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Brain, ChevronDown, ChevronUp, CheckCircle2, Loader2, Clock, AlertCircle } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import agentIcon from '../../assets/icons/agent-icon.png';
 import { useAppStore, type ToolCall, type SubAgentRun, type ChatSegment } from '../../store';
 import { ProviderBadgePill } from '../../lib/provider-badge';
@@ -102,6 +103,7 @@ export function ForgeCard({
   sid,
   agentId,
 }: ForgeCardProps) {
+  const { t } = useTranslation();
   const displayName = (agentName?.trim() || 'FORGE').toUpperCase();
   const [collapsed, setCollapsed] = useState(false);
   const onProviderBusDeepLink = useProviderBusDeepLink();
@@ -169,7 +171,7 @@ export function ForgeCard({
                 <span /><span /><span />
               </span>
               <span className="kc-loading-label">
-                {displayName} 正在思考{elapsedS > 0 && <span className="kc-elapsed"> · {elapsedS}s</span>}
+                {t('forgeCard.thinking', { displayName })}{elapsedS > 0 && <span className="kc-elapsed"> · {elapsedS}s</span>}
               </span>
             </div>
           )}
@@ -266,7 +268,7 @@ export function ForgeCard({
                  *  visually blank — mirrors the legacy fallback below. */}
                 {segments!.length === 0 && status === 'done' && !errorMessage && (
                   <div className="kc-empty">
-                    (空响应 — 上游 cli 这次没产出内容；再发一次试试)
+                    {t('forgeCard.emptyResponse')}
                   </div>
                 )}
               </div>
@@ -278,7 +280,7 @@ export function ForgeCard({
                  * the bubble isn't visually empty (looks like a render bug). */}
                 {!text && toolCalls.length === 0 && status === 'done' && !errorMessage && (
                   <div className="kc-empty">
-                    (空响应 — 上游 cli 这次没产出内容；再发一次试试)
+                    {t('forgeCard.emptyResponse')}
                   </div>
                 )}
                 {preFlowTools.length > 0 && (

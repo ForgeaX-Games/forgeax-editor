@@ -4,18 +4,20 @@ import { DockShell } from './components/DockShell/DockShell';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS, type PanelRenderers } from './components/DockShell/panelRenderers';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
+import { HealthIndicator } from './components/StatusBar/HealthIndicator';
 import { PulseFeeds } from './components/StatusBar/feeds/PulseFeeds';
 import { VersionBadge } from './components/StatusBar/VersionBadge';
 import { SettingsPanel } from './components/SettingsPanel/SettingsPanel';
 import { SettingsSectionsRegister } from './components/SettingsPanel/SectionsRegister';
 import { ContextMenu } from './components/ContextMenu/ContextMenu';
-import { SurfaceOverlay } from './components/Surfaces/SurfaceOverlay';
 import { ConfirmDialog } from './components/Confirm/ConfirmDialog';
 import { FirstRunSetup } from './components/FirstRun/FirstRunSetup';
 import { DialogHost } from './lib/dialog';
 import { bootStageAppMounted } from './boot/driver';
 import { useGlobalShortcuts } from './lib/global-shortcuts';
 import { useAppStore } from './store';
+import { buildEntityPill, buildAssetPill, buildComponentPill } from './components/Composer/referenceRegistry';
+import { isTrustedMessageOrigin } from './lib/trustedOrigins';
 import './App.css';
 
 export interface AppProps {
@@ -52,6 +54,43 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
   useEffect(() => {
     bootStageAppMounted();
   }, []);
+  // ── ✎ Edit → chat reference pills ──────────────────────────────────────────
+  // The editor iframe posts VAG_EDITOR_REF when the user "references to chat" a
+  // scene entity / component / asset. Turn it into a composer pill via the shared
+  // referenceRegistry builders. Restored after the EditMode→EditSurface slim
+  // (0dccba7) dropped this listener; payload is validated inline so the interface
+  // keeps ZERO dependency on @forgeax/editor (the cycle the panel-renderer
+  // refactor 52b6f61 removed — re-importing the editor schema would re-create it).
+  useEffect(() => {
+    const onMessage = (ev: MessageEvent) => {
+      if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
+      const data = ev.data as { type?: unknown; payload?: unknown } | null;
+      if (!data || data.type !== 'VAG_EDITOR_REF') return;
+      const p = data.payload as Record<string, unknown> | null;
+      if (!p || typeof p.kind !== 'string') return;
+      const insert = useAppStore.getState().requestComposerInsert;
+      if (p.kind === 'component' && typeof p.entityName === 'string' && typeof p.comp === 'string') {
+        insert(buildComponentPill({
+          entityId: typeof p.entityId === 'number' ? p.entityId : undefined,
+          entityName: p.entityName, comp: p.comp, value: p.value,
+        }));
+      } else if (p.kind === 'asset' && typeof p.guid === 'string') {
+        insert(buildAssetPill({
+          guid: p.guid,
+          name: typeof p.name === 'string' ? p.name : undefined,
+          assetKind: typeof p.assetKind === 'string' ? p.assetKind : undefined,
+          packPath: typeof p.packPath === 'string' ? p.packPath : undefined,
+        }));
+      } else if (p.kind === 'entity' && (typeof p.id === 'number' || typeof p.id === 'string') && typeof p.name === 'string') {
+        insert(buildEntityPill({
+          id: p.id, name: p.name, components: p.components,
+          source: (p.source ?? undefined) as { plugin?: string; docId?: string } | undefined,
+        }));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
   // WAL replay trigger lives in ChatPanel — it watches activeTab.agentId
   // and re-fires loadSession on every change. No mount hook here so the
   // trigger has a single owner.
@@ -83,6 +122,13 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
           leftmost permanent chip in the status bar. Source: /api/version
           → packages/server/src/api/version.ts. Scheme + rules in CHANGELOG.md. */}
       <VersionBadge />
+      {/* Latest-health indicator — a compact chip pinned to the FAR RIGHT of the
+          GlobalStatusBar (severity icon + truncated latest message + ✖N⚠N).
+          Replaces the old full-width HealthStatusBar strip: the full log now
+          lives only in the Info dock panel (click the chip to open it). The
+          Play/Edit fatal banner is a separate concern, kept and mounted by the
+          surface wrappers (SurfacePanels → FatalBanner). */}
+      <HealthIndicator />
       <GlobalStatusBar />
       {/* Dashboard renders as a top-of-stack overlay when toggled open via
           the TopBar gauge icon. It does NOT replace the studio shell — the
@@ -96,11 +142,6 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
       <SettingsSectionsRegister />
       <SettingsPanel />
       <ContextMenu />
-      {/* Phase D2 — dev-mode surface overlay. Floats bottom-right showing
-          every plugin iframe's `surface.expose` snapshot ("this button
-          equals tool X"). Hidden in production builds via DEV check inside
-          the component. */}
-      <SurfaceOverlay />
       {/* Doc 07 §9.5 — host-side confirm dialog. Listens for
           `tool.confirm-required` envelopes off the SSE stream and POSTs
           the user's verdict back to /api/tools/confirm. */}

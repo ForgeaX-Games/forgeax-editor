@@ -41,7 +41,7 @@ const GlyphTextM4 = defineComponent('GlyphTextM4', {
 // only the type-level shape matters for AC-08; runtime alloc is exercised
 // in hierarchy.unit.test.ts).
 const NodeRefM4 = defineComponent('NodeRefM4', {
-  link: { type: 'ref<NodeRefM4>' },
+  link: { type: 'unique<NodeRefM4>' },
   weight: 'f32',
 });
 
@@ -105,7 +105,7 @@ describe('w10 --- AC-08 negative: managed columns reject direct index write', ()
 
     const state = createQueryState({ with: [NodeRefM4, Entity] });
     queryRun(state, world, (bundle) => {
-      expectTypeOf(bundle.NodeRefM4.link).toEqualTypeOf<ManagedColumnReader<'ref<NodeRefM4>'>>();
+      expectTypeOf(bundle.NodeRefM4.link).toEqualTypeOf<ManagedColumnReader<'unique<NodeRefM4>'>>();
 
       if (NEVER_RUN) {
         for (let i = 0; i < bundle.Entity.self.length; i++) {
@@ -113,7 +113,7 @@ describe('w10 --- AC-08 negative: managed columns reject direct index write', ()
           bundle.NodeRefM4.link[i] = 0;
         }
       }
-      expect(bundle.NodeRefM4.link.__managed).toBe('ref<NodeRefM4>');
+      expect(bundle.NodeRefM4.link.__managed).toBe('unique<NodeRefM4>');
     });
   });
 
@@ -164,7 +164,7 @@ describe('w10 --- AC-08 negative: managed columns reject direct index write', ()
     world.addSystem({
       name: 'm4-managed-reader',
       queries: [{ with: [GlyphTextM4, Entity] }],
-      fn: (results) => {
+      fn: (_world, results) => {
         for (const result of results) {
           for (const bundle of result) {
             const reader: ManagedColumnReader<'string'> = bundle.GlyphTextM4.text;

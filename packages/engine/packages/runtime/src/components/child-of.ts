@@ -25,10 +25,14 @@
 //   - exclusive: true     -- re-adding ChildOf with a new parent auto-reparents
 //     (prunes the old parent's Children entry, appends to the new) instead of
 //     returning ComponentAlreadyPresentError (single-parent hierarchy, AC-12).
-//   - linkedSpawn: false  -- despawning the parent only prunes the Children
-//     entry; the child entity survives (D-1 default; despawning the parent
-//     does NOT also despawn the child).
-//     The judgment human gate may flip this to true without a rewrite.
+//   - linkedSpawn: true   -- despawning the parent cascade-despawns all
+//     child entities that hold this ChildOf (AC-08; the human gate flipped
+//     the D-1 default from false to true). When linkedSpawn is set to true,
+//     world.despawn(parent) recursively despawns the entire subtree.
+//
+//     The prior default (linkedSpawn: false) meant despawning the parent only
+//     pruned the Children entry, leaving the child entity alive. That behavior
+//     is still available by passing linkedSpawn: false explicitly.
 //
 // Child despawn auto-detaches from the parent's Children list: the
 // relationship `onRemove` hook fires on `world.despawn(child)` and prunes the
@@ -92,7 +96,7 @@ export const ChildOf = defineComponent(
       mirror: 'Children',
       field: 'entities',
       exclusive: true,
-      linkedSpawn: false,
+      linkedSpawn: true,
     },
   },
 );

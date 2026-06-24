@@ -11,8 +11,9 @@
  * lime/teal/amber/gold/orange/violet).
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { Brain, Cpu, Sparkles, Wrench, Bot, Radio } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Brain, Sparkles, Wrench, Bot, Gauge } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../../store';
 import { listBusPlugins } from '../../../lib/bus-api';
 import { dashApi } from '../../../lib/dashboard-api';
@@ -22,9 +23,8 @@ import { StatusChip, type ChipState } from '../StatusChip';
 export function PulseFeeds() {
   return (
     <>
-      <BusPulseFeed />
+      <ResourcePulseFeed />
       <ModelBindingPulseFeed />
-      <ProvidersPulseFeed />
       <SkillPulseFeed />
       <ToolPulseFeed />
       <AgentPulseFeed />
@@ -32,57 +32,55 @@ export function PulseFeeds() {
   );
 }
 
-// ─── BUS · ringSize pulse ────────────────────────────────────────────────
+// ─── RES · server resource usage (memory · uptime · WS clients) ───────────
 
-function BusPulseFeed() {
-  const [ringSize, setRingSize] = useState<number | null>(null);
+/** Compact uptime: "2h13m" / "13m" / "<1m". */
+function fmtUptime(s: number): string {
+  if (s < 60) return '<1m';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h${m}m` : `${m}m`;
+}
+
+function ResourcePulseFeed() {
+  const { t } = useTranslation();
   const [state, setState] = useState<ChipState>('loading');
-  const [flashKey, setFlashKey] = useState(0);
-  const [lastDelta, setLastDelta] = useState<number>(0);
-  const prevRingRef = useRef<number | null>(null);
+  const [info, setInfo] = useState<{ rssMB: number; uptime: number; ws: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const poll = async () => {
+    const tick = async () => {
       try {
         const h = await dashApi.health();
         if (cancelled) return;
-        const rs = h.bus?.ringSize;
-        if (typeof rs !== 'number') { setState('down'); return; }
-        const prev = prevRingRef.current;
-        prevRingRef.current = rs;
-        setRingSize(rs);
+        const rss = typeof h.mem?.rss === 'number' ? h.mem.rss : 0;
+        setInfo({ rssMB: Math.round(rss / (1024 * 1024)), uptime: h.uptime ?? 0, ws: h.wsClients ?? 0 });
         setState('ok');
-        if (prev != null && rs > prev) {
-          setLastDelta(rs - prev);
-          setFlashKey((k) => k + 1);
-        }
       } catch { if (!cancelled) setState('down'); }
     };
-    void poll();
-    const t = setInterval(poll, 2000);
-    return () => { cancelled = true; clearInterval(t); };
+    void tick();
+    const timer = setInterval(tick, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
-  const value = state === 'loading' ? '—' : state === 'down' ? '!' : (ringSize ?? 0).toLocaleString();
+  const value = state === 'loading' ? '—' : state === 'down' ? '!' : `${info?.rssMB ?? 0}MB`;
   const title =
-    state === 'loading' ? 'bus pulse · 等待首次 /api/health …' :
-    state === 'down' ? 'bus pulse · health 拉不到（server down？）' :
-    `bus pulse · ring=${ringSize} · 最近 Δ=${lastDelta} · 每 2s 拉一次`;
+    state === 'ok' && info
+      ? t('pulse.res.title.ok', { mem: String(info.rssMB), uptime: fmtUptime(info.uptime), ws: String(info.ws) })
+      : state === 'down' ? t('pulse.res.title.down') : t('pulse.res.title.loading');
 
   useStatusBarItem({
-    id: 'bus.pulse',
+    id: 'sys.res',
     slot: 'right',
-    priority: 100,
+    priority: 95,
     node: (
       <StatusChip
         tone="lime"
         state={state}
-        icon={Radio}
-        label="BUS"
+        icon={Gauge}
+        label="RES"
         value={value}
         title={title}
-        flashKey={flashKey}
       />
     ),
   });
@@ -92,6 +90,7 @@ function BusPulseFeed() {
 // ─── MB · model-binding kind count ────────────────────────────────────────
 
 function ModelBindingPulseFeed() {
+  const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
   const openSettings = useAppStore((s) => s.openSettings);
   const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
@@ -119,9 +118,9 @@ function ModelBindingPulseFeed() {
   const title =
     state === 'ok' || state === 'empty'
       ? count > 0
-        ? `Model bindings · ${count} on bus · 单击下钻 Bus admin →\n` + ids.map((id) => `· ${id}`).join('\n')
-        : `Model bindings · 0 plugins · 单击进入 Bus admin`
-      : state === 'down' ? 'Model bindings · Bus 列表暂不可读' : 'Model bindings · loading…';
+        ? t('pulse.mb.title.some', { count: String(count) }) + '\n' + ids.map((id) => `· ${id}`).join('\n')
+        : t('pulse.mb.title.none')
+      : state === 'down' ? t('pulse.mb.title.down') : t('pulse.mb.title.loading');
 
   useStatusBarItem({
     id: 'bus.mb',
@@ -142,70 +141,10 @@ function ModelBindingPulseFeed() {
   return null;
 }
 
-// ─── PROV · cli-providers health ──────────────────────────────────────────
-
-type ProvHealthState =
-  | { kind: 'loading' }
-  | { kind: 'down' }
-  | { kind: 'ok'; ok: number; total: number; rows: Array<{ id: string; ok: boolean; detail?: string }> };
-
-function ProvidersPulseFeed() {
-  const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
-  const [state, setState] = useState<ProvHealthState>({ kind: 'loading' });
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await dashApi.providers();
-        if (cancelled) return;
-        const rows = r.providers.map((p) => ({ id: p.id, ok: !!p.health?.ok, detail: p.health?.detail }));
-        const ok = rows.filter((p) => p.ok).length;
-        setState({ kind: 'ok', ok, total: rows.length, rows });
-      } catch { if (!cancelled) setState({ kind: 'down' }); }
-    };
-    void tick();
-    const id = setInterval(tick, 10000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
-
-  const chipState: ChipState =
-    state.kind === 'ok'
-      ? state.ok === state.total ? 'ok' : state.ok === 0 ? 'down' : 'warn'
-      : state.kind === 'down' ? 'down' : 'loading';
-  const value =
-    state.kind === 'ok' ? `${state.ok}/${state.total}` :
-    state.kind === 'down' ? '!' : '—';
-  const title =
-    state.kind === 'ok'
-      ? `CLI Providers — ${state.ok}/${state.total} ok · 单击下钻 Bus admin →\n` +
-        state.rows.map((p) => `${p.ok ? '✓' : '✗'} ${p.id}${p.detail ? ` — ${p.detail}` : ''}`).join('\n')
-      : state.kind === 'down' ? 'CLI Providers — endpoint unreachable' : 'CLI Providers — loading…';
-
-  useStatusBarItem({
-    id: 'bus.prov',
-    slot: 'right',
-    priority: 85,
-    node: (
-      <StatusChip
-        tone="amber"
-        state={chipState}
-        icon={Cpu}
-        label="PROV"
-        value={value}
-        title={title}
-        onClick={() => { openSettings('plugins'); setPendingBusKindFilter('cli-provider'); }}
-      />
-    ),
-  });
-  return null;
-}
-
 // ─── SKILL ────────────────────────────────────────────────────────────────
 
 function SkillPulseFeed() {
+  const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
   const openSettings = useAppStore((s) => s.openSettings);
   const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
@@ -232,9 +171,9 @@ function SkillPulseFeed() {
   const title =
     state === 'ok' || state === 'empty'
       ? count > 0
-        ? `Skills · ${count} on bus · 单击下钻 Bus admin →\n` + ids.map((id) => `· ${id}`).join('\n')
-        : `Skills · 0 plugins · 单击进入 Bus admin`
-      : state === 'down' ? 'Skills · Bus 列表暂不可读' : 'Skills · loading…';
+        ? t('pulse.skill.title.some', { count: String(count) }) + '\n' + ids.map((id) => `· ${id}`).join('\n')
+        : t('pulse.skill.title.none')
+      : state === 'down' ? t('pulse.skill.title.down') : t('pulse.skill.title.loading');
 
   useStatusBarItem({
     id: 'bus.skill',
@@ -258,6 +197,7 @@ function SkillPulseFeed() {
 // ─── TOOL ─────────────────────────────────────────────────────────────────
 
 function ToolPulseFeed() {
+  const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
   const openSettings = useAppStore((s) => s.openSettings);
   const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
@@ -284,9 +224,9 @@ function ToolPulseFeed() {
   const title =
     state === 'ok' || state === 'empty'
       ? count > 0
-        ? `Tools · ${count} on bus · 单击下钻 Bus admin →\n` + ids.map((id) => `· ${id}`).join('\n')
-        : `Tools · 0 plugins · 单击进入 Bus admin`
-      : state === 'down' ? 'Tools · Bus 列表暂不可读' : 'Tools · loading…';
+        ? t('pulse.tool.title.some', { count: String(count) }) + '\n' + ids.map((id) => `· ${id}`).join('\n')
+        : t('pulse.tool.title.none')
+      : state === 'down' ? t('pulse.tool.title.down') : t('pulse.tool.title.loading');
 
   useStatusBarItem({
     id: 'bus.tool',
@@ -310,6 +250,7 @@ function ToolPulseFeed() {
 // ─── AGENT ────────────────────────────────────────────────────────────────
 
 function AgentPulseFeed() {
+  const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
   const openSettings = useAppStore((s) => s.openSettings);
   const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
@@ -336,9 +277,9 @@ function AgentPulseFeed() {
   const title =
     state === 'ok' || state === 'empty'
       ? count > 0
-        ? `Agents · ${count} on bus · 单击下钻 Bus admin →\n` + ids.map((id) => `· ${id}`).join('\n')
-        : `Agents · 0 plugins · 单击进入 Bus admin`
-      : state === 'down' ? 'Agents · Bus 列表暂不可读' : 'Agents · loading…';
+        ? t('pulse.agent.title.some', { count: String(count) }) + '\n' + ids.map((id) => `· ${id}`).join('\n')
+        : t('pulse.agent.title.none')
+      : state === 'down' ? t('pulse.agent.title.down') : t('pulse.agent.title.loading');
 
   useStatusBarItem({
     id: 'bus.agent',

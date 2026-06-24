@@ -41,6 +41,7 @@ import type { RhiDevice } from '@forgeax/engine-rhi';
 import { DebugError } from './errors';
 import { InspectorCache, inspectAt as runInspectAt } from './inspector';
 import type { DebugRhiInstance } from './recorder';
+import { waitForRecorderIdle } from './recorder-core';
 import { createReplay, type Replay } from './replayer';
 import type { DebugRhiAdapter } from './rpc-bridge';
 import { deserializeTape } from './tape-format';
@@ -231,39 +232,4 @@ function findEventIdxForDraw(
     }
   }
   return -1;
-}
-
-function waitForRecorderIdle(debugInst: DebugRhiInstance, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const tick = () => {
-      const state = debugInst.getState();
-      if (state === 'idle' && debugInst.getEvents().length > 0) {
-        resolve();
-        return;
-      }
-      if (state === 'error') {
-        reject(
-          new DebugError({
-            code: 'recorder-not-attached',
-            expected: 'recorder transitions back to idle within timeout',
-            hint: 'recorder entered error state during capture; call disposeError() and retry',
-          }),
-        );
-        return;
-      }
-      if (Date.now() - start > timeoutMs) {
-        reject(
-          new DebugError({
-            code: 'frame-end-hook-missing',
-            expected: `host rAF loop drives onFrameEnd within ${String(timeoutMs)} ms`,
-            hint: 'recorder did not return to idle; verify createRenderer._onFrameEnd is wired and the rAF loop is running',
-          }),
-        );
-        return;
-      }
-      setTimeout(tick, 16);
-    };
-    tick();
-  });
 }

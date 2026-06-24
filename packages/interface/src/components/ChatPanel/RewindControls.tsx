@@ -9,6 +9,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { useAppStore, type ChatTab } from '../../store';
 import { rewindPreview, type RewindPreview, type FileDiffStat } from '../../lib/checkpoint-api';
 
@@ -51,6 +52,7 @@ export function RewindConfirmDialog({
   hasCode: boolean;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const performRewind = useAppStore((s) => s.performRewind);
   const [preview, setPreview] = useState<RewindPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -82,29 +84,29 @@ export function RewindConfirmDialog({
   return (
     <div className="rw-overlay" onClick={onClose}>
       <div className="rw-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="rw-title">回退到这条消息?</div>
+        <div className="rw-title">{t('rewind.confirmTitle')}</div>
         <div className="rw-preview">
           {error
             ? <span className="rw-err">{error}</span>
             : preview === null
-              ? '正在计算文件差异…'
+              ? t('rewind.computingDiff')
               : fileCount === 0
-                ? '此后没有文件变更 —— 只会回退会话。'
-                : <>代码将回退 <b>{fileCount}</b> 个文件
+                ? t('rewind.noFileChanges')
+                : <>{t('rewind.codeWillRevertPrefix')} <b>{fileCount}</b> {t('rewind.codeWillRevertSuffix')}
                     {(preview.insertions > 0 || preview.deletions > 0) && (
                       <span className="rw-diffstat">
                         {' '}<em className="ins">+{preview.insertions}</em>
                         {' '}<em className="del">−{preview.deletions}</em>
                       </span>
                     )}
-                    {preview.binaryOrLarge > 0 && <span>(含 {preview.binaryOrLarge} 个二进制/大文件)</span>}
+                    {preview.binaryOrLarge > 0 && <span>{t('rewind.binaryLargeNote', { count: preview.binaryOrLarge })}</span>}
                   </>}
         </div>
         {preview && fileCount > 0 && <FileDiffList files={preview.files ?? []} />}
         <div className="rw-actions">
           {codeAvailable && (
             <button disabled={busy} className="rw-btn rw-primary" onClick={() => void run('both')}>
-              回退代码和会话
+              {t('rewind.revertCodeAndConversation')}
             </button>
           )}
           <button
@@ -112,16 +114,16 @@ export function RewindConfirmDialog({
             className={`rw-btn ${codeAvailable ? '' : 'rw-primary'}`}
             onClick={() => void run('conversation')}
           >
-            仅回退会话
+            {t('rewind.revertConversationOnly')}
           </button>
           {codeAvailable && (
             <button disabled={busy} className="rw-btn" onClick={() => void run('code')}>
-              仅回退代码
+              {t('rewind.revertCodeOnly')}
             </button>
           )}
-          <button disabled={busy} className="rw-btn rw-ghost" onClick={onClose}>取消</button>
+          <button disabled={busy} className="rw-btn rw-ghost" onClick={onClose}>{t('common.cancel')}</button>
         </div>
-        <div className="rw-hint">回退后可一键恢复;发出新消息后定格。</div>
+        <div className="rw-hint">{t('rewind.confirmHint')}</div>
       </div>
     </div>
   );
@@ -135,6 +137,7 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
   initialText: string;
   isStreaming: boolean;
 }) {
+  const { t } = useTranslation();
   const sendMessage = useAppStore((s) => s.sendMessage);
   const enqueueMessage = useAppStore((s) => s.enqueueMessage);
   const performRewindCancel = useAppStore((s) => s.performRewindCancel);
@@ -160,20 +163,20 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
   }, [text]);
 
   const submit = () => {
-    const t = text.trim();
-    if (!t || sendingRef.current) return;
+    const msg = text.trim();
+    if (!msg || sendingRef.current) return;
     sendingRef.current = true;
     // 发送即定格:server /messages 先 finalizePending 再打新快照,被回退段由
     // rewind:finalized 从列表移除(本编辑器随之卸载)。mid-turn 则排队。
-    if (isStreaming) enqueueMessage(t);
-    else void sendMessage(t);
+    if (isStreaming) enqueueMessage(msg);
+    else void sendMessage(msg);
   };
 
   // Redo(恢复):始终可点。失败(网络 / 已定格 409)不静默 —— 既给提示,也
   // 主动清掉本地挂起态(服务端已经不是 pending,本地不该继续显示编辑框)。
   const redo = () => {
     setRedoErr(null);
-    void performRewindCancel(sid).catch((e: Error) => setRedoErr(e?.message ?? '恢复失败'));
+    void performRewindCancel(sid).catch((e: Error) => setRedoErr(e?.message ?? t('rewind.restoreFailed')));
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -192,7 +195,7 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
           className="rw-inline-input"
           value={text}
           rows={1}
-          placeholder="编辑后回车发送 · 从这里重新开始"
+          placeholder={t('rewind.inlinePlaceholder')}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -201,14 +204,14 @@ export function RewindInlineEditor({ sid, initialText, isStreaming }: {
             type="button"
             className="rw-inline-send"
             disabled={!text.trim()}
-            title="从这里重新发送"
+            title={t('rewind.resendFromHere')}
             onClick={submit}
           ><ArrowUp size={14} strokeWidth={2.4} /></button>
         </div>
       </div>
       <div className="rw-inline-foot">
         {redoErr && <span className="rw-err">{redoErr}</span>}
-        <button type="button" className="rw-redo-link" onClick={redo}>Redo checkpoint</button>
+        <button type="button" className="rw-redo-link" onClick={redo}>{t('rewind.redoCheckpoint')}</button>
       </div>
     </div>
   );
@@ -226,6 +229,7 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
   isStreaming: boolean;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const performRewind = useAppStore((s) => s.performRewind);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const enqueueMessage = useAppStore((s) => s.enqueueMessage);
@@ -254,16 +258,16 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
   // (用户已在确认弹窗点过「回退并发送」);无则仅回退会话。
   const doRewindAndSend = async (mode: RewindMode) => {
     if (sendingRef.current) return;
-    const t = text.trim();
-    if (!t) return;
+    const msg = text.trim();
+    if (!msg) return;
     sendingRef.current = true;
     setBusy(true);
     setErr(null);
     try {
       await performRewind(sid, msgId, mode);
       // 发送即触发 server finalizePending 定格;本组件随 rewind:finalized 卸载。
-      if (isStreaming) enqueueMessage(t);
-      else await sendMessage(t);
+      if (isStreaming) enqueueMessage(msg);
+      else await sendMessage(msg);
     } catch (e) {
       sendingRef.current = false;
       setBusy(false);
@@ -272,8 +276,8 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
   };
 
   const submit = () => {
-    const t = text.trim();
-    if (!t || busy || sendingRef.current) return;
+    const msg = text.trim();
+    if (!msg || busy || sendingRef.current) return;
     setBusy(true);
     setErr(null);
     rewindPreview(sid, msgId)
@@ -308,7 +312,7 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
           className="rw-inline-input"
           value={text}
           rows={1}
-          placeholder="编辑后回车发送 · 从这里重新开始"
+          placeholder={t('rewind.inlinePlaceholder')}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={busy && phase === 'editing'}
@@ -318,37 +322,37 @@ export function BubbleEditInline({ sid, msgId, initialText, hasCode, isStreaming
             type="button"
             className="rw-inline-send"
             disabled={!text.trim() || busy}
-            title="从这里编辑并发送"
+            title={t('rewind.editAndSendFromHere')}
             onClick={submit}
           ><ArrowUp size={14} strokeWidth={2.4} /></button>
         </div>
       </div>
       <div className="rw-inline-foot">
         {err && <span className="rw-err">{err}</span>}
-        <button type="button" className="rw-redo-link" disabled={busy} onClick={onCancel}>取消编辑</button>
+        <button type="button" className="rw-redo-link" disabled={busy} onClick={onCancel}>{t('rewind.cancelEdit')}</button>
       </div>
 
       {phase === 'confirming' && preview && (
         <div className="rw-edit-confirm-overlay" onClick={() => { if (!busy) { setPhase('editing'); setPreview(null); } }}>
           <div className="rw-edit-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="rw-title">发送将回退文件?</div>
+            <div className="rw-title">{t('rewind.sendWillRevertTitle')}</div>
             <div className="rw-preview">
-              代码将回退 <b>{preview.filesChanged.length}</b> 个文件
+              {t('rewind.codeWillRevertPrefix')} <b>{preview.filesChanged.length}</b> {t('rewind.codeWillRevertSuffix')}
               {(preview.insertions > 0 || preview.deletions > 0) && (
                 <span className="rw-diffstat">
                   {' '}<em className="ins">+{preview.insertions}</em>
                   {' '}<em className="del">−{preview.deletions}</em>
                 </span>
               )}
-              {preview.binaryOrLarge > 0 && <span>(含 {preview.binaryOrLarge} 个二进制/大文件)</span>}
+              {preview.binaryOrLarge > 0 && <span>{t('rewind.binaryLargeNote', { count: preview.binaryOrLarge })}</span>}
             </div>
             <FileDiffList files={preview.files ?? []} />
             <div className="rw-actions">
               <button disabled={busy} className="rw-btn rw-primary" onClick={() => void doRewindAndSend(hasCode ? 'both' : 'conversation')}>
-                回退并发送
+                {t('rewind.revertAndSend')}
               </button>
               <button disabled={busy} className="rw-btn rw-ghost" onClick={() => { setPhase('editing'); setPreview(null); }}>
-                取消
+                {t('common.cancel')}
               </button>
             </div>
           </div>
@@ -364,6 +368,7 @@ export function RewindBanner({ sid, pending }: {
   sid: string;
   pending: NonNullable<ChatTab['pendingRewind']>;
 }) {
+  const { t } = useTranslation();
   const performRewindCancel = useAppStore((s) => s.performRewindCancel);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -372,7 +377,7 @@ export function RewindBanner({ sid, pending }: {
     <div className="rw-banner">
       <div className="rw-banner-row">
         <span className="rw-banner-label">
-          ⟲ 已回退到此处{pending.mode === 'code' ? '(仅代码)' : ''}
+          {pending.mode === 'code' ? t('rewind.revertedHereCodeOnly') : t('rewind.revertedHere')}
         </span>
         <button
           className="rw-btn rw-redo"
@@ -385,7 +390,7 @@ export function RewindBanner({ sid, pending }: {
               .finally(() => setBusy(false));
           }}
         >
-          Redo checkpoint · 恢复
+          {t('rewind.redoCheckpointRestore')}
         </button>
       </div>
       {err && <div className="rw-banner-row rw-err">{err}</div>}
@@ -399,6 +404,7 @@ export function DirtyNoticeBar({ sid, notice }: {
   sid: string;
   notice: NonNullable<ChatTab['rewindDirtyNotice']>;
 }) {
+  const { t } = useTranslation();
   const performOverwriteDirty = useAppStore((s) => s.performOverwriteDirty);
   const performUndoOverwrite = useAppStore((s) => s.performUndoOverwrite);
   const [busy, setBusy] = useState(false);
@@ -414,17 +420,17 @@ export function DirtyNoticeBar({ sid, notice }: {
     <div className="rw-banner rw-dirty-bar">
       {notice.keptDirty.length > 0 && (
         <div className="rw-banner-row rw-dirty">
-          <span>保留了你手动改的 {notice.keptDirty.length} 个文件</span>
+          <span>{t('rewind.keptDirtyFiles', { count: notice.keptDirty.length })}</span>
           <button className="rw-btn rw-ghost" disabled={busy} onClick={wrap(performOverwriteDirty)}>
-            这些文件也回退
+            {t('rewind.revertTheseFilesToo')}
           </button>
         </div>
       )}
       {notice.overwrite && notice.overwrite.files.length > 0 && (
         <div className="rw-banner-row rw-dirty">
-          <span>已覆盖 {notice.overwrite.files.length} 个手动改动的文件</span>
+          <span>{t('rewind.overwroteDirtyFiles', { count: notice.overwrite.files.length })}</span>
           <button className="rw-btn rw-ghost" disabled={busy} onClick={wrap(performUndoOverwrite)}>
-            撤销
+            {t('rewind.undo')}
           </button>
         </div>
       )}

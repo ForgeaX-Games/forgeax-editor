@@ -66,9 +66,11 @@ import {
   HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
+  resolveAssetHandle,
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import materialPackJson from '../assets/material-wood.pack.json';
 import { computeTransformAt } from './transform-animation';
@@ -184,12 +186,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const cubeAsset = assets.get<MeshAsset>(HANDLE_CUBE);
-  if (!cubeAsset.ok) {
+  const cubeAssetRes = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
+  if (!cubeAssetRes.ok) {
     console.error('[learn-render 1.5 transformations] HANDLE_CUBE asset unavailable');
     return;
   }
-  assets.registerWithGuid<MeshAsset>(cubeGuidRes.value, cubeAsset.value);
+  assets.catalog<MeshAsset>(cubeGuidRes.value, cubeAssetRes.value);
 
   const matPack = materialPackJson as unknown as MaterialPackFile;
   const matEntry = matPack.assets.find((a) => a.kind === 'material');
@@ -199,15 +201,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
+  // loadByGuid returns the texture PAYLOAD (M8 D-17); mint a user-tier column
+  // handle so the baseColorTexture slot carries a resolved numeric Handle.
+  const woodTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', woodHandleRes.value));
   const cubeMaterial: MaterialAsset = {
     kind: 'material',
     passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
     paramValues: {
       baseColor: matEntry.payload.paramValues.baseColor,
-      baseColorTexture: woodHandleRes.value,
+      baseColorTexture: woodTexHandle,
     },
   };
-  assets.registerWithGuid<MaterialAsset>(matGuidRes.value, cubeMaterial);
+  assets.catalog<MaterialAsset>(matGuidRes.value, cubeMaterial);
 
   const cubeHandleRes = await assets.loadByGuid<MeshAsset>(cubeGuidRes.value);
   const matHandleRes = await assets.loadByGuid<MaterialAsset>(matGuidRes.value);
@@ -219,6 +224,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
+  // loadByGuid returns payloads (M8 D-17); mint user-tier column handles.
+  const cubeHandle = world.allocSharedRef('MeshAsset', cubeHandleRes.value);
+  const matHandle = world.allocSharedRef('MaterialAsset', matHandleRes.value);
 
   // Spawn the cube + camera onto the world. spawn-time defaults are
   // identity (the LO §1.5 glm::mat4(1.0f) baseline); the per-frame
@@ -243,10 +251,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           scaleZ: 1,
         },
       },
-      { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
+      { component: MeshFilter, data: { assetHandle: cubeHandle } },
       {
         component: MeshRenderer,
-        data: { materials: [matHandleRes.value] },
+        data: { materials: [matHandle] },
       },
     )
     .unwrap();
@@ -287,7 +295,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.addSystem({
     name: 'transformations-animate-cube',
     queries: [{ with: [Transform, MeshFilter, Entity] }],
-    fn: (queryResults) => {
+    fn: (world, queryResults) => {
       const time = world.getResource<{ readonly dt: number }>('Time');
       const dt = time?.dt ?? 0;
       elapsedSec += dt;

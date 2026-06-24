@@ -27,6 +27,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -110,7 +111,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Construct MaterialAsset POJO directly (no Materials.standard()).
   // baseColorTexture and normalTexture are Handles resolved from GUIDs.
-  const wallMatRes = assets.register<MaterialAsset>({
+  const wallMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -123,15 +124,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColor: [1.0, 1.0, 1.0, 1.0],
       metallic: 0.0,
       roughness: 0.8,
-      baseColorTexture: baseColorTex,
-      normalTexture: normalTex,
+      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', baseColorTex)),
+      normalTexture: unwrapHandle(world.allocSharedRef('TextureAsset', normalTex)),
     },
   });
-  if (!wallMatRes.ok) {
-    console.error('[learn-render 5.4 normal-mapping] material register failed:', wallMatRes.error);
-    return;
-  }
-  const wallMat = wallMatRes.value;
 
   // Spawn quad: HANDLE_QUAD is 1x1 in XY plane, faces +Z (toward camera at (0,0,3)).
   world.spawn(

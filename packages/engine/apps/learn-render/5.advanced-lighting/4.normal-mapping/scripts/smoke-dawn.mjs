@@ -145,6 +145,7 @@ const {
   PointLight,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const brickwallDecodeRes = await decodeImageFromFile(BRICKWALL_SRC_PATH);
@@ -227,12 +228,17 @@ const normalTexAsset = {
   colorSpace: brickwallNormalDecoded.colorSpace,
   mipmap: brickwallNormalDecoded.mipmap,
 };
-const baseColorHandle = assets.registerWithGuid(brickwallGuidRes.value, baseColorTexAsset);
-const normalHandle = assets.registerWithGuid(brickwallNormalGuidRes.value, normalTexAsset);
+const world = new World();
+
+// Catalogue the textures under their GUIDs, then mint shared-ref column handles.
+assets.catalog(brickwallGuidRes.value, baseColorTexAsset);
+assets.catalog(brickwallNormalGuidRes.value, normalTexAsset);
+const baseColorHandle = world.allocSharedRef('TextureAsset', baseColorTexAsset);
+const normalHandle = world.allocSharedRef('TextureAsset', normalTexAsset);
 console.log(`[learn-render-4-normal-mapping] registered brickwall handle id=${baseColorHandle}`);
 
 // Register material with pass-based MaterialAsset shape.
-const wallMatHandle = assets.register({
+const wallMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -245,12 +251,10 @@ const wallMatHandle = assets.register({
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.8,
-    baseColorTexture: baseColorHandle,
-    normalTexture: normalHandle,
+    baseColorTexture: unwrapHandle(baseColorHandle),
+    normalTexture: unwrapHandle(normalHandle),
   },
 });
-
-const world = new World();
 
 // Spawn quad: HANDLE_QUAD is 1x1 in XY, faces +Z.
 world

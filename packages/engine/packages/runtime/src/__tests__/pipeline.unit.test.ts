@@ -77,15 +77,11 @@ import {
   type RenderPipelineAsset,
   type StencilFaceState,
   type TextureAsset,
-  toUnmanaged,
+  toShared,
 } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  AssetRegistry,
-  BUILTIN_FLOATS_PER_VERTEX,
-  HANDLE_CUBE,
-  HANDLE_TRIANGLE,
-} from '../asset-registry';
+import { HANDLE_CUBE, HANDLE_TRIANGLE } from '../asset-registry';
+import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
 import {
   bin,
   type ClusterBinError,
@@ -123,8 +119,8 @@ import {
   deriveRenderDataTexture,
 } from '../render-data';
 import { extractFrame, sortDispatchByQueue } from '../render-system-extract';
+import { resolveAssetHandle } from '../resolve-asset-handle';
 import { matchPass } from '../systems/pass-selector';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 vi.mock('@forgeax/engine-rhi-wgpu', () => {
@@ -1569,9 +1565,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   function makeRegisterCube(): (
     pod: CubeTextureAsset,
-  ) => Result<Handle<'CubeTextureAsset', 'unmanaged'>, AssetError> {
+  ) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError> {
     let next = 2000;
-    return () => rhiOk(toUnmanaged<'CubeTextureAsset'>(next++));
+    return () => rhiOk(toShared<'CubeTextureAsset'>(next++));
   }
 
   function makeEquirectSource(): TextureAsset {
@@ -1596,8 +1592,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         capsCubemapDisabled,
       );
 
-      const srcHandle = toUnmanaged<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const srcHandle = toShared<'TextureAsset'>(4096);
+      const result = await store.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -1613,8 +1613,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const store = new GpuResourceStore();
       store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
 
-      const srcHandle = toUnmanaged<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const srcHandle = toShared<'TextureAsset'>(4096);
+      const result = await store.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
 
       // With caps=true the path should reach the IBL precompute and succeed.
       expect(result.ok).toBe(true);
@@ -1624,8 +1628,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const store = new GpuResourceStore();
       store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
 
-      const srcHandle = toUnmanaged<'TextureAsset'>(4096);
-      const first = await store.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const srcHandle = toShared<'TextureAsset'>(4096);
+      const first = await store.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
       expect(first.ok).toBe(true);
 
       // Simulate caps becoming false (not a real use case; the store's caps
@@ -1649,11 +1657,19 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         capsTrue,
       );
 
-      const first2 = await store2.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const first2 = await store2.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
       const submitsAfterFirst = submitProbe.count;
       expect(submitsAfterFirst).toBeGreaterThanOrEqual(1);
 
-      const second2 = await store2.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const second2 = await store2.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
       // Second call hits the idempotent map, no new submits.
       expect(submitProbe.count).toBe(submitsAfterFirst);
 
@@ -1684,8 +1700,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // at line ~555) and NOT feature-not-enabled (caps guard at ~565).
       const store = new GpuResourceStore();
       // Store is never configured — both registerCube and caps are undefined.
-      const srcHandle = toUnmanaged<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(srcHandle, makeEquirectSource());
+      const srcHandle = toShared<'TextureAsset'>(4096);
+      const result = await store.uploadCubemapFromEquirect(
+        new World(),
+        srcHandle,
+        makeEquirectSource(),
+      );
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -2525,9 +2545,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('BUILTIN_CUBE and BUILTIN_TRIANGLE expose 12 floats per vertex (boundary)', () => {
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-      const cube = assets.get<MeshAsset>(HANDLE_CUBE);
-      const tri = assets.get<MeshAsset>(HANDLE_TRIANGLE);
+      const world = new World();
+      const cube = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
+      const tri = resolveAssetHandle<MeshAsset>(world, HANDLE_TRIANGLE);
       expect(cube.ok).toBe(true);
       expect(tri.ok).toBe(true);
       if (!cube.ok || !tri.ok) return;
@@ -2555,14 +2575,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('BUILTIN and procedural meshes coexist on a single AssetRegistry under one stride', () => {
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const world = new World();
       const proceduralRes = createBoxGeometry(1, 1, 1);
       expect(proceduralRes.ok).toBe(true);
       if (!proceduralRes.ok) return;
-      const handle = assets.register(proceduralRes.value).unwrap();
+      const handle = world.allocSharedRef('MeshAsset', proceduralRes.value);
 
-      const cube = assets.get<MeshAsset>(HANDLE_CUBE);
-      const proc = assets.get<MeshAsset>(handle);
+      const cube = resolveAssetHandle<MeshAsset>(world, HANDLE_CUBE);
+      const proc = resolveAssetHandle<MeshAsset>(world, handle);
       expect(cube.ok).toBe(true);
       expect(proc.ok).toBe(true);
       if (!cube.ok || !proc.ok) return;
@@ -2910,13 +2930,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { renderer };
   }
 
-  async function spawnScene(renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
+  async function spawnScene(_renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
     const world = new World();
-    const reg = renderer.assets.register(meshAsset);
-    expect(reg.ok).toBe(true);
-    const meshHandle = reg.value as Handle<'MeshAsset', 'managed'>;
+    const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
+      'MeshAsset',
+      'shared'
+    >;
 
     world.spawn(
       {
@@ -3238,13 +3259,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     return { renderer };
   }
 
-  async function spawnScene(renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
+  async function spawnScene(_renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
     const world = new World();
-    const reg = renderer.assets.register(meshAsset);
-    expect(reg.ok).toBe(true);
-    const meshHandle = reg.value as Handle<'MeshAsset', 'managed'>;
+    const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
+      'MeshAsset',
+      'shared'
+    >;
 
     world.spawn(
       {
@@ -3434,7 +3456,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from render-query-regression.test.ts ---
-  const MATERIAL_SENTINEL = 0 as unknown as Handle<'MaterialAsset', 'unmanaged'>;
+  const MATERIAL_SENTINEL = 0 as unknown as Handle<'MaterialAsset', 'shared'>;
 
   describe('Bug 1: registerComponent before spawn does not break render query', () => {
     it('entities are included in renderables when an unrelated component is pre-registered', () => {
@@ -3948,8 +3970,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       //   - `await renderer.ready` resolves Result.ok (Step 2 guard skips
       //     dual createShaderModule because `registry.entries().length === 0`)
       //   - on `renderer.draw(world)` the per-entity loop in
-      //     `render-system-extract.ts` calls `assets._materialWalk()` which
-      //     walks the parent chain (none), finds zero passes, and fires
+      //     `render-system-extract.ts` walks the material parent chain (none),
+      //     finds zero passes, and fires
       //     `material-resolved-empty-passes` (RuntimeError).
       const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
       const ready = (await renderer.ready) as { ok: boolean };
@@ -3957,23 +3979,22 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
       const errors: { code: string; hint?: string }[] = [];
 
-      // Register a material with zero passes (no parent chain). The extract
-      // stage's _materialWalk returns Err with
-      // `material-resolved-empty-passes` reason='no-pass-in-chain'.
-      const matHandle = renderer.assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [1, 0, 0, 1],
-        })
-        .unwrap();
-
       // Spawn a Camera (so `cameras.length === 1`) plus a single MeshRenderer
       // entity (so `validated.length > 0` reaches the pipeline-pick branch).
       const world = new World() as {
         spawn: (...components: unknown[]) => { unwrap: () => unknown };
         setErrorHandler: (handler: (err: Error, ctx: unknown) => void) => void;
+        allocSharedRef: (target: string, payload: unknown) => number;
       };
+
+      // Mint a material with zero passes (no parent chain) as a user-tier column
+      // handle. The extract stage's material walk returns Err with
+      // `material-resolved-empty-passes` reason='no-pass-in-chain'.
+      const matHandle = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [1, 0, 0, 1],
+      });
       // feat-20260529 D-3: extract-stage errors (material-resolved-empty-passes)
       // route through the world's errorHandler, not the renderer's errorRegistry.
       // Capture them here to assert the structured error surface (charter P3).
@@ -5383,9 +5404,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // A registerCube relay that mints sequential cube handles without a registry.
   function makeRegisterCube(): (
     pod: CubeTextureAsset,
-  ) => Result<Handle<'CubeTextureAsset', 'unmanaged'>, AssetError> {
+  ) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError> {
     let next = 1000;
-    return () => rhiOk(toUnmanaged<'CubeTextureAsset'>(next++));
+    return () => rhiOk(toShared<'CubeTextureAsset'>(next++));
   }
 
   function meshPod(verts = 4): MeshAsset {
@@ -5428,7 +5449,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(1)+(2) mesh ensureResident miss builds buffers, hit is O(1) (same buffers)', () => {
       const probe = freshProbe();
       const store = configured(probe);
-      const handle = toUnmanaged<'MeshAsset'>(1024);
+      const handle = toShared<'MeshAsset'>(1024);
       const pod = meshPod();
 
       const first = store.ensureResident(handle, pod);
@@ -5448,7 +5469,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(3) texture ensureResident miss (mipmap=false) builds texture + view synchronously', () => {
       const probe = freshProbe();
       const store = configured(probe);
-      const handle = toUnmanaged<'TextureAsset'>(2048);
+      const handle = toShared<'TextureAsset'>(2048);
       const pod = texturePod(false);
 
       const res = store.ensureResident(handle, pod);
@@ -5465,15 +5486,15 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(4) accessors return cached entry; miss returns undefined', () => {
       const probe = freshProbe();
       const store = configured(probe);
-      const meshHandle = toUnmanaged<'MeshAsset'>(1024);
-      const texHandle = toUnmanaged<'TextureAsset'>(2048);
+      const meshHandle = toShared<'MeshAsset'>(1024);
+      const texHandle = toShared<'TextureAsset'>(2048);
 
       // Miss before residency.
       expect(store.getMeshGpuHandles(meshHandle)).toBeUndefined();
       expect(store.getTextureGpuView(texHandle)).toBeUndefined();
-      expect(store.getCubemapGpuView(toUnmanaged<'CubeTextureAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapGpuTexture(toUnmanaged<'CubeTextureAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapFaceViews(toUnmanaged<'CubeTextureAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapGpuView(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapGpuTexture(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapFaceViews(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
 
       store.ensureResident(meshHandle, meshPod());
       store.ensureResident(texHandle, texturePod(false));
@@ -5484,11 +5505,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(5) cubemapIdempotentMap: same source handle returns the same cube handle', async () => {
       const probe = freshProbe();
       const store = configured(probe);
-      const srcHandle = toUnmanaged<'TextureAsset'>(2048);
+      const srcHandle = toShared<'TextureAsset'>(2048);
       const srcPod = texturePod(false, 'rgba16float');
 
-      const r1 = await store.uploadCubemapFromEquirect(srcHandle, srcPod);
-      const r2 = await store.uploadCubemapFromEquirect(srcHandle, srcPod);
+      const r1 = await store.uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
+      const r2 = await store.uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
       expect(r1.ok && r2.ok).toBe(true);
       if (r1.ok && r2.ok) {
         // Second call is the idempotent cache hit -> identical cube handle.
@@ -5507,7 +5528,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const prewarm = await store.prewarmMipmapPipeline(device, ['rgba8unorm-srgb']);
       expect(prewarm.ok).toBe(true);
 
-      const handle = toUnmanaged<'TextureAsset'>(2048);
+      const handle = toShared<'TextureAsset'>(2048);
       const pod = texturePod(true, 'rgba8unorm-srgb');
       const res = store.ensureResident(handle, pod);
       expect(res.ok).toBe(true);
@@ -5518,7 +5539,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(7a) un-prewarmed mipmap format on the sync path returns structured RhiError (no lazy await)', () => {
       const probe = freshProbe();
       const store = configured(probe); // device wired, but NO prewarm
-      const handle = toUnmanaged<'TextureAsset'>(2048);
+      const handle = toShared<'TextureAsset'>(2048);
       const pod = texturePod(true, 'rgba8unorm-srgb'); // mipmap=true, never prewarmed
 
       const res = store.ensureResident(handle, pod);
@@ -5530,9 +5551,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
     it('(7b) no-device ensureResident returns a structured error (OOS-3 legacy degradation made explicit)', () => {
       const store = new GpuResourceStore(); // configureGpuDevice never called
-      const meshRes = store.ensureResident(toUnmanaged<'MeshAsset'>(1024), meshPod());
+      const meshRes = store.ensureResident(toShared<'MeshAsset'>(1024), meshPod());
       expect(meshRes.ok).toBe(false);
-      const texRes = store.ensureResident(toUnmanaged<'TextureAsset'>(2048), texturePod(false));
+      const texRes = store.ensureResident(toShared<'TextureAsset'>(2048), texturePod(false));
       expect(texRes.ok).toBe(false);
     });
   });

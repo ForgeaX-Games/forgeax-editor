@@ -131,6 +131,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[custom-shader] renderer.shader or renderer.assets is null; visible-pulse demo requires a fully initialized WebGPU backend.');
     return;
   }
+  const world = new World();
 
   // Register the user-side material shader entry under the path identifier
   // declared in the .wgsl `#define_import_path` header. ShaderRegistry
@@ -171,7 +172,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     metallic: 0,
     roughness: 2,
   };
-  const materialResult = assets.register<MaterialAsset>({
+  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -183,11 +184,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     ],
     paramValues,
   });
-  if (!materialResult.ok) {
-    console.error('[custom-shader] register<MaterialAsset> failed:', materialResult.error);
-    return;
-  }
-  const materialHandle = materialResult.value;
 
   // Procedural box (12-floats stride: position + normal + uv + tangent).
   // The PBR pipeline cache builder (M9-T03) assumes the standard 4-BGL
@@ -197,12 +193,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[custom-shader] createBoxGeometry failed:', boxRes.error);
     return;
   }
-  const boxAssetResult = assets.register(boxRes.value);
-  if (!boxAssetResult.ok) {
-    console.error('[custom-shader] register box mesh failed:', boxAssetResult.error);
-    return;
-  }
-  const boxMeshHandle = boxAssetResult.value;
+  const boxMeshHandle = world.allocSharedRef('MeshAsset', boxRes.value);
 
   // Compose the World: cube + camera + directional light. Direct light
   // ensures the pulse-material lit path produces a non-black baseline
@@ -210,7 +201,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // normal); the SMOKE_PIXEL_THRESHOLD pulse-delta gate at M9-T06 reads
   // pixels at 3 distinct t values to confirm the colour is visibly
   // pulsing across frames.
-  const world = new World();
   world
     .spawn(
       { component: Name, data: { value: 'pulse-cube' } as never },

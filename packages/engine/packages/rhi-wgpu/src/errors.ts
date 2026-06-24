@@ -221,6 +221,34 @@ export function webgpuRuntimeError(cause: unknown): Result<never, RhiError> {
   );
 }
 
+/**
+ * rhi-descriptor-invalid path — a create* entry descriptor failed to parse
+ * in the wgpu-wasm backend. The stable prefix `[wgpu-wasm] failed to parse`
+ * (D-1 contract) distinguishes descriptor parse failures from runtime
+ * exceptions. Semantics: descriptor parse failure = caller bug (the caller
+ * passed malformed descriptor data that the wasm deserializer rejected);
+ * `.hint` carries the raw parse-error message including the failing field
+ * index (e.g. `fragment.targets[0]`) for human triage. `.detail` is
+ * `undefined` (D-8: index information lives in `.hint`, aligning with the
+ * 15-member baseline).
+ */
+export function descriptorInvalid(cause: unknown): Result<never, RhiError> {
+  const causeMessage =
+    cause instanceof Error
+      ? cause.message
+      : cause === undefined
+        ? 'unknown descriptor parse error'
+        : String(cause);
+  return err(
+    new RhiError({
+      code: 'rhi-descriptor-invalid',
+      expected:
+        'caller passed well-formed descriptor data matching the wgpu-wasm serialization contract',
+      hint: `wgpu-wasm descriptor parse error: ${causeMessage} (check the descriptor field named in the error message for type mismatch or missing required fields)`,
+    }),
+  );
+}
+
 // AC-09 sanity: the closed union is consumed as a type-only import so it is
 // erased at runtime. Each factory's `code:` literal is narrowed against
 // `RhiErrorCode` by the RhiError class constructor signature; this type

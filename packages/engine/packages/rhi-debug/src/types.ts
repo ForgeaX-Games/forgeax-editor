@@ -532,23 +532,66 @@ export interface InspectDrawCall {
 }
 
 /**
+ * Decoded RGBA8 pixels of the RT readback at the inspected draw call — the
+ * structured RT payload produced by the node-free browser path (L3b
+ * `inspectDrawJson`). `pixels.length === width * height * 4` (tight-packed,
+ * row-alignment padding stripped).
+ */
+export interface InspectRtPixels {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: Uint8Array;
+}
+
+/**
+ * The RT readback at the inspected draw call, in one of two genuinely
+ * distinct forms keyed by execution environment:
+ *
+ * - `string` — a PNG **file path** on disk, produced by the Node CLI path
+ *   (`inspector.inspectAt`), which encodes the readback to a PNG under the
+ *   inspect/ output dir. Discriminate with `typeof rt === 'string'`.
+ * - {@link InspectRtPixels} — the decoded `{ width, height, pixels }` triple,
+ *   produced by the node-free browser path (`inspectDrawJson`), which cannot
+ *   write files and so hands back raw RGBA8 pixels. Discriminate with
+ *   `typeof rt === 'object'` (or `'pixels' in rt`).
+ *
+ * AI users branch on `typeof` — the union is the single source of truth for
+ * "what an `rt` field may hold", so no `as any` cast is needed at either
+ * producer.
+ */
+export type InspectRtPayload = string | InspectRtPixels;
+
+/**
  * Structured report produced by inspectAt(replay, drawIdx, fields?).
+ *
+ * frameIdx/drawIdx/passIdx are **always present** — they identify the inspected
+ * draw and are computed regardless of the `fields` selector.
+ *
+ * bindings/drawCall/rt are **field-cropped**: each is present only when the
+ * `fields` selector includes its name, or when `fields` is undefined (full
+ * report). When a field is not requested it is genuinely absent (the key is not
+ * set), not assigned `undefined` (AC-12). AI users must narrow before reading
+ * (`report.drawCall?.pipelineKind`, `if (report.bindings) …`).
  *
  * frameIdx: the frame index containing this draw call.
  * drawIdx: the global draw event index within the tape.
  * passIdx: the render/compute pass index containing this draw.
- * bindings: the bind group bindings active at this draw call.
- * drawCall: metadata about the draw/dispatch call itself.
- * rt: file path to the RT readback PNG (string path, not inline base64).
- *     Only present when fields includes 'rt' or is undefined (full report).
+ * bindings: the bind group bindings active at this draw call (cropped: present
+ *     when fields includes 'bindings' or is undefined).
+ * drawCall: metadata about the draw/dispatch call itself (cropped: present when
+ *     fields includes 'drawCall' or is undefined).
+ * rt: the RT readback ({@link InspectRtPayload}) — a PNG file path string on
+ *     the Node CLI path, or a decoded {width,height,pixels} object on the
+ *     browser path. Cropped: present when fields includes 'rt' or is undefined
+ *     (full report).
  */
 export interface InspectReport {
   readonly frameIdx: number;
   readonly drawIdx: number;
   readonly passIdx: number;
-  readonly bindings: readonly InspectBindingEntry[];
-  readonly drawCall: InspectDrawCall;
-  readonly rt?: string | undefined;
+  readonly bindings?: readonly InspectBindingEntry[] | undefined;
+  readonly drawCall?: InspectDrawCall | undefined;
+  readonly rt?: InspectRtPayload | undefined;
 }
 
 /**

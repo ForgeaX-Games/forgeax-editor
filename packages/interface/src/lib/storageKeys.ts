@@ -36,6 +36,10 @@ export const STORAGE_KEYS = {
   pinnedSlug: 'forgeax.pinnedSlug',
   /** first-run boot splash seen flag. */
   bootSplash: 'forgeax.boot.splash.v1',
+
+  // ── i18n ──
+  /** active UI language code ('en' | 'zh' | …). English is the default/source. */
+  locale: 'forgeax.locale',
 } as const;
 
 /** Build a per-workspace dockview layout key. */
@@ -47,4 +51,6 @@ export const APP_EVENTS = {
   dockLayoutToggle: 'forgeax:shell:dock-layout-toggle',
   dockReset: 'forgeax:shell:dock-reset',
   animHandoff: 'forgeax:anim-handoff',
+  /** Open (or focus, if already open) a dock panel by id. detail: { id: string } */
+  openPanel: 'forgeax:shell:open-panel',
 } as const;

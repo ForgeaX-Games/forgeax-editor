@@ -4,7 +4,7 @@ import { SessionSwitcher } from './SessionSwitcher';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { GameSwitcher } from './GameSwitcher';
 import { STORAGE_KEYS, APP_EVENTS } from '../../lib/storageKeys';
-import { CircleGauge, LayoutGrid, Rocket, Settings, Cpu, Pause, Play, ShieldAlert, Check, X } from 'lucide-react';
+import { CircleGauge, LayoutGrid, Rocket, Settings, ShieldAlert, Check, X } from 'lucide-react';
 import { useConfirmToast, type PendingConfirm } from '../../lib/useConfirmToast';
 import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 // SettingsDrawer is no longer rendered from here — its body migrated into
@@ -15,6 +15,7 @@ import { isTauri } from '../../lib/platform/runtime';
 import { dashApi } from '../../lib/dashboard-api';
 import { alertDialog } from '../../lib/dialog';
 import { listBusPlugins } from '../../lib/bus-api';
+import { useTranslation } from '@/i18n';
 import './TopBar.css';
 
 type BusCountState =
@@ -299,8 +300,8 @@ export interface TopBarProps {
 }
 
 export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
+  const { t } = useTranslation();
   const { mode, setMode } = useAppStore();
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
   const openSettings = useAppStore((s) => s.openSettings);
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const [packaging, setPackaging] = useState(false);
@@ -318,7 +319,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
       } catch { /* fall through */ }
     }
     if (!slug) {
-      await alertDialog({ title: '打包成独立游戏', body: '先选择或创建一个游戏再打包。' });
+      await alertDialog({ title: t('topbar.package.title'), body: t('topbar.package.noGame') });
       return;
     }
     setPackaging(true);
@@ -327,25 +328,25 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
       const j = (await r.json()) as { ok?: boolean; error?: string; detail?: string; outDir?: string; runHint?: string };
       if (!r.ok || !j.ok) {
         await alertDialog({
-          title: '打包失败',
-          body: <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{j.detail || j.error || '未知错误'}</pre>,
+          title: t('topbar.package.failed'),
+          body: <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{j.detail || j.error || t('topbar.package.unknownError')}</pre>,
         });
         return;
       }
       await alertDialog({
-        title: `已打包「${slug}」`,
+        title: t('topbar.package.done', { slug }),
         body: (
           <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <div>导出目录：</div>
+            <div>{t('topbar.package.exportDir')}</div>
             <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{j.outDir}</pre>
-            <div>本地独立运行：</div>
+            <div>{t('topbar.package.runLocally')}</div>
             <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{j.runHint}</pre>
-            <div style={{ opacity: 0.7, marginTop: 8 }}>WebGPU 需在 localhost 或 HTTPS 下打开。</div>
+            <div style={{ opacity: 0.7, marginTop: 8 }}>{t('topbar.package.webgpuHint')}</div>
           </div>
         ),
       });
     } catch (e) {
-      await alertDialog({ title: '打包失败', body: String((e as Error)?.message ?? e) });
+      await alertDialog({ title: t('topbar.package.failed'), body: String((e as Error)?.message ?? e) });
     } finally {
       setPackaging(false);
     }
@@ -451,23 +452,12 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
       <WorkspaceTabs setMode={setMode} />
 
       <div className="tb-right">
-        <button
-          type="button"
-          className="tb-icon-btn"
-          title="CLI Providers · 单击进入 cli-provider admin"
-          onClick={() => { openSettings('plugins'); setPendingBusKindFilter('cli-provider'); }}
-        >
-          <Cpu size={16} />
-        </button>
-        <TbDivider />
-        <PauseToggle />
-        <TbDivider />
         <DashboardToggle />
         <TbDivider />
         <button
           type="button"
           className="tb-icon-btn"
-          title="布局 · 重开 / 重置 / 预设"
+          title={t('topbar.layout.tooltip')}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             window.dispatchEvent(new CustomEvent(APP_EVENTS.dockLayoutToggle, {
@@ -482,7 +472,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
           type="button"
           className="tb-icon-btn"
           onClick={() => openSettings()}
-          title="系统设置 · Plugins / Keys / Models / About"
+          title={t('topbar.settings.tooltip')}
         >
           <Settings size={16} />
         </button>
@@ -492,7 +482,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
           className="tb-publish-btn"
           onClick={onPackageGame}
           disabled={packaging}
-          title={packaging ? '正在打包独立游戏…' : '打包成独立游戏 · 可本地独立跑'}
+          title={packaging ? t('topbar.publish.packaging') : t('topbar.publish.tooltip')}
         >
           <Rocket size={16} />
         </button>
@@ -519,65 +509,3 @@ function DashboardToggle() {
   );
 }
 
-// Doc 07 §TopBar — "Pause AI". Freezes AI-initiated tool/skill calls without
-// touching user-driven ones. Backend: GET/POST /api/runtime/pause + bus
-// emits runtime.paused / runtime.resumed. We tail the SSE stream so a remote
-// pause (CLI, another browser) shows the same icon state here.
-function PauseToggle() {
-  const [paused, setPaused] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/runtime/pause')
-      .then((r) => r.json())
-      .then((j: { paused?: boolean }) => {
-        if (!cancelled && typeof j.paused === 'boolean') setPaused(j.paused);
-      })
-      .catch(() => { /* leave default */ });
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource('/api/events/stream?topic=runtime.*');
-      es.addEventListener('event', (ev: MessageEvent) => {
-        try {
-          const env = JSON.parse(ev.data) as { topic?: string };
-          if (env.topic === 'runtime.paused') setPaused(true);
-          else if (env.topic === 'runtime.resumed') setPaused(false);
-        } catch { /* ignore malformed envelope */ }
-      });
-    } catch { /* no SSE — fall back to button-only state */ }
-    return () => {
-      cancelled = true;
-      if (es) es.close();
-    };
-  }, []);
-
-  const toggle = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const next = !paused;
-      const r = await fetch('/api/runtime/pause', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ paused: next, reason: 'topbar' }),
-      });
-      const j = (await r.json()) as { ok?: boolean; paused?: boolean };
-      if (j.ok && typeof j.paused === 'boolean') setPaused(j.paused);
-    } catch { /* SSE will resync on next transition */ }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <button
-      type="button"
-      className={`tb-icon-btn${paused ? ' active' : ''}`}
-      onClick={toggle}
-      disabled={busy}
-      title={paused ? 'AI 已暂停 — 点击恢复（不影响你的手动操作）' : '暂停 AI — 仅冻结 agent，不影响你的操作'}
-      style={paused ? { color: '#f59e0b' } : undefined}
-    >
-      {paused ? <Play size={16} /> : <Pause size={16} />}
-    </button>
-  );
-}

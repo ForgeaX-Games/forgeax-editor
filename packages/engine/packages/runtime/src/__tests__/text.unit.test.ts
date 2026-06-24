@@ -28,6 +28,7 @@ import {
 import { glyphTextLayoutSystem, resetGlyphBakeCache } from '../glyph-text-layout-system';
 import { GpuResourceStore } from '../gpu-resource-store';
 import { pick } from '../pick';
+import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
 import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -75,10 +76,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       return out;
     };
 
-    function registerFont(assets: AssetRegistry, glyphs: Record<number, GlyphMetric>): number {
-      const r = assets.register<FontAsset>(makeFont(glyphs));
-      if (!r.ok) throw new Error('font register failed');
-      return r.value as unknown as number;
+    function registerFont(world: World, glyphs: Record<number, GlyphMetric>): number {
+      return world.allocSharedRef('FontAsset', makeFont(glyphs)) as unknown as number;
     }
 
     function makeRegistry(): AssetRegistry {
@@ -90,7 +89,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: GlyphText,
           data: {
-            fontHandle: fontId as unknown as Handle<'FontAsset', 'unmanaged'>,
+            fontHandle: fontId as unknown as Handle<'FontAsset', 'shared'>,
             text,
             fontSize,
             colorR: 1,
@@ -107,8 +106,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       it('(a) spawn GlyphText -> entity gains MeshFilter + MeshRenderer (AC-07)', () => {
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('Hi'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, 'Hi');
 
         // Before the pass the entity carries only GlyphText + no MeshFilter column.
@@ -130,8 +129,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         //        (not the empty/dropped column that the chained-add migration bug
         //        produced when the entity already carried >=2 components).
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('Hi'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
         // Entity carries Transform + GlyphText (the >=2-component shape that
         // triggered the F-2 chained-add column loss) before the layout pass adds
         // MeshFilter then MeshRenderer.
@@ -141,7 +140,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             {
               component: GlyphText,
               data: {
-                fontHandle: fontId as unknown as Handle<'FontAsset', 'unmanaged'>,
+                fontHandle: fontId as unknown as Handle<'FontAsset', 'shared'>,
                 text: 'Hi',
                 fontSize: 1,
                 colorR: 1,
@@ -160,7 +159,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(mf.ok).toBe(true);
         const assetHandle = (mf.unwrap() as { assetHandle: number }).assetHandle;
         expect(Number(assetHandle)).not.toBe(0);
-        expect(assets.get<MeshAsset>(assetHandle as never).ok).toBe(true);
+        expect(resolveAssetHandle<MeshAsset>(world, assetHandle as never).ok).toBe(true);
 
         // F-1 guard: MeshRenderer.materials[0] is a real (non-zero) MSDF material handle.
         const mr = world.get(e, MeshRenderer);
@@ -169,19 +168,19 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const material = materials[0] ?? 0;
         expect(Number(material)).not.toBe(0);
         // The bound material resolves to a forgeax::msdf-text pass (not default).
-        const passes = assets.passesOf(material as never);
+        const passes = walkMaterialPassesOverSharedRefs(world, material as never, assets);
         expect(passes.ok).toBe(true);
-        expect(passes.unwrap()[0]?.shader).toBe('forgeax::msdf-text');
+        expect(passes.unwrap().passes[0]?.shader).toBe('forgeax::msdf-text');
       });
 
       it('(b) dirty text -> updateMesh in place, assets size unchanged (AC-08)', () => {
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('HiABC'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('HiABC'));
         const e = spawnLabel(world, fontId, 'Hi');
 
         glyphTextLayoutSystem(world, assets, gpuStore);
-        const sizeAfterBake = assets.inspect().handles.length;
+        const sizeAfterBake = world.sharedRefs._liveCount();
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const meshHandle = mf.assetHandle;
 
@@ -189,33 +188,34 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         world.set(e, GlyphText, { text: 'ABC' }).unwrap();
         glyphTextLayoutSystem(world, assets, gpuStore);
 
-        expect(assets.inspect().handles.length).toBe(sizeAfterBake); // no new registration (AC-08)
+        expect(world.sharedRefs._liveCount()).toBe(sizeAfterBake); // no new registration (AC-08)
         const mf2 = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         expect(mf2.assetHandle).toBe(meshHandle); // same handle reused
       });
 
       it('(b2) clean re-pass does not register or mutate', () => {
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('Hi'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
         spawnLabel(world, fontId, 'Hi');
         glyphTextLayoutSystem(world, assets, gpuStore);
-        const size1 = assets.inspect().handles.length;
+        const size1 = world.sharedRefs._liveCount();
         glyphTextLayoutSystem(world, assets, gpuStore); // no change -> no work
-        expect(assets.inspect().handles.length).toBe(size1);
+        expect(world.sharedRefs._liveCount()).toBe(size1);
       });
 
       it('(c) baked mesh AABB is the conservative anchor-centered cube (non-degenerate)', () => {
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('HHHH'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('HHHH'));
         const e = spawnLabel(world, fontId, 'HHHH');
         glyphTextLayoutSystem(world, assets, gpuStore);
 
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
-        const mesh = assets
-          .get<MeshAsset>(mf.assetHandle as unknown as Handle<'MeshAsset', 'unmanaged'>)
-          .unwrap();
+        const mesh = resolveAssetHandle<MeshAsset>(
+          world,
+          mf.assetHandle as unknown as Handle<'MeshAsset', 'shared'>,
+        ).unwrap();
         const aabb = mesh.aabb as Float32Array;
         // cube centered at origin: min = -R on all axes, max = +R.
         const r = aabb[3] as number;
@@ -232,7 +232,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const world = new World();
         // Spawn 9 labels each referencing a distinct registered font.
         for (let i = 0; i < 9; i++) {
-          const fontId = registerFont(assets, ASCII('A'));
+          const fontId = registerFont(world, ASCII('A'));
           spawnLabel(world, fontId, 'A');
         }
         const result = glyphTextLayoutSystem(world, assets, gpuStore);
@@ -246,16 +246,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       it('(g) empty-string GlyphText -> MeshFilter with a 0-vertex mesh', () => {
         const assets = makeRegistry();
-        const fontId = registerFont(assets, ASCII('Hi'));
         const world = new World();
+        const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, '');
         glyphTextLayoutSystem(world, assets, gpuStore);
 
         expect(world.get(e, MeshFilter).ok).toBe(true);
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
-        const mesh = assets
-          .get<MeshAsset>(mf.assetHandle as unknown as Handle<'MeshAsset', 'unmanaged'>)
-          .unwrap();
+        const mesh = resolveAssetHandle<MeshAsset>(
+          world,
+          mf.assetHandle as unknown as Handle<'MeshAsset', 'shared'>,
+        ).unwrap();
         expect(mesh.vertices.length).toBe(0);
       });
     });
@@ -402,7 +403,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       };
     }
 
-    function registerFont(assets: AssetRegistry, chars: string): number {
+    function registerFont(world: World, chars: string): number {
       const glyphs: Record<number, GlyphMetric> = {};
       for (const ch of chars) glyphs[ch.codePointAt(0) as number] = metric();
       const font: FontAsset = {
@@ -419,9 +420,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           atlasHeight: 64,
         },
       };
-      const r = assets.register<FontAsset>(font);
-      if (!r.ok) throw new Error('font register failed');
-      return r.value as unknown as number;
+      return world.allocSharedRef('FontAsset', font) as unknown as number;
     }
 
     function makeWorld(): World {
@@ -486,7 +485,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: GlyphText,
             data: {
-              fontHandle: fontId as unknown as Handle<'FontAsset', 'unmanaged'>,
+              fontHandle: fontId as unknown as Handle<'FontAsset', 'shared'>,
               text: 'Hi',
               fontSize: 1,
               colorR: 1,
@@ -503,14 +502,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       it('(d) center-viewport ray hits the baked text entity', () => {
         resetGlyphBakeCache();
         const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-        const fontId = registerFont(assets, 'Hi');
         const world = makeWorld();
+        const fontId = registerFont(world, 'Hi');
         const camera = spawnCamera(world, 5);
         const label = spawnLabel(world, fontId);
 
         glyphTextLayoutSystem(world, assets, gpuStore); // bake + attach MeshFilter + MeshRenderer
 
-        const hit = pick(world, assets, camera, VP / 2, VP / 2, VP, VP);
+        const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
         expect(hit).toBeDefined();
         expect(hit?.entity).toBe(label);
       });
@@ -518,15 +517,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       it('(e) pickable=0 label is skipped by pick', () => {
         resetGlyphBakeCache();
         const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-        const fontId = registerFont(assets, 'Hi');
         const world = makeWorld();
+        const fontId = registerFont(world, 'Hi');
         const camera = spawnCamera(world, 5);
         const label = spawnLabel(world, fontId);
 
         glyphTextLayoutSystem(world, assets, gpuStore);
         world.set(label, MeshRenderer, { pickable: 0 }).unwrap();
 
-        const hit = pick(world, assets, camera, VP / 2, VP / 2, VP, VP);
+        const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
         expect(hit).toBeUndefined();
       });
     });

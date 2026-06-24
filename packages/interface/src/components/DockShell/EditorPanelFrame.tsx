@@ -12,22 +12,24 @@
 // so they can be freely docked alongside ChatPanel, Preview, Workbench — and the
 // viewport gets its own full panel with maximum space.
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
+import { requestReloadSlot } from '../../lib/reload-coordinator';
 
 export type EditorPanelId =
   | 'hierarchy' | 'assets' | 'inspector' | 'history'
   | 'capabilities' | 'material' | 'timeline' | 'matgraph' | 'launcher';
 
-const PANEL_LABELS: Record<EditorPanelId, string> = {
-  hierarchy: '层级',
-  assets: '资产',
-  inspector: '检查器',
-  history: '历史',
-  capabilities: '组件',
-  material: '材质',
-  timeline: '时间轴',
-  matgraph: '材质图',
-  launcher: '启动器',
+const PANEL_LABEL_KEYS: Record<EditorPanelId, string> = {
+  hierarchy: 'editorPanel.label.hierarchy',
+  assets: 'editorPanel.label.assets',
+  inspector: 'editorPanel.label.inspector',
+  history: 'editorPanel.label.history',
+  capabilities: 'editorPanel.label.capabilities',
+  material: 'editorPanel.label.material',
+  timeline: 'editorPanel.label.timeline',
+  matgraph: 'editorPanel.label.matgraph',
+  launcher: 'editorPanel.label.launcher',
 };
 
 interface Props {
@@ -35,6 +37,7 @@ interface Props {
 }
 
 export function EditorPanelFrame({ panelId }: Props) {
+  const { t } = useTranslation();
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -61,6 +64,13 @@ export function EditorPanelFrame({ panelId }: Props) {
   }, [src]);
 
   // Force reload when slug changes (a different game is opened → different scene).
+  //
+  // Serialized through the reload coordinator: a game switch changes `src` for
+  // the viewport AND all ~9 editor sub-panels at once; reloading them in the
+  // same frame would spin up that many WebGPU contexts simultaneously and black
+  // out WKWebView. The coordinator grants reloads one-at-a-time so only one new
+  // context comes up per tick. (Initial mount is handled by the `src` attr in
+  // JSX and is NOT routed here — this effect only governs slug-change reloads.)
   useEffect(() => {
     const ifr = iframeRef.current;
     if (!ifr || !ifr.contentWindow) return;
@@ -70,16 +80,23 @@ export function EditorPanelFrame({ panelId }: Props) {
       const want = new URL(src, location.origin);
       if (cur.pathname === want.pathname && cur.search === want.search) return;
     } catch { /* cross-origin or not-yet-loaded — let the src attr handle it */ }
-    ifr.src = src;
+    const cancel = requestReloadSlot(() => {
+      // Re-check the ref: the panel may have unmounted while queued.
+      const live = iframeRef.current;
+      if (live) live.src = src;
+    });
+    return cancel;
   }, [src]);
+
+  const panelLabel = t(PANEL_LABEL_KEYS[panelId]);
 
   return (
     <div className="ep-frame-wrap" data-panel={panelId}>
       {available === false ? (
         <div className="ep-frame-unavailable">
-          <div className="ep-frame-unavailable-title">{PANEL_LABELS[panelId]} 未加载</div>
+          <div className="ep-frame-unavailable-title">{t('editorPanel.notLoaded', { label: panelLabel })}</div>
           <div className="ep-frame-unavailable-desc">
-            Editor runtime 未启动或缺少 engine wasm 产物。已阻止嵌套 Studio 页面。
+            {t('editorPanel.unavailableDesc')}
           </div>
         </div>
       ) : (
@@ -87,7 +104,7 @@ export function EditorPanelFrame({ panelId }: Props) {
           ref={iframeRef}
           src={src}
           className="ep-frame-iframe"
-          title={PANEL_LABELS[panelId]}
+          title={panelLabel}
           // Permissions-Policy allow-list. Adding `pointer-lock *` explicitly
           // for fps: Chrome 2026 stopped silently inheriting pointer lock from
           // same-origin parents (now emits "root document of this element is

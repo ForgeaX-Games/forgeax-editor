@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import type { ReactElement } from 'react';
 import { MoveLeft, ExternalLink, PictureInPicture2 } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
 import { pickLang, type BusPluginInfo } from '../../lib/bus-api';
@@ -24,6 +25,7 @@ import { WorkbenchAgentPicker } from './WorkbenchAgentPicker';
  * handled here — WorkbenchMode still routes it to WorkbenchPluginHost.
  */
 export function CenterPluginLayer(): ReactElement {
+  const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
   const expandedPluginId = useAppStore((s) => s.workbenchExpandedPluginId);
   const setExpandedPluginId = useAppStore((s) => s.setWorkbenchExpandedPluginId);
@@ -77,9 +79,9 @@ export function CenterPluginLayer(): ReactElement {
     <button
       className="wb-plugin-back"
       onClick={() => setExpandedPluginId(null)}
-      title="返回 12 个工作台 tile 网格"
+      title={t('centerPlugin.backToTileGridTitle')}
     >
-      <MoveLeft size={12} /><span>返回工作台</span>
+      <MoveLeft size={12} /><span>{t('centerPlugin.backToWorkbench')}</span>
     </button>
   );
 
@@ -91,9 +93,9 @@ export function CenterPluginLayer(): ReactElement {
         <button
           className="wb-plugin-window-toggle"
           onClick={() => void redockSurface(centerDescriptor)}
-          title="把独立窗口收回主窗"
+          title={t('centerPlugin.redockTitle')}
         >
-          <PictureInPicture2 size={12} /><span>收回主窗</span>
+          <PictureInPicture2 size={12} /><span>{t('centerPlugin.redock')}</span>
         </button>
       ) : (
         <button
@@ -103,9 +105,9 @@ export function CenterPluginLayer(): ReactElement {
               title: activePlugin ? pickLang(activePlugin.displayName, 'zh', activePlugin.id) : undefined,
             })
           }
-          title="弹出为独立窗口"
+          title={t('centerPlugin.detachTitle')}
         >
-          <ExternalLink size={12} /><span>弹出窗口</span>
+          <ExternalLink size={12} /><span>{t('centerPlugin.detach')}</span>
         </button>
       )
     ) : null;
@@ -135,21 +137,21 @@ export function CenterPluginLayer(): ReactElement {
         {isCenterFloating && activePlugin && (
           <div className="fx-center-plugin-status fx-surface-floating" style={{ padding: 20, color: '#888' }}>
             <p>
-              插件 <code>{pickLang(activePlugin.displayName, 'zh', activePlugin.id)}</code> 已在独立窗口中打开。
+              {t('centerPlugin.openedInWindowPrefix')}<code>{pickLang(activePlugin.displayName, 'zh', activePlugin.id)}</code>{t('centerPlugin.openedInWindowSuffix')}
             </p>
             <button className="wb-plugin-window-toggle" onClick={() => void redockSurface(centerDescriptor!)}>
-              <PictureInPicture2 size={12} /><span>收回主窗</span>
+              <PictureInPicture2 size={12} /><span>{t('centerPlugin.redock')}</span>
             </button>
           </div>
         )}
         {showLoading && (
           <div className="fx-center-plugin-status" style={{ padding: 20, color: '#888' }}>
-            正在加载插件 <code>{expandedPluginId}</code>…
+            {t('centerPlugin.loadingPluginPrefix')}<code>{expandedPluginId}</code>{t('centerPlugin.loadingPluginSuffix')}
           </div>
         )}
         {showError && (
           <div className="fx-center-plugin-status" style={{ padding: 20, color: '#888' }}>
-            插件 <code>{expandedPluginId}</code> 缺少 <code>entry.standalone</code> 入口。
+            {t('centerPlugin.missingStandalonePrefix')}<code>{expandedPluginId}</code>{t('centerPlugin.missingStandaloneMid')}<code>entry.standalone</code>{t('centerPlugin.missingStandaloneSuffix')}
           </div>
         )}
       </div>

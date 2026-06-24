@@ -126,6 +126,7 @@ export {
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,
+  extractPackDirs,
 } from './assets';
 export type { PackAsset, RawAsset } from './assets';
 
@@ -237,8 +238,12 @@ export {
   writePlayConfig,
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
+  cancelPendingDiskSave,
+  setAssetSelection,
+  getAssetSelection,
+  useAssetSelection,
 } from './store';
-export type { SceneFileEntry, PlayConfig } from './store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset } from './store';
 
 // ── Entity operations ──
 export {

@@ -8,8 +8,8 @@
 //
 // feat-20260517-merge-mesh-renderer-material-renderer M2 / w3:
 //   MeshRenderer collapses to a single `material` field with brand
-//   `Handle<'MaterialAsset','unmanaged'>` (twoParam phantom). The
-//   schema is upgraded to `'handle<MaterialAsset>'`; the legacy
+//   `Handle<'MaterialAsset','shared'>` (twoParam phantom). The
+//   schema is upgraded to `'shared<MaterialAsset>'`; the legacy
 //   material-binding component (token / file / data alias) is
 //   physically gone. AC-04 / AC-05 literals follow plan-strategy
 //   decision §2.6.
@@ -48,18 +48,16 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['world']>().toEqualTypeOf<Float32Array>();
   });
 
-  it("MeshFilter data shape has 1 Handle<'MeshAsset','unmanaged'> field (assetHandle; M5 / w19)", () => {
+  it("MeshFilter data shape has 1 Handle<'MeshAsset','shared'> field (assetHandle; M5 / w19)", () => {
     type Data = ShapeOf<typeof MeshFilter.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'assetHandle'>();
-    expectTypeOf<Data['assetHandle']>().toEqualTypeOf<Handle<'MeshAsset', 'unmanaged'>>();
+    expectTypeOf<Data['assetHandle']>().toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();
   });
 
   it('MeshRenderer data shape has 3 fields (materials + frustumCulled + pickable; feat-20260608 M2 / w7 multi-material array)', () => {
     type Data = ShapeOf<typeof MeshRenderer.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<'materials' | 'frustumCulled' | 'pickable'>();
-    expectTypeOf<Data['materials']>().toEqualTypeOf<
-      readonly Handle<'MaterialAsset', 'unmanaged'>[]
-    >();
+    expectTypeOf<Data['materials']>().toEqualTypeOf<readonly Handle<'MaterialAsset', 'shared'>[]>();
     expectTypeOf<Data['frustumCulled']>().toEqualTypeOf<number>();
     expectTypeOf<Data['pickable']>().toEqualTypeOf<number>();
   });
@@ -73,7 +71,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     type SpawnData = Partial<ShapeOf<typeof MeshRenderer.schema>>;
     // AC-04 application point: brand-undefined union surfaces at the call site.
     expectTypeOf<SpawnData['materials']>().toEqualTypeOf<
-      readonly Handle<'MaterialAsset', 'unmanaged'>[] | undefined
+      readonly Handle<'MaterialAsset', 'shared'>[] | undefined
     >();
     // empty payload is a valid SpawnData (case B).
     const empty: SpawnData = {};
@@ -82,7 +80,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<{ materials: readonly [0] }>().not.toMatchTypeOf<SpawnData>();
   });
 
-  it('Camera data shape has 21 number fields (w9 9 + tonemap trio + antialias + bloom quartet + clear-color quartet)', () => {
+  it('Camera data shape has 22 fields (21 number + autoAspect boolean: w9 9 + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
     type Data = ShapeOf<typeof Camera.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'fov'
@@ -106,6 +104,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'clearG'
       | 'clearB'
       | 'clearA'
+      | 'autoAspect'
     >();
     expectTypeOf<Data['fov']>().toEqualTypeOf<number>();
     expectTypeOf<Data['far']>().toEqualTypeOf<number>();
@@ -116,6 +115,8 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['tonemap']>().toEqualTypeOf<number>();
     expectTypeOf<Data['exposure']>().toEqualTypeOf<number>();
     expectTypeOf<Data['whitePoint']>().toEqualTypeOf<number>();
+    // feat-20260617 / M3: AC-09 -- bool column narrows to boolean, not number.
+    expectTypeOf<Data['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
   it('DirectionalLight data shape has 7 number fields', () => {
@@ -188,7 +189,7 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
     expectTypeOf<T['scaleZ']>().toEqualTypeOf<number>();
   });
 
-  it("ShapeOf<typeof Camera.schema> yields 21 number fields (all 'f32' -> number)", () => {
+  it("ShapeOf<typeof Camera.schema> yields 21 number fields ('f32' -> number) + autoAspect boolean ('bool' -> boolean)", () => {
     type T = ShapeOf<typeof Camera.schema>;
     expectTypeOf<T['fov']>().toEqualTypeOf<number>();
     expectTypeOf<T['projection']>().toEqualTypeOf<number>();
@@ -197,6 +198,8 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
     expectTypeOf<T['bloomThreshold']>().toEqualTypeOf<number>();
     expectTypeOf<T['bloomIntensity']>().toEqualTypeOf<number>();
     expectTypeOf<T['bloomBlurRadius']>().toEqualTypeOf<number>();
+    // feat-20260617 / M3: AC-09 -- the bool column narrows to boolean.
+    expectTypeOf<T['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
   it('ShapeOf<typeof Transform.schema> is non-empty (field cardinality > 0)', () => {

@@ -18,7 +18,7 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { App, AppError, BundlerOptions } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
-import { createFrameStartScanSystem, type InputBackend } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY, type InputBackend, InputFrameStartScan } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import {
   Camera,
@@ -189,7 +189,7 @@ export function addFirstPersonSystem(
       name: opts.name,
       after: ['input-frame-start-scan'],
       queries: [{ with: [Transform, Camera, Entity] }, { with: [Transform, SpotLight, Entity] }],
-      fn: (queryResults) => {
+      fn: (world, queryResults) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
         const time = world.getResource<{ readonly dt: number }>('Time');
@@ -231,7 +231,7 @@ export function addFirstPersonSystem(
       name: opts.name,
       after: ['input-frame-start-scan'],
       queries: [{ with: [Transform, Camera, Entity] }],
-      fn: (queryResults) => {
+      fn: (world, queryResults) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
         const time = world.getResource<{ readonly dt: number }>('Time');
@@ -278,7 +278,8 @@ export async function createFirstPersonControls(
   try {
     const renderer = await createRenderer(target, {}, bundler);
     const world = new World();
-    world.addSystem(createFrameStartScanSystem(overrideBackend, world));
+    world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
+    world.addSystem(InputFrameStartScan);
     return createApp({ renderer, world, input: overrideBackend });
   } catch (error: unknown) {
     if (error instanceof EngineEnvironmentError) {

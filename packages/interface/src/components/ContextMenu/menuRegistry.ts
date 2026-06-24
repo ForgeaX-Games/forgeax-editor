@@ -1,6 +1,7 @@
 import { buildReferenceFor, REFERENCE_LABEL } from '../Composer/referenceRegistry';
 import type { PillPayload } from '../Composer/pill';
 import { useAppStore } from '../../store';
+import { t } from '@/i18n';
 
 export type MenuItem =
   | { kind: 'item'; label: string; onClick: () => void; danger?: boolean; disabled?: boolean }
@@ -23,7 +24,7 @@ function buildInputMenu(input: HTMLInputElement | HTMLTextAreaElement, selection
   return [
     {
       kind: 'item',
-      label: '剪切',
+      label: t('contextMenu.cut'),
       disabled: !hasSel,
       onClick: () => {
         if (!hasSel) return;
@@ -36,10 +37,10 @@ function buildInputMenu(input: HTMLInputElement | HTMLTextAreaElement, selection
         input.dispatchEvent(new Event('input', { bubbles: true }));
       },
     },
-    { kind: 'item', label: '复制', disabled: !hasSel, onClick: () => copy(selection) },
+    { kind: 'item', label: t('contextMenu.copy'), disabled: !hasSel, onClick: () => copy(selection) },
     {
       kind: 'item',
-      label: '粘贴',
+      label: t('contextMenu.paste'),
       onClick: async () => {
         try {
           const text = await navigator.clipboard.readText();
@@ -59,7 +60,7 @@ function buildInputMenu(input: HTMLInputElement | HTMLTextAreaElement, selection
     { kind: 'sep' },
     {
       kind: 'item',
-      label: '全选',
+      label: t('contextMenu.selectAll'),
       onClick: () => {
         input.focus();
         input.setSelectionRange(0, input.value.length);
@@ -82,8 +83,8 @@ function selectionPill(selection: string): PillPayload | null {
     kind: 'log',
     display: s.length > 30 ? s.slice(0, 30) + '…' : s,
     icon: '📝',
-    detail: `[文本引用: "${s}"]`,
-    tooltip: { title: '📝 选中文本引用', lines: [s.slice(0, 100)] },
+    detail: `[${t('contextMenu.textReference')}: "${s}"]`,
+    tooltip: { title: `📝 ${t('contextMenu.selectedTextReference')}`, lines: [s.slice(0, 100)] },
   };
 }
 
@@ -104,19 +105,19 @@ export function buildMenu(target: EventTarget | null, selection: string): MenuIt
   const codeWrap = target.closest('.md-code-wrap, pre.md-code');
   if (codeWrap) {
     const code = textOf(codeWrap.querySelector('code') ?? codeWrap);
-    return [{ kind: 'item', label: '复制代码', disabled: !code, onClick: () => copy(code) }];
+    return [{ kind: 'item', label: t('contextMenu.copyCode'), disabled: !code, onClick: () => copy(code) }];
   }
   const inlineCode = target.closest('.md-inline-code');
   if (inlineCode) {
     const code = textOf(inlineCode);
-    return [{ kind: 'item', label: '复制', disabled: !code, onClick: () => copy(selection || code) }];
+    return [{ kind: 'item', label: t('contextMenu.copy'), disabled: !code, onClick: () => copy(selection || code) }];
   }
 
   // 3) Game-slug breadcrumb — copy path (not a referenceable unit).
   const slug = target.closest('.fp-slug');
   if (slug) {
     const path = textOf(slug);
-    return [{ kind: 'item', label: '复制路径', disabled: !path, onClick: () => copy(path) }];
+    return [{ kind: 'item', label: t('contextMenu.copyPath'), disabled: !path, onClick: () => copy(path) }];
   }
 
   // 4) Registered referenceable units (the SSOT). One lookup covers files,
@@ -136,7 +137,7 @@ export function buildMenu(target: EventTarget | null, selection: string): MenuIt
 
   // 5) Plain selected text — reference + copy.
   if (selection.trim().length > 0) {
-    return withReference(refItem, [{ kind: 'item', label: '复制', onClick: () => copy(selection) }]);
+    return withReference(refItem, [{ kind: 'item', label: t('contextMenu.copy'), onClick: () => copy(selection) }]);
   }
 
   // 6) Catch-all: reference alone if we have one.

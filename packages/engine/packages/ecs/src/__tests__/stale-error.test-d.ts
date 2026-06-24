@@ -117,7 +117,7 @@ describe('[w6] AC-L5 — world.addSystem<const Qs> method signature shape (simpl
     const ret = world.addSystem({
       name: 'ac-l5-shape-probe',
       queries: [{ with: [Position] }],
-      fn: (queryResults, commands) => {
+      fn: (_world, queryResults, commands) => {
         // Method-level signature shape: queryResults is array; per-query bundle
         // is array; per-component access yields the field-view dict; commands
         // is `CommandBuffer`. Simplified vs. types.test-d.ts:[w15] which probes

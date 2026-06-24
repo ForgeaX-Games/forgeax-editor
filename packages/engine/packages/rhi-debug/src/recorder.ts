@@ -13,7 +13,6 @@
 
 /// <reference types="@webgpu/types" />
 
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
@@ -48,7 +47,7 @@ import type {
 } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { DebugError } from './errors';
-import { computePassOffsets, serializeTape } from './tape-format';
+import { assembleReport, finalizeToMemory } from './recorder-core';
 import type {
   HandleId,
   RhiBindResourceKind,
@@ -69,13 +68,11 @@ import type {
 // ============================================================================
 
 export const PER_EVENT_OVERHEAD = 192 as const;
-export const TAPE_FORMAT_VERSION = 1 as const;
 
-function generateRunId(): string {
-  const iso = new Date().toISOString().replace(/[:.]/g, '-');
-  const nonce = crypto.randomBytes(2).toString('hex');
-  return `${iso}-${nonce}`;
-}
+import { TAPE_FORMAT_VERSION } from './tape-format';
+
+export { generateRunId } from './recorder-core';
+export { TAPE_FORMAT_VERSION };
 
 // ============================================================================
 // State machine
@@ -205,6 +202,13 @@ export interface DebugRhiInstance extends RhiInstance {
    * replay target device.
    */
   _getCapturedDevice(): RhiDevice | undefined;
+  /**
+   * @internal
+   * Return the recorder's `valid` flag. Consumed by `finalizeToMemory`
+   * in recorder-core to embed `valid` in the serialized report without
+   * duplicating state-machine knowledge.
+   */
+  _getValid(): boolean;
 }
 
 // ============================================================================
@@ -337,18 +341,15 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
   }
 
   function finalize(): Result<{ runId: string; tapePath: string; reportPath: string }, DebugError> {
-    const tape = getTape();
-    if (!tape) {
-      return makeErr(
-        new DebugError({
-          code: 'frame-end-hook-missing',
-          expected: 'tape data available for finalize',
-          hint: 'no recorded events to finalize; call arm() and onFrameEnd() first',
-        }),
-      ) as unknown as Result<{ runId: string; tapePath: string; reportPath: string }, DebugError>;
+    const fmResult = finalizeToMemory({ getTape, _getValid: () => s.valid });
+    if (!fmResult.ok) {
+      return fmResult as unknown as Result<
+        { runId: string; tapePath: string; reportPath: string },
+        DebugError
+      >;
     }
 
-    const runId = generateRunId();
+    const { runId, json, blob, passOffsets, valid } = fmResult.value;
     const outDir = path.join('.forgeax-debug', runId);
     try {
       fs.mkdirSync(outDir, { recursive: true });
@@ -362,7 +363,6 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       ) as unknown as Result<{ runId: string; tapePath: string; reportPath: string }, DebugError>;
     }
 
-    const { json, blob } = serializeTape(tape);
     const tapePath = path.join(outDir, 'frame-0.tape.bin');
 
     try {
@@ -377,18 +377,11 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       ) as unknown as Result<{ runId: string; tapePath: string; reportPath: string }, DebugError>;
     }
 
-    const passOffsets = computePassOffsets(tape.events);
-    const parsedJson = JSON.parse(json);
-    const reportJson = {
-      header: parsedJson.header,
-      events: parsedJson.events,
-      passOffsets,
-      valid: s.valid,
-    };
+    const report = assembleReport({ json, passOffsets, valid });
     const reportPath = path.join(outDir, 'frame-0.report.json');
 
     try {
-      fs.writeFileSync(reportPath, JSON.stringify(reportJson));
+      fs.writeFileSync(reportPath, JSON.stringify(report));
     } catch {
       return makeErr(
         new DebugError({
@@ -632,6 +625,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         return realPass.endOcclusionQuery();
       },
       end() {
+        pushEvent(s, { kind: 'endRenderPass', passHandleId: passHId });
         realPass.end();
       },
     };
@@ -669,6 +663,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         realPass.dispatchWorkgroups(x, y, z);
       },
       end() {
+        pushEvent(s, { kind: 'endComputePass', passHandleId: passHId });
         realPass.end();
       },
     };
@@ -1074,6 +1069,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     },
     _getCapturedDevice(): RhiDevice | undefined {
       return s.capturedDevice;
+    },
+    _getValid(): boolean {
+      return s.valid;
     },
 
     async requestAdapter(

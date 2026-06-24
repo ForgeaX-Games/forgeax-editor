@@ -58,7 +58,6 @@
        },
        "DirectionalLightShadow": {
         "mapSize": 2048,
-        "orthoHalfExtent": 16,
         "farPlane": 60
        }
       }

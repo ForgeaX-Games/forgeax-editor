@@ -91,6 +91,66 @@
 @keyframes preview-loading-spin {
   to { transform: rotate(360deg); }
 }
+/* Surface wrapper (SurfacePanels) — fills the dock panel and is the positioning
+   context for the absolutely-pinned FatalBanner overlay. The injected edit /
+   preview surface is the second child and takes the full box. */
+.surface-region {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.surface-region > :not(.preview-fatal-banner) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Fatal banner — pinned to the top of a Play/Edit region when the engine reports
+   device-lost / scene-instantiate / WebGPU init failure. Gives the user the
+   reason (not just a black viewport) + a one-click reload. Shared by PlaySurface
+   + EditSurface (same class). */
+.preview-fatal-banner {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(150, 24, 24, 0.97), rgba(120, 18, 18, 0.95));
+  color: #ffe2e2;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  border-bottom: 1px solid rgba(255, 120, 120, 0.4);
+}
+.preview-fatal-banner .pfb-icon { flex-shrink: 0; color: #ffd0a0; }
+.preview-fatal-banner .pfb-body { flex: 1 1 auto; min-width: 0; }
+.preview-fatal-banner .pfb-title { font-weight: 600; color: #fff; }
+.preview-fatal-banner .pfb-msg {
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.preview-fatal-banner .pfb-retry {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.preview-fatal-banner .pfb-retry:hover { background: rgba(255, 255, 255, 0.26); }
 .preview-toolbar.top {
   height: 36px; flex-shrink: 0;
   display: grid;

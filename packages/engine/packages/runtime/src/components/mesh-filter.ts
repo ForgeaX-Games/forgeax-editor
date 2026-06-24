@@ -1,17 +1,15 @@
 // @forgeax/engine-runtime - MeshFilter (mesh asset reference).
 //
-// Schema (M5 / w19): `{ assetHandle: 'handle<MeshAsset>' }`. Migrated from
-// the tier-1 `'ref'` keyword (which resolved to plain `number`) to the
-// schema-vocab `'handle<T>'` keyword - storage stays a u32 column, but
-// the type-derivation now yields `Handle<'MeshAsset', 'unmanaged'>`
-// (engine-ecs Handle<T,M> twoParam phantom; `'unmanaged'` mode signals
-// the AssetRegistry owns the lifecycle, the ECS does NOT release the slot
-// on despawn / removeComponent / set). The brand prevents cross-asset
-// assignment at compile time (e.g. `Handle<'TextureAsset','unmanaged'>`
-// is not assignable to `assetHandle`).
+// Schema: `{ assetHandle: 'shared<MeshAsset>' }`. The schema-vocab
+// `'shared<T>'` keyword stores a u32 column and type-derives to
+// `Handle<'MeshAsset', 'shared'>` (engine-ecs Handle<T,M> twoParam
+// phantom; `'shared'` mode = ref-counted retain on set / release on
+// clear, lifecycle owned by `SharedRefStore` per feat-20260614).
+// The brand prevents cross-asset assignment at compile time (e.g.
+// `Handle<'TextureAsset','shared'>` is not assignable to `assetHandle`).
 //
 // AI users spawn with the engine-runtime constants `HANDLE_CUBE` /
-// `HANDLE_TRIANGLE` (now branded `Handle<'MeshAsset','unmanaged'>` to
+// `HANDLE_TRIANGLE` (now branded `Handle<'MeshAsset','shared'>` to
 // match the schema-derived shape); custom mesh registration is owned by
 // feat-future-asset-system (this MVP only exposes builtin handles).
 //
@@ -32,7 +30,7 @@
 // failure: missing or unregistered handle fires onError 'asset-not-registered'
 // with .detail = { assetHandle } + cross-asset brand mismatch is a TS
 // compile-time error) + proposition 5 (consistent abstraction: the schema
-// vocab `'handle<T>'` is the SSOT for AssetRegistry-owned handles across
+// vocab `'shared<T>'` is the SSOT for AssetRegistry-owned handles across
 // the engine).
 
 import { defineComponent } from '@forgeax/engine-ecs';
@@ -40,7 +38,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
 /**
  * Mesh filter (geometry asset reference).
  *
- * `assetHandle` carries a `Handle<'MeshAsset', 'unmanaged'>` (u32-stored)
+ * `assetHandle` carries a `Handle<'MeshAsset', 'shared'>` (u32-stored)
  * pointing into `engine.assets: AssetRegistry`. Use the predefined
  * constants `HANDLE_CUBE` / `HANDLE_TRIANGLE` exported from
  * `@forgeax/engine-runtime`; custom-mesh registration is OOS in MVP (see
@@ -57,5 +55,5 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({ component: MeshFilter, data: { assetHandle: HANDLE_CUBE } });
  */
 export const MeshFilter = defineComponent('MeshFilter', {
-  assetHandle: { type: 'handle<MeshAsset>' },
+  assetHandle: { type: 'shared<MeshAsset>' },
 });

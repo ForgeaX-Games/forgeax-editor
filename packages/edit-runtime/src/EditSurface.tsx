@@ -23,8 +23,6 @@ import {
   VagConsoleSchema,
   VagEditorFlushSchema,
   VagFpsStatsSchema,
-  VagEditorOpenSourceSchema,
-  VagEditorRefSchema,
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
@@ -215,15 +213,54 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     return () => { cancelled = true; };
   }, [base]);
 
+  // ── Deferred game-load while hidden (keep-alive contention guard) ────────────
+  // The shell's keep-alive layer keeps BOTH the Edit and Play surfaces mounted at
+  // once. If the iframe src tracked `slug` directly, switching GAMES would cold-boot
+  // the new game's editor here AND the new game's preview in the (hidden) Play iframe
+  // simultaneously → two concurrent WebGPU boots wedge the WKWebView GPU process
+  // ("切一个新游戏的 edit 又卡死"). So the iframe loads `loadedSlug`, which only
+  // advances to the latest `slug` while THIS surface is visible — a hidden surface
+  // defers the new game until shown, so only one engine boots at a time. `slug`
+  // still loads on first mount (loadedSlug seeded = slug).
+  const [loadedSlug, setLoadedSlug] = useState(slug);
+  const slugRef = useRef(slug);
+  slugRef.current = slug;
+  const visibleRef = useRef(true);
+  useEffect(() => {
+    if (visibleRef.current) setLoadedSlug(slug);
+  }, [slug]);
+
   // ── iframe src ─────────────────────────────────────────────────────────────
   const voParam = viewportOnly ? '&viewportOnly=1' : '';
-  const src = `/editor/?scene=${encodeURIComponent(slug)}${voParam}`;
+  const src = `/editor/?scene=${encodeURIComponent(loadedSlug)}${voParam}`;
 
   // ── Flush editor's pending save on unmount ─────────────────────────────────
   useEffect(() => {
     return () => {
       try { sendVagMessage(iframeRef.current?.contentWindow ?? null, VagEditorFlushSchema, {} as Record<string, never>); } catch { /* cross-origin / already gone */ }
     };
+  }, []);
+
+  // ── Auto-pause when hidden (keep-alive background) ──────────────────────────
+  // The shell keeps the editor MOUNTED but display:none'd when you switch to Play,
+  // so the editor iframe + its WebGPU context survive without a reboot (fixes
+  // "Play→Edit 切回去就死掉"). While hidden, pause the editor's render loop so only
+  // the visible surface draws; the context stays alive for an instant resume.
+  // VAG_PREVIEW_PAUSE/PLAY are handled by edit-runtime installPreviewControls
+  // (→ app.pause/resume); raw postMessage is fine (the receiver schema-validates).
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      const visible = entries.some((e) => e.isIntersecting);
+      visibleRef.current = visible;
+      try { iframeRef.current?.contentWindow?.postMessage({ type: visible ? 'VAG_PREVIEW_PLAY' : 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* iframe gone */ }
+      // Becoming visible flushes a game switch deferred while hidden — boots the new
+      // game's editor now (and only now, so it never collides with the Play boot).
+      if (visible) setLoadedSlug(slugRef.current);
+    });
+    io.observe(el);
+    return () => io.disconnect();
   }, []);
 
   // ── Import helpers ──────────────────────────────────────────────────────────
@@ -312,6 +349,12 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       const t = (ev.data as { type?: unknown } | null)?.type;
       if (typeof t !== 'string' || !t.startsWith('VAG_')) return;
 
+      // Forward the network stream up to the Studio shell (Network panel).
+      if (t === 'VAG_NETWORK') {
+        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
+        return;
+      }
+
       switch (t) {
         case 'VAG_FPS_STATS': {
           const r = VagFpsStatsSchema.safeParse(ev.data);
@@ -325,6 +368,11 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
           if (!r.success) { console.warn('VAG_CONSOLE schema failure', { issues: r.error.issues }); return; }
           const { level, text } = r.data.payload;
           console[level]('[editor]', text);
+          // Forward the FULL console stream (all levels) up to the Studio shell so
+          // its Console panel (store.consoleLog) shows it — the shell is one frame
+          // above this surface and never receives the engine iframe's own
+          // VAG_CONSOLE postMessage directly.
+          try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
           // Forward warn+ to the shell health feed; mark fatal region failures.
           if (level === 'error' || level === 'warn') {
             const reason = level === 'error' ? fatalReason(text) : null;
@@ -333,18 +381,10 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
           }
           return;
         }
-        case 'VAG_EDITOR_REF': {
-          VagEditorRefSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_EDITOR_OPEN_SOURCE': {
-          VagEditorOpenSourceSchema.safeParse(ev.data);
-          return;
-        }
-        case 'VAG_ASSETS_CHANGED': {
-          VagAssetsChangedSchema.safeParse(ev.data);
-          return;
-        }
+        // VAG_EDITOR_REF / VAG_EDITOR_OPEN_SOURCE / VAG_ASSETS_CHANGED are NOT
+        // consumed by this surface — they target the shell (window.parent) or
+        // ep:* panels. They were `safeParse`d-then-discarded here (validation
+        // theater); dropped — unknown/unhandled types fall through to ignore.
       }
     };
     window.addEventListener('message', onMessage);
@@ -457,7 +497,15 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
             src={src}
             className="preview-iframe"
             title="forgeax editor"
-            allow="xr-spatial-tracking *; fullscreen *"
+            // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
+            // chain inside the game: Chrome 2026 + WebKit (Safari 26) no longer
+            // silently inherit pointer lock from same-origin parents, so without
+            // this Permissions-Policy entry requestPointerLock is denied
+            // (pointerlockerror). On the Tauri desktop app that denial used to
+            // fall back to a native CGAssociate cursor-grab whose frozen cursor
+            // yields movementX=0 → dead mouse-look. Granting it here lets the
+            // real Pointer Lock API engage in BOTH renderers (web + WKWebView).
+            allow="xr-spatial-tracking *; fullscreen *; pointer-lock *"
             onMouseDown={(e) => { try { e.currentTarget.contentWindow?.focus(); } catch { /* guard */ } }}
           />
         )}

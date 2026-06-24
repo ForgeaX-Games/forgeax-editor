@@ -1,0 +1,137 @@
+{
+  "editor": {
+    "sceneBadge": {
+      "mainScene": "Main scene",
+      "title": "What this window is editing (level/asset) — double-click another item in the Assets panel to switch"
+    },
+    "viewportHints": {
+      "toggleTitle": "Show controls",
+      "closeTitle": "Close (click the ? at the bottom-right to reopen)",
+      "row1": "<b>Middle</b> orbit · <b>Shift+Middle</b> pan · <b>Ctrl+Middle / Wheel</b> zoom · <b>Left</b> select",
+      "row2": "<b>W / E / R</b> move·rotate·scale · <b>F</b> focus selection · trackpad <b>Alt+Left</b> orbit · <b>⇧Alt</b> pan"
+    },
+    "detachedPanel": {
+      "redock": "Redock",
+      "redockTitle": "Dock back to the main window"
+    },
+    "hierarchy": {
+      "menu": {
+        "group": "Group ({{n}})",
+        "deleteSelected": "Delete selected ({{n}})",
+        "editSource": "⤴ Edit source ({{plugin}})",
+        "editSourceNone": "⤴ Edit source (no source)",
+        "duplicate": "Duplicate",
+        "copyJson": "Copy JSON",
+        "refToChat": "Reference in Chat",
+        "ungroup": "Ungroup",
+        "delete": "Delete"
+      }
+    },
+    "history": {
+      "waitingForViewport": "Waiting for Edit viewport… Open the \"Edit\" panel and every operation will show here in real time.",
+      "empty": "No operations",
+      "jumpToStep": "Jump to step {{step}}",
+      "originAi": "AI",
+      "originHuman": "Human"
+    },
+    "inspector": {
+      "batchTitle": "Inspector · Batch ({{count}})",
+      "batchNote": "Editing the shared properties below applies to all selected at once (single undo step).",
+      "alignToPrimary": "Align to primary",
+      "noCommonComponents": "Selected entities have no components in common.",
+      "editSource": "Edit source",
+      "refToChat": "Reference in Chat",
+      "copyJson": "Copy JSON",
+      "trackChannels": "channels: {{count}} (edit keys/tracks in Timeline)"
+    },
+    "launcher": {
+      "title": "Launcher",
+      "noGameOpen": "No game open.",
+      "editingInThisWindow": "Editing in this window",
+      "editingHint": "Double-click another level/asset in the Assets panel to switch (or open in a new window)",
+      "mainScene": "Main scene",
+      "playRun": "▶ Play runs",
+      "campaignOption": "Global (main) — full campaign, starting from level 1",
+      "levelOnly": "Only {{name}}",
+      "configHint": "Writes play-config.json (local launcher state, not committed); read on ▶ Play startup.",
+      "saved": "✓ Saved"
+    },
+    "material": {
+      "selectEntityHint": "Select an entity to edit its material.",
+      "noComponent": "“{{name}}” has no Material component.",
+      "addMaterial": "+ Add Material",
+      "assetsSection": "Assets / Textures (GUID)",
+      "noAssetTitle": "No asset referenced — using inline PBR",
+      "inline": "Inline",
+      "clearAsset": "Clear asset reference",
+      "noTexture": "No texture",
+      "clearTexture": "Clear texture",
+      "hint": "Tip: right-click “Assign to selected entity” in the Assets panel to set the material asset GUID."
+    },
+    "matgraph": {
+      "empty": "Select an entity to edit its material graph.",
+      "addNode": "Add {{label}} node",
+      "evalResult": "Graph evaluation result",
+      "outputPin": "Output — click, then click an input",
+      "deleteNode": "Delete node",
+      "pinDisconnect": " — click to disconnect",
+      "pinConnect": " — click to connect",
+      "hint": "Click an output pin → then click an input pin to wire; click a connected input pin to disconnect. Graph changes apply to the Material immediately."
+    },
+    "timeline": {
+      "waitingViewport": "Waiting for the Edit viewport… open the \"Edit\" panel, then select an entity to edit its animation.",
+      "selectEntity": "Select an entity to edit its animation.",
+      "pause": "Pause",
+      "playPreview": "Play preview",
+      "captureKey": "Capture the current Transform as a keyframe at the playhead",
+      "removeKey": "Delete the keyframe at the playhead",
+      "interpMode": "Interpolation mode for new keyframes",
+      "duration": "Duration",
+      "hint": "Move the entity to a frame → press \"● K\" to capture a keyframe; frames are interpolated automatically.",
+      "keyTooltip": "t={{t}}s v={{v}} ({{interp}}) — click to jump to this frame"
+    },
+    "assets": {
+      "newLevelPrompt": "New level id (lowercase letters/digits/hyphens, e.g. level3; i.e. file name scenes/<id>.pack.json):",
+      "newLevelFailed": "Failed to create level: id already exists / disk write failed",
+      "menuNewEmptyScene": "＋ New empty scene…",
+      "menuDuplicateScene": "⧉ Duplicate current scene as new level…",
+      "menuAssignToSelected": "Assign to selected entity",
+      "menuAssignSelectFirst": "(select one first)",
+      "menuRefToChat": "Reference in Chat",
+      "menuCopyGuid": "Copy GUID",
+      "processFailed": "Process failed: {{error}}",
+      "processDone": "Process complete! Generated {{total}} sub-assets (mesh/material/scene, etc.)",
+      "importSceneFailed": "Failed to import scene: {{error}}",
+      "importSceneWarning": "{{warning}}\n\nConfirm importing as a “single reference entity”?",
+      "importRefDone": "Imported “{{name}}” ({{totalNodes}} nodes · {{meshCount}} mesh).\n\nThe real geometry is loaded asynchronously by the runtime glTF loader — you'll see a placeholder box first, replaced by the real model after a few seconds (works in both editor + Play). Editing commits may lag slightly when a large scene has many nodes.",
+      "importFullDone": "Imported {{totalNodes}} scene entities.",
+      "reloadTitle": "Reload",
+      "levelGroupTitleAttr": "Right-click: new/duplicate scene",
+      "levelGroupTitle": "Levels · double-click to open",
+      "newEmptySceneTitle": "New empty scene",
+      "levelRowTitle": "{{pack}}\nDouble-click to open this level in this window",
+      "editingInThisWindow": "Editing in this window",
+      "charMonsterGroupTitle": "Characters & Monsters · double-click to edit",
+      "assetRowTitle": "{{pack}}\nDouble-click to open this asset in the editor",
+      "editing": "Editing",
+      "materialGroupTitle": "Materials · double-click to apply to selected entity",
+      "emptyPacks": "No *.pack.json yet — import a GLB then click “Process” to generate",
+      "emptyFiles": "No imported files yet — use the “Import” button in the editor toolbar",
+      "processTitle": "Generate meta.json + sub-asset GUIDs; required before adding to a scene",
+      "processBtn": "Process",
+      "addToSceneTitle": "Add a reference entity for this GLB at the current scene root",
+      "addToSceneBtn": "+ Scene",
+      "processedBadge": "Processed · meta.json exists",
+      "searchPlaceholder": "Search asset name / GUID…",
+      "noResults": "No matching assets",
+      "filter": {
+        "all": "All",
+        "level": "Level",
+        "character": "Character",
+        "material": "Material",
+        "mesh": "Mesh",
+        "texture": "Texture"
+      }
+    }
+  }
+}

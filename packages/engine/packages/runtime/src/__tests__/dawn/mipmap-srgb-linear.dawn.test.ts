@@ -20,14 +20,12 @@
 // Red-stage scaffolding: implementation lands in T-M3-04 (mipmap-generator.ts)
 // + T-M3-05 (uploadTexture call site).
 
+import { World } from '@forgeax/engine-ecs';
 import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-import { AssetRegistry } from '../../asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
 import { numMipLevels } from '../../mipmap-generator';
-import { createDefaultLoaderRegistry } from '../../wire-default-loaders';
-import { makeMockShaderRegistry } from '../helpers/mock-shader-registry';
 
 // feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to the
 // store (POD carries format + mipmap flag, decoded carries pixel bytes; D-2).
@@ -77,7 +75,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm-srgb (sRGB physics)', () => {
     // Spec guarantees: hardware decode -> bilinear in linear -> encode back.
     // 4 byte-188 samples bilinear-averaged in linear ~ 0.5 linear ~ byte 188
     // after sRGB encode at mip level 1.
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const world = new World();
     const bytes = new Uint8Array(2 * 2 * 4);
     for (let i = 0; i < 4; i++) {
       bytes[i * 4 + 0] = 188;
@@ -87,7 +85,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm-srgb (sRGB physics)', () => {
     }
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm-srgb', 2, 2, 'srgb', true);
-    const handle = reg.register<TextureAsset>(pod).unwrap();
+    const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 2, 2, 'srgb', true));
     expect(res.ok).toBe(true);
     expect(numMipLevels({ width: 2, height: 2 })).toBe(2);
@@ -99,7 +97,7 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm (linear physics)', () => {
     // 2x2 linear-byte 128 source (no gamma transform). bilinear average of
     // 4 identical samples = byte 128. mipmap=auto enables blit chain on
     // linear format.
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const world = new World();
     const bytes = new Uint8Array(2 * 2 * 4);
     for (let i = 0; i < 4; i++) {
       bytes[i * 4 + 0] = 128;
@@ -109,18 +107,18 @@ describe('T-M3-02 dawn mipmap chain on rgba8unorm (linear physics)', () => {
     }
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm', 2, 2, 'linear', true);
-    const handle = reg.register<TextureAsset>(pod).unwrap();
+    const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 2, 2, 'linear', true));
     expect(res.ok).toBe(true);
   });
 
   it('256x256 mipmap chain produces 9 levels (numMipLevels SSOT)', async () => {
     expect(numMipLevels({ width: 256, height: 256 })).toBe(9);
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const world = new World();
     const bytes = new Uint8Array(256 * 256 * 4).fill(128);
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm', 256, 256, 'linear', true);
-    const handle = reg.register<TextureAsset>(pod).unwrap();
+    const handle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', pod);
     const res = await store.uploadTexture(handle, pod, decoded(bytes, 256, 256, 'linear', true));
     expect(res.ok).toBe(true);
   });

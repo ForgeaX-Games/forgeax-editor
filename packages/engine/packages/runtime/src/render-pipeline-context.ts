@@ -23,6 +23,7 @@
 // Field grouping below is documented (FSceneView vs FRDGBuilder) with grep-able field
 // names so an AI user reading the type knows what each field is FOR, not just its type.
 
+import type { World } from '@forgeax/engine-ecs';
 import type { BindGroup, RhiCommandEncoder, Texture, TextureView } from '@forgeax/engine-rhi';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
@@ -235,6 +236,15 @@ export interface RenderPipelineData {
  * NOT cast — these fields are not part of the public contract.
  */
 export interface _StandardForwardSceneView {
+  /**
+   * @internal — feat-20260614 M8 (D-19): the live World the record stage
+   * resolves user-tier asset handles against. Asset payloads moved off the
+   * AssetRegistry onto `world.sharedRefs`, so `resolveAssetHandle(world, handle)`
+   * is the only resolution entry point; the record stage threads the World here
+   * (it is not part of the public `RenderPipelineContext` — custom pipeline
+   * authors never see it).
+   */
+  readonly world: World;
   readonly tonemapActive: boolean;
   readonly geometryColorView: TextureView | null;
   readonly geometryDepthView: TextureView | null;

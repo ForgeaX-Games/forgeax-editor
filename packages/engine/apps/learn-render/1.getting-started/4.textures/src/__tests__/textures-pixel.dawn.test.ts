@@ -52,6 +52,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -167,11 +168,11 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     const assets = renderer.assets;
     if (assets === null) throw new Error('AssetRegistry null on dawn path');
 
-    // 1. Decode container.jpg -> register TextureAsset under its
-    //    SSOT GUID (mirrors smoke-dawn.mjs section 3 + browser test
-    //    AC-08e). Using `registerWithGuid` (not `loadByGuid`) skips the
-    //    pack-index fetch path -- the dawn harness has no vite middleware
-    //    behind it, so we wire the asset directly through the SSOT GUID.
+    // 1. Decode container.jpg -> mint a TextureAsset column via
+    //    world.allocSharedRef (M8 D-17; the registry holds no handle map).
+    //    Skips the pack-index fetch path -- the dawn harness has no vite
+    //    middleware behind it, so we mint the column directly.
+    const world = new World();
     const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
     expect(decodeRes.ok, `decodeImageFromFile failed: ${decodeRes.ok ? '' : decodeRes.error.code}`)
       .toBe(true);
@@ -189,17 +190,14 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       colorSpace: woodDecoded.colorSpace,
       mipmap: woodDecoded.mipmap,
     };
-    const woodHandle = assets.registerWithGuid<TextureAsset>(woodGuidRes.value, woodTexAsset);
+    const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
 
     // 2. Build material referencing the wood handle.
-    const matHandleRes = assets.register<MaterialAsset>({
+    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-      paramValues: { baseColor: [1, 1, 1, 1], baseColorTexture: woodHandle },
+      paramValues: { baseColor: [1, 1, 1, 1], baseColorTexture: unwrapHandle(woodHandle) },
     });
-    expect(matHandleRes.ok).toBe(true);
-    if (!matHandleRes.ok) return;
-    const matHandle = matHandleRes.value;
 
     // 3. Spawn cube + camera (axis-aligned, no rotation -- AC-08f / g
     //    are about the front-face wood color + UV variation, AC-08h is
@@ -208,7 +206,6 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     //    rim-clear assertion alone catches a regressed depth + cull
     //    state (a side / back face that bleeds past the front-face
     //    footprint will land wood pixels at the rim sample sites).
-    const world = new World();
     world.spawn(
       {
         component: Transform,

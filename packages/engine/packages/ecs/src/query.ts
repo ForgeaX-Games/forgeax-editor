@@ -253,7 +253,7 @@ function archetypeMatches(
 
 /**
  * `true` when the schema field type is a variable-capacity managed-vocab
- * keyword whose column carries u32 slot ids (`ManagedRefStore` /
+ * keyword whose column carries u32 slot ids (`UniqueRefStore` /
  * `BufferPool`) -- direct index assignment would corrupt the slot table,
  * so the bundle wraps the column as a `ManagedColumnReader` (D-4 / D-7).
  *
@@ -262,7 +262,7 @@ function archetypeMatches(
  * TypedArray rows -- not wrapped. `` `handle<X>` `` carries an unmanaged
  * AssetRegistry id (OOS-5) -- not wrapped, surfaces as `Uint32Array`.
  *
- * Reuses TYPE_METADATA via `isManagedField` (managed-ref-store keywords =
+ * Reuses TYPE_METADATA via `isManagedField` (unique-ref-store keywords =
  * `'string'` + `` `ref<T>` ``); the buffer / array variable arms are
  * detected by exact-match on `'buffer'` and absent-comma on `'array<...>'`
  * (the comma form is fixed-capacity inline). Single source: the type
@@ -319,7 +319,7 @@ function makeManagedColumnReader(
  * index assignment is a TypeScript compile error (`TypedArrayFor<T>`
  * resolves to `ManagedColumnReader<T>` for these arms) and the runtime
  * shape (no index setter) backs the type-level guarantee. Mutation MUST
- * flow through `world.set` / `world.push` / `world.allocManagedRef`.
+ * flow through `world.set` / `world.push` / `world.allocUniqueRef`.
  *
  * `comp.id` is the SSOT for column lookup; ids passed alongside `comp` would
  * be a derivable parallel array.
@@ -410,7 +410,7 @@ function buildColumnBundle(
  * Managed-vocab field columns (`'string'` / `` `ref<T>` `` / variable
  * `'buffer'` / variable `` `array<T>` ``) expose `ManagedColumnReader<T>`
  * (read-only `length` + `get(i)`); direct index write is a TypeScript error.
- * Mutate via `world.set` / `world.push` / `world.allocManagedRef`.
+ * Mutate via `world.set` / `world.push` / `world.allocUniqueRef`.
  */
 export function queryRun<
   Cs extends ReadonlyArray<Component>,

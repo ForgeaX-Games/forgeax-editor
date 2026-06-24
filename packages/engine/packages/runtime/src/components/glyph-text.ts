@@ -11,10 +11,10 @@
 // (AGENTS.md §Component naming rule #1 -- Transform / Camera / GlyphText).
 //
 // Schema vocab:
-//   - `fontHandle: 'handle<FontAsset>'` -> `Handle<'FontAsset', 'unmanaged'>`
+//   - `fontHandle: 'shared<FontAsset>'` -> `Handle<'FontAsset', 'shared'>`
 //     (u32-stored; AssetRegistry owns the FontAsset lifecycle). AI users
 //     obtain the handle via `assets.loadByGuid<FontAsset>(guid)`.
-//   - `text: 'string'` -> native JS string (ManagedRefStore-backed, same
+//   - `text: 'string'` -> native JS string (UniqueRefStore-backed, same
 //     dispatch as `Name.value`).
 //   - `fontSize: 'f32'` -> layout scale applied to the FontAsset metrics.
 //   - `colorR/G/B/A: 'f32'` -> linear-space rgba tint. Stored as four f32
@@ -24,7 +24,7 @@
 // charter mapping: P1 (single import surface from `@forgeax/engine-runtime`,
 // co-located with `glyphTextLayoutSystem` that consumes it) + P3
 // (machine-readable schema literal) + P5 (consistent abstraction: same
-// `'handle<T>'` idiom as MeshFilter.assetHandle / MeshRenderer.material).
+// `'shared<T>'` idiom as MeshFilter.assetHandle / MeshRenderer.materials).
 
 import { defineComponent } from '@forgeax/engine-ecs';
 
@@ -48,7 +48,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   });
  */
 export const GlyphText = defineComponent('GlyphText', {
-  fontHandle: { type: 'handle<FontAsset>', default: 0 as never },
+  fontHandle: { type: 'shared<FontAsset>', default: 0 as never },
   text: { type: 'string', default: '' },
   fontSize: { type: 'f32', default: 16 },
   colorR: { type: 'f32', default: 1 },

@@ -60,12 +60,6 @@ const CONTAINER_META_PATH = resolve(CONTAINER_TEXTURES_DIR, 'container.jpg.meta.
 
 const SMOKE_WALL_BUDGET_MS = Number.parseInt(process.env.SMOKE_WALL_BUDGET_MS ?? '45000', 10);
 
-// LO 1.5 GUID set -- mirror the literals from src/index.ts so the disk
-// schema -> runtime bridge stays grep-aligned (`rg WOOD_TEXTURE_GUID
-// apps/learn-render/1.getting-started/5.transformations/`).
-const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
-const CUBE_MATERIAL_GUID = '019e4906-23d4-72f8-bca5-7f18f5465e9a';
-
 // LO 1.5 Z-axis 30-degree rotation -- the lecture's `glm::rotate(...,
 // glm::radians(30.0f), glm::vec3(0, 0, 1))` baked into a quaternion so
 // the static smoke frame still exhibits the rotation effect.
@@ -195,7 +189,7 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
-const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+const { unwrapHandle } = await import('@forgeax/engine-types');
 
 const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
 if (!decodeRes.ok) {
@@ -242,11 +236,6 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const woodGuidRes = AssetGuid.parse(woodMeta.guid);
-if (!woodGuidRes.ok) {
-  console.error(`[smoke] FAIL - wood GUID parse: ${woodGuidRes.error.code}`);
-  process.exit(1);
-}
 const woodTexAsset = {
   kind: 'texture',
   width: woodDecoded.width,
@@ -256,37 +245,19 @@ const woodTexAsset = {
   colorSpace: woodDecoded.colorSpace,
   mipmap: woodDecoded.mipmap,
 };
-const woodHandle = assets.registerWithGuid(woodGuidRes.value, woodTexAsset);
-
-const cubeGuidRes = AssetGuid.parse(CUBE_MESH_GUID);
-if (!cubeGuidRes.ok) {
-  console.error(`[smoke] FAIL - cube mesh GUID parse: ${cubeGuidRes.error.code}`);
-  process.exit(1);
-}
-const cubeAssetRes = assets.get(HANDLE_CUBE);
-if (!cubeAssetRes.ok) {
-  console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
-  process.exit(1);
-}
-assets.registerWithGuid(cubeGuidRes.value, cubeAssetRes.value);
-
-const matGuidRes = AssetGuid.parse(CUBE_MATERIAL_GUID);
-if (!matGuidRes.ok) {
-  console.error(`[smoke] FAIL - material GUID parse: ${matGuidRes.error.code}`);
-  process.exit(1);
-}
-// AssetRegistry.register returns Result<Handle, AssetError>; the
-// 4.textures smoke passes the Result object straight into the
-// MeshRenderer materials slot and the runtime's extractFrame
-// auto-de-Results before consuming the handle. Mirror that pattern.
-const woodMaterial = assets.register({
-  kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
-  baseColorTexture: woodHandle,
-});
 
 const world = new World();
+// Mint user-tier column handles (M8 D-17). The baseColorTexture slot
+// carries the resolved numeric Handle via unwrapHandle; the cube enters
+// the world via the engine builtin HANDLE_CUBE directly (no GUID round-trip).
+const woodTexHandle = unwrapHandle(world.allocSharedRef('TextureAsset', woodTexAsset));
+const woodMaterial = world.allocSharedRef('MaterialAsset', {
+  kind: 'material',
+  passes: [
+    { name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 },
+  ],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: woodTexHandle },
+});
 // Single cube at origin with LO 1.5 Z-axis 30deg rotation baked in.
 world.spawn(
   {
@@ -436,8 +407,6 @@ console.log(`[smoke] perSiteDistance=${JSON.stringify(perSiteDistance)}`);
 
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
-
-void matGuidRes;
 
 const failures = [];
 if (renderer.backend !== 'webgpu')

@@ -158,6 +158,7 @@ const {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const woodDecodeRes = await decodeImageFromFile(WOOD_SRC_PATH);
@@ -241,15 +242,24 @@ function makeTexAsset(decoded) {
   };
 }
 
-const woodHandle = assets.registerWithGuid(woodGuidRes.value, makeTexAsset(woodDecoded));
-const container2Handle = assets.registerWithGuid(container2GuidRes.value, makeTexAsset(container2Decoded));
-const container2SpecularHandle = assets.registerWithGuid(container2SpecularGuidRes.value, makeTexAsset(container2SpecularDecoded));
+const world = new World();
+
+// Catalogue the textures under their GUIDs, then mint shared-ref column handles.
+const woodTexAsset = makeTexAsset(woodDecoded);
+const container2TexAsset = makeTexAsset(container2Decoded);
+const container2SpecularTexAsset = makeTexAsset(container2SpecularDecoded);
+assets.catalog(woodGuidRes.value, woodTexAsset);
+assets.catalog(container2GuidRes.value, container2TexAsset);
+assets.catalog(container2SpecularGuidRes.value, container2SpecularTexAsset);
+const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
+const container2Handle = world.allocSharedRef('TextureAsset', container2TexAsset);
+const container2SpecularHandle = world.allocSharedRef('TextureAsset', container2SpecularTexAsset);
 console.log(`[learn-render-7-bloom] registered wood handle id=${woodHandle}`);
 console.log(`[learn-render-7-bloom] registered container2 handle id=${container2Handle}`);
 console.log(`[learn-render-7-bloom] registered container2Specular handle id=${container2SpecularHandle}`);
 
 // Register materials: wood floor + 3 emissive light boxes.
-const floorMatHandle = assets.register({
+const floorMatHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -262,12 +272,12 @@ const floorMatHandle = assets.register({
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.9,
-    baseColorTexture: woodHandle,
+    baseColorTexture: unwrapHandle(woodHandle),
   },
 });
 
 function makeBoxMaterial(intensity) {
-  return {
+  return world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -282,22 +292,15 @@ function makeBoxMaterial(intensity) {
       roughness: 0.3,
       emissive: [2.0, 1.8, 1.5],
       emissiveIntensity: intensity,
-      emissiveTexture: container2SpecularHandle,
-      baseColorTexture: container2Handle,
+      emissiveTexture: unwrapHandle(container2SpecularHandle),
+      baseColorTexture: unwrapHandle(container2Handle),
     },
-  };
+  });
 }
 
-const boxAMatHandle = assets.register(makeBoxMaterial(2.0));
-const boxBMatHandle = assets.register(makeBoxMaterial(1.5));
-const boxCMatHandle = assets.register(makeBoxMaterial(0.4));
-
-if (!floorMatHandle.ok || !boxAMatHandle.ok || !boxBMatHandle.ok || !boxCMatHandle.ok) {
-  console.error('[smoke] FAIL - material register failed');
-  process.exit(1);
-}
-
-const world = new World();
+const boxAMatHandle = makeBoxMaterial(2.0);
+const boxBMatHandle = makeBoxMaterial(1.5);
+const boxCMatHandle = makeBoxMaterial(0.4);
 
 // Spawn wood floor: HANDLE_CUBE scaled flat and wide.
 world
@@ -311,15 +314,15 @@ world
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [floorMatHandle.value] } },
+    { component: MeshRenderer, data: { materials: [floorMatHandle] } },
   )
   .unwrap();
 
 // Spawn 3 emissive light boxes at (-3, 0, 3) along X.
 for (const [posX, handle] of [
-  [-3.0, boxAMatHandle.value],
-  [0.0, boxBMatHandle.value],
-  [3.0, boxCMatHandle.value],
+  [-3.0, boxAMatHandle],
+  [0.0, boxBMatHandle],
+  [3.0, boxCMatHandle],
 ]) {
   world
     .spawn(

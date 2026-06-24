@@ -512,6 +512,55 @@ import {
     });
   });
 
+  // bug-20260619 -- register-time texture-declaration consistency fail-fast.
+  // A user shader that samples a user-region material texture but omits it from
+  // paramSchema would let the extract stage silently drop the handle and bind
+  // the default white texture (LO 4.3 blending demo grass + windows opaque
+  // white). See docs/handover/2026-06-19-blending-transparency-regression-bisect.md.
+  describe('bug-20260619 -- under-declared sampled texture throws at register', () => {
+    const wgslSamplingBaseColor =
+      '@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;\n' +
+      '@fragment fn fs() { let s = textureSample(baseColorTexture, smp, in.uv); }';
+
+    it('throws when a user shader samples baseColorTexture absent from paramSchema', () => {
+      const registry = makeRegistry();
+      expect(() =>
+        registry.registerMaterialShader('learn-render::alpha-test', {
+          source: wgslSamplingBaseColor,
+          paramSchema: [{ name: 'baseColor', type: 'color' }],
+        }),
+      ).toThrow(/samples texture\(s\) \[baseColorTexture\].*does not declare/s);
+    });
+
+    it('accepts the same shader once baseColorTexture is declared', () => {
+      const registry = makeRegistry();
+      expect(() =>
+        registry.registerMaterialShader('learn-render::alpha-test', {
+          source: wgslSamplingBaseColor,
+          paramSchema: [
+            { name: 'baseColor', type: 'color' },
+            { name: 'baseColorTexture', type: 'texture2d' },
+          ],
+        }),
+      ).not.toThrow();
+    });
+
+    it('does NOT apply the check to engine forgeax:: shaders (build-time gate owns them)', () => {
+      // An engine shader may sample engine-injected textures (emissive /
+      // occlusion) absent from its schema by design; the runtime check is
+      // scoped to user shaders only.
+      const registry = makeRegistry();
+      const wgslEngineInjected =
+        '@fragment fn fs() { let e = textureSample(emissiveTexture, smp, in.uv); }';
+      expect(() =>
+        registry.registerMaterialShader(`${FORGEAX_RESERVED_PATH_PREFIX}custom`, {
+          source: wgslEngineInjected,
+          paramSchema: [{ name: 'baseColor', type: 'color' }],
+        }),
+      ).not.toThrow();
+    });
+  });
+
   describe('M5-T06 (d) -- lookup non-existent returns material-shader-not-found', () => {
     it('returns Result.err with the structured error code', () => {
       const registry = makeRegistry();

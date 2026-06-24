@@ -48,7 +48,6 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 
-import type { Handle, MaterialAsset, RenderPipelineAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const FALSIFY = (() => {
@@ -94,35 +93,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const assets = app.renderer.assets;
-  if (assets === null) {
-    console.error('[hdrp-lighting] AssetRegistry is null');
-    return;
-  }
+  const world = app.world;
 
-  // Step 2: register the HDRP RenderPipelineAsset (the M2/M4 install seam).
+  // Step 2: install the HDRP RenderPipelineAsset (the M2/M4 install seam).
   // pipelineId narrows on the literal 'forgeax::hdrp' so config.clusterGrid
   // becomes valid. URP would ignore config.clusterGrid; HDRP reads it at
-  // buildGraph time to size the cluster_uniform UBO.
-  const hdrpAssetRes = assets.register<RenderPipelineAsset>({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: CLUSTER_GRID },
-  });
-  if (!hdrpAssetRes.ok) {
-    console.error('[hdrp-lighting] HDRP asset register failed:', hdrpAssetRes.error.code);
-    return;
-  }
-  const hdrpHandle = hdrpAssetRes.value;
-
-  // Step 3: installPipeline -- swap URP -> HDRP for this renderer.
+  // buildGraph time to size the cluster_uniform UBO. D-19: installPipeline
+  // takes the POD directly (no AssetRegistry round-trip).
   // FALSIFY=force-urp skips this call, so the engine stays on URP and
   // the smoke (d) per-frame graph assertion fails -- proves that the
   // 256-light demo actually depends on HDRP install (AC-21 falsifiability).
   if (FALSIFY === 'force-urp') {
     console.warn('[hdrp-lighting] FALSIFY=force-urp -- skipping installPipeline(hdrpAsset)');
   } else {
-    const installRes = app.renderer.installPipeline(hdrpHandle);
+    const installRes = app.renderer.installPipeline({
+      kind: 'render-pipeline',
+      pipelineId: HDRP_PIPELINE_ID,
+      config: { clusterGrid: CLUSTER_GRID },
+    });
     if (!installRes.ok) {
       console.error(
         '[hdrp-lighting] installPipeline failed:',
@@ -133,8 +121,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
   }
 
-  // Step 4: register a standard PBR material for the lit floor + lit cube.
-  const matRes = assets.register<MaterialAsset>({
+  // Step 3: alloc a standard PBR material for the lit floor + lit cube as a
+  // user-tier shared ref on the World (D-19).
+  const materialHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -150,14 +139,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       roughness: 0.6,
     },
   });
-  if (!matRes.ok) {
-    console.error('[hdrp-lighting] material register failed:', matRes.error.code);
-    return;
-  }
-  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = matRes.value;
 
-  // Step 5: spawn the lit floor cube (large flat slab) + a hero cube.
-  const world = app.world;
+  // Step 4: spawn the lit floor cube (large flat slab) + a hero cube.
   world.spawn(
     {
       component: Transform,

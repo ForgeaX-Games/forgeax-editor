@@ -123,6 +123,7 @@ const {
   Camera,
   createRenderer,
   HANDLE_CUBE,
+  Materials,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -166,22 +167,15 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Register materials (mirrors src/index.ts scene setup).
-// Low roughness (0.2) for visible specular highlight.
-const objectMatHandle = assets.register({
-  kind: 'material',
-  shadingModel: 'standard',
-  baseColor: [1.0, 0.5, 0.31, 1.0],
-  metallic: 0.0,
-  roughness: 0.2,
-});
-const lampMatHandle = assets.register({
-  kind: 'material',
-  shadingModel: 'unlit',
-  baseColor: [1.0, 1.0, 1.0, 1.0],
-});
-
 const world = new World();
+
+// Mint material column handles (mirrors src/index.ts scene setup; M8 D-17).
+// Low roughness (0.2) for visible specular highlight.
+const objectMatHandle = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: [1.0, 0.5, 0.31, 1.0], metallic: 0.0, roughness: 0.2 }),
+);
+const lampMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 1.0, 1.0, 1.0]));
 
 // Spawn colored cube at origin.
 world

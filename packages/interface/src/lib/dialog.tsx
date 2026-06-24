@@ -11,6 +11,7 @@
  * not touch the dual-modality path.
  */
 import { useEffect, useState, type ReactNode } from 'react'
+import { useTranslation } from '@/i18n'
 import {
   AlertDialog,
   AlertDialogContent,
@@ -76,6 +77,7 @@ export function alertDialog(options: AlertOptions = {}): Promise<void> {
 }
 
 export function DialogHost(): React.ReactElement | null {
+  const { t } = useTranslation()
   const [reqs, setReqs] = useState<DialogRequest[]>(queue)
 
   useEffect(() => {
@@ -101,22 +103,34 @@ export function DialogHost(): React.ReactElement | null {
       }}
     >
       <AlertDialogContent>
-        {(head.options.title || head.options.body) && (
-          <AlertDialogHeader>
-            {head.options.title && (
-              <AlertDialogTitle>{head.options.title}</AlertDialogTitle>
-            )}
-            {head.options.body && (
-              <AlertDialogDescription asChild className="whitespace-pre-line">
-                <div>{head.options.body}</div>
-              </AlertDialogDescription>
-            )}
-          </AlertDialogHeader>
-        )}
+        <AlertDialogHeader>
+          {/* Radix requires an AlertDialogTitle inside AlertDialogContent for
+              screen-reader a11y (else it console.errors). Most confirm/alert
+              calls pass only a body, so when there's no visible title render an
+              sr-only fallback title — satisfies a11y with no visual change. */}
+          {head.options.title ? (
+            <AlertDialogTitle>{head.options.title}</AlertDialogTitle>
+          ) : (
+            <AlertDialogTitle className="sr-only">
+              {isConfirm ? t('dialog.confirmActionTitle') : t('dialog.alertTitle')}
+            </AlertDialogTitle>
+          )}
+          {head.options.body && (
+            // Body is the primary message here (most confirm/alert calls pass
+            // no title), so use full foreground instead of the muted default —
+            // muted-foreground (60% opacity) reads as illegible grey-on-dark.
+            <AlertDialogDescription
+              asChild
+              className="whitespace-pre-line text-foreground"
+            >
+              <div>{head.options.body}</div>
+            </AlertDialogDescription>
+          )}
+        </AlertDialogHeader>
         <AlertDialogFooter>
           {isConfirm && (
             <AlertDialogCancel onClick={() => resolveRequest(head.id, false)}>
-              {head.options.cancelText ?? '取消'}
+              {head.options.cancelText ?? t('common.cancel')}
             </AlertDialogCancel>
           )}
           <AlertDialogAction
@@ -128,7 +142,9 @@ export function DialogHost(): React.ReactElement | null {
             }
             onClick={() => resolveRequest(head.id, true)}
           >
-            {isConfirm ? head.options.confirmText ?? '确认' : head.options.okText ?? '好'}
+            {isConfirm
+              ? head.options.confirmText ?? t('common.confirm')
+              : head.options.okText ?? t('common.ok')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

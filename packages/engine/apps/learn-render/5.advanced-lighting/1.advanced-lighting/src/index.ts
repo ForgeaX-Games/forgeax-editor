@@ -27,6 +27,7 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -94,7 +95,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   shader.registerMaterialShader(BLINN_PHONG_SHADER_ID, {
     source: blinnPhongShader.wgsl,
-    paramSchema: [{ name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] }],
+    paramSchema: [
+      { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
+      { name: 'baseColorTexture', type: 'texture2d' },
+    ],
   });
 
   // Parse texture GUID.
@@ -115,7 +119,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const container2Tex = texRes.value;
 
   // Construct MaterialAsset POJO directly.
-  const matRes = assets.register<MaterialAsset>({
+  const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -125,14 +129,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     ],
     paramValues: {
-      baseColorTexture: container2Tex,
+      baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2Tex)),
     },
   });
-  if (!matRes.ok) {
-    console.error('[learn-render 5.1 blinn-phong] material register failed:', matRes.error);
-    return;
-  }
-  const mat = matRes.value;
 
   // Spawn cube: HANDLE_CUBE is 1x1x1, centered at origin.
   world.spawn(

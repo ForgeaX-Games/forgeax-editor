@@ -126,14 +126,17 @@ struct Material {
 // the IBL irradiance + split-sum specular into `ambient` below.
 struct SkylightUniforms {
   intensity : f32,
-  // bug-20260610: WebGL2 (GLES 3.0) lacks `DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`,
-  // so uniform buffers must be padded to a 16-byte multiple. Three f32 padding
-  // bytes lift the struct from 4 B → 16 B without changing the host-side write
-  // (`packages/runtime/src/ibl/skylight-bind-group.ts` writes only `intensity`;
-  // the trailing pad reads as zero and is unused on the shader side).
-  pad0 : f32,
-  pad1 : f32,
-  pad2 : f32,
+  // The former pad0/1/2 lanes now carry the linear-space ambient `color` tint
+  // (downstream integration #4). Kept as three scalars (NOT vec3<f32>) so the
+  // struct stays exactly 16 B: a vec3 has 16-byte alignment in std140 and
+  // would push `color` to offset 16, growing the UBO to 32 B and breaking the
+  // single 16 B host store. WebGL2 / GLES 3.0 still requires the 16-byte
+  // multiple (no `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`). Host writes
+  // `[intensity, colorR, colorG, colorB]`; color defaults to white (1,1,1) so
+  // the multiply is identity for intensity-only callers.
+  colorR : f32,
+  colorG : f32,
+  colorB : f32,
 };
 @group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
 @group(1) @binding(8)  var irradianceSampler    : sampler;
@@ -336,7 +339,8 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // feat-20260612-hdrp-ssao M7 round-2: `var` (mutable) so the
   // CLUSTER_FORWARD_AVAILABLE branch below can `ambient *=` the SSAO
   // factor. The non-HDRP path leaves ambient untouched.
-  var ambient = (kD * irradiance * albedo + specularIbl) * skylight.intensity * ao;
+  let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
+  var ambient = (kD * irradiance * albedo + specularIbl) * skyColor * skylight.intensity * ao;
 #ifdef CLUSTER_FORWARD_AVAILABLE
   // feat-20260612-hdrp-ssao M2 round-1 + M7 round-2 (plan-strategy D-7 + D-B + D-C):
   // SSAO ambient synthesis. Reads the half-res R8 `ssaoBlurredTexture` from

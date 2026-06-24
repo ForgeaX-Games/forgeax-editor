@@ -65,7 +65,6 @@ import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
 import {
   Camera,
   createDevImportTransport,
@@ -183,20 +182,22 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   assets.configurePackIndex(PACK_INDEX_URL);
+  const world = app.world;
 
-  // Step 2: resolve the wood-container texture handle through the
-  // production loadByGuid fetch chain. The vite-plugin-pack build-time
-  // import step emits the decoded RGBA bytes, and the runtime side here
-  // just consumes the GUID.
+  // Step 2: resolve the wood-container texture through the production
+  // loadByGuid fetch chain (returns the payload, D-17), then mint a
+  // user-tier column handle. The vite-plugin-pack build-time import step
+  // emits the decoded RGBA bytes, and the runtime side here just consumes
+  // the GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_TEXTURE_GUID);
   if (!woodGuidRes.ok) {
     console.error('[sprite] WOOD_TEXTURE_GUID parse failed:', woodGuidRes.error.code);
     return;
   }
   const texHandleRes = await assets.loadByGuid<TextureAsset>(woodGuidRes.value);
-  let textureHandle: Handle<'TextureAsset', 'unmanaged'> | undefined;
+  let textureHandle: Handle<'TextureAsset', 'shared'> | undefined;
   if (texHandleRes.ok) {
-    textureHandle = texHandleRes.value;
+    textureHandle = world.allocSharedRef('TextureAsset', texHandleRes.value);
   } else {
     // charter P3 explicit failure: the sprite bucket warn-once
     // path (render-system-record.ts AC-18 path 4) will fire when the
@@ -209,31 +210,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
   }
 
-  // Step 3: register the default linear-filter sampler. The sprite
-  // material's `sampler` slot is non-optional (AC-01); registering one
+  // Step 3: mint the default linear-filter sampler. The sprite
+  // material's `sampler` slot is non-optional (AC-01); minting one
   // shared sampler is the minimum-surface route. addressMode='repeat'
   // mirrors wood-container.meta.json importSettings (linear /
   // repeat / mipmap=auto SSOT).
-  const samplerRes = assets.register<SamplerAsset>({
+  const samplerHandle: Handle<'SamplerAsset', 'shared'> = world.allocSharedRef<
+    'SamplerAsset',
+    SamplerAsset
+  >('SamplerAsset', {
     kind: 'sampler',
     magFilter: 'linear',
     minFilter: 'linear',
     addressModeU: 'repeat',
     addressModeV: 'repeat',
   });
-  if (!samplerRes.ok) {
-    console.error('[sprite] sampler register failed:', samplerRes.error.code);
-    return;
-  }
-  const samplerHandle: Handle<'SamplerAsset', 'unmanaged'> = samplerRes.value;
 
   // The 3 sprite materials per scene share the same texture + sampler
-  // but differ in `pivot`. We pre-register 6 handles (3 colors x 2
-  // pivots) at boot so scene switching does not re-register material
+  // but differ in `pivot`. We pre-mint 6 handles (3 colors x 2
+  // pivots) at boot so scene switching does not re-mint material
   // assets every frame. If textureHandle is undefined the material
-  // still registers cleanly -- the sprite bucket missing-texture
+  // still mints cleanly -- the sprite bucket missing-texture
   // warn-once path takes over at the record stage (charter P3).
-  const materialHandles: Record<SceneId, Handle<'MaterialAsset', 'unmanaged'>[]> = {
+  const materialHandles: Record<SceneId, Handle<'MaterialAsset', 'shared'>[]> = {
     A: [],
     B: [],
   };
@@ -250,19 +249,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         colorTint: tint,
         pivot: PIVOT_BY_SCENE[sceneId],
       });
-      const matRes = assets.register<MaterialAsset>(material);
-      if (!matRes.ok) {
-        console.error(
-          `[sprite] sprite material register failed (scene=${sceneId}, idx=${i}):`,
-          matRes.error.code,
-        );
-        return;
-      }
-      materialHandles[sceneId].push(matRes.value);
+      materialHandles[sceneId].push(world.allocSharedRef('MaterialAsset', material));
     }
   }
 
-  const world = app.world;
 
   // Step 4: orthographic camera with tonemap='none' (zero-overhead
   // path). The HDR (reinhard-extended) crossings are gated by the
@@ -302,7 +292,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // The 9-slice entities are spawned once at boot and persist across
   // applyScene() switches (they sit at world-Y = +0.7 / -0.7 which
   // never overlaps the scene-A/B sprites at world-Y in [-0.3, 0.3]).
-  setupNineSliceSection(world, assets, textureHandle, samplerHandle);
+  setupNineSliceSection(world, textureHandle, samplerHandle);
 
   // Apply scene-A as the initial configuration (mode=0 layer-z).
   applyScene('A');
@@ -412,12 +402,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 }
 
 function buildSpriteMaterial(args: {
-  texture: Handle<'TextureAsset', 'unmanaged'> | undefined;
-  sampler: Handle<'SamplerAsset', 'unmanaged'>;
+  texture: Handle<'TextureAsset', 'shared'> | undefined;
+  sampler: Handle<'SamplerAsset', 'shared'>;
   colorTint: readonly [number, number, number, number];
   pivot: readonly [number, number];
 }): MaterialAsset {
-  const texture = args.texture ?? (0 as unknown as Handle<'TextureAsset', 'unmanaged'>);
+  const texture = args.texture ?? (0 as unknown as Handle<'TextureAsset', 'shared'>);
   // feat-20260527 M3 / w10: pass-based sprite material (plan-strategy D-3).
   // The extract stage recognizes 'forgeax::sprite' shader and produces
   // shadingModel='sprite' + spriteFields for the record stage pipeline.
@@ -471,17 +461,16 @@ function buildSpriteMaterial(args: {
 // in w19 acceptanceCheck enforces zero hits in this file).
 function setupNineSliceSection(
   world: World,
-  assets: AssetRegistry,
-  textureHandle: Handle<'TextureAsset', 'unmanaged'> | undefined,
-  samplerHandle: Handle<'SamplerAsset', 'unmanaged'>,
+  textureHandle: Handle<'TextureAsset', 'shared'> | undefined,
+  samplerHandle: Handle<'SamplerAsset', 'shared'>,
 ): void {
-  const texture = textureHandle ?? (0 as unknown as Handle<'TextureAsset', 'unmanaged'>);
+  const texture = textureHandle ?? (0 as unknown as Handle<'TextureAsset', 'shared'>);
 
   // Stretch UI panel material: 4-corner anchors at 0.25 of region UV,
   // sliceMode=0 (stretch). Corners stay pixel-fixed at any scale; the
   // 4 edges stretch along their major axis only; centre stretches
   // bilinearly. Shared by both stretch entities below.
-  const panelMatRes = assets.register<MaterialAsset>({
+  const panelMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -501,11 +490,6 @@ function setupNineSliceSection(
       sliceMode: 0,
     },
   });
-  if (!panelMatRes.ok) {
-    console.error('[sprite] nineslice panel material register failed:', panelMatRes.error.code);
-    return;
-  }
-  const panelMat = panelMatRes.value;
 
   // Tile material: corners 0.30 of region UV, sliceMode=1 (tile). The
   // centre cell repeats N times along each axis when the entity's
@@ -514,7 +498,7 @@ function setupNineSliceSection(
   // copies (D-4). Different `slices` value from the panel material
   // so the AI user can grep on these literal numbers and see the two
   // configurations side by side.
-  const tileMatRes = assets.register<MaterialAsset>({
+  const tileMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -534,11 +518,6 @@ function setupNineSliceSection(
       sliceMode: 1,
     },
   });
-  if (!tileMatRes.ok) {
-    console.error('[sprite] nineslice tile material register failed:', tileMatRes.error.code);
-    return;
-  }
-  const tileMat = tileMatRes.value;
 
   // 2 stretch panels: same material, different scale. AC-06 falsifier
   // is "the four corners stretch with scale" — visible in one frame.

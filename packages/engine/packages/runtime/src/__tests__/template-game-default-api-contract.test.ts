@@ -9,10 +9,10 @@
 //
 // Coverage (red-then-green tickets bundled into one file):
 //   (a) `assets.instantiate(handle, world)` exists and returns a
-//       Result<Entity>; when the handle is registered via
-//       `assets.registerWithGuid<SceneAsset>(...)`, the call resolves
-//       handle-typed component fields automatically (no caller-side
-//       `setSceneAssetResolver` wiring required for in-registry handles).
+//       Result<Entity>; when the scene is catalogued and a column handle is
+//       minted via `world.allocSharedRef('SceneAsset', payload)`, the call
+//       resolves handle-typed component fields automatically (no caller-side
+//       `setSceneAssetResolver` wiring required).
 //   (b) the synthetic root carries the `SceneInstance` component, whose
 //       `mapping` Uint32Array is indexed by `localId` and yields the live
 //       Entity for each authored node — the lookup the template's
@@ -27,16 +27,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { type EntityHandle, resolveComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type {
-  Handle,
-  LocalEntityId,
-  MaterialAsset,
-  SceneAsset,
-  SceneEntity,
-} from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 // Importing the runtime components barrel populates the global component
@@ -108,20 +101,24 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
       ],
       paramValues: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
     };
-    reg.registerWithGuid<MaterialAsset>(matGuid.value, mat);
+    reg.catalog<MaterialAsset>(matGuid.value, mat);
 
     const sceneGuid = AssetGuid.parse(SCENE_GUID);
     expect(sceneGuid.ok).toBe(true);
     if (!sceneGuid.ok) return;
-    reg.registerWithGuid<SceneAsset>(sceneGuid.value, buildSceneAssetWithGuidRef());
+    reg.catalog<SceneAsset>(sceneGuid.value, buildSceneAssetWithGuidRef());
 
-    const handleRes = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
-    expect(handleRes.ok).toBe(true);
-    if (!handleRes.ok) return;
+    const payloadRes = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
+    expect(payloadRes.ok).toBe(true);
+    if (!payloadRes.ok) return;
+
+    // loadByGuid returns the PAYLOAD; mint a user-tier column handle to feed
+    // instantiate (the template does exactly this at its call site).
+    const handle = world.allocSharedRef('SceneAsset', payloadRes.value);
 
     // The template uses precisely this 2-line shape; both must compile +
     // succeed without touching a `world.sceneInstances` surface.
-    const instRes = reg.instantiate<SceneAsset>(handleRes.value, world);
+    const instRes = reg.instantiate<SceneAsset>(handle, world);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
     // `instRes.value` is an Entity (the synthetic SceneInstance root), not
@@ -148,15 +145,16 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
       ],
       paramValues: { baseColor: [1, 1, 1, 1] as [number, number, number, number] },
     };
-    reg.registerWithGuid<MaterialAsset>(matGuid.value, mat);
+    reg.catalog<MaterialAsset>(matGuid.value, mat);
 
     const sceneGuid = AssetGuid.parse(SCENE_GUID);
     if (!sceneGuid.ok) throw new Error('parse');
-    reg.registerWithGuid<SceneAsset>(sceneGuid.value, buildSceneAssetWithGuidRef());
+    reg.catalog<SceneAsset>(sceneGuid.value, buildSceneAssetWithGuidRef());
 
-    const handleRes = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
-    if (!handleRes.ok) throw new Error('load');
-    const instRes = reg.instantiate<SceneAsset>(handleRes.value, world);
+    const payloadRes = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
+    if (!payloadRes.ok) throw new Error('load');
+    const handle = world.allocSharedRef('SceneAsset', payloadRes.value);
+    const instRes = reg.instantiate<SceneAsset>(handle, world);
     if (!instRes.ok) throw new Error('inst');
     const root = instRes.value;
 
@@ -226,19 +224,91 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     expect(noComments).not.toMatch(/\.byRef\(/);
   });
 
-  it('(d) handle returned by registerWithGuid + loadByGuid round-trips to the same numeric id', async () => {
+  // bug-20260619: the real `scene.pack.json` shipped a DirectionalLightShadow
+  // node carrying `orthoHalfExtent` — a field deleted when shadows moved to CSM
+  // (cascadeCount / splitLambda / ...). Strict instantiate (bug-20260615
+  // fail-fast) rejected the WHOLE scene on the unknown key, so every freshly
+  // created game booted empty (only the ground+sky fallback survived). The
+  // prior contract tests used a hand-built fixture, so the live-schema-vs-
+  // template drift had no gate. This reads the SHIPPED pack and asserts every
+  // authored component field — AFTER the template loader's documented projection
+  // — exists in the live component schema, i.e. the exact key check
+  // `_buildSceneEntityComponentDatas` runs at instantiate time.
+  //
+  // The projection mirrors `templates/game-default/main.ts` (~L54-58): the
+  // loader strips Studio-only components (Collider) and renames the ref-int
+  // handle field `MeshRenderer.material` -> `materials` (engine #317). Anything
+  // OUTSIDE that projection — DirectionalLightShadow.orthoHalfExtent included —
+  // reaches the engine verbatim and must satisfy the schema. Keep this in sync
+  // if the template's STRIP/rename surface changes.
+  it('(e) [regression] every shipped scene.pack.json component field exists in its live schema (post template projection)', () => {
+    // Touch the barrel bindings so the component-table side-effect import is
+    // not tree-shaken (resolveComponent reads that global table).
+    void Transform;
+    void MeshRenderer;
+    void ChildOf;
+    void SceneInstance;
+
+    // Mirror templates/game-default/main.ts loader projection.
+    const STRIP_COMPONENTS = new Set(['Collider']);
+    const FIELD_RENAME: Record<string, Record<string, string>> = {
+      MeshRenderer: { material: 'materials' },
+    };
+
+    const here = fileURLToPath(import.meta.url);
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const packPath = resolve(repoRoot, 'templates', 'game-default', 'scene.pack.json');
+    const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
+      assets: { kind: string; payload?: { kind?: string; nodes?: SceneEntity[] } }[];
+    };
+
+    const offenders: string[] = [];
+    let scanned = 0;
+    for (const asset of pack.assets) {
+      if (asset.payload?.kind !== 'scene') continue;
+      for (const node of asset.payload.nodes ?? []) {
+        for (const [compName, data] of Object.entries(node.components)) {
+          if (STRIP_COMPONENTS.has(compName)) continue;
+          scanned++;
+          const token = resolveComponent(compName);
+          if (token === undefined) {
+            offenders.push(`${compName} (component not defined)`);
+            continue;
+          }
+          const schema = token.schema as Record<string, unknown>;
+          const rename = FIELD_RENAME[compName] ?? {};
+          for (const rawField of Object.keys(data ?? {})) {
+            const field = rename[rawField] ?? rawField;
+            if (!(field in schema)) {
+              offenders.push(
+                `${compName}.${rawField} (localId ${node.localId as unknown as number})`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+    // Guard against a vacuous pass (e.g. component table not populated / pack
+    // shape drift silently yielding zero scanned components).
+    expect(scanned).toBeGreaterThan(0);
+  });
+
+  it('(d) loadByGuid returns the catalogued SceneAsset payload (identity)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const sceneGuid = AssetGuid.parse(SCENE_GUID);
     if (!sceneGuid.ok) throw new Error('parse');
-    const handleA = reg.registerWithGuid<SceneAsset>(sceneGuid.value, {
-      kind: 'scene',
-      entities: [],
-    });
-    const handleB = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
-    expect(handleB.ok).toBe(true);
-    if (!handleB.ok) return;
-    expect(unwrapHandle(handleB.value as Handle<'SceneAsset', 'unmanaged'>)).toBe(
-      unwrapHandle(handleA),
-    );
+    const payload: SceneAsset = { kind: 'scene', entities: [] };
+    const cataloged = reg.catalog<SceneAsset>(sceneGuid.value, payload);
+    expect(cataloged.ok).toBe(true);
+    if (!cataloged.ok) return;
+    const loaded = await reg.loadByGuid<SceneAsset>(sceneGuid.value);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    // loadByGuid returns the PAYLOAD (no handle); it is the same object the
+    // registry catalogued.
+    expect(loaded.value).toBe(cataloged.value);
+    expect(loaded.value.kind).toBe('scene');
   });
 });

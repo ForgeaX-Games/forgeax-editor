@@ -163,8 +163,9 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     expect(ready.ok).toBe(true);
     if (!ready.ok) return;
 
-    // Material creation (PBR standard)
-    const matRes = assets.register<MaterialAsset>({
+    // Material creation (PBR standard). D-18: a shared-ref handle is per-World;
+    // each frame's World allocs the same payload to get a handle it can resolve.
+    const matAsset: MaterialAsset = {
       kind: 'material',
       passes: [
         {
@@ -182,12 +183,14 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         emissiveIntensity: 0,
         occlusionStrength: 1,
       },
-    });
-    expect(matRes.ok).toBe(true);
-    if (!matRes.ok) return;
+    } as MaterialAsset;
 
     // --- Frame A: instances=N (grid spread) ---
     const worldN = new World();
+    const matHandleN = worldN.allocSharedRef<'MaterialAsset', MaterialAsset>(
+      'MaterialAsset',
+      matAsset,
+    );
     worldN.spawn(
       {
         component: Transform,
@@ -205,7 +208,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matRes.value] } },
+      { component: MeshRenderer, data: { materials: [matHandleN] } },
       { component: Instances, data: { transforms: transformsN } },
     );
     worldN.spawn(
@@ -282,6 +285,10 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     singleTransform[15] = 1;
 
     const world1 = new World();
+    const matHandle1 = world1.allocSharedRef<'MaterialAsset', MaterialAsset>(
+      'MaterialAsset',
+      matAsset,
+    );
     world1.spawn(
       {
         component: Transform,
@@ -299,7 +306,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matRes.value] } },
+      { component: MeshRenderer, data: { materials: [matHandle1] } },
       { component: Instances, data: { transforms: singleTransform } },
     );
     world1.spawn(
@@ -477,7 +484,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     if (!ready2.ok) return;
 
     // Unlit material
-    const matRes2 = assets2.register<MaterialAsset>({
+    const matAsset2: MaterialAsset = {
       kind: 'material',
       passes: [
         {
@@ -488,14 +495,16 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         },
       ],
       paramValues: { baseColor: [0.8, 0.3, 0.3, 1], metallic: 0, roughness: 0.5 },
-    });
-    expect(matRes2.ok).toBe(true);
-    if (!matRes2.ok) return;
+    } as MaterialAsset;
 
     const transformsN2 = buildTranslationGrid();
 
     // Frame A: N instances
     const worldN2 = new World();
+    const matHandleN2 = worldN2.allocSharedRef<'MaterialAsset', MaterialAsset>(
+      'MaterialAsset',
+      matAsset2,
+    );
     worldN2.spawn(
       {
         component: Transform,
@@ -513,7 +522,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matRes2.value] } },
+      { component: MeshRenderer, data: { materials: [matHandleN2] } },
       { component: Instances, data: { transforms: transformsN2 } },
     );
     worldN2.spawn(
@@ -577,6 +586,10 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     singleTransform2[15] = 1;
 
     const world12 = new World();
+    const matHandle12 = world12.allocSharedRef<'MaterialAsset', MaterialAsset>(
+      'MaterialAsset',
+      matAsset2,
+    );
     world12.spawn(
       {
         component: Transform,
@@ -594,7 +607,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [matRes2.value] } },
+      { component: MeshRenderer, data: { materials: [matHandle12] } },
       { component: Instances, data: { transforms: singleTransform2 } },
     );
     world12.spawn(

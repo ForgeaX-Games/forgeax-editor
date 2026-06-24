@@ -14,13 +14,15 @@ import {
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   DirectionalLight,
-  DirectionalLightShadow,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime } from '@forgeax/editor-core';
 import {
   sendVagMessage,
+  onVagMessage,
+  allowedParentOrigins,
   VagConsoleSchema,
+  VagNetworkSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
 import { ViewportBar } from './ViewportBar';
@@ -31,10 +33,64 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave } from '@forgeax/editor-shared';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
+
+// ── Boot watchdog (root-cause-agnostic dead-boot backstop) ───────────────────
+// The editor boots behind several top-level `await`s (initSceneList,
+// loadDocFromDisk, createApp/WebGPU init). If ANY stalls — a dev-server bounced
+// mid-session, vite re-optimizing deps, a WKWebView WebGPU init that never
+// returns — the module never finishes evaluating and the user is stuck on a dead
+// black viewport (FPS '--', clicks dead) with no error and no recovery. This
+// timer is registered SYNCHRONOUSLY before the first await; a stalled top-level
+// await suspends the module but the event loop still fires this timer. If boot
+// hasn't completed in time it paints a reload affordance instead of a silent
+// hang. (Per-fetch timeouts in editor-core handle the fetch variant; this is the
+// backstop for everything else, incl. createApp.)
+let bootCompleted = false;
+let bootStage = 'init';
+// Emit a boot breadcrumb to the shell health feed (Info panel + .forgeax/logs).
+// Posts DIRECTLY to the parent rather than via console — installConsoleBridge runs
+// late in boot, so a stall BEFORE it would otherwise be invisible. This makes a
+// hang observable: the Info panel shows the boot stages and exactly where Edit
+// got stuck, instead of a silent dead viewport you have to guess about.
+function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+  try {
+    window.parent?.postMessage(
+      { type: 'forgeax:health', level, source: 'edit', code: 'boot', message, ts: Date.now() },
+      '*',
+    );
+  } catch { /* no parent / cross-origin — overlay still covers the user */ }
+}
+function setBootStage(s: string): void { bootStage = s; emitBoot(`boot ▸ ${s}`); }
+const bootWatchdog = setTimeout(() => {
+  if (bootCompleted) return;
+  emitBoot(`Edit 启动卡在「${bootStage}」阶段 >15s — 已显示重载入口`, 'error');
+  try {
+    const o = document.createElement('div');
+    o.style.cssText =
+      'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(26,26,30,.82);backdrop-filter:blur(2px);color:#eee;font:14px system-ui;text-align:center;padding:24px';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:15px;font-weight:600';
+    title.textContent = '编辑器启动卡住了';
+    const desc = document.createElement('div');
+    desc.style.cssText = 'opacity:.7;max-width:420px;line-height:1.5';
+    desc.textContent = `Edit 卡在「${bootStage}」阶段（dev server 刚重启 / WebGPU 初始化未返回）。点下面重载即可恢复。`;
+    const btn = document.createElement('button');
+    btn.textContent = '↻ 重新加载编辑器';
+    btn.style.cssText = 'padding:8px 18px;border-radius:8px;border:1px solid #555;background:#2a2a30;color:#fff;cursor:pointer;font:13px system-ui';
+    btn.onclick = () => location.reload();
+    o.append(title, desc, btn);
+    (document.getElementById('ui') ?? document.body).appendChild(o);
+  } catch { /* DOM unavailable — nothing we can do */ }
+}, 15000);
+function markBootComplete(): void {
+  bootCompleted = true;
+  clearTimeout(bootWatchdog);
+  emitBoot('boot ✓ ready');
+}
 
 // Bind persistence to the active game/scene (`?scene=<slug>` passed by the
 // interface EditMode iframe). Each game gets its OWN editor scene — without this
@@ -43,6 +99,7 @@ import './theme.css';
 setSceneId(new URLSearchParams(location.search).get('scene'));
 // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
 // load so paths/storage keys resolve to the active scene file (UE level model).
+setBootStage('initSceneList');
 await initSceneList();
 
 // ── Viewport-only mode (default path) ──────────────────────────────────────────
@@ -75,6 +132,7 @@ if (popoutPanel) {
       <ContextMenuHost />
     </StrictMode>,
   );
+  markBootComplete();
 } else {
   await bootEditor();
 }
@@ -94,6 +152,7 @@ canvas.height = window.innerHeight * dpr;
 appRoot.appendChild(canvas);
 
 installConsoleBridge();
+installNetworkBridge();
 
 // ── Seed / restore the authored document ──────────────────────────────────────
 // A small demo scene so the editor opens with something to edit + render. These
@@ -120,7 +179,19 @@ function seed(): void {
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
 // starts from the seed and persists per-game from there.
-if (!(await loadDocFromDisk()) && !loadDocFromStorage()) seed();
+setBootStage('loadDoc');
+// Load order: on-disk authored scene → localStorage mirror → demo seed. Seed
+// whenever the result is EMPTY (sceneless game, fresh workspace, OR a prior
+// session that persisted a 0-entity doc) — otherwise the viewport opens blank
+// and looks "dead". seed() self-guards against clobbering a non-empty doc.
+await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
+if (Object.keys(bus.doc.entities).length === 0) {
+  seed();
+  // The bare seed is a viewport convenience for a scene-less game — do NOT
+  // auto-persist it to the game dir (avoids creating an unauthored scene.pack.json
+  // / masking a real scene). The user's first real edit re-schedules a save.
+  cancelPendingDiskSave();
+}
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
@@ -141,6 +212,7 @@ if (uiRoot) {
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
 // options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
 // path (not the virtual:forgeax/bundler adapter), so pass it as the bundler arg.
+setBootStage('createApp');
 const app = await createApp(canvas, {}, {
   shaderManifestUrl: `${BASE}/shaders/manifest.json`,
   // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss
@@ -165,10 +237,29 @@ const app = await createApp(canvas, {}, {
     },
   },
 });
+const CREATE_APP_RETRY_KEY = 'forgeax.editor.createApp.retries';
 if (!app.ok) {
+  // WKWebView/WebGPU (the desktop Studio app) transiently fails to (re)create
+  // the GPU device on a reload or under concurrent surface boots — the device
+  // request rejects and the Edit viewport goes pitch-black, while a FRESH page
+  // load succeeds (Chromium never hits this). This is exactly what a scene/level
+  // switch (switchSceneFile → location.reload) and HMR trigger. Rather than leave
+  // a black viewport, auto-reload a BOUNDED number of times to recover; the
+  // counter resets on the next success so the budget refills per session.
+  let retries = 0;
+  try { retries = Number(sessionStorage.getItem(CREATE_APP_RETRY_KEY) ?? '0') || 0; } catch { /* no storage */ }
+  if (retries < 3) {
+    try { sessionStorage.setItem(CREATE_APP_RETRY_KEY, String(retries + 1)); } catch { /* no storage */ }
+    console.warn(`[editor] createApp failed (auto-reload ${retries + 1}/3 to recover):`, app.error);
+    setTimeout(() => location.reload(), 500 + retries * 500);
+    throw new Error('[editor] createApp failed — reloading to recover');
+  }
+  console.error('[editor] createApp failed after 3 reload attempts — giving up:', app.error);
   paintDiagnosticMessage(app.error);
   throw new Error('[editor] createApp failed');
 }
+// Booted cleanly — refill the auto-reload budget for the next reload/scene switch.
+try { sessionStorage.removeItem(CREATE_APP_RETRY_KEY); } catch { /* no storage */ }
 
 const { world, renderer } = app.value;
 // Point at the play engine's per-game catalog (proxied through the studio's
@@ -181,7 +272,7 @@ const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
   : `${BASE}/pack-index.json`;
 renderer.assets.configurePackIndex(packIndexUrl);
 
-(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus };
+(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile };
 void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
   if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
 });
@@ -228,16 +319,14 @@ const engineSync = createEngineSync(world as never, renderer as never, resolveMa
 // EXACTLY ONE DirectionalLight: the engine's first-slice cap supports a single
 // directional (N>1 drops the rest + warns "render-system-multi-light"), so the
 // old key+fill rig silently lost the fill anyway. The cool fill is replaced by
-// the Skylight ambient installed below. DirectionalLightShadow on the SAME
-// entity clears the "DirectionalLight present without DirectionalLightShadow"
-// warn (and gives the preview a contact shadow).
+// the Skylight ambient installed below. Shadow fields are now part of
+// DirectionalLight itself (castShadow defaults to true).
 const sceneFile = getSceneFile() ?? '';
 const isAssetEdit = sceneFile.startsWith('monster:') || sceneFile.startsWith('character:');
 if (isAssetEdit) {
   world.spawn(
     { component: Transform, data: {} },
-    { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6 } },
-    { component: DirectionalLightShadow, data: { cascadeCount: 2, mapSize: 2048, farPlane: 40, nearPlane: 0.05 } },
+    { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6, castShadow: true, cascadeCount: 2, mapSize: 2048, farPlane: 40, nearPlane: 0.05 } },
   );
 }
 
@@ -252,6 +341,7 @@ app.value.start();
 installFpsReport();
 installPreviewControls();
 installErrorOverlay();
+markBootComplete(); // boot reached the live render loop — cancel the dead-boot watchdog
 
 // Environment: load an HDR → IBL Skylight (ambient/specular fill) + visible
 // SkyboxBackground. Uses the shared template HDR (matches what ▶ Play installs
@@ -343,7 +433,19 @@ void (async () => {
     if (!sceneGid.ok) return;
     const sceneRes = await assets.loadByGuid(sceneGid.value);
     if (!sceneRes.ok) { console.warn('[editor] preview skin scene load failed:', (sceneRes.error as { code?: string })?.code); return; }
-    const inst = assets.instantiate(sceneRes.value, world as never);
+    // Teardown/switch guard: if the game changed while we awaited the scene
+    // load, the previous world's shared-refs have been released. Instantiating
+    // now resolves released handles ('shared-ref-released') and leaves a partial
+    // skinned SceneInstance that wedges the renderer (engine runs but renders
+    // nothing). Bail silently — the new game's hook will run its own preview.
+    if (getSceneId() !== slug) return;
+    // engine e53f4616: `loadByGuid` returns the PAYLOAD; `instantiate` wants a
+    // Handle. Mint a shared-ref from the payload (mirrors hellforge Play). The
+    // old code passed the payload straight in, where it was read as a released
+    // handle → 'shared-ref-released' + a wedged partial instantiate on EVERY
+    // hellforge Edit load (the only game with preview.skin).
+    const sceneHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('SceneAsset', sceneRes.value);
+    const inst = assets.instantiate(sceneHandle as never, world as never);
     if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
     const skinRoot = inst.value as { generation: number; index: number };
     // Apply preview placement (pos + scale) on the SceneInstance root.
@@ -373,9 +475,13 @@ void (async () => {
     if (!firstGid.ok) return;
     const clipRes = await assets.loadByGuid(firstGid.value);
     if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
+    if (getSceneId() !== slug) return; // game switched while loading the clip — don't touch a stale world
+    // loadByGuid returns the PAYLOAD; AnimationPlayer.clip wants a Handle — mint
+    // a shared-ref (brand 'AnimationClip'), same as hellforge Play.
+    const clipHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('AnimationClip', clipRes.value);
     (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
       component: AnimationPlayer,
-      data: { clip: clipRes.value, time: 0, speed: 1, paused: false, looping: true },
+      data: { clip: clipHandle, time: 0, speed: 1, paused: false, looping: true },
     });
     console.log(`[editor] preview skin loaded for ${slug} (default clip via guid ${clipGuids[0]!.slice(0, 8)}, ${defaultName})`);
   } catch (err) {
@@ -400,8 +506,9 @@ window.addEventListener('pagehide', () => flushPendingSaveBeacon());
 window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushPendingSaveBeacon();
 });
-window.addEventListener('message', (ev: MessageEvent) => {
-  if ((ev?.data as { type?: string } | undefined)?.type === 'VAG_EDITOR_FLUSH') flushPendingSaveBeacon();
+onVagMessage(window, {
+  allowedOrigins: allowedParentOrigins(),
+  handlers: { VAG_EDITOR_FLUSH: () => flushPendingSaveBeacon() },
 });
 
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
@@ -438,6 +545,68 @@ function installConsoleBridge(): void {
       sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
     } catch { /* cross-origin */ }
   });
+}
+
+// Network bridge — fetch / XHR / WebSocket proxy → VAG_NETWORK (mirrors the
+// console bridge). Feeds the Studio Network panel. Best-effort, never throws.
+function installNetworkBridge(): void {
+  const send = (kind: 'fetch' | 'xhr' | 'ws', method: string, url: string, status: number, ms: number, ok: boolean): void => {
+    try {
+      sendVagMessage(window.parent, VagNetworkSchema, { kind, method, url: String(url).slice(0, 2048), status, ms: Math.round(ms), ok, ts: Date.now() });
+    } catch { /* cross-origin */ }
+  };
+  const origFetch = window.fetch?.bind(window);
+  if (origFetch) {
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const t0 = performance.now();
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+      const method = (init?.method ?? (input instanceof Request ? input.method : 'GET') ?? 'GET').toUpperCase();
+      try {
+        const res = await origFetch(input as RequestInfo, init);
+        send('fetch', method, url, res.status, performance.now() - t0, res.ok);
+        return res;
+      } catch (e) {
+        send('fetch', method, url, 0, performance.now() - t0, false);
+        throw e;
+      }
+    };
+  }
+  const XHR = window.XMLHttpRequest;
+  if (XHR) {
+    const origOpen = XHR.prototype.open;
+    const origSend = XHR.prototype.send;
+    XHR.prototype.open = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, method: string, url: string, ...rest: unknown[]) {
+      this.__fxN = { m: String(method).toUpperCase(), u: String(url), t0: 0 };
+      // @ts-expect-error variadic passthrough
+      return origOpen.call(this, method, url, ...rest);
+    };
+    XHR.prototype.send = function (this: XMLHttpRequest & { __fxN?: { m: string; u: string; t0: number } }, body?: Document | XMLHttpRequestBodyInit | null) {
+      const n = this.__fxN;
+      if (n) {
+        n.t0 = performance.now();
+        this.addEventListener('loadend', () => send('xhr', n.m, n.u, this.status, performance.now() - n.t0, this.status >= 200 && this.status < 400));
+      }
+      return origSend.call(this, body as Document);
+    };
+  }
+  const OrigWS = window.WebSocket;
+  if (OrigWS) {
+    const WSProxy = function (this: unknown, url: string | URL, protocols?: string | string[]) {
+      const t0 = performance.now();
+      const ws = protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
+      const u = typeof url === 'string' ? url : url.href;
+      ws.addEventListener('open', () => send('ws', 'WS', u, 101, performance.now() - t0, true));
+      ws.addEventListener('error', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
+      ws.addEventListener('close', () => send('ws', 'WS', u, 0, performance.now() - t0, false));
+      return ws;
+    } as unknown as typeof WebSocket;
+    WSProxy.prototype = OrigWS.prototype;
+    Object.defineProperty(WSProxy, 'CONNECTING', { value: OrigWS.CONNECTING });
+    Object.defineProperty(WSProxy, 'OPEN', { value: OrigWS.OPEN });
+    Object.defineProperty(WSProxy, 'CLOSING', { value: OrigWS.CLOSING });
+    Object.defineProperty(WSProxy, 'CLOSED', { value: OrigWS.CLOSED });
+    window.WebSocket = WSProxy;
+  }
 }
 
 // On-canvas error surface. A per-frame render throw leaves the viewport BLACK
@@ -480,43 +649,64 @@ function installErrorOverlay(): void {
   });
 }
 
-function installPreviewControls(): void {
-  window.addEventListener('message', (ev) => {
-    const data = ev?.data as { type?: string; payload?: unknown } | undefined;
-    if (!data || typeof data.type !== 'string') return;
-    switch (data.type) {
-      case 'VAG_PREVIEW_PAUSE': app.value.pause(); break;
-      case 'VAG_PREVIEW_PLAY': app.value.resume(); break;
-      case 'VAG_PREVIEW_RELOAD': location.reload(); break;
+// Shape guards for VAG_SPAWN_ENTITY's `entity`/`doc` — the schema declares them
+// `z.unknown()` (the engine ECS doc shape evolves independently), so we validate
+// them HERE before they reach the authoritative bus.
+type SpawnRef = { name: string; components: Record<string, unknown> };
+type SpawnDoc = {
+  order: number[];
+  entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }>;
+};
+function isSpawnRef(x: unknown): x is SpawnRef {
+  const r = x as SpawnRef | null;
+  return !!r && typeof r === 'object' && typeof r.name === 'string'
+    && typeof r.components === 'object' && r.components !== null;
+}
+function isSpawnDoc(x: unknown): x is SpawnDoc {
+  const d = x as SpawnDoc | null;
+  return !!d && typeof d === 'object'
+    && Array.isArray(d.order) && d.order.every((n) => typeof n === 'number')
+    && typeof d.entities === 'object' && d.entities !== null;
+}
 
-      case 'VAG_SPAWN_ENTITY': {
-        // Emitted by the interface shell after a successful auto-import pipeline
-        // (upload → process-gltf → import-scene). Dispatch to the authoritative
-        // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
-        // propagates to all ep:* panel iframes immediately.
-        const p = data.payload as { mode?: string; entity?: unknown; doc?: unknown; name?: string } | undefined;
-        if (!p) break;
-        if (p.mode === 'reference' && p.entity) {
-          const e = p.entity as { name: string; components: Record<string, unknown> };
-          bus.dispatch({ kind: 'spawnEntity', name: e.name, components: e.components });
-        } else if (p.mode === 'full' && p.doc) {
-          const doc = p.doc as { order: number[]; entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }> };
+function installPreviewControls(): void {
+  // Origin-gated + schema-validated via onVagMessage. Previously this accepted
+  // VAG_PREVIEW_* / VAG_SPAWN_ENTITY from ANY window with NO origin/source check
+  // and fed `entity`/`doc` to bus.dispatch UNVALIDATED — any embedder could
+  // pause/reload or spawn arbitrary entities into the authoritative editor bus.
+  onVagMessage(window, {
+    allowedOrigins: allowedParentOrigins(),
+    handlers: {
+      VAG_PREVIEW_PAUSE: () => app.value.pause(),
+      VAG_PREVIEW_PLAY: () => app.value.resume(),
+      VAG_PREVIEW_RELOAD: () => location.reload(),
+
+      // Emitted by the interface shell after a successful auto-import pipeline
+      // (upload → process-gltf → import-scene). Dispatch to the authoritative
+      // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
+      // propagates to all ep:* panel iframes immediately.
+      VAG_SPAWN_ENTITY: (msg) => {
+        const p = msg.payload;
+        if (p.mode === 'reference' && isSpawnRef(p.entity)) {
+          bus.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
+        } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
+          const doc = p.doc;
           const cmds = doc.order.map((id) => {
             const ent = doc.entities[id]!;
             return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
           });
           bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
+        } else {
+          console.warn('[edit] VAG_SPAWN_ENTITY: malformed entity/doc payload — ignored');
+          return;
         }
         broadcastAssetsChanged();
-        break;
-      }
+      },
 
-      case 'VAG_ASSETS_CHANGED':
-        // Relay from the interface shell to ep:* panel iframes so Assets panel
-        // Files tab refreshes its list after an import.
-        broadcastAssetsChanged();
-        break;
-    }
+      // Relay from the interface shell to ep:* panel iframes so the Assets panel
+      // Files tab refreshes its list after an import.
+      VAG_ASSETS_CHANGED: () => broadcastAssetsChanged(),
+    },
   });
 }
 

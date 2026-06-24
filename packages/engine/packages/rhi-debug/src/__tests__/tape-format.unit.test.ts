@@ -14,7 +14,7 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions on deserialized optional fields use non-null assertions because serialized data is always complete; safe at test compile time
 
 import { describe, expect, it } from 'vitest';
-import { deserializeTape, serializeTape } from '../tape-format';
+import { computePassOffsets, deserializeTape, serializeTape } from '../tape-format';
 import type { RhiCallEvent, Tape } from '../types';
 
 // ============================================================================
@@ -1044,5 +1044,555 @@ describe('tape-format — full frame tape', () => {
       expect(res.value.rhiCapsRecorded.canvasFormat).toBe('rgba8unorm');
       expect(res.value.rhiCapsRecorded.float32Filterable).toBe(true);
     }
+  });
+});
+
+// ============================================================================
+// (g) computePassOffsets regression tests — render-only passes (M1 w1, red)
+// ============================================================================
+
+describe('computePassOffsets — render-only regression', () => {
+  it('single render pass with one draw: produces one offset with correct triples', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+  });
+
+  it('single render pass with drawIndexed: correct triples', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'rp:1' },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 36,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+  });
+
+  it('single render pass with multiple draws: contiguous draw indices', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 6,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 12,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(2);
+  });
+
+  it('multiple render passes: each pass has correct passIdx and draw range', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:2',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:2',
+        vertexCount: 6,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:2',
+        indexCount: 12,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:2' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(2);
+    // Pass 0
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+    // Pass 1
+    expect(offsets[1]!.passIdx).toBe(1);
+    expect(offsets[1]!.startDrawIdx).toBe(1);
+    expect(offsets[1]!.endDrawIdx).toBe(2);
+  });
+
+  it('empty render pass (no draws): produces empty range (endDrawIdx < startDrawIdx)', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    // Empty pass: no draws within, start > end (empty range)
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(-1);
+  });
+
+  it('mixed draw and drawIndexed within single pass: draws counted in sequence', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 36,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 6,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(2);
+  });
+
+  it('events outside any pass do not affect offsets', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createBuffer', handleId: 'buf:1', desc: { size: 64, usage: 16 } },
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      { kind: 'createBuffer', handleId: 'buf:2', desc: { size: 128, usage: 32 } },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+  });
+
+  it('three render passes with interleaved events: correct sequential passIdx and draw ranges', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:2',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:2',
+        vertexCount: 6,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:2',
+        vertexCount: 12,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:2' },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:3',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:3',
+        indexCount: 36,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:3' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(3);
+    // Pass 0
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+    // Pass 1
+    expect(offsets[1]!.passIdx).toBe(1);
+    expect(offsets[1]!.startDrawIdx).toBe(1);
+    expect(offsets[1]!.endDrawIdx).toBe(2);
+    // Pass 2
+    expect(offsets[2]!.passIdx).toBe(2);
+    expect(offsets[2]!.startDrawIdx).toBe(3);
+    expect(offsets[2]!.endDrawIdx).toBe(3);
+  });
+});
+
+// ============================================================================
+// (h) computePassOffsets compute fixture tests — mixed render+compute (M1 w2, red)
+// ============================================================================
+
+describe('computePassOffsets — compute fixture', () => {
+  it('render pass then compute pass then render pass: three entries in correct order', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      // Pass 0: render
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      // Pass 1: compute
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:1', passHandleId: 'pass:2' },
+      { kind: 'setComputePipeline', passHandleId: 'pass:2', pipelineHandleId: 'cp:1' },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:2',
+        x: 8,
+        y: 8,
+        z: 1,
+      },
+      { kind: 'endComputePass', passHandleId: 'pass:2' },
+      // Pass 2: render
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:3',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:3',
+        indexCount: 36,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:3' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(3);
+    // Pass 0: render
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+    // Pass 1: compute
+    expect(offsets[1]!.passIdx).toBe(1);
+    expect(offsets[1]!.startDrawIdx).toBe(1);
+    expect(offsets[1]!.endDrawIdx).toBe(1);
+    // Pass 2: render
+    expect(offsets[2]!.passIdx).toBe(2);
+    expect(offsets[2]!.startDrawIdx).toBe(2);
+    expect(offsets[2]!.endDrawIdx).toBe(2);
+  });
+
+  it('compute-only pass with multiple dispatchWorkgroups: correct draw index range', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:1', passHandleId: 'pass:1' },
+      { kind: 'setComputePipeline', passHandleId: 'pass:1', pipelineHandleId: 'cp:1' },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:1',
+        x: 4,
+        y: 4,
+        z: 1,
+      },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:1',
+        x: 8,
+        y: 8,
+        z: 1,
+      },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:1',
+        x: 2,
+        y: 2,
+        z: 2,
+      },
+      { kind: 'endComputePass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(2);
+  });
+
+  it('interleaved render and compute passes: all four passes with contiguous indices', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      // Pass 0: render
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      // Pass 1: compute
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:1', passHandleId: 'pass:2' },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:2',
+        x: 8,
+        y: 8,
+        z: 1,
+      },
+      { kind: 'endComputePass', passHandleId: 'pass:2' },
+      // Pass 2: render
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:3',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: [],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:3',
+        vertexCount: 6,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:3',
+        indexCount: 12,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:3' },
+      // Pass 3: compute
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:1', passHandleId: 'pass:4' },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:4',
+        x: 16,
+        y: 16,
+        z: 1,
+      },
+      {
+        kind: 'dispatchWorkgroups',
+        passHandleId: 'pass:4',
+        x: 4,
+        y: 4,
+        z: 4,
+      },
+      { kind: 'endComputePass', passHandleId: 'pass:4' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(4);
+    // Pass 0: render
+    expect(offsets[0]!.passIdx).toBe(0);
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(0);
+    // Pass 1: compute
+    expect(offsets[1]!.passIdx).toBe(1);
+    expect(offsets[1]!.startDrawIdx).toBe(1);
+    expect(offsets[1]!.endDrawIdx).toBe(1);
+    // Pass 2: render
+    expect(offsets[2]!.passIdx).toBe(2);
+    expect(offsets[2]!.startDrawIdx).toBe(2);
+    expect(offsets[2]!.endDrawIdx).toBe(3);
+    // Pass 3: compute
+    expect(offsets[3]!.passIdx).toBe(3);
+    expect(offsets[3]!.startDrawIdx).toBe(4);
+    expect(offsets[3]!.endDrawIdx).toBe(5);
+  });
+
+  it('compute pass with no dispatchWorkgroups: empty range (endDrawIdx < startDrawIdx)', () => {
+    const events: RhiCallEvent[] = [
+      { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:1', passHandleId: 'pass:1' },
+      { kind: 'setComputePipeline', passHandleId: 'pass:1', pipelineHandleId: 'cp:1' },
+      { kind: 'endComputePass', passHandleId: 'pass:1' },
+    ];
+    const offsets = computePassOffsets(events);
+    expect(offsets).toHaveLength(1);
+    expect(offsets[0]!.passIdx).toBe(0);
+    // No dispatches: start > end (empty range)
+    expect(offsets[0]!.startDrawIdx).toBe(0);
+    expect(offsets[0]!.endDrawIdx).toBe(-1);
   });
 });

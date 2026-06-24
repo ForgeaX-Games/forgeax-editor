@@ -49,10 +49,14 @@
   justify-content: flex-start;
   gap: 0;
 }
-/* empty spacer — takes remaining space */
+/* spacer — takes remaining space and right-aligns its content (the lone
+   far-right health indicator chip). */
 .sb-slot-center {
   order: 3;
   flex: 1 1 auto;
+  justify-content: flex-end;
+  padding-right: 8px;
+  overflow: visible;
 }
 
 .sb-item {

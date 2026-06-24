@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { buildMenu, type MenuItem } from './menuRegistry';
+import { isTrustedMessageOrigin } from '@/lib/trustedOrigins';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +53,7 @@ export function ContextMenu() {
   // Editor-iframe menus → render here at the top layer (no iframe clipping).
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
+      if (!isTrustedMessageOrigin(e.origin)) return; // foreign-origin guard
       const d = e.data as { type?: string; menuId?: string; x?: number; y?: number; items?: WireMenuItem[] } | null;
       if (!d || d.type !== 'VAG_CONTEXT_MENU' || !Array.isArray(d.items)) return;
       // Find the iframe that sent this so we can map its client coords → ours.

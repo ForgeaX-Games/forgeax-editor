@@ -23,6 +23,7 @@
     { "path": "../rhi" },
     { "path": "../rhi-debug" },
     { "path": "../runtime" },
+    { "path": "../state" },
     { "path": "../types" }
   ]
 }

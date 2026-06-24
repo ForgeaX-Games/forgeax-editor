@@ -80,6 +80,6 @@ export function skyboxModeFromF32(value: number): SkyboxMode {
  *   world.spawn({ component: SkyboxBackground, data: { cubemap: cubeRes.value } });
  */
 export const SkyboxBackground = defineComponent('SkyboxBackground', {
-  cubemap: { type: 'handle<CubeTextureAsset>' },
+  cubemap: { type: 'shared<CubeTextureAsset>' },
   mode: { type: 'f32', default: SKYBOX_MODE_CUBEMAP },
 });

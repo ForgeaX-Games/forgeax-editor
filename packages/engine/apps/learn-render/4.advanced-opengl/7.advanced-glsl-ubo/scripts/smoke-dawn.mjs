@@ -202,16 +202,11 @@ if (!ready.ok) {
 // --- 5. Spawn minimal proof scene (AC-05) ---
 
 // Three cubes in a row with standard PBR material.
-const matHandleRes = assets.register(Materials.standard({
+const matHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
   baseColor: [0.8, 0.8, 0.8, 1],
   metallic: 0.0,
   roughness: 0.5,
 }));
-if (!matHandleRes.ok) {
-  console.error(`[smoke] FAIL - material register failed: ${matHandleRes.error.code}`);
-  process.exit(1);
-}
-const matHandle = matHandleRes.value;
 
 // Spawn three cubes: left, center, right.
 for (let i = -1; i <= 1; i++) {

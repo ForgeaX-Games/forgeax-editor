@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowUp, FolderOpen, Folder, Home, Loader2 } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 
 interface BrowseEntry {
   name: string;
@@ -36,6 +37,7 @@ export interface FsBrowserProps {
 }
 
 export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalError }: FsBrowserProps) {
+  const { t } = useTranslation();
   const [dir, setDir] = useState(initialDir);
   const [addrInput, setAddrInput] = useState(initialDir);
   const [data, setData] = useState<BrowseResp | null>(null);
@@ -87,7 +89,7 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
   return (
     <div className="fsb">
       <div className="fsb-toolbar">
-        <button className="fsb-icon-btn" onClick={goParent} disabled={!data?.parent || loading} title="上一级">
+        <button className="fsb-icon-btn" onClick={goParent} disabled={!data?.parent || loading} title={t('fsBrowser.parentDir')}>
           <ArrowUp size={13} />
         </button>
         <button className="fsb-icon-btn" onClick={goHome} disabled={loading} title="HOME">
@@ -101,20 +103,20 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
           spellCheck={false}
           placeholder="~/path/to/dir"
         />
-        <button className="fsb-icon-btn" onClick={goAddr} disabled={loading} title="跳转">
+        <button className="fsb-icon-btn" onClick={goAddr} disabled={loading} title={t('fsBrowser.go')}>
           <FolderOpen size={13} />
         </button>
       </div>
 
       <div className="fsb-list">
         {loading && (
-          <div className="fsb-state"><Loader2 size={14} className="fsb-spin" /> 加载中</div>
+          <div className="fsb-state"><Loader2 size={14} className="fsb-spin" /> {t('common.loading')}</div>
         )}
         {!loading && loadErr && (
           <div className="fsb-state fsb-err">{loadErr}</div>
         )}
         {!loading && !loadErr && data && data.entries.length === 0 && (
-          <div className="fsb-state fsb-dim">空目录</div>
+          <div className="fsb-state fsb-dim">{t('fsBrowser.emptyDir')}</div>
         )}
         {!loading && !loadErr && data && data.entries.map((e) => (
           <button
@@ -140,18 +142,18 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
             checked={initIfMissing}
             onChange={(e) => setInitIfMissing(e.target.checked)}
           />
-          <span>无 game 时初始化默认 workspace</span>
+          <span>{t('fsBrowser.initWorkspaceWhenNoGame')}</span>
         </label>
         {externalError && <div className="fsb-ext-err">{externalError}</div>}
         <div className="fsb-actions">
-          <button className="tb-modal-btn" onClick={onCancel} disabled={busy}>取消</button>
+          <button className="tb-modal-btn" onClick={onCancel} disabled={busy}>{t('common.cancel')}</button>
           <button
             className="tb-modal-btn primary"
             onClick={onPickClick}
             disabled={busy || !data}
-            title={data ? `选择 ${data.dirDisplay}` : ''}
+            title={data ? t('fsBrowser.selectDir', { dir: data.dirDisplay }) : ''}
           >
-            {busy ? '处理中…' : '选择此目录'}
+            {busy ? t('fsBrowser.processing') : t('fsBrowser.selectThisDir')}
           </button>
         </div>
       </div>

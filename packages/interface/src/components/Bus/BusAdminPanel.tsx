@@ -87,6 +87,7 @@
 // toolSnap).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation, type TFunction } from '@/i18n';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useAppStore } from '../../store';
@@ -312,6 +313,7 @@ function matchesQuery(p: BusPluginInfo, q: string): boolean {
 }
 
 export function BusAdminPanel() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<BusPluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -907,10 +909,10 @@ export function BusAdminPanel() {
     <div className="bus-admin">
       <div className="ba-head">
         <div className="ba-title">
-          <span className="ba-title-text">Bus 插件总览</span>
+          <span className="ba-title-text">{t('bus.title')}</span>
           <span className="ba-title-meta">
             {loading
-              ? '加载中…'
+              ? t('common.loading')
               : filtered
                 ? `${visibleCount} / ${items.length} plugin · ${groups.length} kind`
                 : `${items.length} plugin · ${allGroups.length} kind`}
@@ -919,9 +921,9 @@ export function BusAdminPanel() {
         <button
           className="ba-refresh"
           onClick={() => setRefreshTs(Date.now())}
-          title="重新拉取 /api/bus/plugins"
+          title={t('bus.refreshTitle')}
         >
-          ↻ 刷新
+          ↻ {t('bus.refresh')}
         </button>
       </div>
       {!loading && items.length > 0 && (() => {
@@ -950,7 +952,7 @@ export function BusAdminPanel() {
         const wbTitle =
           wbTone === 'down' && wbSurfaces.tone === 'down'
             ? 'Workbench — fetch failed (/api/bus/ui/surfaces)'
-            : `Workbench — ${wbSurfaces.mounted}/${Math.max(wbSurfaces.mounted, wbRegistered)} panels mounted · ${wbRegistered} registered · 单击聚焦 workbench kind`;
+            : `Workbench — ${wbSurfaces.mounted}/${Math.max(wbSurfaces.mounted, wbRegistered)} panels mounted · ${wbRegistered} registered · ${t('bus.mdFocusKind', { kind: 'workbench' })}`;
         const agentCount =
           agentSnap.tone === 'loading'
             ? '…'
@@ -958,30 +960,30 @@ export function BusAdminPanel() {
         const agentTitle =
           agentSnap.tone === 'loading'
             ? 'Agent — checking /api/bus/plugins?kind=agent …'
-            : `Agent — ${agentSnap.registered} plugin${agentSnap.registered === 1 ? '' : 's'} registered · 单击聚焦 agent kind`;
+            : `Agent — ${agentSnap.registered} plugin${agentSnap.registered === 1 ? '' : 's'} registered · ${t('bus.mdFocusKind', { kind: 'agent' })}`;
         const provCount = cliProv.tone === 'loading' ? '…/…' : `${cliProv.ok}/${cliProv.total}`;
         const provTitle =
           cliProv.tone === 'loading'
             ? 'CLI Providers — checking /api/cli-providers …'
-            : `CLI Providers — ${cliProv.ok}/${cliProv.total} healthy · 单击聚焦 cli-provider kind`;
+            : `CLI Providers — ${cliProv.ok}/${cliProv.total} healthy · ${t('bus.mdFocusKind', { kind: 'cli-provider' })}`;
         const mbCount =
           mbSnap.tone === 'loading' ? '…/…' : `${mbSnap.live}/${mbSnap.registered}`;
         const mbTitle =
           mbSnap.tone === 'loading'
             ? 'Model Binding — checking …'
-            : `Model Binding — ${mbSnap.live}/${mbSnap.registered} live · 单击聚焦 model-binding kind`;
+            : `Model Binding — ${mbSnap.live}/${mbSnap.registered} live · ${t('bus.mdFocusKind', { kind: 'model-binding' })}`;
         const skillCount =
           skillSnap.tone === 'loading' ? '…/…' : `${skillSnap.ready}/${skillSnap.registered}`;
         const skillTitle =
           skillSnap.tone === 'loading'
             ? 'Skill — checking …'
-            : `Skill — ${skillSnap.ready}/${skillSnap.registered} ready · ${skillSnap.experimental} experimental · 单击聚焦 skill kind`;
+            : `Skill — ${skillSnap.ready}/${skillSnap.registered} ready · ${skillSnap.experimental} experimental · ${t('bus.mdFocusKind', { kind: 'skill' })}`;
         const toolCount =
           toolSnap.tone === 'loading' ? '…/…' : `${toolSnap.ready}/${toolSnap.registered}`;
         const toolTitle =
           toolSnap.tone === 'loading'
             ? 'Tool — checking …'
-            : `Tool — ${toolSnap.ready}/${toolSnap.registered} ready · ${toolSnap.experimental} experimental · 单击聚焦 tool kind`;
+            : `Tool — ${toolSnap.ready}/${toolSnap.registered} ready · ${toolSnap.experimental} experimental · ${t('bus.mdFocusKind', { kind: 'tool' })}`;
         const leds: Array<{
           kind: string;
           label: string;
@@ -1004,7 +1006,7 @@ export function BusAdminPanel() {
             aria-label="Bus kind health overview"
           >
             <span className="ba-md-label" aria-hidden>
-              健康总览
+              {t('bus.healthOverview')}
             </span>
             {leds.map((led) => {
               const soloed = enabledKinds !== null && enabledKinds.size === 1 && enabledKinds.has(led.kind);
@@ -1071,8 +1073,8 @@ export function BusAdminPanel() {
                   : `Bus kind health — ${totalPlugins} plugins total · ${okN} ok, ${warnN} warn, ${downN} down of ${leds.length} kinds`;
               const titleStr =
                 loadingN === leds.length
-                  ? `Σ ${totalPlugins} plugin · 6 kind 健康状态加载中…`
-                  : `Σ ${totalPlugins} plugin 注册 · ${okN}/${leds.length} kind ok · ${warnN} warn · ${downN} down · 单击清空 kind 过滤`;
+                  ? `Σ ${totalPlugins} plugin · ${t('bus.mdSummaryLoading')}`
+                  : `Σ ${totalPlugins} plugin ${t('bus.registered')} · ${okN}/${leds.length} kind ok · ${warnN} warn · ${downN} down · ${t('bus.mdClearFilter')}`;
               return (
                 <button
                   type="button"
@@ -1171,12 +1173,12 @@ export function BusAdminPanel() {
             className="ba-chips"
             role="tablist"
             aria-orientation="horizontal"
-            aria-label="按 kind 过滤"
+            aria-label={t('bus.filterByKind')}
           >
             <span
               className="ba-kbd"
               aria-hidden="true"
-              title="←→ / Home / End 键盘导航"
+              title={t('bus.kbdNavChips')}
             >
               ←→
             </span>
@@ -1220,10 +1222,12 @@ export function BusAdminPanel() {
                   }}
                   title={
                     (enabledKinds === null
-                      ? `单击：仅看 ${k.kind} · ${k.count} 个`
+                      ? t('bus.chipSolo', { kind: k.kind, count: k.count })
                       : active
-                        ? `单击：隐藏 ${k.kind}`
-                        : `单击：再次显示 ${k.kind}`) + ' · ←→ 切换'
+                        ? t('bus.chipHide', { kind: k.kind })
+                        : t('bus.chipShow', { kind: k.kind })) +
+                    ' · ' +
+                    t('bus.chipToggleHint')
                   }
                 >
                   <span
@@ -1239,7 +1243,7 @@ export function BusAdminPanel() {
           <input
             type="text"
             className="ba-search"
-            placeholder="按 id / 名称搜索 (例如 wb-anim / 角色)…"
+            placeholder={t('bus.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             spellCheck={false}
@@ -1249,34 +1253,34 @@ export function BusAdminPanel() {
               type="button"
               className="ba-reset"
               onClick={resetFilters}
-              title="清空 kind 过滤 + 搜索"
+              title={t('bus.resetTitle')}
             >
-              ✕ 清空
+              ✕ {t('bus.reset')}
             </button>
           )}
         </div>
       )}
       {err && (
         <div className="ba-error">
-          请求失败：{err} · 检查 /api/bus/plugins 是否可达
+          {t('bus.requestFailed', { err })}
         </div>
       )}
       {!err && !loading && items.length === 0 && (
-        <div className="ba-empty">bus 未加载任何 plugin — 检查 marketplace scan 路径</div>
+        <div className="ba-empty">{t('bus.emptyNoPlugins')}</div>
       )}
       {!err && !loading && items.length > 0 && groups.length === 0 && (
-        <div className="ba-empty">无匹配 — 检查搜索词或重启过滤</div>
+        <div className="ba-empty">{t('bus.emptyNoMatch')}</div>
       )}
       {!loading && orderedRowIds.length > 0 && (
         <div className="ba-row-kbd-bar" aria-hidden="true">
           <span
             className="ba-kbd"
-            title="↑↓ / Home / End 行键盘导航 · Enter / Space 展开"
+            title={t('bus.rowKbdTitle')}
           >
             ↑↓
           </span>
           <span className="ba-row-kbd-label">
-            行键盘导航 · {orderedRowIds.length} rows · Enter 展开
+            {t('bus.rowKbdLabel', { n: orderedRowIds.length })}
           </span>
         </div>
       )}
@@ -1361,9 +1365,9 @@ export function BusAdminPanel() {
         ))}
       </div>
       <div className="ba-footnote">
-        来源：<code>GET /api/bus/plugins</code> · slim shape · provides.{'{'}workbench / modelBinding /
-        skills / tools / events / cliProvider{'}'} 已展开 · broken[] 字段尚未由 server 暴露（P3 颗粒）·
-        点行 / ↑↓ 切行 / Enter 展开详情
+        {t('bus.footnoteSource')}<code>GET /api/bus/plugins</code> · slim shape · provides.{'{'}workbench / modelBinding /
+        skills / tools / events / cliProvider{'}'} {t('bus.footnoteExpanded')} · {t('bus.footnoteBroken')} ·
+        {' '}{t('bus.footnoteRowHint')}
       </div>
     </div>
   );
@@ -1404,6 +1408,7 @@ function KindSection({
   skillSnap,
   toolSnap,
 }: KindSectionProps) {
+  const { t } = useTranslation();
   // P4.14 — only the cli-provider section gets the health LED (only kind with
   // a real health channel today). Hover title lists every provider's ok/down
   // line so the player can see *why* a tone is amber without leaving the
@@ -1598,7 +1603,7 @@ function KindSection({
           type="button"
           className={`ba-kind-tag k-${group.kind} is-link`}
           onClick={() => onFlashKind(group.kind)}
-          title={`单击：在左侧 BUS KINDS 闪烁 ${group.kind} 胶囊（同 P3.38 反向 echo 通路）`}
+          title={t('bus.kindTagFlashTitle', { kind: group.kind })}
         >
           {group.kind}
         </button>
@@ -1663,20 +1668,20 @@ function KindSection({
             <span className="ba-kind-tool-count">{toolDisplay}</span>
           </span>
         )}
-        <span className="ba-kind-desc">{kindDescription(group.kind)}</span>
+        <span className="ba-kind-desc">{kindDescription(group.kind, t)}</span>
       </header>
       {group.kind === 'cli-provider' && <CliCapabilityMatrix items={group.items} />}
       <table className="ba-table">
         <thead>
           <tr>
-            <th className="c-chev" aria-label="展开" />
+            <th className="c-chev" aria-label={t('bus.expand')} />
             <th className="c-id">id</th>
             <th className="c-name">displayName.zh</th>
             <th className="c-ver">
               version
               <span
                 className="ba-th-sub"
-                title="0.0.x = manifest 占位 (跟 phase3.0 wb-* 占位 batch 一致) · 0.1+ = 已 bump 过的真版本 (P4.62/P4.63 紫色 pill + 行底色都对应这道分界线)"
+                title={t('bus.versionThSub')}
                 aria-hidden
               >
                 0.0.x · placeholder ↔ 0.1+ · <em>bumped</em>
@@ -1727,6 +1732,7 @@ function PluginRow({
   onMoveRowFocus,
   onSoloKind,
 }: PluginRowProps) {
+  const { t } = useTranslation();
   const nameZh = pickLang(p.displayName, 'zh', p.id);
   const descZh = pickLang(p.description, 'zh', '');
   const descEn = pickLang(p.description, 'en', '');
@@ -1779,7 +1785,7 @@ function PluginRow({
             onToggle(p.id);
           }
         }}
-        title={expanded ? '点击折叠 · ↑↓ 切行 · Enter 折叠' : '点击展开详情 · ↑↓ 切行 · Enter 展开'}
+        title={expanded ? t('bus.rowTitleCollapse') : t('bus.rowTitleExpand')}
       >
         <td className="c-chev">
           <span className={`ba-chev ${expanded ? 'is-open' : ''}`} aria-hidden>
@@ -1801,7 +1807,7 @@ function PluginRow({
           {verBumped ? (
             <span
               className="ba-ver-pill bumped"
-              title={`manifest v${ver} bumped · 已 bump 过 0.0.x 占位语义 · 这是真版本`}
+              title={t('bus.verBumpedTitle', { ver })}
               aria-label={`${ver} bumped`}
             >
               {ver}
@@ -1851,6 +1857,7 @@ function PluginDetail({
   descEn: string;
   onSoloKind: (kind: string) => void;
 }) {
+  const { t } = useTranslation();
   const wb = p.workbench;
   // P3.33 — reverse deep-link wiring. kind=agent rows offer "← 在 Sidebar 高亮"
   // (sets store.pendingSidebarFocusPluginId → AgentsPanel scrolls + flashes the
@@ -1966,14 +1973,14 @@ function PluginDetail({
               className={`ba-detail-copy-flash${copyFlashOn ? ' on' : ''}`}
               aria-live="polite"
             >
-              ✓ 已复制
+              ✓ {t('bus.copied')}
             </span>
           </div>
           <button
             type="button"
             className={`ba-detail-code ba-detail-manifest-link${copyFlashOn ? ' copied' : ''}`}
             onClick={onCopyManifest}
-            title={copyFlashOn ? '✓ 已复制路径到剪贴板' : '点击复制路径到剪贴板 · 粘贴到终端或编辑器可直达 manifest.json'}
+            title={copyFlashOn ? t('bus.manifestCopiedTitle') : t('bus.manifestCopyTitle')}
           >
             {manifestHint}
           </button>
@@ -1998,7 +2005,7 @@ function PluginDetail({
               e.stopPropagation();
               onSoloKind(p.kind);
             }}
-            title={`点击仅显示 ${p.kind} 类的插件 · 顶部过滤行的 ✕ 按钮可清除筛选`}
+            title={t('bus.detailKindSoloTitle', { kind: p.kind })}
             aria-label={`solo filter kind ${p.kind}`}
           >
             {p.kind}
@@ -2017,14 +2024,14 @@ function PluginDetail({
               className={`ba-detail-copy-flash${versionCopyFlashOn ? ' on' : ''}`}
               aria-live="polite"
             >
-              ✓ 已复制
+              ✓ {t('bus.copied')}
             </span>
           </div>
           <button
             type="button"
             className={`ba-detail-code ba-detail-version-link${versionCopyFlashOn ? ' copied' : ''}`}
             onClick={onCopyVersion}
-            title={versionCopyFlashOn ? '✓ 已复制版本号到剪贴板' : '点击复制版本号 · 可粘贴到 changelog / shell / commit message'}
+            title={versionCopyFlashOn ? t('bus.versionCopiedTitle') : t('bus.versionCopyTitle')}
           >
             {p.version}
           </button>
@@ -2033,7 +2040,7 @@ function PluginDetail({
           <div className="ba-detail-cell">
             <div
               className="ba-detail-label"
-              title="entry.frontend · 此插件的 React 面板源码 (相对 plugin 目录) · workbench tab 点开后由 Sidebar 通过 PLUGIN_PANEL_LOADERS 动态 import"
+              title={t('bus.uiFrontendTitle')}
             >
               ui (frontend)
             </div>
@@ -2051,7 +2058,7 @@ function PluginDetail({
                 type="button"
                 className="ba-detail-code ba-detail-entry ba-detail-entry-link"
                 onClick={(e) => { e.stopPropagation(); onOpenWbTab(); }}
-                title={`打开 wb:${wb.id} tab · 渲染 packages/marketplace/plugins/${dir}/${p.entry.frontend.replace(/^\.\//, '')}`}
+                title={t('bus.entryOpenWbTitle', { wbId: wb.id, path: `packages/marketplace/plugins/${dir}/${p.entry.frontend.replace(/^\.\//, '')}` })}
               >
                 {p.entry.frontend}
               </button>
@@ -2089,9 +2096,9 @@ function PluginDetail({
             type="button"
             className="ba-backlink ba-backlink-agent"
             onClick={onBackToSidebar}
-            title={`在 Sidebar AGENTS 区高亮 ${p.id} 对应卡片`}
+            title={t('bus.backlinkAgentTitle', { id: p.id })}
           >
-            ← 在 Sidebar 高亮
+            ← {t('bus.backlinkAgent')}
           </button>
         )}
         {hasWbLink && (
@@ -2099,9 +2106,9 @@ function PluginDetail({
             type="button"
             className="ba-backlink ba-backlink-wb"
             onClick={onOpenWbTab}
-            title={`切回 Workbench 并打开 wb:${wb!.id} tab`}
+            title={t('bus.backlinkWbTitle', { wbId: wb!.id })}
           >
-            ← 打开 wb-* tab
+            ← {t('bus.backlinkWb')}
           </button>
         )}
         {hasKindLink && (
@@ -2109,15 +2116,15 @@ function PluginDetail({
             type="button"
             className={`ba-backlink ba-backlink-kind k-${p.kind}`}
             onClick={onFlashKindFooter}
-            title={`在 Sidebar 底部 BUS KINDS footer 闪烁 ${p.kind} 胶囊 1.5s — 余光确认这颗 plugin 在 chrome 边缘的 kind 归属`}
+            title={t('bus.backlinkKindTitle', { kind: p.kind })}
           >
             <span className="ba-backlink-kind-dot" aria-hidden>●</span>
-            ← 闪烁 BUS KINDS · {p.kind}
+            ← {t('bus.backlinkKind')} · {p.kind}
           </button>
         )}
       </div>
       <div className="ba-detail-note">
-        broken[] 字段尚未由 server 暴露 — 等 P3 颗粒补
+        {t('bus.detailNoteBroken')}
       </div>
     </div>
   );
@@ -2129,6 +2136,7 @@ function PluginDetail({
 // the detail row visually identical for plugins where only workbench /
 // modelBinding apply (those have their own dedicated cells / strips upstream).
 function ProvidesDetail({ p }: { p: BusPluginInfo }) {
+  const { t } = useTranslation();
   const cp = p.cliProvider;
   const skills = p.skills ?? [];
   const tools = p.tools ?? [];
@@ -2140,10 +2148,10 @@ function ProvidesDetail({ p }: { p: BusPluginInfo }) {
     count: number;
     aiTitle: string;
   }> = [
-    { kind: 'cli-provider', label: 'cli', count: cliCount, aiTitle: '本插件作为 cliProvider 注册 (1 = 是 / 0 = 否)' },
-    { kind: 'skill', label: 'skill', count: skills.length, aiTitle: '本插件向 Bus 注册的 skill 数 (Bus.skills[])' },
-    { kind: 'tool', label: 'tool', count: tools.length, aiTitle: '本插件向 Bus 注册的 tool 数 (Bus.tools[])' },
-    { kind: 'event', label: 'event', count: events.length, aiTitle: '本插件向 Bus 注册的 event schema 数 (Bus.events[])' },
+    { kind: 'cli-provider', label: 'cli', count: cliCount, aiTitle: t('bus.tallyCliTitle') },
+    { kind: 'skill', label: 'skill', count: skills.length, aiTitle: t('bus.tallySkillTitle') },
+    { kind: 'tool', label: 'tool', count: tools.length, aiTitle: t('bus.tallyToolTitle') },
+    { kind: 'event', label: 'event', count: events.length, aiTitle: t('bus.tallyEventTitle') },
   ];
   const totalProvides = cliCount + skills.length + tools.length + events.length;
   return (
@@ -2153,8 +2161,8 @@ function ProvidesDetail({ p }: { p: BusPluginInfo }) {
         <div
           className={`ba-prov-tally${totalProvides === 0 ? ' empty' : ''}`}
           title={totalProvides === 0
-            ? '本插件未向 Bus 暴露 cliProvider/skill/tool/event — 通常是 kind=workbench 的纯前端插件 (panel 自己跑)'
-            : `本插件向 Bus 提供 ${totalProvides} 个 provider 入口 (cli+skill+tool+event 合计)`}
+            ? t('bus.provTallyEmptyTitle')
+            : t('bus.provTallyTitle', { n: totalProvides })}
         >
           {tally.map((t) => (
             <span
@@ -2167,7 +2175,7 @@ function ProvidesDetail({ p }: { p: BusPluginInfo }) {
             </span>
           ))}
           {totalProvides === 0 && (
-            <span className="ba-prov-tally-note">无 provides · 纯前端 / placeholder</span>
+            <span className="ba-prov-tally-note">{t('bus.provTallyNote')}</span>
           )}
         </div>
         {cp && (
@@ -2219,11 +2227,11 @@ function ProvidesDetail({ p }: { p: BusPluginInfo }) {
               <span className="ba-prov-count">{tools.length}</span>
             </div>
             <ul className="ba-prov-list">
-              {tools.map((t) => (
-                <li key={t.id}>
-                  <code className="ba-prov-pill ba-prov-tool-id">{t.id}</code>
-                  {t.exposedToAI && (
-                    <span className="ba-prov-flag" title="exposedToAI=true · AI agent 可直接调用">
+              {tools.map((tool) => (
+                <li key={tool.id}>
+                  <code className="ba-prov-pill ba-prov-tool-id">{tool.id}</code>
+                  {tool.exposedToAI && (
+                    <span className="ba-prov-flag" title={t('bus.provAiFlagTitle')}>
                       AI
                     </span>
                   )}
@@ -2383,21 +2391,21 @@ function shortCliId(id: string): string {
   return id.replace(/^@forgeax-plugin\/cli-/, '').replace(/^@forgeax-plugin\//, '');
 }
 
-function kindDescription(kind: string): string {
+function kindDescription(kind: string, t: TFunction): string {
   switch (kind) {
     case 'workbench':
-      return '左侧 TOOLS 行 + 主面板入口（11 类创作 + admin + code）';
+      return t('bus.kindDescWorkbench');
     case 'agent':
-      return '可被 sub-agent 路由召唤的角色（cc-coder 系列等）';
+      return t('bus.kindDescAgent');
     case 'cli-provider':
-      return 'CLI runner 适配器（claude-code / codex / cursor-agent / forgeax）';
+      return t('bus.kindDescCliProvider');
     case 'model-binding':
-      return 'text/multimodal channel 厂商绑定（anthropic-text / openai 等）';
+      return t('bus.kindDescModelBinding');
     case 'skill':
-      return 'slash 命令 + persona（/make-game-design 等）';
+      return t('bus.kindDescSkill');
     case 'tool':
-      return '纯 tool（balance:resim 等）— 不带 UI / agent';
+      return t('bus.kindDescTool');
     default:
-      return '(未分类 kind)';
+      return t('bus.kindDescUnknown');
   }
 }

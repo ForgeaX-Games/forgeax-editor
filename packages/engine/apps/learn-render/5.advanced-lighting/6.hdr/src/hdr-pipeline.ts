@@ -27,14 +27,14 @@
 // intentionally hand-rolls a tiny LO exposure tonemap inline so the
 // LearnOpenGL teaching equation `1.0 - exp(-hdrColor * exposure)` is
 // grep-able in src/index.ts (AC-11) and the dual-pipeline mode-switch
-// surface (`renderer.installPipeline(handle)`) is exercised end-to-end.
+// surface (`renderer.installPipeline(asset)`) is exercised end-to-end.
 //
 // GREP anchors for AI users:
 //   - "addColorTarget"          rgba16float offscreen color target
 //   - "addScenePass"            geometry pass into offscreen HDR target
 //   - "addFullscreenPass"       per-mode fullscreen blit to swap-chain
 //   - "rgba16float"             HDR storage format literal
-//   - "installHdrPipelineByKey" pure key -> handle table-lookup function
+//   - "installHdrPipelineByKey" pure key -> RenderPipelineAsset table-lookup
 
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import {
@@ -45,11 +45,11 @@ import {
   type RenderPipelineData,
 } from '@forgeax/engine-runtime';
 import { type Result, err, ok } from '@forgeax/engine-types';
-import type { Handle } from '@forgeax/engine-types';
+import type { RenderPipelineAsset } from '@forgeax/engine-types';
 
 /**
  * Closed roster of HDR demo modes. The two values map 1:1 to the two
- * RenderPipelineAsset handles src/index.ts registers; pressing keys 1/2
+ * RenderPipelineAsset PODs src/index.ts registers; pressing keys 1/2
  * hot-swaps `installPipeline` between them.
  */
 export type HdrMode = 'hdr' | 'ldr';
@@ -174,10 +174,10 @@ export type HdrInstallError =
  * pulling in the full RhiRenderer type.
  */
 export interface HdrPipelineRegistry {
-  handlesByKey: ReadonlyMap<string, Handle<'RenderPipelineAsset', 'unmanaged'>>;
+  assetsByKey: ReadonlyMap<string, RenderPipelineAsset>;
   renderer: {
     installPipeline(
-      handle: Handle<'RenderPipelineAsset', 'unmanaged'>,
+      asset: RenderPipelineAsset,
     ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
   };
 }
@@ -199,14 +199,14 @@ export function installHdrPipelineByKey(key: string): Result<true, HdrInstallErr
       hint: 'await app.start() resolves before calling installHdrPipelineByKey',
     });
   }
-  const handle = activeRegistry.handlesByKey.get(key);
-  if (handle === undefined) {
+  const asset = activeRegistry.assetsByKey.get(key);
+  if (asset === undefined) {
     return err({
       code: 'unknown-hdr-key',
       hint: `expected '1' or '2'; received ${JSON.stringify(key)}`,
     });
   }
-  const installRes = activeRegistry.renderer.installPipeline(handle);
+  const installRes = activeRegistry.renderer.installPipeline(asset);
   if (!installRes.ok) {
     return err({
       code: 'pipelines-not-ready',
@@ -225,7 +225,7 @@ export function hdrDisplayNameByKey(key: string): HdrMode | null {
 
 /**
  * Bootstrap-only setter. Called once by src/index.ts after the two
- * RenderPipelineAsset handles are registered + renderer is ready.
+ * RenderPipelineAsset PODs are built + renderer is ready.
  */
 export function setHdrPipelineRegistryForTest(registry: HdrPipelineRegistry): void {
   activeRegistry = registry;

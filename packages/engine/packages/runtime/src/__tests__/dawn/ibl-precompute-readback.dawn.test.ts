@@ -14,14 +14,13 @@
 // pixels carry non-zero values (white equirect -> bright cube -> non-zero
 // irradiance / prefilter / brdfLut).
 
+import { World } from '@forgeax/engine-ecs';
 import { composeShader } from '@forgeax/engine-naga';
+import { ok } from '@forgeax/engine-rhi';
 import type { CubeTextureAsset, TextureAsset, TextureFormat } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../../asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
 import { getOrCreateIblCache, setIblComposedShaders } from '../../ibl/IblPipelineCache';
-import { createDefaultLoaderRegistry } from '../../wire-default-loaders';
-import { makeMockShaderRegistry } from '../helpers/mock-shader-registry';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -43,10 +42,11 @@ const mockCaps = {
 };
 
 // feat-20260601-gpu-resource-store-extraction M1 (D-3 falsifiable anchor): a
-// single store.uploadCubemapFromEquirect(srcHandle, srcPod) returns the cube
-// handle, and store.getCubemapGpuTexture(cubeHandle) reads it back -- the
+// single store.uploadCubemapFromEquirect(world, srcHandle, srcPod) returns the
+// cube handle, and store.getCubemapGpuTexture(cubeHandle) reads it back -- the
 // single-call contract is preserved. The cube POD register-relay is injected
-// at configureGpuDevice (the store holds no registry reference, D-3).
+// at configureGpuDevice and mints via world.allocSharedRef (the store holds no
+// registry reference, D-3).
 
 // Load + compose the 6 ibl-* WGSL modules into the 4 composed entry shaders
 // that createIblPipelines consumes. Mirrors what vite-plugin-shader does at
@@ -158,12 +158,10 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
       const adapter = await (navigator as any).gpu.requestAdapter();
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
       const store = new GpuResourceStore();
+      const world = new World();
       const equirect = makeWhiteEquirect();
-      // biome-ignore lint/suspicious/noExplicitAny: register narrows on kind
-      const regRes = reg.register(equirect as any);
-      const equirectHandle = (regRes as { ok: true; value: unknown }).value;
+      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
 
       // We pass the raw GPUDevice directly so the runtime exercises the
       // same dawn path that user-mesh-upload.dawn.test.ts uses. The cube POD
@@ -177,13 +175,12 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
           // biome-ignore lint/suspicious/noExplicitAny: matching shim Result shape
           return { ok: true, value: mod, unwrap: () => mod, unwrapOr: () => mod } as any;
         },
-        (pod: CubeTextureAsset) => reg.register(pod),
+        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
         mockCaps,
       );
 
       // Single call returns the cube handle (D-3 single-call contract).
-      // biome-ignore lint/suspicious/noExplicitAny: opaque unmanaged handle
-      const result = await store.uploadCubemapFromEquirect(equirectHandle as any, equirect);
+      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 

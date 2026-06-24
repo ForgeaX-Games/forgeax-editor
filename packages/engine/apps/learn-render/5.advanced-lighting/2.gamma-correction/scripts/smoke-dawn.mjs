@@ -203,6 +203,7 @@ const {
   PointLight,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
 
@@ -264,9 +265,14 @@ const woodTexAsset = {
   colorSpace: woodDecoded.colorSpace,
   mipmap: woodDecoded.mipmap,
 };
-const woodHandle = assets.registerWithGuid(woodGuidRes.value, woodTexAsset);
 
-const planeMatRes = assets.register({
+const world = new World();
+
+// Catalogue the texture under its GUID, then mint a shared-ref column handle.
+assets.catalog(woodGuidRes.value, woodTexAsset);
+const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
+
+const planeMat = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -279,15 +285,9 @@ const planeMatRes = assets.register({
     baseColor: [1.0, 1.0, 1.0, 1.0],
     metallic: 0.0,
     roughness: 0.8,
-    baseColorTexture: woodHandle,
+    baseColorTexture: unwrapHandle(woodHandle),
   },
 });
-if (!planeMatRes.ok) {
-  console.error(`[smoke] FAIL - plane material register: ${planeMatRes.error.code}`);
-  process.exit(1);
-}
-
-const world = new World();
 
 world
   .spawn(
@@ -300,7 +300,7 @@ world
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [planeMatRes.value] } },
+    { component: MeshRenderer, data: { materials: [planeMat] } },
   )
   .unwrap();
 
@@ -409,26 +409,12 @@ try {
   process.exit(1);
 }
 
-const correctAssetRes = assets.register({
+// --- 6. Install correct pipeline + draw frames ---
+
+const installCorrect = renderer.installPipeline({
   kind: 'render-pipeline',
   pipelineId: GAMMA_CORRECT_PIPELINE_ID,
 });
-if (!correctAssetRes.ok) {
-  console.error(`[smoke] FAIL - correct asset register: ${correctAssetRes.error.code}`);
-  process.exit(1);
-}
-const wrongAssetRes = assets.register({
-  kind: 'render-pipeline',
-  pipelineId: GAMMA_WRONG_PIPELINE_ID,
-});
-if (!wrongAssetRes.ok) {
-  console.error(`[smoke] FAIL - wrong asset register: ${wrongAssetRes.error.code}`);
-  process.exit(1);
-}
-
-// --- 6. Install correct pipeline + draw frames ---
-
-const installCorrect = renderer.installPipeline(correctAssetRes.value);
 if (!installCorrect.ok) {
   console.error(`[smoke] FAIL - installPipeline(correct): ${installCorrect.error.code}`);
   process.exit(1);
@@ -445,7 +431,10 @@ for (let i = 0; i < PER_STATE_FRAMES; i++) {
 
 // --- 7. Hot-swap to wrong pipeline + draw more frames ---
 
-const installWrong = renderer.installPipeline(wrongAssetRes.value);
+const installWrong = renderer.installPipeline({
+  kind: 'render-pipeline',
+  pipelineId: GAMMA_WRONG_PIPELINE_ID,
+});
 if (!installWrong.ok) {
   console.error(`[smoke] FAIL - installPipeline(wrong): ${installWrong.error.code}`);
   process.exit(1);

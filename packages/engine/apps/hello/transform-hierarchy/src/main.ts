@@ -46,7 +46,7 @@ import {
 
 import { World } from '@forgeax/engine-ecs';
 
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -75,16 +75,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  const assets = renderer.assets;
-  if (assets === null) {
-    console.error(
-      '[transform-hierarchy] AssetRegistry is null (renderer construction did not complete successfully)',
-    );
-    return;
-  }
+  // Step 2: wire the propagate kernel. The registerPropagateTransforms line
+  // is the whole point of this demo -- it derives every entity's
+  // Transform.world each frame so the ChildOf entity follows its parent (the
+  // world mat4 lives on Transform; defineComponent makes every component
+  // usable, so spawn is direct with no per-World registration).
+  const world = new World();
 
-  // Step 2: register the standard PBR material shared by every body.
-  const materialRes = assets.register<MaterialAsset>({
+  registerPropagateTransforms(world);
+
+  // Step 3: register the standard PBR material shared by every body.
+  const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
       {
@@ -99,21 +100,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       metallic: 0.0,
       roughness: 0.4,
     },
-  });
-  if (!materialRes.ok) {
-    console.error('[transform-hierarchy] material register failed:', materialRes.error.code);
-    return;
-  }
-  const materialHandle: Handle<'MaterialAsset', 'unmanaged'> = materialRes.value;
-
-  // Step 3: wire the propagate kernel. The registerPropagateTransforms line
-  // is the whole point of this demo -- it derives every entity's
-  // Transform.world each frame so the ChildOf entity follows its parent (the
-  // world mat4 lives on Transform; defineComponent makes every component
-  // usable, so spawn is direct with no per-World registration).
-  const world = new World();
-
-  registerPropagateTransforms(world);
+  } as MaterialAsset);
 
   // Step 4: spawn the hierarchy. Parent is non-identity (offset -0.6 on X).
   const parent = world

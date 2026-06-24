@@ -7,6 +7,7 @@
 //   3. Panel unmounts → removeDockedPlugin so Sidebar can host it again.
 import { useEffect, lazy, Suspense } from 'react';
 import { ExternalLink } from 'lucide-react';
+import { useTranslation } from '@/i18n';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
 import { pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
 import { getWindowManager, type SurfaceDescriptor } from '../../lib/platform';
@@ -27,6 +28,7 @@ interface Props {
 }
 
 export function WbPluginDockPanel({ pluginId }: Props) {
+  const { t } = useTranslation();
   const addDockedPlugin = useAppStore((s) => s.addDockedPlugin);
   const removeDockedPlugin = useAppStore((s) => s.removeDockedPlugin);
   const detachSurface = useAppStore((s) => s.detachSurface);
@@ -40,7 +42,7 @@ export function WbPluginDockPanel({ pluginId }: Props) {
   if (!manifest || manifest === 'loading') {
     return (
       <div className="wb-dock-panel">
-        <div className="wb-dock-loading">正在加载 {pluginId}…</div>
+        <div className="wb-dock-loading">{t('wbPluginDock.loadingPlugin', { pluginId })}</div>
       </div>
     );
   }
@@ -57,13 +59,13 @@ export function WbPluginDockPanel({ pluginId }: Props) {
           <button
             type="button"
             className="wb-dock-popout-btn"
-            title="弹出为独立 OS 窗口"
+            title={t('wbPluginDock.popoutTitle')}
             onClick={() => void detachSurface(desc2, { title: label })}
           >
-            <ExternalLink size={12} /> 独立窗口
+            <ExternalLink size={12} /> {t('wbPluginDock.popoutLabel')}
           </button>
         )}
-        <Suspense fallback={<div className="wb-dock-loading">正在加载插件…</div>}>
+        <Suspense fallback={<div className="wb-dock-loading">{t('wbPluginDock.loadingPluginGeneric')}</div>}>
           <StandalonePluginIframe plugin={manifest} pane="left" active />
         </Suspense>
       </div>

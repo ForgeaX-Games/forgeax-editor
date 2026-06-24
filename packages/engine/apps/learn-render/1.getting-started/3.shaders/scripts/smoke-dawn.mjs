@@ -195,19 +195,13 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// LO 1.3 passes-form material (mirrors src/index.ts:127-132):
-//   assets.register<MaterialAsset>({
-//     kind: 'material',
-//     passes: [{ name: 'Forward', shader: 'forgeax::default-unlit',
-//                tags: { LightMode: 'Forward' }, queue: 2000 }],
-//     paramValues: { baseColor: PLAY_BASE_COLOR },
-//   })
-// Result-returning .register() returns a registry id directly when the
-// asset shape uses the legacy short form; the demo's passes-form goes
-// through the same registry but the shader pass is what the unlit
-// pipeline picks up. The smoke does not call computePulse(): pulse is
-// rAF-driven in main.ts and is not part of the static frame verdict.
-const playMaterialRes = assets.register({
+const world = new World();
+// LO 1.3 passes-form material (mirrors src/index.ts spawnPulseScene):
+// mint a user-tier column handle from the passes-form MaterialAsset POD
+// (M8 D-17). The shader pass is what the unlit pipeline picks up. The
+// smoke does not call computePulse(): pulse is rAF-driven in main.ts and
+// is not part of the static frame verdict.
+const playMaterial = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -219,12 +213,6 @@ const playMaterialRes = assets.register({
   ],
   paramValues: { baseColor: PLAY_BASE_COLOR },
 });
-// .register() returns either an id directly (legacy shape) or a Result
-// (passes-form). Normalise.
-const playMaterial =
-  typeof playMaterialRes === 'number' ? playMaterialRes : playMaterialRes.unwrap();
-
-const world = new World();
 // LO 1.3 single triangle at origin / identity rotation / unit scale.
 world.spawn(
   {

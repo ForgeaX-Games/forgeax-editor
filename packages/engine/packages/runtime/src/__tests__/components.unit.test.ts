@@ -36,6 +36,7 @@ import {
   queryRun,
   World,
 } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   Handle,
   Handler,
@@ -49,7 +50,7 @@ import type {
   SceneAsset,
   SceneEntity,
 } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import {
@@ -180,8 +181,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Locks plan-strategy 7.2 naming + requirements IN-1 schema field set:
   //   Transform: pos:[f32x3] + quat:[f32x4] + scale:[f32x3]   = 10 f32
-  //   MeshFilter:         assetHandle:'handle<MeshAsset>' (u32)
-  //   MeshRenderer:       material:'handle<MaterialAsset>' (u32) + frustumCulled:'u8' (M3 / w8)
+  //   MeshFilter:         assetHandle:'shared<MeshAsset>' (u32)
+  //   MeshRenderer:       material:'array<shared<MaterialAsset>>' (u32) + frustumCulled:'u8' (M3 / w8)
   //   Camera:             fov:f32 + aspect:f32 + near:f32 + far:f32   = 4 f32
   //   DirectionalLight: direction:[f32x3] + color:[f32x3] + intensity:f32 = 7 f32
   //
@@ -216,24 +217,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Transform.schema.world).toBe('array<f32, 16>');
     });
 
-    it('MeshFilter has 1 handle<MeshAsset> field (assetHandle; M5 / w19)', () => {
+    it('MeshFilter has 1 shared<MeshAsset> field (assetHandle; M5 / w14)', () => {
       expect(MeshFilter.name).toBe('MeshFilter');
       expect(Object.keys(MeshFilter.schema).length).toBe(1);
-      expect(MeshFilter.schema.assetHandle).toBe('handle<MeshAsset>');
+      expect(MeshFilter.schema.assetHandle).toBe('shared<MeshAsset>');
     });
 
     it('MeshRenderer has 3 fields (materials + frustumCulled + pickable; feat-20260608 M2 / w7 multi-material array)', () => {
       expect(MeshRenderer.name).toBe('MeshRenderer');
       expect(Object.keys(MeshRenderer.schema).length).toBe(3);
       const schemaRecord = MeshRenderer.schema as Record<string, string>;
-      expect(schemaRecord.materials).toBe('array<handle<MaterialAsset>>');
+      expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
       expect(schemaRecord.frustumCulled).toBe('u8');
       expect(schemaRecord.pickable).toBe('u8');
     });
 
-    it('Camera has 21 f32 fields (perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet)', () => {
+    it('Camera has 22 fields (21 f32 + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
       expect(Camera.name).toBe('Camera');
-      expect(Object.keys(Camera.schema).length).toBe(21);
+      expect(Object.keys(Camera.schema).length).toBe(22);
       expect(Camera.schema.fov).toBe('f32');
       expect(Camera.schema.aspect).toBe('f32');
       expect(Camera.schema.near).toBe('f32');
@@ -258,6 +259,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.clearG).toBe('f32');
       expect(Camera.schema.clearB).toBe('f32');
       expect(Camera.schema.clearA).toBe('f32');
+      // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
+      // opt-out flag (bool column tier, not f32).
+      expect(Camera.schema.autoAspect).toBe('bool');
     });
 
     it('DirectionalLight has 7 f32 fields (direction x/y/z + color r/g/b + intensity)', () => {
@@ -316,7 +320,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const e = world
         .spawn({
           component: MeshFilter,
-          data: { assetHandle: 1 as Handle<'MeshAsset', 'unmanaged'> },
+          data: { assetHandle: 1 as Handle<'MeshAsset', 'shared'> },
         })
         .unwrap();
       const r = world.get(e, MeshFilter).unwrap();
@@ -329,7 +333,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: MeshRenderer,
           data: {
-            materials: [7 as Handle<'MaterialAsset', 'unmanaged'>],
+            materials: [7 as Handle<'MaterialAsset', 'shared'>],
           },
         })
         .unwrap();
@@ -400,11 +404,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
               scaleZ: 1,
             },
           },
-          { component: MeshFilter, data: { assetHandle: 1 as Handle<'MeshAsset', 'unmanaged'> } },
+          { component: MeshFilter, data: { assetHandle: 1 as Handle<'MeshAsset', 'shared'> } },
           {
             component: MeshRenderer,
             data: {
-              materials: [5 as Handle<'MaterialAsset', 'unmanaged'>],
+              materials: [5 as Handle<'MaterialAsset', 'shared'>],
             },
           },
           {
@@ -834,7 +838,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // TDD red: pickable does not exist on the MeshRenderer schema yet when this file is first
   // committed, so the spawn-default + set round-trip + schema assertions fail. Green after w11.
 
-  const asMat = (n: number) => n as Handle<'MaterialAsset', 'unmanaged'>;
+  const asMat = (n: number) => n as Handle<'MaterialAsset', 'shared'>;
 
   describe('w10 — MeshRenderer.pickable u8 schema (AC-09)', () => {
     it('MeshRenderer.schema declares pickable as u8', () => {
@@ -914,7 +918,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // pick.test.ts — feat-20260529-picking-raycasting-screen-to-entity M3 / w12 (TDD red).
   //
   // Integration tests for the screen-to-entity `pick` free function:
-  //   pick(world, assets, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)
+  //   pick(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)
   //     -> PickHit | undefined
   //
   // The deterministic scene is built with a bare `new World()` + a real
@@ -953,7 +957,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // propagate + pick pair so the test bodies stay focused on the pick contract.
   function runPick(
     world: World,
-    assets: AssetRegistry,
     camera: EntityHandle,
     x: number,
     y: number,
@@ -961,7 +964,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     h: number,
   ): PickHit | undefined {
     propagateTransforms(world);
-    return pick(world, assets, camera, x, y, w, h);
+    return pick(world, camera, x, y, w, h);
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -1004,7 +1007,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
    * `vertices` must be a multiple of the 12-float interleaved stride; a single 3-vertex
    * triangle (36 floats) satisfies the gate while the position attribute drives the AABB.
    */
-  function registerBox(assets: AssetRegistry): Handle<'MeshAsset', 'unmanaged'> {
+  function registerBox(world: World, assets: AssetRegistry): Handle<'MeshAsset', 'shared'> {
     const vertices = new Float32Array([
       0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
       1, 0, 0, 0, 0,
@@ -1014,7 +1017,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5,
       -0.5, 0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
     ]);
-    const result = assets.register<MeshAsset>({
+    // catalog computes the local-space AABB (withMeshAabb); mint the augmented
+    // payload on the world so resolveAssetHandle (used by pick) reads .aabb.
+    const result = assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
       kind: 'mesh',
       vertices,
       indices: new Uint16Array([0, 1, 2]),
@@ -1028,12 +1033,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       ],
     });
-    if (!result.ok) throw new Error('mesh register failed');
-    return result.value;
+    if (!result.ok) throw new Error('mesh catalog failed');
+    return world.allocSharedRef('MeshAsset', result.value);
   }
 
-  function registerMaterial(assets: AssetRegistry): Handle<'MaterialAsset', 'unmanaged'> {
-    const result = assets.register<MaterialAsset>({
+  function registerMaterial(
+    world: World,
+    assets: AssetRegistry,
+  ): Handle<'MaterialAsset', 'shared'> {
+    const result = assets.catalog<MaterialAsset>(AssetGuid.format(AssetGuid.random()), {
       kind: 'material',
       passes: [
         {
@@ -1045,22 +1053,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ],
       paramValues: { baseColor: [1, 1, 1] },
     });
-    if (!result.ok) throw new Error('material register failed');
-    return result.value;
+    if (!result.ok) throw new Error('material catalog failed');
+    return world.allocSharedRef('MaterialAsset', result.value);
   }
 
   interface Scene {
     world: World;
     assets: AssetRegistry;
-    mesh: Handle<'MeshAsset', 'unmanaged'>;
-    material: Handle<'MaterialAsset', 'unmanaged'>;
+    mesh: Handle<'MeshAsset', 'shared'>;
+    material: Handle<'MaterialAsset', 'shared'>;
   }
 
   function makeScene(): Scene {
     const world = new World();
     const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-    const mesh = registerBox(assets);
-    const material = registerMaterial(assets);
+    const mesh = registerBox(world, assets);
+    const material = registerMaterial(world, assets);
     return { world, assets, mesh, material };
   }
 
@@ -1132,7 +1140,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const near = spawnBox(scene, 0, 0, 0); // closer to camera at z=5
       spawnBox(scene, 0, 0, -10); // farther along -Z
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeDefined();
       expect(hit?.entity).toBe(near);
     });
@@ -1142,7 +1150,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const box = spawnBox(scene, 0, 0, 0);
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit?.entity).toBe(box);
     });
   });
@@ -1154,7 +1162,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // box pushed far off the -Z centre axis; the centre ray misses it
       spawnBox(scene, 50, 0, 0);
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeUndefined();
     });
 
@@ -1162,7 +1170,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const scene = makeScene();
       const camera = spawnPerspectiveCamera(scene.world, 5);
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeUndefined();
     });
   });
@@ -1173,7 +1181,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const box = spawnBox(scene, 0, 0, 0);
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeDefined();
       if (!hit) throw new Error('expected hit');
 
@@ -1197,7 +1205,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const camera = spawnPerspectiveCamera(scene.world, 5);
       spawnBox(scene, 0, 0, 0, 0); // pickable disabled
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit).toBeUndefined();
     });
 
@@ -1207,7 +1215,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBox(scene, 0, 0, 0, 0); // closer but not pickable -> skipped
       const farPickable = spawnBox(scene, 0, 0, -10, 1); // farther but pickable -> selected
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit?.entity).toBe(farPickable);
     });
   });
@@ -1218,7 +1226,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const camera = spawnOrthographicCamera(scene.world, 5);
       const box = spawnBox(scene, 0, 0, 0);
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit?.entity).toBe(box);
     });
 
@@ -1228,7 +1236,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBox(scene, 0, 0, 0); // box at world origin, ortho span [-5,5]
 
       // top-left corner maps to world (-5, +5): far outside the unit box at origin
-      const hit = runPick(scene.world, scene.assets, camera, 0, 0, VP, VP);
+      const hit = runPick(scene.world, camera, 0, 0, VP, VP);
       expect(hit).toBeUndefined();
     });
   });
@@ -1242,9 +1250,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
       spawnBox(scene, 0, 0, 0);
 
-      expect(() => runPick(scene.world, scene.assets, notACamera, VP / 2, VP / 2, VP, VP)).toThrow(
-        PickError,
-      );
+      expect(() => runPick(scene.world, notACamera, VP / 2, VP / 2, VP, VP)).toThrow(PickError);
     });
 
     it('the PickError carries .code / .expected / .hint / .detail', () => {
@@ -1254,7 +1260,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       try {
-        runPick(scene.world, scene.assets, notACamera, VP / 2, VP / 2, VP, VP);
+        runPick(scene.world, notACamera, VP / 2, VP / 2, VP, VP);
         throw new Error('expected PickError');
       } catch (e) {
         expect(e).toBeInstanceOf(PickError);
@@ -1274,10 +1280,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBox(scene, 0, 0, 0);
 
       // off-screen coordinates: must not throw and must not produce a NaN-driven hit
-      expect(() => runPick(scene.world, scene.assets, camera, -100, -100, VP, VP)).not.toThrow();
-      expect(() =>
-        runPick(scene.world, scene.assets, camera, VP + 999, VP + 999, VP, VP),
-      ).not.toThrow();
+      expect(() => runPick(scene.world, camera, -100, -100, VP, VP)).not.toThrow();
+      expect(() => runPick(scene.world, camera, VP + 999, VP + 999, VP, VP)).not.toThrow();
     });
 
     it('sanitizes NaN / Infinity screen coordinates (no throw, defined result)', () => {
@@ -1285,10 +1289,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const camera = spawnPerspectiveCamera(scene.world, 5);
       spawnBox(scene, 0, 0, 0);
 
-      expect(() => runPick(scene.world, scene.assets, camera, Number.NaN, 0, VP, VP)).not.toThrow();
-      expect(() =>
-        runPick(scene.world, scene.assets, camera, Number.POSITIVE_INFINITY, 0, VP, VP),
-      ).not.toThrow();
+      expect(() => runPick(scene.world, camera, Number.NaN, 0, VP, VP)).not.toThrow();
+      expect(() => runPick(scene.world, camera, Number.POSITIVE_INFINITY, 0, VP, VP)).not.toThrow();
     });
   });
 
@@ -1301,9 +1303,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     // closure itself is what makes `pnpm run typecheck` fail if PickHit drifts.
     // Hoisting the closure to module scope keeps the typecheck signal without a
     // placeholder runtime assertion (feat-20260608-ci-time-cut).
-    const _pickHitTypeProbe = (world: World, assets: AssetRegistry, cam: EntityHandle): void => {
+    const _pickHitTypeProbe = (world: World, cam: EntityHandle): void => {
       // no `as` cast: pick is correctly typed as PickHit | undefined
-      const hit = pick(world, assets, cam, 0, 0, VP, VP);
+      const hit = pick(world, cam, 0, 0, VP, VP);
       if (hit) {
         const e: EntityHandle = hit.entity;
         const d: number = hit.distance;
@@ -1317,7 +1319,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         void hit.uv;
       }
       // PickHit assignability sanity (no cast required)
-      const explicit: PickHit | undefined = pick(world, assets, cam, 1, 1, VP, VP);
+      const explicit: PickHit | undefined = pick(world, cam, 1, 1, VP, VP);
       void explicit;
     };
     void _pickHitTypeProbe;
@@ -1349,7 +1351,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .unwrap();
 
       // Centre ray (down -Z) misses the world-shifted child.
-      expect(runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP)).toBeUndefined();
+      expect(runPick(scene.world, camera, VP / 2, VP / 2, VP, VP)).toBeUndefined();
     });
 
     it('picks a child box whose world position lands back on the ray', () => {
@@ -1369,7 +1371,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         )
         .unwrap();
 
-      const hit = runPick(scene.world, scene.assets, camera, VP / 2, VP / 2, VP, VP);
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
       expect(hit?.entity).toBe(child);
     });
   });
@@ -1573,7 +1575,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         mirror: 'Children',
         field: 'entities',
         exclusive: true,
-        linkedSpawn: false,
+        linkedSpawn: true,
       });
     });
 
@@ -1743,14 +1745,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // packages/ecs/src/scene-instance-container.ts; this file is the red phase.
 
   // M3 ECS-fication: scene-instance container API replaced; tests use
-  // world.instantiateScene + registerSceneAsset (allocManagedRef + toUnmanaged)
+  // world.instantiateScene + registerSceneAsset (allocUniqueRef + toShared)
   // and read mapping via the SceneInstance component on the synthetic root.
   // SceneInstance schema must be locally registered so resolveComponent finds
   // it during instantiateScene (matches the runtime schema definition).
   defineComponent('SceneInstance', {
-    source: { type: 'handle<SceneAsset>' },
+    source: { type: 'shared<SceneAsset>' },
     mapping: { type: 'array<entity>' },
-    state: { type: 'ref<SceneInstanceState>' },
+    state: { type: 'unique<SceneInstanceState>' },
   });
 
   function localId(n: number): LocalEntityId {
@@ -1761,9 +1763,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return { kind: 'scene', entities: nodes };
   }
 
-  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'unmanaged'> {
-    const managed = world.allocManagedRef('SceneAsset', asset);
-    return toUnmanaged<'SceneAsset'>(managed as unknown as number);
+  function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
+    return world.allocSharedRef('SceneAsset', asset);
   }
 
   function firstNodeEntity(world: World, root: EntityHandle): EntityHandle {
@@ -2017,7 +2018,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Old 5-field schema { clip, time, speed, paused, looping } replaced
   // by 6-field SoA inline arrays:
-  //   clips:   'array<handle<AnimationClip>, 4>'   (default all-zero Uint32Array(4))
+  //   clips:   'array<shared<AnimationClip>, 4>'   (default all-zero Uint32Array(4))
   //   times:   'array<f32, 4>'                      (default all-zero Float32Array(4))
   //   weights: 'array<f32, 4>'                      (default all-zero Float32Array(4))
   //   speeds:  'array<f32, 4>'                      (layer-2 default [1,1,1,1] — every slot plays at 1x)
@@ -2034,7 +2035,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const schema = AnimationPlayer.schema as Record<string, unknown>;
       expect(Object.keys(schema).length).toBe(6);
       expect(schema).toEqual({
-        clips: 'array<handle<AnimationClip>, 4>',
+        clips: 'array<shared<AnimationClip>, 4>',
         times: 'array<f32, 4>',
         weights: 'array<f32, 4>',
         speeds: 'array<f32, 4>',
@@ -2043,9 +2044,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
     });
 
-    it('AnimationPlayer.schema.clips is array<handle<AnimationClip>, 4> (SoA keyword)', () => {
+    it('AnimationPlayer.schema.clips is array<shared<AnimationClip>, 4> (SoA keyword)', () => {
       expect((AnimationPlayer.schema as Record<string, unknown>).clips).toBe(
-        'array<handle<AnimationClip>, 4>',
+        'array<shared<AnimationClip>, 4>',
       );
     });
 
@@ -2134,10 +2135,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           component: AnimationPlayer,
           data: {
             clips: [
-              toUnmanaged<'AnimationClip'>(7),
-              toUnmanaged<'AnimationClip'>(3),
-              0 as Handle<'AnimationClip', 'unmanaged'>,
-              0 as Handle<'AnimationClip', 'unmanaged'>,
+              toShared<'AnimationClip'>(7),
+              toShared<'AnimationClip'>(3),
+              0 as Handle<'AnimationClip', 'shared'>,
+              0 as Handle<'AnimationClip', 'shared'>,
             ],
             times: new Float32Array([0, 1.5, 0, 0]),
             weights: new Float32Array([0.7, 0.3, 0, 0]),
@@ -2155,8 +2156,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         paused: boolean;
         looping: boolean;
       };
-      expect(ap.clips[0]).toBe(toUnmanaged<'AnimationClip'>(7));
-      expect(ap.clips[1]).toBe(toUnmanaged<'AnimationClip'>(3));
+      expect(ap.clips[0]).toBe(toShared<'AnimationClip'>(7));
+      expect(ap.clips[1]).toBe(toShared<'AnimationClip'>(3));
       expect(ap.clips[2]).toBe(0);
       expect(ap.clips[3]).toBe(0);
       expect(ap.times[0]).toBe(0);
@@ -2208,8 +2209,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //        refactoring — every field value must stay byte-identical)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('camera factory 21-field snapshot (w14 AC-07 invariant)', () => {
-    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 21 fields match reference', () => {
+  describe('camera factory 22-field snapshot (w14 AC-07 invariant)', () => {
+    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 22 fields match reference', () => {
       const pod = perspective({ fov: Math.PI / 3, aspect: 16 / 9 });
       // Perspective quartet — caller-supplied
       expect(pod.fov).toBeCloseTo(Math.PI / 3, 6);
@@ -2238,6 +2239,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(pod.clearG).toBe(0);
       expect(pod.clearB).toBe(0);
       expect(pod.clearA).toBe(1);
+      // aspect-sync opt-out default (feat-20260617 / M3)
+      expect(pod.autoAspect).toBe(true);
     });
 
     it('perspective({ fov: 45, aspect: 4/3, near: 0.01, far: 1000 }) — explicit overrides, rest defaults', () => {
@@ -2261,7 +2264,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
     });
 
-    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 21 fields match reference', () => {
+    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 22 fields match reference', () => {
       const pod = orthographic({ left: -10, right: 10, bottom: -10, top: 10 });
       // Ortho bounds — caller-supplied
       expect(pod.left).toBe(-10);
@@ -2289,6 +2292,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(pod.clearG).toBe(0);
       expect(pod.clearB).toBe(0);
       expect(pod.clearA).toBe(1);
+      // aspect-sync opt-out default (feat-20260617 / M3): the sidecar only
+      // touches perspective cameras, but the column default is shared.
+      expect(pod.autoAspect).toBe(true);
     });
 
     it('orthographic({ ..., near: -1, far: 1 }) — explicit near/far overrides', () => {
@@ -2305,12 +2311,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(pod.tonemap).toBe(TONEMAP_NONE);
     });
 
-    it('perspective + orthographic 21-field counts (21 Camera columns)', () => {
+    it('perspective + orthographic 22-field counts (22 Camera columns)', () => {
       const p = perspective({ fov: 60, aspect: 4 / 3 });
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
-      // Both return exactly 21 fields (17 pre-clear + 4 clear-color quartet)
-      expect(Object.keys(p).length).toBe(21);
-      expect(Object.keys(o).length).toBe(21);
+      // Both return exactly 22 fields (17 pre-clear + 4 clear-color quartet +
+      // autoAspect bool column, feat-20260617 / M3).
+      expect(Object.keys(p).length).toBe(22);
+      expect(Object.keys(o).length).toBe(22);
     });
   });
 
@@ -2319,11 +2326,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // ────────────────────────────────────────────────────────────────────────────
 
   describe('Camera.fields reflection (w14 AC-07 SSOT)', () => {
-    it('Camera.fields has exactly 21 keys matching the Camera column set', () => {
+    it('Camera.fields has exactly 22 keys matching the Camera column set', () => {
       const keys = Object.keys(Camera.fields).sort();
       expect(keys).toEqual([
         'antialias',
         'aspect',
+        'autoAspect',
         'bloom',
         'bloomBlurRadius',
         'bloomIntensity',
@@ -2346,9 +2354,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ]);
     });
 
-    it("every Camera.fields entry has type === 'f32'", () => {
+    it("every Camera.fields entry has type === 'f32' except autoAspect (bool)", () => {
       for (const key of Object.keys(Camera.fields) as Array<keyof typeof Camera.fields>) {
-        expect(Camera.fields[key].type).toBe('f32');
+        const expected = key === 'autoAspect' ? 'bool' : 'f32';
+        expect(Camera.fields[key].type).toBe(expected);
       }
     });
 
@@ -2380,6 +2389,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(d.clearG.default).toBe(0);
       expect(d.clearB.default).toBe(0);
       expect(d.clearA.default).toBe(1);
+      // aspect-sync opt-out default (feat-20260617 / M3).
+      expect(d.autoAspect.default).toBe(true);
       // Perspective quartet defaults intentionally absent (OOS-5).
       expect(d.fov.default).toBeUndefined();
       expect(d.aspect.default).toBeUndefined();
@@ -2408,6 +2419,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         clearG: 0,
         clearB: 0,
         clearA: 1,
+        autoAspect: true,
       });
     });
 
@@ -2612,12 +2624,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(pod.exposure).toBeCloseTo(1.0, 6);
     });
 
-    it('perspective return value has all 21 Camera fields', () => {
+    it('perspective return value has all 22 Camera fields', () => {
       const pod = perspective({ fov: 60, aspect: 4 / 3 });
       const keys = Object.keys(pod).sort();
       expect(keys).toEqual([
         'antialias',
         'aspect',
+        'autoAspect',
         'bloom',
         'bloomBlurRadius',
         'bloomIntensity',
@@ -2777,19 +2790,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('MeshRenderer spawn with explicit materials array — round-trip (w8)', () => {
     it('spawn with explicit materials array preserves the handle values as Uint32Array', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
 
-      const matHandle = assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [1, 0, 0, 1],
-        } as const)
-        .unwrap();
+      const matHandle = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [1, 0, 0, 1],
+      } as never);
 
       expect(matHandle).toBeGreaterThan(0);
 
@@ -2803,26 +2809,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('spawn with multiple materials round-trips Uint32Array', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
-        { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
-      );
 
-      const m0 = assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [1, 0, 0, 1],
-        } as const)
-        .unwrap();
-      const m1 = assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [0, 1, 0, 1],
-        } as const)
-        .unwrap();
+      const m0 = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [1, 0, 0, 1],
+      } as never);
+      const m1 = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [0, 1, 0, 1],
+      } as never);
 
       const e = world.spawn({ component: MeshRenderer, data: { materials: [m0, m1] } }).unwrap();
       const row = world.get(e, MeshRenderer).unwrap();
@@ -3415,30 +3412,26 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         createDefaultLoaderRegistry(),
       );
 
-      const matHandle = assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [1, 0, 0, 1],
-        } as const)
-        .unwrap();
+      const matHandle = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [1, 0, 0, 1],
+      } as never);
 
-      const meshHandle = assets
-        .register({
-          kind: 'mesh',
-          vertices: new Float32Array(4 * 12),
-          indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-          attributes: { position: new Float32Array(4 * 3) },
-          submeshes: [
-            {
-              indexOffset: 0,
-              indexCount: 6,
-              vertexCount: 4,
-              topology: 'triangle-list' as const,
-            },
-          ],
-        } as never)
-        .unwrap();
+      const meshHandle = world.allocSharedRef('MeshAsset', {
+        kind: 'mesh',
+        vertices: new Float32Array(4 * 12),
+        indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+        attributes: { position: new Float32Array(4 * 3) },
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 6,
+            vertexCount: 4,
+            topology: 'triangle-list' as const,
+          },
+        ],
+      } as never);
 
       world.spawn(
         { component: Transform, data: {} },
@@ -3463,22 +3456,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         createDefaultLoaderRegistry(),
       );
 
-      const meshHandle = assets
-        .register({
-          kind: 'mesh',
-          vertices: new Float32Array(4 * 12),
-          indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-          attributes: { position: new Float32Array(4 * 3) },
-          submeshes: [
-            {
-              indexOffset: 0,
-              indexCount: 6,
-              vertexCount: 4,
-              topology: 'triangle-list' as const,
-            },
-          ],
-        } as never)
-        .unwrap();
+      const meshHandle = world.allocSharedRef('MeshAsset', {
+        kind: 'mesh',
+        vertices: new Float32Array(4 * 12),
+        indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+        attributes: { position: new Float32Array(4 * 3) },
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 6,
+            vertexCount: 4,
+            topology: 'triangle-list' as const,
+          },
+        ],
+      } as never);
 
       world.spawn(
         { component: Transform, data: {} },
@@ -3504,30 +3495,26 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         createDefaultLoaderRegistry(),
       );
 
-      const matHandle = assets
-        .register({
-          kind: 'material',
-          shadingModel: 'unlit',
-          baseColor: [1, 0, 0, 1],
-        } as const)
-        .unwrap();
+      const matHandle = world.allocSharedRef('MaterialAsset', {
+        kind: 'material',
+        shadingModel: 'unlit',
+        baseColor: [1, 0, 0, 1],
+      } as never);
 
-      const meshHandle = assets
-        .register({
-          kind: 'mesh',
-          vertices: new Float32Array(4 * 12),
-          indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
-          attributes: { position: new Float32Array(4 * 3) },
-          submeshes: [
-            {
-              indexOffset: 0,
-              indexCount: 6,
-              vertexCount: 4,
-              topology: 'triangle-list' as const,
-            },
-          ],
-        } as never)
-        .unwrap();
+      const meshHandle = world.allocSharedRef('MeshAsset', {
+        kind: 'mesh',
+        vertices: new Float32Array(4 * 12),
+        indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+        attributes: { position: new Float32Array(4 * 3) },
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 6,
+            vertexCount: 4,
+            topology: 'triangle-list' as const,
+          },
+        ],
+      } as never);
 
       world.spawn(
         { component: Transform, data: {} },

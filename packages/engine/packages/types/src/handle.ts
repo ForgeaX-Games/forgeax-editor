@@ -6,12 +6,12 @@
 // file (charter F1 single-entry indexability).
 //
 // Contents (charter P4 consistent abstraction - 5 co-located building blocks):
-//   - type Handle<T extends string, M extends 'managed' | 'unmanaged'>
+//   - type Handle<T extends string, M extends 'unique' | 'shared'>
 //     (double-axis phantom brand on top of `number`)
-//   - type ManagedHandle<T> / UnmanagedHandle<T> (mode-pinned aliases)
+//   - type UniqueHandle<T> / SharedHandle<T> (mode-pinned aliases)
 //   - interface AssetTagMap (13-member closed map mesh/texture/cube-texture/sampler/material/scene/audio/skin/skeleton/animation-clip/shader/font/render-pipeline)
 //   - type TagOf<T extends Asset> (distributive conditional - 13+1 never tail)
-//   - function toManaged<T>(raw) / toUnmanaged<T>(raw) (brand creation factories)
+//   - function toUnique<T>(raw) / toShared<T>(raw) (brand creation factories)
 //   - function unwrapHandle<T,M>(h) (brand removal helper - cast inverse)
 //
 // The single `as Handle<T, M>` cast inside each factory is the brand-creation
@@ -31,8 +31,8 @@ import type { Asset } from './index';
  * Phantom-branded Handle: a `number` carrying two type tags.
  *
  * @typeParam T - asset target tag (string literal, e.g. `'MeshAsset'`)
- * @typeParam M - release mode: `'managed'` (ECS-tracked via ManagedRefStore)
- *   or `'unmanaged'` (external owner, e.g. `AssetRegistry`)
+ * @typeParam M - release mode: `'unique'` (ECS-tracked via UniqueRefStore)
+ *   or `'shared'` (external owner, e.g. `AssetRegistry`)
  *
  * Runtime representation is a u32 number so the GPU upload path
  * (`GPUBuffer.writeBuffer(slot, ...)`) keeps zero-cost passthrough; only the
@@ -44,52 +44,53 @@ import type { Asset } from './index';
  * `Handle<'TextureAsset', M>` and vice versa (the brand `target` field
  * differs).
  *
- * Cross-mode rejection: `Handle<T, 'managed'>` is not assignable to
- * `Handle<T, 'unmanaged'>` and vice versa (the brand `mode` field differs);
+ * Cross-mode rejection: `Handle<T, 'unique'>` is not assignable to
+ * `Handle<T, 'shared'>` and vice versa (the brand `mode` field differs);
  * this is the TS compile-time wall that prevents accidentally feeding a
- * managed handle to a registry that owns its own release lifecycle (charter
+ * unique-mode handle to a registry that owns its own release lifecycle (charter
  * P3 explicit failure red line; tests live in
  * `packages/types/src/__tests__/handle-brand.test-d.ts` and
  * `packages/ecs/src/__tests__/handle.test-d.ts`).
  *
  * AI users do not write `as Handle<...>` - handles come from registry
  * factories (`engine.assets.register<T>(asset).unwrap()` produces
- * `Handle<TagOf<T>, 'unmanaged'>`; `world.managedRefs.alloc<T>(value)`
- * produces `Handle<T, 'managed'>`). The only `as Handle` literal in the
- * codebase is the brand-creation cast inside `toManaged` / `toUnmanaged`
+ * `Handle<TagOf<T>, 'shared'>`; `world.uniqueRefs.alloc<T>(value)`
+ * produces `Handle<T, 'unique'>` after M2). The only `as Handle` literal in the
+ * codebase is the brand-creation cast inside `toUnique` / `toShared`
  * below (AC-01 exemption).
  */
-export type Handle<T extends string, M extends 'managed' | 'unmanaged'> = number & {
+export type Handle<T extends string, M extends 'unique' | 'shared'> = number & {
   readonly __handle: { readonly target: T; readonly mode: M };
 };
 
 /**
- * Convenience alias - managed-mode handle for asset target `T`.
+ * Convenience alias - unique-mode handle for asset target `T`.
  *
- * Intended for ECS-internal consumption (managed-ref-store.ts column slot
- * read sites). The `@forgeax/engine-ecs` barrel does NOT re-export this
- * alias name (AC-15 grep gate - keeps the AI-facing surface narrow);
- * callers outside ecs continue to write `Handle<T, 'managed'>` literally.
+ * Intended for ECS-internal consumption (column slot read sites in the
+ * unique-ref store, M2 rename). The `@forgeax/engine-ecs` barrel does NOT
+ * re-export this alias name (AC-15 grep gate - keeps the AI-facing surface
+ * narrow); callers outside ecs continue to write `Handle<T, 'unique'>`
+ * literally.
  *
- * Schema vocab `'ref<T>'` derives the column field type to this alias via
+ * Schema vocab `'unique<T>'` derives the column field type to this alias via
  * `FieldValueType<T>` conditional inference (see
  * `packages/ecs/src/component.ts`).
  */
-export type ManagedHandle<T extends string> = Handle<T, 'managed'>;
+export type UniqueHandle<T extends string> = Handle<T, 'unique'>;
 
 /**
- * Convenience alias - unmanaged-mode handle for asset target `T`.
+ * Convenience alias - shared-mode handle for asset target `T`.
  *
- * Mirrors `ManagedHandle<T>` for the external-owner side; surfaces on
+ * Mirrors `UniqueHandle<T>` for the refcounted-owner side; surfaces on
  * `AssetRegistry.register<T>` return signatures and `MeshFilter.assetHandle`
  * column type. Re-exported by the `@forgeax/engine-ecs` barrel (alongside
  * `Handle`) so AI users importing from ecs see the alias - this remains
- * subordinate to writing `Handle<T, 'unmanaged'>` literally.
+ * subordinate to writing `Handle<T, 'shared'>` literally.
  *
- * Schema vocab `'handle<T>'` derives the column field type to this alias
- * via `FieldValueType<T>` conditional inference.
+ * Schema vocab `'shared<T>'` derives the column field type to this alias
+ * via `FieldValueType<T>` conditional inference (feat-20260614 M5).
  */
-export type UnmanagedHandle<T extends string> = Handle<T, 'unmanaged'>;
+export type SharedHandle<T extends string> = Handle<T, 'shared'>;
 
 /**
  * Asset.kind tag map - 13-member closed map keying each Asset variant
@@ -99,7 +100,7 @@ export type UnmanagedHandle<T extends string> = Handle<T, 'unmanaged'>;
  * `target` tag from an Asset variant TS type at register / inference time;
  * AI users adding a new Asset variant minor-add the corresponding
  * `kind -> 'XxxAsset'` row here so that `register<NewVariant>(asset)` returns
- * the correct `Handle<'XxxAsset', 'unmanaged'>` automatically (this map is
+ * the correct `Handle<'XxxAsset', 'shared'>` automatically (this map is
  * the single must-edit point per Asset addition - charter F1 single-entry
  * indexability).
  *
@@ -153,46 +154,47 @@ export type TagOf<T extends Asset> = T extends { kind: infer K }
   : never;
 
 /**
- * Construct a `Handle<T, 'managed'>` from a raw u32. Brand-creation
- * structural cast - the `as Handle<T, 'managed'>` literal here is the
+ * Construct a `Handle<T, 'unique'>` from a raw u32. Brand-creation
+ * structural cast - the `as Handle<T, 'unique'>` literal here is the
  * AC-01 exemption single point of brand creation (D-7); all other call
  * sites must route through this factory.
  *
- * Used by `ManagedRefStore.alloc<T>(value)` to brand fresh handles that
- * the ECS will track via the managed-ref release loop. AI users typically
+ * Used by `World.allocUniqueRef<T>(value)` (M2 rename of allocUniqueRef)
+ * to brand fresh handles that the ECS will track via the per-row release
+ * loop. AI users typically
  * do not call this directly - it is the brand-creation primitive that the
  * ecs / runtime layers wrap.
  */
-export function toManaged<T extends string>(raw: number): Handle<T, 'managed'> {
-  return raw as Handle<T, 'managed'>;
+export function toUnique<T extends string>(raw: number): Handle<T, 'unique'> {
+  return raw as Handle<T, 'unique'>;
 }
 
 /**
- * Construct a `Handle<T, 'unmanaged'>` from a raw u32. Brand-creation
- * structural cast - the `as Handle<T, 'unmanaged'>` literal here is the
+ * Construct a `Handle<T, 'shared'>` from a raw u32. Brand-creation
+ * structural cast - the `as Handle<T, 'shared'>` literal here is the
  * AC-01 exemption single point of brand creation (D-7).
  *
  * Used by `AssetRegistry.register<T>(asset).unwrap()` to brand the returned handle
- * with `Handle<TagOf<T>, 'unmanaged'>`, and by builtin handle constants
+ * with `Handle<TagOf<T>, 'shared'>`, and by builtin handle constants
  * (`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_ROOM_CUBE` / `BUILTIN_HANDLE_*`)
  * to brand compile-time u32 literals without caller-side `as unknown as`
  * casts (AC-05).
  */
-export function toUnmanaged<T extends string>(raw: number): Handle<T, 'unmanaged'> {
-  return raw as Handle<T, 'unmanaged'>;
+export function toShared<T extends string>(raw: number): Handle<T, 'shared'> {
+  return raw as Handle<T, 'shared'>;
 }
 
 /**
  * Remove the `Handle<T, M>` brand and recover the raw u32 carried inside.
- * Brand-removal helper - the inverse of `toManaged` / `toUnmanaged`.
+ * Brand-removal helper - the inverse of `toUnique` / `toShared`.
  *
  * Runtime is identity (the brand `__handle` field is type-only; the
  * underlying number value is unchanged); the helper exists purely to
  * collapse all `as unknown as number` cast sites into a single function so
  * that AC-01 grep can surface stragglers (D-7 / D-8 cast collapse plan).
  *
- * Public on the types barrel (parallel to `toManaged` / `toUnmanaged`):
- * column read sites in managed-ref-store / scene-instance-container,
+ * Public on the types barrel (parallel to `toUnique` / `toShared`):
+ * column read sites in unique-ref-store (M2 rename) / scene-instance-container,
  * AssetRegistry internal `Map<number, ...>` key reads, and any AI-user
  * code that needs to bridge a branded handle to a numeric ABI all call
  * this. AI users on the typical spawn-site / register-site surface
@@ -200,8 +202,23 @@ export function toUnmanaged<T extends string>(raw: number): Handle<T, 'unmanaged
  * stays branded end-to-end), but when a numeric escape is required this
  * is the single sanctioned escape.
  */
-export function unwrapHandle<T extends string, M extends 'managed' | 'unmanaged'>(
+export function unwrapHandle<T extends string, M extends 'unique' | 'shared'>(
   h: Handle<T, M>,
 ): number {
   return h;
 }
+
+/**
+ * Slot boundary between the builtin tier and the user tier (feat-20260614 M6
+ * D-15 / D-16). Builtin asset handles (the 5 process-static meshes:
+ * HANDLE_CUBE=1 .. HANDLE_NINESLICE_QUAD=5) occupy slots `[1, BUILTIN_BASE)`;
+ * user-tier handles minted by `World.sharedRefs.alloc` start at `BUILTIN_BASE`.
+ *
+ * Defined here in `@forgeax/engine-types` — the single dependency shared by
+ * both `@forgeax/engine-ecs` (SharedRefStore `nextSlot` init + builtin-slot
+ * fail-fast) and `@forgeax/engine-runtime` (BuiltinAssetRegistry resolve
+ * dispatch + AssetRegistry index) — so the boundary is one named constant with
+ * no cross-package circular dependency. Value 1024 is the historic
+ * `FIRST_USER_HANDLE` literal, promoted to the shared SSOT.
+ */
+export const BUILTIN_BASE = 1024;

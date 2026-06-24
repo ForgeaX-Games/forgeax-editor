@@ -151,7 +151,7 @@ function materialIrToPod(mat: GltfMaterialIr): MaterialAsset {
 
 function gltfDocToSceneAsset(
   doc: GltfDoc,
-  matHandle: Handle<'MaterialAsset', 'unmanaged'>,
+  matHandle: Handle<'MaterialAsset', 'shared'>,
 ): SceneAsset {
   const sceneIr: GltfSceneIr | undefined = doc.scenes[doc.defaultSceneIndex];
   if (sceneIr === undefined) throw new Error('GltfDoc.scenes[default] missing');
@@ -212,8 +212,9 @@ function gltfDocToSceneAsset(
 }
 
 describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => {
-  it('(a) loadByGuid<SceneAsset>(sceneGuid) infers Result<Handle<SceneAsset>, AssetError>', async () => {
+  it('(a) loadByGuid<SceneAsset>(sceneGuid) infers Result<SceneAsset, AssetError>', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const world = new World();
     const meshGuid = findGuid('mesh');
     const matGuid = findGuid('material');
     const sceneGuid = findGuid('scene');
@@ -233,31 +234,38 @@ describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => 
     expect(matIr).toBeDefined();
     if (meshIr === undefined || matIr === undefined) return;
 
-    const meshHandle = reg.registerWithGuid<MeshAsset>(meshGuid, meshIrToPod(meshIr));
-    const matHandle = reg.registerWithGuid<MaterialAsset>(matGuid, materialIrToPod(matIr));
+    // feat-20260614 M8 (D-17): registerWithGuid deleted. catalog(guid, payload)
+    // feeds loadByGuid; world.allocSharedRef mints the column handle the local
+    // scene builder embeds in MeshRenderer.materials.
+    const meshPod = meshIrToPod(meshIr);
+    const matPod = materialIrToPod(matIr);
+    reg.catalog<MeshAsset>(meshGuid, meshPod);
+    reg.catalog<MaterialAsset>(matGuid, matPod);
+    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', matPod);
     const sceneAsset = gltfDocToSceneAsset(docResult.value, matHandle);
-    reg.registerWithGuid<SceneAsset>(sceneGuid, sceneAsset);
+    reg.catalog<SceneAsset>(sceneGuid, sceneAsset);
 
     // AC-07 surface: no `as` cast in this test source. The generic on
-    // loadByGuid is the only place where the type is mentioned. The
-    // explicit Result<Handle<SceneAsset>, AssetError> annotation below is
-    // the AI-user contract the test asserts: TypeScript must accept it
-    // without widening or unsafe assignment.
+    // loadByGuid is the only place where the type is mentioned. The explicit
+    // Result<SceneAsset, AssetError | ...> annotation below is the AI-user
+    // contract the test asserts (D-17: loadByGuid returns the payload, not a
+    // handle): TypeScript must accept it without widening or unsafe assignment.
     const sceneRes: Result<
-      Handle<'SceneAsset', 'unmanaged'>,
+      SceneAsset,
       AssetError | ImageError | RhiError
     > = await reg.loadByGuid<SceneAsset>(sceneGuid);
     expect(sceneRes.ok).toBe(true);
     if (!sceneRes.ok) return;
+    expect(sceneRes.value.kind).toBe('scene');
 
-    // Sanity: the mesh + material handles resolved on the same fast-path.
+    // Sanity: the mesh + material payloads resolve on the same fast-path.
     const meshRes: Result<
-      Handle<'MeshAsset', 'unmanaged'>,
+      MeshAsset,
       AssetError | ImageError | RhiError
     > = await reg.loadByGuid<MeshAsset>(meshGuid);
     expect(meshRes.ok).toBe(true);
     if (meshRes.ok) {
-      expect(meshRes.value).toBe(meshHandle);
+      expect(meshRes.value).toBe(meshPod);
     }
   });
 
@@ -280,18 +288,23 @@ describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => 
     const matIr = docResult.value.materials[0];
     if (meshIr === undefined || matIr === undefined) return;
 
-    reg.registerWithGuid<MeshAsset>(meshGuid, meshIrToPod(meshIr));
-    const matHandle = reg.registerWithGuid<MaterialAsset>(matGuid, materialIrToPod(matIr));
-    const sceneAsset = gltfDocToSceneAsset(docResult.value, matHandle);
-    reg.registerWithGuid<SceneAsset>(sceneGuid, sceneAsset);
-
     const world = new World();
+
+    // D-17: catalog feeds loadByGuid; allocSharedRef mints the material handle.
+    reg.catalog<MeshAsset>(meshGuid, meshIrToPod(meshIr));
+    const matPod = materialIrToPod(matIr);
+    reg.catalog<MaterialAsset>(matGuid, matPod);
+    const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', matPod);
+    const sceneAsset = gltfDocToSceneAsset(docResult.value, matHandle);
+    reg.catalog<SceneAsset>(sceneGuid, sceneAsset);
 
     const sceneRes = await reg.loadByGuid<SceneAsset>(sceneGuid);
     expect(sceneRes.ok).toBe(true);
     if (!sceneRes.ok) return;
 
-    const instRes = reg.instantiate<SceneAsset>(sceneRes.value, world);
+    // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+    const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+    const instRes = reg.instantiate<SceneAsset>(sceneHandle, world);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
 

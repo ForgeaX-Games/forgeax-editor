@@ -273,6 +273,63 @@ export function derive(schema: readonly ParamSchemaEntry[]): DeriveOutput {
   };
 }
 
+/**
+ * The three user-region material texture fields whose handles flow through the
+ * paramSchema-driven extract filter (`validateTextureHandle`). They map to the
+ * fixed `@group(1) @binding(2/4/6)` slots in the standard material BGL.
+ *
+ * `emissiveTexture` / `occlusionTexture` are deliberately EXCLUDED: they live
+ * in the engine-managed lightmap injection region (`appendInjection`,
+ * bindings 14..17), are sampled by `default-standard-pbr` without a schema
+ * entry, and are never filtered by `validateTextureHandle`. Including them
+ * would false-positive the engine's own PBR shader.
+ */
+const USER_REGION_TEXTURE_FIELDS: readonly string[] = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+];
+
+/** Strip `//` line comments and block comments before scanning WGSL source. */
+function stripWgslComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+/**
+ * Detect user-region material textures a shader actually `textureSample`s but
+ * its paramSchema fails to declare as a texture entry.
+ *
+ * This is the runtime (register-time) counterpart of the build-time superset
+ * gate (`compareParamSchemaSuperset`): user shaders registered directly via
+ * `ShaderRegistry.registerMaterialShader` bypass the vite-plugin-shader
+ * reflection path, so an under-declared schema would otherwise let the extract
+ * stage's `validateTextureHandle` silently drop the sampled texture's handle
+ * and fall back to the default white texture (charter P3 violation — the bug
+ * that turned the LearnOpenGL 4.3 blending demo's grass + windows opaque white;
+ * see docs/handover/2026-06-19-blending-transparency-regression-bisect.md).
+ *
+ * Returns the field names that are sampled-but-undeclared (empty = consistent).
+ * Scan is name-based on the WGSL var passed as the first `textureSample*`
+ * argument; comments are stripped first so a commented-out sample never trips
+ * the check. Only the three `USER_REGION_TEXTURE_FIELDS` participate, so a
+ * shader that merely *declares* the standard binding layout without sampling it
+ * (e.g. an outline / depth-viz shader reusing the PBR BGL) is not flagged.
+ */
+export function findUndeclaredSampledTextures(
+  wgslSource: string,
+  schema: readonly ParamSchemaEntry[],
+): readonly string[] {
+  const declared = derive(schema).textureFieldNames;
+  const clean = stripWgslComments(wgslSource);
+  const sampleRe = /textureSample[A-Za-z]*\(\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+  const sampled = new Set<string>();
+  for (let m = sampleRe.exec(clean); m !== null; m = sampleRe.exec(clean)) {
+    const name = m[1];
+    if (name !== undefined) sampled.add(name);
+  }
+  return USER_REGION_TEXTURE_FIELDS.filter((f) => sampled.has(f) && !declared.has(f));
+}
+
 function largestNumericTail(fields: readonly UboFieldLayout[]): number {
   let tail = 0;
   for (const f of fields) {

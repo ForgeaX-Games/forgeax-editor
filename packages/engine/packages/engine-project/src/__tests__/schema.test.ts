@@ -1,5 +1,5 @@
 // schema.test.ts — w2: GameProjectSchema + GuidString refinement tests
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { GameProjectSchema, GuidString } from '../schema.js';
 
 // ── valid full forge.json ──────────────────────────────────────────────────

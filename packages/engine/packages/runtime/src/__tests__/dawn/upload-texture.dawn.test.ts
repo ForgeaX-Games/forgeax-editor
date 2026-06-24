@@ -27,14 +27,14 @@
 // is not called (M3-only deferred-upload semantics; M5 wires the device into
 // render-system bootstrap).
 
+import { World } from '@forgeax/engine-ecs';
+import { ok } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-webgpu';
 import type { CubeTextureAsset, DecodedImage, TextureAsset } from '@forgeax/engine-types';
-import { toUnmanaged } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../../asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { createDefaultLoaderRegistry } from '../../wire-default-loaders';
-import { makeMockShaderRegistry } from '../helpers/mock-shader-registry';
+import { resolveAssetHandle } from '../../resolve-asset-handle';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,
@@ -99,7 +99,7 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   it('rejects format=rgba8unorm-srgb + decoded.colorSpace=linear (real GPU path)', async () => {
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm-srgb', 1, 1, 'srgb', false);
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([188, 188, 188, 255]), 1, 1, 'linear', false);
     const res = await store.uploadTexture(handle, pod, decoded);
     expect(res.ok).toBe(false);
@@ -113,7 +113,7 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   it('accepts format=rgba8unorm-srgb + decoded.colorSpace=srgb (1x1 mid-gray byte 188)', async () => {
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm-srgb', 1, 1, 'srgb', false);
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([188, 188, 188, 255]), 1, 1, 'srgb', false);
     const res = await store.uploadTexture(handle, pod, decoded);
     expect(res.ok).toBe(true);
@@ -122,16 +122,16 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
   it('accepts format=rgba8unorm + decoded.colorSpace=linear (1x1 linear byte 128)', async () => {
     const store = new GpuResourceStore();
     const pod = makeTexture('rgba8unorm', 1, 1, 'linear', false);
-    const handle = toUnmanaged<'TextureAsset'>(1);
+    const handle = toShared<'TextureAsset'>(1);
     const decoded = decodedFromBytes(new Uint8Array([128, 64, 192, 255]), 1, 1, 'linear', false);
     const res = await store.uploadTexture(handle, pod, decoded);
     expect(res.ok).toBe(true);
   });
 
-  it('asset-not-found path: registry get against unregistered handle (real GPU)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
-    const fake = toUnmanaged<'TextureAsset'>(0xdeadbeef);
-    const podRes = reg.get<TextureAsset>(fake);
+  it('asset-not-found path: resolve against unregistered handle (real GPU)', () => {
+    const world = new World();
+    const fake = toShared<'TextureAsset'>(0xdeadbeef);
+    const podRes = resolveAssetHandle<TextureAsset>(world, fake);
     expect(podRes.ok).toBe(false);
     if (podRes.ok) return;
     expect(podRes.error.code).toBe('asset-not-found');
@@ -152,8 +152,8 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
     if (!deviceResult.ok) return;
     const device = deviceResult.value;
 
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
     const store = new GpuResourceStore();
+    const world = new World();
     // Literal configureGpuDevice required -- this is the anti-short-circuit
     // guard verified by acceptanceCheck grep gate. Wires the device + register
     // relay onto the store (D-3/D-8).
@@ -161,7 +161,7 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
       // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
       device as any,
       undefined,
-      (pod: CubeTextureAsset) => reg.register(pod),
+      (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
       mockCaps,
     );
 
@@ -184,7 +184,7 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
       mipmap: false,
     };
 
-    const handle = reg.register<TextureAsset>(tex).unwrap();
+    const handle = world.allocSharedRef('TextureAsset', tex);
     const decoded = decodedFromBytes(buf, width, height, 'linear', false);
     const res = await store.uploadTexture(handle, tex, decoded);
     expect(res.ok).toBe(true);

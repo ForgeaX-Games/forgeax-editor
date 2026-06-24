@@ -8,11 +8,14 @@
 // reference it in a MaterialPassDescriptor with name='ShadowCaster' and
 // tags={LightMode:'ShadowCaster'}.
 
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances}
+#import forgeax_view::common::{View, Mesh, InstanceData, ShadowCasterCascade, view, shadowCasterCascade, meshes, instances}
 
+// The shadow depth pass binds a position-only vertex buffer (12-float
+// stride, @location(0) only — see pipeline-builder.ts shadow-caster branch),
+// so VsInput must declare only @location(0). A normal input would force a
+// vertex-layout mismatch against the depth pass's buffer layout.
 struct VsInput {
   @location(0) position : vec3<f32>,
-  @location(1) normal   : vec3<f32>,
 };
 
 struct VsOut {
@@ -20,11 +23,24 @@ struct VsOut {
   @location(0) worldPos   : vec3<f32>,
 };
 
+fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
+  switch (layer) {
+    case 0u: { return view.lightViewProj_A; }
+    case 1u: { return view.lightViewProj_B; }
+    case 2u: { return view.lightViewProj_C; }
+    default: { return view.lightViewProj_D; }
+  }
+}
+
 @vertex
 fn vs_main(in : VsInput, @builtin(instance_index) idx : u32) -> VsOut {
   let worldPos = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(in.position, 1.0);
   var out : VsOut;
-  out.clip = view.lightViewProj_A * worldPos;
+  // Per-cascade lightViewProj selection mirrors the built-in
+  // shadow_caster.wgsl so the cutout shadow is correct for cascadeCount > 1
+  // (the shadow pass writes the active cascade index into binding 7 before
+  // each cascade's encoder submit).
+  out.clip = _cascadeLightViewProj(shadowCasterCascade.index) * worldPos;
   out.worldPos = worldPos.xyz;
   return out;
 }

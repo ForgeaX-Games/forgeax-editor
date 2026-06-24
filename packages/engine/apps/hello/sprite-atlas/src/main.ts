@@ -159,7 +159,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     );
     return;
   }
-  const textureHandle = texHandleRes.value;
+  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+  const textureHandle = world.allocSharedRef('TextureAsset', texHandleRes.value);
 
   // Fetch sidecar JSON to extract per-frame regions (charter F2: text channel).
   let sidecarResp: Response;
@@ -194,28 +195,26 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const frameRegions: ReadonlyArray<[number, number, number, number]> =
     sidecar.regions.map((r) => [r.uMin, r.vMin, r.uW, r.vH] as const);
 
-  // Step 4: register sampler (shared across all 4 material handles).
+  // Step 4: mint sampler (shared across all 4 material handles).
   // nearest filtering prevents atlas-edge bleeding (charter P3).
-  const samplerRes = assets.register<SamplerAsset>({
+  const samplerHandle: Handle<'SamplerAsset', 'shared'> = world.allocSharedRef<
+    'SamplerAsset',
+    SamplerAsset
+  >('SamplerAsset', {
     kind: 'sampler',
     magFilter: 'nearest',
     minFilter: 'nearest',
     addressModeU: 'clamp-to-edge',
     addressModeV: 'clamp-to-edge',
   });
-  if (!samplerRes.ok) {
-    console.error('[sprite-atlas] sampler register failed:', samplerRes.error.code);
-    return;
-  }
-  const samplerHandle: Handle<'SamplerAsset', 'unmanaged'> = samplerRes.value;
 
-  // Register 4 MaterialAsset handles (one per walk frame region) using
+  // Mint 4 MaterialAsset handles (one per walk frame region) using
   // the unified pass-based interface (AC-01 / plan-strategy D-1).
   // All share the same atlas texture + sampler but differ in `region`
   // (the static per-frame sub-rectangle). At runtime, SpriteRegionOverride
   // overrides this for the host entity; the 4 base materials are only
-  // registry anchors used by the tick system to compute region slices.
-  const materialHandles: Handle<'MaterialAsset', 'unmanaged'>[] = [];
+  // anchors used by the tick system to compute region slices.
+  const materialHandles: Handle<'MaterialAsset', 'shared'>[] = [];
   for (let i = 0; i < 4; i++) {
     const region = frameRegions[i] ?? [0, 0, 1, 1];
     // feat-20260527 M3 / w10: pass-based sprite material (plan-strategy D-3).
@@ -237,15 +236,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         pivot: [0.5, 0.5],
       },
     };
-    const matRes = assets.register<MaterialAsset>(material);
-    if (!matRes.ok) {
-      console.error(
-        `[sprite-atlas] material register failed (frame ${i}):`,
-        matRes.error.code,
-      );
-      return;
-    }
-    materialHandles.push(matRes.value);
+    materialHandles.push(world.allocSharedRef('MaterialAsset', material));
   }
 
   // Flat regions array for SpriteAnimation.regions: frameCount * 4 floats.

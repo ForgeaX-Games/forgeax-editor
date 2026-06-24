@@ -32,7 +32,8 @@
   "scripts": {
     "build:wasm": "bash build.sh",
     "build": "tsup",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:wasm": "wasm-pack test --node"
   },
   "forgeax": {
     "metrics": {

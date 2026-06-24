@@ -34,8 +34,6 @@ import {
   FixedSizeMismatchError,
   ManagedBufferOutOfBoundsError,
   ManagedBufferShrinkNotSupportedError,
-  ManagedRefDoubleReleaseError,
-  ManagedRefReleasedError,
   RelationshipDetachMismatchError,
   RelationshipMirrorComponentNotRegisteredError,
   RelationshipMirrorFieldTypeMismatchError,
@@ -44,6 +42,8 @@ import {
   SchemaUnsupportedFieldError,
   SpriteAnimationInvalidError,
   StaleEntityError,
+  UniqueRefDoubleReleaseError,
+  UniqueRefReleasedError,
 } from '../errors';
 
 {
@@ -501,14 +501,33 @@ import {
           CYCLIC_DEPENDENCY: 'cyclic-dependency',
           RESOURCE_NOT_FOUND: 'resource-not-found',
         };
-        const headSet = new Set(headMembers.map((m) => M4_RENAME_MAP[m] ?? m));
+        // feat-20260614-ecs-shared-component-and-unique-rename M2/w5: intentional
+        // managed-ref-* -> unique-ref-* error code rename (handle brand
+        // `'managed'` -> `'unique'` cascade). Map head-side managed-ref codes
+        // to their unique-ref counterparts before comparison.
+        const FEAT_20260614_RENAME_MAP: Record<string, string> = {
+          'managed-ref-released': 'unique-ref-released',
+          'managed-ref-double-release': 'unique-ref-double-release',
+        };
+        const applyRenames = (m: string): string =>
+          FEAT_20260614_RENAME_MAP[m] ?? M4_RENAME_MAP[m] ?? m;
+        const headSet = new Set(headMembers.map(applyRenames));
         const currentSet = new Set(currentMembers);
 
         // bug-20260615 spawn-data-unknown-field-fail-fast: AGENTS.md
         // §Error model evolution permits add-only minor evolution. Each
         // intentional addition lists itself here so accidental drift in
         // unrelated diffs still trips the gate.
-        const INTENTIONAL_ADDS = new Set<string>(['spawn-data-unknown-field']);
+        //
+        // feat-20260614-ecs-shared-component-and-unique-rename M3 adds the
+        // two SharedRefStore error codes (companion to the existing
+        // unique-ref-* pair). Intentional add per the same minor-evolution
+        // contract.
+        const INTENTIONAL_ADDS = new Set<string>([
+          'spawn-data-unknown-field',
+          'shared-ref-released',
+          'shared-ref-double-release',
+        ]);
 
         const added: string[] = [];
         const deleted: string[] = [];
@@ -545,17 +564,17 @@ import {
   // ─── from managed-entity-dangling-errors.test.ts ───
   describe('managed-entity-dangling-errors.test.ts', () => {
     describe('w5 — managed error classes', () => {
-      it('ManagedRefReleasedError carries code + hint + detail.handle', () => {
-        const err = new ManagedRefReleasedError(0xdeadbeef, 'MaterialAsset');
-        expect(err.code).toBe('managed-ref-released');
+      it('UniqueRefReleasedError carries code + hint + detail.handle', () => {
+        const err = new UniqueRefReleasedError(0xdeadbeef, 'MaterialAsset');
+        expect(err.code).toBe('unique-ref-released');
         expect(err.hint.length).toBeGreaterThan(0);
         expect(err.detail.handle).toBe(0xdeadbeef);
         expect(err.detail.target).toBe('MaterialAsset');
       });
 
-      it('ManagedRefDoubleReleaseError carries code + hint + detail.handle', () => {
-        const err = new ManagedRefDoubleReleaseError(7, 'MaterialAsset');
-        expect(err.code).toBe('managed-ref-double-release');
+      it('UniqueRefDoubleReleaseError carries code + hint + detail.handle', () => {
+        const err = new UniqueRefDoubleReleaseError(7, 'MaterialAsset');
+        expect(err.code).toBe('unique-ref-double-release');
         expect(err.hint.length).toBeGreaterThan(0);
         expect(err.detail.handle).toBe(7);
         expect(err.detail.target).toBe('MaterialAsset');
@@ -593,8 +612,8 @@ import {
             case 'system-before-unknown':
             case 'system-name-conflict':
             case 'cyclic-injection':
-            case 'managed-ref-released':
-            case 'managed-ref-double-release':
+            case 'unique-ref-released':
+            case 'unique-ref-double-release':
             case 'managed-buffer-out-of-bounds':
             case 'managed-buffer-shrink-not-supported':
             case 'fixed-size-mismatch':
@@ -615,12 +634,15 @@ import {
             case 'remove-essential-component':
             case 'scene-override-type-mismatch':
             case 'spawn-data-unknown-field':
+            case 'shared-ref-released':
+            case 'shared-ref-double-release':
+            case 'builtin-slot-not-owned':
               return code;
             default:
               return assertNever(code);
           }
         }
-        expect(check('managed-ref-released')).toBe('managed-ref-released');
+        expect(check('unique-ref-released')).toBe('unique-ref-released');
         expect(check('managed-buffer-out-of-bounds')).toBe('managed-buffer-out-of-bounds');
       });
     });

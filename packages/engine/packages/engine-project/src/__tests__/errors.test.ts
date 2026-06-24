@@ -1,7 +1,7 @@
 // errors.test.ts — w3: GameProjectError code union exhaustive tests
-import { describe, it, expect } from 'vitest';
-import { GameProjectError } from '../errors.js';
+import { describe, expect, it } from 'vitest';
 import type { GameProjectErrorCode, GameProjectErrorDetail } from '../errors.js';
+import { GameProjectError } from '../errors.js';
 
 // ── helper ───────────────────────────────────────────────────────────────────
 function makeErr(code: GameProjectErrorCode): GameProjectError {
@@ -106,42 +106,39 @@ describe('GameProjectError — detail narrowing per code', () => {
   });
 
   it('forge-parse-failed detail contains path + rawMessage', () => {
-    const _detail: Extract<
-      GameProjectErrorDetail,
-      { path: string; rawMessage: string }
-    > = { path: '/some/forge.json', rawMessage: 'Unexpected token' };
+    const _detail: Extract<GameProjectErrorDetail, { path: string; rawMessage: string }> = {
+      path: '/some/forge.json',
+      rawMessage: 'Unexpected token',
+    };
     expect(_detail.rawMessage).toBe('Unexpected token');
   });
 
   it('forge-schema-invalid detail contains path + zodErrors', () => {
-    const _detail: Extract<
-      GameProjectErrorDetail,
-      { path: string; zodErrors: unknown }
-    > = { path: '/some/forge.json', zodErrors: [] };
+    const _detail: Extract<GameProjectErrorDetail, { path: string; zodErrors: unknown }> = {
+      path: '/some/forge.json',
+      zodErrors: [],
+    };
     expect(_detail.path).toBe('/some/forge.json');
   });
 
   it('forge-unknown-field detail contains path + fieldNames', () => {
-    const _detail: Extract<
-      GameProjectErrorDetail,
-      { path: string; fieldNames: string[] }
-    > = { path: '/some/forge.json', fieldNames: ['scenes'] };
+    const _detail: Extract<GameProjectErrorDetail, { path: string; fieldNames: string[] }> = {
+      path: '/some/forge.json',
+      fieldNames: ['scenes'],
+    };
     expect(_detail.fieldNames).toEqual(['scenes']);
   });
 
   it('forge-guid-malformed detail contains field + rawInput', () => {
-    const _detail: Extract<
-      GameProjectErrorDetail,
-      { field: string; rawInput: string }
-    > = { field: 'defaultScene', rawInput: 'rogue-encampment' };
+    const _detail: Extract<GameProjectErrorDetail, { field: string; rawInput: string }> = {
+      field: 'defaultScene',
+      rawInput: 'rogue-encampment',
+    };
     expect(_detail.rawInput).toBe('rogue-encampment');
   });
 
   it('forge-scene-unresolved detail contains guid:string', () => {
-    const _detail: Extract<
-      GameProjectErrorDetail,
-      { guid: string }
-    > = {
+    const _detail: Extract<GameProjectErrorDetail, { guid: string }> = {
       guid: '15acc839-d847-527c-8284-bfb36d7c50de',
     };
     expect(_detail.guid).toBe('15acc839-d847-527c-8284-bfb36d7c50de');

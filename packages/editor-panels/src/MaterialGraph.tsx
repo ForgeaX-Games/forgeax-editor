@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { bus, dispatch, useDocVersion, useSelection } from '@forgeax/editor-shared';
+import { useTranslation } from '@forgeax/editor-shared/i18n';
 import type { EditorCommand } from '@forgeax/editor-core';
 import {
   type MatGraph, type GraphNode, type NodeKind, type RGB,
@@ -28,6 +29,7 @@ const inputPos = (n: GraphNode, i: number): { x: number; y: number } => ({ x: n.
 const outputPos = (n: GraphNode): { x: number; y: number } => ({ x: n.x + NODE_W, y: n.y + HEAD_H + ROW_H / 2 });
 
 export function MaterialGraphPanel() {
+  const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
   const node = sel !== null ? bus.doc.entities[sel] : undefined;
@@ -37,7 +39,7 @@ export function MaterialGraphPanel() {
   const [, forceDrag] = useState(0);
 
   if (sel === null || !node) {
-    return <div className="panel ed-matgraph" data-testid="panel-matgraph"><h3>Mat Graph</h3><div className="muted mg-empty">选中一个实体以编辑材质图。</div></div>;
+    return <div className="panel ed-matgraph" data-testid="panel-matgraph"><h3>Mat Graph</h3><div className="muted mg-empty">{t('editor.matgraph.empty')}</div></div>;
   }
 
   // Persist the graph; structural edits (applyMat) also evaluate → Material, all
@@ -85,10 +87,10 @@ export function MaterialGraphPanel() {
       <h3>Mat Graph · {node.name}</h3>
       <div className="mg-toolbar">
         {ADDABLE.map((k) => (
-          <button key={k} type="button" className="mg-add" title={`添加 ${KIND_LABEL[k]} 节点`} onClick={() => write(addNode(graph, k, 20, 20 + graph.nodes.length * 8), false)}>+ {KIND_LABEL[k]}</button>
+          <button key={k} type="button" className="mg-add" title={t('editor.matgraph.addNode', { label: KIND_LABEL[k] })} onClick={() => write(addNode(graph, k, 20, 20 + graph.nodes.length * 8), false)}>+ {KIND_LABEL[k]}</button>
         ))}
         <span className="mg-sp" />
-        {result && <span className="mg-out" title="图求值结果"><span className="mg-sw" style={{ background: result.albedo }} />{result.albedo} m{result.metallic.toFixed(2)} r{result.roughness.toFixed(2)}</span>}
+        {result && <span className="mg-out" title={t('editor.matgraph.evalResult')}><span className="mg-sw" style={{ background: result.albedo }} />{result.albedo} m{result.metallic.toFixed(2)} r{result.roughness.toFixed(2)}</span>}
       </div>
 
       <div className="mg-canvas" onClick={() => pending && setPending(null)}>
@@ -107,9 +109,9 @@ export function MaterialGraphPanel() {
           return (
             <div key={n.id} className={`mg-node${n.kind === 'output' ? ' out' : ''}`} style={{ left: n.x, top: n.y, width: NODE_W }}>
               <div className="mg-head" onPointerDown={(e) => startNodeDrag(n.id, e)}>
-                {def.output && <span className={`mg-pin out${pending?.node === n.id ? ' on' : ''}`} title="输出 — 单击后再点输入" onPointerDown={(e) => e.stopPropagation()} onClick={() => onPin(n.id, 'out', 'out')} />}
+                {def.output && <span className={`mg-pin out${pending?.node === n.id ? ' on' : ''}`} title={t('editor.matgraph.outputPin')} onPointerDown={(e) => e.stopPropagation()} onClick={() => onPin(n.id, 'out', 'out')} />}
                 <span className="mg-title">{KIND_LABEL[n.kind]}</span>
-                {n.kind !== 'output' && <span className="mg-del" title="删除节点" onPointerDown={(e) => e.stopPropagation()} onClick={() => write(removeNode(graph, n.id), true)}>×</span>}
+                {n.kind !== 'output' && <span className="mg-del" title={t('editor.matgraph.deleteNode')} onPointerDown={(e) => e.stopPropagation()} onClick={() => write(removeNode(graph, n.id), true)}>×</span>}
               </div>
               {n.kind === 'colorConst' && (
                 <div className="mg-param">
@@ -127,7 +129,7 @@ export function MaterialGraphPanel() {
                 const matchPending = pending && pinType(graph.nodes.find((x) => x.id === pending.node)!.kind, pending.pin, 'out') === p.type;
                 return (
                   <div className="mg-in" key={p.pin}>
-                    <span className={`mg-pin in t-${p.type}${wired ? ' wired' : ''}${matchPending ? ' ok' : ''}`} title={`${p.pin} (${p.type})${wired ? ' — 单击断开' : pending ? ' — 单击连接' : ''}`} onClick={() => onPin(n.id, p.pin, 'in')} />
+                    <span className={`mg-pin in t-${p.type}${wired ? ' wired' : ''}${matchPending ? ' ok' : ''}`} title={`${p.pin} (${p.type})${wired ? t('editor.matgraph.pinDisconnect') : pending ? t('editor.matgraph.pinConnect') : ''}`} onClick={() => onPin(n.id, p.pin, 'in')} />
                     <span className="mg-inlabel">{p.pin}</span>
                   </div>
                 );
@@ -136,7 +138,7 @@ export function MaterialGraphPanel() {
           );
         })}
       </div>
-      <div className="muted mg-hint">单击输出 pin → 再单击输入 pin 连线;单击已连输入 pin 断开。图变化即应用到 Material。</div>
+      <div className="muted mg-hint">{t('editor.matgraph.hint')}</div>
     </div>
   );
 }

@@ -66,7 +66,13 @@ function buildMeshAsset(pod: MeshPod, guid: string): ImportedAsset {
     })),
   };
 
-  return { guid, kind: 'mesh', payload: mesh, refs: [] };
+  return {
+    guid,
+    kind: 'mesh',
+    ...(pod.name !== undefined ? { name: pod.name } : {}),
+    payload: mesh,
+    refs: [],
+  };
 }
 
 function buildMaterialAsset(pod: MaterialPod, guid: string): ImportedAsset {
@@ -86,7 +92,13 @@ function buildMaterialAsset(pod: MaterialPod, guid: string): ImportedAsset {
       roughness: pod.roughnessFactor,
     },
   };
-  return { guid, kind: 'material', payload: mat, refs: [] };
+  return {
+    guid,
+    kind: 'material',
+    ...(pod.name !== undefined ? { name: pod.name } : {}),
+    payload: mat,
+    refs: [],
+  };
 }
 
 function buildSceneAsset(pod: ScenePod, guid: string): ImportedAsset {
@@ -116,7 +128,13 @@ function buildSceneAsset(pod: ScenePod, guid: string): ImportedAsset {
       },
     })),
   };
-  return { guid, kind: 'scene', payload: scene, refs: [] };
+  return {
+    guid,
+    kind: 'scene',
+    ...(pod.name !== undefined ? { name: pod.name } : {}),
+    payload: scene,
+    refs: [],
+  };
 }
 
 // M3: TextureAsset requires decoded pixel data — deferred to M4.
@@ -124,7 +142,13 @@ function buildSceneAsset(pod: ScenePod, guid: string): ImportedAsset {
 function buildTextureNote(_pod: TexturePod, _guid: string): ImportedAsset {
   // Produce a minimal placeholder; real texture import (decode + upload)
   // lands with M4 material parsing.
-  return { guid: _guid, kind: 'texture', payload: {} as never, refs: [] };
+  return {
+    guid: _guid,
+    kind: 'texture',
+    ...(_pod.name !== undefined ? { name: _pod.name } : {}),
+    payload: {} as never,
+    refs: [],
+  };
 }
 
 export function toAssetPack(params: {
@@ -212,6 +236,19 @@ export function toAssetPack(params: {
   }
 
   assets.push(buildSceneAsset(params.scene, bridgeGuid('scene', 0)));
+
+  // XOR identity rule (aligned with the glTF importer): a single-asset package
+  // derives its name from the package path, so the stored entry name is dropped.
+  // Only multi-asset packages keep per-entry stored names. FBX is almost always
+  // multi-asset (a scene asset is always emitted), so this strips name only in
+  // the degenerate single-asset case.
+  if (assets.length === 1) {
+    const only = assets[0];
+    if (only && 'name' in only) {
+      const { name: _dropped, ...rest } = only;
+      assets[0] = rest;
+    }
+  }
 
   return assets;
 }

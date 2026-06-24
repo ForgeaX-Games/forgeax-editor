@@ -199,7 +199,7 @@ function spawnCamera(world: World): void {
     .unwrap();
 }
 
-function spawnStandardCube(world: World, hStandard: Handle<'MaterialAsset', 'unmanaged'>): void {
+function spawnStandardCube(world: World, hStandard: Handle<'MaterialAsset', 'shared'>): void {
   world
     .spawn(
       {
@@ -472,7 +472,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       // -- Retreat-path world: 1 directional + 0 point + 0 spot. --
       const baselineWorld = new World();
       spawnCamera(baselineWorld);
-      const hStandardBaseline = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandardBaseline = baselineWorld.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(baselineWorld, hStandardBaseline);
       spawnDirectional(baselineWorld);
 
@@ -499,7 +502,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       //    + AC-09 d linear accumulation site). --
       const ninelightWorld = new World();
       spawnCamera(ninelightWorld);
-      const hStandardNine = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandardNine = ninelightWorld.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(ninelightWorld, hStandardNine);
       spawnDirectional(ninelightWorld);
       // 4 PointLight at the corners of a 1.6-unit square in front of the cube.
@@ -713,7 +719,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
 
       const world = new World();
       spawnCamera(world);
-      const hStandard = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandard = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(world, hStandard);
       spawnDirectional(world);
 
@@ -783,7 +792,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       // -- Step A: directional-only baseline (1 + 0 + 0). --
       const baselineWorld = new World();
       spawnCamera(baselineWorld);
-      const hStandardBaseline = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandardBaseline = baselineWorld.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(baselineWorld, hStandardBaseline);
       spawnDirectional(baselineWorld);
       const baselinePixels = await readbackAfterDraw(renderer, baselineWorld);
@@ -793,7 +805,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       //    side of the cube, very close so the contribution dominates. --
       const plusZWorld = new World();
       spawnCamera(plusZWorld);
-      const hStandardPlusZ = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandardPlusZ = plusZWorld.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(plusZWorld, hStandardPlusZ);
       spawnDirectional(plusZWorld);
       // PointLight at (0, 0, 2) -- in front of the cube, on the camera
@@ -814,7 +829,10 @@ describe('w26 9-light browser-mode integration (AC-09 readPixels readback + retr
       //    than the centre. --
       const minusZWorld = new World();
       spawnCamera(minusZWorld);
-      const hStandardMinusZ = assets.register<MaterialAsset>(makeStandardAsset()).unwrap();
+      const hStandardMinusZ = minusZWorld.allocSharedRef<'MaterialAsset', MaterialAsset>(
+        'MaterialAsset',
+        makeStandardAsset(),
+      );
       spawnStandardCube(minusZWorld, hStandardMinusZ);
       spawnDirectional(minusZWorld);
       // PointLight at (1.5, 0, 0) -- world `+X` side of the cube, the

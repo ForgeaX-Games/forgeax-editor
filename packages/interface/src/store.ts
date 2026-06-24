@@ -1,5 +1,7 @@
 import { create, type StateCreator } from 'zustand';
+import { t } from '@/i18n';
 import { parseSse } from './lib/sse';
+import { recordLog } from './lib/logSink';
 import { alertDialog } from './lib/dialog';
 import { expandPills } from './components/Composer/pill';
 import { TurnAccumulator } from './lib/event-engine/turn-accumulator';
@@ -21,6 +23,7 @@ import type {
   ToolCallMessage,
 } from './lib/event-engine/types';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/platform';
+import { bootAppMode } from './lib/workspaces';
 
 // P2.6d — 'bus' joins as a top-level mode for the Bus admin panel.
 // Mirrors the Preview / Workbench switch in the TopBar; rendered by MainArea.
@@ -74,6 +77,16 @@ export interface AgentFileTouch {
 export interface ConsoleEntry {
   level: 'log' | 'warn' | 'error' | 'info' | 'debug';
   text: string;
+  ts: number;
+}
+
+export interface NetworkEntry {
+  kind: 'fetch' | 'xhr' | 'ws';
+  method: string;
+  url: string;
+  status: number;
+  ms: number;
+  ok: boolean;
   ts: number;
 }
 
@@ -494,6 +507,11 @@ interface AppState {
   consoleLog: ConsoleEntry[];
   pushConsole: (entry: ConsoleEntry) => void;
   clearConsole: () => void;
+
+  // ── Network buffer from engine iframe (VAG_NETWORK postMessage) ──
+  networkLog: NetworkEntry[];
+  pushNetwork: (entry: NetworkEntry) => void;
+  clearNetwork: () => void;
 
   // ── Chat thread (real, no fake) ──
   messages: ChatMessage[];
@@ -1591,7 +1609,9 @@ const capStoreMiddleware =
   };
 
 export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
-  mode: 'preview',
+  // 启动 mode 跟随持久化的活动工作区（Play/Edit/AI），避免刷新后 tab 高亮与主区域
+  // 内容错位（见 lib/workspaces.ts bootAppMode 注释）。
+  mode: bootAppMode(),
   setMode: (m) => set({ mode: m }),
   workbenchTab: 'agents',
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
@@ -2265,13 +2285,28 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
   },
 
   consoleLog: [],
-  pushConsole: (entry) => set((s) => ({
-    // Cap at 500 entries to bound memory; oldest drop off.
-    consoleLog: s.consoleLog.length >= 500
-      ? [...s.consoleLog.slice(s.consoleLog.length - 499), entry]
-      : [...s.consoleLog, entry],
-  })),
+  pushConsole: (entry) => {
+    recordLog('console', entry); // mirror to disk (.forgeax/logs/console.jsonl)
+    set((s) => ({
+      // Cap at 500 entries to bound memory; oldest drop off.
+      consoleLog: s.consoleLog.length >= 500
+        ? [...s.consoleLog.slice(s.consoleLog.length - 499), entry]
+        : [...s.consoleLog, entry],
+    }));
+  },
   clearConsole: () => set({ consoleLog: [] }),
+
+  networkLog: [],
+  pushNetwork: (entry) => {
+    recordLog('network', entry); // mirror to disk (.forgeax/logs/network.jsonl)
+    set((s) => ({
+      // Cap at 500 entries to bound memory; oldest drop off.
+      networkLog: s.networkLog.length >= 500
+        ? [...s.networkLog.slice(s.networkLog.length - 499), entry]
+        : [...s.networkLog, entry],
+    }));
+  },
+  clearNetwork: () => set({ networkLog: [] }),
 
   liveAgents: {},
   agentFileActivity: {},
@@ -2340,10 +2375,10 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         let serverMsg = '';
         try { serverMsg = ((await r.json()) as { error?: string }).error ?? ''; } catch { /* non-JSON */ }
         const friendly = r.status === 400
-          ? `无法打开「${path}」\n\n这个文件不在可编辑工作区内(通常是引擎 / 依赖库的只读源码,agent 只是读取过它)。\nStudio 只能打开 .forgeax/games/** 和 packages/** 下的文件。${serverMsg ? `\n\n服务端: ${serverMsg}` : ''}`
+          ? t('store.openFile.notInWorkspace', { path }) + (serverMsg ? t('store.openFile.serverDetail', { serverMsg }) : '')
           : r.status === 404
-            ? `文件不存在:「${path}」\n\n可能已被移动 / 重命名 / 删除,或这个游戏的入口文件其实是别的名字(例如 main.ts 而非 index.ts)。`
-            : `无法打开「${path}」:${r.status} ${r.statusText}${serverMsg ? ` — ${serverMsg}` : ''}`;
+            ? t('store.openFile.notFound', { path })
+            : t('store.openFile.failed', { path, status: r.status, statusText: r.statusText }) + (serverMsg ? ` — ${serverMsg}` : '');
         addFile({ path, kind: 'text', mime: 'text/plain', bytes: 0,
           content: friendly,
           error: serverMsg || `${r.status} ${r.statusText}` });
@@ -2704,7 +2739,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       void _syncActiveAgentRunning(sid);
       return { sid };
     } catch (e) {
-      void alertDialog({ title: '新建 session 失败', body: (e as Error).message });
+      void alertDialog({ title: t('store.createSession.failedTitle'), body: (e as Error).message });
       return null;
     }
   },
@@ -2936,8 +2971,8 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
           id: newId(),
           role: 'system',
           text: r.ok
-            ? `🔁 长程任务 \`${daemonId}\` 已起 · 每 ${intervalSec}s 跑一拍 · 在 Dashboard → Agents Hub 看进展 + 截图墙 · 在这条 ChatPanel 看每拍历史`
-            : `❌ 创建长程任务失败: ${j.error ?? r.status}`,
+            ? t('store.loop.started', { daemonId, intervalSec })
+            : t('store.loop.createFailed', { error: j.error ?? r.status }),
           toolCalls: [],
           status: 'done',
           ts: Date.now(),
@@ -2947,7 +2982,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         const sysMsg: ChatMessage = {
           id: newId(),
           role: 'system',
-          text: `❌ 网络错误创建长程任务: ${(e as Error).message}`,
+          text: t('store.loop.networkError', { message: (e as Error).message }),
           toolCalls: [],
           status: 'done',
           ts: Date.now(),
@@ -2972,7 +3007,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
           const sysMsg: ChatMessage = {
             id: newId(),
             role: 'system',
-            text: `❌ /tool 参数不是合法 JSON: ${(e as Error).message}`,
+            text: t('store.tool.invalidJson', { message: (e as Error).message }),
             toolCalls: [],
             status: 'done',
             ts: Date.now(),
@@ -3012,7 +3047,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         const sysMsg: ChatMessage = {
           id: newId(),
           role: 'system',
-          text: `❌ /tool 网络错误: ${(e as Error).message}`,
+          text: t('store.tool.networkError', { message: (e as Error).message }),
           toolCalls: [],
           status: 'done',
           ts: Date.now(),
@@ -3073,7 +3108,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         ));
       } catch (e) {
         set((s) => patchTabMessages(s, startSid, (msgs) =>
-          msgs.map((m) => m.id === pendingId ? { ...m, text: `❌ /${cmdName} 网络错误: ${(e as Error).message}`, ts: Date.now() } : m),
+          msgs.map((m) => m.id === pendingId ? { ...m, text: t('store.command.networkError', { cmdName, message: (e as Error).message }), ts: Date.now() } : m),
         ));
       }
       return;
@@ -3088,7 +3123,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       const sysMsg: ChatMessage = {
         id: newId(),
         role: 'system',
-        text: '⚠ 还没选 agent —— 等 AgentSwitcher 列表加载（一般 <1s），或手动点上面的 agent 头像。',
+        text: t('store.noAgentSelected'),
         toolCalls: [],
         status: 'done',
         ts: Date.now(),
@@ -3128,7 +3163,7 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
       } catch (e) {
         set((s) => patchTabMessages(s, startSid, (msgs) => [...msgs, {
           id: newId(), role: 'system',
-          text: `❌ 打断发送失败: ${(e as Error).message}`,
+          text: t('store.steer.sendFailed', { message: (e as Error).message }),
           toolCalls: [], status: 'done', ts: Date.now(),
         }]));
       }

@@ -49,7 +49,7 @@ describe('w7 --- (b) inside queryRun callback (AC-02)', () => {
     w.addSystem({
       name: 'queryReader',
       queries: [{ with: [TestName] }],
-      fn: (results) => {
+      fn: (_world, results) => {
         for (const result of results) {
           for (const _bundle of result) {
             const value = w.get(e, TestName).unwrap().value;

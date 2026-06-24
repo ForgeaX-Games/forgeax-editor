@@ -2,15 +2,15 @@
 // research F-4).
 //
 // SSOT for wasm init across all consumers (@forgeax/engine-rhi-wgpu + @forgeax/engine-naga thin shells).
-// The single-Promise cache + permanent-reject-on-failure semantics is required so that:
+// The single-Promise cache + null-reset-on-rejection semantics is required so that:
 //
 // 1. Multiple thin shells calling ensureReady() concurrently share one wasm instance
 //    (charter proposition 6 Idempotency: reference equality across calls).
 // 2. The wasm boundary is crossed exactly once per page lifecycle — a second call
 //    after success returns the same wasm namespace without re-running init().
-// 3. A failed init is sticky — subsequent calls observe the same reject without
-//    re-attempting (charter proposition 4 explicit failure: a partially-loaded wasm
-//    has undefined behaviour, so we surface the original error every time).
+// 3. A transient init failure (e.g. fetch jitter) null-resets the cached Promise;
+//    subsequent calls re-attempt _loadWasm() (charter proposition 4 explicit failure:
+//    the original error is surfaced on each attempt, but the caller may retry).
 //
 // Three-scenario wasm asset resolution (research F-4):
 // - Browser / Vite: the Vite ?url import resolves to a fetch-able asset URL.
@@ -40,10 +40,10 @@ let _instance: Promise<WgpuWasm> | null = null;
  * Idempotent: N calls return the same Promise reference. The Promise resolves to
  * the same wasm namespace reference across N awaits (charter proposition 6).
  *
- * Permanent-reject-on-failure: if the underlying `init(wasmUrl)` rejects, the
- * cached Promise is the rejected one and remains so — subsequent calls observe
- * the same rejection without retrying (charter proposition 4 explicit failure;
- * a partially-loaded wasm is not safely re-initialisable in this surface).
+ * Null-reset on transient failure: if the underlying `init(wasmUrl)` rejects,
+ * the cached Promise is cleared (set to null) so the next call retries
+ * `_loadWasm()` (charter proposition 4 explicit failure; transient errors such
+ * as fetch jitter are recoverable by the caller without manual reset).
  */
 // Avoid @types/node devDep (mirror @forgeax/engine-math + @forgeax/engine-shader-compiler strategy).
 // The process value on globalThis is fetched via an unknown bridge; runtime detection
@@ -88,7 +88,10 @@ async function _loadWasm(): Promise<WgpuWasm> {
 
 export const ensureReady = (): Promise<WgpuWasm> => {
   if (!_instance) {
-    _instance = _loadWasm();
+    _instance = _loadWasm().catch((e: unknown) => {
+      _instance = null;
+      throw e;
+    });
   }
   return _instance;
 };

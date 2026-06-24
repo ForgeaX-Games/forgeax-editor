@@ -11,7 +11,8 @@
 //
 //   1. const detach = attachBrowserInputBackend(canvas)
 //      -- detach is a callable () => void with .backend: InputBackend mounted.
-//   2. world.addSystem(createFrameStartScanSystem(detach.backend, world))
+//   2. world.insertResource(INPUT_BACKEND_KEY, detach.backend) +
+//      world.addSystem(InputFrameStartScan)
 //      -- registers the scan system whose stable name is
 //      FRAME_START_SCAN_SYSTEM_NAME ('input-frame-start-scan'). The system
 //      runs at frame-start each world.update() and writes the frozen
@@ -41,9 +42,10 @@
 import type { World } from '@forgeax/engine-ecs';
 import {
   attachBrowserInputBackend,
-  createFrameStartScanSystem,
   FRAME_START_SCAN_SYSTEM_NAME,
+  INPUT_BACKEND_KEY,
   type InputBackend,
+  InputFrameStartScan,
 } from '@forgeax/engine-input';
 
 import { AppError } from '../errors';
@@ -81,15 +83,16 @@ function makeAppError(
  * caller (createApp assemble form, post-renderer) holds the returned
  * handle; cleanup() must be called when the app stops or on device-lost.
  *
- * Per plan-strategy D-4 + research engine-input-public-contract.md
- * §createFrameStartScanSystem signature SSOT: the scan system is the
- * double-arg form (backend, world) so it can call world.insertResource
- * inside the system fn (which itself only accepts (queryResults, commands)).
+ * Per plan-strategy D-2 (M2 full resource-ification): the backend is supplied
+ * via the INPUT_BACKEND_KEY World resource; the InputFrameStartScan token reads
+ * it back inside its fn. Insert the resource BEFORE adding the system so the
+ * system's ParamValidation finds the backend on the first tick.
  */
 export function attachInputAuto(canvas: HTMLCanvasElement, world: World): InputAttachHandle {
   const detach = attachBrowserInputBackend(canvas);
   const backend = detach.backend;
-  world.addSystem(createFrameStartScanSystem(backend, world));
+  world.insertResource(INPUT_BACKEND_KEY, backend);
+  world.addSystem(InputFrameStartScan);
 
   let cleanedUp = false;
 

@@ -12,7 +12,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const WIDTH = 512;
@@ -143,6 +143,7 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const container2DecodeRes = await decodeImageFromFile(CONTAINER2_SRC_PATH);
@@ -200,77 +201,34 @@ if (shader === null) {
   process.exit(1);
 }
 
-// Inline the WGSL source for the dawn-node smoke path (no Vite transform).
-// Mirror src/blinn-phong.wgsl byte-for-byte: light constants are inlined
-// (LO 5.1 never animates them) and viewPos is read from view.cameraPos.
-// User shaders cannot allocate @group(1) bindings above 6 — engine PBR
-// reserves binding 7..17 for Skylight + emissive/AO.
-shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
-  source: `#define_import_path learn_render::5_1_blinn_phong
-
-#import forgeax_view::common::{View, Mesh, view, meshes}
-
-struct Material {
-  baseColor : vec4<f32>,
-  metallic  : f32,
-  roughness : f32,
-};
-
-@group(1) @binding(0) var<uniform> material : Material;
-@group(1) @binding(1) var baseColorSampler : sampler;
-@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
-@group(1) @binding(3) var metallicRoughnessSampler : sampler;
-@group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
-@group(1) @binding(5) var normalSampler : sampler;
-@group(1) @binding(6) var normalTexture : texture_2d<f32>;
-
-const LIGHT_POS   : vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-const LIGHT_COLOR : vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-const SHININESS   : f32       = 32.0;
-
-struct VsIn {
-  @location(0) pos     : vec3<f32>,
-  @location(1) normal  : vec3<f32>,
-  @location(2) uv      : vec2<f32>,
-  @location(3) tangent : vec4<f32>,
-};
-
-struct VsOut {
-  @builtin(position) clip        : vec4<f32>,
-  @location(0)       worldPos    : vec3<f32>,
-  @location(1)       worldNormal : vec3<f32>,
-  @location(2)       uv          : vec2<f32>,
-};
-
-@vertex
-fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
-  let world = meshes[idx].worldFromLocal * vec4<f32>(in.pos, 1.0);
-  var out : VsOut;
-  out.clip = view.worldViewProj * world;
-  out.worldPos = world.xyz;
-  out.worldNormal = normalize(meshes[idx].normalMatrix * in.normal);
-  out.uv = in.uv;
-  return out;
+// Register the custom Blinn-Phong shader from the build-output COMPOSED WGSL.
+// `ShaderRegistry.registerMaterialShader` requires post-naga_oil composed WGSL
+// (see packages/shader/src/ShaderRegistry.ts: `source` = "composed WGSL source
+// (post-naga_oil)"). The runtime deliberately does NOT bundle naga_oil, so the
+// raw `src/blinn-phong.wgsl` (which opens with `#define_import_path` + `#import`)
+// cannot be registered directly -- it must go through the build-time vite-plugin
+// composition (exactly as the real app does via `import ... from './blinn-phong.wgsl'`).
+// This smoke has no vite transform, so read the demo build's composed entry from
+// dist/shaders/manifest.json (mirrors apps/hello/custom-shader/scripts/smoke-dawn.mjs).
+const DEMO_MANIFEST_PATH = resolve(APP_ROOT, 'dist', 'shaders', 'manifest.json');
+if (!existsSync(DEMO_MANIFEST_PATH)) {
+  console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${DEMO_MANIFEST_PATH}`);
+  console.error(
+    "  hint: rebuild via `pnpm --filter '@forgeax/app-learn-render-5-advanced-lighting-1-advanced-lighting' build`",
+  );
+  process.exit(1);
 }
-
-@fragment
-fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let N = normalize(in.worldNormal);
-  let V = normalize(view.cameraPos - in.worldPos);
-  let L = normalize(LIGHT_POS - in.worldPos);
-  let H = normalize(V + L);
-
-  let ambient = 0.05 * LIGHT_COLOR;
-  let diff = max(dot(N, L), 0.0) * LIGHT_COLOR;
-  let spec = pow(max(dot(N, H), 0.0), SHININESS) * LIGHT_COLOR;
-
-  let texColor = textureSample(baseColorTexture, baseColorSampler, in.uv).rgb;
-  let result = (ambient + diff + spec) * texColor;
-
-  return vec4<f32>(result, 1.0);
-}`,
-  paramSchema: [{ name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] }],
-  bindingLayout: [],
+const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
+const blinnPhongEntry = (demoManifest.materialShaders ?? []).find(
+  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('5_1_blinn_phong'),
+);
+if (!blinnPhongEntry) {
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing 5_1_blinn_phong entry');
+  process.exit(1);
+}
+shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
+  source: blinnPhongEntry.composedWgsl,
+  paramSchema: JSON.parse(blinnPhongEntry.paramSchema),
 });
 
 // Register texture under its GUID.
@@ -289,11 +247,16 @@ const container2TexAsset = {
   colorSpace: container2Decoded.colorSpace,
   mipmap: container2Decoded.mipmap,
 };
-const container2Handle = assets.registerWithGuid(container2GuidRes.value, container2TexAsset);
+
+const world = new World();
+
+// Catalogue the texture under its GUID, then mint a shared-ref column handle.
+assets.catalog(container2GuidRes.value, container2TexAsset);
+const container2Handle = world.allocSharedRef('TextureAsset', container2TexAsset);
 console.log(`[learn-render-5-1-blinn-phong] registered container2 handle id=${container2Handle}`);
 
 // Register material with the custom shader.
-const matHandle = assets.register({
+const matHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
     {
@@ -303,11 +266,9 @@ const matHandle = assets.register({
     },
   ],
   paramValues: {
-    baseColorTexture: container2Handle,
+    baseColorTexture: unwrapHandle(container2Handle),
   },
 });
-
-const world = new World();
 
 // Spawn cube: HANDLE_CUBE is 1x1x1, centered at origin.
 world

@@ -1,3 +1,4 @@
+import { useTranslation } from '@/i18n';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import type { BusEntry } from './sidebar-types';
 
@@ -15,8 +16,9 @@ function shortenLabel(label: string): string {
 
 /** Preview wb-module-strip — bus workbench plugins in 6-column grid. */
 export function WorkbenchModuleStrip({ entries, activeTabId, onSelect }: Props) {
+  const { t } = useTranslation();
   return (
-    <div className="wb-module-strip" role="listbox" aria-label="工作台模块">
+    <div className="wb-module-strip" role="listbox" aria-label={t('workbenchModuleStrip.ariaLabel')}>
       {entries.map((e) => {
         const active = e.id === activeTabId;
         const Icon = iconForWorkbenchModule({

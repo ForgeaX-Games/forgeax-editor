@@ -17,6 +17,7 @@ import {
 } from '../../lib/dashboard-api';
 import { listBusPlugins, type BusPluginInfo } from '../../lib/bus-api';
 import { useAppStore } from '../../store';
+import { useTranslation } from '@/i18n';
 
 interface BusHealth {
   pluginCount: number;
@@ -56,6 +57,7 @@ function shortSid(sid: string): string {
 }
 
 export function Analytics() {
+  const { t } = useTranslation();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [summaries, setSummaries] = useState<Map<string, SessionAgentSummary>>(new Map());
   const [busHealth, setBusHealth] = useState<BusHealth | null>(null);
@@ -179,7 +181,7 @@ export function Analytics() {
               type="button"
               className="dash-stat is-link dash-stat-ok"
               onClick={goBus}
-              title={`${busHealth.pluginCount} plugin${busHealth.pluginCount === 1 ? '' : 's'} loaded · 单击切到 Bus 详情 →`}
+              title={`${busHealth.pluginCount} plugin${busHealth.pluginCount === 1 ? '' : 's'} loaded · ${t('analytics.clickToBusDetail')}`}
             >
               <div className="dash-stat-label">Plugins</div>
               <div className="dash-stat-value">{busHealth.pluginCount}</div>
@@ -188,7 +190,7 @@ export function Analytics() {
               type="button"
               className={`dash-stat is-link ${busHealth.brokenCount === 0 ? 'dash-stat-ok' : 'dash-stat-idle'}`}
               onClick={goBus}
-              title={`${busHealth.pluginCount - busHealth.brokenCount} healthy · 单击切到 Bus 详情 →`}
+              title={`${busHealth.pluginCount - busHealth.brokenCount} healthy · ${t('analytics.clickToBusDetail')}`}
             >
               <div className="dash-stat-label">Healthy</div>
               <div className="dash-stat-value">{busHealth.pluginCount - busHealth.brokenCount}</div>
@@ -197,7 +199,7 @@ export function Analytics() {
               type="button"
               className={`dash-stat is-link ${busHealth.brokenCount > 0 ? 'dash-stat-err' : 'dash-stat-idle'}`}
               onClick={goBus}
-              title={busHealth.brokenCount > 0 ? `${busHealth.brokenCount} broken · 单击切到 Bus 详情 →` : '0 broken · 单击切到 Bus 详情 →'}
+              title={busHealth.brokenCount > 0 ? `${busHealth.brokenCount} broken · ${t('analytics.clickToBusDetail')}` : `0 broken · ${t('analytics.clickToBusDetail')}`}
             >
               <div className="dash-stat-label">Broken</div>
               <div className="dash-stat-value">{busHealth.brokenCount}</div>
@@ -206,7 +208,7 @@ export function Analytics() {
               type="button"
               className="dash-stat is-link dash-stat-idle"
               onClick={goBus}
-              title={`${busHealth.listenerCount} listener${busHealth.listenerCount === 1 ? '' : 's'} · 单击切到 Bus 详情 →`}
+              title={`${busHealth.listenerCount} listener${busHealth.listenerCount === 1 ? '' : 's'} · ${t('analytics.clickToBusDetail')}`}
             >
               <div className="dash-stat-label">Listeners</div>
               <div className="dash-stat-value">{busHealth.listenerCount}</div>
@@ -215,7 +217,7 @@ export function Analytics() {
               type="button"
               className="dash-stat is-link dash-stat-idle"
               onClick={goBus}
-              title={`Bus uptime ${formatDuration(busHealth.uptimeMs)} · 单击切到 Bus 详情 →`}
+              title={`Bus uptime ${formatDuration(busHealth.uptimeMs)} · ${t('analytics.clickToBusDetail')}`}
             >
               <div className="dash-stat-label">Uptime</div>
               <div className="dash-stat-value">{formatDuration(busHealth.uptimeMs)}</div>
@@ -227,8 +229,8 @@ export function Analytics() {
                 onClick={goBus}
                 title={
                   surfaces.count > 0
-                    ? `${surfaces.count} UI surface${surfaces.count === 1 ? '' : 's'} · ${surfaces.aiActions}/${surfaces.totalActions} AI · 单击切到 Bus 详情 →`
-                    : '0 UI surfaces · 单击切到 Bus 详情 →'
+                    ? `${surfaces.count} UI surface${surfaces.count === 1 ? '' : 's'} · ${surfaces.aiActions}/${surfaces.totalActions} AI · ${t('analytics.clickToBusDetail')}`
+                    : `0 UI surfaces · ${t('analytics.clickToBusDetail')}`
                 }
               >
                 <div className="dash-stat-label">Surfaces</div>
@@ -265,7 +267,7 @@ export function Analytics() {
                       type="button"
                       key={k.id}
                       className={`dash-kind-row k-${k.id} is-link`}
-                      title={`${k.label} · ${n} plugin${n === 1 ? '' : 's'} · 单击 → Bus admin (filter=${k.label}) →`}
+                      title={`${k.label} · ${n} plugin${n === 1 ? '' : 's'} · ${t('analytics.clickToBusAdminFilter', { label: k.label })}`}
                       onClick={() => goBusKind(k.id)}
                     >
                       <span className="dash-kind-name">{k.label}</span>

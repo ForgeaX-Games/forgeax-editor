@@ -37,7 +37,7 @@ const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 | `createRenderer(canvas, options?)` | async 工厂 | WebGPU backend (rhi-webgpu / rhi-wgpu); all channels fail throw `EngineEnvironmentError` |
 | `Renderer.backend` | `'webgpu'` readonly | backend marker (K-4) |
 | `Renderer.shader` | `ShaderRegistry` readonly | Instance-per-engine ShaderRegistry lazy property (plan-strategy S-10 / D-R10 / OQ-5); `Renderer.ready` auto-loads manifest + compiles PBR pipeline |
-| `Renderer.assets` | `AssetRegistry` readonly | Instance-per-engine AssetRegistry lazy property (feat-20260509-ecs-render-bridge-mvp / D-S9); pre-registers `HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE` / `HANDLE_NINESLICE_QUAD` built-in mesh; `register(asset)` is a temporary escape hatch (feat-future-asset-system) |
+| `Renderer.assets` | `AssetRegistry` readonly | Instance-per-engine AssetRegistry lazy property (feat-20260509-ecs-render-bridge-mvp / D-S9). Post-D-17 it is a GUID -> payload catalogue (`catalog` / `loadByGuid` / `lookup`); the 5 built-in meshes (`HANDLE_CUBE`..`HANDLE_NINESLICE_QUAD`) are process-static in `BuiltinAssetRegistry` (D-15), not catalogued here. See § Assets. |
 | `Renderer.metrics` | `EngineMetrics` readonly | feat-20260527-sprite-nineslice / D-5 — public counter API; `increment(name)` / `snapshot()` / `reset()` (Map-backed). Counter key namespace `<feat>.<event>` (e.g. `nineslice.scale-too-small` / `nineslice.tile-needs-repeat-sampler`). See § Sprite materials. |
 | `Renderer.ready` | `Promise<void>` readonly | Init barrier (D-S3); serial three-step (manifest load -> PBR pipeline compile -> AssetRegistry built-in mesh GPU buffer upload); `await renderer.ready` before calling `draw(world)` |
 | `Renderer.draw(world)` | `(World) => void` | One-frame RenderSystem Extract / Prepare / Record (D-S2 / K-4 rewrite); replaced prior `draw(target: RendererDrawTarget)` (breaking, D-Q4) |
@@ -64,7 +64,7 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
 
 **三层职责命题（顶层）：**
 
-- **`AssetRegistry`** — 编目 CPU asset POD（`register` / `loadByGuid`，纯 CPU，无 GPU 副作用；无 GPU 环境与有 GPU 环境行为一致）。
+- **`AssetRegistry`** — 编目 CPU asset POD（`catalog` / `loadByGuid` / `lookup`，纯 CPU，无 GPU 副作用，**无 handle 概念**；D-17 后 `loadByGuid` 返回 payload 而非 handle）。
 - **`deriveRenderData*`** — 投影层（`packages/runtime/src/render-data.ts`）：把 asset POD **纯派生**为 GPU 描述符（`deriveRenderDataMesh` / `deriveRenderDataTexture` / `deriveRenderDataCubemap`）；认识 asset `kind`，**不碰 device**。
 - **`GpuResourceStore`** — 管 device 上 GPU 资源生死（`packages/runtime/src/gpu-resource-store.ts`）：per-handle texture / cubemap / mesh-buffer 缓存 + 建造它们的 upload 原语；不认识 `kind`，对 `AssetRegistry` 零反依赖（POD 由调用方传入）。
 
@@ -107,7 +107,7 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
 
 **dogfood / hot-swap 时序（末尾论证）：**
 
-- **一次性 setup（`createRenderer` 内）**：`renderer.ready` 后 `registerPipeline('forgeax::urp', urpPipeline)` → `assets.register<RenderPipelineAsset>({ kind:'render-pipeline', pipelineId:'forgeax::urp' })`（返回值经 `AssetTagMap` 推断为 `Handle<'RenderPipelineAsset','unmanaged'>`，无 `as`）→ `installPipeline(handle)`。默认帧因此与任意用户自定义管线走**完全相同**的公开通道（dogfood 硬约束）。
+- **一次性 setup（`createRenderer` 内）**：`renderer.ready` 后 `registerPipeline('forgeax::urp', urpPipeline)` → `installPipeline({ kind:'render-pipeline', pipelineId:'forgeax::urp' })`（D-17/D-19：`installPipeline` 直收 `RenderPipelineAsset` POD，无 register round-trip）。默认帧因此与任意用户自定义管线走**完全相同**的公开通道（dogfood 硬约束）。
 - **每帧 hot-swap 检测（`draw` 内）**：`draw` 比较 `frameState.installedPipelineHandle` 与上次构建图的 handle；变化（一次 SWAP）才把 `frameState.perFrameGraph = null` 强制重建（复用既有记忆化闸门）。effect toggle（如 `camera.bloom` 在 pass 闭包内 early-return）**不**改 handle，故**不**触发重建——只有真正 install 另一条管线才重建。
 - **可观测性**：`renderer.perFramePassNames` 读穿当前已编译图的 `listPasses()`；安装不同 `config.passCount` 的管线后该数组随之变化（AC-03 结构化断言锚点）。
 
@@ -246,7 +246,7 @@ pnpm bench:pixel-parity                                  # AC-13 HDRP cluster fo
 
 ## URP / HDRP（双 pipeline · 兼容性 vs 效果分轨）
 
-> `forgeax::urp` / `forgeax::hdrp` 是引擎内建的双管线对，命名直取自 Unity (URP = Universal Render Pipeline, HDRP = High Definition Render Pipeline) 的兼容性 vs 效果分轨——URP 是 0 行 config 默认路径，覆盖 ≤ 4 punctual lights 的轻量场景；HDRP 是 `installPipeline(hdrpHandle)` 一行 opt-in 升级，cluster-forward 着色支持 ≤ 256 punctual lights 的高密度光照。同一 `RenderPipeline` 接口下的两个 `registerPipeline` 实现，AI 用户用同一对 `assets.register<RenderPipelineAsset>` + `renderer.installPipeline(handle)` 切换。
+> `forgeax::urp` / `forgeax::hdrp` 是引擎内建的双管线对，命名直取自 Unity (URP = Universal Render Pipeline, HDRP = High Definition Render Pipeline) 的兼容性 vs 效果分轨——URP 是 0 行 config 默认路径，覆盖 ≤ 4 punctual lights 的轻量场景；HDRP 是 `installPipeline(hdrpAsset)` 一行 opt-in 升级，cluster-forward 着色支持 ≤ 256 punctual lights 的高密度光照。同一 `RenderPipeline` 接口下的两个 `registerPipeline` 实现，AI 用户用 `renderer.installPipeline(asset)`（D-17：直收 POD，无 register round-trip）切换。
 
 **何时选 URP（默认）**：
 
@@ -274,14 +274,12 @@ pnpm bench:pixel-parity                                  # AC-13 HDRP cluster fo
 ```ts
 import { HDRP_PIPELINE_ID, type RenderPipelineAsset } from '@forgeax/engine-runtime';
 
-const hdrpHandle = renderer.assets
-  .register<RenderPipelineAsset>({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-    config: { clusterGrid: { x: 16, y: 9, z: 24 } },
-  })
-  .unwrap();
-renderer.installPipeline(hdrpHandle).unwrap();
+// D-17/D-19: installPipeline takes the RenderPipelineAsset POD directly (no register round-trip).
+renderer.installPipeline({
+  kind: 'render-pipeline',
+  pipelineId: HDRP_PIPELINE_ID,
+  config: { clusterGrid: { x: 16, y: 9, z: 24 } },
+} as RenderPipelineAsset).unwrap();
 // 后续 renderer.draw(world) 即走 cluster-forward；perFramePassNames 含 'cluster-forward'.
 ```
 
@@ -298,13 +296,11 @@ renderer.installPipeline(hdrpHandle).unwrap();
 ```ts
 import { HDRP_PIPELINE_ID, type RenderPipelineAsset } from '@forgeax/engine-runtime';
 
-const hdrpHandle = renderer.assets
-  .register<RenderPipelineAsset>({
-    kind: 'render-pipeline',
-    pipelineId: HDRP_PIPELINE_ID,
-  })
-  .unwrap();
-renderer.installPipeline(hdrpHandle).unwrap();
+// D-17: installPipeline takes the RenderPipelineAsset POD directly.
+renderer.installPipeline({
+  kind: 'render-pipeline',
+  pipelineId: HDRP_PIPELINE_ID,
+} as RenderPipelineAsset).unwrap();
 // opaque geometry: g-buffer pass (passKind='deferred') → lighting pass (full-screen GGX)
 // transparent geometry: forward pass (passKind='forward', depth test vs g-buffer depth)
 ```
@@ -340,8 +336,7 @@ const hdrpAsset: RenderPipelineAsset = {
     ssao: { enabled: true },
   },
 };
-const handle = registry.register(hdrpAsset).unwrap();
-renderer.installPipeline(handle);
+renderer.installPipeline(hdrpAsset).unwrap();   // D-17: POD directly, no register round-trip
 ```
 
 **参数表**（all under `config.ssao`）：
@@ -537,7 +532,7 @@ Same-name duplicate fails fast on the first conflict and returns `Result.err(Ins
 
 > [!IMPORTANT]
 > Demo code in this README and in `apps/hello/*` uses a crash-on-failure idiom:
-> `world.spawn(...).unwrap()`, `assets.register(...).unwrap()`, and
+> `world.spawn(...).unwrap()`, `assets.catalog(...).unwrap()`, and
 > `world.set(...).unwrap()`. This keeps demo listings short and focused on the
 > intent. `createApp()` retains its explicit `if (!ready.ok)` guard because
 > host-initialisation failure is recoverable (no canvas, wrong environment).
@@ -547,7 +542,7 @@ Same-name duplicate fails fast on the first conflict and returns `Result.err(Ins
 
 ## Built-in mesh handles
 
-Five pre-registered `Handle<'MeshAsset', 'unmanaged'>` constants occupy reserved ids 1-5, all available as top-level re-exports from `@forgeax/engine-runtime`. Id=4 `HANDLE_SPHERE` was added 2026-05-29 (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog); id=5 `HANDLE_NINESLICE_QUAD` was added 2026-06-03 (feat-20260527-sprite-nineslice / D-2).
+Five process-static `Handle<'MeshAsset', 'shared'>` constants occupy reserved builtin ids 1-5 (`< BUILTIN_BASE`), resolved through `BuiltinAssetRegistry` (D-15, never reference-counted), all available as top-level re-exports from `@forgeax/engine-runtime`. Id=4 `HANDLE_SPHERE` was added 2026-05-29 (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog); id=5 `HANDLE_NINESLICE_QUAD` was added 2026-06-03 (feat-20260527-sprite-nineslice / D-2).
 
 | Handle | id | Geometry source | Notes |
 |:--|:--|:--|:--|
@@ -621,7 +616,7 @@ world.spawn(
   } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: {
-    // feat-20260608 M2 / w7: schema-vocab `array<handle<MaterialAsset>>`；
+    // feat-20260608 M2 / w7: schema-vocab `array<shared<MaterialAsset>>`（feat-20260614 handle->shared rename）；
     // materials[i] 索引位对位 MeshAsset.submeshes[i]。缺省（{} 或 materials: []）
     // → default mid-grey unlit (D-Q7 case B)。单 mesh 单材质：写 [matHandle]。
     materials: [matHandle], // readonly Handle<MaterialAsset>[]
@@ -660,7 +655,7 @@ import {
 |:--|:--|:--|
 | `Transform` | `posX/Y/Z + quatX/Y/Z/W + scaleX/Y/Z`（10 f32） | pos=`[0,0,0]` / quat=identity / scale=`[1,1,1]`（缺 → 默认） |
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
-| `MeshRenderer` | `materials: array<handle<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
+| `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
 | `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity`（7 f32） | 0 light = unlit fallback（合法，不 fire onError） |
 
@@ -685,7 +680,7 @@ import {
 |:--|:--|:--|:--|:--|
 | **case A** archetype 缺位 | entity 没挂 `MeshRenderer`（archetype 不命中 single query） | silent skip — extract 阶段不进入该 entity；无 RenderableSnapshot | 不（D-Q7 软化：「ergonomic 缺省，不算误用」） | — |
 | **case B** missing-spec fallback | spawn `MeshRenderer { /* material 字段未填 */ }`（spawn payload 是 `Partial<ShapeOf<S>>`，column `material[i] === 0`） | extract 命中 archetype → `material === undefined` 分支走 `defaultMaterialSnapshot()` mid-grey unlit；entity 出现在 RenderableSnapshot[]，材质为默认 | 不（缺省合法） | hint：`'pass undefined or omit field to request default material; an empty array materials: [] also routes case B'` |
-| **case C** dangling-ref fire onError | spawn `MeshRenderer { materials: [<未注册 handle>] }`（column `materials[i] !== 0`，但 `assetRegistry.get(H) === err`） | extract 命中 archetype → 任一 `assets.get(materials[i]) === err` 分支重新包装为 `RhiError({ code: 'asset-not-registered', detail: { assetHandle } })` → fire onError；entity 不进 RenderableSnapshot[] | 是 | `'asset-not-registered'`（`detail = { assetHandle }`，与 `MeshFilter.assetHandle` 路径字段名对称）；hint：`'register every material in MeshRenderer.materials[] before spawn, or pass an empty array to fall back to default'` |
+| **case C** dangling-ref fire onError | spawn `MeshRenderer { materials: [<未解析 handle>] }`（column `materials[i] !== 0`，但 `resolveAssetHandle(world, H) === err`） | extract 命中 archetype → 任一 `resolveAssetHandle(world, materials[i]) === err` 分支重新包装为 `RhiError({ code: 'asset-not-registered', detail: { assetHandle } })` → fire onError；entity 不进 RenderableSnapshot[] | 是 | `'asset-not-registered'`（`detail = { assetHandle }`，与 `MeshFilter.assetHandle` 路径字段名对称）；hint：`'mint every material handle via world.allocSharedRef before spawn, or pass an empty array to fall back to default'` |
 
 > 三档语义在 `packages/runtime/src/render-system-extract.ts` head JSDoc + `packages/runtime/src/components/mesh-renderer.ts` head JSDoc 同时落 SSOT；AC-09 (case A) / AC-10 (case B) / AC-11 (case C) 三测试用例分别锚定。
 
@@ -857,6 +852,7 @@ const worldPos = mat4.getTranslation(vec3.create(), worldMat);
 - **`Children`** — `{ entities: 'array<entity>' }`（feat-20260514 起：变长 entity 引用列表，由 ECS 通过 BufferPool slot + sidecar count 列管理）；feat-20260515-buffer-array-vocab-collapse 起，`world.get(parent, Children).unwrap().entities` 返回 `TypedArrayFor<'entity'>`（`Uint32Array`）read-only snapshot；增删通过 World 三命令：`world.push(parent, Children, 'entities', child)` / `world.pop(parent, Children, 'entities')` / `world.capacity(parent, Children, 'entities')`，不再走 view 包装对象（`FixedArrayView` / `VarArrayView` 已物理删除）。旧 v1 OOS-04 的 `count: 'u32'` 计数 + 占位 `'entity[]'` 关键字一刀切删除（2026-05-14 行）。
 - **stale ChildOf ref** — ECS 不做读时兜底；父 entity 被销毁后 child 的 stale parent u32 永久留存（对齐 Bevy：移出 / 销毁 parent 不级联清子）。`propagateTransforms`（archetype 直读，不走 `world.get`）检测到死父 → fire `RhiError({ code: 'hierarchy-broken' })` 经 `Renderer.onError` 触达 AI 用户（charter P3 显式失败）；该 subtree skip，其他 entity 正常渲染（architecture-principles.md #9 优雅降级）。这是 deliberate 行为，非回归——consumer 须自行清理。
 - **恢复路径** — consumer 通过 relationship 机制 / `world.get(parent, Entity)` 探活并自行清理：销毁父之前先 `world.removeComponent(child, ChildOf)`，或 `world.despawn` 整个子树，或在 `propagateTransforms` 前用 `world.get(parent, Entity).ok` 探测并处置。
+- **`linkedSpawn` default changed to `true`** (feat-20260616-engine-state-and-state-scoped-entities): `ChildOf` now defaults `linkedSpawn: true`, meaning `world.despawn(parent)` recursively despawns all children in the `Children` mirror list. This is the Bevy-consistent behaviour for state-scoped entity teardown. The `world.despawn` call within `transitionStatesSystem`'s scopeDespawn path relies on this default to recursively tear down entity subtrees. If you need the old non-recursive behaviour, pass `linkedSpawn: false` explicitly in `ChildOf` options.
 
 ```ts
 import { ChildOf, Children, Transform } from '@forgeax/engine-runtime';
@@ -879,7 +875,7 @@ world.capacity(root, Children, 'entities');                    // current alloca
 
 - **`Skin`** -- `{ skeleton: Handle<SkeletonAsset>, joints: Entity[] }`. Sibling of `MeshFilter` / `MeshRenderer` on the same entity. Joints auto-resolved at `sceneInstances.instantiate` time from `SkinAsset.jointPaths` via Name-component lookup (first-match on same-name siblings). `Skin + Instances` coexistence fail-fast with `'skin-instances-coexist-forbidden'`.
 - **`AnimationPlayer`** -- N-way SoA inline arrays (feat-20260615-animation-player-crossfade-simple-transition): `{ clips: array<Handle<AnimationClip>, 4>, times: array<f32, 4>, weights: array<f32, 4>, speeds: array<f32, 4>, paused: bool, looping: bool }`. Defaults: clips/times/weights/speeds all 0; paused=false; looping=true. Slot semantics: `clips[i] === 0` (invalid handle) skips that slot — system never resolves it, never warns. Per-channel normalized blend (`Σ wᵢ × sᵢ / Σ wᵢ`); pos/scale linear, quat sign-fixed nlerp; per-joint single `world.set` (not per-channel). Low-level API only — user drives `weights[]` each frame for crossfade / N-way blend (no helper). System `advanceAnimationPlayer` auto-registered in `createApp`; `createRenderer` callers register via `registerAdvanceAnimationPlayer(world, animResolver)`.
-- **Asset trio** (D-1 3-asset separation): `SkeletonAsset` (IBM + jointCount, kind='skeleton') / `SkinAsset` (skeletonGuid + jointPaths, kind='skin') / `AnimationClip` (duration + channels with LINEAR|STEP samplers, kind='animation-clip'). Register via `assets.registerWithGuid(guid, asset)`; loading path identical to Mesh/Material: `loadByGuid<SceneAsset>` + `sceneInstances.instantiate`.
+- **Asset trio** (D-1 3-asset separation): `SkeletonAsset` (IBM + jointCount, kind='skeleton') / `SkinAsset` (skeletonGuid + jointPaths, kind='skin') / `AnimationClip` (duration + channels with LINEAR|STEP samplers, kind='animation-clip'). Catalogue via `assets.catalog(guid, asset)` (D-17); loading path identical to Mesh/Material: `loadByGuid<SceneAsset>` (returns payload) + mint via `world.allocSharedRef` + `assets.instantiate`.
 - **Shader routing** (D-3): skinned mesh (`RenderableSnapshot.skin !== undefined`) routes to `forgeax::pbr-skin` material shader with `@location(4) skinIndex: vec4<u32>` + `@location(5) skinWeight: vec4<f32>` vertex inputs + `@group(2) @binding(1) var<storage, read> palette: array<mat4x4<f32>>`. Non-skin path unchanged.
 - **Common errors**: `'skin-joint-count-exceeded'` (max 256), `'skin-joint-path-unresolved'` (Name mismatch), `'skin-joint-despawned'` (joint entity gone), `'skin-palette-overflow'` (buffer cap), `'vertex-storage-buffer-unavailable'` (WebGPU compat mode).
 
@@ -1431,48 +1427,73 @@ ECS-native writes via `world.set`, prefab-diff via `setSceneOverride`.
 
 ## Assets
 
-> feat-20260511-asset-system-v1 / M4 / D-P3 — `AssetRegistry` 五入口纯 SDK + url→Handle Map idempotency。
+> feat-20260511-asset-system-v1 / M4 / D-P3 — initial 5-entry SDK. **feat-20260614 M8 (D-15 / D-17 / D-19) rewrote the surface**: `AssetRegistry` is now a **GUID -> payload catalogue with NO handle concept**. It owns no World, so it cannot mint a column handle. The handle-keyed map narrative below is gone.
 
-`Renderer.assets` returns lazy `AssetRegistry` (always non-null after successful construction). Entrypoints:
+`Renderer.assets` returns lazy `AssetRegistry` (always non-null after successful construction). Entrypoints (post-D-17):
 
 | Entrypoint | Signature | Purpose |
 |:--|:--|:--|
-| `registerWithGuid<T>(guid, asset)` | `(AssetGuid, T) => Handle<T>` | GUID-keyed registration; throws on duplicate GUID |
-| `resolveGuid<T>(guid)` | `(AssetGuid) => Result<Handle<T>, AssetError>` | GUID -> Handle lookup; Err on miss |
-| `guidOf(handle)` | `(Handle<Asset>) => AssetGuid \| undefined` | reverse Handle -> GUID lookup |
-| `loadByGuid<T>(guid)` | `(AssetGuid) => Promise<Result<Handle<T>, AssetError \| ImageError \| RhiError>>` | resolve by GUID, recursively loading every transitively referenced sub-asset before returning `ok` (tweak-20260609 M1-M3 post-condition strengthening). See separate `loadByGuid` recursive semantics paragraph below. |
-| `register<T>(asset)` | `(T) => Handle<T>` | anonymous registration without GUID |
-| `get<T>(handle)` | `(Handle<T>) => Result<T, AssetError>` | `.ok = true` -> `.value`; else `.error.code = 'asset-not-found'` |
-| `inspect()` | `() => { handles: Array<{ id, brand, refcount: 'immortal' }> }` | runtime snapshot; `brand` in `'MeshAsset'\|'TextureAsset'\|'SamplerAsset'\|'MaterialAsset'\|'SceneAsset'` (5-member closed union; feat-20260513-instanced-mesh M1 added `InstancedBufferAsset` then feat-20260514-ecs-children-instances-managed-buffer-array M3 / w15 deleted it — Asset closed-union 5 -> 4 minor — and feat-20260514-scene-as-world-blueprint w3 added `SceneAsset` (4 -> 5 minor); Instances per-entity transforms now flow through the ECS-managed `array<f32>` schema vocab) |
-| `configurePackIndex(url)` | `(string) => void` | Wire the pack-index URL for `loadByGuid`'s prod fetch path. Required before any prod-path `loadByGuid` call (build emits `pack-index.json`); dev path also benefits when the in-memory `registerWithGuid` Map misses. Idempotent — calling again resets the catalog cache (feat-20260517-vite-plugin-image-build-time-cook D-2). |
+| `catalog<T>(guid, asset)` | `(AssetGuid \| string, T) => Result<T, AssetError>` | Store a payload under its GUID. Validates mesh stride + material passes / sprite slices at entry (same fail-fast surface as the deleted `register`). Returns the stored payload (mesh payloads gain an `aabb`). Replaces `register` / `registerWithGuid`. |
+| `loadByGuid<T>(guid)` | `(AssetGuid) => Promise<Result<T, AssetError \| ImageError \| RhiError>>` | Resolve by GUID, returning **the payload** (not a handle), recursively loading every transitively referenced sub-asset before returning `ok` (tweak-20260609 M1-M3 post-condition). Fast path: already catalogued. Prod fetch path enabled by `configurePackIndex`. |
+| `lookup(guid)` | `(AssetGuid \| string) => Asset \| undefined` | Synchronous catalogue lookup; `undefined` on miss. Used render-side (e.g. `walkMaterialPassesOverSharedRefs`) to resolve a payload's embedded sub-asset GUIDs (D-19) without minting. |
+| `parseGuid(guidStr)` | `(string) => AssetGuid` | Parse a dash-form GUID; throws `AssetError` (`asset-parse-failed`) on a malformed literal (author-supplied, eager validation). |
+| `inspect()` | `() => InspectSnapshot` | Runtime catalogue snapshot for the inspector. |
+| `configurePackIndex(url)` | `(string) => void` | Wire the pack-index URL for `loadByGuid`'s prod fetch path. Required before any prod-path `loadByGuid` call (build emits `pack-index.json`); dev path falls back to the in-memory catalogue. Idempotent — calling again resets the catalog cache (feat-20260517 D-2). |
 
-- **Handle brand** — `Handle<T>` is phantom `number & { readonly __brand: T }`; `Handle<MeshAsset>` is not assignable to `Handle<TextureAsset>` (AC-09 TS guard).
+**Deleted by D-17** (no deprecation alias): `register` / `registerWithGuid` / `resolveGuid` / `guidOf` / `get(handle)` / `kindOf` / `resolveRefSync` + the handle<->guid maps (`guidToHandle` / `handleToGuid`) + `nextHandle`. `AssetRegistry` is math-/handle-free; resolution moved entirely ECS/render-side (see below).
+
+### Handle resolution — D-15 two-tier (`resolveAssetHandle` / `BuiltinAssetRegistry`)
+
+A column-ref field stores a `Handle<T, 'shared'>` (u32 slot). Resolution is **ECS/render-side**, dispatched by slot range — it never touches `AssetRegistry`:
+
+| Tier | Slot range | Owner | Lifecycle | Resolve |
+|:--|:--|:--|:--|:--|
+| **Builtin** | `[1, BUILTIN_BASE)` | `BuiltinAssetRegistry` (process-static frozen const; 5 builtin meshes `HANDLE_CUBE`..`HANDLE_NINESLICE_QUAD`) | never reference-counted; transparent across every World + renderer | `BuiltinAssetRegistry.resolve(handle)` (no World) |
+| **User** | `[BUILTIN_BASE, +inf)` | per-`World` `SharedRefStore` (`world.sharedRefs`) | ref-counted (retain / release, per-handle deleter) | `world.sharedRefs.resolve(handle)` |
+
+- **`resolveAssetHandle<T>(world, handle): Result<T, AssetError>`** (`packages/runtime/src/resolve-asset-handle.ts`) — the single ECS/render-side entry. Dispatches on slot range and returns the payload. Out-of-range / unowned builtin -> `asset-not-found`.
+- **`BuiltinAssetRegistry`** — top-level re-export from `@forgeax/engine-runtime`. Read-only: no register / mint surface; the 5 builtin payloads are fixed at module load (D-15 / R-13 init-order safe). `BuiltinAssetRegistry.resolve(handle)` returns the frozen payload for `slot < BUILTIN_BASE`, else `null` (user-tier slot — resolve via `world.sharedRefs`).
+- **`BUILTIN_BASE`** (`= 1024`, re-exported from the runtime barrel; defined in `@forgeax/engine-types` to avoid an `ecs -> runtime` cycle, D-16) — the slot boundary.
+- **`BuiltinSlotNotOwnedError`** — `SharedRefStore.alloc` / `retain` / `release` / `resolve` fail-fast with this code when handed a builtin slot (`< BUILTIN_BASE`); the store manages only user-tier slots (charter P3 machine-readable failure).
+
+### Use-site minting (GUID -> payload -> column handle)
+
+`loadByGuid` returns the payload; the caller mints a user-tier column handle at the use site via `world.allocSharedRef` (returns a **bare** `Handle`, no `.ok`):
+
+```ts
+const payload = (await assets.loadByGuid<MeshAsset>(guid)).value;   // payload, not a handle
+const handle = world.allocSharedRef('MeshAsset', payload);          // user-tier column handle
+world.spawn({ component: MeshFilter, data: { assetHandle: handle } }).unwrap();
+```
+
+Payload-internal nested sub-asset refs (`MaterialAsset.parent`, `FontAsset.atlas` / `.sampler`, `material.paramValues` texture/sampler entries) store the **GUID string verbatim** (`AssetGuid`), **not** a handle — `loadByGuid` recursion has no World to mint into (D-19). The render-side material walk resolves the root from its column handle via `resolveAssetHandle`, then each `parent` GUID via `AssetRegistry.lookup`.
 
 **HDR equirect loadByGuid (feat-20260604-hdr-equirect-cube-importer-loader):** HDR equirectangular sources (`.hdr`) are imported at build-time by `@forgeax/engine-image`'s `imageImporter` HDR arm (decodeHdr -> f32ToF16Bytes -> rgba16float `.bin`). The sidecar declares `subAssets[].kind: 'cube-texture'` with `importSettings.cubeFaceSize` and `specularMipLevels`. At runtime, `loadByGuid<TextureAsset>(hdrGuid)` loads the imported `.bin` through the standard production path (`configurePackIndex` -> pack-index fetch -> textureLoader -> imported `.bin` fetch). Raw `.hdr` sources hitting runtime without import fail fast with `image-decode-failed` (charter P3). After load, the equirect TextureAsset is uploaded to a cubemap via `renderer.store.uploadCubemapFromEquirect(handle, pod)`, then bound to a `Skylight` / `SkyboxBackground`.
 
-**`loadByGuid` recursive post-condition (tweak-20260609 M1-M3):** `loadByGuid<T>(guid)` returns `ok(handle)` only when the asset AND every transitively referenced sub-asset (per `collectRefs(asset)` dispatch on `asset.kind`) are in the registry. This is a **semantic strengthening, no shape change**: pre-existing consumers that pre-register sub-assets via `registerWithGuid` are protected by the registry fast-path (`guidToHandle` Map) so the recursive walk hits cache on every node -- zero additional fetch, behaviour unchanged. Adding a new `asset.kind` to the closed `Asset` union requires extending `collectRefs` (compiler-enforced via exhaustive `switch` with no `default` arm -- `tsc` reports `Type 'X' is not assignable to type 'never'`).
+**`loadByGuid` recursive post-condition (tweak-20260609 M1-M3):** `loadByGuid<T>(guid)` returns `ok(payload)` only when the asset AND every transitively referenced sub-asset (per `collectRefs(asset)` dispatch on `asset.kind`) are in the catalogue. This is a **semantic strengthening, no shape change** beyond the D-17 payload return: pre-existing consumers that pre-catalogue sub-assets via `catalog` are protected by the in-flight Map (D-5) so the recursive walk hits the catalogue on every node -- zero additional fetch. Adding a new `asset.kind` to the closed `Asset` union requires extending `collectRefs` (compiler-enforced via exhaustive `switch` with no `default` arm -- `tsc` reports `Type 'X' is not assignable to type 'never'`).
 
-**Minimal 2-line consumer example for SceneAsset:**
+**Minimal consumer example for SceneAsset** (`loadByGuid` returns the payload; mint a column handle, then instantiate — the scene's GUID-typed component fields are resolved to fresh user-tier handles internally, D-15 / D-17):
 
 ```ts
-const h = (await assets.loadByGuid<SceneAsset>(sceneGuid)).unwrap();
-const inst = assets.instantiate(h, world).unwrap();
+const scene = (await assets.loadByGuid<SceneAsset>(sceneGuid)).value;   // payload, not a handle
+const sceneHandle = world.allocSharedRef('SceneAsset', scene);
+const inst = assets.instantiate(sceneHandle, world).unwrap();
 ```
 
 ```ts
-import { AssetRegistry, type Handle } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 const guid = AssetGuid.parse('00000000-0000-7000-8000-000000000001');
 const res = await engine.assets.loadByGuid(guid);
 if (!res.ok) console.error(res.error.code, res.error.hint);
-else { const handle: Handle<unknown> = res.value; /* ... */ }
+else { const payload = res.value; /* mint via world.allocSharedRef at use site */ }
 ```
 
 ### Pack-index catalog rows + `'texture'` arm
 
 > feat-20260517-vite-plugin-image-build-time-cook D-2 — `PackIndexEntry` 5-field shape + `parseAssetPayload` `'texture'` arm dual sub-branch (HMR JPG fetch vs build-time cook RGBA fetch).
 
-`loadByGuid` resolves a GUID by reading the pack-index catalog (`pack-index.json` for build path, `/__pack/index` JSON response for dev path). Calling `assets.configurePackIndex('/pack-index.json')` is the prerequisite for the prod fetch path — without it `loadByGuid` falls back to the in-memory `registerWithGuid` Map (dev / fast-path). Each row is a `PackIndexEntry` with 5 fields (SSOT: `packages/types/src/index.ts`):
+`loadByGuid` resolves a GUID by reading the pack-index catalog (`pack-index.json` for build path, `/__pack/index` JSON response for dev path). Calling `assets.configurePackIndex('/pack-index.json')` is the prerequisite for the prod fetch path — without it `loadByGuid` falls back to the in-memory `catalog()` catalogue (dev / fast-path). Each row is a `PackIndexEntry` with 5 fields (SSOT: `packages/types/src/index.ts`):
 
 | Field | Type | Notes |
 |:--|:--|:--|
@@ -1497,19 +1518,21 @@ Legacy 4-field rows (non-texture / future arms) stay valid; `metadata === undefi
 > **`paramSchema` 是单一 SSOT；BGL / UBO / loader 三件套均由 `derive(paramSchema)` 派生**（feat-20260613-material-paramschema-driven-binding M3 / w12-w16）。`MaterialShaderEntry.bindingLayout` 字段已删；`MATERIAL_UBO_BYTES = 80` 常量已删；`MATERIAL_PARAM_TEXTURE_FIELDS` Set 常量已删。registerMaterialShader / render-system-record / material-loader 三处都调 `derive(schema)` 拿 `{ bglEntries, uboLayout, textureFieldNames, samplerForTexture, userRegionBindingEnd }` 五元组。详见 [`@forgeax/engine-shader` README §paramSchema v2](../shader/README.md)。
 
 - **`MaterialAsset`** — union `UnlitMaterialAsset | StandardMaterialAsset`；discriminator `shadingModel: 'unlit' | 'standard'`；消费站点 `switch (mat.shadingModel)` 无 default（TS 穷尽）。
-- **`MeshRenderer`** — 单 ECS component，shape `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`；schema 仅 `{ materials: 'array<handle<MaterialAsset>>' }`（feat-20260608 M2 / w7：旧单字段 `material: 'handle<MaterialAsset>'` 升级为 multi-material array；列存是 u32 句柄数组，brand 在 FieldValueType 层从 schema 字符串里 infer；`materials[i]` 索引位对位 `MeshAsset.submeshes[i]`，count mismatch fail-fast 抛 `mesh-renderer-material-count-mismatch`）；`world.spawn` 的 `data` 是 `Partial<ShapeOf<S>>`，字段可省略 → spawn 缺省走 case B fallback（详见上面 §ECS render bridge 错误分档表 D-Q7 三档子表）。shading model 分类只在 asset 上，不重复体现在 component 名（K-1 单一 SSOT 立场）。
-- **archetype dispatch** — `RenderSystem` 单 query（`world.query(MeshRenderer)`，case A archetype 缺位天然 skip）→ extract 阶段按 `material === undefined` (case B) / `assets.get(handle) === err` (case C) / `mat.shadingModel` 三层路由到 `defaultMaterialSnapshot()` / fire onError / unlit + standard pipeline；`unlit.wgsl` vs `pbr.wgsl` 两 WGSL 源在 `@forgeax/engine-shader`。
+- **`MeshRenderer`** — 单 ECS component，shape `MeshRenderer { materials: readonly Handle<'MaterialAsset', 'shared'>[] }`；schema 仅 `{ materials: 'array<shared<MaterialAsset>>' }`（feat-20260608 M2 / w7：旧单字段 `material: 'handle<MaterialAsset>'` 升级为 multi-material array，feat-20260614 vocab `handle<T>` -> `shared<T>` 物理删除；列存是 u32 句柄数组，brand 在 FieldValueType 层从 schema 字符串里 infer；`materials[i]` 索引位对位 `MeshAsset.submeshes[i]`，count mismatch fail-fast 抛 `mesh-renderer-material-count-mismatch`）；`world.spawn` 的 `data` 是 `Partial<ShapeOf<S>>`，字段可省略 → spawn 缺省走 case B fallback（详见上面 §ECS render bridge 错误分档表 D-Q7 三档子表）。shading model 分类只在 asset 上，不重复体现在 component 名（K-1 单一 SSOT 立场）。
+- **archetype dispatch** — `RenderSystem` 单 query（`world.query(MeshRenderer)`，case A archetype 缺位天然 skip）→ extract 阶段按 `material === undefined` (case B) / `resolveAssetHandle(world, handle) === err` (case C) / `mat.shadingModel` 三层路由到 `defaultMaterialSnapshot()` / fire onError / unlit + standard pipeline；`unlit.wgsl` vs `pbr.wgsl` 两 WGSL 源在 `@forgeax/engine-shader`。
 - **`MaterialSnapshot` 7 字段全集**（feat-20260517 / w6 + feat-20260522 expand 2 fields）— `{ shadingModel, baseColor, metallic, roughness, baseColorTexture, metallicRoughnessTexture, normalTexture }`；`shadingModel === 'unlit'` 时 `metallic / roughness` 为 0 占位，PBR 纹理 slot 为 undefined。PBR 三纹理 slot 对应 GPU pipeline binding 索引：`baseColorTexture` -> `@group(1) @binding(3)`、`metallicRoughnessTexture` -> `@group(1) @binding(4)`、`normalTexture` -> `@group(1) @binding(6)`。slot 为 `undefined` 时 record 阶段注入 per-device fallback placeholder view（default white for binding 4、default normal for binding 6）；`baseColorTexture` undefined 时 sampler 仍绑定但读取全白纹理（feat-20260518 baseColor path）。`StandardMaterialAsset` POD 字段 `metallicRoughnessTexture` / `normalTexture` 由 `@forgeax/engine-types` 声明（L226-227），extract 阶段从 `asset` 直读写入 snapshot，record 阶段按 snapshot 字段选择真 handle 或 fallback。AI 用户设置 PBR 纹理 slot 的三步：(a) 用 `engine.assets.uploadTexture` 或 `loadByGuid<TextureAsset>` 获取 `Handle<TextureAsset>`；(b) 构造 `MaterialAsset { shadingModel: 'standard', baseColorTexture: handle, metallicRoughnessTexture: handle2, normalTexture: handle3 }`；(c) `MeshRenderer { materials: [matHandle] }`。三 slot 全可选——未填时引擎自动注入 fallback 不报错。
 - **v1 不做变体** — shader variant / texture hot-reload 走 `feat-future-shader-variant` / `feat-future-asset-hot-reload`。
 
 ```ts
 import {
   MeshRenderer, MeshFilter, Transform, HANDLE_CUBE,
-  type MaterialAsset, type Handle,
+  type MaterialAsset,
 } from '@forgeax/engine-runtime';
-const matHandle: Handle<MaterialAsset> = engine.assets.register({
+// D-17: catalogue the payload by GUID, then mint a column handle at the use site.
+const matPayload = engine.assets.catalog(matGuid, {
   kind: 'material', shadingModel: 'standard', baseColor: [0.8, 0.4, 0.2], metallic: 0, roughness: 0.5,
-});
+} as MaterialAsset).value;
+const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
 world.spawn(
   { component: Transform, data: { /* ... */ } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -1534,21 +1557,23 @@ import {
   type MaterialAsset,
 } from '@forgeax/engine-runtime';
 
-const matRes = engine.assets.register<MaterialAsset>({
+// D-17 catalogue by GUID; D-19: paramValues texture/sampler store GUID strings verbatim.
+const matPayload = engine.assets.catalog<MaterialAsset>(spriteMatGuid, {
   kind: 'material',
   passes: [
     { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
   ],
   paramValues: {
     baseColor: [1, 1, 1, 1],
-    texture: textureHandle,           // Handle<TextureAsset>
-    sampler: samplerHandle,           // Handle<SamplerAsset>; addressMode='repeat' iff sliceMode=1
+    texture: textureGuid,             // AssetGuid string (D-19), NOT a handle
+    sampler: samplerGuid,             // AssetGuid string; addressMode='repeat' iff sliceMode=1
     region: [0, 0, 1, 1],             // optional; default [0,0,1,1] (full atlas)
     pivot:  [0.5, 0.5],               // optional; default [0.5,0.5]
     slices: [0.25, 0.25, 0.25, 0.25], // OPTIONAL 9-slice anchors (region-local UV 0..1)
     sliceMode: 0,                     // OPTIONAL; 0 = stretch, 1 = tile (numeric, NOT string)
   },
-});
+} as MaterialAsset).value;
+const spriteMatHandle = world.allocSharedRef('MaterialAsset', matPayload);
 // MeshFilter binds HANDLE_NINESLICE_QUAD ONLY when the sprite render path
 // detects slices !== [0,0,0,0]; otherwise HANDLE_QUAD (id=3) stays bound
 // (plan-strategy D-2 sentinel routing). Authors do not need to choose the
@@ -1596,6 +1621,7 @@ Counter key namespace is dot-delimited (mirrors `forgeax.metrics.*` build-time M
 |:--|:--|:--|
 | `nineslice.scale-too-small` | `render-system-record.ts` 9-slice branch | `Transform.scale[xy]` smaller than the 4-corner combined size; corners shrink uniformly per CSS border-image semantics (no fail-fast, no console.warn). |
 | `nineslice.tile-needs-repeat-sampler` | `AssetRegistry.register` D-9 soft-warn branch | Material with `sliceMode=1` binds a sampler whose `addressModeU` or `addressModeV` is not `'repeat'`. |
+| `package.xor-invariant-violated` | `AssetRegistry.registerPackage` 1->N promotion branch (feat-20260618 / D-4) | A single-asset package whose lone asset already carries a stored name is promoted to multi-asset (the abnormal single-asset-with-name XOR state). The pre-existing name is preserved, not overwritten; this is a soft-warn, not a fail-fast. Read the counter -- `resolveName` never throws. |
 
 ### When to choose stretch vs tile
 
@@ -1723,7 +1749,7 @@ This constraint is inherited from the engine's choice to keep the per-instance t
 import { createBoxGeometry, AssetRegistry } from '@forgeax/engine-runtime';
 const meshRes = createBoxGeometry(1, 1, 1, 2, 2, 2);
 if (!meshRes.ok) console.error(meshRes.error.code);
-else { const handle = engine.assets.register(meshRes.value); /* ... */ }
+else { const handle = world.allocSharedRef('MeshAsset', meshRes.value); /* mint column handle at use site */ }
 ```
 
 ## Frustum Culling (feat-20260528-frustum-culling)
