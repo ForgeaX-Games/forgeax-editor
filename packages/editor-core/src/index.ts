@@ -245,6 +245,7 @@ export {
   broadcastAssetsChanged,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
+  hasPendingDiskSave,
   setAssetSelection,
   getAssetSelection,
   useAssetSelection,
