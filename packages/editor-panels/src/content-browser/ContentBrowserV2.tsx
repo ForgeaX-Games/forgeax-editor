@@ -15,7 +15,6 @@ import { CBList } from './CBList';
 import { CBColumn } from './CBColumn';
 import { CBStatusBar } from './CBStatusBar';
 import { CBToolbar } from './CBToolbar';
-import { extractPackDirs } from '@forgeax/editor-core';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
@@ -57,16 +56,31 @@ export function ContentBrowserV2() {
 
   useEffect(() => { reload(); }, [reload]);
 
+  const gamePrefix = `.forgeax/games/${gameSlug}/`;
+
   const packDirs = useMemo(() => {
-    const paths = allAssets.map(a => a.packPath);
-    return extractPackDirs(paths as any);
-  }, [allAssets]);
+    const dirs = new Set<string>();
+    for (const a of allAssets) {
+      const rel = a.packPath.startsWith(gamePrefix)
+        ? a.packPath.slice(gamePrefix.length)
+        : a.packPath;
+      const dir = rel.replace(/\/[^/]+$/, '');
+      if (!dir) continue;
+      let cur = dir;
+      while (cur) {
+        dirs.add(cur);
+        const slash = cur.lastIndexOf('/');
+        cur = slash > 0 ? cur.slice(0, slash) : '';
+      }
+    }
+    return [...dirs].sort();
+  }, [allAssets, gamePrefix]);
 
   const assetsInPath = useMemo(() => {
     if (!nav.currentPath) return allAssets;
-    const prefix = nav.currentPath;
-    return allAssets.filter(a => a.packPath.includes(prefix));
-  }, [allAssets, nav.currentPath]);
+    const fullPrefix = gamePrefix + nav.currentPath;
+    return allAssets.filter(a => a.packPath.startsWith(fullPrefix + '/') || a.packPath.startsWith(fullPrefix));
+  }, [allAssets, nav.currentPath, gamePrefix]);
 
   const filteredAssets = useMemo(() => filter.applyFilters(assetsInPath), [filter, assetsInPath]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);

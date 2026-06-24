@@ -65,13 +65,25 @@ export function CBToolbar({ currentPath, onReload }: Props) {
     if (!files || files.length === 0) return;
 
     for (const file of Array.from(files)) {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('path', `${basePath}/${file.name}`);
-
       try {
-        await fetch('/api/files/upload', { method: 'POST', body: formData });
-      } catch { /* best effort */ }
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        const data = btoa(binary);
+
+        const r = await fetch('/api/files/upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: `${basePath}/${file.name}`, data }),
+        });
+        if (!r.ok) console.warn('[CBToolbar] upload failed:', file.name, r.status);
+      } catch (err) {
+        console.warn('[CBToolbar] upload error:', file.name, err);
+      }
     }
     broadcastAssetsChanged();
     onReload();
