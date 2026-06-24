@@ -10,6 +10,55 @@
   overflow: hidden;
 }
 
+/* ── Split layout ── */
+.cb-split {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+.cb-source-panel {
+  width: 180px;
+  min-width: 120px;
+  max-width: 260px;
+  border-right: 1px solid var(--border, #333);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.cb-asset-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cb-source-section { padding: 4px 0; }
+.cb-source-title {
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--panel-fg, #aaa);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cb-source-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--panel-fg, #ccc);
+  text-align: left;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-source-item:hover { background: var(--hover-bg, #2a2a2a); }
+.cb-source-item.sel {
+  background: var(--sel-bg, #264f78);
+  color: #fff;
+}
+
 /* ── Toolbar ── */
 .cb-toolbar {
   display: flex;
