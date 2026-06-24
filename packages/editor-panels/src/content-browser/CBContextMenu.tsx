@@ -1,10 +1,8 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
-import { setAssetSelection, requestRefAsset, requestAddAssetsToChat, type AssetChatRef } from '@forgeax/editor-shared';
-
-export interface ContextMenuPosition {
-  x: number;
-  y: number;
-}
+import {
+  setAssetSelection, requestAddAssetsToChat, type AssetChatRef,
+  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
+} from '@forgeax/editor-shared';
 
 export interface ContextMenuItem {
   id: string;
@@ -20,19 +18,51 @@ function getAssetsInSelection(selection: CBSelection): CBAsset[] {
   return selection.items.filter((i): i is CBAsset => i.type === 'asset');
 }
 
+export interface CRUDCallbacks {
+  onRename?: (asset: CBAsset) => void;
+  onNewFolder?: (parentPath: string) => void;
+  onReload?: () => void;
+}
+
 export function buildAssetContextMenu(
   asset: CBAsset,
   selection: CBSelection,
   allAssets: CBAsset[],
+  callbacks?: CRUDCallbacks,
 ): ContextMenuItem[] {
   const selectedAssets = getAssetsInSelection(selection);
   const targets = selectedAssets.length > 1 ? selectedAssets : [asset];
 
   return [
     // ── Common ──
-    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => { /* M2 */ } },
-    { id: 'duplicate', label: 'Duplicate', shortcut: 'Ctrl+D', action: () => { /* M2 */ } },
-    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => { /* M2 */ } },
+    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => {
+      if (callbacks?.onRename) {
+        callbacks.onRename(asset);
+      } else {
+        const newName = window.prompt('Rename asset:', asset.name);
+        if (newName && newName !== asset.name) {
+          void renameAssetInPack(asset.packPath, asset.guid, newName).then(ok => {
+            if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
+          });
+        }
+      }
+    }},
+    { id: 'duplicate', label: 'Duplicate', shortcut: 'Ctrl+D', action: () => {
+      for (const a of targets) {
+        void duplicateAssetInPack(a.packPath, a.guid).then(({ ok }) => {
+          if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
+        });
+      }
+    }},
+    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+      const names = targets.map(a => a.name).join(', ');
+      if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
+      for (const a of targets) {
+        void deleteAsset(a.packPath, a.guid).then(ok => {
+          if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
+        });
+      }
+    }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
     // ── References ──
@@ -84,15 +114,18 @@ export function buildAssetContextMenu(
 export function buildFolderContextMenu(
   folder: CBFolder,
   assetsInFolder: CBAsset[],
+  callbacks?: CRUDCallbacks,
 ): ContextMenuItem[] {
   return [
     // ── Folder ──
     { id: 'open', label: 'Open', action: () => { /* handled by caller via navigate */ } },
-    { id: 'new-folder', label: 'New Folder', action: () => { /* M2 */ } },
+    { id: 'new-folder', label: 'New Folder', action: () => {
+      callbacks?.onNewFolder?.(folder.path);
+    }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
-    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => { /* M2 */ } },
-    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => { /* M2 */ } },
+    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
+    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => { /* folder delete needs server API */ } },
     { id: 'copy-path', label: 'Copy Path', action: () => {
       void navigator.clipboard.writeText(folder.path);
     }},
@@ -106,13 +139,12 @@ export function buildFolderContextMenu(
     { id: 'add-folder-chat', label: '🤖 Add Folder to AI Chat', action: () => {
       const kinds: Record<string, number> = {};
       for (const a of assetsInFolder) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
-      const ref: AssetChatRef = {
+      requestAddAssetsToChat([{
         type: 'folder',
         name: folder.name,
         path: folder.path,
         summary: { totalAssets: assetsInFolder.length, kinds, guids: assetsInFolder.map(a => a.guid) },
-      };
-      requestAddAssetsToChat([ref]);
+      }]);
     }},
     { id: 'add-folder-summary', label: '🤖 Add Folder Summary to Chat', action: () => {
       const kinds: Record<string, number> = {};

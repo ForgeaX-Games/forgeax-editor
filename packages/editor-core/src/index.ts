@@ -137,6 +137,19 @@ export {
 } from './assets';
 export type { PackAsset, RawAsset } from './assets';
 
+// ── Pack CRUD (M2) ──
+export {
+  generateAssetGuid,
+  addAssetToPack,
+  removeAssetFromPack,
+  renameAssetInPack,
+  duplicateAssetInPack,
+  moveAsset,
+  deleteAsset,
+  createPack,
+  createDirectory,
+} from './pack-ops';
+
 // ── Matgraph ──
 export {
   evaluate,

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { loadGameAssets, type PackAsset } from '@forgeax/editor-core';
-import { getSceneId, setAssetSelection, showContextMenu, useDocVersion } from '@forgeax/editor-shared';
+import { getSceneId, setAssetSelection, showContextMenu, useDocVersion,
+  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-shared';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
-import { buildAssetContextMenu } from './CBContextMenu';
+import { buildAssetContextMenu, type CRUDCallbacks } from './CBContextMenu';
 import { CBFilterBar } from './CBFilterBar';
 import { CBNavigationBar } from './CBNavigationBar';
 import { CBGrid } from './CBGrid';
@@ -73,14 +74,35 @@ export function ContentBrowserV2() {
     });
   }, []);
 
+  const crudCallbacks: CRUDCallbacks = useMemo(() => ({
+    onReload: reload,
+    onRename: (asset: CBAsset) => {
+      const newName = window.prompt('Rename asset:', asset.name);
+      if (newName && newName !== asset.name) {
+        void renameAssetInPack(asset.packPath, asset.guid, newName).then(ok => {
+          if (ok) { broadcastAssetsChanged(); reload(); }
+        });
+      }
+    },
+    onNewFolder: (parentPath: string) => {
+      const name = window.prompt('New folder name:');
+      if (!name) return;
+      const slug = getSceneId();
+      const fullPath = `.forgeax/games/${slug}/${parentPath ? parentPath + '/' : ''}${name}`;
+      void createDirectory(fullPath).then(ok => {
+        if (ok) reload();
+      });
+    },
+  }), [reload]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, asset: CBAsset) => {
-    const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets);
+    const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
     showContextMenu(e, menuItems.filter(m => !m.separator).map(m => ({
       label: m.label,
       onClick: m.action,
       disabled: m.disabled,
     })));
-  }, [multiSelect.selection, allAssets]);
+  }, [multiSelect.selection, allAssets, crudCallbacks]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
@@ -93,11 +115,40 @@ export function ContentBrowserV2() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         e.preventDefault();
         multiSelect.selectAll();
+        return;
+      }
+      const primary = multiSelect.selection.primary;
+      if (!primary || primary.type !== 'asset') return;
+      const asset = primary as CBAsset;
+
+      if (e.key === 'F2') {
+        e.preventDefault();
+        crudCallbacks.onRename?.(asset);
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
+        const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
+        const names = targets.map(a => a.name).join(', ');
+        if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
+        for (const a of targets) {
+          void deleteAsset(a.packPath, a.guid).then(ok => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+        e.preventDefault();
+        const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
+        const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
+        for (const a of targets) {
+          void duplicateAssetInPack(a.packPath, a.guid).then(({ ok }) => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
+        }
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [multiSelect]);
+  }, [multiSelect, crudCallbacks, reload]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;
