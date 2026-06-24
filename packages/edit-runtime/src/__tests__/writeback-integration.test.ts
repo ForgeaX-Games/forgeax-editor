@@ -180,6 +180,11 @@ describe('w39 — writebackInstance drives the real engine collectSceneAsset cha
   it('(c) handle->GUID reverse index resolves a shared field through the real chain', async () => {
     // Field named 'assetHandle' triggers the collector's handle->GUID allowlist;
     // f32 type avoids shared-ref schema validation (same trick as engine w10).
+    // The collector resolves the live handle int -> GUID string; the serializer
+    // then de-dupes GUID strings into the pack's refs[] and replaces each inline
+    // occurrence with the ref index (engine M2 D-1). So the assertion checks
+    // refs[] carries the GUID and the inline field is a numeric ref index, NOT
+    // the raw GUID string (the same contract the engine's own w10 (g) test uses).
     defineComponent('W39_MeshRef', { assetHandle: 'f32' });
 
     const fakeHandle = 777;
@@ -200,8 +205,18 @@ describe('w39 — writebackInstance drives the real engine collectSceneAsset cha
     );
 
     expect(result.ok).toBe(true);
+
+    // The GUID survives the real collect->serialize chain into refs[].
+    const pack = JSON.parse(captured!.content) as {
+      assets: Array<{ refs: string[] }>;
+    };
+    expect(pack.assets[0]!.refs).toContain(meshGuid);
+
+    // The inline field is the ref index pointing at that GUID (not the raw int,
+    // not the raw GUID) — proving the handle->GUID->ref-index path ran.
     const entities = payloadEntities(captured!.content);
-    expect(comp(entities[0]!, 'W39_MeshRef')!.assetHandle).toBe(meshGuid);
+    const refIndex = pack.assets[0]!.refs.indexOf(meshGuid);
+    expect(comp(entities[0]!, 'W39_MeshRef')!.assetHandle).toBe(refIndex);
   });
 
   it('(d) the written pack carries the source scene GUID (single-instance addressing)', async () => {
