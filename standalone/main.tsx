@@ -47,8 +47,14 @@ import {
   PanelRenderersProvider,
   DEFAULT_PANEL_RENDERERS,
 } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { useAppStore } from '@forgeax/interface/store';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import '@forgeax/interface/styles/global.css';
+
+// Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
+// null when the stack was started without `cli.sh run --game <dir>` — in that
+// case no game is served and the editor shows its built-in demo seed.
+declare const __FORGEAX_GAME_SLUG__: string | null;
 
 // Thin-shell renderers — the standalone host renders edit/preview as iframes to
 // edit-runtime (:15280, proxied), the same pattern as the ep:* panels, instead
@@ -57,18 +63,33 @@ import '@forgeax/interface/styles/global.css';
 // supplies these surfaces through the PanelRenderers injection point.
 const SURFACE_IFRAME_STYLE: React.CSSProperties = { width: '100%', height: '100%', border: 'none', display: 'block' };
 
+// Build the edit-runtime iframe query. When a game slug is injected, thread
+// ?scene=<slug>&gameRoot=<slug> so edit-runtime's default PathResolver
+// (main.tsx:117) takes the ?gameRoot= branch (gameRoot=slug) — matching the host
+// middleware's toDiskPath, which strips the <slug>/ prefix. No slug → no params
+// → edit-runtime sceneId stays 'default' → demo seed.
+function editRuntimeQuery(extra?: Record<string, string>): string {
+  const q = new URLSearchParams(extra);
+  const slug = __FORGEAX_GAME_SLUG__;
+  if (slug) {
+    q.set('scene', slug);
+    q.set('gameRoot', slug);
+  }
+  return q.toString();
+}
+
 const standaloneRenderers = {
   ...DEFAULT_PANEL_RENDERERS,
   renderEdit: ({ viewportOnly }: { viewportOnly?: boolean }) => (
     <iframe
       title="Edit"
-      src={`/editor/?${viewportOnly ? 'viewportOnly=1' : ''}`}
+      src={`/editor/?${editRuntimeQuery(viewportOnly ? { viewportOnly: '1' } : undefined)}`}
       style={SURFACE_IFRAME_STYLE}
       allow="autoplay; xr-spatial-tracking *; fullscreen *; pointer-lock *"
     />
   ),
   renderPreview: () => (
-    <iframe title="Preview" src="/editor/?play=1" style={SURFACE_IFRAME_STYLE} />
+    <iframe title="Preview" src={`/editor/?${editRuntimeQuery({ play: '1' })}`} style={SURFACE_IFRAME_STYLE} />
   ),
 };
 
@@ -99,6 +120,26 @@ function boot(): void {
       hint: '#root element not present in standalone/index.html',
       expected: '<div id="root"></div>',
     });
+  }
+
+  // Pin the active game BEFORE React mounts so EditorPanelFrame builds its panel
+  // iframe src (&scene=) for this game. pinnedSlug MUST be set via the store's
+  // setPinnedSlug at runtime — the store reads localStorage lazily at MODULE
+  // INIT (store.ts:2446), which already ran during import (before boot()), so
+  // writing localStorage here would be too late for pinnedSlug. setPinnedSlug
+  // also persists to localStorage. Clearing when no --game guarantees a stale
+  // pin from a prior --game run can't make panels request a now-unserved game.
+  //
+  // forgeax.gameRoot is a separate standalone-only signal read at RENDER time by
+  // EditorPanelFrame (so localStorage is fine for it): when present it appends
+  // &gameRoot=<value> so the panel-side resolver uses <slug> (matching the host
+  // middleware). studio embedded never sets it → panels keep the default.
+  try {
+    useAppStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
+    if (__FORGEAX_GAME_SLUG__) localStorage.setItem('forgeax.gameRoot', __FORGEAX_GAME_SLUG__);
+    else localStorage.removeItem('forgeax.gameRoot');
+  } catch {
+    /* store/localStorage unavailable — fine; demo seed path still works */
   }
 
   // React tree — DockShell + EditorPanelFrame iframes + the renderEdit viewport

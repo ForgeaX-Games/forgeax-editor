@@ -118,14 +118,29 @@ ensure_wasm() {
 
 # ── run: launch the standalone stack (foreground; Ctrl-C cleans up) ──────────
 run() {
-  local play=0 bg=0
-  for arg in "$@"; do
-    case "$arg" in
-      --play) play=1 ;;
-      --bg)   bg=1 ;;
-      *) die "unknown run flag: $arg (supported: --play, --bg)" ;;
+  local play=0 bg=0 game=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --play)    play=1 ;;
+      --bg)      bg=1 ;;
+      --game)    shift; game="${1:-}"; [ -n "$game" ] || die "--game needs a path" ;;
+      --game=*)  game="${1#--game=}" ;;
+      *) die "unknown run flag: $1 (supported: --play, --bg, --game <path>)" ;;
     esac
+    shift
   done
+
+  # --game <dir>: serve that game's files read-only via the host vite middleware
+  # (vite.config.ts gameApiMiddleware) so the standalone editor opens a REAL game
+  # instead of the demo seed. dir must directly contain forge.json; slug=basename.
+  local game_dir=""
+  if [ -n "$game" ]; then
+    [ -d "$game" ] || die "--game path is not a directory: $game"
+    game_dir="$(cd "$game" && pwd)"
+    [ -f "$game_dir/forge.json" ] || die "--game dir has no forge.json: $game_dir"
+    ok "serving game '$(basename "$game_dir")' from $game_dir"
+  fi
+  export FORGEAX_GAME_DIR="$game_dir"
 
   # preflight — if the engine build is missing, point at install (don't silently
   # build: install is the explicit, slow, one-time step).
@@ -175,6 +190,8 @@ forgeax-editor cli — one-stop standalone dev stack
   bash cli.sh install         prepare everything (submodules, deps, engine dist + wasm)
   bash cli.sh run [--play]    start the stack (:15290 host + :15280 edit-runtime
                               [+ :15173 play-runtime with --play]); Ctrl-C stops
+  bash cli.sh run --game DIR  open a real game (DIR directly contains forge.json),
+                              served read-only by the host vite; omit → demo seed
   bash cli.sh run --bg        start in background (logs in /tmp), returns immediately
   bash cli.sh stop            stop everything cli.sh started (by port)
 
