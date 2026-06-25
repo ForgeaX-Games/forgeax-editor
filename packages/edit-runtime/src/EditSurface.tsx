@@ -158,6 +158,12 @@ async function importAssetFile(
   slug: string,
   serverBase: string,
 ): Promise<{ ok: boolean; error?: string; dest?: string }> {
+  // EditSurface runs in the HOST (interface) window — a separate JS realm from the
+  // editor iframe where setPathResolver is installed, so the editor-core resolver
+  // singleton isn't reachable here. This is a host adapter that owns the studio
+  // layout convention by design (the slug arrives as an explicit prop, not implicit
+  // context) — the same role main.tsx's setPathResolver default adapter plays for
+  // the iframe realm. Pure libs (editor-core/editor-shared) stay convention-free.
   const dest = `.forgeax/games/${slug}/assets/${file.name}`;
   try {
     const buf = await file.arrayBuffer();

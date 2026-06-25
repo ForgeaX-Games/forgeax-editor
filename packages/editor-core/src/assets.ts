@@ -7,6 +7,7 @@
 // (same-origin via the interface proxy).
 import { Materials } from '@forgeax/engine-runtime';
 import { fetchWithTimeout } from './net';
+import { resolveGamePath } from './path-resolver';
 
 export interface PackAsset {
   guid: string;
@@ -19,30 +20,10 @@ export interface PackAsset {
 
 interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
 
-async function packPaths(slug: string): Promise<string[]> {
-  const root = `.forgeax/games/${slug}/assets`;
-  try {
-    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
-    if (!r.ok) return [];
-    const j = (await r.json()) as { tree?: TreeNode };
-    const out: string[] = [];
-    const walk = (n?: TreeNode): void => {
-      if (!n) return;
-      if (n.type === 'file' && n.name.endsWith('.pack.json')) out.push(n.path);
-      n.children?.forEach(walk);
-    };
-    walk(j.tree);
-    return out;
-  } catch {
-    return [];
-  }
-}
-
 /** Every `*.pack.json` under the WHOLE game dir (not just assets/) — needed to
- *  find scene packs that live in `scenes/` or at the game root, which `packPaths`
- *  (assets-only) never sees. */
-async function allGamePackPaths(slug: string): Promise<string[]> {
-  const root = `.forgeax/games/${slug}`;
+ *  find scene packs that live in `scenes/` or at the game root. */
+async function allGamePackPaths(_slug: string): Promise<string[]> {
+  const root = resolveGamePath('');
   try {
     const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
@@ -74,7 +55,9 @@ export async function findScenePackByGuid(
   guid: string | null | undefined,
 ): Promise<string | null> {
   if (!slug || slug === 'default' || !guid) return null;
-  const prefix = `.forgeax/games/${slug}/`;
+  // Game root (host-resolved) → strip it so callers get a game-relative pack path.
+  const root = resolveGamePath('');
+  const prefix = root.endsWith('/') ? root : `${root}/`;
   for (const p of await allGamePackPaths(slug)) {
     try {
       const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
@@ -110,7 +93,7 @@ const RAW_EXTS: Record<string, RawAsset['kind']> = {
 export async function loadRawAssets(slug: string | null | undefined): Promise<RawAsset[]> {
   if (!slug || slug === 'default') return [];
   try {
-    const root = `.forgeax/games/${slug}/assets`;
+    const root = resolveGamePath('assets');
     const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };

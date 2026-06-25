@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { getSceneId, broadcastAssetsChanged } from '@forgeax/editor-shared';
+import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { generateAssetGuid, addAssetToPack, createPack, createDirectory } from '@forgeax/editor-core';
 import { ASSET_KINDS, type AssetKind } from './types';
 
@@ -25,8 +25,7 @@ export function CBToolbar({ currentPath, onReload }: Props) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const gameSlug = getSceneId();
-  const basePath = `.forgeax/games/${gameSlug}/${currentPath || 'assets'}`;
+  const basePath = resolveGamePath(currentPath || 'assets');
 
   const handleCreateAsset = useCallback(async (kind: AssetKind) => {
     setAddMenuOpen(false);

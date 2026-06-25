@@ -3,8 +3,9 @@
 // Shows what THIS editor window is editing (one window ↔ one scene, bound via
 // `?sceneFile=` — see store.switchSceneFile) and configures what the Studio
 // ▶ Play tab runs: the full campaign from main, or one specific level.
-// Writes .forgeax/games/<slug>/play-config.json via /api/files (gitignored,
-// per-developer launcher state); the game's main.ts reads it at boot.
+// Writes the game's play-config.json via writePlayConfig (host-resolved path,
+// /api/files; gitignored, per-developer launcher state); the game's main.ts
+// reads it at boot.
 import { useEffect, useState } from 'react';
 import {
   getSceneId, useSceneList, useSceneFile, readPlayConfig, writePlayConfig,
