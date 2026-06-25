@@ -130,6 +130,7 @@ export type { Clip, Track, Interp } from './anim';
 // ── Assets ──
 export {
   loadGameAssets,
+  loadMetaAssets,
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,
@@ -287,3 +288,12 @@ export { focusPanel, openSourcePanel } from './dock-bridge';
 // ── Project authoring (M3) ──
 export { openProject, type OpenProjectResult } from './open-project';
 export { createFetchReader } from './fetch-reader';
+
+// ── Host-injected game path resolver (layout decoupling) ──
+export {
+  setPathResolver,
+  resolveGamePath,
+  hasPathResolver,
+  EditorPathResolverError,
+} from './path-resolver';
+export type { PathResolver } from './path-resolver';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { loadGameAssets, type PackAsset } from '@forgeax/editor-core';
-import { getSceneId, setAssetSelection, showContextMenu, useDocVersion,
+import { loadGameAssets, loadMetaAssets, type PackAsset } from '@forgeax/editor-core';
+import { getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-shared';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -15,6 +15,8 @@ import { CBList } from './CBList';
 import { CBColumn } from './CBColumn';
 import { CBStatusBar } from './CBStatusBar';
 import { CBToolbar } from './CBToolbar';
+import { importFiles, type ImportProgress } from './import-pipeline';
+import { isImportable } from './import-registry';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
@@ -24,7 +26,7 @@ function packAssetToCBAsset(pa: PackAsset, index: number): CBAsset {
     guid: pa.guid,
     kind: pa.kind,
     name: pa.name,
-    payload: pa.payload,
+    payload: { ...pa.payload, _packPath: pa.packPath },
     packPath: pa.packPath,
     packIndex: index,
     refs: [],
@@ -39,6 +41,8 @@ export function ContentBrowserV2() {
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<CBViewMode>('grid');
   const [thumbnailSize, setThumbnailSize] = useState(80);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const nav = useNavHistory();
   const filter = useFilter();
   const sort = useSort();
@@ -48,15 +52,30 @@ export function ContentBrowserV2() {
     const slug = getSceneId();
     if (!slug || slug === 'default') return;
     setLoading(true);
-    void loadGameAssets(slug).then(assets => {
-      setAllAssets(assets.map(packAssetToCBAsset));
+    void Promise.all([loadGameAssets(slug), loadMetaAssets(slug)]).then(([packAssets, metaAssets]) => {
+      const pack = packAssets.map(packAssetToCBAsset);
+      const meta = metaAssets.map(packAssetToCBAsset);
+      const seen = new Set(pack.map((a: CBAsset) => a.guid));
+      const merged = [...pack, ...meta.filter((a: CBAsset) => !seen.has(a.guid))];
+      setAllAssets(merged);
       setLoading(false);
     });
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
 
-  const gamePrefix = `.forgeax/games/${gameSlug}/`;
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'VAG_ASSETS_CHANGED') reload();
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [reload]);
+
+  // Host-resolved game root (with trailing slash) — used to strip the absolute
+  // packPath prefix back to a game-relative path for the folder tree.
+  const gameRoot = resolveGamePath('');
+  const gamePrefix = gameRoot.endsWith('/') ? gameRoot : `${gameRoot}/`;
 
   const packDirs = useMemo(() => {
     const dirs = new Set<string>();
@@ -110,8 +129,7 @@ export function ContentBrowserV2() {
     onNewFolder: (parentPath: string) => {
       const name = window.prompt('New folder name:');
       if (!name) return;
-      const slug = getSceneId();
-      const fullPath = `.forgeax/games/${slug}/${parentPath ? parentPath + '/' : ''}${name}`;
+      const fullPath = resolveGamePath(`${parentPath ? parentPath + '/' : ''}${name}`);
       void createDirectory(fullPath).then(ok => {
         if (ok) reload();
       });
@@ -179,11 +197,45 @@ export function ContentBrowserV2() {
     setThumbnailSize(prev => Math.max(48, Math.min(200, prev - Math.sign(e.deltaY) * 8)));
   }, [viewMode]);
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => isImportable(f.name));
+    if (files.length === 0 || !gameSlug || gameSlug === 'default') return;
+    void importFiles(
+      files,
+      nav.currentPath,
+      (p) => setImportProgress(p),
+      reload,
+    ).then(() => {
+      setTimeout(() => setImportProgress(null), 3000);
+    });
+  }, [gameSlug, nav.currentPath, reload]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragOver(false);
+  }, []);
+
   const noGame = !gameSlug || gameSlug === 'default';
 
   return (
-    <div className="cb-root" onWheel={handleWheel}>
-      <CBToolbar currentPath={nav.currentPath} onReload={reload} />
+    <div
+      className={`cb-root${dragOver ? ' cb-drag-over' : ''}`}
+      onWheel={handleWheel}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
+      <CBToolbar currentPath={nav.currentPath} onReload={reload} onImportProgress={setImportProgress} />
       {noGame ? (
         <div style={{ padding: 16, opacity: 0.6, textAlign: 'center', marginTop: 32 }}>
           Open a game to browse assets
@@ -256,6 +308,28 @@ export function ContentBrowserV2() {
             )}
             <CBStatusBar totalItems={sortedAssets.length} selection={multiSelect.selection} />
           </div>
+        </div>
+      )}
+
+      {importProgress && (
+        <div className="cb-import-progress">
+          <span className="cb-import-progress-text">
+            {importProgress.completed < importProgress.total
+              ? `Importing ${importProgress.completed + 1}/${importProgress.total}: ${importProgress.current}`
+              : `Import complete: ${importProgress.results.filter(r => r.status === 'done').length}/${importProgress.total} succeeded`}
+          </span>
+          <div className="cb-import-progress-bar">
+            <div
+              className="cb-import-progress-fill"
+              style={{ width: `${(importProgress.completed / importProgress.total) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {dragOver && (
+        <div className="cb-drag-overlay">
+          <div className="cb-drag-overlay-label">Drop files to import</div>
         </div>
       )}
     </div>

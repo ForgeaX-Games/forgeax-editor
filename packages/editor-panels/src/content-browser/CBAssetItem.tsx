@@ -21,10 +21,35 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
     onContextMenu(e);
   }, [onContextMenu]);
 
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    const ref = {
+      type: 'asset' as const,
+      guid: asset.guid,
+      kind: asset.kind,
+      name: asset.name,
+      path: asset.packPath,
+      payload: asset.payload,
+    };
+    e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
+    e.dataTransfer.effectAllowed = 'copy';
+    try {
+      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_START', ref }, '*');
+    } catch { /* cross-origin */ }
+  }, [asset]);
+
+  const handleDragEnd = useCallback(() => {
+    try {
+      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_END' }, '*');
+    } catch { /* cross-origin */ }
+  }, []);
+
   return (
     <div
       className={`cb-grid-item${selected ? ' sel' : ''}`}
       style={{ width: thumbnailSize + 8, height: thumbnailSize + 28 }}
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={handleCtxMenu}
@@ -41,10 +66,19 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
       >
         {thumb.type === 'gradient' ? (
           <div className="cb-thumb-sphere" style={{ background: thumb.gradient }} />
+        ) : thumb.type === 'image' && thumb.imageUrl ? (
+          <img
+            src={thumb.imageUrl}
+            alt={asset.name}
+            className="cb-thumb-img"
+            style={{ width: thumbnailSize, height: thumbnailSize, objectFit: 'contain' }}
+            loading="lazy"
+          />
         ) : (
           <span className="cb-grid-icon">{thumb.icon}</span>
         )}
         {thumb.badge && <span className="cb-thumb-badge">{thumb.badge}</span>}
+        {asset.payload?.cookError && <span className="cb-thumb-warn" title={String(asset.payload.cookError)}>⚠</span>}
       </div>
       <div className="cb-grid-label" title={asset.name}>{asset.name}</div>
 

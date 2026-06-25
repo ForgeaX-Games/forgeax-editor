@@ -1,11 +1,14 @@
 import { useCallback, useRef, useState } from 'react';
-import { getSceneId, broadcastAssetsChanged } from '@forgeax/editor-shared';
+import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { generateAssetGuid, addAssetToPack, createPack, createDirectory } from '@forgeax/editor-core';
 import { ASSET_KINDS, type AssetKind } from './types';
+import { importFiles, type ImportProgress } from './import-pipeline';
+import { buildAcceptString } from './import-registry';
 
 interface Props {
   currentPath: string;
   onReload: () => void;
+  onImportProgress?: (progress: ImportProgress | null) => void;
 }
 
 const KIND_ICONS: Record<string, string> = {
@@ -21,12 +24,11 @@ const EMPTY_PAYLOADS: Partial<Record<AssetKind, () => Record<string, unknown>>> 
   shader: () => ({ kind: 'shader', source: '// WGSL shader\n' }),
 };
 
-export function CBToolbar({ currentPath, onReload }: Props) {
+export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const gameSlug = getSceneId();
-  const basePath = `.forgeax/games/${gameSlug}/${currentPath || 'assets'}`;
+  const basePath = resolveGamePath(currentPath || 'assets');
 
   const handleCreateAsset = useCallback(async (kind: AssetKind) => {
     setAddMenuOpen(false);
@@ -64,31 +66,23 @@ export function CBToolbar({ currentPath, onReload }: Props) {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    for (const file of Array.from(files)) {
-      try {
-        const buf = await file.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let binary = '';
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-        }
-        const data = btoa(binary);
+    onImportProgress?.({ total: files.length, completed: 0, current: '', results: [] });
 
-        const r = await fetch('/api/files/upload', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path: `${basePath}/${file.name}`, data }),
-        });
-        if (!r.ok) console.warn('[CBToolbar] upload failed:', file.name, r.status);
-      } catch (err) {
-        console.warn('[CBToolbar] upload error:', file.name, err);
-      }
+    const results = await importFiles(
+      Array.from(files),
+      currentPath,
+      (progress) => onImportProgress?.(progress),
+      onReload,
+    );
+
+    const errors = results.filter(r => r.status === 'error');
+    if (errors.length > 0) {
+      console.warn('[CBToolbar] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
     }
-    broadcastAssetsChanged();
-    onReload();
+
+    setTimeout(() => onImportProgress?.(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [basePath, onReload]);
+  }, [currentPath, onReload, onImportProgress]);
 
   const handleSaveAll = useCallback(() => {
     broadcastAssetsChanged();
@@ -123,7 +117,7 @@ export function CBToolbar({ currentPath, onReload }: Props) {
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".glb,.gltf,.png,.jpg,.jpeg,.webp,.ttf,.otf,.wav,.mp3,.ogg"
+          accept={buildAcceptString()}
           style={{ display: 'none' }}
           onChange={e => void handleFileSelected(e)}
         />

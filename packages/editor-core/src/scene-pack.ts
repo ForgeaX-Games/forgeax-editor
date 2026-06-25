@@ -159,6 +159,9 @@ export function sessionToPack(doc: EditSession, sceneGuid?: string): ScenePack {
   const matGuidByKey = new Map<string, string>();
   const sceneRefs: string[] = [];
   const refIdx = (guid: string): number => { let i = sceneRefs.indexOf(guid); if (i < 0) { i = sceneRefs.length; sceneRefs.push(guid); } return i; };
+  // Include sceneGuid in the material GUID seed so games with identical
+  // default materials produce distinct GUIDs (prevents pack-guid-collision).
+  const matGuidPrefix = sceneGuid ? sceneGuid.slice(0, 8) : '';
 
   const nodes: Array<{ localId: number; components: Record<string, Record<string, unknown>> }> = [];
   const nodeDocIds: EntityId[] = [];                 // parallel to nodes[]: which doc id each came from
@@ -194,7 +197,7 @@ export function sessionToPack(doc: EditSession, sceneGuid?: string): ScenePack {
       c.MeshFilter = { assetHandle: refIdx(meshGuidForKind(mesh?.kind)) };
       const key = matKey(material);
       let mg = matGuidByKey.get(key);
-      if (mg === undefined) { mg = stableGuid('mat|' + key); matGuidByKey.set(key, mg); matAssets.set(mg, { guid: mg, kind: 'material', payload: matToPayload(material), refs: [] }); }
+      if (mg === undefined) { mg = stableGuid('mat|' + matGuidPrefix + '|' + key); matGuidByKey.set(key, mg); matAssets.set(mg, { guid: mg, kind: 'material', payload: matToPayload(material), refs: [] }); }
       // Engine #317 renamed MeshRenderer.material (single ref-int) ->
       // MeshRenderer.materials ([ref-int]). ▶ Play instantiates the SAVED pack
       // verbatim through the engine's strict component-schema validator, which

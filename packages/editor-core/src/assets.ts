@@ -7,6 +7,7 @@
 // (same-origin via the interface proxy).
 import { Materials } from '@forgeax/engine-runtime';
 import { fetchWithTimeout } from './net';
+import { resolveGamePath } from './path-resolver';
 
 export interface PackAsset {
   guid: string;
@@ -19,30 +20,10 @@ export interface PackAsset {
 
 interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
 
-async function packPaths(slug: string): Promise<string[]> {
-  const root = `.forgeax/games/${slug}/assets`;
-  try {
-    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
-    if (!r.ok) return [];
-    const j = (await r.json()) as { tree?: TreeNode };
-    const out: string[] = [];
-    const walk = (n?: TreeNode): void => {
-      if (!n) return;
-      if (n.type === 'file' && n.name.endsWith('.pack.json')) out.push(n.path);
-      n.children?.forEach(walk);
-    };
-    walk(j.tree);
-    return out;
-  } catch {
-    return [];
-  }
-}
-
 /** Every `*.pack.json` under the WHOLE game dir (not just assets/) — needed to
- *  find scene packs that live in `scenes/` or at the game root, which `packPaths`
- *  (assets-only) never sees. */
-async function allGamePackPaths(slug: string): Promise<string[]> {
-  const root = `.forgeax/games/${slug}`;
+ *  find scene packs that live in `scenes/` or at the game root. */
+async function allGamePackPaths(_slug: string): Promise<string[]> {
+  const root = resolveGamePath('');
   try {
     const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
@@ -74,7 +55,9 @@ export async function findScenePackByGuid(
   guid: string | null | undefined,
 ): Promise<string | null> {
   if (!slug || slug === 'default' || !guid) return null;
-  const prefix = `.forgeax/games/${slug}/`;
+  // Game root (host-resolved) → strip it so callers get a game-relative pack path.
+  const root = resolveGamePath('');
+  const prefix = root.endsWith('/') ? root : `${root}/`;
   for (const p of await allGamePackPaths(slug)) {
     try {
       const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
@@ -110,7 +93,7 @@ const RAW_EXTS: Record<string, RawAsset['kind']> = {
 export async function loadRawAssets(slug: string | null | undefined): Promise<RawAsset[]> {
   if (!slug || slug === 'default') return [];
   try {
-    const root = `.forgeax/games/${slug}/assets`;
+    const root = resolveGamePath('assets');
     const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
     if (!r.ok) return [];
     const j = (await r.json()) as { tree?: TreeNode };
@@ -161,6 +144,72 @@ export async function loadGameAssets(slug: string | null | undefined): Promise<P
     }
   }
   return out;
+}
+
+interface MetaJson {
+  schemaVersion?: string | number;
+  kind?: string;
+  importer?: string;
+  source?: string;
+  importSettings?: Record<string, unknown>;
+  subAssets?: { guid: string; sourceIndex: number; kind: string; name?: string }[];
+}
+
+/** Load sub-assets declared in .meta.json sidecars across the entire game tree.
+ *  These represent imported external binary assets (textures, meshes, audio, fonts). */
+export async function loadMetaAssets(slug: string | null | undefined): Promise<PackAsset[]> {
+  if (!slug || slug === 'default') return [];
+  const root = resolveGamePath('');
+  try {
+    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    if (!r.ok) return [];
+    const j = (await r.json()) as { tree?: TreeNode };
+    const metaPaths: string[] = [];
+    const walk = (n?: TreeNode): void => {
+      if (!n) return;
+      if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git')) return;
+      if (n.type === 'file' && n.name.endsWith('.meta.json')) metaPaths.push(n.path);
+      n.children?.forEach(walk);
+    };
+    walk(j.tree);
+
+    const out: PackAsset[] = [];
+    for (const mp of metaPaths) {
+      try {
+        const res = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(mp)}`);
+        if (!res.ok) continue;
+        const body = (await res.json()) as { content?: string };
+        if (!body.content) continue;
+        const meta = JSON.parse(body.content) as MetaJson;
+        if (meta.kind !== 'external-asset-package' || !Array.isArray(meta.subAssets)) continue;
+        const stem = meta.source
+          ? meta.source.replace(/\.[^.]+$/, '')
+          : mp.replace(/\.meta\.json$/, '').replace(/^.*\//, '');
+        for (const sub of meta.subAssets) {
+          if (!sub.guid) continue;
+          const normalizedKind = sub.kind === 'image' ? 'texture' : sub.kind;
+          const subRec = sub as Record<string, unknown>;
+          out.push({
+            guid: sub.guid,
+            kind: normalizedKind,
+            name: sub.name ?? `${stem} · ${sub.guid.slice(0, 8)}`,
+            payload: {
+              importer: meta.importer,
+              source: meta.source,
+              importSettings: meta.importSettings,
+              ...(subRec.width != null ? { width: subRec.width } : {}),
+              ...(subRec.height != null ? { height: subRec.height } : {}),
+              ...(subRec.format != null ? { format: subRec.format } : {}),
+            },
+            packPath: mp,
+          });
+        }
+      } catch { /* skip unreadable meta */ }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** A friendly label for a sub-pack asset row: "<pack-stem> · <guid8>".

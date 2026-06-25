@@ -166,6 +166,7 @@ const EditorSyncMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('openScene'), id: z.string() }),
   z.object({ t: z.literal('sceneChanged'), id: z.string() }),
   z.object({ t: z.literal('assetSelect'), asset: z.union([ObjZ, z.null()]) }),
+  z.object({ t: z.literal('addAssetToChat'), refs: z.array(ObjZ) }),
 ]);
 
 /** Validate an inbound BroadcastChannel message envelope. Returns the typed
