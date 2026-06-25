@@ -79,6 +79,10 @@ export interface MaterialData {
   emissive?: string;          // #rrggbb (normalized hue; HDR magnitude in emissiveIntensity)
   emissiveIntensity?: number; // multiplier (carries >1 HDR magnitude)
   shading?: 'standard' | 'unlit';
+  /** Texture asset GUID slots (resolved at edit-runtime via loadByGuid). */
+  albedoMap?: string;
+  normalMap?: string;
+  ormMap?: string;
 }
 
 export type LightType = 'point' | 'spot' | 'directional';

@@ -1,6 +1,7 @@
 /* Content Browser V2 — UE5-parity styling */
 
 .cb-root {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -306,6 +307,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  cursor: grab;
   cursor: pointer;
   border-radius: 4px;
   border: 1px solid transparent;
@@ -344,6 +346,18 @@
   pointer-events: none;
 }
 .cb-grid-thumb { position: relative; }
+.cb-thumb-img {
+  display: block;
+  background: repeating-conic-gradient(#3a3a3a 0% 25%, #2a2a2a 0% 50%) 50% / 12px 12px;
+}
+.cb-thumb-warn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 14px;
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.8));
+  pointer-events: none;
+}
 .cb-grid-label {
   margin-top: 4px;
   text-align: center;
@@ -448,3 +462,63 @@
 .cb-tooltip-icon { font-size: 14px; }
 .cb-tooltip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-tooltip-row { color: var(--panel-fg, #999); padding: 1px 0; word-break: break-all; }
+
+/* ── Drag-and-drop overlay ── */
+.cb-root.cb-drag-over {
+  outline: 2px solid var(--accent, #4c9eff);
+  outline-offset: -2px;
+}
+.cb-drag-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(76, 158, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  pointer-events: none;
+}
+.cb-drag-overlay-label {
+  background: var(--accent, #4c9eff);
+  color: #fff;
+  padding: 10px 24px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+/* ── Import progress bar ── */
+.cb-import-progress {
+  position: absolute;
+  bottom: 24px;
+  left: 8px;
+  right: 8px;
+  background: var(--panel-bg, #252525);
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 6px 10px;
+  z-index: 250;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.cb-import-progress-text {
+  display: block;
+  font-size: 10px;
+  color: var(--panel-fg, #ccc);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-import-progress-bar {
+  height: 3px;
+  background: var(--border, #444);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.cb-import-progress-fill {
+  height: 100%;
+  background: var(--accent, #4c9eff);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}

@@ -13,7 +13,7 @@
 // ── Asset Kinds (mirrors engine Asset union discriminants) ────────────────────
 
 export const ASSET_KINDS = [
-  'mesh', 'texture', 'cube-texture', 'sampler', 'material', 'scene',
+  'mesh', 'texture', 'image', 'cube-texture', 'sampler', 'material', 'scene',
   'shader', 'skeleton', 'skin', 'animation-clip', 'audio', 'font',
   'render-pipeline', 'tileset',
 ] as const;

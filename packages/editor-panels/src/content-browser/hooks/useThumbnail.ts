@@ -2,22 +2,24 @@ import { useMemo } from 'react';
 import type { CBAsset } from '../types';
 
 export interface ThumbnailData {
-  type: 'icon' | 'swatch' | 'gradient';
+  type: 'icon' | 'swatch' | 'gradient' | 'image';
   icon?: string;
   color?: string;
   gradient?: string;
   badge?: string;
+  /** Actual image URL for texture/image thumbnail previews. */
+  imageUrl?: string;
 }
 
 const KIND_ICONS: Record<string, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
+  mesh: '◫', texture: '🖼', image: '🖼', 'cube-texture': '🧊', sampler: '⚙',
   material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
   skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
   'render-pipeline': '🔧', tileset: '🧱',
 };
 
 const KIND_COLORS: Record<string, string> = {
-  mesh: '#4a6b8a', texture: '#6a8a4a', 'cube-texture': '#4a8a8a',
+  mesh: '#4a6b8a', texture: '#6a8a4a', image: '#6a8a4a', 'cube-texture': '#4a8a8a',
   sampler: '#8a6a4a', material: '#8a4a6a', scene: '#4a8a6a',
   shader: '#6a4a8a', skeleton: '#8a8a4a', skin: '#4a4a8a',
   'animation-clip': '#8a4a4a', audio: '#4a8a4a', font: '#6a6a8a',
@@ -67,11 +69,34 @@ function shaderPreview(payload: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function resolveImageUrl(asset: CBAsset): string | undefined {
+  const source = asset.payload?.source as string | undefined;
+  if (!source) return undefined;
+  const packDir = asset.packPath.replace(/[^/]+$/, '');
+  const sourcePath = `${packDir}${source}`;
+  return `/api/files/raw?path=${encodeURIComponent(sourcePath)}`;
+}
+
+function textureBadge(payload: Record<string, unknown>): string | undefined {
+  const w = payload.width as number | undefined;
+  const h = payload.height as number | undefined;
+  if (w != null && h != null) return `${w}×${h}`;
+  return undefined;
+}
+
 export function getThumbnailData(asset: CBAsset): ThumbnailData {
   const { kind, payload } = asset;
 
   if (kind === 'material') {
     return { type: 'gradient', gradient: materialGradient(payload) };
+  }
+
+  if (kind === 'texture' || kind === 'image') {
+    const imageUrl = resolveImageUrl(asset);
+    if (imageUrl) {
+      return { type: 'image', imageUrl, icon: '🖼', color: KIND_COLORS.texture, badge: textureBadge(payload) };
+    }
+    return { type: 'icon', icon: '🖼', color: KIND_COLORS.texture, badge: textureBadge(payload) };
   }
 
   if (kind === 'mesh') {

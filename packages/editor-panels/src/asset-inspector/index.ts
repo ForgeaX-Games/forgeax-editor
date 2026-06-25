@@ -10,6 +10,7 @@ const lz = (load: () => Promise<{ default: ComponentType<PreviewProps> }>) =>
 export const PREVIEW_COMPONENTS: Record<string, ComponentType<PreviewProps>> = {
   mesh: lz(() => import('./AssetPreviewMesh')),
   texture: lz(() => import('./AssetPreviewTexture')),
+  image: lz(() => import('./AssetPreviewTexture')),
   'cube-texture': lz(() => import('./AssetPreviewCubeTexture')),
   sampler: lz(() => import('./AssetPreviewSampler')),
   material: lz(() => import('./AssetPreviewMaterial')),

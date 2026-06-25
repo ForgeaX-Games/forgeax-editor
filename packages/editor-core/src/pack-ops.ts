@@ -171,8 +171,14 @@ export async function moveAsset(
   return s1 && s2;
 }
 
-/** Delete an asset. If the pack becomes empty, delete the file too. */
+/** Delete an asset. Handles both .pack.json and .meta.json sidecars.
+ *  For .meta.json: removes the sub-asset entry; if empty, deletes the sidecar
+ *  AND the source file it references. For .pack.json: removes the asset entry;
+ *  if empty, deletes the pack file. */
 export async function deleteAsset(packPath: string, guid: string): Promise<boolean> {
+  if (packPath.endsWith('.meta.json')) {
+    return deleteMetaAsset(packPath, guid);
+  }
   const pack = await readPack(packPath);
   if (!pack) return false;
   pack.assets = pack.assets.filter(a => a.guid !== guid);
@@ -180,6 +186,51 @@ export async function deleteAsset(packPath: string, guid: string): Promise<boole
     return deleteFile(packPath);
   }
   return writePack(packPath, pack);
+}
+
+async function readJsonFile(path: string): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(path)}`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as { content?: string };
+    if (!j.content) return null;
+    return JSON.parse(j.content) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonFile(path: string, obj: Record<string, unknown>): Promise<boolean> {
+  try {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, content: JSON.stringify(obj, null, 2) + '\n' }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteMetaAsset(metaPath: string, guid: string): Promise<boolean> {
+  const meta = await readJsonFile(metaPath);
+  if (!meta) return false;
+  const subs = meta.subAssets as { guid: string }[] | undefined;
+  if (!Array.isArray(subs)) return false;
+
+  meta.subAssets = subs.filter(s => s.guid !== guid);
+
+  if ((meta.subAssets as unknown[]).length === 0) {
+    const sourceFile = typeof meta.source === 'string' ? meta.source : null;
+    const dir = metaPath.replace(/\/[^/]+$/, '');
+    const results = await Promise.all([
+      deleteFile(metaPath),
+      sourceFile ? deleteFile(`${dir}/${sourceFile}`) : Promise.resolve(true),
+    ]);
+    return results[0];
+  }
+  return writeJsonFile(metaPath, meta);
 }
 
 /** Create a new empty pack file. */

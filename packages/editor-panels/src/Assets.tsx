@@ -6,8 +6,32 @@ import { dispatch, getSceneId, getSelection, requestRefAsset, requestOpenScene, 
 import { AssetFolderTree } from './AssetFolderTree';
 import { AssetCard } from './AssetCard';
 import { Breadcrumb } from './Breadcrumb';
-import { Suspense } from 'react';
-import { ContentBrowserV2 } from './content-browser/ContentBrowserV2';
+import { Component, Suspense, lazy } from 'react';
+import type { ReactNode, ErrorInfo } from 'react';
+
+const ContentBrowserV2 = lazy(() =>
+  import('./content-browser/ContentBrowserV2').then(m => ({ default: m.ContentBrowserV2 }))
+);
+
+class CBErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state: { error: string | null } = { error: null };
+  static getDerivedStateFromError(e: Error) { return { error: e.message + '\n' + e.stack }; }
+  componentDidCatch(e: Error, info: ErrorInfo) { console.error('[ContentBrowserV2]', e, info); }
+  render() {
+    if (this.state.error) return <div style={{ padding: 12, color: '#f88', whiteSpace: 'pre-wrap', fontSize: 11 }}>Content Browser error:\n{this.state.error}</div>;
+    return this.props.children;
+  }
+}
+
+export function AssetsPanel() {
+  return (
+    <CBErrorBoundary>
+      <Suspense fallback={<div style={{ padding: 16, opacity: 0.5 }}>Loading Content Browser...</div>}>
+        <ContentBrowserV2 />
+      </Suspense>
+    </CBErrorBoundary>
+  );
+}
 
 type ViewMode = 'list' | 'grid';
 
@@ -29,10 +53,7 @@ const KIND_LABELS: Record<string, string> = {
   'render-pipeline': '🔧 Render Pipeline', tileset: '🧱 Tileset',
 };
 
-export function AssetsPanel() {
-  return <ContentBrowserV2 />;
-
-  /* V1 legacy code below — preserved for rollback */
+function _AssetsPanelV1() {
   const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
