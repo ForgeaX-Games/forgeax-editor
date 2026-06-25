@@ -130,6 +130,7 @@ export type { Clip, Track, Interp } from './anim';
 // ── Assets ──
 export {
   loadGameAssets,
+  loadMetaAssets,
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,

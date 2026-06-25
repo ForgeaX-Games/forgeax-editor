@@ -146,6 +146,72 @@ export async function loadGameAssets(slug: string | null | undefined): Promise<P
   return out;
 }
 
+interface MetaJson {
+  schemaVersion?: string | number;
+  kind?: string;
+  importer?: string;
+  source?: string;
+  importSettings?: Record<string, unknown>;
+  subAssets?: { guid: string; sourceIndex: number; kind: string; name?: string }[];
+}
+
+/** Load sub-assets declared in .meta.json sidecars across the entire game tree.
+ *  These represent imported external binary assets (textures, meshes, audio, fonts). */
+export async function loadMetaAssets(slug: string | null | undefined): Promise<PackAsset[]> {
+  if (!slug || slug === 'default') return [];
+  const root = resolveGamePath('');
+  try {
+    const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(root)}`);
+    if (!r.ok) return [];
+    const j = (await r.json()) as { tree?: TreeNode };
+    const metaPaths: string[] = [];
+    const walk = (n?: TreeNode): void => {
+      if (!n) return;
+      if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git')) return;
+      if (n.type === 'file' && n.name.endsWith('.meta.json')) metaPaths.push(n.path);
+      n.children?.forEach(walk);
+    };
+    walk(j.tree);
+
+    const out: PackAsset[] = [];
+    for (const mp of metaPaths) {
+      try {
+        const res = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(mp)}`);
+        if (!res.ok) continue;
+        const body = (await res.json()) as { content?: string };
+        if (!body.content) continue;
+        const meta = JSON.parse(body.content) as MetaJson;
+        if (meta.kind !== 'external-asset-package' || !Array.isArray(meta.subAssets)) continue;
+        const stem = meta.source
+          ? meta.source.replace(/\.[^.]+$/, '')
+          : mp.replace(/\.meta\.json$/, '').replace(/^.*\//, '');
+        for (const sub of meta.subAssets) {
+          if (!sub.guid) continue;
+          const normalizedKind = sub.kind === 'image' ? 'texture' : sub.kind;
+          const subRec = sub as Record<string, unknown>;
+          out.push({
+            guid: sub.guid,
+            kind: normalizedKind,
+            name: sub.name ?? `${stem} · ${sub.guid.slice(0, 8)}`,
+            payload: {
+              importer: meta.importer,
+              source: meta.source,
+              importSettings: meta.importSettings,
+              ...(subRec.width != null ? { width: subRec.width } : {}),
+              ...(subRec.height != null ? { height: subRec.height } : {}),
+              ...(subRec.format != null ? { format: subRec.format } : {}),
+            },
+            packPath: mp,
+          });
+        }
+      } catch { /* skip unreadable meta */ }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** A friendly label for a sub-pack asset row: "<pack-stem> · <guid8>".
  *  e.g. `level1 · 1c720a13`, `grasscalf · b73e4290`. The pack stem tells
  *  a human which level / monster / character / effect the material came

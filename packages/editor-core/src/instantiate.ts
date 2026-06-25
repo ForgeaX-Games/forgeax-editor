@@ -63,6 +63,8 @@ export interface InstantiateCtx {
    *  caller pre-loads GUID assets (async) and passes a sync lookup here, so the
    *  instantiator itself stays synchronous. */
   resolveMaterialAsset?: (guid: string) => Handle | null | undefined;
+  /** Optional: resolve a texture GUID (albedoMap / normalMap / ormMap) to a GPU handle. */
+  resolveTextureAsset?: (guid: string) => Handle | null | undefined;
 }
 
 export interface InstantiateResult {
