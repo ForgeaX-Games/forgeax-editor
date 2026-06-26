@@ -54,6 +54,14 @@ bun run lint:dep                          # dependency-cruiser — assert no cyc
 > Cloning fresh? `git clone --recurse-submodules <url>` does the submodule fetch
 > in one step.
 
+> [!NOTE]
+> **"clone 即跑" is gated, not a slogan.** CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml))
+> re-proves every push/PR that a fresh `clone → bun install → bun scripts/selfcheck-standalone-b2.mjs`
+> reaches **self-boot level B2** — the standalone editor reads **and writes** a
+> game with **no studio server**, by reusing `@forgeax/platform-io` as its game
+> backend (see [`standalone/game-backend.ts`](./standalone/game-backend.ts)).
+> Run it yourself: `bun run selfcheck:b2`.
+
 ## Run
 
 The editor runs in two contexts. **Standalone** (this repo on its own) is the

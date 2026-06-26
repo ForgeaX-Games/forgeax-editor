@@ -1,0 +1,72 @@
+name: CI
+
+# forgeax-editor standalone "clone 即跑" gate (ideal-clean-architecture.md §6 R7).
+#
+# The editor is a self-contained repo: `git clone --recurse-submodules` then
+# `bun install` must reach SELF-BOOT level B2 (reuse @forgeax/platform-io as the
+# game backend → real read + WRITE) with NO studio server. This workflow is the
+# permanent gate on that promise — every push / PR re-proves a fresh checkout
+# installs and reaches B2.
+#
+# Deliberately LIGHTWEIGHT (no engine pnpm / Rust-wasm build): the B2 selfcheck
+# only drives the /api/files wire (tree/read/write/confinement) through the host
+# vite proxy and the game-backend bun process — it never loads a page that
+# imports the engine. So B2 needs only `bun install` + the kernel submodule, and
+# runs in ~1-2 min. Heavier gates (typecheck / api-seam lint / e2e / engine
+# build) live in the studio superrepo CI, which assembles this editor by pin.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  b2-self-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # INTERNAL_TOKEN is the kubeela PAT that can read the private
+      # ForgeaXGame/forgeax-* submodules this repo pins (engine / interface /
+      # kernel / editor-assets). Same secret the studio superrepo CI uses — no
+      # new repo configuration required.
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.INTERNAL_TOKEN }}
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts on purpose:
+      #   - postinstall runs scripts/sync-harness.mjs which clones a private
+      #     forgeax-editor-harness (loop state) — not needed for B2 and would
+      #     require harness auth in CI.
+      #   - a transitive `simple-git-hooks` postinstall stat's its own
+      #     package.json before extraction completes and crashes the FIRST
+      #     `bun install` of a clean clone (succeeds only on re-run). Skipping
+      #     scripts makes the single-run install deterministic. None of the
+      #     skipped scripts are needed to reach B2.
+      - name: Install (bun, no scripts)
+        run: bun install --ignore-scripts
+
+      # Gate 1 — the reused 后L1 backend's confinement contract (whitelist +
+      # single-game slug-strip / traversal). Runs against the kernel this editor
+      # repo pins, so a kernel pin bump that weakens confinement fails here too.
+      - name: Test @forgeax/platform-io (kernel)
+        run: bun -F @forgeax/platform-io test
+
+      # Gate 2 — SELF-BOOT B2: boot the game-backend bun process + host vite
+      # (NO studio server), exercise /api/files end to end (tree / read / WRITE
+      # / persistence / out-of-game rejection). 9/9 or the run is red.
+      - name: Self-boot B2 (read + write, no studio server)
+        run: bun scripts/selfcheck-standalone-b2.mjs
