@@ -43,6 +43,35 @@ const here = dirname(fileURLToPath(import.meta.url));
 // which run.sh symlinks to the instance's actual .forgeax in both modes.
 const viteRoot = here;
 
+// ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
+// SSOT = THIS root's node_modules/@forgeax, i.e. exactly the @forgeax packages
+// Vite can resolve natively here. Excluding precisely that set is correct on both
+// sides:
+//   - Pre-bundling any of them risks the OOM: under preserveSymlinks:true Vite's
+//     esbuild pre-bundle crawls the nested workspace symlink graph
+//     (packages/engine/packages/*/node_modules/@forgeax/* → ../../../*), where one
+//     source file reached via combinatorially-many distinct symlink paths becomes
+//     a distinct module → esbuild blew past 70 GB the moment a game imported the
+//     un-excluded @forgeax/engine-physics (it also drags in the Rapier WASM).
+//   - They are all present here, so excluding them (→ served as native ESM) still
+//     resolves. We must NOT over-exclude: transitive-only packages absent from
+//     node_modules (e.g. @forgeax/engine-plugin / engine-debug-draw, imported by
+//     engine-app / engine-runtime) have to stay pre-bundlable, or native import
+//     analysis fails with "Failed to resolve import". So derive ONLY from what's
+//     actually here — never the full engine/packages source tree.
+// Hand-listing was the original bug: it named ~10 packages and missed physics.
+// @forgeax/scene shares the engine module subgraph; keep it excluded as before.
+function forgeaxWorkspacePackages(): string[] {
+  const out = new Set<string>(['@forgeax/scene']);
+  try {
+    for (const name of readdirSync(resolve(here, 'node_modules/@forgeax'))) {
+      out.add(`@forgeax/${name}`);
+    }
+  } catch { /* node_modules not materialised yet — fall through */ }
+  return [...out];
+}
+const FORGEAX_WS_PKGS = forgeaxWorkspacePackages();
+
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 
@@ -312,55 +341,26 @@ export default defineConfig({
     silenceShaderEmitInServe(forgeaxShader()) as never,
   ],
   optimizeDeps: {
-    // Exclude engine workspace packages from Vite pre-bundling so they are
-    // loaded as native ESM .mjs (research F2: engine outputs ESM .mjs, vite
-    // 6 can serve them directly; pre-bundling would break source maps and
-    // module identity for the engine subgraph).
-    exclude: [
-      '@forgeax/engine-app',
-      '@forgeax/engine-runtime',
-      '@forgeax/engine-render-graph',
-      '@forgeax/engine-ecs',
-      '@forgeax/engine-types',
-      '@forgeax/engine-shader',
-      // engine-gltf is imported by user games' scene-runtime/gltf-runtime.ts
-      // (e.g. @forgeax/game-fps). Pre-bundling it would split it from the
-      // engine subgraph (parseGlb / gltfDocToSceneAsset reach into engine-pack
-      // / engine-image internals). Mirror editor-edit-runtime/vite.config.ts.
-      '@forgeax/engine-gltf',
-      // @forgeax/scene re-exports engine-runtime components (Transform/HANDLE_CUBE
-      // etc.) to instantiate scene docs; it MUST share the engine subgraph's module
-      // identity, so exclude it from pre-bundling too (else a games' import would
-      // get a second engine-runtime instance and ECS handles wouldn't match).
-      '@forgeax/scene',
-      // game main.ts is dynamically imported (loadGame), so its imports are NOT
-      // in vite's startup entry scan. The native template pulls subpaths
-      // `@forgeax/engine-pack/guid` (AssetGuid) + `@forgeax/engine-image/hdr-decoder`
-      // (decodeHdr); left in the pre-bundle, vite discovers them lazily on a NEW
-      // game's first load → "optimized dependencies changed, reloading" → the
-      // preview reloads a few times (the "new game flicker" after project creation). Exclude
-      // them (native ESM, same as the rest of the engine subgraph) so there is no
-      // runtime re-optimize and no reload.
-      '@forgeax/engine-pack',
-      '@forgeax/engine-image',
-    ],
+    // Exclude the ENTIRE @forgeax workspace family from Vite pre-bundling so each
+    // is loaded as native ESM .mjs (engine outputs ESM .mjs; pre-bundling would
+    // break source maps + module identity for the engine subgraph). Deriving the
+    // full list (see forgeaxWorkspacePackages) is load-bearing: a game's
+    // dynamically-imported main.ts (loadGame, not in the startup scan) may pull
+    // ANY engine package or subpath (@forgeax/engine-physics,
+    // @forgeax/engine-pack/guid, …); a missing entry lets Vite lazily pre-bundle
+    // it and OOM esbuild on the preserveSymlinks symlink-diamond, besides the
+    // new-game re-optimize flicker.
+    exclude: FORGEAX_WS_PKGS,
   },
   resolve: {
     alias: {
       '@forgeax/game-types': resolve(here, 'src/types.ts'),
     },
-    dedupe: [
-      '@forgeax/engine-runtime',
-      '@forgeax/engine-render-graph',
-      '@forgeax/engine-ecs',
-      '@forgeax/engine-types',
-      '@forgeax/engine-rhi',
-      '@forgeax/engine-math',
-      '@forgeax/engine-pack',
-      '@forgeax/engine-image',
-      '@forgeax/engine-gltf',
-      '@forgeax/scene',
-    ],
+    // Dedupe the whole @forgeax family (same SSOT-derived list as optimizeDeps):
+    // every engine package must resolve to a single instance so ECS handles /
+    // component identities match across the game subgraph. A hand-listed subset
+    // had the same drift hazard as the old exclude list.
+    dedupe: FORGEAX_WS_PKGS,
     // User game files live at <studio-root>/.forgeax/games/<slug>/ (entry is a
     // root-level main.ts, extra modules under src/), reachable via run.sh's
     // symlink engine-src/.forgeax → <studio-root>/.forgeax.
