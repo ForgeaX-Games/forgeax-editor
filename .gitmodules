@@ -10,3 +10,7 @@
 	path = packages/interface
 	url = https://github.com/ForgeaXGame/forgeax-interface.git
 	branch = main
+[submodule "packages/kernel"]
+	path = packages/kernel
+	url = https://github.com/ForgeaXGame/forgeax-kernel.git
+	branch = main

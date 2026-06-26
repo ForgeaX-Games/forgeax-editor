@@ -25,7 +25,8 @@
   },
   "workspaces": [
     "packages/*",
-    "packages/engine/packages/*"
+    "packages/engine/packages/*",
+    "packages/kernel/platform-io"
   ],
   "scripts": {
     "harness:sync": "node scripts/sync-harness.mjs",
@@ -39,6 +40,7 @@
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:api-seam": "node scripts/lint-no-direct-api-fetch.mjs",
     "lint:dep": "dependency-cruiser --output-type err-html -c .dependency-cruiser.cjs packages",
+    "selfcheck:b2": "bun scripts/selfcheck-standalone-b2.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
     "selfcheck": "node scripts/selfcheck.mjs"
@@ -49,6 +51,7 @@
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-shared": "workspace:*",
     "@forgeax/interface": "workspace:*",
+    "@forgeax/platform-io": "workspace:*",
     "zod": "^3.25.0"
   },
   "devDependencies": {

@@ -19,163 +19,37 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve, basename, sep } from 'node:path';
-import { existsSync, createReadStream } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { dirname, resolve, basename } from 'node:path';
+import { existsSync } from 'node:fs';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 
-// ── standalone game source (see plan: cli.sh run --game <path>) ──────────────
-// The standalone stack has NO backend (forgeax-server :18900 is studio-only).
-// editor-core reads game files via fetch('/api/files*'); with no server those
-// fetch HTML (SPA fallback) and the editor falls back to the demo seed. When
-// `cli.sh run --game <dir>` is used it exports FORGEAX_GAME_DIR; we then serve
-// a MINIMAL READ-ONLY /api/files{,/raw,/tree} from that dir via a vite
-// middleware (gameApiMiddleware below) — no extra process, no studio server.
-// The slug (basename) is the opaque key threaded through iframe URLs; the
-// absolute path lives only here, server-side. No --game → GAME_DIR null →
-// middleware is a pure pass-through and the demo-seed path is unchanged.
+// ── standalone game backend — REUSE platform-io (R3, ideal-clean-architecture §5) ─
+// The standalone stack has NO studio server (forgeax-server :18900 is studio-only).
+// editor-core reaches its backend through the injected ApiClient (R2 seam); its
+// DEFAULT client is relative `/api` (base=''), and the standalone editor iframe's
+// document origin IS this :15290 host (its src `/editor/…` is proxied here), so a
+// bare fetch('/api/files…') resolves to this :15290 origin. Raw media
+// (`<img src="/api/files/raw?…">`) are plain relative DOM URLs that bypass the
+// ApiClient entirely, so the backend MUST be reachable same-origin from :15290.
+//
+// Before R3 this shipped a SECOND, hand-written READ-ONLY file backend inline in
+// this config (a §5 violation: "为启动自写一个独立后端"). Now `cli.sh run --game`
+// starts standalone/game-backend.ts — a tiny bun process mounting the REAL
+// @forgeax/platform-io createFilesRouter (the exact 后L1 router cli/server use),
+// confined to one game via singleGameFileBackend — and this config simply PROXIES
+// /api → that process. (It can't be a vite middleware: vite 8 loads its config
+// through Node's ESM loader, which can't resolve platform-io's extensionless `.ts`
+// barrel re-exports; bun can, which is why the separate bun process works.) One
+// wire contract, read+write (B2), zero duplicated IO logic.
+//
+// The slug (basename) is the opaque client-space key threaded through iframe URLs.
+// No --game → GAME_DIR null → no /api proxy → the demo-seed path is unchanged.
 const GAME_DIR = process.env.FORGEAX_GAME_DIR
   ? resolve(process.env.FORGEAX_GAME_DIR)
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
-
-// Map a client-space path (`<slug>/<rel>` — what resolveGamePath produced and
-// sent as ?path=/?root=) back to an absolute disk path under GAME_DIR, with a
-// path-traversal guard. Returns null on escape (caller → 403).
-function toDiskPath(clientPath: string | null): string | null {
-  if (GAME_DIR === null || GAME_SLUG === null || clientPath === null) return null;
-  let rel = clientPath;
-  if (rel === GAME_SLUG) rel = '';
-  else if (rel.startsWith(`${GAME_SLUG}/`)) rel = rel.slice(GAME_SLUG.length + 1);
-  const abs = resolve(GAME_DIR, rel);
-  const rootWithSep = GAME_DIR.endsWith(sep) ? GAME_DIR : GAME_DIR + sep;
-  if (abs !== GAME_DIR && !abs.startsWith(rootWithSep)) return null; // escape
-  return abs;
-}
-
-const RAW_CONTENT_TYPE: Record<string, string> = {
-  '.glb': 'model/gltf-binary',
-  '.gltf': 'model/gltf+json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.hdr': 'image/vnd.radiance',
-  '.webp': 'image/webp',
-  '.ktx2': 'image/ktx2',
-  '.wav': 'audio/wav',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
-};
-
-interface TreeNode {
-  name: string;
-  path: string;
-  type: 'dir' | 'file';
-  children?: TreeNode[];
-}
-
-// Recursive directory walk. `clientPath` is kept in CLIENT space (rooted at the
-// verbatim ?root= the caller sent) because callers strip resolveGamePath('')
-// (=<slug>) as the prefix and re-fetch n.path via /api/files. node_modules/.git
-// are skipped server-side to bound large game trees.
-async function walkTree(diskPath: string, clientPath: string, name: string): Promise<TreeNode> {
-  const st = await stat(diskPath);
-  if (!st.isDirectory()) return { name, path: clientPath, type: 'file' };
-  const node: TreeNode = { name, path: clientPath, type: 'dir', children: [] };
-  let entries: string[] = [];
-  try {
-    entries = await readdir(diskPath);
-  } catch {
-    return node;
-  }
-  for (const entry of entries.sort()) {
-    if (entry === 'node_modules' || entry === '.git') continue;
-    const childDisk = resolve(diskPath, entry);
-    const childClient = clientPath ? `${clientPath}/${entry}` : entry;
-    try {
-      node.children!.push(await walkTree(childDisk, childClient, entry));
-    } catch {
-      /* unreadable entry — skip */
-    }
-  }
-  return node;
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify(body));
-}
-
-// Minimal read-only file backend for the standalone stack. Only active when
-// --game set a GAME_DIR; otherwise every request passes through to vite.
-function gameApiMiddleware() {
-  return {
-    name: 'forgeax:game-api',
-    configureServer(server: {
-      middlewares: {
-        use(fn: (req: IncomingMessage, res: ServerResponse, next: () => void) => void): unknown;
-      };
-    }) {
-      server.middlewares.use((req, res, next) => {
-        if (GAME_DIR === null || !req.url || req.method !== 'GET') return next();
-        const u = new URL(req.url, 'http://localhost');
-        const route = u.pathname;
-        if (route !== '/api/files' && route !== '/api/files/raw' && route !== '/api/files/tree') {
-          return next();
-        }
-        void (async () => {
-          try {
-            if (route === '/api/files/tree') {
-              const root = u.searchParams.get('root') ?? '';
-              const disk = toDiskPath(root);
-              if (disk === null) return sendJson(res, 403, { error: 'forbidden' });
-              try {
-                const tree = await walkTree(disk, root, basename(disk));
-                return sendJson(res, 200, { tree });
-              } catch {
-                return sendJson(res, 200, { tree: null });
-              }
-            }
-            const disk = toDiskPath(u.searchParams.get('path'));
-            if (disk === null) return sendJson(res, 403, { error: 'forbidden' });
-            if (route === '/api/files/raw') {
-              try {
-                await stat(disk);
-              } catch {
-                return sendJson(res, 404, { error: 'not-found' });
-              }
-              const ext = disk.slice(disk.lastIndexOf('.')).toLowerCase();
-              res.statusCode = 200;
-              res.setHeader('Content-Type', RAW_CONTENT_TYPE[ext] ?? 'application/octet-stream');
-              createReadStream(disk).on('error', () => {
-                if (!res.headersSent) res.statusCode = 500;
-                res.end();
-              }).pipe(res);
-              return;
-            }
-            // /api/files — text content. ?optional=1 mirrors the studio server
-            // contract: an absent file returns 200 {exists:false} (not 404) so
-            // per-developer optional state like play-config.json logs no error.
-            try {
-              const content = await readFile(disk, 'utf8');
-              return sendJson(res, 200, { content });
-            } catch {
-              if (u.searchParams.get('optional') === '1') {
-                return sendJson(res, 200, { content: null, exists: false });
-              }
-              return sendJson(res, 404, { error: 'not-found' });
-            }
-          } catch {
-            return sendJson(res, 500, { error: 'internal' });
-          }
-        })();
-      });
-    },
-  };
-}
+const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 
 // INTERFACE_DIR resolution — embedded vs standalone:
 //   - Embedded in studio: the parent studio tree's packages/interface (../../
@@ -207,7 +81,7 @@ if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 export default defineConfig({
   root: resolve(PACKAGE_DIR, 'standalone'),
   base: '/',
-  plugins: [react(), gameApiMiddleware()],
+  plugins: [react()],
   // Expose the game slug to the standalone client bundle so it can pin the
   // game and thread ?scene=/?gameRoot= into the editor iframes. null = no --game.
   define: { __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG) },
@@ -264,6 +138,14 @@ export default defineConfig({
       // a root-relative URL that, on :15290, would otherwise be served by the
       // standalone vite SPA fallback. Route the prefix to edit-runtime.
       '/editor': { target: 'http://127.0.0.1:15280', changeOrigin: true, ws: true },
+      // --game: proxy /api → the standalone game-backend bun process (R3), which
+      // mounts the real @forgeax/platform-io createFilesRouter confined to the
+      // game. Same-origin from :15290 so editor-core's relative fetch('/api/…')
+      // and raw-media <img src="/api/files/raw…"> both reach it. No --game → no
+      // entry → /api 404s through the SPA fallback (demo-seed path, unchanged).
+      ...(GAME_DIR
+        ? { '/api': { target: `http://127.0.0.1:${GAME_API_PORT}`, changeOrigin: true } }
+        : {}),
     },
   },
   build: {
