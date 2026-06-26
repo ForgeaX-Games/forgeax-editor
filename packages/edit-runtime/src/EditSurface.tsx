@@ -318,10 +318,15 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       }
 
       setImportStep('importing');
+      // Force 'reference' (NOT 'auto'): a whole import is a single GltfRef resource
+      // (uasset-like). 'auto' expands small GLBs into per-node doc entities whose
+      // single Material component can't carry a multi-submesh mesh's N materials,
+      // tripping the engine's mesh-renderer-material-count-mismatch (materials=1 vs
+      // submeshes=N). Mirrors spawnSceneFromGlb (the drag path).
       const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: dest, mode: 'auto' }),
+        body: JSON.stringify({ path: dest, mode: 'reference' }),
       });
       const sceneJ = await sceneRes.json() as {
         mode?: string; totalNodes?: number; meshCount?: number;
@@ -383,14 +388,19 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   }, [slug, base]);
 
   // ── Asset drag-to-scene (D-4/D-5) ───────────────────────────────────────────
-  // Spawn a whole-GLB asset (mode A) by re-running import-scene on its source path,
-  // then forwarding the tree to the editor iframe (mirrors onFileSelected's tail).
+  // Spawn a whole-GLB asset (mode A) as a single GltfRef instance. Forcing
+  // 'reference' (vs 'auto', which expands small GLBs into per-node doc entities)
+  // is what makes the whole-resource semantics correct: multi-submesh / multi-
+  // material meshes (e.g. bed.glb has 3 submeshes) render via the gltf-runtime
+  // cache with their full per-submesh material set. The doc's single Material
+  // component can't carry N materials, so the per-node 'full' path trips the
+  // engine's mesh-renderer-material-count-mismatch (materials=1 vs submeshes=N).
   const spawnSceneFromGlb = useCallback(async (path: string, name: string): Promise<void> => {
     try {
       const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path, mode: 'auto' }),
+        body: JSON.stringify({ path, mode: 'reference' }),
       });
       const sceneJ = await sceneRes.json() as { mode?: string; entity?: unknown; doc?: unknown; error?: string };
       if (!sceneRes.ok) { console.warn('[editor] drag scene import failed:', sceneJ.error); return; }
