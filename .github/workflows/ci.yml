@@ -31,16 +31,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # INTERNAL_TOKEN is the kubeela PAT that can read the private
-      # ForgeaXGame/forgeax-* submodules this repo pins (engine / interface /
-      # kernel / editor-assets). Same secret the studio superrepo CI uses — no
-      # new repo configuration required.
+      # GHA is the kubeela PAT that can read the private ForgeaXGame/forgeax-*
+      # submodules this repo pins (engine / interface / kernel / editor-assets).
+      # Same secret name forgeax-engine's CI uses; set it on this repo with
+      #   gh secret set GHA --repo ForgeaXGame/forgeax-editor
       - name: Checkout (with submodules)
         uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 1
-          token: ${{ secrets.INTERNAL_TOKEN }}
+          token: ${{ secrets.GHA }}
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
