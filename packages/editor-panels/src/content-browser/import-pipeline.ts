@@ -9,7 +9,7 @@
  *   4. Notify listeners (broadcastAssetsChanged)
  */
 
-import { generateAssetGuid } from '@forgeax/editor-core';
+import { generateAssetGuid, getApiClient } from '@forgeax/editor-core';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { getImportFormat, isImportable, type ImportFormat } from './import-registry';
 
@@ -44,7 +44,7 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 async function uploadFile(destPath: string, file: File): Promise<boolean> {
   const buf = await file.arrayBuffer();
   const data = arrayBufferToBase64(buf);
-  const r = await fetch('/api/files/upload', {
+  const r = await getApiClient().fetch('/api/files/upload', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: destPath, data }),
@@ -70,7 +70,7 @@ async function writeMetaSidecar(
       kind: format.subAssetKind,
     }],
   };
-  const r = await fetch('/api/files', {
+  const r = await getApiClient().fetch('/api/files', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -98,7 +98,7 @@ async function triggerCook(guid: string): Promise<string | undefined> {
  *  Returns the first sub-asset GUID on success so the caller can use it. */
 async function processGltf(destPath: string): Promise<{ ok: boolean; guid?: string }> {
   try {
-    const r = await fetch('/api/assets/process-gltf', {
+    const r = await getApiClient().fetch('/api/assets/process-gltf', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: destPath }),

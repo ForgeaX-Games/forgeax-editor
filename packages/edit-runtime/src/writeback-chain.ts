@@ -17,6 +17,7 @@
 // engine HEAD already has it). Until that bump, this chain typechecks (engine
 // surface is shimmed) but the named exports resolve at runtime only post-bump.
 
+import { getApiClient } from '@forgeax/editor-core';
 import { collectSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 
 /** Minimal engine surface the chain reads — the live world + the synthetic root
@@ -102,7 +103,7 @@ export async function writebackInstance(
     };
   }
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: target.packPath, content: json }),

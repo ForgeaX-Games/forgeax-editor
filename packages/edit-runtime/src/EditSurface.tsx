@@ -26,7 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, createDefaultApiClient, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -94,9 +94,8 @@ export interface ProbeResult {
 
 export async function probeServer(serverBase?: string): Promise<ProbeResult> {
   const base = serverBase ?? '';
-  const url = `${base}/api/workbench/active-slug`;
   try {
-    const r = await fetch(url);
+    const r = await createDefaultApiClient(base).fetch('/api/workbench/active-slug');
     if (!r.ok) {
       return {
         available: false,
@@ -169,7 +168,7 @@ async function importAssetFile(
   try {
     const buf = await file.arrayBuffer();
     const data = arrayBufferToBase64(buf);
-    const r = await fetch(`${serverBase}/api/files/upload`, {
+    const r = await createDefaultApiClient(serverBase).fetch('/api/files/upload', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dest, data }),
@@ -297,7 +296,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     try {
       setImportStep('processing');
       setImportMsg(baseName);
-      const procRes = await fetch(`${base}/api/assets/process-gltf`, {
+      const procRes = await createDefaultApiClient(base).fetch('/api/assets/process-gltf', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: dest, slug, importMode }),
@@ -319,7 +318,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       }
 
       setImportStep('importing');
-      const sceneRes = await fetch(`${base}/api/assets/import-scene`, {
+      const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: dest, mode: 'auto' }),
@@ -388,7 +387,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // then forwarding the tree to the editor iframe (mirrors onFileSelected's tail).
   const spawnSceneFromGlb = useCallback(async (path: string, name: string): Promise<void> => {
     try {
-      const sceneRes = await fetch(`${base}/api/assets/import-scene`, {
+      const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path, mode: 'auto' }),

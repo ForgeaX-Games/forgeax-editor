@@ -4,6 +4,7 @@
 // Schema validation is deferred to engine load time — the editor reads pack
 // files as loose JSON and preserves schemaVersion + kind verbatim.
 
+import { getApiClient } from './api-client';
 import { fetchWithTimeout } from './net';
 import { stableGuid } from './scene-pack';
 
@@ -39,7 +40,7 @@ async function readPack(packPath: string): Promise<PackFile | null> {
 
 async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: packPath, content: JSON.stringify(pack, null, 2) + '\n' }),
@@ -52,7 +53,7 @@ async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
 
 async function deleteFile(filePath: string): Promise<boolean> {
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
     return r.ok;
   } catch {
     return false;
@@ -202,7 +203,7 @@ async function readJsonFile(path: string): Promise<Record<string, unknown> | nul
 
 async function writeJsonFile(path: string, obj: Record<string, unknown>): Promise<boolean> {
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path, content: JSON.stringify(obj, null, 2) + '\n' }),
@@ -252,7 +253,7 @@ export async function createPack(
 /** Create a directory via the server API. */
 export async function createDirectory(dirPath: string): Promise<boolean> {
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dirPath, content: '', mkdir: true }),
