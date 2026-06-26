@@ -65,6 +65,12 @@ export interface InstantiateCtx {
   resolveMaterialAsset?: (guid: string) => Handle | null | undefined;
   /** Optional: resolve a texture GUID (albedoMap / normalMap / ormMap) to a GPU handle. */
   resolveTextureAsset?: (guid: string) => Handle | null | undefined;
+  /** Optional: resolve a Mesh.meshAsset GUID (e.g. an imported glTF mesh
+   *  sub-asset) to a ready mesh handle. Returns null/undefined → fall back to the
+   *  entity's builtin `kind`. The caller pre-loads the GUID asset (async) and
+   *  passes a sync lookup so the instantiator stays synchronous (mirrors
+   *  resolveMaterialAsset). */
+  resolveMeshAsset?: (guid: string) => Handle | null | undefined;
 }
 
 export interface InstantiateResult {
@@ -109,7 +115,14 @@ export function instantiateScene(doc: EditSession, ctx: InstantiateCtx): Instant
 
   // ── mesh handle cache (cube is prebuilt; sphere/cylinder registered once) ──
   const meshCache = new Map<string, Handle>();
-  const meshHandle = (kind: MeshData['kind']): Handle => {
+  const meshHandle = (m: MeshData | undefined): Handle => {
+    // An imported mesh ASSET (GUID) wins over the builtin `kind` when the caller
+    // can resolve it (pre-loaded). Otherwise fall through to the builtin.
+    if (m?.meshAsset && ctx.resolveMeshAsset) {
+      const resolved = ctx.resolveMeshAsset(m.meshAsset);
+      if (resolved !== null && resolved !== undefined) return resolved;
+    }
+    const kind = m?.kind;
     if (kind === 'sphere' || kind === 'cylinder') {
       const cached = meshCache.get(kind);
       if (cached !== undefined) return cached;
@@ -251,7 +264,7 @@ export function instantiateScene(doc: EditSession, ctx: InstantiateCtx): Instant
       parts.push({ component: Transform, data });
     }
     if (isRenderable) {
-      parts.push({ component: MeshFilter, data: { assetHandle: meshHandle(mesh?.kind) } });
+      parts.push({ component: MeshFilter, data: { assetHandle: meshHandle(mesh) } });
       parts.push({ component: MeshRenderer, data: { materials: [materialHandle(material)] } });
     }
     if (isLight) {
@@ -339,7 +352,12 @@ export function sceneEntities(doc: EditSession, ctx: InstantiateCtx, caches: Sce
   const colliders: Collider[] = [];
   const entities: SceneEntity[] = [];
 
-  const meshHandle = (kind: MeshData['kind']): Handle => {
+  const meshHandle = (m: MeshData | undefined): Handle => {
+    if (m?.meshAsset && ctx.resolveMeshAsset) {
+      const resolved = ctx.resolveMeshAsset(m.meshAsset);
+      if (resolved !== null && resolved !== undefined) return resolved;
+    }
+    const kind = m?.kind;
     if (kind === 'sphere') return HANDLE_SPHERE;
     if (kind === 'cylinder') {
       const cached = caches.mesh.get('cylinder');
@@ -471,7 +489,7 @@ export function sceneEntities(doc: EditSession, ctx: InstantiateCtx, caches: Sce
     const components: Record<string, Record<string, unknown>> = {};
     if (t || isLight) components.Transform = transformData(px, py, pz, sx, sy, sz, t);
     if (isRenderable) {
-      components.MeshFilter = { assetHandle: meshHandle(mesh?.kind) };
+      components.MeshFilter = { assetHandle: meshHandle(mesh) };
       // engine #317: MeshRenderer.material (single) -> materials[] (one slot per submesh).
       components.MeshRenderer = { materials: [materialHandle(material)] };
     }

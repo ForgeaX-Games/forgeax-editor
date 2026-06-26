@@ -134,9 +134,14 @@ export {
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,
+  makeMeshResolver,
   extractPackDirs,
 } from './assets';
 export type { PackAsset, RawAsset } from './assets';
+
+// ── Drag-to-scene (Content Browser → viewport spawn) ──
+export { buildSpawnEntityFromDragRef } from './drag-asset-spawn';
+export type { DragAssetRef, SpawnRefEntity } from './drag-asset-spawn';
 
 // ── Pack CRUD (M2) ──
 export {
@@ -236,6 +241,7 @@ export {
   requestRefAsset,
   requestRefEntity,
   requestAddAssetsToChat,
+  requestAddAssetToScene,
   useDocVersion,
   useMainConnected,
   useGizmoMode,

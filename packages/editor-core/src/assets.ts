@@ -290,3 +290,32 @@ export function makeMaterialResolver(world: WorldLike, packAssets: PackAsset[]):
     return h;
   };
 }
+
+/** Build a sync GUID→mesh-handle resolver (for instantiateScene's Mesh.meshAsset).
+ *  Two sources, in priority order:
+ *    1. `preloaded` — handles minted from imported mesh sub-assets that live in
+ *       .meta.json/DDC (NOT *.pack.json), loaded async via the runtime asset
+ *       registry (loadByGuid → allocSharedRef) and populated by the caller. This
+ *       is how a dragged glTF mesh sub-asset renders.
+ *    2. `packAssets` — mesh assets present in the game's loaded *.pack.json files.
+ *  GUIDs absent from both return null → the instantiator falls back to the
+ *  entity's builtin `kind` (placeholder cube). Mirrors makeMaterialResolver so the
+ *  instantiator stays synchronous. */
+export function makeMeshResolver(
+  world: WorldLike,
+  packAssets: PackAsset[],
+  preloaded?: ReadonlyMap<string, unknown>,
+): (guid: string) => unknown | null {
+  const byGuid = new Map(packAssets.filter((a) => a.kind === 'mesh').map((a) => [a.guid, a]));
+  const cache = new Map<string, unknown>();
+  return (guid: string) => {
+    const pre = preloaded?.get(guid);
+    if (pre !== undefined) return pre;
+    if (cache.has(guid)) return cache.get(guid)!;
+    const a = byGuid.get(guid);
+    if (!a) return null;
+    const h = world.allocSharedRef('MeshAsset', a.payload);
+    cache.set(guid, h);
+    return h;
+  };
+}

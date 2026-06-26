@@ -3,6 +3,7 @@ import { useTranslation } from '@/i18n';
 import { useAppStore, seedUninstalledIfFirstRun } from '../../store';
 import { onSessionEvent } from '../../lib/forgeax-bridge';
 import { AgentAvatarVideo } from '../AgentAvatarVideo/AgentAvatarVideo';
+import { resolveNaming } from '../../lib/agent-name';
 
 type WorkbenchAgent = {
   id: string;
@@ -10,6 +11,7 @@ type WorkbenchAgent = {
   role: string;
   status?: string;
   isMain?: boolean;
+  naming?: { title: string; sub: string };
 };
 
 const MAX_PAGE_SIZE = 5;
@@ -582,6 +584,7 @@ export function ChatAgentCapsule() {
           const selected = a.id === activeAgentId;
           const isLoading = !!streamingByAgent[a.id];
           const isUnread = !selected && unreadAgents.has(a.id);
+          const agentTitle = resolveNaming(a).title;
           return (
             <button
               key={a.id}
@@ -596,7 +599,7 @@ export function ChatAgentCapsule() {
               ]
                 .filter(Boolean)
                 .join(' ')}
-              title={a.name}
+              title={agentTitle}
               onClick={() => {
                 if (activeSid) setTabAgent(activeSid, a.id);
               }}
@@ -621,7 +624,7 @@ export function ChatAgentCapsule() {
                 {isUnread && <span className="cas-unread-dot" aria-label={t('chatAgentCapsule.unreadMessage')} />}
               </span>
               <span className="cas-name" aria-hidden="true">
-                {a.name}
+                {agentTitle}
               </span>
             </button>
           );

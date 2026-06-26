@@ -20,6 +20,23 @@ import { isImportable } from './import-registry';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
+// D-7 (§4): present meta sub-assets according to their import mode. A pack
+// imported as 'whole' shows ONLY its `scene` resource at top level (the
+// mesh/material/texture children are internal deps — still loadable by GUID for
+// drag/refs, just not flattened into the browser). 'split' (or legacy/missing)
+// flattens every sub-asset. Grouped by packPath since one .meta.json == one pack.
+function filterByImportMode(assets: PackAsset[]): PackAsset[] {
+  const modeByPack = new Map<string, string>();
+  for (const a of assets) {
+    const mode = (a.payload?.importSettings as { importMode?: unknown } | undefined)?.importMode;
+    if (typeof mode === 'string') modeByPack.set(a.packPath, mode);
+  }
+  return assets.filter((a) => {
+    if (modeByPack.get(a.packPath) !== 'whole') return true;
+    return a.kind === 'scene';
+  });
+}
+
 function packAssetToCBAsset(pa: PackAsset, index: number): CBAsset {
   return {
     type: 'asset',
@@ -54,7 +71,7 @@ export function ContentBrowserV2() {
     setLoading(true);
     void Promise.all([loadGameAssets(slug), loadMetaAssets(slug)]).then(([packAssets, metaAssets]) => {
       const pack = packAssets.map(packAssetToCBAsset);
-      const meta = metaAssets.map(packAssetToCBAsset);
+      const meta = filterByImportMode(metaAssets).map(packAssetToCBAsset);
       const seen = new Set(pack.map((a: CBAsset) => a.guid));
       const merged = [...pack, ...meta.filter((a: CBAsset) => !seen.has(a.guid))];
       setAllAssets(merged);

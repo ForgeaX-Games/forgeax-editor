@@ -1,10 +1,35 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdirSync } from 'node:fs';
 import react from '@vitejs/plugin-react';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
+// SSOT = THIS root's node_modules/@forgeax (engine-* + editor-*), i.e. exactly
+// the @forgeax packages Vite resolves natively here. Excluding precisely that set:
+//   - Avoids the OOM: under preserveSymlinks:true a pre-bundle crawls the nested
+//     workspace symlink graph (packages/*/node_modules/@forgeax/* → ../../../*)
+//     where one file via combinatorially-many symlink paths becomes a distinct
+//     module → esbuild blows up; also keeps the editor singletons (editor-shared
+//     EditorBus / active sceneId) a single instance.
+//   - Stays resolvable: all are present here. We must NOT over-exclude with the
+//     full engine/packages tree — transitive-only packages absent from
+//     node_modules (engine-plugin / engine-debug-draw, imported by engine-app /
+//     engine-runtime) must stay pre-bundlable or native import analysis throws
+//     "Failed to resolve import". Hand-listing was the original drift bug.
+function forgeaxWorkspacePackages(): string[] {
+  const out = new Set<string>(['@forgeax/scene']);
+  try {
+    for (const name of readdirSync(resolve(here, 'node_modules/@forgeax'))) {
+      out.add(`@forgeax/${name}`);
+    }
+  } catch { /* node_modules not materialised yet — fall through */ }
+  return [...out];
+}
+const FORGEAX_WS_PKGS = forgeaxWorkspacePackages();
 
 const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? 15280);
 const HOST = process.env.FORGEAX_EDITOR_HOST ?? '0.0.0.0';
@@ -89,48 +114,19 @@ export default defineConfig({
     silenceShaderEmitInServe(forgeaxShader() as never) as never,
   ],
   optimizeDeps: {
-    exclude: [
-      '@forgeax/engine-app',
-      '@forgeax/engine-runtime',
-      '@forgeax/engine-ecs',
-      '@forgeax/engine-types',
-      '@forgeax/engine-shader',
-      '@forgeax/engine-gltf',
-      // shares the engine subgraph's module identity (see engine-src vite.config).
-      '@forgeax/scene',
-      // The editor-internal packages hold MUTABLE SINGLETON state (the
-      // EditorBus + the active sceneId in editor-shared/store.ts). With
-      // `preserveSymlinks: true`, vite's optimizeDeps walked through each
-      // package's nested-symlink view of its workspace deps and bundled a
-      // SECOND copy of editor-shared inside the editor-panels chunk — so
-      // main.tsx's `setSceneId(cow-survivor)` + loaded doc lived on the
-      // top-level instance, while HierarchyPanel read an empty bus.doc from
-      // the nested instance and rendered no rows. Excluding them keeps each
-      // served as a single ESM source module, shared by all importers.
-      '@forgeax/editor-shared',
-      '@forgeax/editor-core',
-      '@forgeax/editor-panels',
-    ],
+    // Exclude the ENTIRE @forgeax workspace family (engine-* + editor-*) from
+    // Vite pre-bundling — served as native ESM. SSOT-derived (see
+    // forgeaxWorkspacePackages) so it can't drift the way the old hand list did;
+    // also keeps the editor singletons (EditorBus / active sceneId in
+    // editor-shared) a single shared instance.
+    exclude: FORGEAX_WS_PKGS,
   },
   resolve: {
-    dedupe: [
-      'react',
-      'react-dom',
-      '@forgeax/engine-runtime',
-      '@forgeax/engine-ecs',
-      '@forgeax/engine-types',
-      '@forgeax/engine-rhi',
-      '@forgeax/engine-math',
-      '@forgeax/engine-gltf',
-      '@forgeax/scene',
-      // Belt-and-braces with optimizeDeps.exclude above: `dedupe` collapses
-      // any dual symlink-paths to the same realpath at resolve time, so even
-      // if a transitive importer reaches editor-shared via the nested
-      // symlink it lands on the same module instance.
-      '@forgeax/editor-shared',
-      '@forgeax/editor-core',
-      '@forgeax/editor-panels',
-    ],
+    // react/react-dom must dedupe (single React instance); the @forgeax family
+    // dedupes off the same SSOT-derived list as optimizeDeps so every engine /
+    // editor package resolves to one realpath even when reached via a nested
+    // symlink path.
+    dedupe: ['react', 'react-dom', ...FORGEAX_WS_PKGS],
     preserveSymlinks: true,
   },
   server: {

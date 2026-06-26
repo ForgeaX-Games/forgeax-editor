@@ -14,7 +14,9 @@
 //   - DEV (split-port): engine/editor run on localhost ports → allow localhost /
 //     127.0.0.1 origins so split-dev keeps working.
 
-/** True if `origin` is the shell's own origin, or (dev only) a localhost port. */
+/** True if `origin` is the shell's own origin, or (dev only) a localhost port.
+ *  Also accepts private-network origins (10.x / 172.16-31.x / 192.168.x) so
+ *  WSL2 forwarded addresses work without opening the gate to the public web. */
 export function isTrustedMessageOrigin(origin: string): boolean {
   try {
     if (origin === window.location.origin) return true;
@@ -22,7 +24,8 @@ export function isTrustedMessageOrigin(origin: string): boolean {
   if (import.meta.env.DEV) {
     try {
       const host = new URL(origin).hostname;
-      return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+      if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return true;
+      if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host)) return true;
     } catch { /* opaque/empty origin */ }
   }
   return false;

@@ -98,7 +98,9 @@ export type EditorSyncMsg =
   // any panel → all: asset selection changed (Content Browser → Asset Inspector)
   | { t: 'assetSelect'; asset: { guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string } | null }
   // panel → main: batch-add asset/folder refs into AI Chat context (M5)
-  | { t: 'addAssetToChat'; refs: AssetChatRef[] };
+  | { t: 'addAssetToChat'; refs: AssetChatRef[] }
+  // panel → main: add an asset to the Scene viewport (context-menu Add to Scene, D-6)
+  | { t: 'addAssetToScene'; ref: AssetChatRef };
 
 /** Reference payload for AI Chat context injection (M5). */
 export interface AssetChatRef {
@@ -167,6 +169,7 @@ const EditorSyncMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('sceneChanged'), id: z.string() }),
   z.object({ t: z.literal('assetSelect'), asset: z.union([ObjZ, z.null()]) }),
   z.object({ t: z.literal('addAssetToChat'), refs: z.array(ObjZ) }),
+  z.object({ t: z.literal('addAssetToScene'), ref: ObjZ }),
 ]);
 
 /** Validate an inbound BroadcastChannel message envelope. Returns the typed

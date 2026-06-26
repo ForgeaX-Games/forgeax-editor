@@ -102,6 +102,8 @@ export interface BusPluginInfo {
   events?: BusEventInfo[];
   cliProvider?: BusCliProviderInfo;
   entry?: BusEntryInfo;
+  /** kind=agent 才有：统一命名。title=「中文职能·英文名」，sub=灰字英文职能。 */
+  naming?: { title: string; sub: string };
 }
 
 export interface BusPluginListResponse {

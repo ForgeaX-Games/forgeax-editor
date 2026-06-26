@@ -309,6 +309,19 @@ export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
   }
 }
 
+/** Add an asset to the active Scene viewport (context-menu equivalent of dragging
+ *  it onto the viewport — D-6). Routes to the Shell, where EditSurface builds the
+ *  spawn entity (split sub-asset) or runs import-scene (whole GLB). A popped-out
+ *  panel forwards via the sync channel to the main window first. */
+export function requestAddAssetToScene(ref: AssetChatRef): void {
+  if (IS_POPOUT) { postSync({ t: 'addAssetToScene', ref }); return; }
+  try {
+    window.parent?.postMessage({ type: 'FORGEAX_ADD_ASSET_TO_SCENE', ref }, '*');
+  } catch {
+    /* cross-origin — non-fatal */
+  }
+}
+
 // Re-render hook: bumps a version on every bus change so panels re-read doc.
 let docVersion = 0;
 const docListeners = new Set<() => void>();
@@ -1094,6 +1107,7 @@ function mainOnMessage(ev: MessageEvent): void {
     case 'refEntity': requestRefEntity(msg.id); break;
     case 'refAsset': requestRefAsset(msg.asset); break;
     case 'addAssetToChat': requestAddAssetsToChat(msg.refs); break;
+    case 'addAssetToScene': requestAddAssetToScene(msg.ref); break;
     case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
     case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
       case 'openScene': void switchSceneFile(msg.id); break;

@@ -1,8 +1,17 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
 import {
-  setAssetSelection, requestAddAssetsToChat, type AssetChatRef,
+  setAssetSelection, requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
+  dispatch, getSelection,
 } from '@forgeax/editor-shared';
+
+/** Map an asset kind to the component patch that assigns it onto an entity. */
+function assignPatchForKind(kind: string, guid: string): { component: string; patch: Record<string, unknown> } | null {
+  if (kind === 'material') return { component: 'Material', patch: { materialAsset: guid } };
+  if (kind === 'mesh') return { component: 'Mesh', patch: { meshAsset: guid } };
+  if (kind === 'texture' || kind === 'image') return { component: 'Material', patch: { albedoMap: guid } };
+  return null;
+}
 
 export interface ContextMenuItem {
   id: string;
@@ -75,8 +84,21 @@ export function buildAssetContextMenu(
     { id: 'sep-2', label: '', separator: true, action: () => {} },
 
     // ── Scene ──
+    { id: 'add-to-scene', label: 'Add to Scene', action: () => {
+      const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload };
+      requestAddAssetToScene(ref);
+    }},
     { id: 'assign', label: 'Assign to Selected Entity', action: () => {
-      setAssetSelection({ guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath });
+      const sel = getSelection();
+      const mapping = assignPatchForKind(asset.kind, asset.guid);
+      // With an entity selected AND an assignable kind → actually patch the
+      // component. Otherwise fall back to publishing the asset selection (so the
+      // Inspector / Material panel can pick it up).
+      if (sel !== null && mapping) {
+        dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
+      } else {
+        setAssetSelection({ guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath });
+      }
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },
 

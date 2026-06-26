@@ -1733,7 +1733,8 @@ function PluginRow({
   onSoloKind,
 }: PluginRowProps) {
   const { t } = useTranslation();
-  const nameZh = pickLang(p.displayName, 'zh', p.id);
+  // Agent 行用统一命名「中文职能·英文名」；其它插件仍用 displayName。
+  const nameZh = p.naming?.title || pickLang(p.displayName, 'zh', p.id);
   const descZh = pickLang(p.description, 'zh', '');
   const descEn = pickLang(p.description, 'en', '');
   const wb = p.workbench;

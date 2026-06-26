@@ -65,7 +65,14 @@ export interface TransformData {
 }
 
 export type MeshKind = 'cube' | 'sphere' | 'cylinder';
-export interface MeshData { kind?: MeshKind; }
+export interface MeshData {
+  kind?: MeshKind;
+  /** Reference to a mesh ASSET by GUID (e.g. an imported glTF mesh sub-asset).
+   *  When set AND the caller supplies a resolver that loads it, this WINS over
+   *  `kind` — so an entity can render an imported mesh instead of a builtin
+   *  primitive. Empty → fall back to the `kind` builtin (cube/sphere/cylinder). */
+  meshAsset?: string;
+}
 
 export interface MaterialData {
   /** Reference to a material ASSET by GUID (from a .pack). When set AND the

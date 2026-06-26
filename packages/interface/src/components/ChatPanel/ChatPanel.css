@@ -1537,6 +1537,15 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
 /* Composer */
 .composer {
   flex-shrink: 0;
+  transition: outline 0.15s;
+}
+.composer--asset-drop {
+  outline: 2px dashed var(--accent, #4c9eff);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.composer--asset-drop .composer-card {
+  background: rgba(76, 158, 255, 0.06);
 }
 .composer-input {
   width: 100%;
@@ -1640,23 +1649,17 @@ button.cp-agent-bar-id.is-empty:focus-visible .cp-agent-bar-id-arrow {
   z-index: 100;
   display: flex; flex-direction: column; gap: 1px;
 }
+/* Every row is two-line: a horizontal id+name+pills row (.cb-cli-row), then a
+   mono description mini-strip (.cb-cli-desc) below. So the item is a column. */
 .cb-cli-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+  padding: 6px 8px 7px;
   border: none; background: transparent;
   cursor: pointer;
   border-radius: 4px;
   color: var(--text-default, rgba(255,255,255,0.85));
   font-family: inherit; font-size: 12px;
   text-align: left;
-}
-/* P2.7g — rows that ALSO live on bus get a two-line layout: the original
-   id+name+pills horizontal row, then a mono mini-strip showing the bus
-   manifest description.zh. Width is widened to give the description enough
-   horizontal room without wrapping mid-clause. */
-.cb-cli-item.has-bus-desc {
-  flex-direction: column; align-items: stretch; gap: 4px;
-  padding: 6px 8px 7px;
 }
 .cb-cli-row {
   display: flex; align-items: center; gap: 8px;

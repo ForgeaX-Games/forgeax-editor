@@ -67,11 +67,20 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef): SpawnRefEntity |
       name,
       components: {
         Transform: { x: 0, y: 0.5, z: 0 },
-        Mesh: { kind: 'cube' },
+        // Reference the REAL imported mesh by GUID. `kind:'cube'` is only the
+        // fallback shape until the mesh asset is resolved (resolveMeshAsset).
+        Mesh: { kind: 'cube', meshAsset: ref.guid },
+        // Leave material inline (default) — the engine renders with a neutral PBR
+        // material; mesh↔material association can be added later.
         Material: { albedo: '#cccccc', roughness: 0.7 },
       },
     };
   }
+
+  // `scene` (a whole-GLB asset, mode A) is NOT a single reference-mode entity —
+  // the drop handler routes it through /api/assets/import-scene (full/reference
+  // tree spawn) instead. Returning null signals "not a single-entity spawn".
+  if (kind === 'scene') return null;
 
   return null;
 }

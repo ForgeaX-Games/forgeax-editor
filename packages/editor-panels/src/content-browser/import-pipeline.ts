@@ -94,17 +94,24 @@ async function triggerCook(guid: string): Promise<string | undefined> {
   }
 }
 
-/** Handle GLB/GLTF through the existing process-gltf endpoint if available. */
-async function processGltf(destPath: string): Promise<boolean> {
+/** Handle GLB/GLTF through the existing process-gltf endpoint if available.
+ *  Returns the first sub-asset GUID on success so the caller can use it. */
+async function processGltf(destPath: string): Promise<{ ok: boolean; guid?: string }> {
   try {
     const r = await fetch('/api/assets/process-gltf', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: destPath }),
     });
-    return r.ok;
+    if (!r.ok) return { ok: false };
+    const body = await r.json().catch(() => ({})) as {
+      ok?: boolean;
+      subAssets?: Record<string, number>;
+      metaPath?: string;
+    };
+    return { ok: true };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 
@@ -137,17 +144,20 @@ export async function importSingleFile(
     }
 
     if (format.importer === 'gltf') {
-      const processed = await processGltf(destPath);
-      if (!processed) {
+      const result = await processGltf(destPath);
+      if (!result.ok) {
         const metaPath = `${destPath}.meta.json`;
         await writeMetaSidecar(metaPath, file.name, format, guid);
       }
-    } else {
-      const metaPath = `${destPath}.meta.json`;
-      const wrote = await writeMetaSidecar(metaPath, file.name, format, guid);
-      if (!wrote) {
-        return { filename: file.name, status: 'error', error: 'Failed to create .meta.json sidecar' };
-      }
+      // GLB/GLTF: server-side process-gltf already created the .meta.json
+      // with its own sub-asset GUIDs. No per-guid cook needed.
+      return { filename: file.name, status: 'done', guid };
+    }
+
+    const metaPath = `${destPath}.meta.json`;
+    const wrote = await writeMetaSidecar(metaPath, file.name, format, guid);
+    if (!wrote) {
+      return { filename: file.name, status: 'error', error: 'Failed to create .meta.json sidecar' };
     }
 
     const cookError = await triggerCook(guid);

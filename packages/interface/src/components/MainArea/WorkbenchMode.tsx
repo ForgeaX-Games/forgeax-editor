@@ -6,6 +6,7 @@ import { useAppStore } from '../../store';
 import { useLocalSize } from '../Resize/ResizeHandle';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
+import { resolveNaming } from '../../lib/agent-name';
 import { WorkbenchPluginHost, pluginRendersInMainArea } from './WorkbenchPluginHost';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { openAgentDetail } from '../../lib/open-agent-detail';
@@ -777,6 +778,8 @@ function WbGallery() {
 interface AgentRec {
   id: string;
   name: string;
+  personName?: string;
+  naming?: { title: string; sub: string };
   role: string;
   color: string;
   avatar: string;
@@ -1089,8 +1092,8 @@ function AgentCard({
           }
         />
         <div className="wm-agent-meta">
-          <span className="wm-agent-name">{a.name}</span>
-          <span className="wm-agent-role">{a.role}</span>
+          <span className="wm-agent-name">{resolveNaming(a).title}</span>
+          <span className="wm-agent-role">{resolveNaming(a).sub || a.role}</span>
         </div>
         {off
           ? <span className="wm-agent-badge">{t('workbench.disabledBadge')}</span>

@@ -390,7 +390,9 @@ interface AppState {
   // (FilesPanel / AgentsPanel / Sidebar workbench tab / Preview / ...) can call
   // requestComposerInsert(pill) and the Composer's RichInput will pick it up
   // on its next render tick, insert the chip at the caret, then clear.
+  // Uses a queue so batch "Add to AI Chat" (multi-select) inserts all pills.
   composerPendingInsert: import('./components/Composer/pill').PillPayload | null;
+  composerPendingInsertQueue: import('./components/Composer/pill').PillPayload[];
   requestComposerInsert: (p: import('./components/Composer/pill').PillPayload) => void;
   clearComposerPendingInsert: () => void;
 
@@ -1723,8 +1725,15 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
   setPendingBusExpandId: (id) => set({ pendingBusExpandId: id }),
 
   composerPendingInsert: null,
-  requestComposerInsert: (p) => set({ composerPendingInsert: p }),
-  clearComposerPendingInsert: () => set({ composerPendingInsert: null }),
+  composerPendingInsertQueue: [],
+  requestComposerInsert: (p) => set((s) => ({
+    composerPendingInsertQueue: [...s.composerPendingInsertQueue, p],
+    composerPendingInsert: s.composerPendingInsertQueue.length === 0 ? p : s.composerPendingInsert,
+  })),
+  clearComposerPendingInsert: () => set((s) => {
+    const q = s.composerPendingInsertQueue.slice(1);
+    return { composerPendingInsertQueue: q, composerPendingInsert: q[0] ?? null };
+  }),
 
   // ── checkpoint 回退点 ──
   composerPendingText: null,

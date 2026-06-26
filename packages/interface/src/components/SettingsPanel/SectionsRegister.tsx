@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Command, Cpu, FlaskConical, GitFork, Globe, History, Info, Key, Network, Plug, RefreshCw, ShieldCheck, Sparkles, Trash2, User, Users } from 'lucide-react';
 import { buildShortcuts, prettyCombo, type ShortcutDef } from '../../lib/global-shortcuts';
 import { confirmDialog } from '../../lib/dialog';
+import { resolveNaming } from '../../lib/agent-name';
 import { Section, EnvField } from '../TopBar/SettingsDrawer';
 import { BusAdminPanel } from '../Bus/BusAdminPanel';
 import { useSettingsSection } from './store';
@@ -558,6 +559,8 @@ function AboutBody() {
 interface WorkbenchAgent {
   id: string;
   name: string;
+  personName?: string;
+  naming?: { title: string; sub: string };
   role: string;
   color: string;
   avatar: string;
@@ -650,7 +653,7 @@ function AgentsBody() {
           </option>
           {bootstrapCandidates.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.name} ({a.id}){a.isMain ? ' · manifest main' : ''}
+              {resolveNaming(a).title} ({a.id}){a.isMain ? ' · manifest main' : ''}
             </option>
           ))}
         </select>
@@ -684,7 +687,7 @@ function AgentsBody() {
             // indent=2 (two rails) so the lead↔sub hierarchy reads visually
             // — without the deeper sub indent every row looks like a sibling.
             const total = 1 + item.subs.length;
-            const label = `${item.lead.name} · ${t('settings.agents.familyLabel')}`;
+            const label = `${resolveNaming(item.lead).title} · ${t('settings.agents.familyLabel')}`;
             const leadIsMain = item.lead.id === effectiveMainId;
             return (
               <div key={`fam-${item.group.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
@@ -826,11 +829,11 @@ function AgentRegisterRow({
       />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          <strong>{a.name}</strong>
+          <strong>{resolveNaming(a).title}</strong>
           {isMain && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· main · {t('settings.agents.newSessionEntry')}</span>}
           {!isMain && a.status === 'placeholder' && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>· placeholder</span>}
         </div>
-        <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.role}</div>
+        <div className="dim" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{resolveNaming(a).sub || a.role}</div>
       </div>
       <code style={{ fontSize: 10, color: 'var(--text-dim)' }}>{a.id}</code>
     </label>

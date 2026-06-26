@@ -48,9 +48,19 @@ export function EditorPanelFrame({ panelId }: Props) {
   // right scene's bus (same channel key as the viewport iframe).
   const slug = pinnedSlug ?? '';
   const sceneParam = slug ? `&scene=${encodeURIComponent(slug)}` : '';
+  // Standalone-only seam: when the host (editor standalone) serves a game via
+  // its own read-only middleware, it writes localStorage['forgeax.gameRoot'] so
+  // a panel's resolveGamePath uses <slug> (matching that middleware) instead of
+  // the .forgeax/games/<slug> default. studio embedded never sets this key, so
+  // this param is absent there and behavior is unchanged.
+  let gameRootParam = '';
+  try {
+    const gr = localStorage.getItem('forgeax.gameRoot');
+    if (gr) gameRootParam = `&gameRoot=${encodeURIComponent(gr)}`;
+  } catch { /* localStorage unavailable — omit, keep default */ }
   // ?chromeless=1: DetachedPanel hides its own title header + h3 inside the
   // panel body — the dockview tab already shows the panel name.
-  const src = `/editor/?panel=${encodeURIComponent(panelId)}${sceneParam}&chromeless=1`;
+  const src = `/editor/?panel=${encodeURIComponent(panelId)}${sceneParam}${gameRootParam}&chromeless=1`;
 
   useEffect(() => {
     let cancelled = false;

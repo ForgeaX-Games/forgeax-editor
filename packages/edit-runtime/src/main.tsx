@@ -32,7 +32,7 @@ import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
-import { loadGameAssets, makeMaterialResolver } from '@forgeax/editor-core';
+import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
@@ -342,11 +342,17 @@ const cameraEntity = world.spawn(
 // instantiator stays synchronous.
 const packAssets = await loadGameAssets(getSceneId());
 const resolveMaterialAsset = makeMaterialResolver(world as never, packAssets);
+// Imported mesh sub-assets (glTF mesh dragged from Content Browser) live in
+// .meta.json/DDC, not *.pack.json — they're loaded async via loadByGuid below and
+// minted into this cache; the sync resolver consults it so split-mesh drags
+// render their real geometry (mirrors the GltfRef preload + resolveMaterialAsset).
+const preloadedMeshes = new Map<string, unknown>();
+const resolveMeshAsset = makeMeshResolver(world as never, packAssets, preloadedMeshes);
 
 // Wire the authored doc → forgeax world (rebuilds on every bus change). The
 // doc→world mapping is @forgeax/scene's instantiateScene — the same path ▶ Play
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
-const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset);
+const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset);
 
 // Asset-edit mode: a standalone prefab-style pack (Assets panel monster/character asset,
 // id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
@@ -428,6 +434,65 @@ void setupEditorSkylight(
     // the now-loaded GLB into its real per-node geometry.
     engineSync.forceResync();
   })();
+}
+
+// Preload imported mesh sub-assets referenced by Mesh.meshAsset (e.g. a glTF mesh
+// dragged from the Content Browser). These live in .meta.json/DDC, not in the
+// game's *.pack.json, so loadGameAssets never sees them — load each via the
+// runtime asset registry (loadByGuid → allocSharedRef), mint a MeshAsset handle
+// into `preloadedMeshes`, then forceResync so instantiateScene's resolveMeshAsset
+// hits the cache and renders real geometry instead of the placeholder cube.
+// (Mirrors the GltfRef preload above + the preview.skin loadByGuid path.)
+{
+  const collectMeshGuids = (): Set<string> => {
+    const guids = new Set<string>();
+    const packMeshGuids = new Set(packAssets.filter((a) => a.kind === 'mesh').map((a) => a.guid));
+    for (const e of Object.values(bus.doc.entities)) {
+      const g = (e?.components as { Mesh?: { meshAsset?: string } } | undefined)?.Mesh?.meshAsset;
+      if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g)) guids.add(g);
+    }
+    return guids;
+  };
+  const preloadMeshes = async (): Promise<void> => {
+    const guids = collectMeshGuids();
+    if (guids.size === 0) return;
+    // loadByGuid takes a PARSED AssetGuid (it keys on AssetGuid.format(guid)),
+    // NOT a raw string — passing the string yields a garbage key → catalog miss
+    // → the mesh never loads and the entity stays a placeholder cube.
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    let landed = false;
+    await Promise.all([...guids].map(async (g) => {
+      try {
+        const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
+        if (!parsed.ok || parsed.value === undefined) { console.warn('[editor] mesh preload bad guid:', g); return; }
+        const res = await (renderer.assets as never as { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
+        if (!res.ok) { console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
+        const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MeshAsset', res.value);
+        preloadedMeshes.set(g, handle);
+        landed = true;
+      } catch (err) {
+        console.warn('[editor] mesh preload failed:', g, (err as Error)?.message ?? err);
+      }
+    }));
+    // Re-instantiate so resolveMeshAsset picks up the freshly-minted handles. If
+    // a handle is somehow incompatible, re-instantiate would throw mid-rebuild
+    // and leave the scene despawned (a dropped mesh — and everything else —
+    // vanishes). Guard it: on failure, drop the just-loaded handles so the next
+    // resync falls back to the placeholder cube (degraded but visible) instead
+    // of an empty viewport.
+    if (landed) {
+      try {
+        engineSync.forceResync();
+      } catch (err) {
+        console.warn('[editor] mesh preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
+        for (const g of guids) preloadedMeshes.delete(g);
+        try { engineSync.forceResync(); } catch { /* leave as-is */ }
+      }
+    }
+  };
+  // Initial pass + re-run whenever the doc changes (a fresh drag adds a meshAsset).
+  void preloadMeshes();
+  bus.subscribe(() => { void preloadMeshes(); });
 }
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
