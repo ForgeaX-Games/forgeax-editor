@@ -291,6 +291,14 @@ export type { MenuItemDef } from './contextMenuService';
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './dock-bridge';
 
+// ── Backend transport seam (R2 DIP) ──
+export {
+  getApiClient,
+  setApiClient,
+  createDefaultApiClient,
+  type ApiClient,
+} from './api-client';
+
 // ── Project authoring (M3) ──
 export { openProject, type OpenProjectResult } from './open-project';
 export { createFetchReader } from './fetch-reader';

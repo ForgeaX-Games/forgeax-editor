@@ -17,6 +17,7 @@ import {
   type AssetChatRef,
 } from './sync-channel';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
+import { getApiClient } from './api-client';
 import { findScenePackByGuid } from './assets';
 import { fetchWithTimeout } from './net';
 import { resolveGamePath } from './path-resolver';
@@ -648,7 +649,7 @@ export async function readPlayConfig(): Promise<PlayConfig> {
     // optional=1: play-config.json is per-developer launcher state that may not
     // exist yet (default = campaign). The flag makes the server return 200
     // { exists:false } instead of 404, so an absent config logs no red error.
-    const r = await fetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
+    const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
     if (r.ok) {
       const j = (await r.json()) as { content?: string };
       if (j.content) {
@@ -663,7 +664,7 @@ export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
   const p = playConfigPath();
   if (!p) return false;
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: p, content: JSON.stringify(cfg, null, 2) + '\n' }),
@@ -688,7 +689,7 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   // one (which would drift on the first edit).
   const packContent = JSON.stringify(sessionToPack(sourceDoc, stableGuid('scene|' + newPath)), null, 2) + '\n';
   try {
-    const w1 = await fetch('/api/files', {
+    const w1 = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: newPath, content: packContent }),
@@ -845,7 +846,7 @@ export async function saveDocToDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
   try {
-    const r = await fetch('/api/files', {
+    const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: p, content: serializedPack() }),
@@ -904,7 +905,7 @@ export function flushPendingSaveBeacon(): void {
     const ok = navigator.sendBeacon('/api/files', blob);
     // sendBeacon can refuse (queue full / too large); fall back to a keepalive
     // fetch which also survives teardown for small bodies.
-    if (!ok) void fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
+    if (!ok) void getApiClient().fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
   } catch {
     // last resort — best-effort async save (may be aborted on teardown)
     void saveDocToDisk();
@@ -942,7 +943,7 @@ export function initDiskWatch(): void {
     const p = scenePath();
     if (!p) return;
     try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) return;
       const j = (await r.json()) as { content?: string };
       if (!j.content) return;

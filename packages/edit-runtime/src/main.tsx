@@ -34,7 +34,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath } from '@forgeax/editor-core';
+import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -416,7 +416,7 @@ void setupEditorSkylight(
 // geometry renders. GLBs fetch via the server's raw-file endpoint.
 {
   const fetchGlb = async (p: string): Promise<ArrayBuffer> => {
-    const r = await fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+    const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
     if (!r.ok) throw new Error(`glb ${r.status}`);
     return r.arrayBuffer();
   };
@@ -519,7 +519,7 @@ void (async () => {
     // fetchRead wraps the studio /api/files endpoint to match loadGameProject injection.
     const gameForgePath = resolveGamePath(FORGE_JSON);
     const fetchRead = async (path: string): Promise<string> => {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { content?: string };
       if (!j.content) throw new Error('Empty content');

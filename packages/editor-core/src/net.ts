@@ -16,15 +16,13 @@
 // Lives in its own module (not store.ts) so BOTH store.ts and assets.ts can use
 // it without a circular import — store.ts already imports findScenePackByGuid
 // from assets.ts, and the boot path runs through assets.ts too.
+//
+// R2: the timeout-race body moved into the injected ApiClient (api-client.ts);
+// this is now a thin delegate so the 16 existing call sites keep their `url`
+// argument unchanged. `url` is the path (e.g. `/api/files?...`); the client
+// prepends its base ('' in studio mode ⇒ byte-identical relative fetch).
+import { getApiClient } from './api-client';
+
 export async function fetchWithTimeout(url: string, ms = 6000): Promise<Response> {
-  const ctrl = new AbortController();
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } reject(new Error('fetch-timeout')); }, ms);
-  });
-  try {
-    return await Promise.race([fetch(url, { signal: ctrl.signal }), timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
+  return getApiClient().fetchSafe(url, undefined, ms);
 }

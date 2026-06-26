@@ -117,6 +117,19 @@ function forgeaxPackBaseStrip() {
   };
 }
 
+// Reject backup/snapshot dirs and hidden dot-dirs from being treated as games.
+// Game optimize/migration tooling drops sibling backups like
+// `<slug>.bak-1782212746` (a FULL copy, including `assets/`) under
+// .forgeax/games. Without this filter gameAssetRoots()/gameSlugs() count those
+// as real games → the asset-root set differs from the boot snapshot →
+// forgeaxGameRescan fires server.restart() (repeatedly, as more backups/tsconfig
+// changes land) → the preview iframe gets ECONNREFUSED on :15173 during each
+// restart window and sticks on "Loading game" forever.
+const GAME_SLUG_REJECT_RE = /(^\.)|(\.bak(-|\.|$))/i;
+function isRealGameSlug(slug: string): boolean {
+  return !GAME_SLUG_REJECT_RE.test(slug);
+}
+
 // Scan every game's assets/ dir as a pack root. One-level glob over
 // .forgeax/games/<slug>/assets deliberately excludes nested dirs like
 // shoot/backup/assets, whose .pack.json files reuse the same GUIDs and would
@@ -125,6 +138,7 @@ function gameAssetRoots(): string[] {
   const gamesDir = resolve(here, '.forgeax/games');
   if (!existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
+    .filter(isRealGameSlug)
     .map((slug) => join(gamesDir, slug, 'assets'))
     .filter((p) => existsSync(p));
 }
@@ -161,6 +175,7 @@ function gameSlugs(): string[] {
   const gamesDir = resolve(here, '.forgeax/games');
   if (!existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
+    .filter(isRealGameSlug)
     .filter((slug) => existsSync(join(gamesDir, slug, 'assets')));
 }
 
@@ -258,8 +273,18 @@ function forgeaxGameRescan() {
         known = next;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
+          // Vite 6 bug: concurrent server.restart() calls race and deadlock the server
+          // (https://github.com/vitejs/vite/issues/21636). Use a global lock on the
+          // process to guarantee we never trigger a restart while one is already in flight.
+          if ((process as any).__forgeax_restarting) return;
           console.log('[forgeax:game-rescan] asset roots changed → restarting vite');
-          void server.restart();
+          (process as any).__forgeax_restarting = true;
+          server.restart().finally(() => {
+            // Add a small debounce after restart completes before allowing another
+            setTimeout(() => {
+              (process as any).__forgeax_restarting = false;
+            }, 1000);
+          });
         }, 400);
       };
       server.watcher.on('addDir', (p: string) => maybeRestart(p));
@@ -351,6 +376,17 @@ export default defineConfig({
     // it and OOM esbuild on the preserveSymlinks symlink-diamond, besides the
     // new-game re-optimize flicker.
     exclude: FORGEAX_WS_PKGS,
+    // Don't hold module requests until the static-import crawl finishes. With
+    // preserveSymlinks:true over the @forgeax symlink-diamond, that crawl can run
+    // very long / wedge — most visibly after an in-process server.restart()
+    // (forgeaxGameRescan fires one whenever the active-workspace symlink flips or
+    // a game is scaffolded). With holdUntilCrawlEnd:true (the default) Vite then
+    // holds ALL requests behind the never-finishing crawl → the engine vite binds
+    // :15173 but answers nothing (0% CPU) → the preview iframe never boots → Play
+    // sticks on "Loading game" / black screen. We exclude the whole @forgeax
+    // family anyway (nothing left to discover), so releasing after the scanner is
+    // strictly better here and removes the wedge.
+    holdUntilCrawlEnd: false,
   },
   resolve: {
     alias: {
@@ -386,6 +422,16 @@ export default defineConfig({
         '**/.forgeax/cache/**',
         '**/.forgeax/packs/**',
         '**/node_modules/**',
+        // Game backup snapshots (`<slug>.bak-<ts>` / `<slug>.bak`) are NOT games;
+        // ignore them so vite's tsconfig watcher won't force-reload on their
+        // tsconfig.json and forgeaxGameRescan won't restart-loop (preview black
+        // screen / stuck "Loading game"). Mirrors isRealGameSlug().
+        '**/.forgeax/games/*.bak-*/**',
+        '**/.forgeax/games/*.bak/**',
+        // Prevent Vite's internal watcher from triggering concurrent restarts
+        // when the workspace symlink flips and package.json/tsconfig.json change.
+        '**/.forgeax/games/**/package.json',
+        '**/.forgeax/games/**/tsconfig.json',
       ],
     },
     fs: { allow: [viteRoot], strict: false },
