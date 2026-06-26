@@ -14,7 +14,7 @@ export interface ThumbnailData {
 const KIND_ICONS: Record<string, string> = {
   mesh: '◫', texture: '🖼', image: '🖼', 'cube-texture': '🧊', sampler: '⚙',
   material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
+  skin: '🩻', 'animation-clip': '🎬', animation: '🎬', audio: '🔊', font: '🔤',
   'render-pipeline': '🔧', tileset: '🧱',
 };
 
@@ -22,7 +22,7 @@ const KIND_COLORS: Record<string, string> = {
   mesh: '#4a6b8a', texture: '#6a8a4a', image: '#6a8a4a', 'cube-texture': '#4a8a8a',
   sampler: '#8a6a4a', material: '#8a4a6a', scene: '#4a8a6a',
   shader: '#6a4a8a', skeleton: '#8a8a4a', skin: '#4a4a8a',
-  'animation-clip': '#8a4a4a', audio: '#4a8a4a', font: '#6a6a8a',
+  'animation-clip': '#8a4a4a', animation: '#8a4a4a', audio: '#4a8a4a', font: '#6a6a8a',
   'render-pipeline': '#8a6a6a', tileset: '#6a8a6a',
 };
 

@@ -42,6 +42,7 @@ export {
   requestRefAsset,
   requestRefEntity,
   requestAddAssetsToChat,
+  requestAddAssetToScene,
   useDocVersion,
   useMainConnected,
   useGizmoMode,

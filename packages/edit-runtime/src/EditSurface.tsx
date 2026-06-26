@@ -26,6 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
+import { buildSpawnEntityFromDragRef, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -196,6 +197,17 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // on a live frame (fps) or explicit reload.
   const [fatal, setFatal] = useState<{ code: string; message: string } | null>(null);
   const [importAnchor, setImportAnchor] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
+  // GLB import-mode dialog (§4 / D-8): set after a .glb/.gltf upload completes,
+  // cleared once the user picks 'whole' (scene/uasset) or 'split' (sub-assets).
+  const [glbModePrompt, setGlbModePrompt] = useState<{ dest: string; baseName: string } | null>(null);
+  // Asset drag-to-scene (D-4). The drag ref arrives via postMessage (cross-iframe
+  // dataTransfer is blocked), cached in pendingDragAsset for the drop event.
+  //   assetDragPending — a CB asset drag is in flight (START..END): show a capture
+  //     overlay over the iframe (the iframe would otherwise swallow drag events).
+  //   assetDragActive  — the drag is currently over the viewport: highlight it.
+  const [assetDragPending, setAssetDragPending] = useState(false);
+  const [assetDragActive, setAssetDragActive] = useState(false);
+  const pendingDragAsset = useRef<DragAssetRef | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -271,36 +283,18 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     setImportOpen(false);
   }, []);
 
-  const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.currentTarget.files?.[0];
-    e.currentTarget.value = '';
-    if (!file || !slug) return;
-    const isModel = /\.(glb|gltf)$/i.test(file.name);
-    const baseName = file.name.replace(/\.(glb|gltf)$/i, '');
-
+  // GLB import after the user picks a mode (D-8). 'whole' declares the sub-assets
+  // AND auto-spawns the scene tree (uasset-like); 'split' only declares the
+  // individual mesh/material/texture sub-assets so the user can drag them in.
+  const runGlbImport = useCallback(async (dest: string, baseName: string, importMode: 'whole' | 'split') => {
+    if (!slug) return;
     try {
-      setImportStep('uploading');
-      setImportMsg(file.name);
-      const res = await importAssetFile(file, slug, base);
-      if (!res.ok || !res.dest) {
-        setImportStep('error');
-        setImportMsg(res.error ?? 'Upload failed');
-        return;
-      }
-
-      if (!isModel) {
-        sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
-        setImportStep('done');
-        setImportMsg(file.name);
-        setTimeout(() => setImportStep(null), 3000);
-        return;
-      }
-
       setImportStep('processing');
+      setImportMsg(baseName);
       const procRes = await fetch(`${base}/api/assets/process-gltf`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: res.dest, slug }),
+        body: JSON.stringify({ path: dest, slug, importMode }),
       });
       if (!procRes.ok) {
         const j = await procRes.json() as { error?: string };
@@ -309,11 +303,20 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         return;
       }
 
+      if (importMode === 'split') {
+        // No auto-spawn — just surface the new sub-assets in the Content Browser.
+        sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+        setImportStep('done');
+        setImportMsg(baseName);
+        setTimeout(() => setImportStep(null), 4000);
+        return;
+      }
+
       setImportStep('importing');
       const sceneRes = await fetch(`${base}/api/assets/import-scene`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: res.dest, mode: 'auto' }),
+        body: JSON.stringify({ path: dest, mode: 'auto' }),
       });
       const sceneJ = await sceneRes.json() as {
         mode?: string; totalNodes?: number; meshCount?: number;
@@ -339,6 +342,134 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       setImportMsg((err as Error).message ?? String(err));
     }
   }, [slug, base]);
+
+  const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = '';
+    if (!file || !slug) return;
+    const isModel = /\.(glb|gltf)$/i.test(file.name);
+    const baseName = file.name.replace(/\.(glb|gltf)$/i, '');
+
+    try {
+      setImportStep('uploading');
+      setImportMsg(file.name);
+      const res = await importAssetFile(file, slug, base);
+      if (!res.ok || !res.dest) {
+        setImportStep('error');
+        setImportMsg(res.error ?? 'Upload failed');
+        return;
+      }
+
+      if (!isModel) {
+        sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+        setImportStep('done');
+        setImportMsg(file.name);
+        setTimeout(() => setImportStep(null), 3000);
+        return;
+      }
+
+      // GLB/GLTF → pause and ask the user how to import it (§4 / D-8).
+      setImportStep(null);
+      setGlbModePrompt({ dest: res.dest, baseName });
+    } catch (err) {
+      setImportStep('error');
+      setImportMsg((err as Error).message ?? String(err));
+    }
+  }, [slug, base]);
+
+  // ── Asset drag-to-scene (D-4/D-5) ───────────────────────────────────────────
+  // Spawn a whole-GLB asset (mode A) by re-running import-scene on its source path,
+  // then forwarding the tree to the editor iframe (mirrors onFileSelected's tail).
+  const spawnSceneFromGlb = useCallback(async (path: string, name: string): Promise<void> => {
+    try {
+      const sceneRes = await fetch(`${base}/api/assets/import-scene`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path, mode: 'auto' }),
+      });
+      const sceneJ = await sceneRes.json() as { mode?: string; entity?: unknown; doc?: unknown; error?: string };
+      if (!sceneRes.ok) { console.warn('[editor] drag scene import failed:', sceneJ.error); return; }
+      const spawnMode: 'reference' | 'full' = sceneJ.mode === 'full' ? 'full' : 'reference';
+      sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
+        mode: spawnMode, entity: sceneJ.entity, doc: sceneJ.doc, name,
+      });
+    } catch (err) {
+      console.warn('[editor] drag scene import error:', (err as Error)?.message ?? err);
+    }
+  }, [base]);
+
+  const onAssetDragOver = useCallback((e: React.DragEvent) => {
+    if (!pendingDragAsset.current) return; // not a Content Browser asset drag
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!assetDragActive) setAssetDragActive(true);
+  }, [assetDragActive]);
+
+  const onAssetDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear when leaving the frame itself (not when crossing child elements).
+    if (e.currentTarget === e.target) setAssetDragActive(false);
+  }, []);
+
+  // Add an asset to the scene — shared by drag-drop (D-4) and the context-menu
+  // "Add to Scene" (D-6). Routes whole-GLB (scene) through import-scene, and split
+  // sub-assets (mesh/material/texture) through a single reference-mode spawn.
+  const spawnAssetRef = useCallback((ref: DragAssetRef): void => {
+    const kind = ref.kind ?? '';
+    if (kind === 'scene') {
+      // import-scene needs the GLB's *game-relative* path (e.g.
+      // `.forgeax/games/<slug>/assets/Fox.glb`). The scene asset's packPath is
+      // the `.meta.json` sidecar that sits next to the GLB (`Fox.glb.meta.json`),
+      // so strip `.meta.json` to recover it. `payload.source` is only the
+      // basename (`Fox.glb`) — passing that makes import-scene resolve against
+      // the project root and 404 (silent no-op), so it's a last resort.
+      const metaPath = ref.path;
+      const src = typeof metaPath === 'string' && /\.meta\.json$/i.test(metaPath)
+        ? metaPath.replace(/\.meta\.json$/i, '')
+        : ((ref.payload?.source as string | undefined) ?? metaPath);
+      const name = ref.name ?? 'GLB';
+      if (typeof src === 'string' && /\.(glb|gltf)$/i.test(src)) void spawnSceneFromGlb(src, name);
+      else console.warn('[editor] scene asset has no resolvable GLB source — cannot spawn:', metaPath);
+      return;
+    }
+    const entity = buildSpawnEntityFromDragRef(ref);
+    if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
+    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
+      mode: 'reference', entity, name: entity.name,
+    });
+    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+  }, [spawnSceneFromGlb, slug]);
+
+  const onAssetDrop = useCallback((e: React.DragEvent) => {
+    const ref = pendingDragAsset.current;
+    if (!ref) return;
+    e.preventDefault();
+    setAssetDragActive(false);
+    setAssetDragPending(false);
+    pendingDragAsset.current = null;
+    spawnAssetRef(ref);
+  }, [spawnAssetRef]);
+
+  // Content Browser (a sibling iframe) posts FORGEAX_DRAG_ASSET_START/END up to
+  // this Shell window while an asset card is dragged (cross-iframe dataTransfer is
+  // unreadable, so we cache the ref for the drop). FORGEAX_ADD_ASSET_TO_SCENE is
+  // the context-menu "Add to Scene" path (D-6) — no drag, spawn immediately.
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data as { type?: string; ref?: unknown } | null;
+      if (d?.type === 'FORGEAX_DRAG_ASSET_START' && d.ref) {
+        pendingDragAsset.current = d.ref as DragAssetRef;
+        setAssetDragPending(true);
+      } else if (d?.type === 'FORGEAX_DRAG_ASSET_END') {
+        pendingDragAsset.current = null;
+        setAssetDragPending(false);
+        setAssetDragActive(false);
+      } else if (d?.type === 'FORGEAX_ADD_ASSET_TO_SCENE' && d.ref) {
+        spawnAssetRef(d.ref as DragAssetRef);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [spawnAssetRef]);
 
   // ── VAG_* message consumption ──────────────────────────────────────────────
   useEffect(() => {
@@ -497,6 +628,13 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
             src={src}
             className="preview-iframe"
             title="forgeax editor"
+            // While a Content Browser asset drag is in flight, kill the viewport
+            // iframe's pointer-events so the native drag is NOT swallowed by the
+            // iframe — the `.preview-asset-drop` overlay (a Shell-DOM sibling on
+            // top) then actually receives dragover/drop. Mirrors DockShell's
+            // proven `html.fx-dock-dragging iframe { pointer-events: none }` fix
+            // (a cross-origin iframe otherwise eats the drag before any overlay).
+            style={assetDragPending ? { pointerEvents: 'none' } : undefined}
             // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
             // chain inside the game: Chrome 2026 + WebKit (Safari 26) no longer
             // silently inherit pointer lock from same-origin parents, so without
@@ -509,6 +647,75 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
             onMouseDown={(e) => { try { e.currentTarget.contentWindow?.focus(); } catch { /* guard */ } }}
           />
         )}
+        {/* Asset drop capture overlay (D-4). Mounted only while a Content Browser
+            asset drag is in flight — sits ON TOP of the iframe (which would
+            otherwise swallow the dragover/drop events) to receive the drop. */}
+        {assetDragPending && (
+          <div
+            className={`preview-asset-drop${assetDragActive ? ' preview-asset-drop--active' : ''}`}
+            onDragOver={onAssetDragOver}
+            onDragLeave={onAssetDragLeave}
+            onDrop={onAssetDrop}
+          >
+            <div className="preview-asset-drop-hint">Drop to add to scene</div>
+          </div>
+        )}
+        {glbModePrompt && (
+          <GlbImportModeDialog
+            name={glbModePrompt.baseName}
+            onCancel={() => setGlbModePrompt(null)}
+            onConfirm={(mode) => {
+              const p = glbModePrompt;
+              setGlbModePrompt(null);
+              void runGlbImport(p.dest, p.baseName, mode);
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── GLB import-mode dialog (§4 / D-8) ──────────────────────────────────────────
+// Mirrors UE's Interchange import dialog "Import individual assets" vs "Import as
+// scene": 'whole' spawns the GLB as one scene/uasset-like resource, 'split'
+// declares each mesh/material/texture as an independent sub-asset.
+
+interface GlbImportModeDialogProps {
+  name: string;
+  onConfirm: (mode: 'whole' | 'split') => void;
+  onCancel: () => void;
+}
+
+function GlbImportModeDialog({ name, onConfirm, onCancel }: GlbImportModeDialogProps) {
+  const [mode, setMode] = useState<'whole' | 'split'>('whole');
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onCancel]);
+  return (
+    <div className="glb-import-backdrop" onClick={onCancel}>
+      <div className="glb-import-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="glb-import-title">Import “{name}”</div>
+        <label className={`glb-import-opt${mode === 'whole' ? ' glb-import-opt--sel' : ''}`}>
+          <input type="radio" name="glb-mode" checked={mode === 'whole'} onChange={() => setMode('whole')} />
+          <div className="glb-import-opt-body">
+            <div className="glb-import-opt-title">Whole resource</div>
+            <div className="glb-import-opt-desc">Import as one scene/prefab (uasset-like). Spawns the full node tree.</div>
+          </div>
+        </label>
+        <label className={`glb-import-opt${mode === 'split' ? ' glb-import-opt--sel' : ''}`}>
+          <input type="radio" name="glb-mode" checked={mode === 'split'} onChange={() => setMode('split')} />
+          <div className="glb-import-opt-body">
+            <div className="glb-import-opt-title">Individual sub-assets</div>
+            <div className="glb-import-opt-desc">Split into separate mesh / material / texture assets you can drag in one by one.</div>
+          </div>
+        </label>
+        <div className="glb-import-actions">
+          <button type="button" className="glb-import-btn" onClick={onCancel}>Cancel</button>
+          <button type="button" className="glb-import-btn glb-import-btn--primary" onClick={() => onConfirm(mode)}>Import</button>
+        </div>
       </div>
     </div>
   );

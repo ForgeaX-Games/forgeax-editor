@@ -119,6 +119,12 @@ function payloadToMat(payload: { passes?: Array<{ shader?: string }>; paramValue
 
 const meshGuidForKind = (k: MeshData['kind']): string => (k === 'sphere' ? SPHERE_GUID : k === 'cylinder' ? CYLINDER_GUID : CUBE_GUID);
 const kindForMeshGuid = (g: string): MeshData['kind'] => (g === SPHERE_GUID ? 'sphere' : g === CYLINDER_GUID ? 'cylinder' : 'cube');
+// Builtin primitive mesh GUIDs round-trip to a `MeshData.kind`; any OTHER GUID is
+// an imported mesh asset (e.g. a glTF mesh sub-asset) and round-trips to
+// `MeshData.meshAsset` so the reference survives session↔pack without being
+// flattened to a placeholder cube.
+const BUILTIN_MESH_GUIDS = new Set<string>([CUBE_GUID, SPHERE_GUID, CYLINDER_GUID]);
+const isBuiltinMeshGuid = (g: string | undefined): boolean => g !== undefined && BUILTIN_MESH_GUIDS.has(g);
 
 // quaternion → euler (XYZ, degrees) — for round-tripping authored rotation.
 function quatToEuler(qx: number, qy: number, qz: number, qw: number): { rotX: number; rotY: number; rotZ: number } {
@@ -194,10 +200,20 @@ export function sessionToPack(doc: EditSession, sceneGuid?: string): ScenePack {
       c.Transform = data;
     }
     if (isRenderable) {
-      c.MeshFilter = { assetHandle: refIdx(meshGuidForKind(mesh?.kind)) };
-      const key = matKey(material);
-      let mg = matGuidByKey.get(key);
-      if (mg === undefined) { mg = stableGuid('mat|' + matGuidPrefix + '|' + key); matGuidByKey.set(key, mg); matAssets.set(mg, { guid: mg, kind: 'material', payload: matToPayload(material), refs: [] }); }
+      // meshAsset GUID (imported mesh) wins over the builtin `kind`.
+      const meshGuid = mesh?.meshAsset ?? meshGuidForKind(mesh?.kind);
+      c.MeshFilter = { assetHandle: refIdx(meshGuid) };
+      let mg: string;
+      if (material?.materialAsset) {
+        // Reference an imported material by GUID — it lives in its own pack, so
+        // do NOT synthesize a material asset here, just record the ref.
+        mg = material.materialAsset;
+      } else {
+        const key = matKey(material);
+        let cached = matGuidByKey.get(key);
+        if (cached === undefined) { cached = stableGuid('mat|' + matGuidPrefix + '|' + key); matGuidByKey.set(key, cached); matAssets.set(cached, { guid: cached, kind: 'material', payload: matToPayload(material), refs: [] }); }
+        mg = cached;
+      }
       // Engine #317 renamed MeshRenderer.material (single ref-int) ->
       // MeshRenderer.materials ([ref-int]). ▶ Play instantiates the SAVED pack
       // verbatim through the engine's strict component-schema validator, which
@@ -277,10 +293,21 @@ export function packToSession(pack: ScenePack): EditSession {
       docComps.Transform = td;
     }
     const mf = cc.MeshFilter as { assetHandle?: number } | undefined;
-    if (mf?.assetHandle !== undefined) docComps.Mesh = { kind: kindForMeshGuid(refs[mf.assetHandle] ?? CUBE_GUID) };
+    if (mf?.assetHandle !== undefined) {
+      const g = refs[mf.assetHandle] ?? CUBE_GUID;
+      // builtin GUID → kind; imported mesh GUID → meshAsset (kind kept as cube
+      // fallback for any consumer that ignores meshAsset).
+      docComps.Mesh = isBuiltinMeshGuid(g) ? { kind: kindForMeshGuid(g) } : { kind: 'cube', meshAsset: g };
+    }
     const mr = cc.MeshRenderer as { material?: number; materials?: number[] } | undefined;
     const matRef: number | undefined = mr?.materials?.[0] ?? mr?.material;
-    if (matRef !== undefined) docComps.Material = payloadToMat(matByGuid.get(refs[matRef] ?? ''));
+    if (matRef !== undefined) {
+      const mg = refs[matRef] ?? '';
+      const inline = matByGuid.get(mg);
+      // Material asset present in THIS pack → reconstruct inline fields; otherwise
+      // it's an imported material referenced by GUID → keep the reference.
+      docComps.Material = inline ? payloadToMat(inline) : { materialAsset: mg };
+    }
     if (cc.Collider) docComps.Collider = cc.Collider;
     const dl = cc.DirectionalLight as Record<string, number> | undefined;
     const pl = cc.PointLight as Record<string, number> | undefined;
