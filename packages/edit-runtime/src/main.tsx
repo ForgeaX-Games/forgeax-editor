@@ -16,7 +16,7 @@ import {
   DirectionalLight,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
-import { loadGltfRuntime } from '@forgeax/editor-core';
+import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
 import {
   sendVagMessage,
   onVagMessage,
@@ -420,20 +420,51 @@ void setupEditorSkylight(
     if (!r.ok) throw new Error(`glb ${r.status}`);
     return r.arrayBuffer();
   };
-  void (async () => {
+  // Track already-decoded GLBs so the bus-driven re-run (below) only fetches a
+  // freshly-added GltfRef once, not on every doc mutation. `failedGltfPaths`
+  // holds GLBs whose expansion threw at instantiate time — they stay as
+  // placeholder cubes and are NOT retried (otherwise every bus tick re-throws).
+  const loadedGltfPaths = new Set<string>();
+  const failedGltfPaths = new Set<string>();
+  const preloadGltfRefs = async (): Promise<void> => {
     const paths = new Set<string>();
     for (const e of Object.values(bus.doc.entities)) {
       const p = (e?.components as { GltfRef?: { path?: string } } | undefined)?.GltfRef?.path;
-      if (typeof p === 'string' && p) paths.add(p);
+      if (typeof p === 'string' && p && !loadedGltfPaths.has(p) && !failedGltfPaths.has(p)) paths.add(p);
     }
     if (paths.size === 0) return;
+    let landed = false;
     await Promise.all([...paths].map((p) =>
-      loadGltfRuntime(p, fetchGlb, renderer.assets as never, world as never).catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
+      loadGltfRuntime(p, fetchGlb, renderer.assets as never, world as never)
+        .then(() => { loadedGltfPaths.add(p); landed = true; })
+        .catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
     // The GLB landed in the gltf-runtime cache but the doc sig is unchanged, so a
     // plain resync() would no-op — force a rebuild so sceneEntities re-projects
     // the now-loaded GLB into its real per-node geometry.
-    engineSync.forceResync();
-  })();
+    // Guard the rebuild: if the expanded GLB trips a mid-instantiate throw (e.g.
+    // a per-mesh material/submesh count mismatch), an unguarded forceResync leaves
+    // the WHOLE scene despawned (everything vanishes). On failure, EVICT the just-
+    // loaded GLBs from the gltf cache (so getLoadedGltf → null → placeholder cube)
+    // and quarantine them in failedGltfPaths (so the next bus tick doesn't reload
+    // + re-throw forever), then resync to a degraded-but-visible scene.
+    if (landed) {
+      try {
+        engineSync.forceResync();
+      } catch (err) {
+        console.warn('[editor] GLB preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
+        for (const p of paths) {
+          _clearGltfCache(p);
+          loadedGltfPaths.delete(p);
+          failedGltfPaths.add(p);
+        }
+        try { engineSync.forceResync(); } catch { /* leave as-is */ }
+      }
+    }
+  };
+  // Initial pass + re-run whenever the doc changes (a fresh whole-GLB drag adds a
+  // GltfRef entity — without the re-run it stays a placeholder cube forever).
+  void preloadGltfRefs();
+  bus.subscribe(() => { void preloadGltfRefs(); });
 }
 
 // Preload imported mesh sub-assets referenced by Mesh.meshAsset (e.g. a glTF mesh
