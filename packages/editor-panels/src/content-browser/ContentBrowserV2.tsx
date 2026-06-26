@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { loadGameAssets, loadMetaAssets, type PackAsset } from '@forgeax/editor-core';
-import { getSceneId, setAssetSelection, showContextMenu, useDocVersion,
+import { getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-shared';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -89,7 +89,10 @@ export function ContentBrowserV2() {
     return () => window.removeEventListener('message', handler);
   }, [reload]);
 
-  const gamePrefix = `.forgeax/games/${gameSlug}/`;
+  // Host-resolved game root (with trailing slash) — used to strip the absolute
+  // packPath prefix back to a game-relative path for the folder tree.
+  const gameRoot = resolveGamePath('');
+  const gamePrefix = gameRoot.endsWith('/') ? gameRoot : `${gameRoot}/`;
 
   const packDirs = useMemo(() => {
     const dirs = new Set<string>();
@@ -143,8 +146,7 @@ export function ContentBrowserV2() {
     onNewFolder: (parentPath: string) => {
       const name = window.prompt('New folder name:');
       if (!name) return;
-      const slug = getSceneId();
-      const fullPath = `.forgeax/games/${slug}/${parentPath ? parentPath + '/' : ''}${name}`;
+      const fullPath = resolveGamePath(`${parentPath ? parentPath + '/' : ''}${name}`);
       void createDirectory(fullPath).then(ok => {
         if (ok) reload();
       });
@@ -220,7 +222,6 @@ export function ContentBrowserV2() {
     if (files.length === 0 || !gameSlug || gameSlug === 'default') return;
     void importFiles(
       files,
-      gameSlug,
       nav.currentPath,
       (p) => setImportProgress(p),
       reload,

@@ -33,8 +33,8 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave } from '@forgeax/editor-shared';
-import { openProject, createFetchReader } from '@forgeax/editor-core';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver } from '@forgeax/editor-shared';
+import { openProject, createFetchReader, resolveGamePath } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -98,6 +98,25 @@ function markBootComplete(): void {
 // every game shared one global doc, so picking shoot-opt showed whatever was
 // last edited (or the demo). Must run before loadDocFromStorage below.
 setSceneId(new URLSearchParams(location.search).get('scene'));
+// Install the game→disk path resolver (layout decoupling, 2026-06-25). editor-core
+// is layout-agnostic: it asks for game-relative paths ('forge.json', 'scenes/…')
+// and THIS adapter (the host) maps them to disk. The studio convention
+// `.forgeax/games/<slug>/…` lives here in the runtime adapter, NOT in the pure
+// library. Three tensions resolved:
+//   (i)  pure lib zero-convention — the literal only lives at this seam;
+//   (ii) self-contained — standalone with no game (slug 'default') yields an
+//        empty root, but the call sites' `currentSceneId === 'default'` guards
+//        mean the resolver is never reached, so the demo seed / build / tests run
+//        with no studio changes;
+//   (iii) studio override seam — a host can pass `?gameRoot=<path>` (flat /
+//        nested / workspace layouts) or replace this resolver entirely before
+//        boot to fully own slug→path translation.
+{
+  const qp = new URLSearchParams(location.search);
+  const slug = (qp.get('scene') ?? '').trim();
+  const gameRoot = qp.get('gameRoot') ?? (slug && slug !== 'default' ? `.forgeax/games/${slug}` : '');
+  setPathResolver((rel) => (rel ? `${gameRoot}/${rel}` : gameRoot));
+}
 // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
 // load so paths/storage keys resolve to the active scene file (UE level model).
 setBootStage('initSceneList');
@@ -281,7 +300,7 @@ renderer.assets.configurePackIndex(packIndexUrl);
   // project through SceneAsset (M6). The result world is exposed on the window
   // object for manual verification (AC-06 human part).
   if (sceneSlug && sceneSlug !== 'default') {
-    openProject(sceneSlug, createFetchReader(sceneSlug)).then((projectResult) => {
+    openProject(sceneSlug, createFetchReader()).then((projectResult) => {
       if (projectResult.sceneRoot !== null) {
         console.log(`[editor] openProject: scene instantiated (${projectResult.world.inspect().entityCount} entities, root=${projectResult.sceneRoot})`);
       } else {
@@ -498,7 +517,7 @@ void (async () => {
   try {
     // Load forge.json via the authoritative loader (AC-11) instead of fetch+parse.
     // fetchRead wraps the studio /api/files endpoint to match loadGameProject injection.
-    const gameForgePath = `.forgeax/games/${slug}/${FORGE_JSON}`;
+    const gameForgePath = resolveGamePath(FORGE_JSON);
     const fetchRead = async (path: string): Promise<string> => {
       const r = await fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

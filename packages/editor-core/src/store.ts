@@ -19,6 +19,7 @@ import {
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { findScenePackByGuid } from './assets';
 import { fetchWithTimeout } from './net';
+import { resolveGamePath } from './path-resolver';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a
@@ -424,7 +425,7 @@ export function useSceneFile(): string | null {
 }
 
 function forgeJsonPath(): string | null {
-  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/${FORGE_JSON}`;
+  return currentSceneId === 'default' ? null : resolveGamePath(FORGE_JSON);
 }
 
 /**
@@ -497,7 +498,7 @@ export async function initSceneList(): Promise<void> {
   if (currentSceneId !== 'default') {
     const listPacks = async (root: string): Promise<string[]> => {
       try {
-        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(`.forgeax/games/${currentSceneId}/${root}`)}`);
+        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}`);
         if (!r.ok) return [];
         const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
         return (j.tree?.children ?? [])
@@ -631,14 +632,14 @@ export function requestOpenScene(id: string): void {
 }
 
 // ── Launcher config (UE-style "play this level") ─────────────────────────────
-// .forgeax/games/<slug>/play-config.json — read by the GAME at boot:
+// <game>/play-config.json (host-resolved) — read by the GAME at boot:
 //   { mode: 'campaign' }                  → ▶ Play runs main from level 1
 //   { mode: 'level', level: '<sceneId>' } → ▶ Play runs just that level
 // The editor's PlayLauncher select writes it via /api/files (gitignored,
 // per-developer launcher state).
 export interface PlayConfig { mode: 'campaign' | 'level'; level?: string; endAfter?: boolean }
 function playConfigPath(): string | null {
-  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/play-config.json`;
+  return currentSceneId === 'default' ? null : resolveGamePath('play-config.json');
 }
 export async function readPlayConfig(): Promise<PlayConfig> {
   const p = playConfigPath();
@@ -681,7 +682,7 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
   const sourceDoc = duplicateCurrent ? bus.doc : createEditSession();
-  const newPath = `.forgeax/games/${currentSceneId}/scenes/${slug}.pack.json`;
+  const newPath = resolveGamePath(`scenes/${slug}.pack.json`);
   // A NEW level gets its own stable, path-derived GUID — never the source
   // scene's GUID (duplicate must be a distinct asset) and never an order-derived
   // one (which would drift on the first edit).
@@ -749,8 +750,9 @@ bus.subscribe(() => {
 // ── Disk persistence: the game's authored scene-asset ────────────────────────
 // Design (editor-feature-spec §15): the EditSession is the SSOT, serialized as
 // self-describing JSON. We persist it to the GAME's folder so it's git-trackable,
-// AI-readable, and the same file ▶ Play can instantiate. Path:
-//   .forgeax/games/<slug>/scene.json   (the active ?scene slug)
+// AI-readable, and the same file ▶ Play can instantiate. Path is host-resolved
+// (resolveGamePath) from a game-relative name, e.g. `scene.pack.json` — the
+// editor never bakes in where the game lives on disk.
 // Reached via the server's /api/files (same-origin through the interface proxy).
 // localStorage stays as a fast offline mirror; disk is the durable source.
 //
@@ -762,12 +764,12 @@ function scenePath(): string | null {
   if (currentSceneId === 'default') return null;
   if (currentSceneFile) {
     const entry = sceneList.find((s) => s.id === currentSceneFile);
-    if (entry) return `.forgeax/games/${currentSceneId}/${entry.pack}`;
+    if (entry) return resolveGamePath(entry.pack);
   }
-  return `.forgeax/games/${currentSceneId}/scene.pack.json`;
+  return resolveGamePath('scene.pack.json');
 }
 function legacyScenePath(): string | null {
-  return currentSceneId === 'default' ? null : `.forgeax/games/${currentSceneId}/scene.json`;
+  return currentSceneId === 'default' ? null : resolveGamePath('scene.json');
 }
 /** The scene asset GUID to persist for the active scene. Prefers the GUID we
  *  read from disk (the scene's stable identity, e.g. the one forge.json's

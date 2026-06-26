@@ -95,3 +95,12 @@ export type { MenuItemDef } from '@forgeax/editor-core';
 
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from '@forgeax/editor-core';
+
+// ── Host-injected game path resolver (layout decoupling) ──
+export {
+  setPathResolver,
+  resolveGamePath,
+  hasPathResolver,
+  EditorPathResolverError,
+} from '@forgeax/editor-core';
+export type { PathResolver } from '@forgeax/editor-core';

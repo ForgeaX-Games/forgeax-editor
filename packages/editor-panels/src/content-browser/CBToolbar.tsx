@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { getSceneId, broadcastAssetsChanged } from '@forgeax/editor-shared';
+import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { generateAssetGuid, addAssetToPack, createPack, createDirectory } from '@forgeax/editor-core';
 import { ASSET_KINDS, type AssetKind } from './types';
 import { importFiles, type ImportProgress } from './import-pipeline';
@@ -28,8 +28,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const gameSlug = getSceneId();
-  const basePath = `.forgeax/games/${gameSlug}/${currentPath || 'assets'}`;
+  const basePath = resolveGamePath(currentPath || 'assets');
 
   const handleCreateAsset = useCallback(async (kind: AssetKind) => {
     setAddMenuOpen(false);
@@ -71,7 +70,6 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
     const results = await importFiles(
       Array.from(files),
-      gameSlug ?? '',
       currentPath,
       (progress) => onImportProgress?.(progress),
       onReload,
@@ -84,7 +82,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
     setTimeout(() => onImportProgress?.(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [gameSlug, currentPath, onReload, onImportProgress]);
+  }, [currentPath, onReload, onImportProgress]);
 
   const handleSaveAll = useCallback(() => {
     broadcastAssetsChanged();

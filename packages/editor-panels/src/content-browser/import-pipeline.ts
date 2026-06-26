@@ -10,7 +10,7 @@
  */
 
 import { generateAssetGuid } from '@forgeax/editor-core';
-import { broadcastAssetsChanged } from '@forgeax/editor-shared';
+import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { getImportFormat, isImportable, type ImportFormat } from './import-registry';
 
 export type ImportFileStatus = 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'error';
@@ -122,7 +122,6 @@ async function processGltf(destPath: string): Promise<{ ok: boolean; guid?: stri
  */
 export async function importSingleFile(
   file: File,
-  gameSlug: string,
   currentPath: string,
 ): Promise<ImportFileResult> {
   const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
@@ -132,7 +131,9 @@ export async function importSingleFile(
     return { filename: file.name, status: 'error', error: `Unsupported format: ${ext}` };
   }
 
-  const basePath = `.forgeax/games/${gameSlug}/${currentPath || 'assets'}`;
+  // Host-resolved import target — the studio games-dir convention lives in the
+  // edit-runtime adapter (setPathResolver), not here.
+  const basePath = resolveGamePath(currentPath || 'assets');
   const destPath = `${basePath}/${file.name}`;
   const guid = generateAssetGuid();
 
@@ -184,7 +185,6 @@ export async function importSingleFile(
  */
 export async function importFiles(
   files: File[],
-  gameSlug: string,
   currentPath: string,
   onProgress?: ImportProgressCallback,
   onReload?: () => void,
@@ -204,7 +204,7 @@ export async function importFiles(
     progress.current = file.name;
     onProgress?.(structuredClone(progress));
 
-    const result = await importSingleFile(file, gameSlug, currentPath);
+    const result = await importSingleFile(file, currentPath);
     results.push(result);
     progress.completed++;
     onProgress?.(structuredClone(progress));
