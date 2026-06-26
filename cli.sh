@@ -26,7 +26,9 @@ cd "$ROOT"
 ENGINE_DIR="$ROOT/packages/engine"
 WASM_DIR="$ENGINE_DIR/packages/wgpu-wasm"
 WASM_FILE="$WASM_DIR/pkg/wgpu_wasm_bg.wasm"
-PORTS=(15290 15280 15173)
+# 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
+PORTS=(15290 15280 15281 15173)
+GAME_API_PORT=15281
 
 # ── pretty logging ─────────────────────────────────────────────────────────
 c_blue='\033[0;34m'; c_green='\033[0;32m'; c_yellow='\033[0;33m'; c_red='\033[0;31m'; c_reset='\033[0m'
@@ -130,17 +132,19 @@ run() {
     shift
   done
 
-  # --game <dir>: serve that game's files read-only via the host vite middleware
-  # (vite.config.ts gameApiMiddleware) so the standalone editor opens a REAL game
-  # instead of the demo seed. dir must directly contain forge.json; slug=basename.
+  # --game <dir>: open a REAL game (instead of the demo seed) by reusing the
+  # @forgeax/platform-io backend — standalone/game-backend.ts runs it as a bun
+  # process on :15281 confined to this dir (R3, B2: read+WRITE), and the host
+  # vite proxies /api → :15281. dir must directly contain forge.json; slug=basename.
   local game_dir=""
   if [ -n "$game" ]; then
     [ -d "$game" ] || die "--game path is not a directory: $game"
     game_dir="$(cd "$game" && pwd)"
     [ -f "$game_dir/forge.json" ] || die "--game dir has no forge.json: $game_dir"
-    ok "serving game '$(basename "$game_dir")' from $game_dir"
+    ok "reusing platform-io for game '$(basename "$game_dir")' from $game_dir"
   fi
   export FORGEAX_GAME_DIR="$game_dir"
+  export FORGEAX_GAME_API_PORT="$GAME_API_PORT"
 
   # preflight — if the engine build is missing, point at install (don't silently
   # build: install is the explicit, slow, one-time step).
@@ -153,6 +157,8 @@ run() {
 
   if [ "$bg" = 1 ]; then
     step "starting stack in background (logs → /tmp/forgeax-editor-*.log) ..."
+    [ -n "$game_dir" ] && bun "$ROOT/standalone/game-backend.ts" \
+      > /tmp/forgeax-editor-game-backend.log 2>&1 &
     FORGEAX_INTERFACE_PORT=15290 bun -F @forgeax/editor-edit-runtime dev -- --port 15280 --strictPort \
       > /tmp/forgeax-editor-edit-runtime.log 2>&1 &
     bun run dev > /tmp/forgeax-editor-host.log 2>&1 &
@@ -167,6 +173,11 @@ run() {
   # foreground: trap Ctrl-C to tear the whole process group down
   cleanup() { echo; step "shutting down ..."; kill 0 2>/dev/null || true; }
   trap cleanup EXIT INT TERM
+
+  if [ -n "$game_dir" ]; then
+    step "starting game-backend :$GAME_API_PORT (platform-io reuse, R3) ..."
+    bun "$ROOT/standalone/game-backend.ts" &
+  fi
 
   step "starting edit-runtime :15280 (HMR→15290) ..."
   FORGEAX_INTERFACE_PORT=15290 bun -F @forgeax/editor-edit-runtime dev -- --port 15280 --strictPort &
