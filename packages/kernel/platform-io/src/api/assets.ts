@@ -1,17 +1,20 @@
 // /api/assets — asset pipeline helpers for the editor.
 //
-// POST /api/assets/process-gltf
-//   Body: { path: string (relative .forgeax/games path), slug: string }
-//   Reads the uploaded .glb/.gltf, runs the engine-gltf importer
-//   (parseGlb / toAssetPack), and writes a sibling `<file>.meta.json`
-//   with sub-asset GUIDs — the same sidecar the CLI tool generates.
-//   After this the engine can load the asset via pack-index GUIDs and
-//   the editor can offer "add to scene" for each sub-asset.
+// POST /api/assets/import-scene
+//   Reads a GLB and returns a SceneDocument (or single GltfRef entity) for the
+//   editor to merge into scene.json.
+//
+// glТF → .meta.json cooking is NOT done here. The backend (platform-io is the
+// 6-layer model's backend L1) cannot import @forgeax/engine-gltf (frontend L1),
+// so a backend-side cook can only hand-roll the sidecar — a second, drifting
+// implementation of the engine's toAssetPack. The editor (frontend L2) cooks
+// the canonical `external-asset-package` sidecar via engine-gltf's
+// parseGlb/toAssetPack SSOT instead (editor-core `cookGltfMeta`), then writes it
+// through /api/files. The former POST /api/assets/process-gltf endpoint was that
+// hand-rolled second implementation and has been removed.
 import { Hono } from 'hono';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { defaultProjectRoot, resolveSafePath } from './lib/safe-path';
 
 export function createAssetsRouter(): Hono {
@@ -146,69 +149,6 @@ export function createAssetsRouter(): Hono {
         order: entitiesArr.map((e) => e.id),
       },
     });
-  });
-
-  r.post('/process-gltf', async (c) => {
-    let body: { path?: unknown; slug?: unknown };
-    try { body = await c.req.json() as { path?: unknown; slug?: unknown }; }
-    catch { return c.json({ error: 'invalid json body' }, 400); }
-    if (typeof body?.path !== 'string') {
-      return c.json({ error: 'field { path: string } required' }, 400);
-    }
-    const root = defaultProjectRoot();
-    const abs = resolveSafePath(root, body.path);
-    if (!abs) return c.json({ error: 'path outside whitelist' }, 400);
-    if (!/\.(glb|gltf)$/i.test(body.path)) {
-      return c.json({ error: 'only .glb/.gltf supported' }, 400);
-    }
-
-    try {
-      const bytes = await readFile(abs);
-
-      // Parse GLB/GLTF JSON chunk directly — no engine-gltf dist dependency.
-      let gltfJson: {
-        meshes?: Array<{ name?: string }>;
-        materials?: Array<{ name?: string }>;
-        textures?: Array<{ source?: number }>;
-        animations?: Array<{ name?: string }>;
-        nodes?: Array<{ name?: string }>;
-        scenes?: Array<{ name?: string; nodes?: number[] }>;
-      };
-      const isGlb = bytes.length >= 12 && bytes.readUInt32BE(0) === 0x676C5446; // 'glTF'
-      if (isGlb) {
-        const jsonLen = bytes.readUInt32LE(12);
-        gltfJson = JSON.parse(bytes.slice(20, 20 + jsonLen).toString('utf8'));
-      } else {
-        gltfJson = JSON.parse(bytes.toString('utf8'));
-      }
-
-      // Generate a stable sub-asset GUID for every named GLTF object (mesh /
-      // material / texture / animation). The GUIDs are random per-import —
-      // consistent within one meta.json, referenced by pack.json assets later.
-      const subAssets: Array<{ kind: string; name: string; guid: string }> = [];
-      for (const [i, m] of (gltfJson.meshes ?? []).entries()) {
-        subAssets.push({ kind: 'mesh', name: m.name ?? `Mesh_${i}`, guid: randomUUID() });
-      }
-      for (const [i, m] of (gltfJson.materials ?? []).entries()) {
-        subAssets.push({ kind: 'material', name: m.name ?? `Material_${i}`, guid: randomUUID() });
-      }
-      for (const [i] of (gltfJson.textures ?? []).entries()) {
-        subAssets.push({ kind: 'texture', name: `Texture_${i}`, guid: randomUUID() });
-      }
-      for (const [i, a] of (gltfJson.animations ?? []).entries()) {
-        subAssets.push({ kind: 'animation', name: a.name ?? `Animation_${i}`, guid: randomUUID() });
-      }
-
-      const meta = { src: body.path, subAssets };
-      const metaPath = `${abs}.meta.json`;
-      await writeFile(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
-
-      const byKind: Record<string, number> = {};
-      for (const sa of subAssets) { byKind[sa.kind] = (byKind[sa.kind] ?? 0) + 1; }
-      return c.json({ ok: true, metaPath: `${body.path}.meta.json`, subAssets: byKind, total: subAssets.length });
-    } catch (e) {
-      return c.json({ error: (e as Error).message ?? String(e) }, 500);
-    }
   });
 
   return r;

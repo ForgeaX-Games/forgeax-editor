@@ -26,7 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, createDefaultApiClient, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -204,7 +204,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   const [importAnchor, setImportAnchor] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
   // GLB import-mode dialog (§4 / D-8): set after a .glb/.gltf upload completes,
   // cleared once the user picks 'whole' (scene/uasset) or 'split' (sub-assets).
-  const [glbModePrompt, setGlbModePrompt] = useState<{ dest: string; baseName: string } | null>(null);
+  const [glbModePrompt, setGlbModePrompt] = useState<{ dest: string; baseName: string; file: File } | null>(null);
   // Asset drag-to-scene (D-4). The drag ref arrives via postMessage (cross-iframe
   // dataTransfer is blocked), cached in pendingDragAsset for the drop event.
   //   assetDragPending — a CB asset drag is in flight (START..END): show a capture
@@ -291,20 +291,39 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // GLB import after the user picks a mode (D-8). 'whole' declares the sub-assets
   // AND auto-spawns the scene tree (uasset-like); 'split' only declares the
   // individual mesh/material/texture sub-assets so the user can drag them in.
-  const runGlbImport = useCallback(async (dest: string, baseName: string, importMode: 'whole' | 'split') => {
+  const runGlbImport = useCallback(async (dest: string, baseName: string, importMode: 'whole' | 'split', file: File) => {
     if (!slug) return;
     try {
       setImportStep('processing');
       setImportMsg(baseName);
-      const procRes = await createDefaultApiClient(base).fetch('/api/assets/process-gltf', {
+      // Cook the canonical meta (external-asset-package incl. the `scene`
+      // sub-asset + reimport-stable GUIDs) on the frontend via the engine SSOT
+      // (replaces the platform-io process-gltf endpoint which omitted `scene`,
+      // so loadMetaAssets rejected the sidecar and nothing showed). The
+      // importMode (whole/split) is a pure-frontend spawn concern below — it is
+      // deliberately NOT written into the engine meta.
+      const api = createDefaultApiClient(base);
+      const metaPath = `${dest}.meta.json`;
+      let existing: unknown;
+      try {
+        const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        if (r.ok) existing = JSON.parse(await r.text());
+      } catch { /* first import — no existing meta to reuse */ }
+      const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
+      const cooked = await cookGltfMeta(await file.arrayBuffer(), sourceName, existing);
+      if (!cooked.ok || !cooked.metaJson) {
+        setImportStep('error');
+        setImportMsg(cooked.error ?? 'glTF processing failed');
+        return;
+      }
+      const wrote = await api.fetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: dest, slug, importMode }),
+        body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
       });
-      if (!procRes.ok) {
-        const j = await procRes.json() as { error?: string };
+      if (!wrote.ok) {
         setImportStep('error');
-        setImportMsg(j.error ?? 'Processing failed');
+        setImportMsg('Failed to write .meta.json');
         return;
       }
 
@@ -378,9 +397,10 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         return;
       }
 
-      // GLB/GLTF → pause and ask the user how to import it (§4 / D-8).
+      // GLB/GLTF → pause and ask the user how to import it (§4 / D-8). Keep the
+      // File so runGlbImport can cook the meta on the frontend (engine SSOT).
       setImportStep(null);
-      setGlbModePrompt({ dest: res.dest, baseName });
+      setGlbModePrompt({ dest: res.dest, baseName, file });
     } catch (err) {
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
@@ -682,7 +702,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
             onConfirm={(mode) => {
               const p = glbModePrompt;
               setGlbModePrompt(null);
-              void runGlbImport(p.dest, p.baseName, mode);
+              void runGlbImport(p.dest, p.baseName, mode, p.file);
             }}
           />
         )}

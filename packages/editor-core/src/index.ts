@@ -143,6 +143,10 @@ export type { PackAsset, RawAsset } from './assets';
 export { buildSpawnEntityFromDragRef } from './drag-asset-spawn';
 export type { DragAssetRef, SpawnRefEntity } from './drag-asset-spawn';
 
+// ── glTF import cook (frontend SSOT reuse — engine toAssetPack) ──
+export { cookGltfMeta } from './gltf-cook';
+export type { GltfCookResult } from './gltf-cook';
+
 // ── Pack CRUD (M2) ──
 export {
   generateAssetGuid,
