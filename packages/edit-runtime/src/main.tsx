@@ -816,7 +816,7 @@ function installPreviewControls(): void {
       VAG_PREVIEW_RELOAD: () => location.reload(),
 
       // Emitted by the interface shell after a successful auto-import pipeline
-      // (upload → process-gltf → import-scene). Dispatch to the authoritative
+      // (upload → cook meta (engine toAssetPack) → import-scene). Dispatch to the authoritative
       // bus so the entity appears in Hierarchy and the BroadcastChannel snapshot
       // propagates to all ep:* panel iframes immediately.
       VAG_SPAWN_ENTITY: (msg) => {

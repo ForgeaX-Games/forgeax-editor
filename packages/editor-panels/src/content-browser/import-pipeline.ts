@@ -9,7 +9,7 @@
  *   4. Notify listeners (broadcastAssetsChanged)
  */
 
-import { generateAssetGuid, getApiClient } from '@forgeax/editor-core';
+import { cookGltfMeta, generateAssetGuid, getApiClient } from '@forgeax/editor-core';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { getImportFormat, isImportable, type ImportFormat } from './import-registry';
 
@@ -94,25 +94,39 @@ async function triggerCook(guid: string): Promise<string | undefined> {
   }
 }
 
-/** Handle GLB/GLTF through the existing process-gltf endpoint if available.
- *  Returns the first sub-asset GUID on success so the caller can use it. */
-async function processGltf(destPath: string): Promise<{ ok: boolean; guid?: string }> {
+/** Read an existing `.meta.json` (text) for reimport GUID reuse; undefined on first import. */
+async function readExistingMeta(metaPath: string): Promise<unknown> {
   try {
-    const r = await getApiClient().fetch('/api/assets/process-gltf', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: destPath }),
-    });
-    if (!r.ok) return { ok: false };
-    const body = await r.json().catch(() => ({})) as {
-      ok?: boolean;
-      subAssets?: Record<string, number>;
-      metaPath?: string;
-    };
-    return { ok: true };
+    const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+    if (!r.ok) return undefined;
+    return JSON.parse(await r.text());
   } catch {
-    return { ok: false };
+    return undefined;
   }
+}
+
+/** Write a pre-built meta.json string to disk via the file API. */
+async function writeMetaContent(metaPath: string, content: string): Promise<boolean> {
+  const r = await getApiClient().fetch('/api/files', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: metaPath, content }),
+  });
+  return r.ok;
+}
+
+/** Cook a GLB/GLTF into a canonical meta.json on the frontend (engine SSOT) and write it.
+ *  Replaces the platform-io `process-gltf` endpoint (which omitted the `scene` sub-asset). */
+async function processGltf(file: File, destPath: string): Promise<{ ok: boolean; error?: string }> {
+  const metaPath = `${destPath}.meta.json`;
+  const sourceName = destPath.slice(destPath.lastIndexOf('/') + 1);
+  const existing = await readExistingMeta(metaPath);
+  const cooked = await cookGltfMeta(await file.arrayBuffer(), sourceName, existing);
+  if (!cooked.ok || !cooked.metaJson) {
+    return { ok: false, error: cooked.error ?? 'glTF cook failed' };
+  }
+  const wrote = await writeMetaContent(metaPath, cooked.metaJson);
+  return wrote ? { ok: true } : { ok: false, error: 'Failed to write .meta.json sidecar' };
 }
 
 /**
@@ -144,13 +158,13 @@ export async function importSingleFile(
     }
 
     if (format.importer === 'gltf') {
-      const result = await processGltf(destPath);
+      // GLB/GLTF: cook the canonical meta (external-asset-package incl. the
+      // `scene` sub-asset + stable GUIDs) on the frontend via the engine SSOT,
+      // then write it. No per-guid cook trigger needed.
+      const result = await processGltf(file, destPath);
       if (!result.ok) {
-        const metaPath = `${destPath}.meta.json`;
-        await writeMetaSidecar(metaPath, file.name, format, guid);
+        return { filename: file.name, status: 'error', error: result.error ?? 'glTF import failed' };
       }
-      // GLB/GLTF: server-side process-gltf already created the .meta.json
-      // with its own sub-asset GUIDs. No per-guid cook needed.
       return { filename: file.name, status: 'done', guid };
     }
 
