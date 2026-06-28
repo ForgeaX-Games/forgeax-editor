@@ -33,7 +33,7 @@
 //   - display:none / visibility:hidden / zero-size plain-DOM iframes
 //   - document.createElement('iframe') outside React
 //
-// Engine subpackage dist must be present — see scripts/bootstrap-worktree.sh
+// Engine subpackage dist must be present — see scripts/bootstrap-worktree.mjs
 // (plan §2 D-12 / w19). Without it, vite cannot resolve
 // @forgeax/engine-vite-plugin-{pack,shader} and webServer fails ENOENT.
 //
@@ -52,7 +52,7 @@ import { AppKitError } from '@forgeax/editor/app-kit';
 import '@forgeax/interface/styles/global.css';
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
-// null when the stack was started without `cli.sh run --game <dir>` — in that
+// null when the stack was started without `cli.mjs run --game <dir>` — in that
 // case no game is served and the editor shows its built-in demo seed.
 declare const __FORGEAX_GAME_SLUG__: string | null;
 
