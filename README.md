@@ -97,7 +97,7 @@ Then open **http://localhost:15290**.
 > `clientPort` defaults to `18920` (the studio-embed host). In standalone the
 > host is `:15290`, so without this override the HMR websocket hammers a dead
 > `:18920` and floods the console with `ERR_CONNECTION_REFUSED`.
-> `bun run dev:standalone` (see [`scripts/dev-standalone.sh`](./scripts/dev-standalone.sh))
+> `bun run dev:standalone` (see [`scripts/dev-standalone.mjs`](./scripts/dev-standalone.mjs))
 > sets it for you. Anchors: edit-runtime `vite.config.ts` `hmr.clientPort`,
 > standalone `vite.config.ts` `server.proxy['/editor']`.
 

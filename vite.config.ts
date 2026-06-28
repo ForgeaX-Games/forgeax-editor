@@ -34,7 +34,7 @@ const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 // ApiClient entirely, so the backend MUST be reachable same-origin from :15290.
 //
 // Before R3 this shipped a SECOND, hand-written READ-ONLY file backend inline in
-// this config (a §5 violation: "为启动自写一个独立后端"). Now `cli.sh run --game`
+// this config (a §5 violation: "为启动自写一个独立后端"). Now `cli.mjs run --game`
 // starts standalone/game-backend.ts — a tiny bun process mounting the REAL
 // @forgeax/platform-io createFilesRouter (the exact 后L1 router cli/server use),
 // confined to one game via singleGameFileBackend — and this config simply PROXIES

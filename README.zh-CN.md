@@ -95,7 +95,7 @@ bun run dev:standalone        # → 打开 http://localhost:15290
 > `clientPort` 默认是 `18920`（studio-embed host）。standalone 下 host 是
 > `:15290`，不覆盖这个值的话 HMR websocket 会一直怼向死掉的 `:18920`，把控制台
 > 刷满 `ERR_CONNECTION_REFUSED`。`bun run dev:standalone`
-> （见 [`scripts/dev-standalone.sh`](./scripts/dev-standalone.sh)）已替你设好。
+> （见 [`scripts/dev-standalone.mjs`](./scripts/dev-standalone.mjs)）已替你设好。
 > 锚点：edit-runtime `vite.config.ts` `hmr.clientPort`、standalone
 > `vite.config.ts` `server.proxy['/editor']`。
 
