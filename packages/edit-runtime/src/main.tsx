@@ -33,7 +33,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
@@ -341,18 +341,43 @@ const cameraEntity = world.spawn(
 // the editor's pack-index is empty, so we can't loadByGuid). Sync lookup → the
 // instantiator stays synchronous.
 const packAssets = await loadGameAssets(getSceneId());
-const resolveMaterialAsset = makeMaterialResolver(world as never, packAssets);
+// Original glTF materials recovered for a dropped mesh (Material.submeshMaterials)
+// live in DDC/meta, NOT in the game *.pack.json — so makeMaterialResolver can't
+// see them. They're loaded async via loadByGuid below and minted into this cache;
+// the resolver consults it first (mirrors the preloaded-mesh resolver).
+const preloadedMaterials = new Map<string, unknown>();
+const baseMaterialResolver = makeMaterialResolver(world as never, packAssets);
+const resolveMaterialAsset = (guid: string): unknown | null =>
+  preloadedMaterials.has(guid) ? (preloadedMaterials.get(guid) ?? null) : baseMaterialResolver(guid);
 // Imported mesh sub-assets (glTF mesh dragged from Content Browser) live in
 // .meta.json/DDC, not *.pack.json — they're loaded async via loadByGuid below and
 // minted into this cache; the sync resolver consults it so split-mesh drags
 // render their real geometry (mirrors the GltfRef preload + resolveMaterialAsset).
 const preloadedMeshes = new Map<string, unknown>();
 const resolveMeshAsset = makeMeshResolver(world as never, packAssets, preloadedMeshes);
+// Submesh counts keyed by mesh GUID. The engine requires
+// MeshRenderer.materials.length === MeshAsset.submeshes.length; the editor authors
+// a single material per entity, so the instantiator broadcasts it across this many
+// submesh slots (instantiate.ts materialSlots). Preloaded imports (loaded async
+// below) win over pack meshes; unknown → the instantiator uses the engine's
+// per-submesh default instead of risking a count mismatch. Must stay in lockstep
+// with resolveMeshAsset (same GUIDs populated together).
+const preloadedMeshSubmeshCounts = new Map<string, number>();
+const packMeshSubmeshCounts = new Map<string, number>(
+  packAssets
+    .filter((a) => a.kind === 'mesh')
+    .map((a) => {
+      const subs = (a.payload as { submeshes?: { length?: number } } | undefined)?.submeshes;
+      return [a.guid, typeof subs?.length === 'number' && subs.length > 0 ? subs.length : 1] as const;
+    }),
+);
+const resolveMeshSubmeshCount = (guid: string): number | undefined =>
+  preloadedMeshSubmeshCounts.get(guid) ?? packMeshSubmeshCounts.get(guid);
 
 // Wire the authored doc → forgeax world (rebuilds on every bus change). The
 // doc→world mapping is @forgeax/scene's instantiateScene — the same path ▶ Play
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
-const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset);
+const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount);
 
 // Asset-edit mode: a standalone prefab-style pack (Assets panel monster/character asset,
 // id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
@@ -500,6 +525,11 @@ void setupEditorSkylight(
         if (!res.ok) { console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
         const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MeshAsset', res.value);
         preloadedMeshes.set(g, handle);
+        // Capture the submesh count alongside the handle so the instantiator can
+        // size MeshRenderer.materials to it (equal-length contract). Set together
+        // with the handle → resolveMeshAsset / resolveMeshSubmeshCount stay in lockstep.
+        const subs = (res.value as { submeshes?: { length?: number } } | undefined)?.submeshes;
+        if (typeof subs?.length === 'number' && subs.length > 0) preloadedMeshSubmeshCounts.set(g, subs.length);
         landed = true;
       } catch (err) {
         console.warn('[editor] mesh preload failed:', g, (err as Error)?.message ?? err);
@@ -516,7 +546,7 @@ void setupEditorSkylight(
         engineSync.forceResync();
       } catch (err) {
         console.warn('[editor] mesh preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
-        for (const g of guids) preloadedMeshes.delete(g);
+        for (const g of guids) { preloadedMeshes.delete(g); preloadedMeshSubmeshCounts.delete(g); }
         try { engineSync.forceResync(); } catch { /* leave as-is */ }
       }
     }
@@ -524,6 +554,134 @@ void setupEditorSkylight(
   // Initial pass + re-run whenever the doc changes (a fresh drag adds a meshAsset).
   void preloadMeshes();
   bus.subscribe(() => { void preloadMeshes(); });
+}
+
+// Preload ORIGINAL per-submesh materials recovered for a dropped mesh
+// (Material.submeshMaterials — see editor-core/resolveMeshOriginalMaterials).
+// These glTF material sub-assets live in .meta.json/DDC, not the game pack, so
+// loadGameAssets never sees them. Load each via loadByGuid → allocSharedRef →
+// preloadedMaterials, then forceResync so materialSlots resolves them per submesh
+// (restoring the source materials instead of the grey placeholder). The recursive
+// loader pulls each material's texture sub-asset refs. Mirrors preloadMeshes.
+{
+  const collectMaterialGuids = (): Set<string> => {
+    const guids = new Set<string>();
+    const packMatGuids = new Set(packAssets.filter((a) => a.kind === 'material').map((a) => a.guid));
+    for (const e of Object.values(bus.doc.entities)) {
+      const subs = (e?.components as { Material?: { submeshMaterials?: string[] } } | undefined)?.Material?.submeshMaterials;
+      if (!Array.isArray(subs)) continue;
+      for (const g of subs) {
+        if (typeof g === 'string' && g && !packMatGuids.has(g) && !preloadedMaterials.has(g)) guids.add(g);
+      }
+    }
+    return guids;
+  };
+  const preloadMaterials = async (): Promise<void> => {
+    const guids = collectMaterialGuids();
+    if (guids.size === 0) return;
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    let landed = false;
+    await Promise.all([...guids].map(async (g) => {
+      try {
+        const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
+        if (!parsed.ok || parsed.value === undefined) { console.warn('[editor] material preload bad guid:', g); return; }
+        const res = await (renderer.assets as never as { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
+        if (!res.ok) { console.warn('[editor] material preload miss:', g, res.error?.code); return; }
+        const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MaterialAsset', res.value);
+        preloadedMaterials.set(g, handle);
+        landed = true;
+      } catch (err) {
+        console.warn('[editor] material preload failed:', g, (err as Error)?.message ?? err);
+      }
+    }));
+    // Re-instantiate so materialSlots picks up the freshly-minted handles. Guard
+    // the resync (an incompatible handle would throw mid-rebuild → blank scene):
+    // on failure drop the just-loaded handles so the next resync falls back to the
+    // single placeholder material (degraded but visible).
+    if (landed) {
+      try {
+        engineSync.forceResync();
+      } catch (err) {
+        console.warn('[editor] material preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
+        for (const g of guids) preloadedMaterials.delete(g);
+        try { engineSync.forceResync(); } catch { /* leave as-is */ }
+      }
+    }
+  };
+  // Initial pass + re-run whenever the doc changes (a fresh drag adds submeshMaterials).
+  void preloadMaterials();
+  bus.subscribe(() => { void preloadMaterials(); });
+}
+
+// Selected mesh sub-asset → publish geometry stats to the Mesh panel.
+// meta.json mesh sub-assets carry no geometry in the Content Browser payload and
+// the panel iframes hold no asset registry — so the MAIN window (which owns the
+// registry) loads the selected mesh via loadByGuid, derives geometry-free stats
+// (vertices / primitives-by-topology / submeshes / index format / AABB) and
+// broadcasts them (store.publishMeshStats). Design: docs/design/editor-mesh-panel.md §4.3.
+{
+  const primCount = (topology: string, indexCount: number, vertexCount: number): number => {
+    const n = indexCount > 0 ? indexCount : vertexCount;
+    switch (topology) {
+      case 'triangle-list': return Math.floor(n / 3);
+      case 'triangle-strip': return Math.max(0, n - 2);
+      case 'line-list': return Math.floor(n / 2);
+      case 'line-strip': return Math.max(0, n - 1);
+      case 'point-list': return n;
+      default: return Math.floor(n / 3);
+    }
+  };
+  const emptyStats = (guid: string, error: string) =>
+    ({ guid, vertexCount: 0, primitiveCount: 0, indexFormat: 'none' as const, submeshes: [], attributes: [], error });
+  let lastGuid: string | null = null;
+  const publishForSelection = async (): Promise<void> => {
+    const sel = getAssetSelection();
+    if (!sel || sel.kind !== 'mesh') { lastGuid = null; return; }
+    if (sel.guid === lastGuid) return; // already published for this selection
+    lastGuid = sel.guid;
+    const guid = sel.guid;
+    try {
+      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+      const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(guid);
+      if (!parsed.ok || parsed.value === undefined) { publishMeshStats(emptyStats(guid, 'bad guid')); return; }
+      const res = await (renderer.assets as never as { loadByGuid: (g: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
+      if (getAssetSelection()?.guid !== guid) return; // selection moved on — drop stale result
+      if (!res.ok || res.value === undefined) { publishMeshStats(emptyStats(guid, res.error?.code ?? 'load miss')); return; }
+      const mesh = res.value as {
+        indices?: unknown;
+        attributes?: Record<string, unknown>;
+        aabb?: { length: number; [i: number]: number };
+        submeshes?: readonly { topology: string; indexCount: number; vertexCount: number }[];
+      };
+      const indices = mesh.indices;
+      const indexFormat: 'u16' | 'u32' | 'none' =
+        indices instanceof Uint32Array ? 'u32' : indices instanceof Uint16Array ? 'u16' : 'none';
+      const subs = (mesh.submeshes ?? []).map((s) => ({
+        topology: s.topology, indexCount: s.indexCount, vertexCount: s.vertexCount,
+        primitiveCount: primCount(s.topology, s.indexCount, s.vertexCount),
+      }));
+      const ab = mesh.aabb;
+      const aabb = ab && ab.length === 6 ? [0, 1, 2, 3, 4, 5].map((i) => ab[i] ?? 0) : undefined;
+      // `vertices` is an INTERLEAVED buffer (stride 12/18 floats — pos/nrm/uv/tan
+      // [+skin]); its length is NOT a vertex count. Per-stream position is absent
+      // from `attributes` (only skinIndex/skinWeight ride along). So derive the
+      // vertex count by summing each submesh's vertex span — glTF primitives don't
+      // share vertices, so the sum is the mesh total. See engine mesh-bin.ts.
+      publishMeshStats({
+        guid,
+        vertexCount: subs.reduce((a, s) => a + s.vertexCount, 0),
+        primitiveCount: subs.reduce((a, s) => a + s.primitiveCount, 0),
+        indexFormat,
+        submeshes: subs,
+        ...(aabb ? { aabb } : {}),
+        attributes: mesh.attributes ? Object.keys(mesh.attributes) : [],
+      });
+    } catch (err) {
+      publishMeshStats(emptyStats(guid, (err as Error)?.message ?? 'load failed'));
+    }
+  };
+  onAssetSelectionChange(() => { void publishForSelection(); });
+  void publishForSelection();
 }
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any

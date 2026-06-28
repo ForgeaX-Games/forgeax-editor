@@ -71,6 +71,73 @@ export interface InstantiateCtx {
    *  passes a sync lookup so the instantiator stays synchronous (mirrors
    *  resolveMaterialAsset). */
   resolveMeshAsset?: (guid: string) => Handle | null | undefined;
+  /** Optional: resolve a Mesh.meshAsset GUID to its submesh count. The engine
+   *  requires `MeshRenderer.materials.length === MeshAsset.submeshes.length`; the
+   *  editor authors a single material per entity, so the instantiator broadcasts
+   *  it across that many submesh slots (see `materialSlots`). Returns undefined
+   *  when unknown → the instantiator falls back to the engine's per-submesh
+   *  default rather than risk a count mismatch. Must stay in lockstep with
+   *  `resolveMeshAsset` (populated for the same GUIDs). */
+  resolveMeshSubmeshCount?: (guid: string) => number | undefined;
+}
+
+/**
+ * Build the `MeshRenderer.materials` slot array for a renderable entity.
+ *
+ * The engine (feat-20260608 multi-section/multi-material) requires
+ * `materials.length === MeshAsset.submeshes.length`; otherwise it raises
+ * `mesh-renderer-material-count-mismatch` every frame in RenderSystem.extract.
+ * The editor's authoring model carries a SINGLE material per entity, so we
+ * broadcast that one material across every submesh slot — matching the
+ * Unity/Blender "one material over the whole mesh" convention (the engine's
+ * record stage already maps a single material over N submeshes via slot-0
+ * fallback; only the extract-side validator needs the equal-length array).
+ *
+ * Dispositions:
+ *  - builtin shape (cube/sphere/cylinder — no `meshAsset`): single submesh →
+ *    `[matHandle]`.
+ *  - imported mesh resolved + submesh count known → broadcast `matHandle` to N.
+ *  - imported mesh resolved but count unknown → `[]` (engine case-B: mid-grey
+ *    default per submesh). Returning a single slot here would crash a
+ *    multi-submesh mesh, so empty (always valid) is the safe fallback.
+ *  - imported mesh NOT resolved (placeholder cube) → `[matHandle]` (cube = 1).
+ *
+ * Original-materials override: when `material.submeshMaterials` is present (an
+ * imported mesh dropped via drag / Add to Scene whose source glTF materials were
+ * recovered — see `resolveMeshOriginalMaterials`) AND the mesh resolves, each
+ * submesh slot resolves its own GUID via `ctx.resolveMaterialAsset`, restoring
+ * the source materials. A slot with an empty GUID / unresolvable handle falls
+ * back to `matHandle` (the entity's inline material).
+ */
+function materialSlots(
+  material: MaterialData | undefined,
+  matHandle: Handle,
+  mesh: MeshData | undefined,
+  ctx: InstantiateCtx,
+): Handle[] {
+  const resolvedImported =
+    mesh?.meshAsset && ctx.resolveMeshAsset
+      ? ctx.resolveMeshAsset(mesh.meshAsset) ?? undefined
+      : undefined;
+
+  if (resolvedImported !== undefined) {
+    const subs = material?.submeshMaterials;
+    const count = ctx.resolveMeshSubmeshCount?.(mesh!.meshAsset!);
+    // Original per-submesh materials recovered → resolve each positionally.
+    if (subs && subs.length > 0) {
+      const n = typeof count === 'number' && count > 0 ? count : subs.length;
+      return Array.from({ length: n }, (_, i) => {
+        const guid = subs[i] ?? subs[subs.length - 1] ?? '';
+        const h = guid && ctx.resolveMaterialAsset ? ctx.resolveMaterialAsset(guid) : undefined;
+        return h !== null && h !== undefined ? h : matHandle;
+      });
+    }
+    // No per-submesh materials → broadcast the single material across N slots.
+    if (typeof count === 'number' && count > 0) return Array.from({ length: count }, () => matHandle);
+    // Resolved import but unknown submesh count → engine case-B default per submesh.
+    return [];
+  }
+  return [matHandle];
 }
 
 export interface InstantiateResult {
@@ -265,7 +332,7 @@ export function instantiateScene(doc: EditSession, ctx: InstantiateCtx): Instant
     }
     if (isRenderable) {
       parts.push({ component: MeshFilter, data: { assetHandle: meshHandle(mesh) } });
-      parts.push({ component: MeshRenderer, data: { materials: [materialHandle(material)] } });
+      parts.push({ component: MeshRenderer, data: { materials: materialSlots(material, materialHandle(material), mesh, ctx) } });
     }
     if (isLight) {
       if (light!.type === 'directional') {
@@ -490,8 +557,11 @@ export function sceneEntities(doc: EditSession, ctx: InstantiateCtx, caches: Sce
     if (t || isLight) components.Transform = transformData(px, py, pz, sx, sy, sz, t);
     if (isRenderable) {
       components.MeshFilter = { assetHandle: meshHandle(mesh) };
-      // engine #317: MeshRenderer.material (single) -> materials[] (one slot per submesh).
-      components.MeshRenderer = { materials: [materialHandle(material)] };
+      // engine #317: MeshRenderer.material (single) -> materials[] (one slot per
+      // submesh). Broadcast the single authored material across N submesh slots so
+      // multi-submesh imported meshes satisfy materials.length === submeshes.length;
+      // when original per-submesh materials were recovered, resolve them per slot.
+      components.MeshRenderer = { materials: materialSlots(material, materialHandle(material), mesh, ctx) };
     }
     if (isLight) {
       if (light!.type === 'directional') {

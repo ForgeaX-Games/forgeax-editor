@@ -26,7 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -448,7 +448,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // Add an asset to the scene — shared by drag-drop (D-4) and the context-menu
   // "Add to Scene" (D-6). Routes whole-GLB (scene) through import-scene, and split
   // sub-assets (mesh/material/texture) through a single reference-mode spawn.
-  const spawnAssetRef = useCallback((ref: DragAssetRef): void => {
+  const spawnAssetRef = useCallback(async (ref: DragAssetRef): Promise<void> => {
     const kind = ref.kind ?? '';
     if (kind === 'scene') {
       // import-scene needs the GLB's *game-relative* path (e.g.
@@ -468,11 +468,38 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     }
     const entity = buildSpawnEntityFromDragRef(ref);
     if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
+    // A single multi-submesh mesh drop would otherwise get one grey placeholder
+    // material broadcast across all submeshes. Recover the ORIGINAL per-submesh
+    // glTF materials (from the source GLB + meta) and stamp their GUIDs onto the
+    // entity so instantiate/preload restore the source look. Best-effort: any
+    // failure leaves the entity as-is (placeholder), never blocks the spawn.
+    if (kind === 'mesh') {
+      try {
+        const api = createDefaultApiClient(base);
+        const readRaw = async (p: string): Promise<Response | null> => {
+          try { const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`); return r.ok ? r : null; }
+          catch { return null; }
+        };
+        const subs = await resolveMeshOriginalMaterials(
+          { guid: ref.guid, path: ref.path, payload: ref.payload },
+          {
+            fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
+            fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
+          },
+        );
+        if (subs && subs.length > 0) {
+          const mat = (entity.components.Material ?? (entity.components.Material = {})) as Record<string, unknown>;
+          mat.submeshMaterials = subs;
+        }
+      } catch (err) {
+        console.warn('[editor] original-material recovery failed:', (err as Error)?.message ?? err);
+      }
+    }
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
       mode: 'reference', entity, name: entity.name,
     });
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
-  }, [spawnSceneFromGlb, slug]);
+  }, [spawnSceneFromGlb, slug, base]);
 
   const onAssetDrop = useCallback((e: React.DragEvent) => {
     const ref = pendingDragAsset.current;
@@ -481,7 +508,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     setAssetDragActive(false);
     setAssetDragPending(false);
     pendingDragAsset.current = null;
-    spawnAssetRef(ref);
+    void spawnAssetRef(ref);
   }, [spawnAssetRef]);
 
   // Content Browser (a sibling iframe) posts FORGEAX_DRAG_ASSET_START/END up to
@@ -499,7 +526,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         setAssetDragPending(false);
         setAssetDragActive(false);
       } else if (d?.type === 'FORGEAX_ADD_ASSET_TO_SCENE' && d.ref) {
-        spawnAssetRef(d.ref as DragAssetRef);
+        void spawnAssetRef(d.ref as DragAssetRef);
       }
     };
     window.addEventListener('message', onMsg);

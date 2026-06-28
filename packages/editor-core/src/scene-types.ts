@@ -80,6 +80,15 @@ export interface MaterialData {
    *  below — so a material can live in the asset system + be shared, instead of
    *  being inlined per entity. Empty → use the inline PBR fields. */
   materialAsset?: string;
+  /** Per-submesh material asset GUIDs, ordered to match `MeshAsset.submeshes`.
+   *  Set when an imported multi-submesh mesh is dropped and its ORIGINAL glTF
+   *  materials were recovered (see `resolveMeshOriginalMaterials`). When present
+   *  AND the mesh resolves, `instantiate.materialSlots` builds
+   *  `MeshRenderer.materials` by resolving each GUID positionally — restoring the
+   *  source materials instead of broadcasting a single placeholder. An empty
+   *  string at index i means "that submesh had no glTF material" → default.
+   *  Empty/absent → existing single-material behaviour. */
+  submeshMaterials?: string[];
   albedo?: string;            // #rrggbb base color (LDR)
   metallic?: number;          // 0..1
   roughness?: number;         // 0..1

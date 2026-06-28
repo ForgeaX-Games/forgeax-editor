@@ -143,6 +143,10 @@ export type { PackAsset, RawAsset } from './assets';
 export { buildSpawnEntityFromDragRef } from './drag-asset-spawn';
 export type { DragAssetRef, SpawnRefEntity } from './drag-asset-spawn';
 
+// ── Imported mesh → original per-submesh materials (drag / Add to Scene) ──
+export { resolveMeshOriginalMaterials, _clearMeshMaterialCache } from './mesh-original-materials';
+export type { MeshMaterialResolveDeps, MeshAssetRef } from './mesh-original-materials';
+
 // ── glTF import cook (frontend SSOT reuse — engine toAssetPack) ──
 export { cookGltfMeta } from './gltf-cook';
 export type { GltfCookResult } from './gltf-cook';
@@ -275,8 +279,12 @@ export {
   setAssetSelection,
   getAssetSelection,
   useAssetSelection,
+  onAssetSelectionChange,
+  publishMeshStats,
+  getMeshStats,
+  useMeshStats,
 } from './store';
-export type { SceneFileEntry, PlayConfig, SelectedAsset } from './store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats } from './store';
 
 // ── Entity operations ──
 export {
