@@ -21,12 +21,10 @@ function rOk<T>(value: T) {
 // Stub RhiInstance (mimics the shape wrap() expects)
 // ---------------------------------------------------------------
 
-// biome-ignore lint/suspicious/noExplicitAny: structural stub — same pattern as recorder.unit.test.ts m2-6
 function h(): any {
   return {};
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: structural stub — needs to match RhiInstance shape loosely
 function stubRhiInstance(): { inst: any; requestAdapterSpy: any; createCmdEncRes: any } {
   const writeBufferSpy = vi.fn(() => rOk(undefined));
   const submitSpy = vi.fn(() => rOk(undefined));
@@ -132,9 +130,8 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle');
 
     // Step 2: wrapCreateShaderModule
-    const originalFn: CreateShaderModuleFn = vi.fn(
-      // biome-ignore lint/suspicious/noExplicitAny: mock stub matching CreateShaderModuleFn signature
-      (_device: any, _desc: any) => Promise.resolve(rOk(h())),
+    const originalFn: CreateShaderModuleFn = vi.fn((_device: any, _desc: any) =>
+      Promise.resolve(rOk(h())),
     ) as unknown as CreateShaderModuleFn;
 
     const wrappedFn = wrapCreateShaderModule(originalFn, debugInst);
@@ -216,12 +213,9 @@ describe('bootstrap integration (m3-3)', () => {
     expect(tape).toBeDefined();
 
     // frameMark should be the last event (or the only event if no RHI calls)
-    // biome-ignore lint/style/noNonNullAssertion: guarded by expect above — tape is defined
     const frameMarkEvents = tape!.events.filter((e: any) => e.kind === 'frameMark');
     expect(frameMarkEvents).toHaveLength(1);
-    // biome-ignore lint/style/noNonNullAssertion: guarded by toHaveLength(1)
     expect(frameMarkEvents[0]!.kind).toBe('frameMark');
-    // biome-ignore lint/style/noNonNullAssertion: guarded by toHaveLength(1)
     const first = frameMarkEvents[0]!;
     if (first && 'frameIdx' in first) {
       expect(first?.frameIdx).toBe(0);
@@ -250,9 +244,8 @@ describe('bootstrap integration (m3-3)', () => {
 
     // Simulate the Channel-1 probe pattern: attach createShaderModule as an extra
     // property on the wrapped instance (as done in createApp m3-1).
-    const realCsm: CreateShaderModuleFn = vi.fn(
-      // biome-ignore lint/suspicious/noExplicitAny: mock stub matching CreateShaderModuleFn signature
-      (_device: any, _desc: any) => Promise.resolve(rOk(h())),
+    const realCsm: CreateShaderModuleFn = vi.fn((_device: any, _desc: any) =>
+      Promise.resolve(rOk(h())),
     ) as unknown as CreateShaderModuleFn;
     const wrappedCsm = wrapCreateShaderModule(realCsm, debugInst);
 
