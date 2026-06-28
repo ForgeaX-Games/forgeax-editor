@@ -478,12 +478,19 @@ void setupEditorSkylight(
 // hits the cache and renders real geometry instead of the placeholder cube.
 // (Mirrors the GltfRef preload above + the preview.skin loadByGuid path.)
 {
+  // GUIDs whose load already failed (bad guid / catalog miss / loader throw).
+  // preloadMeshes re-runs on EVERY bus mutation, and a failed GUID never lands
+  // in `preloadedMeshes`, so without this quarantine a stale/dangling meshAsset
+  // ref (e.g. an old builtin-cube GUID a pre-migration scene still carries)
+  // re-issues loadByGuid → POST /__import → 404 on every doc edit, flooding the
+  // console. Mirrors the `failedGltfPaths` quarantine in the GltfRef preload.
+  const failedMeshGuids = new Set<string>();
   const collectMeshGuids = (): Set<string> => {
     const guids = new Set<string>();
     const packMeshGuids = new Set(packAssets.filter((a) => a.kind === 'mesh').map((a) => a.guid));
     for (const e of Object.values(bus.doc.entities)) {
       const g = (e?.components as { Mesh?: { meshAsset?: string } } | undefined)?.Mesh?.meshAsset;
-      if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g)) guids.add(g);
+      if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g) && !failedMeshGuids.has(g)) guids.add(g);
     }
     return guids;
   };
@@ -498,9 +505,9 @@ void setupEditorSkylight(
     await Promise.all([...guids].map(async (g) => {
       try {
         const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
-        if (!parsed.ok || parsed.value === undefined) { console.warn('[editor] mesh preload bad guid:', g); return; }
+        if (!parsed.ok || parsed.value === undefined) { failedMeshGuids.add(g); console.warn('[editor] mesh preload bad guid:', g); return; }
         const res = await (renderer.assets as never as { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
-        if (!res.ok) { console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
+        if (!res.ok) { failedMeshGuids.add(g); console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
         const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MeshAsset', res.value);
         preloadedMeshes.set(g, handle);
         // Capture the submesh count alongside the handle so the instantiator can
@@ -510,6 +517,7 @@ void setupEditorSkylight(
         if (typeof subs?.length === 'number' && subs.length > 0) preloadedMeshSubmeshCounts.set(g, subs.length);
         landed = true;
       } catch (err) {
+        failedMeshGuids.add(g);
         console.warn('[editor] mesh preload failed:', g, (err as Error)?.message ?? err);
       }
     }));

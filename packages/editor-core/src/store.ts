@@ -586,9 +586,9 @@ export async function initSceneList(): Promise<void> {
   if (currentSceneId !== 'default') {
     const listPacks = async (root: string): Promise<string[]> => {
       try {
-        // optional=1: the scenes/ dir legitimately may not exist in a given game
-        // (a fresh template has none) — server returns 200 { tree:null } instead
-        // of a red 404 in the network panel.
+        // optional=1: a game may legitimately lack a probed dir (e.g. no
+        // assets/monsters/). The server then returns 200 + empty tree instead
+        // of a red 404 in the browser network panel.
         const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}&optional=1`);
         if (!r.ok) return [];
         const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
