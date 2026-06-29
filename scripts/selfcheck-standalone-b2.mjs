@@ -11,6 +11,9 @@
 //   3. POST /api/files {path:<slug>/scenes/x.pack.json, content} → WRITE (B2!)
 //   4. GET the just-written path                → persisted content matches
 //   5. write outside the game (../escape)       → rejected (confinement holds)
+//   6. prefs wire (createPrefsRouter, the 2nd reused L1 router): GET empty
+//      workspace-layout → 200 json null; PUT a layout → ok; GET back → persisted
+//   7. tree optional=1: absent dir &optional=1 → 200 {tree:null}; without it → 404
 //
 // B0/B1 (can't start / read-only) would fail step 3. A studio server running is
 // NOT required (and not started) — that's the whole point of the fast track.
@@ -137,6 +140,47 @@ async function main() {
         body: JSON.stringify({ path: `${slug}/../secret.txt`, content: 'pwned' }),
       });
       check('POST escaping game dir → rejected (400)', r.status === 400, `status ${r.status}`);
+    }
+
+    // (6) prefs wire — the SECOND reused platform-io L1 router (createPrefsRouter,
+    //     §5 复用不另写后端). The client GET/PUTs /api/prefs/workspace-layout/* on
+    //     boot + every layout change; without this router those 404'd in --game
+    //     mode. Gate it the same way as /api/files so the reuse can't be焊回去.
+    {
+      // empty workspace-layout → 200 + json null (not 404, not SPA html)
+      const rGet = await fetch(`${BASE}/api/prefs/workspace-layout/preview`);
+      const ct = rGet.headers.get('content-type') ?? '';
+      check('GET /api/prefs/workspace-layout → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
+      check('empty layout → null', (await rGet.json()) === null);
+
+      // PUT a layout → ok, then GET it back (persists under <game>/.forgeax/prefs)
+      const layout = { panels: { main: {} }, ts: 'b2-prefs' };
+      const rPut = await fetch(`${BASE}/api/prefs/workspace-layout/preview`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(layout),
+      });
+      const putBody = await rPut.json();
+      check('PUT /api/prefs/workspace-layout → 200 ok', rPut.status === 200 && putBody?.ok === true, `status ${rPut.status} ${JSON.stringify(putBody)}`);
+
+      const rBack = await fetch(`${BASE}/api/prefs/workspace-layout/preview`);
+      const back = await rBack.json();
+      check('GET written layout → persisted content matches', back?.ts === 'b2-prefs', JSON.stringify(back));
+    }
+
+    // (7) tree optional=1 — expected-absent dir probes (editor scene/asset
+    //     discovery scans scenes/ & assets/{monsters,characters}/, absent in a
+    //     fresh game). optional=1 → 200 { tree:null } so no red 404 in the
+    //     network panel; WITHOUT optional the 404 default must hold (the escape
+    //     hatch must not loosen genuine missing-dir errors other callers rely on).
+    {
+      const absent = `${slug}/no-such-dir`;
+      const rOpt = await fetch(`${BASE}/api/files/tree?root=${encodeURIComponent(absent)}&optional=1`);
+      const optBody = await rOpt.json();
+      check('GET /api/files/tree absent &optional=1 → 200 {tree:null}', rOpt.status === 200 && optBody?.tree === null, `status ${rOpt.status} ${JSON.stringify(optBody)}`);
+
+      const rReq = await fetch(`${BASE}/api/files/tree?root=${encodeURIComponent(absent)}`);
+      check('GET /api/files/tree absent (no optional) → 404 (default held)', rReq.status === 404, `status ${rReq.status}`);
     }
   } finally {
     await cleanup();
