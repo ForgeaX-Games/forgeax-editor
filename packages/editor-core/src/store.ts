@@ -397,9 +397,19 @@ export function getSceneId(): string { return currentSceneId; }
 //   { "scenes": [{ "id": "level1", "name": "Level 1", "pack": "scenes/level1.pack.json" }, …],
 //     "defaultScene": "level1" }
 // The editor then edits ONE of them at a time (`currentSceneFile`), switchable
-// live via the SceneSwitcher UI — the UE "level asset" model. Games without a
-// `scenes` manifest keep the legacy single `scene.pack.json` (currentSceneFile
-// stays null and every path/key reduces to the historical shape).
+// live via the SceneSwitcher UI — the UE "level asset" model.
+//
+// Scene-as-asset is the canonical model: a scene is a GUID-keyed asset, and
+// `forge.json.defaultScene` (a scene GUID) is the engine SSOT for which scene
+// ▶ Play boots and ✎ Edit opens. The editor discovers it by resolving that GUID
+// to the pack that declares it (findScenePackByGuid, scanning scenes/ + assets/
+// + root). The engine's own templates/game-default is now this shape:
+// `assets/scene.pack.json` + `forge.json.defaultScene`.
+//
+// The single top-level `scene.pack.json` mode (currentSceneFile stays null, every
+// path/key reduces to the single-scene shape) is retained only as LEGACY COMPAT
+// for older games that predate scene-as-asset and carry no defaultScene GUID — it
+// is NOT the canonical shape. New/template games go through the defaultScene path.
 export interface SceneFileEntry { id: string; name?: string; pack: string }
 let currentSceneFile: string | null = null;
 let sceneList: SceneFileEntry[] = [];
@@ -482,7 +492,8 @@ async function readForgeJson(): Promise<Record<string, unknown> | null> {
 
 /** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
  *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
- *  the active scene file. Games without a manifest stay in legacy mode. */
+ *  the active scene file. Games with neither a scenes/ dir nor a defaultScene
+ *  GUID fall back to legacy single-scene mode (top-level scene.pack.json). */
 export async function initSceneList(): Promise<void> {
   currentSceneFile = null;
   sceneList = [];
@@ -538,7 +549,7 @@ export async function initSceneList(): Promise<void> {
     //      multiple editor windows edit different levels side by side)
     //   2. per-game localStorage — what this game last had open (survives the
     //      Studio Edit iframe being rebuilt without URL params)
-    //   3. forge.json defaultScene → first level → legacy single scene
+    //   3. forge.json defaultScene → first level → legacy single top-level scene
     let urlWant: string | null = null;
     try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
     let want: string | null = null;
@@ -560,7 +571,7 @@ export async function initSceneList(): Promise<void> {
       : (want && sceneList.some((s) => s.id === want)) ? want
       : defId ? defId
       : firstScene ? firstScene.id
-      : null;  // no scene packs found → keep editing the legacy single scene
+      : null;  // no scene packs found → legacy: keep editing the single top-level scene
   }
   emitSceneList();
 }
