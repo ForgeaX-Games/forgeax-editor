@@ -828,9 +828,25 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
   const refreshGizmos = (): void => { updateGizmo(); updateParamGizmo(); };
-  const unsubSel = onSelectionChange(refreshGizmos);
+  // The gizmos depend ONLY on the selected entity's own components (updateGizmo
+  // reads its local Transform; updateParamGizmo reads its Light/Camera). So an
+  // edit to any OTHER entity can't move them — skip the refresh by tracking a
+  // signature of just the selected entity (cheap: one entity, not the whole doc).
+  const selSig = (): string | null => {
+    const sel = getSelection();
+    if (sel === null) return null;
+    const node = bus.doc.entities[sel];
+    return node ? JSON.stringify(node.components) : '\u2205'; // '∅' = selected entity gone
+  };
+  let lastSelSig = selSig();
+  const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
   const unsubMode = onGizmoModeChange(updateGizmo);
-  const unsubDoc = bus.subscribe(() => refreshGizmos());
+  const unsubDoc = bus.subscribe(() => {
+    const sig = selSig();
+    if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
+    lastSelSig = sig;
+    refreshGizmos();
+  });
   const unsubAnim = onAnimPreview(applyAnimPreview);
 
   applyCamera(); // also paints the gizmo if something is already selected

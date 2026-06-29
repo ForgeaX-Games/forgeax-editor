@@ -46,6 +46,63 @@ let syncChannel: BroadcastChannel | null = null;
 // PLACE (no location.reload → no WebGPU context recreate → no WKWebView wedge).
 let controlChannel: BroadcastChannel | null = null;
 let applyingSnapshot = false; // guard: applying a remote snapshot must not re-emit upstream
+
+// Single re-entrancy invariant for cross-window selection sync. While we are
+// APPLYING a remote update (a localStorage `storage` echo OR a BroadcastChannel
+// snapshot mirror), every OUTBOUND propagation channel must stay silent —
+// otherwise the windows ping-pong forever (see
+// docs/design/editor-cross-window-selection-sync-loop.md).
+//
+// IMPORTANT: this only suppresses *echoes*. A genuine inbound selection from a
+// popout arrives via mainOnMessage → setSelectionMany (applyingRemote === false),
+// so the main window still persists + broadcasts it (legitimate fan-out). Do NOT
+// widen this guard to cover setSelection/setSelectionMany themselves.
+//
+// INVARIANT (do not break): applyingExternalSel / applyingSnapshot are plain
+// booleans, not depth counters. They are only correct because every site sets →
+// emits SYNCHRONOUSLY → resets within one call frame, with no `await`/microtask
+// in between and no nesting (storage events + channel messages are delivered as
+// separate, serial tasks). If a future change makes emit() async or re-entrant,
+// convert these to a depth counter before relying on them.
+function applyingRemote(): boolean {
+  return applyingExternalSel || applyingSnapshot;
+}
+
+// Channel-択一 (single transport) for cross-window SELECTION sync. The editor
+// has two cross-window transports — BroadcastChannel (snapshots + 'selection'
+// upstream) and a localStorage `storage`-event mirror. Running BOTH for selection
+// double-delivers and is the structural cause of the historical echo loop (see
+// docs/design/editor-cross-window-selection-sync-loop.md §4.3). So:
+//   • BroadcastChannel OPEN  → it is the SOLE selection transport; the
+//     localStorage selKey mirror is fully disabled (no writes, no reads).
+//   • BroadcastChannel CLOSED → fall back to the localStorage mirror (Tauri
+//     cross-process WebviewWindows, where BroadcastChannel can't reach, or before
+//     initSync has opened the channel).
+// NOTE: the selKey value is NEVER read at load time (selection is transient, not
+// restored), so disabling it loses nothing in the browser path.
+//
+// DETECTION — must NOT be `syncChannel !== null`: in Tauri the BroadcastChannel
+// object EXISTS but cannot span WebviewWindow processes, so the object's presence
+// does not prove cross-window delivery. We instead require PROOF: the channel is
+// only treated as the live transport once we have actually RECEIVED a cross-window
+// message over it (`broadcastProven`). In the browser (same-process iframes) the
+// init handshake (`hello`/`snapshot`) flips this on within a tick; in Tauri it
+// never flips, so the localStorage fallback stays active.
+let broadcastProven = false;
+function markBroadcastProven(): void { broadcastProven = true; }
+function broadcastActive(): boolean {
+  return broadcastProven;
+}
+
+// Order-sensitive id-list equality (selection is small; the last element is the
+// primary, so order matters). Used to short-circuit redundant remote selection
+// applications before they emit + re-render.
+function sameIdList(a: EntityId[], b: EntityId[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 function postSync(msg: EditorSyncMsg): void {
   syncChannel?.postMessage(msg);
 }
@@ -65,10 +122,31 @@ const selectionListeners = new Set<() => void>();
 let applyingExternalSel = false;
 function selKey(): string { return `forgeax:editor:sel:${currentSceneId}`; }
 function persistSelection(): void {
-  if (applyingExternalSel || typeof localStorage === 'undefined') return;
+  // applyingRemote(): a window mirroring a remote selection must NOT write the
+  // authoritative localStorage key — that write would `storage`-event back into
+  // every other window and start an unbounded cross-window echo.
+  // broadcastActive(): when BroadcastChannel is the live transport, the
+  // localStorage selection mirror is redundant (channel-択一) — skip it entirely.
+  if (applyingRemote() || broadcastActive() || typeof localStorage === 'undefined') return;
   try { localStorage.setItem(selKey(), JSON.stringify(selectionList)); } catch { /* quota */ }
 }
+
+// Dev-only runaway-propagation net: if selection emits storm within a short
+// window it almost always means a cross-window echo loop regressed. Warns once
+// per window so it's visible without re-instrumenting. No-op in production.
+let _emitWindowStart = 0;
+let _emitCount = 0;
+let _emitWarned = false;
 function emitSelection(): void {
+  if (import.meta.env?.DEV) {
+    const now = Date.now();
+    if (now - _emitWindowStart > 1000) { _emitWindowStart = now; _emitCount = 0; _emitWarned = false; }
+    if (++_emitCount > 32 && !_emitWarned) {
+      _emitWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn(`[sel-sync] runaway selection propagation: ${_emitCount} emits within 1s — likely a cross-window echo loop (see docs/design/editor-cross-window-selection-sync-loop.md)`);
+    }
+  }
   for (const fn of selectionListeners) fn();
   persistSelection();
 }
@@ -111,7 +189,7 @@ export function setSelectionMany(ids: EntityId[]): void {
 // A popout forwards selection to the main window (the authority); the main window
 // echoes it back inside its snapshot. Suppressed while applying a snapshot.
 function syncSelectionUpstream(): void {
-  if (IS_POPOUT && !applyingSnapshot) postSync({ t: 'selection', ids: selectionList });
+  if (IS_POPOUT && !applyingRemote()) postSync({ t: 'selection', ids: selectionList });
 }
 
 function subscribeSelection(fn: () => void): () => void {
@@ -1023,6 +1101,11 @@ function buildSnapshot(): EditorSnapshot {
 }
 
 function broadcastSnapshot(): void {
+  // Never re-broadcast a state we are CURRENTLY applying from a remote source —
+  // otherwise an inbound storage echo / snapshot mirror is bounced straight back
+  // out, closing the cross-window loop. Genuine local edits run with
+  // applyingRemote() === false and broadcast normally.
+  if (applyingRemote()) return;
   if (syncChannel) postSync({ t: 'snapshot', snap: buildSnapshot() });
 }
 
@@ -1043,14 +1126,18 @@ function applySnapshot(snap: EditorSnapshot): void {
     // BroadcastChannel structuredClone drops the EditSession `asset` getter —
     // revive it so popout panels reading bus.doc.asset stay live (w34).
     bus.doc = reviveSession(snap.doc);
-    selectionList = [...snap.selection];
+    const selChanged = !sameIdList(selectionList, snap.selection);
+    if (selChanged) selectionList = [...snap.selection];
     if (gizmoMode !== snap.gizmo) {
       gizmoMode = snap.gizmo;
       for (const fn of gizmoListeners) fn();
     }
     docVersion++;
     for (const fn of docListeners) fn();
-    emitSelection();
+    // Only re-emit selection when it actually changed — avoids redundant panel
+    // re-renders on every snapshot (doc edits arrive far more often than
+    // selection changes).
+    if (selChanged) emitSelection();
   } finally {
     applyingSnapshot = false;
   }
@@ -1084,6 +1171,7 @@ export function announcePopoutGeom(panel: SyncPanelId, geom: PopoutGeom): void {
 // subscriptions live in initMain (attached ONCE) and post to whatever syncChannel
 // is current via postSync — so swapping the channel needs only onmessage + a push.
 function mainOnMessage(ev: MessageEvent): void {
+  markBroadcastProven(); // receiving anything proves the channel reaches siblings
   const msg = parseEditorSyncMsg(ev.data);
   if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
   switch (msg.t) {
@@ -1146,6 +1234,7 @@ function initPopout(ch: BroadcastChannel): void {
   bus.historySteps = (): HistoryStep[] => mirror?.history ?? [];
   bus.appliedCount = () => mirror?.applied ?? 0;
   ch.onmessage = (ev: MessageEvent) => {
+    markBroadcastProven(); // receiving anything proves the channel reaches siblings
     const msg = parseEditorSyncMsg(ev.data);
     if (!msg) { console.warn('[sync] dropped malformed channel message (popout)', ev.data); return; }
     if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
@@ -1194,10 +1283,17 @@ export function initSync(): void {
   if (typeof window !== 'undefined') {
     const onStorage = (e: StorageEvent): void => {
       if (e.key === docKey(currentSceneId) && e.newValue) { loadDocFromStorage(); return; }
-      if (e.key === selKey() && e.newValue) {
+      // Channel-択一: only honour the localStorage selection mirror when the
+      // BroadcastChannel transport is NOT live (fallback path). When the channel
+      // is open it is the sole selection transport, so ignore selKey writes.
+      if (!broadcastActive() && e.key === selKey() && e.newValue) {
         try {
           const ids = JSON.parse(e.newValue);
-          if (Array.isArray(ids)) { applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false; }
+          // Short-circuit identical echoes so a redundant `storage` event never
+          // re-emits / re-renders (defence-in-depth alongside applyingRemote).
+          if (Array.isArray(ids) && !sameIdList(selectionList, ids)) {
+            applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false;
+          }
         } catch { /* ignore */ }
       }
     };

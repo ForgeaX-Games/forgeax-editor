@@ -73,8 +73,11 @@ export function createEngineSync(
   // Synthetic-root Entity carrying the scene's `SceneInstance` component
   // (teardown handle for `world.despawnScene`), or null before the first build.
   let instanceRoot: number | null = null;
-  // Skip no-op rebuilds (the bus fires on snapshot/selection echoes too).
-  let lastSig: string | null = null;
+  // Skip no-op rebuilds: compare the bus's monotonic revision instead of hashing
+  // the whole doc on every notification (resync only ever runs on a bus
+  // notification or forceResync, and every notifying path bumps bus.rev, so rev
+  // is a complete + O(1) change signal). `-1` forces the first/forced run.
+  let lastRev = -1;
   const ctx = { world, assets: renderer.assets, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount } as never;
 
   function despawnInstance(): void {
@@ -88,7 +91,7 @@ export function createEngineSync(
     despawnInstance();
     rendered = new Map();
     const r = instantiateSceneEntities(entities, ctx);
-    if (!r) { console.error('[editor] native scene instantiate failed'); lastSig = null; return; }
+    if (!r) { console.error('[editor] native scene instantiate failed'); lastRev = -1; return; }
     instanceRoot = r.instanceRoot;
     for (const e of entities) {
       const entity = r.byDoc.get(e.docId);
@@ -111,16 +114,15 @@ export function createEngineSync(
   }
 
   function resync(): void {
-    const sig = JSON.stringify(bus.doc);
-    if (sig === lastSig) return;
-    lastSig = sig;
+    if (bus.rev === lastRev) return;
+    lastRev = bus.rev;
 
     let entities: SceneEntity[];
     try {
       entities = sceneEntities(bus.doc, ctx, caches).entities;
     } catch (err) {
       console.error('[editor] sceneEntities threw:', (err as Error)?.message ?? err, (err as Error)?.stack ?? '');
-      lastSig = null;
+      lastRev = -1;
       return;
     }
 
@@ -144,7 +146,7 @@ export function createEngineSync(
 
   return {
     resync,
-    forceResync() { lastSig = null; resync(); },
+    forceResync() { lastRev = -1; resync(); },
     worldEntityFor: (id) => rendered.get(id)?.entity,
     dispose() { unsub(); despawnInstance(); rendered = new Map(); },
   };
