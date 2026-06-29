@@ -634,6 +634,7 @@ void setupEditorSkylight(
       if (getAssetSelection()?.guid !== guid) return; // selection moved on — drop stale result
       if (!res.ok || res.value === undefined) { publishMeshStats(emptyStats(guid, res.error?.code ?? 'load miss')); return; }
       const mesh = res.value as {
+        vertices?: { byteLength?: number };
         indices?: unknown;
         attributes?: Record<string, unknown>;
         aabb?: { length: number; [i: number]: number };
@@ -648,6 +649,11 @@ void setupEditorSkylight(
       }));
       const ab = mesh.aabb;
       const aabb = ab && ab.length === 6 ? [0, 1, 2, 3, 4, 5].map((i) => ab[i] ?? 0) : undefined;
+      // CPU geometry footprint (interleaved vertex buffer + index buffer). NOT the
+      // GPU resource size. See editor-mesh-panel-ue58-parity.md §6.4.
+      const vBytes = typeof mesh.vertices?.byteLength === 'number' ? mesh.vertices.byteLength : 0;
+      const iBytes = indices instanceof Uint16Array || indices instanceof Uint32Array ? indices.byteLength : 0;
+      const byteSize = vBytes + iBytes;
       // `vertices` is an INTERLEAVED buffer (stride 12/18 floats — pos/nrm/uv/tan
       // [+skin]); its length is NOT a vertex count. Per-stream position is absent
       // from `attributes` (only skinIndex/skinWeight ride along). So derive the
@@ -660,6 +666,7 @@ void setupEditorSkylight(
         indexFormat,
         submeshes: subs,
         ...(aabb ? { aabb } : {}),
+        ...(byteSize > 0 ? { byteSize } : {}),
         attributes: mesh.attributes ? Object.keys(mesh.attributes) : [],
       });
     } catch (err) {

@@ -277,10 +277,20 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .mat-clear:hover { color: var(--fg); }
 .ed-material .mat-hint { padding: 6px 10px; font-size: 10px; }
 
-/* Mesh panel — geometry stats (reuses the global .mat-* row primitives) */
+/* Mesh panel — geometry stats (reuses the global .mat-* row primitives).
+   UE5.8-parity layout: collapsible Overview / Sections / Attributes sections. */
 .ed-mesh { font-size: 12px; }
 .ed-mesh .mat-empty { padding: 8px 10px; }
 .ed-mesh .mat-hint { padding: 6px 10px; font-size: 10px; }
+.ed-mesh .mesh-sec { border-top: 1px solid var(--line); }
+.ed-mesh .mesh-sec-h { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; cursor: pointer;
+  background: none; border: none; color: var(--fg3); font: inherit; font-family: var(--mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.06em; text-align: left; }
+.ed-mesh .mesh-sec-h:hover { color: var(--fg); }
+.ed-mesh .mesh-sec-caret { flex: 0 0 auto; width: 10px; color: var(--fg3); }
+.ed-mesh .mesh-sec-title { flex: 1 1 auto; }
+.ed-mesh .mesh-sec-body { padding-bottom: 4px; }
+.ed-mesh .mesh-cm { color: var(--fg3); font-size: 10px; }
 
 /* Timeline panel — keyframe animation */
 .ed-timeline { font-size: 12px; display: flex; flex-direction: column; }
