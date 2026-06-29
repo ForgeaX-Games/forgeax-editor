@@ -10,10 +10,18 @@
 //
 // Architecture (plan §2 D-4 R3 + §2 D-10 R3):
 //   - The viewport iframe is rendered by `renderEdit` (see standaloneRenderers
-//     below), injected into DockShell's Edit panel via PanelRenderersProvider.
-//     Its src is `/editor/?viewportOnly=1` — a root-relative URL served through
-//     the :15290 vite proxy (→ :15280). There is NO body-level iframe: the
-//     viewport lives inside the dock like every other panel.
+//     below), injected through PanelRenderersProvider. Its src is
+//     `/editor/?viewportOnly=1` — a root-relative URL served through the :15290
+//     vite proxy (→ :15280). There is NO body-level iframe.
+//   - As of interface's keepalive-surface refactor (commit 2120593), DockShell's
+//     Edit/Play panels are only thin <SurfaceAnchor> placeholders; the actual
+//     viewport iframe is owned by <SurfaceKeepAliveLayer> — an always-mounted
+//     sibling of DockShell that mounts each surface ONCE and overlays the active
+//     one (position:fixed) onto its anchor's rect (fixes the Play↔Edit freeze).
+//     So StandaloneShell must render BOTH DockShell AND SurfaceKeepAliveLayer,
+//     exactly as interface's own App.tsx does. Mounting only DockShell (the
+//     pre-refactor shape) leaves the Edit panel a black rectangle — the anchor
+//     renders but nothing ever mounts the viewport over it.
 //   - createRoot()->render(<StandaloneShell />) draws the whole shell inside
 //     #root: DockShell reused from @forgeax/interface. DockShell's edit
 //     workspace registers EditorPanelFrame for each ep:* panel id; matgraph +
@@ -47,6 +55,7 @@ import {
   PanelRenderersProvider,
   DEFAULT_PANEL_RENDERERS,
 } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { SurfaceKeepAliveLayer } from '@forgeax/interface/components/Surfaces/SurfaceKeepAliveLayer';
 import { useAppStore } from '@forgeax/interface/store';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import '@forgeax/interface/styles/global.css';
@@ -106,6 +115,13 @@ function StandaloneShell() {
     >
       <PanelRenderersProvider value={standaloneRenderers}>
         <DockShell hideChatAndForge />
+        {/* Always-mounted owner of the Edit/Play viewport iframes (interface's
+            keepalive-surface refactor). DockShell's Edit panel is only a
+            <SurfaceAnchor> placeholder; this sibling layer mounts the real
+            viewport once via renderEdit and overlays it (position:fixed) onto
+            that anchor's rect. Without it the Edit panel stays black. Mirrors
+            interface App.tsx (DockShell + SurfaceKeepAliveLayer siblings). */}
+        <SurfaceKeepAliveLayer />
       </PanelRenderersProvider>
     </div>
   );
@@ -142,9 +158,10 @@ function boot(): void {
     /* store/localStorage unavailable — fine; demo seed path still works */
   }
 
-  // React tree — DockShell + EditorPanelFrame iframes + the renderEdit viewport
-  // all render synchronously through React's commit cycle. No body-level iframe,
-  // no setTimeout, no display:none. The viewport is just DockShell's Edit panel.
+  // React tree — DockShell + EditorPanelFrame iframes + SurfaceKeepAliveLayer
+  // (which owns the renderEdit/renderPreview viewport iframes, overlaid on the
+  // Edit/Play panel anchors) all render synchronously through React's commit
+  // cycle. No body-level iframe, no setTimeout, no display:none.
   try {
     createRoot(rootEl).render(
       <StrictMode>
