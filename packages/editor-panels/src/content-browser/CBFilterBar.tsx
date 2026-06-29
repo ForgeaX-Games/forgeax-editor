@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import type { FilterAPI, SortAPI } from './hooks';
 import type { CBSortKey, CBViewMode } from './types';
 
@@ -17,6 +18,82 @@ const SORT_LABELS: Record<CBSortKey, string> = {
   estimatedSize: 'Size',
 };
 
+/** Kind filter as a collapsible dropdown (multi-select, OR semantics). */
+function CBKindDropdown({ filter }: { filter: FilterAPI }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  // Clear only kind filters; leave the search query untouched.
+  const clearKinds = () => {
+    filter.filters.filter(f => f.active).forEach(f => filter.toggleFilter(f.id));
+  };
+
+  const active = filter.filters.filter(f => f.active);
+  const triggerLabel =
+    active.length === 0 ? 'All Types'
+    : active.length === 1 ? active[0].label
+    : `${active.length} types`;
+
+  return (
+    <div className="cb-kind-dropdown" ref={rootRef}>
+      <button
+        type="button"
+        className={`cb-kind-trigger${active.length > 0 ? ' active' : ''}`}
+        onClick={() => setOpen(o => !o)}
+        title="Filter by asset kind"
+      >
+        {active.length === 1 && active[0].icon && (
+          <span className="cb-pill-icon">{active[0].icon}</span>
+        )}
+        <span className="cb-kind-trigger-label">{triggerLabel}</span>
+        <span className="cb-kind-caret">▾</span>
+      </button>
+
+      {open && (
+        <div className="cb-kind-menu" role="listbox">
+          <button
+            type="button"
+            className={`cb-kind-option${active.length === 0 ? ' sel' : ''}`}
+            onClick={clearKinds}
+          >
+            <span className="cb-kind-check">{active.length === 0 ? '✓' : ''}</span>
+            <span className="cb-kind-option-label">All Types</span>
+          </button>
+          <div className="cb-kind-divider" />
+          {filter.filters.map(f => (
+            <button
+              key={f.id}
+              type="button"
+              className={`cb-kind-option${f.active ? ' sel' : ''}`}
+              onClick={() => filter.toggleFilter(f.id)}
+            >
+              <span className="cb-kind-check">{f.active ? '✓' : ''}</span>
+              {f.icon && <span className="cb-pill-icon">{f.icon}</span>}
+              <span className="cb-kind-option-label">{f.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CBFilterBar({ filter, sort, viewMode, onViewModeChange, thumbnailSize, onThumbnailSizeChange }: Props) {
   return (
     <div className="cb-filter-bar">
@@ -33,22 +110,7 @@ export function CBFilterBar({ filter, sort, viewMode, onViewModeChange, thumbnai
         )}
       </div>
 
-      <div className="cb-filter-pills">
-        {filter.filters.map(f => (
-          <button
-            key={f.id}
-            className={`cb-filter-pill${f.active ? ' active' : ''}`}
-            onClick={() => filter.toggleFilter(f.id)}
-            title={f.label}
-          >
-            {f.icon && <span className="cb-pill-icon">{f.icon}</span>}
-            <span className="cb-pill-label">{f.label}</span>
-          </button>
-        ))}
-        {filter.activeFilterCount > 0 && (
-          <button className="cb-filter-clear" onClick={filter.clearFilters}>Clear</button>
-        )}
-      </div>
+      <CBKindDropdown filter={filter} />
 
       <div className="cb-view-controls">
         <select
