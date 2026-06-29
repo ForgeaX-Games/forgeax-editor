@@ -128,6 +128,7 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
   SpotLightSnapshot,
+  SpriteInstancesSnapshot,
 } from './render-system-extract';
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1 record-stage
 // fold operator). Pure linear-scan helper that groups transparent-dispatch
@@ -163,6 +164,98 @@ import { probeVideoHighPerfUpload } from './video-player-system';
  * (`zero-camera-clear-fallback.test.ts`). AC-05.
  */
 export const ZERO_CAMERA_CLEAR_FALLBACK: readonly [number, number, number, number] = [0, 0, 0, 1];
+
+// ─── feat-20260625 M3 / w11 — sprite-pass 80B interleaved upload helpers ─────
+//
+// Plan-strategy D-1 (interleaved single buffer 80B/instance) + D-9 (cacheKey
+// = entity packed u32). The sprite-pass record stage consumes
+// `SpriteInstancesSnapshot` (from render-system-extract) and produces a single
+// GPU buffer interleaving mat4 transforms with vec4 regions per instance;
+// the BGL stays untouched (D-1 single binding slot @group(3) @binding(0)).
+//
+// Layout (per instance, byte offset 0..80):
+//   [0..64)  mat4 column-major (16 f32)
+//   [64..80) region vec4 [uMin, vMin, uW, vH] (4 f32)
+//   second instance starts at byte 80.
+//
+// The cache fingerprint is the triple `(cacheKey, archVersion, byteLength)`;
+// `spriteInstancesCacheHit` is the boolean side of the fingerprint check the
+// record stage runs once per sprite-pass entity. Pure functions — the GPU
+// device + buffer wrapper layer stays out of this module so the unit test
+// (w9) exercises both helpers without standing up a device mock.
+
+/** Re-export of the extract-stage snapshot so test sites can build it. */
+export type { SpriteInstancesSnapshot };
+
+/**
+ * Interleave SpriteInstances transforms (stride 16) and regions (stride 4)
+ * into a single Float32Array with stride 20 (= 80 bytes per instance,
+ * plan-strategy D-1). Callers feed the output buffer to
+ * `device.queue.writeBuffer` against the per-entity GPU buffer slot.
+ *
+ * Pre-conditions guaranteed by render-system-extract M3 / w10:
+ *   - `transforms.length` is a multiple of 16
+ *   - `regions.length` is a multiple of 4
+ *   - `transforms.length / 16 === regions.length / 4`
+ *
+ * Violations fire `sprite-instances-count-mismatch` at the extract entry and
+ * never reach this helper. The helper itself does NOT re-validate the
+ * pre-conditions — single-validator invariant (charter P4 explicit failure
+ * routed once at the extract boundary; downstream consumers trust the
+ * snapshot shape).
+ *
+ * @param transforms — packed mat4 (column-major) Float32Array (stride 16).
+ * @param regions    — packed vec4 [uMin, vMin, uW, vH] Float32Array (stride 4).
+ * @returns interleaved Float32Array with length `(transforms.length + regions.length)`.
+ */
+export function interleaveSpriteInstanceBuffer(
+  transforms: Float32Array,
+  regions: Float32Array,
+): Float32Array {
+  const count = transforms.length / 16;
+  const out = new Float32Array(count * 20);
+  for (let i = 0; i < count; i++) {
+    const dstBase = i * 20;
+    const tSrcBase = i * 16;
+    const rSrcBase = i * 4;
+    // mat4 (16 floats) — explicit loop avoids subarray copy overhead.
+    for (let k = 0; k < 16; k++) out[dstBase + k] = transforms[tSrcBase + k] ?? 0;
+    // region (4 floats).
+    for (let k = 0; k < 4; k++) out[dstBase + 16 + k] = regions[rSrcBase + k] ?? 0;
+  }
+  return out;
+}
+
+/**
+ * Boolean side of the per-entity sprite-pass GPU buffer cache fingerprint
+ * check. Returns true iff the existing entry is byte-for-byte safe to reuse:
+ *
+ *   - `entry` exists (the entity has been recorded at least once);
+ *   - `entry.uploadedArchVersion === snapshot.archVersion` (archetype
+ *     storage has not been re-allocated since last upload);
+ *   - `entry.uploadedByteLength === requestedBytes` (byte count matches the
+ *     interleaved layout this frame would write).
+ *
+ * The record stage gates the `createBuffer + queue.writeBuffer` round on the
+ * negation of this predicate; a hit short-circuits to a `writeBuffer`-only
+ * refresh against the existing GPU buffer.
+ *
+ * @param entry — cached `InstanceBufferCacheEntry` for this `cacheKey`, or
+ *   `undefined` if the entity has never been recorded.
+ * @param snapshot — current frame's snapshot (carries `cacheKey + archVersion`).
+ * @param requestedBytes — `transforms.byteLength + regions.byteLength` =
+ *   80 * `instanceCount` for SpriteInstances (D-1 interleaved layout).
+ */
+export function spriteInstancesCacheHit(
+  entry: import('./instance-buffer-cache').InstanceBufferCacheEntry | undefined,
+  snapshot: SpriteInstancesSnapshot,
+  requestedBytes: number,
+): boolean {
+  if (entry === undefined) return false;
+  if (entry.uploadedArchVersion !== snapshot.archVersion) return false;
+  if (entry.uploadedByteLength !== requestedBytes) return false;
+  return true;
+}
 
 /**
  * Build a synthetic CameraSnapshot the record stage uses when the world
@@ -6398,6 +6491,80 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
                   spriteInstanceBuffer = activeSprite.buffer.handle;
                   spriteInstanceCount = Math.max(1, spriteInst.instanceCount);
                 }
+              }
+            }
+          }
+        }
+
+        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
+        // M3 / w11: SpriteInstances 80B-per-instance interleaved upload path.
+        // SSOT for the per-entity 2D mat4 + per-instance UV region buffer
+        // (plan-strategy D-1 interleaved single buffer + single binding slot;
+        // D-9 cacheKey = entity packed u32). The extract-stage validator
+        // (M3 / w10) enforces the XOR contract `Instances XOR SpriteInstances`
+        // (sprite-instances-mutually-exclusive-with-instances), so the
+        // legacy `spriteInst` block above and this block are never both
+        // active for the same entity.
+        const spriteInstancesSnap: SpriteInstancesSnapshot | undefined =
+          spriteEntry.source.spriteInstances;
+        if (spriteInstancesSnap !== undefined) {
+          const requestedBytes =
+            spriteInstancesSnap.transforms.byteLength + spriteInstancesSnap.regions.byteLength;
+          const cap = runtime.device.limits.maxStorageBufferBindingSize;
+          if (typeof cap === 'number' && requestedBytes > cap) {
+            runtime.errorRegistry.fire(
+              new RhiError({
+                code: 'limit-exceeded',
+                expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
+                hint: 'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (80 bytes per instance: mat4 64B + region 16B)',
+                detail: {
+                  maxStorageBufferBindingSize: cap,
+                  requestedBytes,
+                },
+              }),
+            );
+          } else {
+            const cachedSpriteInst = frameState.instanceBuffers.get(spriteInstancesSnap.cacheKey);
+            let activeSpriteInst: InstanceBufferCacheEntry | null = null;
+            if (spriteInstancesCacheHit(cachedSpriteInst, spriteInstancesSnap, requestedBytes)) {
+              activeSpriteInst = cachedSpriteInst ?? null;
+            } else if (requestedBytes > 0) {
+              const bufRes = runtime.device.createBuffer({
+                size: requestedBytes,
+                usage: STORAGE_USAGE | COPY_DST_USAGE,
+                mappedAtCreation: false,
+              });
+              if (!bufRes.ok) {
+                runtime.errorRegistry.fire(bufRes.error);
+              } else {
+                if (cachedSpriteInst !== undefined && !cachedSpriteInst.buffer.isDestroyed) {
+                  const r = cachedSpriteInst.buffer.destroy();
+                  if (!r.ok) runtime.errorRegistry.fire(r.error);
+                }
+                const newBuf = new GpuBuffer(runtime.device, bufRes.value);
+                activeSpriteInst = {
+                  buffer: newBuf,
+                  uploadedArchVersion: spriteInstancesSnap.archVersion,
+                  uploadedByteLength: requestedBytes,
+                };
+                frameState.instanceBuffers.set(spriteInstancesSnap.cacheKey, activeSpriteInst);
+              }
+            }
+            if (activeSpriteInst !== null && requestedBytes > 0) {
+              const interleaved = interleaveSpriteInstanceBuffer(
+                spriteInstancesSnap.transforms,
+                spriteInstancesSnap.regions,
+              );
+              const writeRes = runtime.device.queue.writeBuffer(
+                activeSpriteInst.buffer.handle,
+                0,
+                interleaved,
+              );
+              if (!writeRes.ok) {
+                runtime.errorRegistry.fire(writeRes.error);
+              } else {
+                spriteInstanceBuffer = activeSpriteInst.buffer.handle;
+                spriteInstanceCount = spriteInstancesSnap.instanceCount;
               }
             }
           }

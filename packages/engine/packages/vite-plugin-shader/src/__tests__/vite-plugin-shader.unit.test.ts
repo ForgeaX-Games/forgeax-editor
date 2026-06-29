@@ -1600,7 +1600,16 @@ ${MINIMAL_WGSL.trim()}
 
   function compileEntry(file: string, id: string, defines: Record<string, boolean>) {
     const entry = stripPragmas(readSrc(file));
-    return compileShader(entry, { id, imports: IMPORTS, defines });
+    // feat-20260625 M2: common.wgsl uses `#if PER_INSTANCE_REGION == true`
+    // for the InstanceData region field; entries that don't declare this
+    // axis must inject `PER_INSTANCE_REGION: false` to satisfy naga_oil's
+    // `Unknown shader def` check. Mirrors the production injection path
+    // in packages/vite-plugin-shader/src/index.ts compileEngineEntry.
+    return compileShader(entry, {
+      id,
+      imports: IMPORTS,
+      defines: { PER_INSTANCE_REGION: false, ...defines },
+    });
   }
 
   // ============================================================================
@@ -1687,7 +1696,11 @@ ${MINIMAL_WGSL.trim()}
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-true',
         imports: IMPORTS,
-        defines: { STORAGE_BUFFER_AVAILABLE: true, CLUSTER_FORWARD_AVAILABLE: true },
+        defines: {
+          PER_INSTANCE_REGION: false,
+          STORAGE_BUFFER_AVAILABLE: true,
+          CLUSTER_FORWARD_AVAILABLE: true,
+        },
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
@@ -1697,7 +1710,11 @@ ${MINIMAL_WGSL.trim()}
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-false',
         imports: IMPORTS,
-        defines: { STORAGE_BUFFER_AVAILABLE: true, CLUSTER_FORWARD_AVAILABLE: false },
+        defines: {
+          PER_INSTANCE_REGION: false,
+          STORAGE_BUFFER_AVAILABLE: true,
+          CLUSTER_FORWARD_AVAILABLE: false,
+        },
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
@@ -1707,7 +1724,11 @@ ${MINIMAL_WGSL.trim()}
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-true-binding',
         imports: IMPORTS,
-        defines: { STORAGE_BUFFER_AVAILABLE: true, CLUSTER_FORWARD_AVAILABLE: true },
+        defines: {
+          PER_INSTANCE_REGION: false,
+          STORAGE_BUFFER_AVAILABLE: true,
+          CLUSTER_FORWARD_AVAILABLE: true,
+        },
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (!r.ok) return;
@@ -1743,7 +1764,11 @@ ${MINIMAL_WGSL.trim()}
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-false-binding',
         imports: IMPORTS,
-        defines: { STORAGE_BUFFER_AVAILABLE: true, CLUSTER_FORWARD_AVAILABLE: false },
+        defines: {
+          PER_INSTANCE_REGION: false,
+          STORAGE_BUFFER_AVAILABLE: true,
+          CLUSTER_FORWARD_AVAILABLE: false,
+        },
       });
       expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
       if (!r.ok) return;

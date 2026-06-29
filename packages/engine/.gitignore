@@ -102,3 +102,6 @@ apps/**/*.tsbuildinfo
 # M8 stray debug capture dirs from unit tests
 .forgeax-debug/
 packages/*/.forgeax-debug/
+
+# Template-local forgeax workspace prefs (layouts etc.) — per-project user state
+templates/game-default/.forgeax/

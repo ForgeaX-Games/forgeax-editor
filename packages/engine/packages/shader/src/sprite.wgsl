@@ -1,4 +1,5 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis PER_INSTANCE_REGION
 
 #import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances}
 
@@ -236,7 +237,23 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     // operates on atlas-space coordinates independently — no double-flip
     // risk, because the region adjustment is a linear transform applied
     // after uv_eff and neither path depends on the other's sign convention.
-    uv_atlas = uv_eff * material.region.zw + material.region.xy;
+    //
+    // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M2 /
+    // w7 (plan-strategy §2 D-5 + research §Q-R-4.4): when the sprite
+    // pipeline composes this module with PER_INSTANCE_REGION=true the
+    // region source is the per-instance value carried in
+    // `instances[idx].region` (host-uploaded 80 B-per-instance interleaved
+    // buffer; D-1 + D-9). When PER_INSTANCE_REGION is unset (legacy
+    // sprite-atlas / non-SpriteInstances entities) the region still comes
+    // from the material UBO. The 9-slice branch above keeps reading
+    // `material.region` regardless — 9-slice config is material-level by
+    // construction (OOS-3 + D-5) and the two region semantics do not mix.
+#if PER_INSTANCE_REGION == true
+    let region_src = instances[idx].region;
+#else
+    let region_src = material.region;
+#endif
+    uv_atlas = uv_eff * region_src.zw + region_src.xy;
   }
 
   // feat-20260604-instances-per-instance-transform-shader-group3-bin M2 / w8:

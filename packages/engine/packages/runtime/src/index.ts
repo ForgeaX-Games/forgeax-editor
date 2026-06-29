@@ -292,6 +292,8 @@ export {
   Children,
   cameraProjectionFromF32,
   DirectionalLight,
+  decodeSortScope,
+  encodeSortScope,
   Instances,
   type InstancesData,
   Layer,
@@ -313,6 +315,7 @@ export {
   type SkyboxMode,
   Skylight,
   SortKey,
+  type SortScope,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   SpotLight,
@@ -322,6 +325,7 @@ export {
   skyboxModeFromF32,
   spritePlaybackModeFromU32,
   TileLayer,
+  type TileLayerData,
   Tilemap,
   TONEMAP_ACES_FILMIC,
   TONEMAP_AGX,
@@ -345,6 +349,20 @@ export {
  * the system from one package.
  */
 export { GlyphText } from './components/glyph-text';
+/**
+ * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w4 —
+ * SpriteInstances primitive: 2D peer of `Instances`. Carries per-instance
+ * mat4 (stride 16) + per-instance UV region (stride 4). Exported directly
+ * from the @forgeax/engine-runtime barrel so AI users discover both
+ * primitives side-by-side via IDE autocomplete on `@forgeax/engine-runtime`.
+ * Per plan-strategy D-8, the barrel re-export lives here (runtime top-level),
+ * not in `@forgeax/engine-ecs` — the ecs package stays unaware of the sprite
+ * shading model concept.
+ */
+export {
+  SpriteInstances,
+  type SpriteInstancesData,
+} from './components/sprite-instances';
 // feat-20260604-hdr-equirect-cube-importer-loader M4 / w15: the dev-only
 // ImportTransport factory. A host wires it into createRenderer / createApp so
 // a DDC miss at runtime triggers an on-demand POST /__import import against the

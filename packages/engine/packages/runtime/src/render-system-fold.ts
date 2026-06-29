@@ -24,7 +24,7 @@
 //     consumer treats singleton buckets identically to today's per-entity
 //     drawIndexed, so the bypass is byte-for-byte the current behavior
 //     (charter P3 silent fallback — no error fired, AC-04 zero-difference
-//     for ySort modes preserved).
+//     for sortScope modes preserved).
 //
 // Uniform-cap fallback (M2 / D-2 + D-9):
 //   - When `caps.storageBuffer === false` (WebGL2 path) AND a fold bucket

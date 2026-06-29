@@ -32,6 +32,7 @@ import {
   Camera,
   ChildOf,
   EngineEnvironmentError,
+  encodeSortScope,
   HANDLE_QUAD,
   Layer,
   MeshFilter,
@@ -72,8 +73,8 @@ const CHARACTER = '/character';
 
 const PLAYER_SPEED = 6;
 
-// Object TileLayer uses ySort=1 so all derived entities share
-// Layer.value = OBJECT_LAYER_ORDER << 20 (no chunkIndex contamination).
+// Object TileLayer uses sortScope: 'per-cell' so all derived entities
+// share Layer.value = OBJECT_LAYER_ORDER << 20 (no chunkIndex contamination).
 // This lets the player Y-interleave with every object tile: the player
 // and all trees/stumps/grass are in the same transparent-sort bucket and
 // sorted by foot-Y, giving the JRPG walk-behind-tree effect.
@@ -83,7 +84,7 @@ const PLAYER_SPEED = 6;
 const OBJECT_LAYER_ORDER = 1000;
 
 // Must equal OBJECT_LAYER_ORDER<<20 so the player sits in the same
-// transparent-sort bucket as ySort object-tile entities.
+// transparent-sort bucket as sortScope: 'per-cell' object-tile entities.
 const SPRITE_LAYER_VALUE = OBJECT_LAYER_ORDER << 20;
 
 // Tile id encoding (engine reads `tileset.tiles[tileLayerCellValue - 1]`):
@@ -294,7 +295,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const objectLayerSpawn = world.spawn(
     {
       component: TileLayer,
-      data: { tiles: objectTiles, layerOrder: OBJECT_LAYER_ORDER, ySort: 1 },
+      data: {
+        tiles: objectTiles,
+        layerOrder: OBJECT_LAYER_ORDER,
+        sortScope: encodeSortScope('per-cell'),
+      },
     },
     { component: ChildOf, data: { parent: tilemapEntity } },
     { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },

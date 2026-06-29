@@ -919,6 +919,8 @@ renderer.onError((e: RhiError) => {
 | 关系组件持有者视角 | 名字 = 持有者对父的 verb / role；字段名与组件名互呼 | `ChildOf { parent: Entity }`（schema-vocab `'entity'`，relationship `mirror: 'Children'`，feat-20260514 M5/w18）/ `Children { entities: 'array<entity>' }`（feat-20260514-ecs-children-instances-managed-buffer-array：变长 `array<entity>` 取代 v1 OOS-04 的 `count: 'u32'` 计数 + 旧 `'entity[]'` 占位） |
 | 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.shadingModel` 路由 unlit / standard） |
 | 逐实体标志 | bool-ish `u8` 字段，默认为 1（opt-in culling），设为 0 禁用 | `MeshRenderer.frustumCulled`（`u8`）— per-entity opt-out of frustum culling |
+| 2D 同位组件 | 与 `Instances` 同位的 2D 批绘原语；per-instance 带 mat4 + UV region 双 `array<f32>` 列（stride 16 + 4）；3 条新 `EcsErrorCode` 在 RenderSystem extract entry 防御性 fire | `SpriteInstances { transforms: 'array<f32>', regions: 'array<f32>' }`（feat-20260625；`'sprite-instances-count-mismatch'` / `'sprite-instances-requires-sprite-shader'` / `'sprite-instances-mutually-exclusive-with-instances'`） |
+| 字面量联合 sort 域 | 离散字符串字面量取代 0/1 整数标志；TS exhaustive switch 守门 | `TileLayer.sortScope: 'layer' \| 'per-cell'`（feat-20260625 取代 `ySort: 0 \| 1`） |
 
 破坏性变更 row 见 [AGENTS.md §Breaking changes 2026-05-13](../../AGENTS.md#breaking-changes) 与 [§Breaking changes 2026-05-17 (Single MeshRenderer consolidation)](../../AGENTS.md#breaking-changes)。
 

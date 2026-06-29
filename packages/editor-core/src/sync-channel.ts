@@ -121,6 +121,10 @@ export interface MeshStatsWire {
   /** Local-space AABB [minX,minY,minZ,maxX,maxY,maxZ], if known. */
   aabb?: readonly number[];
   attributes: readonly string[];
+  /** CPU geometry byte size = vertices.byteLength + indices.byteLength. This is
+   *  the host-side geometry footprint, NOT the GPU resource size (which would
+   *  include alignment/padding) — see editor-mesh-panel-ue58-parity.md §6.4. */
+  byteSize?: number;
   /** Set when the mesh could not be loaded (registry miss / bad guid). */
   error?: string;
 }

@@ -103,6 +103,9 @@ import {
   InstanceTransformsStrideMismatchError,
   queryRun,
   Severity,
+  SpriteInstancesCountMismatchError,
+  SpriteInstancesMutuallyExclusiveWithInstancesError,
+  SpriteInstancesRequiresSpriteShaderError,
 } from '@forgeax/engine-ecs';
 import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { RhiError } from '@forgeax/engine-rhi';
@@ -130,6 +133,7 @@ import {
   Skylight,
   SortKey,
   SpotLight,
+  SpriteInstances,
   SpriteRegionOverride,
   Transform,
 } from './components';
@@ -548,6 +552,26 @@ export interface RenderableSnapshot {
    */
   readonly instances?: InstancesSnapshot;
   /**
+   * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10
+   * (plan-strategy D-1 + D-9): when the entity carries a `SpriteInstances`
+   * component the extract stage materialises a paired snapshot — packed mat4
+   * `transforms` (16 f32, stride 16) + per-instance UV `regions` (4 f32,
+   * stride 4) — plus the same cache fingerprint pair (`cacheKey` = entity
+   * packed u32, `archVersion` = archetype version stamp at snapshot time).
+   * The record stage interleaves the two arrays into an 80B-per-instance
+   * single GPU buffer routed through `@group(3) @binding(0)` (BGL unchanged,
+   * D-1). Absent (`undefined`) means the entity is not a `SpriteInstances`
+   * carrier; the record stage falls back to its existing sprite path
+   * (material UBO region + identity-instance buffer).
+   *
+   * Three structured `EcsError` codes fire at extract entry and skip the
+   * renderable on violation (charter P3 explicit failure):
+   *   - `'sprite-instances-mutually-exclusive-with-instances'`
+   *   - `'sprite-instances-requires-sprite-shading-model'`
+   *   - `'sprite-instances-count-mismatch'`
+   */
+  readonly spriteInstances?: SpriteInstancesSnapshot;
+  /**
    * feat-20260523-skin-skeleton-animation M2 / T-21: when the entity carries
    * a `Skin` component the extract stage populates this field with the
    * skin palette slice metadata. The record stage uses this to route the
@@ -601,6 +625,37 @@ export interface InstancesSnapshot {
    * BufferPool slot may have grown / been reallocated, forcing a fresh
    * `device.createBuffer + queue.writeBuffer` round.
    */
+  readonly archVersion: number;
+}
+
+/**
+ * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
+ * extract-stage view of a `SpriteInstances` carrier (2D peer of
+ * `InstancesSnapshot`).
+ *
+ * Field shapes mirror `InstancesSnapshot` so the record-stage cache protocol
+ * (`(cacheKey, archVersion, byteLength)` fingerprint triple) is reused
+ * verbatim. The byte length consumed at upload time is the sum
+ * `transforms.byteLength + regions.byteLength` (= 80*N for N instances,
+ * plan-strategy D-1 interleaved single-buffer); the record stage builds the
+ * 80B/instance interleaved buffer once per (entity, archVersion, byteLength)
+ * fingerprint change.
+ */
+export interface SpriteInstancesSnapshot {
+  /** Packed column-major mat4 transforms (16 f32 per instance, stride 16). */
+  readonly transforms: Float32Array;
+  /** Per-instance UV vec4 regions (4 f32 per instance, stride 4). */
+  readonly regions: Float32Array;
+  /**
+   * Number of instances. Derived from `transforms.length / 16` (equivalently
+   * `regions.length / 4`); the extract-entry validator guarantees the two
+   * derivations agree, otherwise it fires
+   * `'sprite-instances-count-mismatch'` and skips the renderable.
+   */
+  readonly instanceCount: number;
+  /** Stable per-entity GPU buffer cache key (the packed Entity u32, D-9). */
+  readonly cacheKey: number;
+  /** Archetype version stamp at snapshot time (cache invalidation fingerprint). */
   readonly archVersion: number;
 }
 
@@ -2204,7 +2259,16 @@ export function extractFrame(
 
   const meshRendererQuery = createQueryState({
     with: [MeshRenderer, Entity],
-    optional: [Transform, MeshFilter, Instances, Skin, Layer, SortKey, SpriteRegionOverride],
+    optional: [
+      Transform,
+      MeshFilter,
+      Instances,
+      Skin,
+      Layer,
+      SortKey,
+      SpriteRegionOverride,
+      SpriteInstances,
+    ],
   });
   const graph = worldInternal._getGraph();
   queryRun(meshRendererQuery, world, (bundle) => {
@@ -2226,6 +2290,16 @@ export function extractFrame(
     const hasMeshFilter = bundle.MeshFilter !== undefined;
     const hasInstances = bundle.Instances !== undefined;
     const hasSkin = bundle.Skin !== undefined;
+    // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
+    // SpriteInstances optional component archetype-edge sniff. Three structured
+    // EcsError codes fire at the row-loop entry (D-6 fail-fast at extract):
+    //   - 'sprite-instances-mutually-exclusive-with-instances'
+    //       (hasInstances && hasSpriteInstances) — Instances + SpriteInstances peers.
+    //   - 'sprite-instances-requires-sprite-shading-model'
+    //       (materialSnap.shadingModel !== 'sprite') — non-sprite material.
+    //   - 'sprite-instances-count-mismatch'
+    //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
+    const hasSpriteInstances = bundle.SpriteInstances !== undefined;
     const isRenderable = hasTransform && hasMeshFilter;
 
     // feat-20260601 D-3: the resolved world transform is read per-entity from
@@ -2980,6 +3054,87 @@ export function extractFrame(
             materialsArr.push(resolveMaterialSnapshot(subHandle, world, assets, gpuStore));
           }
         }
+
+        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 /
+        // w10: SpriteInstances validation + snapshot materialisation.
+        // Three structured EcsError fires at this single point (plan-strategy
+        // D-6 "fail-fast at the render domain entry, not at ECS spawn-time"):
+        let spriteInstancesSnap: SpriteInstancesSnapshot | undefined;
+        if (hasSpriteInstances) {
+          // (1) mutually exclusive with Instances (peers — pick one).
+          if (hasInstances) {
+            worldInternal._routeError(
+              new SpriteInstancesMutuallyExclusiveWithInstancesError(
+                entity as unknown as number,
+              ) as unknown as Error,
+              {
+                severity: Severity.Error,
+                systemName: 'RenderSystem.extract (sprite-instances-mutually-exclusive)',
+              },
+            );
+            continue;
+          }
+          // (2) requires sprite shader — the per-instance UV region is
+          // consumed by the sprite vertex shader path only (plan-strategy D-4
+          // axis on sprite.wgsl). Post-collapse (PR #520): sprite is no longer
+          // a `shadingModel` enum member; identification is via the first-pass
+          // `materialShaderId === 'forgeax::sprite'` (OOS-1 path retained).
+          if (materialSnap.materialShaderId !== 'forgeax::sprite') {
+            worldInternal._routeError(
+              new SpriteInstancesRequiresSpriteShaderError(
+                entity as unknown as number,
+                materialSnap.materialShaderId ?? 'undefined',
+              ) as unknown as Error,
+              {
+                severity: Severity.Error,
+                systemName: 'RenderSystem.extract (sprite-instances-requires-sprite-shader)',
+              },
+            );
+            continue;
+          }
+          // (3) count mismatch — transforms.length / 16 === regions.length / 4
+          // (transforms.length=0 + regions.length=0 is the zero-instance lawful
+          // boundary; both derivations are 0 and equality holds, so no fire).
+          const spriteRes = world.get(entity, SpriteInstances);
+          if (spriteRes.ok) {
+            const transforms = spriteRes.value.transforms;
+            const regions = spriteRes.value.regions;
+            const transformsLength = transforms.length;
+            const regionsLength = regions.length;
+            // Stride sanity: transforms must be mod 16, regions must be mod 4.
+            // A stride violation expresses as a count mismatch under the
+            // canonical derivation transforms/16 vs regions/4 — fire the
+            // count-mismatch code (the same code carries detail.expectedStride).
+            const tCount = transformsLength / 16;
+            const rCount = regionsLength / 4;
+            if (transformsLength % 16 !== 0 || regionsLength % 4 !== 0 || tCount !== rCount) {
+              worldInternal._routeError(
+                new SpriteInstancesCountMismatchError(
+                  transformsLength,
+                  regionsLength,
+                ) as unknown as Error,
+                {
+                  severity: Severity.Error,
+                  systemName: 'RenderSystem.extract (sprite-instances-count-mismatch)',
+                },
+              );
+              continue;
+            }
+            // Validation passes — build the snapshot. transforms.length === 0
+            // is lawful (zero-instance) and produces instanceCount=0; the
+            // record stage skips drawIndexed when instanceCount===0.
+            const transformsCopy = new Float32Array(transforms);
+            const regionsCopy = new Float32Array(regions);
+            spriteInstancesSnap = {
+              transforms: transformsCopy,
+              regions: regionsCopy,
+              instanceCount: tCount,
+              cacheKey: entity as unknown as number,
+              archVersion,
+            };
+          }
+        }
+
         const baseRenderable: RenderableSnapshot = {
           assetHandle: Math.round(fAssetHandle?.get(i) ?? 0),
           transform: transformSnap,
@@ -2987,6 +3142,7 @@ export function extractFrame(
           materials: materialsArr,
           entityKey: 0,
           ...(skinSlice !== undefined ? { skin: skinSlice } : {}),
+          ...(spriteInstancesSnap !== undefined ? { spriteInstances: spriteInstancesSnap } : {}),
         };
 
         // feat-20260528-frustum-culling M3 / w10: frustum culling check.
