@@ -1,16 +1,16 @@
 # `@forgeax/editor-core`
 
-> forgeax editor 核心逻辑层 — SceneDocument 单一真相源、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
+> forgeax editor 核心逻辑层 — EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
 ## 导入示例
 
 ```ts
 import {
   EditorBus,
-  createDocument,
+  createEditSession,
   applyCommand,
   childrenOf,
-  type SceneDocument,
+  type EditSession,
   type EditorCommand,
   type EntityId,
 } from '@forgeax/editor-core';

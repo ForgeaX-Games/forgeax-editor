@@ -14,7 +14,7 @@
 
 | Package | Purpose |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | Core logic layer — SceneDocument, EditorBus, undo/redo, schema, sync-channel, animation, material graph, assets, presets |
+| [`@forgeax/editor-core`](./packages/editor-core/) | Core logic layer — EditSession, EditorBus, undo/redo, schema, sync-channel, animation, material graph, assets, presets |
 | [`@forgeax/editor-shared`](./packages/editor-shared/) | Cross-layer shared runtime — zustand store, entity ops, context menu, dock bridge, panel manifest SSOT |
 | [`@forgeax/editor-panels`](./packages/editor-panels/) | 8 business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Timeline, MaterialGraph) + panel-component injection |
 | [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
