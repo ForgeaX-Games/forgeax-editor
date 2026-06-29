@@ -1,16 +1,16 @@
 [submodule "packages/engine"]
 	path = packages/engine
-	url = https://github.com/ForgeaXGame/forgeax-engine.git
+	url = ../forgeax-engine.git
 	branch = main
 [submodule "forgeax-editor-assets"]
 	path = forgeax-editor-assets
-	url = https://github.com/ForgeaXGame/forgeax-editor-assets.git
+	url = ../forgeax-editor-assets.git
 	branch = main
 [submodule "packages/interface"]
 	path = packages/interface
-	url = https://github.com/ForgeaXGame/forgeax-interface.git
+	url = ../forgeax-interface.git
 	branch = main
 [submodule "packages/kernel"]
 	path = packages/kernel
-	url = https://github.com/ForgeaXGame/forgeax-kernel.git
+	url = ../forgeax-kernel.git
 	branch = main
