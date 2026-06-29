@@ -15,6 +15,7 @@ import {
   type PopoutGeom,
   type SyncPanelId,
   type AssetChatRef,
+  type MeshStatsWire,
 } from './sync-channel';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { getApiClient } from './api-client';
@@ -1173,6 +1174,10 @@ function initPopout(ch: BroadcastChannel): void {
       applyRemoteAssetSelection(msg.asset as SelectedAsset | null);
       return;
     }
+    if (msg.t === 'meshStats') {
+      applyRemoteMeshStats(msg.stats as MeshStats | null);
+      return;
+    }
   };
   // Request the current state on open. A SINGLE hello is lost if the main
   // viewport hasn't booted yet — and in the studio DockShell the reload
@@ -1283,4 +1288,48 @@ function subscribeAssetSel(fn: () => void): () => void {
 }
 export function useAssetSelection(): SelectedAsset | null {
   return useSyncExternalStore(subscribeAssetSel, getAssetSelection, getAssetSelection);
+}
+/** Non-React subscription to asset-selection changes (used by the MAIN window in
+ *  main.tsx to load the selected mesh and publish its stats). Returns unsubscribe. */
+export function onAssetSelectionChange(fn: () => void): () => void {
+  return subscribeAssetSel(fn);
+}
+
+// ── Mesh stats (cross-panel: MAIN window loads mesh → Mesh panel) ─────────────
+// meta.json mesh sub-assets carry NO geometry in their Content Browser payload
+// (see editor-core/assets.ts loadMetaAssets). Only the MAIN window holds the
+// engine asset registry, so it loads the selected mesh via loadByGuid, derives
+// geometry-free stats, and publishes them here; the Mesh panel (a registry-less
+// iframe) renders them. Mirrors the asset-selection channel above.
+// Design: docs/design/editor-mesh-panel.md §4.3.
+
+export type MeshStats = MeshStatsWire;
+
+let selectedMeshStats: MeshStats | null = null;
+const meshStatsListeners = new Set<() => void>();
+function emitMeshStats(): void { for (const fn of meshStatsListeners) fn(); }
+
+let applyingRemoteMeshStats = false;
+/** MAIN window: publish derived stats for the currently-selected mesh (broadcasts
+ *  to popouts/panels). Pass null to clear. */
+export function publishMeshStats(stats: MeshStats | null): void {
+  selectedMeshStats = stats;
+  emitMeshStats();
+  if (!applyingRemoteMeshStats) postSync({ t: 'meshStats', stats });
+}
+export function applyRemoteMeshStats(stats: MeshStats | null): void {
+  applyingRemoteMeshStats = true;
+  selectedMeshStats = stats;
+  emitMeshStats();
+  applyingRemoteMeshStats = false;
+}
+export function getMeshStats(): MeshStats | null { return selectedMeshStats; }
+function subscribeMeshStats(fn: () => void): () => void {
+  meshStatsListeners.add(fn);
+  return () => meshStatsListeners.delete(fn);
+}
+/** Panel hook: the latest published mesh stats (check `.guid` against the
+ *  selected asset before rendering — a stale entry may linger during a switch). */
+export function useMeshStats(): MeshStats | null {
+  return useSyncExternalStore(subscribeMeshStats, getMeshStats, getMeshStats);
 }

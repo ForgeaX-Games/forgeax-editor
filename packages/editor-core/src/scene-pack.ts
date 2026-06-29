@@ -221,7 +221,15 @@ export function sessionToPack(doc: EditSession, sceneGuid?: string): ScenePack {
       // MeshRenderer-field-unknown error → whole-scene instantiate aborts →
       // FALLBACK). Persist the plural array form the engine expects (matches the
       // working cow-survivor packs). packToSession reads both for back-compat.
-      c.MeshRenderer = { materials: [refIdx(mg)] };
+      //
+      // Original per-submesh materials (imported multi-submesh mesh, recovered on
+      // drop): persist one ref per submesh so the saved pack satisfies the engine's
+      // materials.length === submeshes.length contract AND restores the source
+      // materials on reopen / ▶ Play. An empty slot falls back to the single `mg`.
+      const subMats = material?.submeshMaterials;
+      c.MeshRenderer = Array.isArray(subMats) && subMats.length > 0
+        ? { materials: subMats.map((sg) => refIdx(sg && sg.length > 0 ? sg : mg)) }
+        : { materials: [refIdx(mg)] };
     }
     if (collider?.shape && collider.shape !== 'none') c.Collider = { shape: collider.shape, ...(collider.radius !== undefined ? { radius: collider.radius } : {}) };
     if (isLight) {
@@ -300,13 +308,26 @@ export function packToSession(pack: ScenePack): EditSession {
       docComps.Mesh = isBuiltinMeshGuid(g) ? { kind: kindForMeshGuid(g) } : { kind: 'cube', meshAsset: g };
     }
     const mr = cc.MeshRenderer as { material?: number; materials?: number[] } | undefined;
-    const matRef: number | undefined = mr?.materials?.[0] ?? mr?.material;
+    const matArr = mr?.materials;
+    const matRef: number | undefined = matArr?.[0] ?? mr?.material;
     if (matRef !== undefined) {
       const mg = refs[matRef] ?? '';
       const inline = matByGuid.get(mg);
       // Material asset present in THIS pack → reconstruct inline fields; otherwise
       // it's an imported material referenced by GUID → keep the reference.
-      docComps.Material = inline ? payloadToMat(inline) : { materialAsset: mg };
+      const matData = inline ? payloadToMat(inline) : { materialAsset: mg };
+      // Recover original per-submesh materials: a multi-slot MeshRenderer whose
+      // slots are NOT a single inline broadcast represents distinct per-submesh
+      // imported materials → round-trip them as submeshMaterials GUIDs (mirrors
+      // sessionToPack). A uniform inline broadcast (all slots === mg) is the
+      // single-material case and is left as-is.
+      if (Array.isArray(matArr) && matArr.length > 1) {
+        const subGuids = matArr.map((i) => refs[i] ?? '');
+        if (new Set(subGuids).size > 1 || !inline) {
+          (matData as { submeshMaterials?: string[] }).submeshMaterials = subGuids;
+        }
+      }
+      docComps.Material = matData;
     }
     if (cc.Collider) docComps.Collider = cc.Collider;
     const dl = cc.DirectionalLight as Record<string, number> | undefined;

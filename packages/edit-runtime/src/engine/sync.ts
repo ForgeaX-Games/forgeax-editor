@@ -65,6 +65,7 @@ export function createEngineSync(
   renderer: RendererLike,
   resolveMaterialAsset?: (guid: string) => unknown | null,
   resolveMeshAsset?: (guid: string) => unknown | null,
+  resolveMeshSubmeshCount?: (guid: string) => number | undefined,
 ): EngineSync {
   const caches: SceneCaches = makeSceneCaches();
   // doc entity id → { live engine entity, last-applied components }.
@@ -74,7 +75,7 @@ export function createEngineSync(
   let instanceRoot: number | null = null;
   // Skip no-op rebuilds (the bus fires on snapshot/selection echoes too).
   let lastSig: string | null = null;
-  const ctx = { world, assets: renderer.assets, resolveMaterialAsset, resolveMeshAsset } as never;
+  const ctx = { world, assets: renderer.assets, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount } as never;
 
   function despawnInstance(): void {
     if (instanceRoot !== null) {

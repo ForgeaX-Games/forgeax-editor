@@ -26,7 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -181,6 +181,47 @@ async function importAssetFile(
   }
 }
 
+// ── Single-mesh scene-asset → mesh ref ─────────────────────────────────────────
+// A whole-GLB `scene` asset normally spawns as an in-session-only `GltfRef`
+// (expanded to the GLB's real nodes for ✎ Edit). But `GltfRef` is an editor-only
+// component that scene-pack can't persist — so on reopen the entity saves as an
+// empty Transform node and the geometry disappears (and ▶ Play never sees it).
+//
+// When the GLB is a SINGLE-mesh asset (e.g. `bed.glb`), we don't need the whole
+// nested-scene machinery: it is equivalent to dropping that one mesh sub-asset.
+// Resolve the meta's lone `mesh` sub-asset GUID and route it through the proven
+// mesh-spawn path → `Mesh.meshAsset` (+ recovered per-submesh materials), which
+// scene-pack round-trips and ▶ Play instantiates (both use registered components
+// only). Multi-mesh GLBs (length !== 1) keep the GltfRef path (no regression).
+/** GUID of the lone `mesh` sub-asset in a cooked GLB meta, or null when the meta
+ *  has zero or several meshes (→ caller keeps the GltfRef whole-scene path). */
+function singleMeshGuidFromMeta(metaText: string): string | null {
+  try {
+    const meta = JSON.parse(metaText) as { subAssets?: Array<{ guid: string; kind: string }> };
+    const meshes = (meta.subAssets ?? []).filter((s) => s && s.kind === 'mesh' && typeof s.guid === 'string');
+    return meshes.length === 1 ? meshes[0]!.guid : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSingleMeshSceneRef(ref: DragAssetRef, serverBase: string): Promise<DragAssetRef | null> {
+  const metaPath = ref.path;
+  // Only the canonical `*.glb.meta.json` sidecar carries the sub-asset table
+  // (same constraint as resolveMeshOriginalMaterials — .gltf w/ external
+  // resources is unsupported in-browser and falls back to the GltfRef path).
+  if (typeof metaPath !== 'string' || !/\.glb\.meta\.json$/i.test(metaPath)) return null;
+  try {
+    const r = await createDefaultApiClient(serverBase).fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+    if (!r.ok) return null;
+    const guid = singleMeshGuidFromMeta(await r.text());
+    if (!guid) return null; // 0 or many meshes → leave to the GltfRef path
+    return { type: 'asset', guid, kind: 'mesh', name: ref.name, path: metaPath, payload: ref.payload };
+  } catch {
+    return null;
+  }
+}
+
 // ── EditSurface Props ──────────────────────────────────────────────────────────
 
 export interface EditSurfaceProps {
@@ -288,6 +329,44 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     setImportOpen(false);
   }, []);
 
+  // Spawn a single imported sub-asset (mesh / material / texture) as one
+  // reference-mode entity. For an imported MESH, recover its original per-submesh
+  // glTF materials so a multi-submesh mesh restores its source look instead of a
+  // single grey placeholder. Best-effort: any failure leaves the entity as-is.
+  // Defined before runGlbImport / spawnAssetRef because BOTH reuse it (a later
+  // `const` referenced in their dependency arrays would hit the TDZ at render).
+  const spawnMeshOrAssetRef = useCallback(async (ref: DragAssetRef): Promise<void> => {
+    const kind = ref.kind ?? '';
+    const entity = buildSpawnEntityFromDragRef(ref);
+    if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
+    if (kind === 'mesh') {
+      try {
+        const api = createDefaultApiClient(base);
+        const readRaw = async (p: string): Promise<Response | null> => {
+          try { const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`); return r.ok ? r : null; }
+          catch { return null; }
+        };
+        const subs = await resolveMeshOriginalMaterials(
+          { guid: ref.guid, path: ref.path, payload: ref.payload },
+          {
+            fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
+            fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
+          },
+        );
+        if (subs && subs.length > 0) {
+          const mat = (entity.components.Material ?? (entity.components.Material = {})) as Record<string, unknown>;
+          mat.submeshMaterials = subs;
+        }
+      } catch (err) {
+        console.warn('[editor] original-material recovery failed:', (err as Error)?.message ?? err);
+      }
+    }
+    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
+      mode: 'reference', entity, name: entity.name,
+    });
+    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+  }, [slug, base]);
+
   // GLB import after the user picks a mode (D-8). 'whole' declares the sub-assets
   // AND auto-spawns the scene tree (uasset-like); 'split' only declares the
   // individual mesh/material/texture sub-assets so the user can drag them in.
@@ -337,6 +416,20 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       }
 
       setImportStep('importing');
+      // Single-mesh GLB (e.g. bed.glb) → spawn as a persistable `Mesh.meshAsset`
+      // entity (survives ✎ Edit reopen + ▶ Play) instead of the in-session-only
+      // GltfRef whole-scene tree. Mirrors the drag / Add-to-Scene path
+      // (spawnAssetRef → resolveSingleMeshSceneRef); reuses the freshly-cooked
+      // meta in-hand (no extra fetch). Multi-mesh GLBs fall through to the
+      // import-scene/GltfRef tree spawn below.
+      const meshGuid = /\.glb\.meta\.json$/i.test(metaPath) ? singleMeshGuidFromMeta(cooked.metaJson) : null;
+      if (meshGuid) {
+        await spawnMeshOrAssetRef({ type: 'asset', guid: meshGuid, kind: 'mesh', name: baseName, path: metaPath });
+        setImportStep('done');
+        setImportMsg(baseName);
+        setTimeout(() => setImportStep(null), 4000);
+        return;
+      }
       // Force 'reference' (NOT 'auto'): a whole import is a single GltfRef resource
       // (uasset-like). 'auto' expands small GLBs into per-node doc entities whose
       // single Material component can't carry a multi-submesh mesh's N materials,
@@ -370,7 +463,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
     }
-  }, [slug, base]);
+  }, [slug, base, spawnMeshOrAssetRef]);
 
   const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.currentTarget.files?.[0];
@@ -448,9 +541,17 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   // Add an asset to the scene — shared by drag-drop (D-4) and the context-menu
   // "Add to Scene" (D-6). Routes whole-GLB (scene) through import-scene, and split
   // sub-assets (mesh/material/texture) through a single reference-mode spawn.
-  const spawnAssetRef = useCallback((ref: DragAssetRef): void => {
+  const spawnAssetRef = useCallback(async (ref: DragAssetRef): Promise<void> => {
     const kind = ref.kind ?? '';
     if (kind === 'scene') {
+      // A SINGLE-mesh GLB (e.g. bed.glb) is equivalent to dropping its one mesh
+      // sub-asset — spawn it as a persistable `Mesh.meshAsset` entity so it
+      // survives ✎ Edit reopen AND ▶ Play (the GltfRef whole-scene reference is
+      // editor-only and scene-pack can't persist it → geometry vanishes on
+      // reopen). Multi-mesh GLBs fall through to the GltfRef tree spawn below.
+      const meshRef = await resolveSingleMeshSceneRef(ref, base);
+      if (meshRef) { await spawnMeshOrAssetRef(meshRef); return; }
+
       // import-scene needs the GLB's *game-relative* path (e.g.
       // `.forgeax/games/<slug>/assets/Fox.glb`). The scene asset's packPath is
       // the `.meta.json` sidecar that sits next to the GLB (`Fox.glb.meta.json`),
@@ -466,13 +567,8 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       else console.warn('[editor] scene asset has no resolvable GLB source — cannot spawn:', metaPath);
       return;
     }
-    const entity = buildSpawnEntityFromDragRef(ref);
-    if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
-    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
-      mode: 'reference', entity, name: entity.name,
-    });
-    sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
-  }, [spawnSceneFromGlb, slug]);
+    await spawnMeshOrAssetRef(ref);
+  }, [spawnSceneFromGlb, spawnMeshOrAssetRef, base]);
 
   const onAssetDrop = useCallback((e: React.DragEvent) => {
     const ref = pendingDragAsset.current;
@@ -481,7 +577,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     setAssetDragActive(false);
     setAssetDragPending(false);
     pendingDragAsset.current = null;
-    spawnAssetRef(ref);
+    void spawnAssetRef(ref);
   }, [spawnAssetRef]);
 
   // Content Browser (a sibling iframe) posts FORGEAX_DRAG_ASSET_START/END up to
@@ -499,7 +595,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
         setAssetDragPending(false);
         setAssetDragActive(false);
       } else if (d?.type === 'FORGEAX_ADD_ASSET_TO_SCENE' && d.ref) {
-        spawnAssetRef(d.ref as DragAssetRef);
+        void spawnAssetRef(d.ref as DragAssetRef);
       }
     };
     window.addEventListener('message', onMsg);

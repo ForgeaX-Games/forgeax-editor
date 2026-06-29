@@ -17,6 +17,7 @@ import { HierarchyPanel } from './Hierarchy';
 import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
 import { MaterialPanel } from './Material';
+import { MeshPanel } from './Mesh';
 import { MaterialGraphPanel } from './MaterialGraph';
 import { TimelinePanel } from './Timeline';
 import { LauncherPanel } from './Launcher';
@@ -29,6 +30,7 @@ export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   history: HistoryPanel,
   capabilities: CapabilitiesPanel,
   material: MaterialPanel,
+  mesh: MeshPanel,
   timeline: TimelinePanel,
   matgraph: MaterialGraphPanel,
   launcher: LauncherPanel,

@@ -25,7 +25,7 @@ import type { EditorCommand, EntityId, EditSession } from './types';
 // major editor feature work), and the runtime cost of a second source
 // for an 8-element const array is negligible.
 
-/** The 11 dockable business panels of the forgeax editor. */
+/** The 12 dockable business panels of the forgeax editor. */
 const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -33,6 +33,7 @@ const EDITOR_PANELS = [
   'history',
   'capabilities',
   'material',
+  'mesh',
   'timeline',
   'matgraph',
   'launcher',
@@ -97,10 +98,32 @@ export type EditorSyncMsg =
   | { t: 'sceneChanged'; id: string }
   // any panel → all: asset selection changed (Content Browser → Asset Inspector)
   | { t: 'assetSelect'; asset: { guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string } | null }
+  // main → panels: derived mesh stats for the selected mesh sub-asset. The MAIN
+  // window owns the engine asset registry (loadByGuid); meta.json mesh sub-assets
+  // carry no geometry in their Content Browser payload, so the Mesh panel (an
+  // iframe without a registry) gets its vertex/primitive/submesh/index-format
+  // stats from here. See docs/design/editor-mesh-panel.md §4.3.
+  | { t: 'meshStats'; stats: MeshStatsWire | null }
   // panel → main: batch-add asset/folder refs into AI Chat context (M5)
   | { t: 'addAssetToChat'; refs: AssetChatRef[] }
   // panel → main: add an asset to the Scene viewport (context-menu Add to Scene, D-6)
   | { t: 'addAssetToScene'; ref: AssetChatRef };
+
+/** Derived, geometry-free mesh statistics for the Mesh panel (wire shape). */
+export interface MeshStatsWire {
+  /** GUID of the mesh sub-asset these stats describe. */
+  guid: string;
+  vertexCount: number;
+  /** Total primitives across submeshes (per-topology: tri/line/point). */
+  primitiveCount: number;
+  indexFormat: 'u16' | 'u32' | 'none';
+  submeshes: readonly { topology: string; indexCount: number; vertexCount: number; primitiveCount: number }[];
+  /** Local-space AABB [minX,minY,minZ,maxX,maxY,maxZ], if known. */
+  aabb?: readonly number[];
+  attributes: readonly string[];
+  /** Set when the mesh could not be loaded (registry miss / bad guid). */
+  error?: string;
+}
 
 /** Reference payload for AI Chat context injection (M5). */
 export interface AssetChatRef {
@@ -168,6 +191,7 @@ const EditorSyncMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('openScene'), id: z.string() }),
   z.object({ t: z.literal('sceneChanged'), id: z.string() }),
   z.object({ t: z.literal('assetSelect'), asset: z.union([ObjZ, z.null()]) }),
+  z.object({ t: z.literal('meshStats'), stats: z.union([ObjZ, z.null()]) }),
   z.object({ t: z.literal('addAssetToChat'), refs: z.array(ObjZ) }),
   z.object({ t: z.literal('addAssetToScene'), ref: ObjZ }),
 ]);

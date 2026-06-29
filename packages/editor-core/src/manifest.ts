@@ -7,7 +7,7 @@
 // Every consumer that needs panel IDs imports from this file:
 //   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';
 
-/** The 11 dockable business panels of the forgeax editor. */
+/** The 12 dockable business panels of the forgeax editor. */
 export const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -15,6 +15,7 @@ export const EDITOR_PANELS = [
   'history',
   'capabilities',
   'material',
+  'mesh',
   'timeline',
   'matgraph',
   'launcher',

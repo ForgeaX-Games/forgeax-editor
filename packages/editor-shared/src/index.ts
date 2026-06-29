@@ -76,8 +76,12 @@ export {
   setAssetSelection,
   getAssetSelection,
   useAssetSelection,
+  onAssetSelectionChange,
+  publishMeshStats,
+  getMeshStats,
+  useMeshStats,
 } from '@forgeax/editor-core';
-export type { SceneFileEntry, PlayConfig, SelectedAsset, AssetChatRef } from '@forgeax/editor-core';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, AssetChatRef, MeshStats } from '@forgeax/editor-core';
 
 // ── Entity operations ──
 export {

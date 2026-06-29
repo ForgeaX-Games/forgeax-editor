@@ -277,6 +277,11 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .mat-clear:hover { color: var(--fg); }
 .ed-material .mat-hint { padding: 6px 10px; font-size: 10px; }
 
+/* Mesh panel — geometry stats (reuses the global .mat-* row primitives) */
+.ed-mesh { font-size: 12px; }
+.ed-mesh .mat-empty { padding: 8px 10px; }
+.ed-mesh .mat-hint { padding: 6px 10px; font-size: 10px; }
+
 /* Timeline panel — keyframe animation */
 .ed-timeline { font-size: 12px; display: flex; flex-direction: column; }
 .ed-timeline .tl-empty { padding: 8px 10px; }
