@@ -13,7 +13,6 @@ import {
   Camera,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
-  DirectionalLight,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
@@ -33,7 +32,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
@@ -379,30 +378,9 @@ const resolveMeshSubmeshCount = (guid: string): number | undefined =>
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
 const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount);
 
-// Asset-edit mode: a standalone prefab-style pack (Assets panel monster/character asset,
-// id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
-// the arena-scale default framing leaves it a speck on the horizon, and without
-// a scene Sun its PBR reads near-black. Frame close-up and add a neutral key
-// light (NOT part of the doc, so it never saves into the asset).
-//
-// EXACTLY ONE DirectionalLight: the engine's first-slice cap supports a single
-// directional (N>1 drops the rest + warns "render-system-multi-light"), so the
-// old key+fill rig silently lost the fill anyway. The cool fill is replaced by
-// the Skylight ambient installed below. Shadow fields are now part of
-// DirectionalLight itself (castShadow defaults to true).
-const sceneFile = getSceneFile() ?? '';
-const isAssetEdit = sceneFile.startsWith('monster:') || sceneFile.startsWith('character:');
-if (isAssetEdit) {
-  world.spawn(
-    { component: Transform, data: {} },
-    { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6, castShadow: true, cascadeCount: 2, mapSize: 2048, farPlane: 40, nearPlane: 0.05 } },
-  );
-}
-
 // Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
 const viewport = createViewport({
   canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync,
-  ...(isAssetEdit ? { initialOrbit: { target: [0, -0.9, 0] as [number, number, number], dist: 8.5, pitch: -0.18 } } : {}),
 });
 window.addEventListener('resize', () => viewport.refresh());
 

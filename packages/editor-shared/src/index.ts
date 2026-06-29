@@ -62,7 +62,6 @@ export {
   useSceneFile,
   switchSceneFile,
   createSceneFile,
-  requestOpenScene,
   readPlayConfig,
   writePlayConfig,
   broadcastAssetsChanged,

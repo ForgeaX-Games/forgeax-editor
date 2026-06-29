@@ -400,7 +400,7 @@ export function getSceneId(): string { return currentSceneId; }
 // live via the SceneSwitcher UI — the UE "level asset" model. Games without a
 // `scenes` manifest keep the legacy single `scene.pack.json` (currentSceneFile
 // stays null and every path/key reduces to the historical shape).
-export interface SceneFileEntry { id: string; name?: string; pack: string; group?: 'scene' | 'asset' }
+export interface SceneFileEntry { id: string; name?: string; pack: string }
 let currentSceneFile: string | null = null;
 let sceneList: SceneFileEntry[] = [];
 // The active scene asset's STABLE GUID, captured from disk on load. A scene's
@@ -482,25 +482,25 @@ async function readForgeJson(): Promise<Record<string, unknown> | null> {
 
 /** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
  *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
- *  the active scene file. Games without a manifest stay in legacy mode.
- *  Also lists assets/monsters/*.pack.json as the monster/character asset group — standalone
- *  prefab-style packs the editor opens exactly like a scene (UE asset editor). */
+ *  the active scene file. Games without a manifest stay in legacy mode. */
 export async function initSceneList(): Promise<void> {
   currentSceneFile = null;
   sceneList = [];
   const fj = await readForgeJson();
-  // Scene + asset discovery is DIRECTORY-driven, never forge.json-driven. The
+  // Scene discovery is DIRECTORY-driven, never forge.json-driven. The
   // engine-project loader's schema is `.strict()`, so an editor-only `scenes[]`
   // field makes loadGameProject FAIL — and ▶ Play reads physics/pointerLock off
   // that same loader (play-runtime AC-11), so a stray `scenes[]` silently
   // disables the game's physics. ubpa's w21 forge.json migration dropped it for
-  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json
-  // (group 'scene'), exactly like the monster/character packs under assets/
-  // (group 'asset'). forge.json is read only for its typed contract fields.
+  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json.
+  // forge.json is read only for its typed contract fields.
   if (currentSceneId !== 'default') {
     const listPacks = async (root: string): Promise<string[]> => {
       try {
-        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}`);
+        // optional=1: the scenes/ dir legitimately may not exist in a given game
+        // (a fresh template has none) — server returns 200 { tree:null } instead
+        // of a red 404 in the network panel.
+        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}&optional=1`);
         if (!r.ok) return [];
         const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
         return (j.tree?.children ?? [])
@@ -513,29 +513,21 @@ export async function initSceneList(): Promise<void> {
     // game's LEVELS[].id (the launcher writes play-config.json { level:<id> }).
     for (const name of await listPacks('scenes')) {
       const base = name.slice(0, -'.pack.json'.length);
-      sceneList.push({ id: base, name: base, pack: `scenes/${name}`, group: 'scene' });
+      sceneList.push({ id: base, name: base, pack: `scenes/${name}` });
     }
     // Fallback for games whose scene pack still lives in assets/ (not scenes/):
     // resolve forge.json `defaultScene` to its pack so ✎ Edit opens the REAL
     // scene instead of seeding a default vignette (which then gets persisted and
     // permanently masks the real scene — the cow-level/hellforge "弹出默认场景"
     // bug). Only when the scenes/ scan above found nothing.
-    if (!sceneList.some((s) => s.group === 'scene')) {
+    if (sceneList.length === 0) {
       const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
       if (defGuid) {
         const pack = await findScenePackByGuid(currentSceneId, defGuid);
         if (pack) {
           const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-          sceneList.push({ id: stem, name: stem, pack, group: 'scene' });
+          sceneList.push({ id: stem, name: stem, pack });
         }
-      }
-    }
-    // Monster/character asset packs — opened in the editor like a scene (UE
-    // content-browser style); the Assets panel is their UI entry.
-    for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
-      for (const name of await listPacks(`assets/${dir}`)) {
-        const base = name.slice(0, -'.pack.json'.length);
-        sceneList.push({ id: `${prefix}:${base}`, name: base, pack: `assets/${dir}/${name}`, group: 'asset' });
       }
     }
   }
@@ -560,15 +552,15 @@ export async function initSceneList(): Promise<void> {
     // to firstScene and only lined up by luck when the default sorted first.)
     const defPack = def ? await findScenePackByGuid(currentSceneId, def) : null;
     const defId = defPack
-      ? (sceneList.find((s) => s.group !== 'asset' && s.pack === defPack)?.id ?? null)
+      ? (sceneList.find((s) => s.pack === defPack)?.id ?? null)
       : null;
-    const firstScene = sceneList.find((s) => s.group !== 'asset');
+    const firstScene = sceneList[0];
     currentSceneFile =
       (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
       : (want && sceneList.some((s) => s.id === want)) ? want
       : defId ? defId
       : firstScene ? firstScene.id
-      : null;  // only asset packs exist → keep editing the legacy single scene
+      : null;  // no scene packs found → keep editing the legacy single scene
   }
   emitSceneList();
 }
@@ -618,19 +610,6 @@ export async function switchSceneFile(id: string): Promise<boolean> {
     location.assign(u.toString());
     return true;
   }
-}
-
-/** Open a scene/asset pack from ANY editor surface. Panel iframes (ep:*) can't
- *  reload the main viewport themselves — they forward an `openScene` over the
- *  BroadcastChannel; the main window persists + reloads (and the panels follow
- *  via the post-reload snapshot). This is the Assets-panel double-click path. */
-export function requestOpenScene(id: string): void {
-  // Post on the per-GAME control channel (not the per-file channel) so the main
-  // window receives it regardless of which scene file each side is currently on —
-  // the main then switches IN PLACE (no reload). Falls back to the per-file
-  // channel too, for any window still paired only there.
-  if (IS_POPOUT) { postControl({ t: 'openScene', id }); postSync({ t: 'openScene', id }); return; }
-  void switchSceneFile(id);
 }
 
 // ── Launcher config (UE-style "play this level") ─────────────────────────────
