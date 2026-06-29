@@ -138,7 +138,10 @@ let _emitWindowStart = 0;
 let _emitCount = 0;
 let _emitWarned = false;
 function emitSelection(): void {
-  if (import.meta.env?.DEV) {
+  // editor-core is typechecked with plain tsc (Bun import.meta types, no
+  // vite/client), so `import.meta.env` isn't on ImportMeta here — cast locally.
+  // At runtime this module is Vite-bundled, where `import.meta.env.DEV` is real.
+  if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
     const now = Date.now();
     if (now - _emitWindowStart > 1000) { _emitWindowStart = now; _emitCount = 0; _emitWarned = false; }
     if (++_emitCount > 32 && !_emitWarned) {
