@@ -46,6 +46,63 @@ let syncChannel: BroadcastChannel | null = null;
 // PLACE (no location.reload → no WebGPU context recreate → no WKWebView wedge).
 let controlChannel: BroadcastChannel | null = null;
 let applyingSnapshot = false; // guard: applying a remote snapshot must not re-emit upstream
+
+// Single re-entrancy invariant for cross-window selection sync. While we are
+// APPLYING a remote update (a localStorage `storage` echo OR a BroadcastChannel
+// snapshot mirror), every OUTBOUND propagation channel must stay silent —
+// otherwise the windows ping-pong forever (see
+// docs/design/editor-cross-window-selection-sync-loop.md).
+//
+// IMPORTANT: this only suppresses *echoes*. A genuine inbound selection from a
+// popout arrives via mainOnMessage → setSelectionMany (applyingRemote === false),
+// so the main window still persists + broadcasts it (legitimate fan-out). Do NOT
+// widen this guard to cover setSelection/setSelectionMany themselves.
+//
+// INVARIANT (do not break): applyingExternalSel / applyingSnapshot are plain
+// booleans, not depth counters. They are only correct because every site sets →
+// emits SYNCHRONOUSLY → resets within one call frame, with no `await`/microtask
+// in between and no nesting (storage events + channel messages are delivered as
+// separate, serial tasks). If a future change makes emit() async or re-entrant,
+// convert these to a depth counter before relying on them.
+function applyingRemote(): boolean {
+  return applyingExternalSel || applyingSnapshot;
+}
+
+// Channel-択一 (single transport) for cross-window SELECTION sync. The editor
+// has two cross-window transports — BroadcastChannel (snapshots + 'selection'
+// upstream) and a localStorage `storage`-event mirror. Running BOTH for selection
+// double-delivers and is the structural cause of the historical echo loop (see
+// docs/design/editor-cross-window-selection-sync-loop.md §4.3). So:
+//   • BroadcastChannel OPEN  → it is the SOLE selection transport; the
+//     localStorage selKey mirror is fully disabled (no writes, no reads).
+//   • BroadcastChannel CLOSED → fall back to the localStorage mirror (Tauri
+//     cross-process WebviewWindows, where BroadcastChannel can't reach, or before
+//     initSync has opened the channel).
+// NOTE: the selKey value is NEVER read at load time (selection is transient, not
+// restored), so disabling it loses nothing in the browser path.
+//
+// DETECTION — must NOT be `syncChannel !== null`: in Tauri the BroadcastChannel
+// object EXISTS but cannot span WebviewWindow processes, so the object's presence
+// does not prove cross-window delivery. We instead require PROOF: the channel is
+// only treated as the live transport once we have actually RECEIVED a cross-window
+// message over it (`broadcastProven`). In the browser (same-process iframes) the
+// init handshake (`hello`/`snapshot`) flips this on within a tick; in Tauri it
+// never flips, so the localStorage fallback stays active.
+let broadcastProven = false;
+function markBroadcastProven(): void { broadcastProven = true; }
+function broadcastActive(): boolean {
+  return broadcastProven;
+}
+
+// Order-sensitive id-list equality (selection is small; the last element is the
+// primary, so order matters). Used to short-circuit redundant remote selection
+// applications before they emit + re-render.
+function sameIdList(a: EntityId[], b: EntityId[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 function postSync(msg: EditorSyncMsg): void {
   syncChannel?.postMessage(msg);
 }
@@ -65,10 +122,34 @@ const selectionListeners = new Set<() => void>();
 let applyingExternalSel = false;
 function selKey(): string { return `forgeax:editor:sel:${currentSceneId}`; }
 function persistSelection(): void {
-  if (applyingExternalSel || typeof localStorage === 'undefined') return;
+  // applyingRemote(): a window mirroring a remote selection must NOT write the
+  // authoritative localStorage key — that write would `storage`-event back into
+  // every other window and start an unbounded cross-window echo.
+  // broadcastActive(): when BroadcastChannel is the live transport, the
+  // localStorage selection mirror is redundant (channel-択一) — skip it entirely.
+  if (applyingRemote() || broadcastActive() || typeof localStorage === 'undefined') return;
   try { localStorage.setItem(selKey(), JSON.stringify(selectionList)); } catch { /* quota */ }
 }
+
+// Dev-only runaway-propagation net: if selection emits storm within a short
+// window it almost always means a cross-window echo loop regressed. Warns once
+// per window so it's visible without re-instrumenting. No-op in production.
+let _emitWindowStart = 0;
+let _emitCount = 0;
+let _emitWarned = false;
 function emitSelection(): void {
+  // editor-core is typechecked with plain tsc (Bun import.meta types, no
+  // vite/client), so `import.meta.env` isn't on ImportMeta here — cast locally.
+  // At runtime this module is Vite-bundled, where `import.meta.env.DEV` is real.
+  if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
+    const now = Date.now();
+    if (now - _emitWindowStart > 1000) { _emitWindowStart = now; _emitCount = 0; _emitWarned = false; }
+    if (++_emitCount > 32 && !_emitWarned) {
+      _emitWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn(`[sel-sync] runaway selection propagation: ${_emitCount} emits within 1s — likely a cross-window echo loop (see docs/design/editor-cross-window-selection-sync-loop.md)`);
+    }
+  }
   for (const fn of selectionListeners) fn();
   persistSelection();
 }
@@ -111,7 +192,7 @@ export function setSelectionMany(ids: EntityId[]): void {
 // A popout forwards selection to the main window (the authority); the main window
 // echoes it back inside its snapshot. Suppressed while applying a snapshot.
 function syncSelectionUpstream(): void {
-  if (IS_POPOUT && !applyingSnapshot) postSync({ t: 'selection', ids: selectionList });
+  if (IS_POPOUT && !applyingRemote()) postSync({ t: 'selection', ids: selectionList });
 }
 
 function subscribeSelection(fn: () => void): () => void {
@@ -397,10 +478,20 @@ export function getSceneId(): string { return currentSceneId; }
 //   { "scenes": [{ "id": "level1", "name": "Level 1", "pack": "scenes/level1.pack.json" }, …],
 //     "defaultScene": "level1" }
 // The editor then edits ONE of them at a time (`currentSceneFile`), switchable
-// live via the SceneSwitcher UI — the UE "level asset" model. Games without a
-// `scenes` manifest keep the legacy single `scene.pack.json` (currentSceneFile
-// stays null and every path/key reduces to the historical shape).
-export interface SceneFileEntry { id: string; name?: string; pack: string; group?: 'scene' | 'asset' }
+// live via the SceneSwitcher UI — the UE "level asset" model.
+//
+// Scene-as-asset is the canonical model: a scene is a GUID-keyed asset, and
+// `forge.json.defaultScene` (a scene GUID) is the engine SSOT for which scene
+// ▶ Play boots and ✎ Edit opens. The editor discovers it by resolving that GUID
+// to the pack that declares it (findScenePackByGuid, scanning scenes/ + assets/
+// + root). The engine's own templates/game-default is now this shape:
+// `assets/scene.pack.json` + `forge.json.defaultScene`.
+//
+// The single top-level `scene.pack.json` mode (currentSceneFile stays null, every
+// path/key reduces to the single-scene shape) is retained only as LEGACY COMPAT
+// for older games that predate scene-as-asset and carry no defaultScene GUID — it
+// is NOT the canonical shape. New/template games go through the defaultScene path.
+export interface SceneFileEntry { id: string; name?: string; pack: string }
 let currentSceneFile: string | null = null;
 let sceneList: SceneFileEntry[] = [];
 // The active scene asset's STABLE GUID, captured from disk on load. A scene's
@@ -482,25 +573,26 @@ async function readForgeJson(): Promise<Record<string, unknown> | null> {
 
 /** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
  *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
- *  the active scene file. Games without a manifest stay in legacy mode.
- *  Also lists assets/monsters/*.pack.json as the monster/character asset group — standalone
- *  prefab-style packs the editor opens exactly like a scene (UE asset editor). */
+ *  the active scene file. Games with neither a scenes/ dir nor a defaultScene
+ *  GUID fall back to legacy single-scene mode (top-level scene.pack.json). */
 export async function initSceneList(): Promise<void> {
   currentSceneFile = null;
   sceneList = [];
   const fj = await readForgeJson();
-  // Scene + asset discovery is DIRECTORY-driven, never forge.json-driven. The
+  // Scene discovery is DIRECTORY-driven, never forge.json-driven. The
   // engine-project loader's schema is `.strict()`, so an editor-only `scenes[]`
   // field makes loadGameProject FAIL — and ▶ Play reads physics/pointerLock off
   // that same loader (play-runtime AC-11), so a stray `scenes[]` silently
   // disables the game's physics. ubpa's w21 forge.json migration dropped it for
-  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json
-  // (group 'scene'), exactly like the monster/character packs under assets/
-  // (group 'asset'). forge.json is read only for its typed contract fields.
+  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json.
+  // forge.json is read only for its typed contract fields.
   if (currentSceneId !== 'default') {
     const listPacks = async (root: string): Promise<string[]> => {
       try {
-        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}`);
+        // optional=1: a game may legitimately lack a probed dir (e.g. no
+        // assets/monsters/). The server then returns 200 + empty tree instead
+        // of a red 404 in the browser network panel.
+        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}&optional=1`);
         if (!r.ok) return [];
         const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
         return (j.tree?.children ?? [])
@@ -513,29 +605,21 @@ export async function initSceneList(): Promise<void> {
     // game's LEVELS[].id (the launcher writes play-config.json { level:<id> }).
     for (const name of await listPacks('scenes')) {
       const base = name.slice(0, -'.pack.json'.length);
-      sceneList.push({ id: base, name: base, pack: `scenes/${name}`, group: 'scene' });
+      sceneList.push({ id: base, name: base, pack: `scenes/${name}` });
     }
     // Fallback for games whose scene pack still lives in assets/ (not scenes/):
     // resolve forge.json `defaultScene` to its pack so ✎ Edit opens the REAL
     // scene instead of seeding a default vignette (which then gets persisted and
     // permanently masks the real scene — the cow-level/hellforge "弹出默认场景"
     // bug). Only when the scenes/ scan above found nothing.
-    if (!sceneList.some((s) => s.group === 'scene')) {
+    if (sceneList.length === 0) {
       const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
       if (defGuid) {
         const pack = await findScenePackByGuid(currentSceneId, defGuid);
         if (pack) {
           const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-          sceneList.push({ id: stem, name: stem, pack, group: 'scene' });
+          sceneList.push({ id: stem, name: stem, pack });
         }
-      }
-    }
-    // Monster/character asset packs — opened in the editor like a scene (UE
-    // content-browser style); the Assets panel is their UI entry.
-    for (const [dir, prefix] of [['monsters', 'monster'], ['characters', 'character']] as const) {
-      for (const name of await listPacks(`assets/${dir}`)) {
-        const base = name.slice(0, -'.pack.json'.length);
-        sceneList.push({ id: `${prefix}:${base}`, name: base, pack: `assets/${dir}/${name}`, group: 'asset' });
       }
     }
   }
@@ -546,7 +630,7 @@ export async function initSceneList(): Promise<void> {
     //      multiple editor windows edit different levels side by side)
     //   2. per-game localStorage — what this game last had open (survives the
     //      Studio Edit iframe being rebuilt without URL params)
-    //   3. forge.json defaultScene → first level → legacy single scene
+    //   3. forge.json defaultScene → first level → legacy single top-level scene
     let urlWant: string | null = null;
     try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
     let want: string | null = null;
@@ -560,15 +644,15 @@ export async function initSceneList(): Promise<void> {
     // to firstScene and only lined up by luck when the default sorted first.)
     const defPack = def ? await findScenePackByGuid(currentSceneId, def) : null;
     const defId = defPack
-      ? (sceneList.find((s) => s.group !== 'asset' && s.pack === defPack)?.id ?? null)
+      ? (sceneList.find((s) => s.pack === defPack)?.id ?? null)
       : null;
-    const firstScene = sceneList.find((s) => s.group !== 'asset');
+    const firstScene = sceneList[0];
     currentSceneFile =
       (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
       : (want && sceneList.some((s) => s.id === want)) ? want
       : defId ? defId
       : firstScene ? firstScene.id
-      : null;  // only asset packs exist → keep editing the legacy single scene
+      : null;  // no scene packs found → legacy: keep editing the single top-level scene
   }
   emitSceneList();
 }
@@ -618,19 +702,6 @@ export async function switchSceneFile(id: string): Promise<boolean> {
     location.assign(u.toString());
     return true;
   }
-}
-
-/** Open a scene/asset pack from ANY editor surface. Panel iframes (ep:*) can't
- *  reload the main viewport themselves — they forward an `openScene` over the
- *  BroadcastChannel; the main window persists + reloads (and the panels follow
- *  via the post-reload snapshot). This is the Assets-panel double-click path. */
-export function requestOpenScene(id: string): void {
-  // Post on the per-GAME control channel (not the per-file channel) so the main
-  // window receives it regardless of which scene file each side is currently on —
-  // the main then switches IN PLACE (no reload). Falls back to the per-file
-  // channel too, for any window still paired only there.
-  if (IS_POPOUT) { postControl({ t: 'openScene', id }); postSync({ t: 'openScene', id }); return; }
-  void switchSceneFile(id);
 }
 
 // ── Launcher config (UE-style "play this level") ─────────────────────────────
@@ -1033,6 +1104,11 @@ function buildSnapshot(): EditorSnapshot {
 }
 
 function broadcastSnapshot(): void {
+  // Never re-broadcast a state we are CURRENTLY applying from a remote source —
+  // otherwise an inbound storage echo / snapshot mirror is bounced straight back
+  // out, closing the cross-window loop. Genuine local edits run with
+  // applyingRemote() === false and broadcast normally.
+  if (applyingRemote()) return;
   if (syncChannel) postSync({ t: 'snapshot', snap: buildSnapshot() });
 }
 
@@ -1053,14 +1129,18 @@ function applySnapshot(snap: EditorSnapshot): void {
     // BroadcastChannel structuredClone drops the EditSession `asset` getter —
     // revive it so popout panels reading bus.doc.asset stay live (w34).
     bus.doc = reviveSession(snap.doc);
-    selectionList = [...snap.selection];
+    const selChanged = !sameIdList(selectionList, snap.selection);
+    if (selChanged) selectionList = [...snap.selection];
     if (gizmoMode !== snap.gizmo) {
       gizmoMode = snap.gizmo;
       for (const fn of gizmoListeners) fn();
     }
     docVersion++;
     for (const fn of docListeners) fn();
-    emitSelection();
+    // Only re-emit selection when it actually changed — avoids redundant panel
+    // re-renders on every snapshot (doc edits arrive far more often than
+    // selection changes).
+    if (selChanged) emitSelection();
   } finally {
     applyingSnapshot = false;
   }
@@ -1094,6 +1174,7 @@ export function announcePopoutGeom(panel: SyncPanelId, geom: PopoutGeom): void {
 // subscriptions live in initMain (attached ONCE) and post to whatever syncChannel
 // is current via postSync — so swapping the channel needs only onmessage + a push.
 function mainOnMessage(ev: MessageEvent): void {
+  markBroadcastProven(); // receiving anything proves the channel reaches siblings
   const msg = parseEditorSyncMsg(ev.data);
   if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
   switch (msg.t) {
@@ -1156,6 +1237,7 @@ function initPopout(ch: BroadcastChannel): void {
   bus.historySteps = (): HistoryStep[] => mirror?.history ?? [];
   bus.appliedCount = () => mirror?.applied ?? 0;
   ch.onmessage = (ev: MessageEvent) => {
+    markBroadcastProven(); // receiving anything proves the channel reaches siblings
     const msg = parseEditorSyncMsg(ev.data);
     if (!msg) { console.warn('[sync] dropped malformed channel message (popout)', ev.data); return; }
     if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
@@ -1204,10 +1286,17 @@ export function initSync(): void {
   if (typeof window !== 'undefined') {
     const onStorage = (e: StorageEvent): void => {
       if (e.key === docKey(currentSceneId) && e.newValue) { loadDocFromStorage(); return; }
-      if (e.key === selKey() && e.newValue) {
+      // Channel-択一: only honour the localStorage selection mirror when the
+      // BroadcastChannel transport is NOT live (fallback path). When the channel
+      // is open it is the sole selection transport, so ignore selKey writes.
+      if (!broadcastActive() && e.key === selKey() && e.newValue) {
         try {
           const ids = JSON.parse(e.newValue);
-          if (Array.isArray(ids)) { applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false; }
+          // Short-circuit identical echoes so a redundant `storage` event never
+          // re-emits / re-renders (defence-in-depth alongside applyingRemote).
+          if (Array.isArray(ids) && !sameIdList(selectionList, ids)) {
+            applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false;
+          }
         } catch { /* ignore */ }
       }
     };

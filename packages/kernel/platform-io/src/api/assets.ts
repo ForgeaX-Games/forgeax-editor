@@ -1,8 +1,9 @@
 // /api/assets — asset pipeline helpers for the editor.
 //
 // POST /api/assets/import-scene
-//   Reads a GLB and returns a SceneDocument (or single GltfRef entity) for the
-//   editor to merge into scene.json.
+//   Reads a GLB and returns scene entities (a full-hierarchy set, or a single
+//   GltfRef entity) for the editor to merge into its EditSession via
+//   reviveSession.
 //
 // glТF → .meta.json cooking is NOT done here. The backend (platform-io is the
 // 6-layer model's backend L1) cannot import @forgeax/engine-gltf (frontend L1),
@@ -22,10 +23,10 @@ export function createAssetsRouter(): Hono {
 
   // POST /api/assets/import-scene
   // Body: { path: string, mode?: 'reference'|'full', maxNodes?: number }
-  // Reads a GLB and returns a SceneDocument (or patch) to merge into scene.json.
+  // Reads a GLB and returns scene entities to merge into the editor's EditSession.
   //   'reference' (default): ONE entity with GltfRef + Transform → fastest, best for
   //      large scenes (>200 nodes). Engine renders via loadByGuid on the scene GUID.
-  //   'full': one SceneDocument entity per GLTF node → shows full hierarchy in the
+  //   'full': one entity per GLTF node → shows full hierarchy in the
   //      editor tree; only recommended for small scenes (≤200 nodes).
   r.post('/import-scene', async (c) => {
     let body: { path?: unknown; mode?: unknown; maxNodes?: unknown };
@@ -92,7 +93,7 @@ export function createAssetsRouter(): Hono {
       });
     }
 
-    // 'full' mode: convert every GLTF node to a SceneDocument entity.
+    // 'full' mode: convert every GLTF node to a scene entity.
     // Quaternion → Euler (YXZ, degrees) for the editor's rotX/Y/Z fields.
     function quatToEuler(q: number[]): { rotX: number; rotY: number; rotZ: number } {
       const [qx = 0, qy = 0, qz = 0, qw = 1] = q;

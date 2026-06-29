@@ -14,7 +14,7 @@ export function SceneBadge() {
   if (getSceneId() === 'default') return null;
   const entry = scenes.find((s) => s.id === current);
   const label = entry
-    ? `${entry.group === 'asset' ? '✎' : '🗺'} ${entry.name ?? entry.id}`
+    ? `🗺 ${entry.name ?? entry.id}`
     : `🗺 ${t('editor.sceneBadge.mainScene')}`;
   return (
     <span className="vp-scene-badge" data-testid="vp-scene-badge"

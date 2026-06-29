@@ -1297,3 +1297,26 @@
 .ws-ctx-item.ws-ctx-delete { color: var(--color-text-danger, #ff6b6b); }
 .ws-ctx-item.disabled { opacity: 0.4; cursor: not-allowed; }
 .ws-ctx-item.disabled:hover { background: transparent; }
+
+/* ── Package progress overlay ── */
+.tb-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tb-progress-dialog {
+  background: var(--color-background-floating, #1e1e2e);
+  border: 1px solid var(--color-border-default, #333);
+  border-radius: 8px;
+  padding: 16px 20px;
+  min-width: 340px;
+  max-width: 540px;
+  color: var(--color-text-primary, #e0e0e0);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+@keyframes tb-spin { to { transform: rotate(360deg); } }
+.tb-spinner { animation: tb-spin 1s linear infinite; }

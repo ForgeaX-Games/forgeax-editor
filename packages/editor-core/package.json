@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "core types + shared runtime — SceneDocument, EditorBus, ComponentSchema, VAG protocol, manifest, store, entity ops, context menu, dock bridge",
+  "description": "core types + shared runtime — EditSession, EditorBus, ComponentSchema, VAG protocol, manifest, store, entity ops, context menu, dock bridge",
   "exports": {
     ".": {
       "types": "./src/index.ts",

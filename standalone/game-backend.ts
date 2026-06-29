@@ -24,7 +24,7 @@
 // Run (cli.mjs wires this): FORGEAX_GAME_DIR=<dir> bun standalone/game-backend.ts
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
-import { createFilesRouter, singleGameFileBackend } from '@forgeax/platform-io';
+import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
 if (!gameDir) {
@@ -33,24 +33,40 @@ if (!gameDir) {
 }
 
 const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
-const FILES_PREFIX = '/api/files';
-const router = createFilesRouter(singleGameFileBackend(gameDir));
+
+// Two real @forgeax/platform-io routers, the exact ones cli/server mount:
+//   /api/files  — file IO, confined to the one --game dir (read + WRITE = B2).
+//   /api/prefs  — UI-pref server mirror (workspace-layout, browser-localStorage,
+//     uninstalled-agents), persisted under <gameDir>/.forgeax/prefs/. Without
+//     this, the client's GET/PUT /api/prefs/workspace-layout/* 404'd (the
+//     `--game` path returns 404+json, which the client doesn't latch as
+//     "no backend" the way it does the no-game SPA-html fallback) — harmless
+//     console noise, but now the layout actually persists into the game.
+const PREFIXES = [
+  { prefix: '/api/files', router: createFilesRouter(singleGameFileBackend(gameDir)) },
+  { prefix: '/api/prefs', router: createPrefsRouter(gameDir) },
+];
 
 const server = Bun.serve({
   port,
   hostname: '127.0.0.1',
   fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname !== FILES_PREFIX && !url.pathname.startsWith(`${FILES_PREFIX}/`)) {
-      return new Response(JSON.stringify({ error: 'not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    for (const { prefix, router } of PREFIXES) {
+      if (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) {
+        // Re-root `<prefix>/…` → `/…` for the router's own route table.
+        url.pathname = url.pathname.slice(prefix.length) || '/';
+        return router.fetch(new Request(url.href, req));
+      }
     }
-    // Re-root `/api/files…` → `/…` for the router's own route table.
-    url.pathname = url.pathname.slice(FILES_PREFIX.length) || '/';
-    return router.fetch(new Request(url.href, req));
+    return new Response(JSON.stringify({ error: 'not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
   },
 });
 
-console.log(`[game-backend] reusing @forgeax/platform-io for '${gameDir}' → http://127.0.0.1:${server.port}${FILES_PREFIX}`);
+console.log(
+  `[game-backend] reusing @forgeax/platform-io for '${gameDir}' → http://127.0.0.1:${server.port}` +
+    ` (${PREFIXES.map((p) => p.prefix).join(', ')})`,
+);

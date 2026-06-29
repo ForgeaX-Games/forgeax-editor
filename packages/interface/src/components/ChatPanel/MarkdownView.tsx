@@ -113,102 +113,155 @@ function looksLikeReflection(text: string): boolean {
   return STRONG_CORR_RE.test(tail.slice(0, 40)) || WEAK_CORR_RE.test(tail.slice(0, 8));
 }
 
+// ── Block parsing — 2026-06 rewrite (FIXES AN INFINITE LOOP) ────────────────
+// The previous parseBlocks defined "where does a block start" TWICE: once as the
+// if-chain that dispatched each block kind, and again as a separate list of
+// negated regexes that told the paragraph loop when to stop. Those two copies
+// drifted apart. The paragraph terminator was LOOSER than the dispatcher, so
+// some lines fell through every dispatch `if` (treated as not-a-block) yet were
+// rejected by the paragraph loop (treated as a block) — a "gap line" that no
+// branch ever consumed. `i` then never advanced and `while (i < lines.length)`
+// spun forever. Because parseBlocks runs synchronously on the main thread for
+// every streamed chat delta, a single such line HARD-FROZE the browser tab
+// (100% CPU, unrecoverable). Real triggers were common in streamed output:
+//   • a fence info-string the strict opener rejected but the loose `/^```/`
+//     paragraph-exclusion still bailed on, e.g.  ```ts title
+//   • a hash-only "heading" with no body, e.g.  "###   "
+// Fix: detection lives in ONE place (`blockStartKind`); both the dispatch switch
+// and the paragraph terminator derive from it, so they can no longer disagree.
+// One deliberate behavior normalization falls out of de-duplicating the rules:
+// `***` now interrupts a paragraph as a thematic break (matching `---`, which
+// already did, and CommonMark) — the old code let `***` slip into paragraph text
+// purely because of the same dual-rule drift. Everything else is unchanged.
+//
+// Block-start regexes, defined once. The fence opener is strict (whole line is
+// ``` + optional word/dash lang) and the closer is bare ```; everything else
+// mirrors the consumers below so detection and termination can't drift.
+const RE_BLANK = /^\s*$/;
+const RE_FENCE = /^```\s*([\w-]*)\s*$/;
+const RE_FENCE_CLOSE = /^```\s*$/;
+const RE_HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const RE_HR = /^(?:---+|\*\*\*+)\s*$/;
+const RE_TABLE_ROW = /^\s*\|.+\|\s*$/;
+const RE_TABLE_SEP = /^\s*\|[\s:|-]+\|\s*$/;
+const RE_UL = /^\s*[-*+]\s+/;
+const RE_OL = /^\s*\d+\.\s+/;
+const RE_QUOTE = /^\s*>\s?/;
+
+type BlockStart = 'blank' | 'code' | 'heading' | 'hr' | 'table' | 'ul' | 'ol' | 'quote' | null;
+
+// Single source of truth for "what block (if any) begins at lines[i]". Both the
+// dispatch switch and the paragraph terminator derive from this, so the two can
+// never disagree about where a paragraph ends — the historical infinite-loop
+// class (e.g. a "```ts title" line the strict fence rejected but the paragraph
+// loop also refused to consume) is structurally impossible. `null` means the
+// line is paragraph text. Table needs one line of lookahead for its separator.
+function blockStartKind(lines: string[], i: number): BlockStart {
+  const line = lines[i];
+  if (RE_BLANK.test(line)) return 'blank';
+  if (RE_FENCE.test(line)) return 'code';
+  if (RE_HEADING.test(line)) return 'heading';
+  if (RE_HR.test(line)) return 'hr';
+  if (RE_TABLE_ROW.test(line) && i + 1 < lines.length && RE_TABLE_SEP.test(lines[i + 1])) return 'table';
+  if (RE_UL.test(line)) return 'ul';
+  if (RE_OL.test(line)) return 'ol';
+  if (RE_QUOTE.test(line)) return 'quote';
+  return null;
+}
+
 function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n?/g, '\n').split('\n');
   const out: Block[] = [];
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i];
-    // fenced code
-    const fence = /^```\s*([\w-]*)\s*$/.exec(line);
-    if (fence) {
-      const lang = fence[1] || '';
-      i++;
-      const body: string[] = [];
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
-        body.push(lines[i]);
+    const start = i;
+    switch (blockStartKind(lines, i)) {
+      case 'blank':
         i++;
-      }
-      if (i < lines.length) i++; // consume closing fence
-      out.push({ kind: 'code', lang, body: body.join('\n') });
-      continue;
-    }
-    if (/^\s*$/.test(line)) { i++; continue; }
-    const h = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (h) {
-      out.push({ kind: 'heading', level: h[1].length, text: h[2] });
-      i++; continue;
-    }
-    if (/^---+\s*$/.test(line) || /^\*\*\*+\s*$/.test(line)) {
-      out.push({ kind: 'hr' });
-      i++; continue;
-    }
-    // table (GFM)
-    if (/^\s*\|.+\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
-      const header = splitTableRow(line);
-      const rawAligns = parseTableAligns(lines[i + 1]);
-      // Normalize aligns to match header column count: pad with 'left' if the
-      // separator row has fewer cells (broken markdown), truncate if it has
-      // more. Without this, `styleFor(idx)` returned `undefined` past the
-      // shorter array, which rendered correctly but masked authoring bugs.
-      const aligns: Array<'left'|'center'|'right'> =
-        Array.from({ length: header.length }, (_, idx) => rawAligns[idx] ?? 'left');
-      i += 2; // skip header + separator
-      const rows: string[][] = [];
-      while (i < lines.length && /^\s*\|.+\|\s*$/.test(lines[i])) {
-        rows.push(splitTableRow(lines[i]));
+        break;
+      case 'code': {
+        const lang = RE_FENCE.exec(lines[i])?.[1] || '';
         i++;
+        const body: string[] = [];
+        while (i < lines.length && !RE_FENCE_CLOSE.test(lines[i])) {
+          body.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) i++; // consume closing fence
+        out.push({ kind: 'code', lang, body: body.join('\n') });
+        break;
       }
-      out.push({ kind: 'table', header, rows, aligns });
-      continue;
-    }
-    // unordered list
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*[-*+]\s+/, ''));
+      case 'heading': {
+        const h = RE_HEADING.exec(lines[i])!;
+        out.push({ kind: 'heading', level: h[1].length, text: h[2] });
         i++;
+        break;
       }
-      out.push({ kind: 'ul', items });
-      continue;
-    }
-    // ordered list
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
+      case 'hr':
+        out.push({ kind: 'hr' });
         i++;
+        break;
+      case 'table': {
+        const header = splitTableRow(lines[i]);
+        const rawAligns = parseTableAligns(lines[i + 1]);
+        // Normalize aligns to match header column count: pad with 'left' if the
+        // separator row has fewer cells (broken markdown), truncate if it has
+        // more. Without this, `styleFor(idx)` returned `undefined` past the
+        // shorter array, which rendered correctly but masked authoring bugs.
+        const aligns: Array<'left'|'center'|'right'> =
+          Array.from({ length: header.length }, (_, idx) => rawAligns[idx] ?? 'left');
+        i += 2; // skip header + separator
+        const rows: string[][] = [];
+        while (i < lines.length && RE_TABLE_ROW.test(lines[i])) {
+          rows.push(splitTableRow(lines[i]));
+          i++;
+        }
+        out.push({ kind: 'table', header, rows, aligns });
+        break;
       }
-      out.push({ kind: 'ol', items });
-      continue;
-    }
-    // blockquote
-    if (/^\s*>\s?/.test(line)) {
-      const buf: string[] = [];
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-        buf.push(lines[i].replace(/^\s*>\s?/, ''));
-        i++;
+      case 'ul': {
+        const items: string[] = [];
+        while (i < lines.length && RE_UL.test(lines[i])) {
+          items.push(lines[i].replace(RE_UL, ''));
+          i++;
+        }
+        out.push({ kind: 'ul', items });
+        break;
       }
-      out.push({ kind: 'quote', lines: buf });
-      continue;
+      case 'ol': {
+        const items: string[] = [];
+        while (i < lines.length && RE_OL.test(lines[i])) {
+          items.push(lines[i].replace(RE_OL, ''));
+          i++;
+        }
+        out.push({ kind: 'ol', items });
+        break;
+      }
+      case 'quote': {
+        const buf: string[] = [];
+        while (i < lines.length && RE_QUOTE.test(lines[i])) {
+          buf.push(lines[i].replace(RE_QUOTE, ''));
+          i++;
+        }
+        out.push({ kind: 'quote', lines: buf });
+        break;
+      }
+      case null: {
+        // paragraph: consume until blank line / next block start
+        const buf: string[] = [];
+        while (i < lines.length && blockStartKind(lines, i) === null) {
+          buf.push(lines[i]);
+          i++;
+        }
+        out.push({ kind: 'para', lines: buf, reflection: buf.length > 0 ? looksLikeReflection(buf[0]) : false });
+        break;
+      }
     }
-    // paragraph: consume until blank line / block-start
-    const buf: string[] = [];
-    while (
-      i < lines.length &&
-      !/^\s*$/.test(lines[i]) &&
-      !/^```/.test(lines[i]) &&
-      !/^#{1,6}\s+/.test(lines[i]) &&
-      !/^\s*[-*+]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i]) &&
-      !/^\s*>\s?/.test(lines[i]) &&
-      !/^---+\s*$/.test(lines[i]) &&
-      !(/^\s*\|.+\|\s*$/.test(lines[i]) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1]))
-    ) {
-      buf.push(lines[i]);
-      i++;
-    }
-    out.push({ kind: 'para', lines: buf, reflection: buf.length > 0 ? looksLikeReflection(buf[0]) : false });
+    // Progress guard: every branch above advances i, so this is dead code today.
+    // It exists so that if a future block kind is ever added that consumes zero
+    // lines, a malformed line degrades to "one skipped line" instead of hard-
+    // freezing this synchronous, main-thread parse over streamed input.
+    if (i === start) i++;
   }
   return out;
 }

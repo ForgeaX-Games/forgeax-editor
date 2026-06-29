@@ -23,6 +23,7 @@ export interface ConfirmPayload {
   token: string;
   caller: ConfirmCaller;
   reason?: string;
+  message?: string;
 }
 
 export interface PendingConfirm extends ConfirmPayload {
@@ -64,6 +65,7 @@ export function parseConfirmEnvelope(raw: string): ConfirmPayload | null {
     token: p.token as string,
     caller: p.caller as ConfirmCaller,
     reason: typeof p.reason === 'string' ? p.reason : undefined,
+    message: typeof p.message === 'string' ? p.message : undefined,
   };
 }
 

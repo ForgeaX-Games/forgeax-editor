@@ -49,6 +49,14 @@ export class EditorBus {
   private undoStack: StackEntry[] = [];
   private redoStack: StackEntry[] = [];
   private listeners = new Set<BusListener>();
+  // Monotonic revision — bumped on EVERY mutation that notifies subscribers
+  // (dispatch/undo/redo via emit, and replaceDoc). Lets consumers (e.g. the
+  // engine sync) detect "did the doc change since I last looked?" in O(1) instead
+  // of hashing the whole document. Every path that fires subscribers bumps this,
+  // so a subscriber that only ever runs on notification can trust rev as a
+  // complete change signal.
+  private _rev = 0;
+  get rev(): number { return this._rev; }
   /** append-only log of every applied command — the "AI did X" ledger. */
   readonly ledger: EditorCommand[] = [];
   /** origin of each ledger entry (index-aligned): who issued the command. */
@@ -77,6 +85,7 @@ export class EditorBus {
     this.redoStack.length = 0;
     this.ledger.length = 0;
     this.origins.length = 0;
+    this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);
   }
 
@@ -142,6 +151,7 @@ export class EditorBus {
   }
 
   private emit(last: EditorCommand): void {
+    this._rev++;
     for (const fn of this.listeners) fn(this.doc, last);
   }
 }

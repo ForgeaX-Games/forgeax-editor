@@ -722,10 +722,32 @@
       "noGame": "Select or create a game before packaging.",
       "failed": "Packaging failed",
       "unknownError": "Unknown error",
-      "done": "Packaged \"{{slug}}\"",
+      "done": "Packaged \"{{slug}}\" ({{platform}})",
       "exportDir": "Export directory:",
-      "runLocally": "Run locally standalone:",
-      "webgpuHint": "WebGPU requires opening over localhost or HTTPS."
+      "runLocally": "Run locally:",
+      "webgpuHint": "WebGPU requires opening over localhost or HTTPS.",
+      "menuTitle": "Package Game",
+      "platformWeb": "Web (Static Site)",
+      "platformWindows": "Windows (.exe)",
+      "platformAndroid": "Android (Coming Soon)",
+      "platformIos": "iOS (Coming Soon)",
+      "rebuildEngine": "Rebuild Engine Core",
+      "rebuildEngineHint": "Developer mode: rebuild Rust→WASM engine core (wgpu-wasm)",
+      "engineRoot": "Engine Root",
+      "engineRootInvalid": "missing deps",
+      "engineRootNone": "No usable engine root found",
+      "history": "Package History",
+      "historyEmpty": "No packaging records yet",
+      "historyDelete": "Delete",
+      "historyDeleteConfirm": "Delete this record?",
+      "historyRetry": "Retry",
+      "historyCleanArtifacts": "Also clean artifacts",
+      "progressTitle": "Packaging…",
+      "progressPhase": "Phase: {{phase}}",
+      "progressClose": "Close",
+      "jobSuccess": "Package succeeded",
+      "jobFailed": "Package failed",
+      "cachedShell": "Used cached launcher"
     },
     "layout": {
       "tooltip": "Layout · reopen / reset / presets"
@@ -734,8 +756,8 @@
       "tooltip": "System settings · Plugins / Keys / Models / About"
     },
     "publish": {
-      "packaging": "Packaging standalone game…",
-      "tooltip": "Package as standalone game · runs locally standalone"
+      "packaging": "Packaging {{platform}}…",
+      "tooltip": "Package game for target platform"
     }
   },
   "agentSwitcher": {
@@ -779,6 +801,7 @@
       "history": "History",
       "capabilities": "Components",
       "material": "Material",
+      "mesh": "Mesh",
       "timeline": "Timeline",
       "matgraph": "Material Graph",
       "launcher": "Launcher"

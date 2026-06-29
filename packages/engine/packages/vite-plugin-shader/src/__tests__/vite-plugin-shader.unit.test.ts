@@ -947,11 +947,17 @@ import { toRollupLog } from '../wrap.js';
       // roughness + 4 channel selectors + emissive + emissiveIntensity +
       // occlusionStrength + 3 textures = 13 entries). Sampler-first auto-pair
       // (D-4) still applies; shadow-caster stays 0 (vertex-only depth pass).
+      //
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11: sprite
+      // paramSchema collapsed from 8 user-facing fields to 5 UBO-aligned
+      // entries (4 vec4: colorTint / region / pivotAndSize / slicesAndMode
+      // + baseColorTexture) so the generic std140 writer derives byte-stable
+      // offsets straight from `derive(paramSchema).uboLayout`.
       const expectedFieldCounts: Record<string, number> = {
         'forgeax::default-standard-pbr': 13,
         'forgeax::pbr-skin': 13,
         'forgeax::default-unlit': 2,
-        'forgeax::sprite': 8,
+        'forgeax::sprite': 5,
         'forgeax::msdf-text': 3,
         'forgeax::default-shadow-caster': 0,
       };

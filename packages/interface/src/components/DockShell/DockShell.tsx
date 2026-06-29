@@ -95,8 +95,9 @@ function buildDefault(api: DockviewApi, workspaceId: string = 'edit'): void {
   api.addPanel({ id: 'ep:hierarchy', component: 'ep:hierarchy', title: PANEL_TITLE['ep:hierarchy'] ?? 'Hierarchy' });
   api.addPanel({ id: 'edit', component: 'edit', title: 'Edit', position: { referencePanel: 'ep:hierarchy', direction: 'right' } });
   api.addPanel({ id: 'ep:inspector', component: 'ep:inspector', title: PANEL_TITLE['ep:inspector'] ?? 'Inspector', position: { referencePanel: 'edit', direction: 'right' } });
-  // Top-right tab group: Inspector + Material (Inspector active).
+  // Top-right tab group: Inspector + Material + Mesh (Inspector active).
   api.addPanel({ id: 'ep:material', component: 'ep:material', title: PANEL_TITLE['ep:material'] ?? 'Material', position: { referencePanel: 'ep:inspector', direction: 'within' } });
+  api.addPanel({ id: 'ep:mesh', component: 'ep:mesh', title: PANEL_TITLE['ep:mesh'] ?? 'Mesh', position: { referencePanel: 'ep:material', direction: 'within' } });
   // Split each column downward now that all three columns are established.
   api.addPanel({ id: 'ep:assets', component: 'ep:assets', title: PANEL_TITLE['ep:assets'] ?? 'Assets', position: { referencePanel: 'ep:hierarchy', direction: 'below' } });
   api.addPanel({ id: 'ep:history', component: 'ep:history', title: PANEL_TITLE['ep:history'] ?? 'History', position: { referencePanel: 'edit', direction: 'below' } });
@@ -218,12 +219,20 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
   const hideChatRef = useRef<boolean>(!!hideChatAndForge);
   useEffect(() => { hideChatRef.current = !!hideChatAndForge; }, [hideChatAndForge]);
   // Active bus workbench plugins — used to populate the "插件面板" layout section.
+  // The plugin bus is owned by `cli` (后L2 Agent engine, /api/bus → getEventBus),
+  // NOT by platform-io (后L1). The standalone editor ships no agent engine, which
+  // is exactly what `hideChatAndForge` signals — so there is never a bus to probe.
+  // Skip the fetch entirely in that mode: firing it would guarantee a 404 (red in
+  // the console) for a capability standalone intentionally doesn't have. (bus-api
+  // still degrades gracefully if it IS hit; this just avoids the pointless wire
+  // request — §4 前L2 不连后L2.)
   const [busPlugins, setBusPlugins] = useState<BusPluginInfo[]>([]);
   useEffect(() => {
+    if (hideChatAndForge) return; // no agent engine → no plugin bus
     let cancelled = false;
     void listBusPlugins('workbench').then((res) => { if (!cancelled) setBusPlugins(res.items ?? []); });
     return () => { cancelled = true; };
-  }, []);
+  }, [hideChatAndForge]);
 
   // Dynamic components map: extends the static map with wb:<pluginId> renderers
   // so each plugin panel renders its own WbPluginDockPanel.

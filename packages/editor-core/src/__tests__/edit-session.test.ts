@@ -1,26 +1,26 @@
 // w29 — EditSession applyCommand equivalence tests (TDD red stage).
 //
-// M6 replaces the editor's SceneDocument working model with an EditSession that
+// M6 replaces the editor's prior document working model with an EditSession that
 // holds an engine SceneAsset POD (`asset`) PLUS the editor-local ID management
 // (`nextLocalId` self-incrementing allocator + `order` spawn-order list) that the
 // engine SceneAsset POD intentionally does NOT carry (A0 red line: engine never
 // learns "edit"; plan-strategy D-6).
 //
 // These tests pin that EditSession.applyCommand reproduces the SAME observable
-// semantics the prior SceneDocument-based applyCommand had:
+// semantics the prior document-based applyCommand had:
 //   - entity set + ID space (self-increment allocator, _id reuse, rollback)
 //   - per-entity component values
 //   - order list (spawn order; destroy filters it out)
 //   - childrenOf hierarchy derivation
 //
-// The equivalence is asserted directly against the documented SceneDocument
+// The equivalence is asserted directly against the documented prior-model
 // behavior (research Finding 4: nextId @ document.ts:29-33 incl. rollback
 // nextId--, order @ :44/:54/:157) — the OLD type is being deleted in w38, so we
 // cannot import both; instead we encode the prior contract as explicit asserts.
 //
 // Anchors:
 //   plan-tasks.json w29: ID management applyCommand equivalence unit test
-//   requirements AC-13: SceneDocument removed → applyCommand behavior equivalent
+//   requirements AC-13: prior document model removed → applyCommand behavior equivalent
 //   plan-strategy D-6: editor-local ID layer (EditSession), engine SceneAsset pure
 //   research Finding 4: applyCommand deep-depends on nextId + order
 
@@ -50,7 +50,7 @@ describe('EditSession — fresh session shape', () => {
   });
 });
 
-describe('EditSession — spawnEntity ID allocation (equivalent to SceneDocument nextId)', () => {
+describe('EditSession — spawnEntity ID allocation (equivalent to prior-model nextId)', () => {
   it('allocates self-incrementing ids 1,2,3 and appends them to order', () => {
     const s = createEditSession();
     const r1 = applyCommand(s, { kind: 'spawnEntity', name: 'A' });
@@ -181,7 +181,7 @@ describe('EditSession — childrenOf / isSelfOrDescendant (order-derived hierarc
   });
 });
 
-describe('EditSession — transaction rollback (equivalent to SceneDocument transaction)', () => {
+describe('EditSession — transaction rollback (equivalent to prior-model transaction)', () => {
   it('rolls back already-applied sub-commands when a later one fails', () => {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'root' }); // 1
@@ -198,7 +198,7 @@ describe('EditSession — transaction rollback (equivalent to SceneDocument tran
     // transaction replays each applied sub-command's inverse in reverse.
     expect(s.order).toEqual([1]);
     expect(s.entities[2]).toBeUndefined();
-    // Equivalence note: the original SceneDocument transaction rollback replays
+    // Equivalence note: the original prior-model transaction rollback replays
     // inverses (a destroyEntity for the first spawn), which does NOT decrement
     // the id allocator — so nextLocalId stays advanced past the consumed id,
     // exactly as the prior nextId allocator did. (Only the direct

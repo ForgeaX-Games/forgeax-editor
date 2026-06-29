@@ -145,10 +145,36 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
     () => `${plugin.version ?? 'dev'}-${reloadNonce}`,
     [plugin.id, plugin.version, reloadNonce],
   );
-  // 当前 game slug（pinnedSlug 由 TopBar 从 /api/workbench/active-slug 同步到 localStorage / store）。
-  // 拼到 iframe URL 上，让插件读出后用于 per-game 数据隔离。
+  // 当前 game slug。pinnedSlug 是用户显式选中的工程；但用户**没有显式 pin** 时它
+  // 为 null —— 历史上此时 iframe 会以"无 slug（全局库）"启动 per-game 插件，而服务端
+  // active-game.json 其实指向某个 game。这个**前后端 slug 不一致**正是"新建 1234 工程
+  // 却被 demo/旧素材污染"的根因之一：前端以全局态生成/落库，写到了错误的桶。
+  //
+  // 修复：pinnedSlug 缺失时回落到服务端解析的 activeSlug（沿用 GameSwitcher /
+  // FilesPanel 的 `pinnedSlug ?? activeSlug` 既有约定），并在 slug 解析完成前**不挂载**
+  // iframe，杜绝 per-game 插件以无 slug 抢跑。
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
-  const rawSrc = buildIframeSrc(plugin, pane, pinnedSlug);
+  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  const [slugFetched, setSlugFetched] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workbench/active-slug')
+      .then((r) => r.json())
+      .then((j: { activeSlug?: string | null }) => {
+        if (!cancelled) setActiveSlug(j?.activeSlug ?? null);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSlugFetched(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const effectiveSlug = pinnedSlug ?? activeSlug;
+  // 已显式 pin → 立即可用；否则等服务端 active-slug 回来（finally 一定会置位）。
+  const slugReady = pinnedSlug != null || slugFetched;
+  const rawSrc = slugReady ? buildIframeSrc(plugin, pane, effectiveSlug) : null;
   const src = rawSrc ? rawSrc + (rawSrc.includes('?') ? '&' : '?') + `fxv=${encodeURIComponent(iframeCacheKey)}` : null;
 
   useEffect(() => {

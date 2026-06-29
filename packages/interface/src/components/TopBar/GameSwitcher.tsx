@@ -23,6 +23,7 @@ export function GameSwitcher() {
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const setPinnedSlug = useAppStore((s) => s.setPinnedSlug);
+  const switchGame = useAppStore((s) => s.switchGame);
 
   const currentSlug = pinnedSlug ?? activeSlug;
   const currentGame = games.find((g) => g.slug === currentSlug);
@@ -42,26 +43,16 @@ export function GameSwitcher() {
     return () => clearInterval(timer);
   }, []);
 
-  // Picking a game pins it client-side (preview / agents scoping) AND tells the
-  // server to make it the active game — which relocates every live session's
-  // cli working directory into games/<slug>/ so the agent's shell/pwd follows.
+  // Picking a game goes through store.switchGame — one mechanism shared with 新建
+  // game: it pins the game client-side (preview / agents scoping), tells the server
+  // to make it the active game (relocating live sessions' cli into games/<slug>/),
+  // re-scopes the session list to this game and lands on its most-recent session
+  // (creating one when the game has none). Activate-failure surfacing lives inside
+  // switchGame; here we just refresh this switcher's own games list afterwards.
   const onPick = async (slug: string) => {
-    setPinnedSlug(slug);
     setOpen(false);
-    try {
-      const r = await fetch(`/api/workbench/games/${slug}/activate`, { method: 'POST' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      await reload();
-    } catch (e) {
-      // The client-side pin already switched the preview, but the server didn't
-      // record the active game — so agent cwd / system-prompt scope / products
-      // may still point at the previous game. Surface it instead of silently
-      // leaving that mismatch in place.
-      void alertDialog({
-        title: t('gameSwitcher.activateFailedTitle'),
-        body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
-      });
-    }
+    await switchGame(slug);
+    await reload();
   };
 
   const onDelete = async (slug: string) => {
@@ -164,7 +155,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const sendMessage = useAppStore((s) => s.sendMessage);
-  const setPinnedSlug = useAppStore((s) => s.setPinnedSlug);
+  const switchGame = useAppStore((s) => s.switchGame);
 
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -186,9 +177,11 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
         setBusy(false);
         return;
       }
-      // Server already marked games/<slug>/ as the active game + relocated live
-      // sessions' cli there; pin it client-side too so preview/agents follow.
-      setPinnedSlug(cleaned);
+      // Server already marked games/<slug>/ as the active game. switchGame pins it
+      // client-side AND — since a brand-new game has no sessions — auto-creates one
+      // bound to it ("新建 game 必带 session"), landing the user on a fresh session
+      // scoped to the new game before the kickoff message goes out.
+      await switchGame(cleaned);
       onClose();
       // Kick Forge with the brief so the design pipeline starts immediately.
       if (brief.trim()) {

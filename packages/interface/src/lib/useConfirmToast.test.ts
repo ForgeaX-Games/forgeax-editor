@@ -63,6 +63,23 @@ describe('parseConfirmEnvelope', () => {
   it('returns null for malformed JSON', () => {
     expect(parseConfirmEnvelope('not-json')).toBeNull();
   });
+
+  it('decodes message field from payload', () => {
+    const rawPayload = {
+      topic: 'tool.confirm-required',
+      payload: {
+        toolId: 'gen3d:auto-rig',
+        token: 'confirm-gen3d-auto-rig-1748000003000-xyz789',
+        caller: { kind: 'ai' },
+        message: 'Auto-rig will consume about 5 Meshy credits. Continue?',
+      },
+    };
+    const result = parseConfirmEnvelope(JSON.stringify(rawPayload));
+    expect(result).not.toBeNull();
+    const p = result as ConfirmPayload;
+    expect(p.message).toBe('Auto-rig will consume about 5 Meshy credits. Continue?');
+    expect(p.reason).toBeUndefined();
+  });
 });
 
 describe('parseSse + parseConfirmEnvelope (integration)', () => {

@@ -523,10 +523,18 @@ import {
         // two SharedRefStore error codes (companion to the existing
         // unique-ref-* pair). Intentional add per the same minor-evolution
         // contract.
+        //
+        // feat-20260623 #511 unified generational handle codec adds the
+        // shared-ref-stale + unique-ref-stale pair (gen-mismatch on
+        // resolve / retain after the entity+asset shared isRetiredSlot
+        // SSOT merge). Intentional add per the same minor-evolution
+        // contract.
         const INTENTIONAL_ADDS = new Set<string>([
           'spawn-data-unknown-field',
           'shared-ref-released',
           'shared-ref-double-release',
+          'shared-ref-stale',
+          'unique-ref-stale',
         ]);
 
         const added: string[] = [];

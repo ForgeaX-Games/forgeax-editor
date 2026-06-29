@@ -722,10 +722,32 @@
       "noGame": "先选择或创建一个游戏再打包。",
       "failed": "打包失败",
       "unknownError": "未知错误",
-      "done": "已打包「{{slug}}」",
+      "done": "已打包「{{slug}}」({{platform}})",
       "exportDir": "导出目录：",
-      "runLocally": "本地独立运行：",
-      "webgpuHint": "WebGPU 需在 localhost 或 HTTPS 下打开。"
+      "runLocally": "本地运行：",
+      "webgpuHint": "WebGPU 需在 localhost 或 HTTPS 下打开。",
+      "menuTitle": "打包游戏",
+      "platformWeb": "Web (静态站点)",
+      "platformWindows": "Windows (.exe)",
+      "platformAndroid": "Android (即将推出)",
+      "platformIos": "iOS (即将推出)",
+      "rebuildEngine": "重新编译引擎核心",
+      "rebuildEngineHint": "开发者模式：重新编译 Rust→WASM 引擎核心 (wgpu-wasm)",
+      "engineRoot": "引擎根目录",
+      "engineRootInvalid": "缺少依赖",
+      "engineRootNone": "未探测到可用引擎根",
+      "history": "打包历史",
+      "historyEmpty": "暂无打包记录",
+      "historyDelete": "删除",
+      "historyDeleteConfirm": "确定删除此记录？",
+      "historyRetry": "重试",
+      "historyCleanArtifacts": "同时清理产物",
+      "progressTitle": "正在打包…",
+      "progressPhase": "阶段: {{phase}}",
+      "progressClose": "关闭",
+      "jobSuccess": "打包成功",
+      "jobFailed": "打包失败",
+      "cachedShell": "使用了缓存的启动器"
     },
     "layout": {
       "tooltip": "布局 · 重开 / 重置 / 预设"
@@ -734,8 +756,8 @@
       "tooltip": "系统设置 · Plugins / Keys / Models / About"
     },
     "publish": {
-      "packaging": "正在打包独立游戏…",
-      "tooltip": "打包成独立游戏 · 可本地独立跑"
+      "packaging": "正在打包 {{platform}}…",
+      "tooltip": "打包游戏到目标平台"
     }
   },
   "agentSwitcher": {
@@ -779,6 +801,7 @@
       "history": "历史",
       "capabilities": "组件",
       "material": "材质",
+      "mesh": "网格",
       "timeline": "时间轴",
       "matgraph": "材质图",
       "launcher": "启动器"

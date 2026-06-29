@@ -132,7 +132,7 @@ export const AGENT_GROUPS: AgentGroup[] = [
     id: 'reel-family',
     kind: 'subagent-family',
     leadId: 'reia',
-    memberIds: ['reel-storyboard', 'reel-video', 'reel-visual'],
+    memberIds: ['reel-storyboard', 'reel-video', 'reel-visual', 'reel-editor'],
   },
   {
     // Scene-asset pipeline family — `director` (场景总监, role=orchestrator)

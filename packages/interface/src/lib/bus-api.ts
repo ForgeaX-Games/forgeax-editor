@@ -126,13 +126,18 @@ export async function listBusPlugins(kind?: string): Promise<BusPluginListRespon
   const url = kind
     ? `/api/bus/plugins?kind=${encodeURIComponent(kind)}`
     : '/api/bus/plugins';
+  const empty: BusPluginListResponse = { kind: kind ?? null, count: 0, items: [] };
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url} → ${res.status}`);
-  // Standalone (no backend) serves the SPA index.html for unknown /api routes —
-  // a 200 with text/html. There is no plugin bus without a server, so degrade
-  // to an empty list instead of choking on `<!doctype html>`.
+  // The plugin bus is a studio-only surface (workbench app, front-L2). The
+  // standalone editor has NO bus router, so its absence is EXPECTED, not an
+  // error — degrade to an empty list either way the "no backend" shows up:
+  //   - no `--game`: unknown /api routes fall to the SPA fallback → 200 + html
+  //   - with `--game`: the game-backend answers non-bus routes → 404 + json
+  // (Before, only the html case degraded; the 404+json slipped past the !ok
+  // guard and threw an Uncaught error in DockShell's boot effect.)
+  if (!res.ok) return empty;
   if (!res.headers.get('content-type')?.includes('application/json')) {
-    return { kind: kind ?? null, count: 0, items: [] };
+    return empty;
   }
   return (await res.json()) as BusPluginListResponse;
 }

@@ -62,8 +62,12 @@ export interface ForgeaXAgentNode {
 
 // ─── REST：sessions CRUD ─────────────────────────────────────────────────
 
-export async function fetchSessionList(): Promise<SessionMeta[]> {
-  const r = await fetch("/api/sessions");
+// `game` scopes the list to one game's sessions (整个 session 面板按 game 收口).
+// Omitting it lets the server fall back to the active game; passing the current
+// pinned slug keeps every surface showing only that game's sessions.
+export async function fetchSessionList(game?: string): Promise<SessionMeta[]> {
+  const url = game ? `/api/sessions?game=${encodeURIComponent(game)}` : "/api/sessions";
+  const r = await fetch(url);
   if (!r.ok) throw new Error(`GET /api/sessions ${r.status}`);
   const j = (await r.json()) as { sessions?: SessionMeta[] };
   return j.sessions ?? [];

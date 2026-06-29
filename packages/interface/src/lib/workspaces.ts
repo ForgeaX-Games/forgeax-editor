@@ -20,8 +20,10 @@ const LAYOUT_VERSION_KEY = STORAGE_KEYS.wsLayoutVersion;
 // to hit "重置布局" manually. (Version 3: 2026-06 — evict layouts saved while
 // editor iframes fell back to the outer Studio shell, causing nested workspaces.
 // Version 4: 2026-06 — Info panel now defaults into the bottom History/Timeline/
-// Capabilities group instead of floating top-right.)
-export const CURRENT_LAYOUT_VERSION = 4;
+// Capabilities group instead of floating top-right.
+// Version 5: 2026-06 — add the Mesh panel as a tab in the top-right
+// Inspector/Material group (was registered but never seeded into the layout).)
+export const CURRENT_LAYOUT_VERSION = 5;
 
 // Core workspace IDs — always present, cannot be deleted.
 export const CORE_WORKSPACE_IDS = new Set(['preview', 'edit', 'workbench']);

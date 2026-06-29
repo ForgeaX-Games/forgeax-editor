@@ -595,8 +595,14 @@ export { quat } from '@forgeax/engine-math';
  * const unlitWhite = Materials.unlit([1, 1, 1, 1]);
  * const standardPbr = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
  * ```
+ *
+ * `SPRITE_PREMULTIPLIED_ALPHA_BLEND` is a sibling re-export here for
+ * sprite materials opting into the transparent compositing route —
+ * assign on `MaterialPassDescriptor.renderState.blend`. See
+ * `./materials.ts` for the constant's full JSDoc (factor pair, equation,
+ * paste-able snippet).
  */
-export { Materials } from './materials';
+export { Materials, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Inspector contributor (feat-20260516-console-dependency-inversion / w4rb)
@@ -640,6 +646,15 @@ export { registerRuntimeInspector } from './register-inspector';
 // serializes the POD into a valid internal-text-package JSON object
 // suitable for disk write via forge.json / file system writer.
 export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
+// feat-20260626 M6 / m6-4: debug-draw auto-attach glue is re-exported from the
+// main barrel (was a separate tsup entry). The separate entry produced a SECOND
+// module copy of the mutable `registeredDebugDraw` registry: createApp set it on
+// the subpath copy, but the URP/HDRP pipelines (bundled into index) read their
+// own always-null copy AND tsup dead-code-eliminated the flush body into a stub,
+// so DebugDraw.flush() never ran in the browser build (debug overlay leaked +
+// never rendered). One barrel entry => one module copy => one registry shared by
+// createDebugDrawOnReady (the writer) and attachDebugOverlayPass (the reader).
+export { attachDebugOverlayPass, createDebugDrawOnReady } from './debug-draw-glue';
 export {
   HdrpCapsInsufficientError,
   HdrpIndexListOverflowError,

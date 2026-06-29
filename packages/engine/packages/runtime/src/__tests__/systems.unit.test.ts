@@ -738,8 +738,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       defaultWhiteTextureView: { __label: 'default-white-view' },
       unlitPipeline: { __label: 'unlit' },
       standardPipeline: { __label: 'standard' },
-      spritePipeline: { __label: 'sprite' },
-      spritePipelineHdr: { __label: 'sprite-hdr' },
       unlitPipelineHdr: null,
       standardPipelineHdr: null,
       shadowFallbackTextureView: { __label: 'shadow-fallback-view' },
@@ -3635,12 +3633,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       defaultWhiteTextureView: { __label: 'default-white-view' },
       unlitPipeline: f.fakeUnlitPipeline,
       standardPipeline: f.fakeStandardPipeline,
-      // feat-20260520-2d-sprite-layer-mvp M-3 / w24: sprite alpha-blend
-      // pipeline pair added to PipelineState SSOT. Tonemap-pipeline-split
-      // fixture stays an opaque-bucket test (no sprite entity); fields
-      // present so PipelineState type-check passes but never bound.
-      spritePipeline: { __label: 'sprite-pipeline' },
-      spritePipelineHdr: { __label: 'sprite-pipeline-hdr' },
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w10:
+      // sprite-specific PipelineState fields removed (AC-12). Sprite PSO
+      // now flows through the same generic per-MaterialShader pipeline cache
+      // every other transparent material uses (plan-strategy D-7).
       unlitPipelineHdr: f.fakeUnlitHdrPipeline,
       standardPipelineHdr: f.fakeStandardHdrPipeline,
       perPassResources: {

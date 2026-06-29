@@ -29,6 +29,7 @@ import { useAppStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
 import { DetachedSurface } from './components/DetachedSurface';
 import { installHealthBridge } from './components/StatusBar/healthBridge';
+import { beginAppBoot, appBootSpan, endAppBoot } from './lib/trace';
 
 // Boot Aegis (Galileo) front-end monitoring first, before any heavy boot work,
 // so early throws are captured. Inert unless VITE_AEGIS_* is configured (PROD,
@@ -126,9 +127,11 @@ function bootStore() {
 }
 
 function bootFullShell(el: HTMLElement) {
+  // 全链路 trace:app.boot 初始化 trace(store-wiring + shell-mount;纯浏览器)。
+  beginAppBoot();
   // R3 (2026-05-20 重做) —— boot 流程见 bootStore():subscribeSessionStream 先挂
   // handler,再 initSessions → connectForgeaXWs。store 是唯一真值源。
-  bootStore();
+  appBootSpan('app.boot.store', () => bootStore());
 
   // Windowing: when a detached surface window is closed by the user, redock it
   // (the main window re-mounts its keep-alive iframe). No-op in the browser
@@ -144,13 +147,16 @@ function bootFullShell(el: HTMLElement) {
     (window as unknown as Record<string, unknown>)['__dev'] = useAppStore;
   }
 
-  createRoot(el).render(
-    <StrictMode>
-      <ErrorBoundary scope="studio-shell">
-        <BrandProvider>
-          <App />
-        </BrandProvider>
-      </ErrorBoundary>
-    </StrictMode>,
-  );
+  appBootSpan('app.boot.shell', () => {
+    createRoot(el).render(
+      <StrictMode>
+        <ErrorBoundary scope="studio-shell">
+          <BrandProvider>
+            <App />
+          </BrandProvider>
+        </ErrorBoundary>
+      </StrictMode>,
+    );
+  });
+  endAppBoot();
 }

@@ -38,6 +38,7 @@ import {
   MeshRenderer,
   setTransparentSortConfig,
   SpriteRegionOverride,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   Tilemap,
   TileLayer,
@@ -583,14 +584,23 @@ function registerCharacterMaterial(
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+        // `renderState.blend` drives LDR split + premultiplied-alpha
+        // pipeline + transparentDispatch routing (preset
+        // `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: [1, 1, 1, 1],
-      texture: args.texture,
+      // feat-20260625 M3 / w11 (D-4): UBO-aligned 1:1 with paramSchema.
+      // flipY is still a recognised user input (extract folds it into region
+      // sign-negation per plan-strategy D-8); colorTint / baseColorTexture /
+      // pivotAndSize replace the legacy baseColor / texture / pivot keys.
+      colorTint: [1, 1, 1, 1],
+      baseColorTexture: args.texture,
       sampler: args.sampler,
       region: [0, 0, 1, 1],
-      pivot: [0.5, 0.0],
+      pivotAndSize: [0.5, 0.0, 1, 1],
       flipY: 1,
     },
   });

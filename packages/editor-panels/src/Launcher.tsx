@@ -20,7 +20,7 @@ export function LauncherPanel() {
   const current = useSceneFile();
   const [value, setValue] = useState<string>(CAMPAIGN);
   const [savedAt, setSavedAt] = useState<number>(0);
-  const levels = scenes.filter((s) => s.group !== 'asset');
+  const levels = scenes;
   const currentEntry = scenes.find((s) => s.id === current);
 
   useEffect(() => {
@@ -60,7 +60,7 @@ export function LauncherPanel() {
         <div className="launcher-label">{t('editor.launcher.editingInThisWindow')}</div>
         <div className="launcher-current" title={t('editor.launcher.editingHint')}>
           {currentEntry
-            ? `${currentEntry.group === 'asset' ? '✎' : '🗺'} ${currentEntry.name ?? currentEntry.id}`
+            ? `🗺 ${currentEntry.name ?? currentEntry.id}`
             : t('editor.launcher.mainScene')}
         </div>
       </div>

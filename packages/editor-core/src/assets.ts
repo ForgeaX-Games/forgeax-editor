@@ -46,9 +46,12 @@ async function allGamePackPaths(_slug: string): Promise<string[]> {
 /**
  * Resolve the engine SSOT `forge.json.defaultScene` (a scene GUID) to the
  * game-relative pack path that DECLARES that scene asset (e.g.
- * `scenes/rogue-encampment.pack.json`). This is how the editor opens the SAME
- * scene ▶ Play boots, instead of falling back to a stray legacy `scene.pack.json`.
- * Returns null when the GUID isn't found in any pack (caller keeps legacy mode).
+ * `scenes/rogue-encampment.pack.json` or `assets/scene.pack.json`). This is the
+ * canonical scene-as-asset path: a scene is a GUID-keyed asset, and the editor
+ * opens the SAME scene ▶ Play boots by resolving that GUID — the engine's own
+ * templates/game-default ships this shape (`assets/scene.pack.json` + defaultScene).
+ * Returns null when the GUID isn't found in any pack (caller falls back to LEGACY
+ * single-scene mode: a top-level `scene.pack.json` with no defaultScene GUID).
  */
 export async function findScenePackByGuid(
   slug: string | null | undefined,

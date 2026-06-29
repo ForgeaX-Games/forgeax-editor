@@ -42,6 +42,7 @@ import {
 } from '../store';
 import { onSessionEvent, type SessionEvent } from './forgeax-bridge';
 import { ratioFromUsage } from './event-engine/turn-accumulator';
+import { chatFirstToken, chatTurnEnd } from './trace';
 import { t } from '@/i18n';
 
 // ─── server event payload shapes ─────────────────────────────────────────
@@ -572,6 +573,7 @@ function dispatch(evt: SessionEvent): void {
     if (chunk.type === 'text') {
       const t = chunk.text ?? '';
       if (!t) return;
+      chatFirstToken(emitter); // 全链路 trace:首 token → 收 ui.request、起 ui.stream(幂等;thinking 站点亦调)
       patchMsg(sid, emitter, ctx.msg.id, (m) => ({
         ...m,
         text: m.text + t,
@@ -583,6 +585,7 @@ function dispatch(evt: SessionEvent): void {
     if (chunk.type === 'thinking') {
       const t = chunk.text ?? '';
       if (!t) return;
+      chatFirstToken(emitter); // 全链路 trace:思考 token 也算首 token(真实 TTFT,幂等)
       patchMsg(sid, emitter, ctx.msg.id, (m) => ({
         ...m,
         thinking: (m.thinking ?? '') + t,
@@ -690,6 +693,8 @@ function dispatch(evt: SessionEvent): void {
         return { ...m, status: 'done', durationMs };
       });
     }
+    // 全链路 trace:收 ui.stream、起 ui.render,rAF 后(真实上屏帧)收 ui.render + ui.send root。
+    chatTurnEnd(emitter, !p.error, p.error);
     useAppStore.setState((s) => {
       const tabs = s.tabs.map((t) => {
         if (t.sid !== sid) return t;

@@ -13,7 +13,6 @@ import {
   Camera,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
-  DirectionalLight,
 } from '@forgeax/engine-runtime';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
@@ -33,7 +32,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, getSceneFile, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
@@ -379,30 +378,9 @@ const resolveMeshSubmeshCount = (guid: string): number | undefined =>
 // uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
 const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount);
 
-// Asset-edit mode: a standalone prefab-style pack (Assets panel monster/character asset,
-// id `monster:<name>` / `character:<name>`) is a few units tall at the origin —
-// the arena-scale default framing leaves it a speck on the horizon, and without
-// a scene Sun its PBR reads near-black. Frame close-up and add a neutral key
-// light (NOT part of the doc, so it never saves into the asset).
-//
-// EXACTLY ONE DirectionalLight: the engine's first-slice cap supports a single
-// directional (N>1 drops the rest + warns "render-system-multi-light"), so the
-// old key+fill rig silently lost the fill anyway. The cool fill is replaced by
-// the Skylight ambient installed below. Shadow fields are now part of
-// DirectionalLight itself (castShadow defaults to true).
-const sceneFile = getSceneFile() ?? '';
-const isAssetEdit = sceneFile.startsWith('monster:') || sceneFile.startsWith('character:');
-if (isAssetEdit) {
-  world.spawn(
-    { component: Transform, data: {} },
-    { component: DirectionalLight, data: { directionX: -0.5, directionY: -1, directionZ: -0.6, colorR: 1, colorG: 0.97, colorB: 0.92, intensity: 2.6, castShadow: true, cascadeCount: 2, mapSize: 2048, farPlane: 40, nearPlane: 0.05 } },
-  );
-}
-
 // Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
 const viewport = createViewport({
   canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync,
-  ...(isAssetEdit ? { initialOrbit: { target: [0, -0.9, 0] as [number, number, number], dist: 8.5, pitch: -0.18 } } : {}),
 });
 window.addEventListener('resize', () => viewport.refresh());
 
@@ -500,12 +478,19 @@ void setupEditorSkylight(
 // hits the cache and renders real geometry instead of the placeholder cube.
 // (Mirrors the GltfRef preload above + the preview.skin loadByGuid path.)
 {
+  // GUIDs whose load already failed (bad guid / catalog miss / loader throw).
+  // preloadMeshes re-runs on EVERY bus mutation, and a failed GUID never lands
+  // in `preloadedMeshes`, so without this quarantine a stale/dangling meshAsset
+  // ref (e.g. an old builtin-cube GUID a pre-migration scene still carries)
+  // re-issues loadByGuid → POST /__import → 404 on every doc edit, flooding the
+  // console. Mirrors the `failedGltfPaths` quarantine in the GltfRef preload.
+  const failedMeshGuids = new Set<string>();
   const collectMeshGuids = (): Set<string> => {
     const guids = new Set<string>();
     const packMeshGuids = new Set(packAssets.filter((a) => a.kind === 'mesh').map((a) => a.guid));
     for (const e of Object.values(bus.doc.entities)) {
       const g = (e?.components as { Mesh?: { meshAsset?: string } } | undefined)?.Mesh?.meshAsset;
-      if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g)) guids.add(g);
+      if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g) && !failedMeshGuids.has(g)) guids.add(g);
     }
     return guids;
   };
@@ -520,9 +505,9 @@ void setupEditorSkylight(
     await Promise.all([...guids].map(async (g) => {
       try {
         const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
-        if (!parsed.ok || parsed.value === undefined) { console.warn('[editor] mesh preload bad guid:', g); return; }
+        if (!parsed.ok || parsed.value === undefined) { failedMeshGuids.add(g); console.warn('[editor] mesh preload bad guid:', g); return; }
         const res = await (renderer.assets as never as { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
-        if (!res.ok) { console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
+        if (!res.ok) { failedMeshGuids.add(g); console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
         const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MeshAsset', res.value);
         preloadedMeshes.set(g, handle);
         // Capture the submesh count alongside the handle so the instantiator can
@@ -532,6 +517,7 @@ void setupEditorSkylight(
         if (typeof subs?.length === 'number' && subs.length > 0) preloadedMeshSubmeshCounts.set(g, subs.length);
         landed = true;
       } catch (err) {
+        failedMeshGuids.add(g);
         console.warn('[editor] mesh preload failed:', g, (err as Error)?.message ?? err);
       }
     }));

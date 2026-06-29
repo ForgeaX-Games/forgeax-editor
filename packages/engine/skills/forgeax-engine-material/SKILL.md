@@ -200,6 +200,33 @@ const handle = renderer.assets.register(mat).unwrap();
 
 POJO 路径仍走完整 loader pipeline：`MATERIAL_PARAM_TEXTURE_FIELDS` 白名单字段照样解析 GUID → handle，shader 标识符同样走 `registerMaterialShader` 注册表查询。区别只是构造期不走工厂语法糖。
 
+### Sprite material：`renderState.blend` 是 transparent 的 SSOT
+
+sprite material 走同一条 `MaterialAsset` POJO 路径，区别仅在 shader id 与 `renderState.blend`。**`renderState.blend !== undefined` 是 transparent 路由（LDR sub-pass split + back-to-front sort）的 SSOT 信号**；旧版 `transparent: boolean` 字段已被 feat-20260626 坍缩消亡。推荐 preset：`SPRITE_PREMULTIPLIED_ALPHA_BLEND`（`@forgeax/engine-runtime` re-export 自 `packages/runtime/src/materials.ts`）。
+
+```ts
+import {
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+  type MaterialAsset,
+} from '@forgeax/engine-runtime';
+
+const spriteMat: MaterialAsset = {
+  kind: 'material',
+  passes: [{
+    name: 'Forward',
+    shader: 'forgeax::sprite',
+    renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+  }],
+  paramValues: {
+    colorTint: [1, 1, 1, 1],
+    baseColorTexture: spriteTextureGuid,   // dash-form GUID string
+    sampler: spriteSamplerGuid,
+  },
+};
+```
+
+漏写 `renderState.blend` → 走 opaque pass（hard-edged 非 blended quad）。SSOT 与 preset 速查表（additive / multiply / straight-alpha / opaque overlay 字面量）见 `packages/runtime/README.md` §Sprite materials。
+
 ## 世界空间视频纹理 -- VideoPlayer + paramValues video GUID
 
 **一句话价值：** 视频就是"会动的贴图"——`MaterialAsset.paramValues` 的贴图字段（如 `baseColorTexture`）填入 VideoAsset GUID 后，材质采样视频帧的方式与静态贴图完全相同。AI 用户只需改一句 GUID，其余链路无需变动。

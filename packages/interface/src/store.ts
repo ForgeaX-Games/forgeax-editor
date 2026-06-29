@@ -658,6 +658,10 @@ interface AppState {
   /** 重新拉一遍 server sessions 列表，merge 进 tabs（保留本地 messages / 各 tab
    *  in-flight 状态）。手动刷新 / 切换后兜底用。 */
   refreshSessions: () => Promise<void>;
+  /** 切换当前 game（GameSwitcher.onPick 与新建 game 共用）：pin → 设为 server active
+   *  game（使新建 session 绑对）→ 按该 game 收口刷新 session 列表 → 落到最近活跃的一条；
+   *  该 game 0 条 session 时自动新建一条（"新建 game 必带 session"）。 */
+  switchGame: (slug: string) => Promise<void>;
   renameTab: (sid: string, displayName: string) => void;
   /** L3 sub-agent switcher (P6d step d). For tabs with a server-side thread,
    *  PATCH /api/threads/:id { activeEmitterId } so the next /api/chat turn
@@ -2695,12 +2699,14 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
     _initSessionsPending = (async () => {
       const { fetchSessionList, createSession, connectForgeaXWs } = await import('./lib/forgeax-bridge');
       try {
-        let metas = await fetchSessionList();
+        // 列表恒按当前 game 收口（pinnedSlug；null 时 server 回落 active game）。
+        const scope = get().pinnedSlug ?? undefined;
+        let metas = await fetchSessionList(scope);
         if (metas.length === 0) {
           // 真空态：兜底建一条。**不**传 displayName / defaultDir —— 让 server 端
           // 缺省决定，UI 走 tabLabel 占位规则反映"无名"真值，不再硬塞 default。
           const { sid } = await createSession({ autoStart: true });
-          metas = await fetchSessionList();
+          metas = await fetchSessionList(scope);
           // 兜底：如果 list 里居然没看到刚建的（应该不会，但 fs-watcher race 等
           // 极端情况），手动补一条 meta 进去保证 UI 有 tab。
           if (!metas.some((m) => m.sid === sid)) {
@@ -2752,7 +2758,8 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
   refreshSessions: async () => {
     const { fetchSessionList } = await import('./lib/forgeax-bridge');
     try {
-      const metas = await fetchSessionList();
+      // 同 initSessions：按当前 game 收口（pinnedSlug；null → server 回落 active game）。
+      const metas = await fetchSessionList(get().pinnedSlug ?? undefined);
       set((s) => {
         const byOldSid = new Map(s.tabs.map((t) => [t.sid, t] as const));
         const merged: ChatTab[] = metas.map((m) => {
@@ -2801,6 +2808,34 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
     } catch (e) {
       console.warn('[refreshSessions] failed', e);
     }
+  },
+
+  switchGame: async (slug) => {
+    // 一条机制,GameSwitcher.onPick 与新建 game 共用:pin → 设 server active game(使
+    // 后续新建 session 绑到该 game)→ 按 game 收口刷新列表 → 落最近活跃一条/空则新建。
+    get().setPinnedSlug(slug);
+    try {
+      const r = await fetch(`/api/workbench/games/${encodeURIComponent(slug)}/activate`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch (e) {
+      // pin 已切了 preview/agents,但 server 没记下 active game —— 显式报出而非默默
+      // 让 session scope 错位。仍继续刷新(server 端 fallback 会按旧 active game 收口)。
+      void alertDialog({
+        title: t('gameSwitcher.activateFailedTitle'),
+        body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
+      });
+    }
+    await get().refreshSessions();
+    const tabs = get().tabs;
+    if (tabs.length === 0) {
+      // 该 game 还没有 session(新建 game / 从未用过)→ 自动建一条,保证总有可用 session。
+      await get().createNewSession();
+      return;
+    }
+    // D1:落到最近活跃的一条。switchToSession 会重连 WS,故无条件调(refreshSessions
+    // 只改 tabs/activeSid,不重连 WS)。
+    const recent = [...tabs].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0];
+    await get().switchToSession(recent.sid);
   },
 
   createNewSession: async (opts) => {
@@ -3268,9 +3303,13 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         const candidate = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : undefined;
         const clientMsgId = `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         markEmittedClientMsg(clientMsgId);
+        // 全链路 trace:浏览器起 ui.send root,把 ui.request 的 traceparent 随 payload 下行
+        //   (键 = activeAgent = 气泡所属 slot = session-stream 的 emitter,供回传流事件续 span)。
+        const { beginChatTurn } = await import('./lib/trace');
+        const { traceparent } = beginChatTurn(activeAgent, startSid, useAppStore.getState().providerOverride ?? undefined);
         const r = await emitForgeaXMessage(startSid, expandPills(trimmed), {
           to: candidate,
-          payload: { agentId, clientMsgId, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
+          payload: { agentId, clientMsgId, traceparent, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
           handoff: 'steer',
         });
         if (!r.ok) throw new Error(r.error ?? 'emit failed');
@@ -3403,9 +3442,13 @@ export const useAppStore = create<AppState>(capStoreMiddleware((set, get) => ({
         const targetAgent = candidate;
         const clientMsgId = `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         markEmittedClientMsg(clientMsgId);
+        // 全链路 trace:浏览器起 ui.send root + ui.request,traceparent 随 payload 下行,
+        //   键 = activeAgent(= 气泡 slot = session-stream emitter)。
+        const { beginChatTurn } = await import('./lib/trace');
+        const { traceparent } = beginChatTurn(activeAgent, startSid, useAppStore.getState().providerOverride ?? undefined);
         const r = await emitForgeaXMessage(startSid, expandPills(trimmed), {
           to: targetAgent,
-          payload: { agentId, clientMsgId, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
+          payload: { agentId, clientMsgId, traceparent, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) },
         });
         if (!r.ok) throw new Error(r.error ?? 'emit failed');
         // checkpoint:server 注入并回传 msgId —— 补到预 push 的 user 气泡,并

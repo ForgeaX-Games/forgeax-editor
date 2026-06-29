@@ -18,7 +18,7 @@ import { requestReloadSlot } from '../../lib/reload-coordinator';
 
 export type EditorPanelId =
   | 'hierarchy' | 'assets' | 'inspector' | 'history'
-  | 'capabilities' | 'material' | 'timeline' | 'matgraph' | 'launcher'
+  | 'capabilities' | 'material' | 'mesh' | 'timeline' | 'matgraph' | 'launcher'
   | 'asset-inspector';
 
 const PANEL_LABEL_KEYS: Record<EditorPanelId, string> = {
@@ -28,6 +28,7 @@ const PANEL_LABEL_KEYS: Record<EditorPanelId, string> = {
   history: 'editorPanel.label.history',
   capabilities: 'editorPanel.label.capabilities',
   material: 'editorPanel.label.material',
+  mesh: 'editorPanel.label.mesh',
   timeline: 'editorPanel.label.timeline',
   matgraph: 'editorPanel.label.matgraph',
   launcher: 'editorPanel.label.launcher',

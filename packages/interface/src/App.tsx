@@ -11,7 +11,6 @@ import { VersionBadge } from './components/StatusBar/VersionBadge';
 import { SettingsPanel } from './components/SettingsPanel/SettingsPanel';
 import { SettingsSectionsRegister } from './components/SettingsPanel/SectionsRegister';
 import { ContextMenu } from './components/ContextMenu/ContextMenu';
-import { ConfirmDialog } from './components/Confirm/ConfirmDialog';
 import { FirstRunSetup } from './components/FirstRun/FirstRunSetup';
 import { DialogHost } from './lib/dialog';
 import { bootStageAppMounted } from './boot/driver';
@@ -183,10 +182,6 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
       <SettingsSectionsRegister />
       <SettingsPanel />
       <ContextMenu />
-      {/* Doc 07 §9.5 — host-side confirm dialog. Listens for
-          `tool.confirm-required` envelopes off the SSE stream and POSTs
-          the user's verdict back to /api/tools/confirm. */}
-      <ConfirmDialog />
       {/* Imperative async confirm()/alert() replacement (shadcn AlertDialog). */}
       <DialogHost />
     </div>

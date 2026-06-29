@@ -4,7 +4,7 @@
 // AC-14 (writeback addresses instance → source SceneAsset → pack) + AC-16
 // (disk round-trip: an external writer edits the pack on disk; the editor
 // reloads it and the edit-state world reflects the new pack). After the
-// SceneDocument→SceneAsset/EditSession replacement (M6) these editor-core paths
+// prior-model→SceneAsset/EditSession replacement (M6) these editor-core paths
 // must NOT break.
 //
 // This pins the EDITOR-side writeback contract that is runtime-reachable in the
