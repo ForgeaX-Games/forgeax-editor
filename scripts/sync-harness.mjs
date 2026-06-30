@@ -33,16 +33,7 @@ if (process.env.FORGEAX_SKIP_HARNESS_SYNC) {
 }
 
 function git(args, opts = {}) {
-  // GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=true: never block on a credential prompt.
-  // A missing or private harness repo over HTTPS otherwise hangs `git clone` waiting
-  // on stdin (e.g. open-source clones where the harness repo is not published), which
-  // would freeze `bun install` forever. Forcing non-interactive makes git fail fast so
-  // the graceful warn-and-exit-0 policy below can actually run.
-  return spawnSync('git', args, {
-    encoding: 'utf8',
-    ...opts,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'true', ...(opts.env || {}) },
-  });
+  return spawnSync('git', args, { encoding: 'utf8', ...opts });
 }
 
 function warnExit0(msg) {
