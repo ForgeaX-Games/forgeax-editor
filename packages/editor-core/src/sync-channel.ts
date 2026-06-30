@@ -39,6 +39,7 @@ const EDITOR_PANELS = [
   'launcher',
   'asset-inspector',
   'systems',
+  'socket-editor',
 ] as const;
 
 /** Union type of all editor panel IDs. */
@@ -107,7 +108,17 @@ export type EditorSyncMsg =
   // panel → main: batch-add asset/folder refs into AI Chat context (M5)
   | { t: 'addAssetToChat'; refs: AssetChatRef[] }
   // panel → main: add an asset to the Scene viewport (context-menu Add to Scene, D-6)
-  | { t: 'addAssetToScene'; ref: AssetChatRef };
+  | { t: 'addAssetToScene'; ref: AssetChatRef }
+  // socket-editor panel → main: drive the preview AnimationPlayer (绑点 clip
+  // scrubber, 开发文档 §9). `phase` is normalized 0..1 (main maps to seconds via
+  // the loaded clip duration); `applyPhase` distinguishes a scrub-seek from a
+  // pause/speed-only change so freezing in place never jumps the pose to 0.
+  | { t: 'clipCtl'; paused: boolean; speed: number; phase: number; applyPhase: boolean }
+  // socket-editor panel → main: one-shot viewport intents (需求 §4.1).
+  //   'resetCamera' re-aims the orbit camera to the default character framing;
+  //   'recenter' normalizes the preview character (scale-to-height + center XZ +
+  //   ground Y) so it stands at the origin regardless of the source rig's offset.
+  | { t: 'socketView'; cmd: 'resetCamera' | 'recenter' };
 
 /** Derived, geometry-free mesh statistics for the Mesh panel (wire shape). */
 export interface MeshStatsWire {
@@ -198,6 +209,8 @@ const EditorSyncMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('meshStats'), stats: z.union([ObjZ, z.null()]) }),
   z.object({ t: z.literal('addAssetToChat'), refs: z.array(ObjZ) }),
   z.object({ t: z.literal('addAssetToScene'), ref: ObjZ }),
+  z.object({ t: z.literal('clipCtl'), paused: z.boolean(), speed: z.number(), phase: z.number(), applyPhase: z.boolean() }),
+  z.object({ t: z.literal('socketView'), cmd: z.enum(['resetCamera', 'recenter']) }),
 ]);
 
 /** Validate an inbound BroadcastChannel message envelope. Returns the typed

@@ -322,3 +322,58 @@ export {
   EditorPathResolverError,
 } from './path-resolver';
 export type { PathResolver } from './path-resolver';
+
+// ── Socket (绑点) editor ──
+export {
+  SOCKET_DOC_VERSION,
+  SOCKET_EULER_ORDER,
+  SocketAuxSchema,
+  SocketDefSchema,
+  SocketDocSchema,
+  emptySocketDoc,
+  defaultSocket,
+  uniqueSocketId,
+  normalizeScale,
+  targetLenToScale,
+  scaleToTargetLen,
+  findSocket,
+} from './socket';
+export type { SocketAux, SocketDef, SocketDoc } from './socket';
+export {
+  exportSocketJson,
+  importSocketJson,
+  validateSocketDoc,
+  loadSocketDoc,
+  saveSocketDoc,
+} from './socket-io';
+export type { SocketImportResult } from './socket-io';
+export {
+  getSocketDoc,
+  setSocketDoc,
+  getSocketDocVersion,
+  useSocketDocVersion,
+  addSocket,
+  removeSocket,
+  updateSocket,
+  setSkeletonId,
+  getSelectedSocketId,
+  setSelectedSocketId,
+  useSelectedSocketId,
+  getCoordSpace,
+  setCoordSpace,
+  useCoordSpace,
+  getPivot,
+  setPivot,
+  usePivot,
+  onSocketPreview,
+  getClipControl,
+  getClipControlVersion,
+  setClipControl,
+  setClipControlForwarder,
+  onClipControl,
+  useClipControl,
+  onViewRequest,
+  requestView,
+  setViewRequestForwarder,
+} from './socket-store';
+export type { SocketCoordSpace, SocketPivot, ClipControl, SocketViewCmd } from './socket-store';

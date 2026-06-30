@@ -170,6 +170,8 @@ export interface Viewport {
   dispose(): void;
   /** Re-aim the camera (e.g. on resize the aspect changes). */
   refresh(): void;
+  /** Re-aim the orbit camera to a default ~human-character framing (需求 §4.1). */
+  resetCamera(): void;
 }
 
 const FOV = Math.PI / 3;
@@ -784,6 +786,17 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
     if (!overPanel(e.target)) e.preventDefault();
   }
 
+  /** Re-aim to the default character framing: target chest-height, ~4.5m back,
+   *  slight downward tilt — matches the socket-editor preview which grounds the
+   *  character at the origin (~1.9m tall). */
+  function resetCamera(): void {
+    target = [0, 1, 0];
+    yaw = 0.6;
+    pitch = -0.3;
+    dist = 4.5;
+    applyCamera();
+  }
+
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
@@ -868,5 +881,6 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
       despawnParam();
     },
     refresh: applyCamera,
+    resetCamera,
   };
 }
