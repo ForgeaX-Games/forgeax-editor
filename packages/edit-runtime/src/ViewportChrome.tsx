@@ -42,7 +42,7 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay }: Viewpor
 
   return (
     <>
-      <ViewportBar />
+      <ViewportBar onPlay={onPlay} onStop={onStop} onToggleDisplay={onToggleDisplay} />
       <ViewportHints />
     </>
   );

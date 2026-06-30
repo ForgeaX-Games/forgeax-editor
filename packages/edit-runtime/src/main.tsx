@@ -26,8 +26,6 @@ import {
   VagNetworkSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
-import { ViewportBar } from './ViewportBar';
-import { ViewportHints } from './ViewportHints';
 import { ViewportChrome } from './ViewportChrome';
 import { DetachedPanel } from './DetachedPanel';
 import { ContextMenuHost } from '@forgeax/editor-shared';

@@ -368,6 +368,13 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .vp-btn:disabled { opacity: 0.25; cursor: default; }
 .vp-btn.on { background: var(--lime, #d4ff48); color: var(--bg0, #0e0f10); }
 .vp-sep { width: 1px; height: 16px; background: var(--line, #2a2d30); margin: 0 2px; }
+/* FPS counter in ViewportBar (w25) — monospaced, subdued */
+.vp-fps {
+  font-size: 11px;
+  color: var(--fg3, #6b7177);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
 
 /* SceneSwitcher — level/scene-file picker (multi-scene games) */
 .vp-scene-select {
