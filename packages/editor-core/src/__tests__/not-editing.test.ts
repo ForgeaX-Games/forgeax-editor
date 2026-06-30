@@ -195,3 +195,63 @@ describe('w19 — notEditing freeze gameplay system', () => {
     expect(structureExecuted).toBe(1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// w8 — notEditing wrapping composition (discoverer registration semantics)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// w10 wraps every discovered gameplay system with
+//   `handle.runIf ? and(handle.runIf, notEditing) : notEditing`.
+// These tests pin the two arms of that ternary at the run-condition layer,
+// independent of the discoverer, so w10's wrapping has an executable contract:
+//   (1) and(originalRunIf, notEditing) is true ONLY when BOTH are true.
+//   (2) and(notEditing) (single arg — the "no original runIf" arm) is
+//       behaviorally identical to notEditing itself.
+//
+// Anchors:
+//   plan-tasks.json w8: notEditing wrapping unit test (increment)
+//   plan-strategy D-1: systems registered with and(handle.runIf, notEditing)
+//   requirements C-1: flip EditMode.active implements Simulate
+//   requirements AC-16: notEditing is an editor-core run condition; engine
+//     scheduler behavior unchanged.
+
+describe('w8 — notEditing wrapping composition', () => {
+  it('and(runIf, notEditing): true only when BOTH runIf AND notEditing are true', () => {
+    const world = freshWorld();
+
+    // runIf=true, editing off -> notEditing true -> composed true.
+    injectEditMode(world, false);
+    const alwaysTrue = (_w: World) => true;
+    expect(and(alwaysTrue, notEditing)(world)).toBe(true);
+
+    // runIf=false, editing off -> composed false (runIf gate wins).
+    const alwaysFalse = (_w: World) => false;
+    expect(and(alwaysFalse, notEditing)(world)).toBe(false);
+
+    // runIf=true, editing ON -> notEditing false -> composed false.
+    injectEditMode(world, true);
+    expect(and(alwaysTrue, notEditing)(world)).toBe(false);
+
+    // runIf=false, editing ON -> composed false.
+    expect(and(alwaysFalse, notEditing)(world)).toBe(false);
+  });
+
+  it('and(notEditing): single-arg compose equals notEditing itself', () => {
+    const world = freshWorld();
+    const composed = and(notEditing);
+
+    injectEditMode(world, true);
+    expect(composed(world)).toBe(notEditing(world));
+    expect(composed(world)).toBe(false);
+
+    injectEditMode(world, false);
+    expect(composed(world)).toBe(notEditing(world));
+    expect(composed(world)).toBe(true);
+  });
+
+  it('and(notEditing) defaults to run when EditMode resource is absent', () => {
+    const world = freshWorld();
+    // No injectEditMode call -> EditMode absent -> notEditing true (default run).
+    expect(and(notEditing)(world)).toBe(true);
+  });
+});
