@@ -14,6 +14,7 @@ import {
   perspective,
   TONEMAP_REINHARD_EXTENDED,
 } from '@forgeax/engine-runtime';
+import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
 import {
@@ -312,16 +313,60 @@ injectEditMode(world, true);
 //      the doc to pre▶ state (AC-06); runtime-spawned entities (not in snapshot
 //      projection) are despawned.
 let snapshot: ReturnType<typeof cloneEditSession> | null = null;
+/** Entity handles alive at ▶ time. Used to diff at ■ for runtime entity cleanup (R-C fallback). */
+let prePlayEntityHandles: Set<number> | null = null;
+
+/**
+ * Collect all live entity handles from the world by walking the archetype graph.
+ * The Entity.self column in each archetype row stores the packed entity handle.
+ * Reads @internal `world._getGraph()` — charter P4 engine-neutral reading.
+ */
+function collectWorldEntityHandles(w: typeof world): Set<number> {
+  const handles = new Set<number>();
+  interface ArchWithSelf { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }
+  interface WorldWithGraph { _getGraph: () => { archetypes: ArchWithSelf[] } }
+  const graph = (w as unknown as WorldWithGraph)._getGraph();
+  for (const arch of graph.archetypes) {
+    const selfCol = arch.columns.get(Entity.id)?.get('self');
+    if (!selfCol) continue;
+    for (let row = 0; row < arch.size; row++) {
+      const packed = selfCol.view[row]!;
+      if (packed !== 0) handles.add(packed as unknown as number);
+    }
+  }
+  return handles;
+}
 
 function playSimulation(): void {
   // w14: Snapshot-once at ▶ click — deep-copy bus.doc before any play mutation
   // can touch it. The snapshot lives in the viewport session lifecycle and is
   // never updated during play (snapshot-once, AC-07).
   snapshot = cloneEditSession(bus.doc);
+  // w15: Record pre▶ entity handles so ■ can diff for runtime entity cleanup.
+  prePlayEntityHandles = collectWorldEntityHandles(world);
   injectEditMode(world, false); // release game systems — notEditing gate opens
 }
 function stopSimulation(): void {
   injectEditMode(world, true); // freeze game systems — notEditing gate closes
+
+  // w15: Restore via replaceDoc(snapshot) + cleanup runtime-spawned entities.
+  // replaceDoc triggers EngineSync.forceResync → fullRebuild from snapshot,
+  // covering entity/component/field-level restore (C-2). Runtime-spawned entities
+  // (spawned by game systems outside doc projection) survive scene-instance
+  // rebuild — despawn them via pre▶→post-restore entity diff (R-C fallback).
+  if (snapshot) {
+    bus.replaceDoc(snapshot);
+    if (prePlayEntityHandles) {
+      const postRestoreHandles = collectWorldEntityHandles(world);
+      for (const h of postRestoreHandles) {
+        if (!prePlayEntityHandles.has(h)) {
+          try { world.despawn(h as never); } catch { /* entity already gone */ }
+        }
+      }
+    }
+    snapshot = null;
+    prePlayEntityHandles = null;
+  }
 }
 
 (window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile, playSimulation, stopSimulation };
