@@ -73,7 +73,7 @@ const DESIGN_DIR = resolve(INTERFACE_DIR, 'packages/design');
 // real sources WHEN the studio tree is present (embedded mode) so types resolve.
 const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
 const HOST_SDK = resolve(STUDIO_ROOT, 'packages/host-sdk/src/index.ts');
-const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/types/src/index.ts');
+const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/contracts/types/src/index.ts');
 const studioLayerAlias: Record<string, string> = {};
 if (existsSync(HOST_SDK)) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
 if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
