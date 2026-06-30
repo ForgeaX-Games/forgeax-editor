@@ -185,6 +185,10 @@ export function MeshPanel() {
   const { t } = useTranslation();
   const sel = useSelection();
   const assetSel = useAssetSelection();
+  // Called unconditionally (hooks rule); entity mode below matches it against the
+  // selected entity's bound meshAsset guid. The MAIN window publishes stats for the
+  // active mesh (entity-bound or asset-selected) — see edit-runtime main.tsx.
+  const meshStatsRaw = useMeshStats();
   const node = sel !== null ? bus.doc.entities[sel] : undefined;
   const mesh = node?.components.Mesh as Record<string, unknown> | undefined;
 
@@ -218,14 +222,32 @@ export function MeshPanel() {
   // Per-submesh material binding lives on the instance — noted, not faked.
   const material = node.components.Material as Record<string, unknown> | undefined;
   const matGuid = material && typeof material.materialAsset === 'string' ? (material.materialAsset as string) : '';
+  // Geometry stats for the bound mesh asset (published by the main window keyed by
+  // GUID). Inline primitives (no meshAsset GUID) have no loadable geometry, so we
+  // show "—" rather than fake a count. A guid mismatch means the main window is
+  // still loading → show the loading hint (parity-doc §5.1, §6).
+  const entityStats = guid !== '' && meshStatsRaw != null && meshStatsRaw.guid === guid ? meshStatsRaw : null;
   return (
     <div className="panel ed-mesh" data-testid="panel-mesh">
       <h3>Mesh · {node.name}</h3>
-      <StatRow k={t('editor.mesh.kind')} v={kind} />
+      {/* `kind` (cube/sphere/cylinder) is the builtin-primitive fallback; when a
+          meshAsset GUID is bound it WINS and the engine ignores `kind` (often a
+          stale default 'cube' — see drag-asset-spawn.ts / scene-types MeshData).
+          So only surface `kind` for a true inline primitive, else it misleads. */}
+      {guid === '' ? <StatRow k={t('editor.mesh.kind')} v={kind} /> : null}
       <div className="mat-row">
         <span className="mat-k">{t('editor.mesh.meshAsset')}</span>
         <span className={`mat-slot${guid ? ' on' : ''}`} title={guid || t('editor.mesh.primitive')}>{guid ? short(guid) : t('editor.mesh.primitive')}</span>
       </div>
+      {guid === '' ? (
+        <StatRow k={t('editor.mesh.triangles')} v="—" title={t('editor.mesh.primitive')} />
+      ) : entityStats == null ? (
+        <div className="muted mat-hint">{t('editor.mesh.loading')}</div>
+      ) : entityStats.error ? (
+        <div className="muted mat-hint">{t('editor.mesh.loadError', { error: entityStats.error })}</div>
+      ) : (
+        <MeshStatsView stats={entityStats} />
+      )}
       {material ? (
         <Section id="materials" title={t('editor.mesh.secMaterials')}>
           <div className="mat-row">
@@ -235,7 +257,7 @@ export function MeshPanel() {
           <div className="muted mat-hint">{t('editor.mesh.materialsNote')}</div>
         </Section>
       ) : null}
-      <div className="muted mat-hint">{t('editor.mesh.entityHint')}</div>
+      {guid === '' ? <div className="muted mat-hint">{t('editor.mesh.entityHint')}</div> : null}
     </div>
   );
 }
