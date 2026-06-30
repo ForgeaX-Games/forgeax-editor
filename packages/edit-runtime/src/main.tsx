@@ -33,7 +33,7 @@ import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
-import { getInputTarget } from './engine/viewport-quadrant';
+import { getInputTarget, getViewportQuadrant, setViewportQuadrant } from './engine/viewport-quadrant';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -474,6 +474,36 @@ const viewport = createViewport({
   getInputTarget,
 });
 window.addEventListener('resize', () => viewport.refresh());
+
+// ── possess exit (feat-20260630-viewport M4 / w20, requirements §3.2 + AC-15) ──
+// In play·game the game owns the cursor + input (PIE). Esc "un-possesses": it
+// switches display→scene (→ play·scene = UE Simulate), handing input back to the
+// editor for free observation. This moves ONLY the display axis — it does NOT
+// touch run / EditMode / the world, so the game keeps ticking continuously
+// (requirements §3.3 hard constraint 3: play·game ⇄ play·scene never resets).
+//
+// G is the fallback (AC-15): WKWebView (desktop .app) may swallow Esc as a system
+// gesture, so G performs the same play·game → play·scene exit. (G is also the
+// universal display toggle in requirements §3.2; the universal keyboard handler
+// for the other quadrants lands with the M5 ViewportBar/state-machine work — w20
+// owns only the possess-exit direction so the PIE → Simulate path works now.)
+//
+// This listener is intentionally OUTSIDE the viewport.ts editor handlers: those
+// early-return in play·game (w17), so a possess-exit key must be handled here
+// where it fires regardless of inputTarget. Capture phase so it runs before the
+// game's own keydown consumer can stop propagation.
+function onPossessKey(e: KeyboardEvent): void {
+  const el = e.target as HTMLElement | null;
+  const tag = el?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+  const q = getViewportQuadrant();
+  if (q.run !== 'play' || q.display !== 'game') return; // only un-possess from play·game
+  const k = e.key;
+  if (k === 'Escape' || k === 'g' || k === 'G') {
+    setViewportQuadrant({ display: 'scene' }); // → play·scene; run/EditMode/world untouched
+  }
+}
+window.addEventListener('keydown', onPossessKey, { capture: true });
 
 app.value.start();
 installFpsReport();
