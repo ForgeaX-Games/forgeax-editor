@@ -20,6 +20,7 @@ import { getRegisteredComponents, getRegisteredSystems, World } from '@forgeax/e
 import type { SystemHandle } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
+import { and, notEditing } from './run-conditions';
 
 // `World` is imported as a VALUE and used through `InstanceType<typeof World>`
 // to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
@@ -200,10 +201,18 @@ export async function discoverModules(
     }
 
     // ── Register systems into world ──
+    // Game systems are gated by `notEditing` so they freeze when EditMode.active
+    // (run=edit) and tick when EditMode is inactive (run=play). If a system
+    // already declares a runIf, compose it with AND so both conditions hold;
+    // otherwise gate it on notEditing alone. (plan-strategy D-1, requirements §8.)
     for (const sysName of allSystems) {
       const handle = getRegisteredSystems().get(sysName);
       if (handle) {
-        world.addSystem(handle);
+        const gated = {
+          ...handle,
+          runIf: handle.runIf ? and(handle.runIf, notEditing) : notEditing,
+        };
+        world.addSystem(gated);
       }
     }
 
