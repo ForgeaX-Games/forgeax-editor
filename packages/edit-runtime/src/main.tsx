@@ -33,7 +33,7 @@ import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
-import { getInputTarget, getViewportQuadrant, setViewportQuadrant } from './engine/viewport-quadrant';
+import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange } from './engine/viewport-quadrant';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -504,6 +504,20 @@ function onPossessKey(e: KeyboardEvent): void {
   }
 }
 window.addEventListener('keydown', onPossessKey, { capture: true });
+
+// ── play·scene non-commit (feat-20260630-viewport M4 / w27, AC-11) ──────────────
+// play·scene (run=play ∧ display=scene = UE Simulate) lets the user edit the
+// running game for observation, but those edits must NOT persist. bus.transientMode
+// gates that: while true, dispatch applies + repaints but does not grow undo/ledger
+// (editor-core bus.ts). Keep it in lock-step with the quadrant — true exactly in
+// play·scene, false everywhere else. Sync once at boot (default is edit·scene →
+// false) and on every quadrant change. The ■ Stop snapshot (w14/w15) is the second
+// safety net that discards the transient world state on exit (AC-07 double-safety).
+function syncTransientMode(q: { run: string; display: string }): void {
+  bus.transientMode = q.run === 'play' && q.display === 'scene';
+}
+syncTransientMode(getViewportQuadrant());
+onViewportQuadrantChange(syncTransientMode);
 
 app.value.start();
 installFpsReport();

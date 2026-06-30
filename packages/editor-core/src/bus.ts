@@ -61,6 +61,17 @@ export class EditorBus {
   readonly ledger: EditorCommand[] = [];
   /** origin of each ledger entry (index-aligned): who issued the command. */
   readonly origins: CommandOrigin[] = [];
+  /**
+   * Non-committing edit mode (feat-20260630-viewport w27, requirements AC-11).
+   * play·scene (UE Simulate) lets the user edit a running game for observation,
+   * but those edits must NOT persist: while true, `dispatch` STILL applies the
+   * command and STILL emits (the world changes + the engine sync repaints for
+   * immediate feedback), but it does NOT push to undoStack / ledger / origins.
+   * So Undo stays disabled and the AI ledger is not polluted; the ■ Stop snapshot
+   * (AC-07) discards the transient world state on exit. Set true on play·scene
+   * entry, false otherwise. Default false (normal committing dispatch).
+   */
+  transientMode = false;
 
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
@@ -69,10 +80,14 @@ export class EditorBus {
   dispatch(cmd: EditorCommand, origin: CommandOrigin = 'human'): DispatchResult {
     const r = applyCommand(this.doc, cmd);
     if (!r.ok) return r;
-    this.undoStack.push({ cmd, inverse: r.inverse, origin });
-    this.redoStack.length = 0;
-    this.ledger.push(cmd);
-    this.origins.push(origin);
+    // play·scene non-commit (w27, AC-11): apply + emit for immediate feedback, but
+    // do not grow undo/ledger/origins so the edit is non-persistent and un-undoable.
+    if (!this.transientMode) {
+      this.undoStack.push({ cmd, inverse: r.inverse, origin });
+      this.redoStack.length = 0;
+      this.ledger.push(cmd);
+      this.origins.push(origin);
+    }
     this.emit(cmd);
     return { ok: true };
   }
