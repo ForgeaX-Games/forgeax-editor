@@ -23,9 +23,10 @@ interface ViewportBarProps {
   onPlay: () => void;
   onStop: () => void;
   onToggleDisplay: () => void;
+  onFullscreen: () => void;
 }
 
-export function ViewportBar({ onPlay, onStop, onToggleDisplay }: ViewportBarProps) {
+export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: ViewportBarProps) {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live
   const gizmoMode = useGizmoMode();
   const [fps, setFpsState] = useState<number>(() => getFps());
@@ -106,6 +107,10 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay }: ViewportBarProp
         onClick={() => void saveDocToDisk()} title="Save scene (⌘S)">
         ⤓
       </button>
+      <span className="vp-sep" />
+      {/* Fullscreen play (w26, AC-14): standalone play-runtime in a new tab */}
+      <button type="button" className="vp-btn" data-testid="vp-fullscreen"
+        onClick={onFullscreen} title="Play standalone">◉</button>
     </div>
   );
 }

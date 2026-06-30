@@ -248,6 +248,11 @@ if (uiRoot) {
           const q = getViewportQuadrant();
           setViewportQuadrant({ display: q.display === 'game' ? 'scene' : 'game' });
         }}
+        onFullscreen={() => {
+          const slug = getSceneId();
+          const url = slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
+          window.open(url, '_blank', 'noopener');
+        }}
       />
     </StrictMode>,
   );
