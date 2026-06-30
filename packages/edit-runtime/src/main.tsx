@@ -28,6 +28,7 @@ import {
 } from '@forgeax/editor-core/protocol';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
+import { ViewportChrome } from './ViewportChrome';
 import { DetachedPanel } from './DetachedPanel';
 import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
@@ -36,6 +37,7 @@ import { createViewport } from './engine/viewport';
 import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange, setEditorCameraEntity, setGameCameraEntity, deriveActiveCameraEntity } from './engine/viewport-quadrant';
 import { setActiveCamera } from '@forgeax/engine-runtime';
 import { _syncDisplayMode } from './engine/display-bus';
+import { setFps, getFps } from './fps-store';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -222,12 +224,33 @@ if (Object.keys(bus.doc.entities).length === 0) {
 // Default path: always render ViewportBar (editor self-built dock retired; default
 // route is now viewport-only). The `?panel=X` and `?viewportOnly=1` query paths
 // are handled above (popout panel path) or are semantically identical.
+// ── FPS store for ViewportChrome / GameOverlay (w24). The GameOverlay needs a
+// live FPS readout. The frame-loop accumulator (installFpsReport) writes into
+// this store; ViewportChrome reads it on a subscription. Initial value is 0
+// (the first frame hasn't landed yet — the overlay shows '? FPS' until then).
+let fpsStoreValue = 0;
+// Deferred action references: playSimulation/stopSimulation are defined inside
+// bootEditor() (after the engine world is live), but the React mount runs before
+// it. The ViewportChrome callbacks resolve through this indirection so they don't
+// close over undefined references.
+const actions = {
+  play: (): void => { /* wired after engine boot */ },
+  stop: (): void => { /* wired after engine boot */ },
+};
+
 const uiRoot = document.getElementById('ui');
 if (uiRoot) {
   createRoot(uiRoot).render(
     <StrictMode>
-      <ViewportBar />
-      <ViewportHints />
+      <ViewportChrome
+        fps={fpsStoreValue}
+        onPlay={() => actions.play()}
+        onStop={() => actions.stop()}
+        onToggleDisplay={() => {
+          const q = getViewportQuadrant();
+          setViewportQuadrant({ display: q.display === 'game' ? 'scene' : 'game' });
+        }}
+      />
     </StrictMode>,
   );
 }
@@ -381,6 +404,18 @@ function stopSimulation(): void {
 }
 
 (window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile, playSimulation, stopSimulation };
+
+	// Wire deferred action references for ViewportChrome callbacks (w24). The
+	// React mount runs before bootEditor, so the callbacks were stubbed. Now
+	// that playSimulation/stopSimulation are defined, close the loop.
+	actions.play = () => {
+	  setViewportQuadrant({ run: 'play', display: 'game' });
+	  playSimulation();
+	};
+	actions.stop = () => {
+	  stopSimulation();
+	  setViewportQuadrant({ run: 'edit', display: 'scene' });
+	};
 
   // ── openProject proof-of-life (M3 w15): call openProject with fetch reader ──
   // This call path is an ADDITION (does not replace the existing EditSession
@@ -1155,6 +1190,7 @@ function installFpsReport(): void {
     if (accum >= 1) {
       const fps = Math.round(frames / accum);
       sendVagMessage(window.parent, VagFpsStatsSchema, { fps });
+      setFps(fps); // feed the in-viewport FPS counter (GameOverlay + ViewportBar)
       frames = 0; accum = 0;
     }
   });
