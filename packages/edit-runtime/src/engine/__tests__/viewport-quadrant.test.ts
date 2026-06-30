@@ -52,11 +52,11 @@ describe('possess exit: play·game → play·scene (w20, §3.2 + §3.3)', () => 
 
   it('notifies subscribers on the possess-exit transition', () => {
     setViewportQuadrant({ run: 'play', display: 'game' });
-    let fired: { run: string; display: string } | null = null;
-    const unsub = onViewportQuadrantChange((snap) => { fired = { run: snap.run, display: snap.display }; });
+    const fired: Array<{ run: string; display: string }> = [];
+    const unsub = onViewportQuadrantChange((snap) => { fired.push({ run: snap.run, display: snap.display }); });
     setViewportQuadrant({ display: 'scene' });
     unsub();
-    expect(fired).toEqual({ run: 'play', display: 'scene' });
+    expect(fired).toEqual([{ run: 'play', display: 'scene' }]);
   });
 
   it('a no-op set (same run+display) does not notify', () => {
