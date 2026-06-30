@@ -16,6 +16,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
+import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
 import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
 import {
   sendVagMessage,
@@ -467,6 +468,39 @@ installFpsReport();
 installPreviewControls();
 installErrorOverlay();
 markBootComplete(); // boot reached the live render loop — cancel the dead-boot watchdog
+
+// ── Game input chain liveness (feat-20260630-viewport M4 / w18, §8 + AC-10) ──
+// Single-world model (C-1): the game's systems run in THIS edit world. For the
+// play·game quadrant their input must flow DOM → InputBackend → InputFrameStartScan
+// → InputSnapshot resource → game system (requirements §8). createApp's canvas
+// form already wires that chain: it calls attachInputAuto(canvas, world) — which
+// inserts INPUT_BACKEND_KEY and mounts the DOM listeners — and runs inputPlugin(),
+// which registers InputFrameStartScan (engine/app create-app.ts:472 + plugin-
+// factories inputPlugin). So the chain is LIVE here through createApp, NOT absent:
+// research Finding 5 grepped main.tsx for a literal `attachInputAuto` (0 hits) and
+// read it as "edit-runtime has no game input chain", but the engine's M3/w15 cut
+// (canvas form always attaches input) means the chain rides createApp. We do NOT
+// re-attach here — a second attachInputAuto would double-bind the DOM listeners.
+//
+// Instead verify the chain at boot and emit a health breadcrumb (the AC's required
+// observable surface). The InputBackend resource is present immediately; the
+// InputSnapshot resource is written by InputFrameStartScan on the first world
+// update, so it appears one frame after start().
+{
+  const liveWorld = world as unknown as { hasResource(key: string): boolean };
+  const hasBackend = liveWorld.hasResource(INPUT_BACKEND_KEY);
+  // The scan system is registered iff the backend resource was present when
+  // inputPlugin ran (inputPlugin is a no-op without it). InputSnapshot lands on
+  // the first tick — check on the next frame so we observe the populated chain.
+  requestAnimationFrame(() => {
+    const hasSnapshot = liveWorld.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY);
+    if (hasBackend && hasSnapshot) {
+      emitBoot('input ▸ game input chain live (InputBackend + InputFrameStartScan + InputSnapshot)');
+    } else {
+      emitBoot(`input ▸ game input chain incomplete (backend=${hasBackend} snapshot=${hasSnapshot})`, 'warn');
+    }
+  });
+}
 
 // ── Game-system discovery (feat-20260630-viewport M2 / w9, research Finding 2) ──
 // Single-world model (requirements C-1): the game's systems run in THIS edit
