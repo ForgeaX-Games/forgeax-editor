@@ -33,6 +33,7 @@ import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
+import { getInputTarget } from './engine/viewport-quadrant';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -234,7 +235,14 @@ if (uiRoot) {
 // options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
 // path (not the virtual:forgeax/bundler adapter), so pass it as the bundler arg.
 setBootStage('createApp');
-const app = await createApp(canvas, {}, {
+const app = await createApp(canvas, {
+  // Pointer-lock gate (w19, requirements C-4 / OOS-4): the game's input backend
+  // auto-locks the cursor on a canvas click, which in the edit world would steal
+  // the mouse from editor orbit/pick. Gate it on the SAME derived inputTarget the
+  // viewport input gate reads — only the play·game quadrant captures the cursor.
+  // The engine stays editor-agnostic: it only calls this neutral predicate.
+  pointerLockAllowed: () => getInputTarget() === 'game',
+}, {
   shaderManifestUrl: `${BASE}/shaders/manifest.json`,
   // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss
   // so the editor viewport can lazily cook glTF sub-assets (skin, animation
@@ -460,6 +468,10 @@ const engineSync = createEngineSync(world as never, renderer as never, resolveMa
 // Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
 const viewport = createViewport({
   canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync,
+  // w17/w19: the viewport input gate reads the derived inputTarget from the
+  // {run, display} SSOT (viewport-quadrant). Only play·game returns 'game', at
+  // which point the editor handlers early-return so events reach the game canvas.
+  getInputTarget,
 });
 window.addEventListener('resize', () => viewport.refresh());
 
