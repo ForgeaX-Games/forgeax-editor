@@ -12,41 +12,13 @@
 //   research Finding 3 (runtime entity escape)
 //   plan-strategy D-3 (snapshot = deep copy bus.doc; restore = replaceDoc + cleanup)
 //
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import {
   EditorBus,
   createEditSession,
-  makeEditSession,
+  cloneEditSession,
 } from '@forgeax/editor-core';
-import type { EditSession, EntityId, EntityNode } from '@forgeax/editor-core';
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/**
- * Deep-copy an EditSession. The snapshot must be independent — mutations
- * to the original must not affect the snapshot, and vice versa.
- *
- * EditSession's `asset` getter is non-enumerable (projectSessionAsset is a
- * getter defined via Object.defineProperty), so a simple spread / JSON round-trip
- * loses it. We reconstruct the session via makeEditSession, which reapplies the
- * getter. EntityNode fields (components / hidden / source) are deep-copied so the
- * clone is a true fork.
- */
-function cloneEditSession(session: EditSession): EditSession {
-  const entities: Record<EntityId, EntityNode> = {};
-  for (const [id, node] of Object.entries(session.entities)) {
-    const nid = Number(id);
-    entities[nid] = {
-      id: node.id,
-      name: node.name,
-      parent: node.parent,
-      components: JSON.parse(JSON.stringify(node.components)),
-      ...(node.source ? { source: { ...node.source } } : {}),
-      ...(node.hidden !== undefined ? { hidden: node.hidden } : {}),
-    };
-  }
-  return makeEditSession(entities, [...session.order], session.nextLocalId);
-}
+import type { EditSession } from '@forgeax/editor-core';
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 

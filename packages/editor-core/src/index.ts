@@ -81,7 +81,7 @@ export type {
 
 // ── Edit session (authoring working state) ──
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
-export { makeEditSession, projectSessionAsset } from './edit-session';
+export { makeEditSession, projectSessionAsset, cloneEditSession } from './edit-session';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
 export { schemaFingerprint, decideReloadTier } from './hot-reload';

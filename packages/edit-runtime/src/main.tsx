@@ -33,7 +33,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode } from '@forgeax/editor-core';
+import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -304,9 +304,20 @@ injectEditMode(world, true);
 // flip is a pure resource overwrite (research Finding 1: insertResource → Map.set,
 // zero world teardown), so the world — editor orbit-camera and gizmo systems
 // included — survives untouched across ▶/■; only `notEditing`-gated game systems
-// change tick state. Snapshot/restore (w14/w15) and viewport state (w22) wire
-// these later; for now they are the injectEditMode call sites the toolbar invokes.
+// change tick state.
+//
+// Snapshot/restore (w14/w15 — plan-strategy D-3):
+//   ▶  snapshots bus.doc once (AC-07); then injectEditMode(false) releases game systems.
+//   ■  injectEditMode(true) freezes game systems; then replaceDoc(snapshot) restores
+//      the doc to pre▶ state (AC-06); runtime-spawned entities (not in snapshot
+//      projection) are despawned.
+let snapshot: ReturnType<typeof cloneEditSession> | null = null;
+
 function playSimulation(): void {
+  // w14: Snapshot-once at ▶ click — deep-copy bus.doc before any play mutation
+  // can touch it. The snapshot lives in the viewport session lifecycle and is
+  // never updated during play (snapshot-once, AC-07).
+  snapshot = cloneEditSession(bus.doc);
   injectEditMode(world, false); // release game systems — notEditing gate opens
 }
 function stopSimulation(): void {
