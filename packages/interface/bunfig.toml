@@ -1,0 +1,4 @@
+[test]
+# Register happy-dom globals before any test runs so DOM-touching units
+# (pill referenceRegistry, etc.) can use document / Element / closest().
+preload = ["./test/happydom.ts"]

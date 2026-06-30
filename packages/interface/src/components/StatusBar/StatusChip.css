@@ -1,0 +1,43 @@
+/* StatusChip — Figma: badge px-12, gap-4, Fira Mono 12px.
+   Each chip is a label + value pair; no dots, no icons, no color tones. */
+
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  letter-spacing: 0;
+  transition: background 120ms ease;
+  cursor: default;
+}
+.sb-chip.is-link {
+  cursor: pointer;
+}
+.sb-chip.is-link:hover {
+  background: var(--color-interaction-hover);
+}
+.sb-chip.is-link:focus-visible {
+  outline: 1px solid var(--color-border-strong);
+  outline-offset: -1px;
+}
+
+/* Version badge — <a> reset */
+a.sb-chip { text-decoration: none; }
+
+.sb-chip-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.sb-chip-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}

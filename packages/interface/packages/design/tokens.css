@@ -1,0 +1,14 @@
+/* =============================================================================
+   @forgeax/design · tokens.css — the single design-token entrypoint.
+
+   Import this once per app/plugin bundle:
+       import '@forgeax/design/tokens.css'
+
+   Order matters: primitives → semantic → fx-bridge.
+   It carries the FULL ForgeaX token system, so a plugin in its own iframe
+   bundle gets every `--prim-* / --color-* / --fx-*` value without depending on
+   the host injecting CSS at runtime (host only broadcasts the theme name).
+   ============================================================================= */
+@import './styles/primitive.css';
+@import './styles/semantic.css';
+@import './styles/fx-bridge.css';
