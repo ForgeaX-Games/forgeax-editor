@@ -1,0 +1,29 @@
+{
+  // Typecheck-only config for `tsc --noEmit` and `tsc -b` (lint + build).
+  //
+  // It re-adds the `react`/`react-dom` → @types/react *.d.ts path mappings that
+  // the base tsconfig.json deliberately omits. Those mappings are needed so tsc
+  // resolves a single hoisted @types/react when it follows a cross-package
+  // import (src → packages/marketplace/plugins/*), but they MUST NOT live in
+  // tsconfig.json: bun reads tsconfig.json `paths` for runtime resolution too,
+  // and would try to *execute* index.d.ts during `bun test`. Keeping them here,
+  // out of the file bun reads, is what lets bun load the real react runtime.
+  //
+  // `paths` does not merge across `extends`, so the full set is repeated.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "paths": {
+      "react": ["../node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["../node_modules/@types/react/jsx-runtime.d.ts"],
+      "react-dom": ["../node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/client": ["../node_modules/@types/react-dom/client.d.ts"],
+      "@/*": ["*"],
+      "@forgeax/design": ["../packages/design/index.ts"],
+      "@forgeax/design/preset": ["../packages/design/preset.ts"],
+      "@forgeax/design/theme": ["../packages/design/theme.ts"],
+      "@forgeax/types": ["../../types/src/index.ts"],
+      "@forgeax/host-sdk": ["../../host-sdk/src/index.ts"]
+    }
+  }
+}

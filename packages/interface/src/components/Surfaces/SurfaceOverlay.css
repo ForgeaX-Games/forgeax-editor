@@ -1,0 +1,160 @@
+.fx-surf-overlay {
+  position: fixed;
+  right: 12px;
+  /* Sit above the 24px global status bar (the chip that toggles us lives there). */
+  bottom: 32px;
+  width: 320px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 20, 24, 0.96);
+  border: 1px solid #2a2a2c;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #ccc;
+  z-index: var(--z-surface);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.fx-surf-overlay-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a2a2c;
+  background: #18181c;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.fx-surf-overlay-title {
+  color: #4a8cff;
+  font-weight: 600;
+}
+.fx-surf-overlay-hide {
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+}
+.fx-surf-overlay-hide:hover { color: #ccc; }
+/* Status-bar chip — entry point that toggles the panel. Inherits .sb-chip
+   typography from the global status bar; we only add the open-state accent. */
+.fx-surf-chip {
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary, #888);
+  cursor: pointer;
+  padding: 0 4px;
+  font: inherit;
+}
+.fx-surf-chip:hover { color: #4a8cff; }
+.fx-surf-chip-open { color: #4a8cff; }
+.fx-surf-overlay-body {
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fx-surf-overlay-empty {
+  color: #666;
+  text-align: center;
+  padding: 12px 0;
+}
+.fx-surf-card {
+  border: 1px solid #2a2a2c;
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #1c1c20;
+}
+.fx-surf-card-head {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  align-items: center;
+}
+.fx-surf-plugin {
+  color: #999;
+  font-size: 10px;
+}
+.fx-surf-id {
+  color: #4a8cff;
+}
+.fx-surf-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fx-surf-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.fx-surf-action:hover {
+  background: rgba(74, 140, 255, 0.08);
+}
+.fx-surf-action-disabled {
+  opacity: 0.5;
+}
+.fx-surf-action-id {
+  color: #d0a060;
+  font-size: 10.5px;
+}
+.fx-surf-action-label {
+  color: #ddd;
+}
+.fx-surf-hotkey {
+  background: #2a2a2c;
+  border: 1px solid #3a3a3c;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: #aaa;
+}
+.fx-surf-args {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  background: #0e0e10;
+  color: #888;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.fx-surf-empty {
+  color: #666;
+  font-style: italic;
+}
+
+/* D2 — inline run button + form. Sits next to the action id in each row. */
+.fx-surf-action-run {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px;
+  background: #1a4a78; color: #fff; border: 1px solid #2563eb;
+  border-radius: 3px; font-size: 10px; cursor: pointer;
+}
+.fx-surf-action-run:hover { background: #2563eb; }
+.fx-surf-action-form {
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding: 6px;
+  background: #0e0e0e;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+}
+.fx-surf-action-result {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #a8d4ff;
+}

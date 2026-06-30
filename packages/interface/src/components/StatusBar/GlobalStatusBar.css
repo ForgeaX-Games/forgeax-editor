@@ -1,0 +1,82 @@
+/* Global status bar — Figma: h-24px, Fira Mono 12px.
+   Layout: [version | divider] [BUS MB PROV SKILL TOOL AGENT] [spacer →]
+   CSS order trick: left(1) → right(2) → center-spacer(3); no slot-logic change. */
+
+.global-status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0;
+  background: var(--color-background-elevated);
+  border-top: 1px solid var(--color-border-default);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  user-select: none;
+  position: relative;
+  z-index: 5;
+}
+
+.sb-slot {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+/* version badge, flex-start, shrinks to content */
+.sb-slot-left {
+  order: 1;
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  gap: 0;
+}
+/* divider between version and badges via ::after */
+.sb-slot-left::after {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 10px;
+  background: var(--color-divider-default);
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+/* badges flush-left after the version divider */
+.sb-slot-right {
+  order: 2;
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  gap: 0;
+}
+/* spacer — takes remaining space and right-aligns its content (the lone
+   far-right health indicator chip). */
+.sb-slot-center {
+  order: 3;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  padding-right: 8px;
+  overflow: visible;
+}
+
+.sb-item {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.sb-overflow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border-default);
+  padding: 1px 8px;
+  margin: 0 4px;
+  border-radius: 999px;
+  cursor: help;
+}
+
+/* Chip primitive styles now live in ./StatusChip.css — see <StatusChip>.
+   This file only owns the bar layout (height / slots / overflow indicator). */

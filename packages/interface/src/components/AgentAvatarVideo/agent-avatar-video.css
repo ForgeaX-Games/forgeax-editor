@@ -1,0 +1,92 @@
+/* ADR-0019 — Agent avatar WEBM 状态机渲染样式.
+ *
+ * 容器: 固定 size, overflow:hidden, 圆 / 方两种 shape.
+ * 层级: 两个 <video> 叠在容器里做双缓冲 (AgentAvatarVideo.tsx 里的 VideoStack).
+ *   前景 opacity:1, 后景 opacity:0 在背后偷偷加载 webm; onLoadedData 后两槽 opacity
+ *   瞬切 — 没有 transition, 硬切. 这样切 state 时旧画面保持到新画面首帧 ready 才换,
+ *   不会出现"几秒空白窗" (单 <video> 改 src 会回到 HAVE_NOTHING 黑帧).
+ * 透明 PNG webm 假定底层 background 自带 (调用方可在父元素加色板).
+ */
+
+.agent-avatar-video {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  flex-shrink: 0;
+  /* 防 video 元素本身溢出 (某些 webm 元数据宽高跟容器不齐时). */
+  line-height: 0;
+}
+
+.agent-avatar-video.is-circle {
+  border-radius: 50%;
+}
+
+.agent-avatar-video.is-square {
+  border-radius: 6px;
+}
+
+.agent-avatar-video .aav-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* WEBM 立绘是 portrait (头+身), object-fit: cover 默认居中裁剪 (50%) 会把头切到框外,
+   * 圆头像里看到的是腰/身体而不是脸. 用 center top 让头紧贴顶部, 小尺寸圆头像里
+   * 一定看到脸. 大尺寸下也美观 (脸顶住顶端, 身体往下延伸到底). */
+  object-position: center top;
+  pointer-events: none;
+  /* WebKit (.app/WKWebView) 渲染 webm 透明通道时偶尔有半像素 sub-pixel 锯齿,
+   * transform: translateZ(0) 强制 GPU compositing 干净一点. */
+  transform: translateZ(0);
+}
+
+/* Per-agent 微调: 美术资源不同 agent 头部 Y 位置 / 脸占比不一致, 单独调缩放和
+ * 偏移. 用属性选择器 [data-agent-id=...] 锁定单 agent, 不影响其他 agent.
+ * 所有带 scale() 的规则统一用 transform-origin: center top, 这样缩放围绕顶端
+ * 展开, 头顶不会被多余裁掉. */
+.agent-avatar-video[data-agent-id="suzu"] .aav-layer {
+  transform: scale(1.10) translate3d(0, -12%, 0);
+  transform-origin: center top;
+}
+
+.agent-avatar-video[data-agent-id="arin"] .aav-layer {
+  transform: scale(1.10) translate3d(0, -4%, 0);
+  transform-origin: center top;
+}
+
+.agent-avatar-video[data-agent-id="kotone"] .aav-layer {
+  transform: scale(1.18) translate3d(0, -3%, 0);
+  transform-origin: center top;
+}
+
+.agent-avatar-video[data-agent-id="tsumugi"] .aav-layer {
+  transform: scale(1.06) translate3d(0, -2%, 0);
+  transform-origin: center top;
+}
+
+.agent-avatar-video[data-agent-id="lock"] .aav-layer {
+  transform: scale(1.12) translate3d(0, -10%, 0);
+  transform-origin: center top;
+}
+
+.agent-avatar-video[data-agent-id="cc-coder"] .aav-layer {
+  transform: scale(1.12) translate3d(0, -5%, 0);
+  transform-origin: center top;
+}
+
+/* iori 没缩放, 只是把整张图往下挪一点点 (立绘头部偏高). 纯 translate 下
+ * transform-origin 用不上, 省掉. */
+.agent-avatar-video[data-agent-id="iori"] .aav-layer {
+  transform: translate3d(0, 5%, 0);
+}
+
+.agent-avatar-video .aav-fallback-under {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: -1;
+  pointer-events: none;
+}
