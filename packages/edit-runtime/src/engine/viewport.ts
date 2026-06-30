@@ -36,6 +36,22 @@ const DEG2RAD = Math.PI / 180;
 
 export type Vec3 = [number, number, number];
 
+// ── input-target derivation (requirements C-4, §3) ───────────────────────────
+// The viewport spans two orthogonal axes: run (edit/play) × display (scene/game).
+// `inputTarget` is a DERIVED quantity over those two — never an independent state
+// field. The single rule (requirements §3): only `(run==='play' ∧ display==='game')`
+// routes input to the game; the other three quadrants route input to the editor.
+
+export type RunMode = 'edit' | 'play';
+export type DisplayMode = 'scene' | 'game';
+export type InputTarget = 'editor' | 'game';
+
+/** Pure selector: which surface owns viewport input for a given quadrant.
+ *  Only play·game possesses the game; every other quadrant stays editor-owned. */
+export function deriveInputTarget(run: RunMode, display: DisplayMode): InputTarget {
+  return run === 'play' && display === 'game' ? 'game' : 'editor';
+}
+
 // ── pure geometry (exported for tests) ───────────────────────────────────────
 
 /** Pixel position → normalized device coords in [-1,1], Y up. */
@@ -164,6 +180,13 @@ export interface ViewportDeps {
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
    *  origin instead of the arena-scale default. */
   initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
+  /** Live read of the current input owner (requirements C-4). When it returns
+   *  'game' (only the play·game quadrant) the editor's orbit/pick/gizmo handlers
+   *  early-return so DOM events pass through to the game's InputBackend. Defaults
+   *  to always-'editor' until the run/display state machine (w22) wires the real
+   *  derivation. The viewport never stores run/display itself — it only reads
+   *  inputTarget through this accessor (SSOT lives upstream). */
+  getInputTarget?: () => InputTarget;
 }
 
 export interface Viewport {
@@ -174,7 +197,12 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, camera, sync, initialOrbit }: ViewportDeps): Viewport {
+export function createViewport({ canvas, world, camera, sync, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+  // Input-routing gate (requirements C-4 / AC-10): in the play·game quadrant the
+  // game owns input, so every editor handler bails before doing orbit/pick/gizmo
+  // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
+  // bubbles to the canvas → game InputBackend (AC-10 hard constraint).
+  const inputToGame = (): boolean => (getInputTarget?.() ?? 'editor') === 'game';
   // orbit state — frames the typical arena (centered, looking slightly down).
   let target: Vec3 = initialOrbit?.target ? [...initialOrbit.target] : [0, 2, 0];
   let yaw = initialOrbit?.yaw ?? 0.6, pitch = initialOrbit?.pitch ?? -0.5, dist = initialOrbit?.dist ?? 34;
@@ -630,6 +658,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
 
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
+    if (inputToGame()) return; // play·game: input belongs to the game — let it pass through to canvas
     lastX = downX = e.clientX; lastY = downY = e.clientY;
     // Blender DEFAULT navigation, aligned 1:1:
     //   MMB = orbit · Shift+MMB = pan · Ctrl+MMB = zoom · wheel = zoom · LMB = select.
@@ -687,6 +716,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
   }
 
   function onMove(e: PointerEvent): void {
+    if (inputToGame()) return; // play·game: game owns pointer-move
     if (mode === 'none') return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
@@ -775,6 +805,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
 
   function onWheel(e: WheelEvent): void {
     if (overPanel(e.target)) return;
+    if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
     e.preventDefault();
     dist = Math.max(2, Math.min(300, dist * (e.deltaY > 0 ? 1.1 : 0.9)));
     applyCamera();
@@ -801,6 +832,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+    if (inputToGame()) return; // play·game: W/E/R/F gizmo shortcuts yield to the game
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 'w') setGizmoMode('translate');
@@ -812,6 +844,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit }: Vi
   // double-click an entity → select + frame it.
   function onDblClick(e: MouseEvent): void {
     if (overPanel(e.target)) return;
+    if (inputToGame()) return; // play·game: no editor double-click select/frame
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     const hit = pick(origin, dir);
     if (hit !== null) { setSelection(hit); frameSelection(); }
