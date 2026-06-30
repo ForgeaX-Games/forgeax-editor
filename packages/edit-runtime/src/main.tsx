@@ -33,7 +33,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules } from '@forgeax/editor-core';
+import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -291,7 +291,29 @@ const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
   : `${BASE}/pack-index.json`;
 renderer.assets.configurePackIndex(packIndexUrl);
 
-(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile };
+// ── EditMode resource: boot in edit state (▶/■ Simulate, w11) ─────────────────
+// Single-world model (requirements C-1): one edit-runtime world hosts both editor
+// and game systems. Game systems are gated by `notEditing` (w10), which reads
+// EditMode.active. Inject EditMode.active=true at boot so discovered game systems
+// freeze in the default edit·scene state (AC-03). ▶ Play flips it to false to let
+// them tick; ■ Stop flips it back to true. This is the ONLY EditMode writer chain
+// (Append-Only/SSOT): no other code path touches EditMode.active.
+injectEditMode(world, true);
+
+// ▶/■ command chain (w11): flip EditMode.active to start/stop the simulation. The
+// flip is a pure resource overwrite (research Finding 1: insertResource → Map.set,
+// zero world teardown), so the world — editor orbit-camera and gizmo systems
+// included — survives untouched across ▶/■; only `notEditing`-gated game systems
+// change tick state. Snapshot/restore (w14/w15) and viewport state (w22) wire
+// these later; for now they are the injectEditMode call sites the toolbar invokes.
+function playSimulation(): void {
+  injectEditMode(world, false); // release game systems — notEditing gate opens
+}
+function stopSimulation(): void {
+  injectEditMode(world, true); // freeze game systems — notEditing gate closes
+}
+
+(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile, playSimulation, stopSimulation };
 
   // ── openProject proof-of-life (M3 w15): call openProject with fetch reader ──
   // This call path is an ADDITION (does not replace the existing EditSession

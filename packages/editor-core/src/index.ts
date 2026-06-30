@@ -328,3 +328,7 @@ export {
   EditorPathResolverError,
 } from './path-resolver';
 export type { PathResolver } from './path-resolver';
+
+// ── EditMode resource injection (▶/■ Simulate, feat-20260630-viewport w11) ──
+export { injectEditMode, EDIT_MODE_KEY } from './edit-mode';
+export type { EditModeState } from './edit-mode';

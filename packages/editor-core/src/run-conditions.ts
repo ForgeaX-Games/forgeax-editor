@@ -8,9 +8,17 @@
 //   research Finding 6: engine has no and() — editor must supply it
 //   charter P4: consistent abstraction — editor helpers don't leak engine internals
 
-import type { World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 
-export type RunCondition = (world: World) => boolean;
+// `World` is imported as a VALUE and used through `InstanceType<typeof World>`
+// to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
+// as a type") that fires once this module is pulled into a consumer's tsc program
+// via the editor-core barrel (discoverer → run-conditions, w10). Same idiom +
+// reason as discoverer.ts `EcsWorld` and open-project.ts `OpenProjectWorld`; the
+// runtime value is unused at type position — purely a type-resolution shim.
+type EcsWorld = InstanceType<typeof World>;
+
+export type RunCondition = (world: EcsWorld) => boolean;
 
 /**
  * Compose multiple run conditions with AND logic.
@@ -18,7 +26,7 @@ export type RunCondition = (world: World) => boolean;
 export function and(...conds: RunCondition[]): RunCondition {
   if (conds.length === 0) return () => true;
   if (conds.length === 1) return conds[0]!;
-  return (world: World) => conds.every((c) => c(world));
+  return (world: EcsWorld) => conds.every((c) => c(world));
 }
 
 /**
@@ -30,7 +38,7 @@ export function and(...conds: RunCondition[]): RunCondition {
  * - EditMode.active=false → notEditing=true  (systems run in play mode)
  * - EditMode absent       → notEditing=true  (default: systems run)
  */
-export function notEditing(world: World): boolean {
+export function notEditing(world: EcsWorld): boolean {
   // Use hasResource + getResource instead of try-catch for cleaner semantic matching.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = world as any;
