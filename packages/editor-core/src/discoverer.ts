@@ -16,10 +16,18 @@
 //   requirements AC-07/09/10: dual-enum hit, duplicate gate, broken state
 //   charter P3: explicit failure — structured errors with property access
 
-import { getRegisteredComponents, getRegisteredSystems } from '@forgeax/engine-ecs';
-import type { World, SystemHandle } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, getRegisteredSystems, World } from '@forgeax/engine-ecs';
+import type { SystemHandle } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
+
+// `World` is imported as a VALUE and used through `InstanceType<typeof World>`
+// to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
+// as a type") that fires when this file is pulled into a consumer's tsc program
+// via the editor-core barrel (the same idiom + reason documented in
+// open-project.ts `OpenProjectWorld`). The runtime value is unused at type
+// position; this is purely a type-resolution shim.
+type EcsWorld = InstanceType<typeof World>;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -129,7 +137,7 @@ function makeError(
  * @throws DiscoverError on duplicate component/system (fail-fast).
  */
 export async function discoverModules(
-  world: World,
+  world: EcsWorld,
   scripts: Array<{ relPath: string; absPath: string }>,
 ): Promise<DiscoverResult> {
   const modules: DiscoveredModule[] = [];

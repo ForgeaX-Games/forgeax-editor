@@ -33,7 +33,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
+import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -389,6 +389,105 @@ installFpsReport();
 installPreviewControls();
 installErrorOverlay();
 markBootComplete(); // boot reached the live render loop — cancel the dead-boot watchdog
+
+// ── Game-system discovery (feat-20260630-viewport M2 / w9, research Finding 2) ──
+// Single-world model (requirements C-1): the game's systems run in THIS edit
+// world, gated by `notEditing` (w10), flipped by ▶/■ via injectEditMode (w11).
+// Before this feat the edit-runtime never imported the game's logic modules —
+// only the scene asset was projected — so ▶ Play had no systems to run. We now
+// walk the game's `src/` tree, dynamic-import each module (which registers its
+// components/systems into the engine global registry), and `discoverModules`
+// adds the registered systems to the world. Discovery is best-effort: a failure
+// degrades to "no game systems" (the editor still renders the scene), per the
+// charter's graceful-degradation boundary — it never blocks the editor boot.
+//
+// w10 attaches the `notEditing` runIf gate inside discoverModules' registration,
+// so the systems added here do NOT tick until EditMode.active flips to false.
+interface ScriptTreeNode {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  children?: ScriptTreeNode[];
+}
+
+/**
+ * Collect importable game-logic scripts for the active game.
+ *
+ * `relPath` is the game-relative path (e.g. `src/movement.ts`); `absPath` is the
+ * dev-server URL the browser can dynamic-`import()` — edit-runtime reaches game
+ * source through the same `/preview/.forgeax/games/<slug>/` proxy that
+ * play-runtime imports the game entry from. `.test.ts` / `.d.ts` and the entry
+ * `main.ts` (a bootstrap hook, not a registration module) are skipped.
+ */
+async function collectGameScripts(
+  slug: string,
+): Promise<Array<{ relPath: string; absPath: string }>> {
+  const importBase = `${BASE}/preview/.forgeax/games/${slug}`;
+  const srcRoot = resolveGamePath('src');
+  const res = await getApiClient().fetch(`/api/files/tree?root=${encodeURIComponent(srcRoot)}`);
+  if (!res.ok) return [];
+  const json = (await res.json()) as { tree?: ScriptTreeNode };
+  const scripts: Array<{ relPath: string; absPath: string }> = [];
+  const walk = (node?: ScriptTreeNode): void => {
+    if (!node) return;
+    if (node.type === 'dir') {
+      if (node.name === 'node_modules' || node.name === '.git') return;
+      node.children?.forEach(walk);
+      return;
+    }
+    if (!node.name.endsWith('.ts') && !node.name.endsWith('.tsx')) return;
+    if (node.name.endsWith('.test.ts') || node.name.endsWith('.d.ts')) return;
+    // `node.path` is the host path; recover the game-relative `src/...` tail.
+    const rel = node.path.replace(/^.*?(src\/.*)$/, '$1');
+    scripts.push({ relPath: rel, absPath: `${importBase}/${rel}` });
+  };
+  walk(json.tree);
+  return scripts;
+}
+
+/**
+ * Discover + register the active game's systems into the edit world. Logs the
+ * registered system list (observability — health feed / console). Returns the
+ * count so the hot-reload bridge can report deltas. Never throws.
+ */
+async function discoverGameSystems(): Promise<number> {
+  const slug = getSceneId();
+  if (!slug) return 0;
+  try {
+    const scripts = await collectGameScripts(slug);
+    if (scripts.length === 0) {
+      console.log('[editor] discoverModules: no game scripts found under src/');
+      return 0;
+    }
+    const result = await discoverModules(world as never, scripts);
+    const systemNames = result.modules.flatMap((m) => m.systems);
+    console.log(
+      `[editor] discoverModules: registered ${systemNames.length} system(s) from ${result.modules.length} module(s)`,
+      systemNames,
+    );
+    for (const e of result.errors) {
+      console.warn(`[editor] discoverModules: ${e.code} — ${e.expected} (${e.hint})`);
+    }
+    return systemNames.length;
+  } catch (e) {
+    // Graceful degradation: discovery failure leaves the scene rendering; the
+    // game just has no live systems until the author fixes the module.
+    console.warn('[editor] discoverModules failed (editor still renders scene):', e);
+    return 0;
+  }
+}
+
+await discoverGameSystems();
+
+// Hot-reload bridge (w9): when vite pushes a game-source update, re-run the
+// discoverer so newly added/edited systems re-register into the live world.
+// import.meta.hot is undefined in production builds — the guard keeps this a
+// dev-only path.
+if (import.meta.hot) {
+  import.meta.hot.on('vite:afterUpdate', () => {
+    void discoverGameSystems();
+  });
+}
 
 // Environment: load an HDR → IBL Skylight (ambient/specular fill) + visible
 // SkyboxBackground. Uses the shared template HDR (matches what ▶ Play installs

@@ -87,6 +87,12 @@ export { makeEditSession, projectSessionAsset } from './edit-session';
 export { schemaFingerprint, decideReloadTier } from './hot-reload';
 export type { ReloadTier, SchemaSource } from './hot-reload';
 
+// ── Module discoverer (feat-20260630-viewport M2 / w9: edit-runtime wires the
+// game systems into the single edit world through this; the only production
+// system-registration path) ──
+export { discoverModules } from './discoverer';
+export type { DiscoveredModule, DiscoverResult } from './discoverer';
+
 // ── Schema ──
 export {
   listComponentSchemas,
