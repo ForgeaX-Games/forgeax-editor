@@ -1,16 +1,19 @@
 // Viewport quadrant state — the {run, display} SSOT for the 2×2 viewport model
 // (requirements §3, item 3: the viewport panel holds local run + display state,
 // and input ownership is a derived selector). This is the single source of truth
-// for those two axes; every derived quantity (inputTarget, and later activeCamera
-// / aux-visibility) falls out of it — nothing else stores run or display
+// for those two axes; every derived quantity (inputTarget, activeCamera entity,
+// auxiliary-visibility) falls out of it — nothing else stores run or display
 // independently (C-4).
 //
 // M4 ships the minimal holder the input-gating / pointer-lock / possess / transient
-// tasks (w17/w19/w20/w27) need to read and flip the quadrant. The full state
-// machine + programmable API (w22, M5) ENRICHES this module (activeCamera
-// derivation, consumer fan-out to the display-visibility bus + ViewportBar); it
-// does not replace it. Keeping the SSOT here from M4 means w22 extends one module
-// rather than migrating scattered state.
+// tasks (w17/w19/w20/w27) need to read and flip the quadrant. w22 (M5) enriches
+// this module with activeCamera derivation and camera-entity registration so the
+// renderer can switch between the editor orbit camera and the game camera per
+// quadrant — the engine stays neutral (OOS-4), receiving only an entity id.
+//
+// Programmable API (§10.1): getViewportQuadrant / setViewportQuadrant are the
+// single SSOT entry points for both human UI gestures (ViewportBar) and scripted
+// AI users — same surface, same semantics (charter P4).
 
 import { deriveInputTarget, type RunMode, type DisplayMode, type InputTarget } from './viewport';
 
@@ -28,6 +31,52 @@ export interface ViewportQuadrant {
 // display=scene; aids + ViewportBar on, game logic stopped).
 let run: RunMode = 'edit';
 let display: DisplayMode = 'scene';
+
+// ── camera entity registration (w22) ────────────────────────────────────────
+// The engine's ActiveCamera resource (w12) receives an entity id; the editor
+// decides WHICH entity that is based on the current quadrant. The editor orbit
+// camera is spawned at boot (main.tsx cameraEntity); the game camera entity is
+// discovered from the game scene. These two ids are registered here so the
+// quadrant module can derive the active camera for any quadrant without holding
+// a world reference.
+
+let editorCameraEntity: number | undefined;
+let gameCameraEntity: number | undefined;
+
+/**
+ * Register the editor's orbit-camera entity so the quadrant module can derive
+ * which camera should be active.
+ */
+export function setEditorCameraEntity(entity: number): void {
+  editorCameraEntity = entity;
+}
+
+/**
+ * Register the game's camera entity (discovered from the authored scene or
+ * explicitly set by game logic). `undefined` means "no game camera found" —
+ * the renderer falls back to its first-hit behavior (D-8).
+ */
+export function setGameCameraEntity(entity: number | undefined): void {
+  gameCameraEntity = entity;
+}
+
+/**
+ * Derive the entity id of the camera that should be active for the current
+ * quadrant. This is a PURE derivation from {run, display} + the registered
+ * camera entities — no side effects.
+ *
+ * - play·game: use the game camera (if registered), otherwise fall back to
+ *   `undefined` (the renderer handles the no-camera case per D-8).
+ * - all other quadrants: use the editor orbit camera.
+ *
+ * Returns `undefined` when no camera is registered for the derived quadrant.
+ */
+export function deriveActiveCameraEntity(): number | undefined {
+  if (run === 'play' && display === 'game') {
+    return gameCameraEntity; // may be undefined → renderer fallback (D-8)
+  }
+  return editorCameraEntity;
+}
 
 type QuadrantListener = (q: ViewportQuadrant) => void;
 const listeners = new Set<QuadrantListener>();

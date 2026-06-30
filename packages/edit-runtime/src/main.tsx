@@ -33,7 +33,8 @@ import { ContextMenuHost } from '@forgeax/editor-shared';
 import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
-import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange } from './engine/viewport-quadrant';
+import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange, setEditorCameraEntity, setGameCameraEntity, deriveActiveCameraEntity } from './engine/viewport-quadrant';
+import { setActiveCamera } from '@forgeax/engine-runtime';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -422,6 +423,10 @@ const cameraEntity = world.spawn(
   { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
 ).unwrap();
 
+// Register the editor orbit camera with the quadrant SSOT (w22). The quadrant
+// derivation uses this id whenever the quadrant is NOT play·game.
+setEditorCameraEntity(cameraEntity as unknown as number);
+
 // Load the open game's asset packs once, so a Material.materialAsset GUID
 // renders as the referenced asset material (registered from the pack payload —
 // the editor's pack-index is empty, so we can't loadByGuid). Sync lookup → the
@@ -518,6 +523,54 @@ function syncTransientMode(q: { run: string; display: string }): void {
 }
 syncTransientMode(getViewportQuadrant());
 onViewportQuadrantChange(syncTransientMode);
+
+// ── activeCamera derivation (feat-20260630-viewport M5 / w22) ───────────────────
+// The quadrant SSOT derives which camera entity should be active per quadrant:
+//   - play·game: game camera (setGameCameraEntity registered entity, or undefined)
+//   - other three: editor orbit camera (setEditorCameraEntity registered entity)
+// The engine's ActiveCamera resource (w12) receives the entity id via setActiveCamera,
+// and the renderer's record stage reads it to select the render camera (D-2, OOS-4).
+// Game camera discovery is best-effort: if the authored scene has no Camera entity,
+// setGameCameraEntity stays undefined → play·game falls back to editor orbit camera
+// (the renderer's ActiveCamera selection also falls back to first-hit).
+//
+// Game camera registration: walk the doc entities after boot+sync and set the
+// first found Camera entity as gameCameraEntity. This is a snapshot at boot —
+// the setGameCameraEntity call is idempotent and the quadrant derivation reads
+// the latest registered id.
+function discoverGameCamera(): void {
+  // Walk the authored doc for the first Camera entity (the game scene's camera).
+  // This runs after the initial engineSync, so the scene is projected into the world.
+  for (const eid of Object.keys(bus.doc.entities)) {
+    const comps = bus.doc.entities[eid as unknown as number]?.components;
+    if (comps && 'Camera' in comps) {
+      const worldEnt = engineSync.worldEntityFor(eid as unknown as number);
+      if (worldEnt !== undefined) {
+        setGameCameraEntity(worldEnt as unknown as number);
+        return;
+      }
+    }
+  }
+}
+// Run game camera discovery after the initial sync populates the world.
+// engineSync is sync (not async), so this runs immediately after project.
+engineSync.resync();
+discoverGameCamera();
+
+// Wire activeCamera to the engine on every quadrant change. The setter directly
+// writes the engine's ActiveCamera KV resource — the renderer reads it on the
+// next extract stage (hard cut, no interpolation — requirements AC-12).
+function applyActiveCamera(): void {
+  const camEnt = deriveActiveCameraEntity();
+  if (camEnt !== undefined) {
+    setActiveCamera(world as never, camEnt as unknown as number);
+  }
+}
+// Apply once at boot (default is edit·scene → editor orbit camera), then on every
+// quadrant change. The transientMode subscriber above is separate — both fire
+// on the same quadrant change event.
+applyActiveCamera();
+onViewportQuadrantChange(() => applyActiveCamera());
 
 app.value.start();
 installFpsReport();
