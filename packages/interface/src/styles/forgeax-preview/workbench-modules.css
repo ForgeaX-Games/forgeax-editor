@@ -1,0 +1,31 @@
+/* 工具抽屉顶部模块条 — Lucide 线性 icon，保持紧凑高级比例 */
+.wb-module-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px 5px;
+  padding: 8px 7px;
+}
+
+.wb-module-tile {
+  width: auto;
+  min-width: 0;
+  min-height: 62px;
+  gap: 5px;
+  padding: 7px 3px 6px;
+}
+
+.wb-module-tile-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.wb-module-tile-icon svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.wb-module-tile-label {
+  font-size: 9.5px;
+  max-width: 48px;
+  line-height: 1.15;
+}

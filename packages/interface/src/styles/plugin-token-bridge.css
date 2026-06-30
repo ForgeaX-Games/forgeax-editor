@@ -1,0 +1,50 @@
+/**
+ * Workbench plugin panels (Sidebar drawer) — align injected plugin CSS with
+ * host tokens.css. Plugins should migrate inline <style> blocks to these vars.
+ */
+.wb-tools-pane,
+.wb-rail-body {
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.wb-tools-pane [class^='cf-']:not(button):not(.cf-cta),
+.wb-tools-pane [class^='wbc-']:not(button),
+.wb-rail-body [class^='cf-']:not(button):not(.cf-cta),
+.wb-rail-body [class^='wbc-']:not(button) {
+  color: inherit;
+}
+
+/* Brand primary CTA — lime fill must use on-bright text (black), not inherited white */
+.wb-tools-pane .cf-cta,
+.wb-rail-body .cf-cta {
+  background: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 60%, transparent);
+  color: var(--color-text-on-bright-primary, #000000);
+  font-weight: 600;
+}
+
+.wb-tools-pane .cf-cta:hover:not(:disabled),
+.wb-rail-body .cf-cta:hover:not(:disabled) {
+  background: var(--color-brand-primary-hover, var(--primary));
+  color: var(--color-text-on-bright-primary, #000000);
+}
+
+.wb-tools-pane .cf-cta:disabled,
+.wb-rail-body .cf-cta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Host primary buttons — solid lime fill always uses on-bright text */
+.studio-shell .tb-modal-btn.primary,
+.studio-shell .settings-save-btn {
+  color: var(--color-text-on-bright-primary, #000000);
+}
+
+.studio-shell .tb-modal-btn.primary:hover:not(:disabled),
+.studio-shell .tb-modal-btn.primary:active:not(:disabled),
+.studio-shell .settings-save-btn:hover:not(:disabled) {
+  color: var(--color-text-on-bright-primary, #000000);
+}

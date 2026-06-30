@@ -1,0 +1,242 @@
+/* =============================================================================
+   SEMANTIC LAYER — 来自 semantic.tokens.json (Figma Semantic 集合)
+   命名规则：--color-{category}-{role}
+
+   SSOT shared by host + plugins. Depends on primitive.css (import it first).
+   ============================================================================= */
+:root {
+
+  /* ── text ───────────────────────────────────────────────────────────────── */
+  --color-text-primary:             var(--prim-color-neutral-0);       /* #FFFFFF */
+  --color-text-secondary:           rgba(255, 255, 255, 0.60);
+  --color-text-tertiary:            rgba(255, 255, 255, 0.30);
+  --color-text-disabled:            rgba(255, 255, 255, 0.20);
+  --color-text-on-bright-primary:   var(--prim-color-neutral-1000);    /* #000000 */
+  --color-text-on-bright-secondary: rgba(0, 0, 0, 0.60);
+  --color-text-on-bright-tertiary:  rgba(0, 0, 0, 0.30);
+  --color-text-on-bright-disabled:  rgba(0, 0, 0, 0.10);
+
+  /* ── icon (aliases of text) ─────────────────────────────────────────────── */
+  --color-icon-primary:            var(--color-text-primary);
+  --color-icon-secondary:          var(--color-text-secondary);
+  --color-icon-tertiary:           var(--color-text-tertiary);
+  --color-icon-disabled:           var(--color-text-disabled);
+  --color-icon-on-bright-primary:  var(--color-text-on-bright-primary);
+  --color-icon-on-bright-secondary:var(--color-text-on-bright-secondary);
+  --color-icon-on-bright-tertiary: var(--color-text-on-bright-tertiary);
+  --color-icon-on-dark-disabled:   var(--color-text-on-bright-disabled);
+
+  /* ── background ─────────────────────────────────────────────────────────── */
+  --color-background-canvas:   var(--prim-color-neutral-950);  /* #0D0D0D — deepest */
+  --color-background-base:     var(--prim-color-neutral-900);  /* #191919 — topbar/panel */
+  --color-background-elevated: var(--prim-color-neutral-850);  /* #242424 — card/component */
+  --color-background-floating: var(--prim-color-neutral-800);  /* #333333 — hover/tooltip */
+
+  /* ── border ─────────────────────────────────────────────────────────────── */
+  --color-border-subtle:  var(--prim-color-neutral-800);  /* #333333 */
+  --color-border-default: var(--prim-color-neutral-750);  /* #404040 */
+  --color-border-strong:  var(--prim-color-neutral-550);  /* #737373 */
+
+  /* ── brand ──────────────────────────────────────────────────────────────── */
+  --color-brand-primary:       var(--prim-color-lime-400);  /* #D4FF48 */
+  --color-brand-primary-light: var(--prim-color-lime-300);  /* #DFFF78 */
+  --color-brand-primary-soft:  var(--prim-color-lime-700);  /* #6A7F24 */
+
+  /* ── accent ─────────────────────────────────────────────────────────────── */
+  --color-accent-blue-default:   var(--prim-color-blue-400);    /* #639CF8 */
+  --color-accent-blue-soft:      var(--prim-color-blue-900);    /* #0B182D */
+  --color-accent-green-default:  var(--prim-color-green-400);   /* #4FD17F */
+  --color-accent-green-soft:     var(--prim-color-green-800);   /* #0D4C24 */
+  --color-accent-orange-default: var(--prim-color-orange-400);  /* #FFB056 */
+  --color-accent-orange-soft:    var(--prim-color-orange-800);  /* #633C10 */
+  --color-accent-purple-default: var(--prim-color-purple-500);  /* #A855F7 */
+  --color-accent-purple-soft:    var(--prim-color-purple-800);  /* #412160 */
+  --color-accent-error-default:  var(--prim-color-red-400);     /* #F26A6A */
+  --color-accent-error-soft:     var(--prim-color-red-800);     /* #5C1A1A */
+
+  /* ── status ─────────────────────────────────────────────────────────────── */
+  --color-status-success: var(--prim-color-green-600);   /* #1B9D4B */
+  --color-status-warning: var(--prim-color-yellow-600);  /* #BA8E06 */
+  --color-status-error:   var(--prim-color-red-600);     /* #BE3636 */
+
+  /* ── overlay ────────────────────────────────────────────────────────────── */
+  --color-overlay-modal: rgba(0, 0, 0, 0.50);
+  --color-overlay-focus: rgba(212, 255, 72, 0.30);
+
+  /* ── divider ────────────────────────────────────────────────────────────── */
+  --color-divider-strong:  rgba(255, 255, 255, 0.15);
+  --color-divider-default: rgba(255, 255, 255, 0.10);
+  --color-divider-subtle:  rgba(255, 255, 255, 0.05);
+
+  /* ── skeleton ───────────────────────────────────────────────────────────── */
+  --color-skeleton-default: rgba(255, 255, 255, 0.10);
+
+  /* ── interaction ────────────────────────────────────────────────────────── */
+  --color-interaction-hover:            rgba(255, 255, 255, 0.05);
+  --color-interaction-selected-brand:   rgba(212, 255, 72, 0.10);
+  --color-interaction-selected-neutral: rgba(255, 255, 255, 0.10);
+  --color-interaction-disabled:         rgba(0, 0, 0, 0.50);
+  --color-interaction-error:            rgba(255, 107, 107, 0.08);
+  --color-interaction-error-strong:     rgba(255, 107, 107, 0.14);
+
+  /* ── rgb channels (for alpha composition: rgba(var(--rgb-*), α)) ──────── */
+  --rgb-accent-green:  75, 222, 128;   /* tb-providers is-ok  */
+  --rgb-accent-warn:   245, 178, 67;   /* tb-providers is-warn */
+  --rgb-accent-error:  255, 107, 107;  /* *.is-down           */
+  --rgb-accent-teal:   126, 231, 196;  /* tb-model            */
+  --rgb-accent-gold:   255, 200, 120;  /* tb-skill            */
+  --rgb-accent-orange: 255, 140, 66;   /* tb-tool             */
+  --rgb-accent-violet: 196, 163, 255;  /* tb-agent            */
+}
+
+/* =============================================================================
+   BACKWARD-COMPAT ALIASES — 旧 token 名 → semantic 层
+   ============================================================================= */
+:root {
+
+  /* background ── 迁移目标：--color-background-* */
+  --bg-0: var(--color-background-canvas);    /* → --color-background-canvas   */
+  --bg-1: var(--color-background-base);      /* → --color-background-base     */
+  --bg-2: var(--color-background-elevated);  /* → --color-background-elevated */
+  --bg-3: var(--color-background-floating);  /* → --color-background-floating */
+
+  /* text ── 迁移目标：--color-text-* */
+  --text:           var(--color-text-primary);    /* → --color-text-primary   */
+  --text-primary:   var(--color-text-primary);    /* → --color-text-primary   */
+  --text-secondary: var(--color-text-secondary);  /* → --color-text-secondary */
+  --text-muted:     var(--color-text-tertiary);   /* → --color-text-tertiary  */
+  --text-mute:      var(--color-text-tertiary);   /* → --color-text-tertiary  */
+  --text-dim:       var(--color-text-disabled);   /* → --color-text-disabled  */
+  --text-default:   var(--color-text-primary);    /* → --color-text-primary   */
+
+  /* fg ── 迁移目标：--color-text-* */
+  --fg-1: var(--color-text-primary);    /* → --color-text-primary   */
+  --fg-2: var(--color-text-secondary);  /* → --color-text-secondary */
+  --fg-3: var(--color-text-tertiary);   /* → --color-text-tertiary  */
+
+  /* brand / primary ── 迁移目标：--color-brand-* / --color-interaction-* */
+  --primary:       var(--color-brand-primary);              /* → --color-brand-primary              */
+  --primary-light: var(--color-brand-primary-light);        /* → --color-brand-primary-light        */
+  --primary-soft:  var(--color-brand-primary-soft);         /* → --color-brand-primary-soft         */
+  --primary-bg:    var(--color-interaction-selected-brand); /* → --color-interaction-selected-brand */
+
+  /* secondary (teal) ── 无对应 semantic token，暂保留 primitive 引用 */
+  --secondary:      var(--prim-color-teal-400);  /* → (待补) --color-accent-teal-default  */
+  --secondary-soft: var(--prim-color-teal-700);  /* → (待补) --color-accent-teal-soft     */
+
+  /* accent ── 迁移目标：--color-accent-*-default / --color-accent-*-soft */
+  --accent-blue:        var(--color-accent-blue-default);    /* → --color-accent-blue-default   */
+  --accent-blue-soft:   var(--color-accent-blue-soft);       /* → --color-accent-blue-soft      */
+  --accent-mint:        var(--prim-color-teal-300);          /* → (待补) --color-accent-teal-light */
+  --accent-green:       var(--color-accent-green-default);   /* → --color-accent-green-default  */
+  --accent-green-soft:  var(--color-accent-green-soft);      /* → --color-accent-green-soft     */
+  --accent-cyan:        var(--prim-color-teal-400);          /* → (待补) --color-accent-teal-default */
+  --accent-cyan-soft:   var(--prim-color-teal-700);          /* → (待补) --color-accent-teal-soft    */
+  --accent-orange:      var(--color-accent-orange-default);  /* → --color-accent-orange-default */
+  --accent-orange-soft: var(--color-accent-orange-soft);     /* → --color-accent-orange-soft    */
+  --accent-purple:      var(--color-accent-purple-default);  /* → --color-accent-purple-default */
+  --accent-purple-soft: var(--color-accent-purple-soft);     /* → --color-accent-purple-soft    */
+  --accent-pink:        var(--prim-color-pink-400);          /* → (待补) --color-accent-pink-default */
+  --accent-error:       var(--color-accent-error-default);   /* → --color-accent-error-default  */
+  --accent-error-soft:  var(--color-accent-error-soft);      /* → --color-accent-error-soft     */
+
+  /* misc ── 迁移目标：--color-interaction-* */
+  --hover-active: var(--prim-color-green-400);  /* → (待补) --color-interaction-selected-success */
+
+  /* typography ── 迁移目标：--prim-font-* */
+  --font-sans: var(--prim-font-sans);  /* → --prim-font-sans */
+  --font-mono: var(--prim-font-mono);  /* → --prim-font-mono */
+  --font-base: var(--prim-font-sans);  /* → --prim-font-sans */
+  --mono:      var(--prim-font-mono);  /* → --prim-font-mono */
+
+  /* radius ── 迁移目标：--prim-radius-* */
+  --radius-sm:   var(--prim-radius-4);     /* → --prim-radius-4    */
+  --radius-md:   var(--prim-radius-8);     /* → --prim-radius-8    */
+  --radius-lg:   var(--prim-radius-12);    /* → --prim-radius-12   */
+  --radius-xl:   var(--prim-radius-16);    /* → --prim-radius-16   */
+  --radius-2xl:  var(--prim-radius-24);    /* → --prim-radius-24   */
+  --radius-pill: var(--prim-radius-full);  /* → --prim-radius-full */
+
+  /* z-index ── primitive 已是最终值 */
+  --z-base:    var(--prim-z-level-1);  /* → --prim-z-level-1 */
+  --z-overlay: var(--prim-z-level-2);  /* → --prim-z-level-2 */
+  --z-modal:   var(--prim-z-level-3);  /* → --prim-z-level-3 */
+  --z-top:     var(--prim-z-level-4);  /* → --prim-z-level-4 */
+
+  /* ── motion (Linear-style) ──────────────────────────────────────────────── */
+  --motion-duration-instant: 80ms;
+  --motion-duration-fast:    110ms;
+  --motion-duration-base:    150ms;
+  --motion-duration-smooth:  190ms;
+  --motion-duration-panel:   220ms;
+  --motion-duration-switch:  240ms;
+  --motion-duration-switch-item: 200ms;
+  --motion-duration-flash:   600ms;
+  --motion-duration-pulse:   1400ms;
+  --motion-duration-ambient: 18s;
+  --motion-stagger-step:     24ms;
+  --motion-stagger-cap:      240ms;
+
+  --motion-ease-linear:   linear;
+  --motion-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-in:       cubic-bezier(0.32, 0, 0.67, 0);
+  --motion-ease-spring:   var(--motion-ease-standard);
+  --motion-ease-flow:     cubic-bezier(0.45, 0, 0.55, 1);
+
+  --motion-press-scale: 0.996;
+  --motion-hover-y: -1px;
+  --motion-hover-scale: 1;
+  --motion-hover-icon-scale: 1.02;
+  --motion-hover-icon-rotate: 0deg;
+  --motion-row-x: 1.5px;
+  --motion-panel-y: 4px;
+  --motion-panel-scale: 1;
+  --motion-list-y: 4px;
+  --motion-list-scale: 1;
+  --motion-page-enter-opacity: 1;
+  --motion-list-enter-opacity: 0.92;
+  --motion-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.14);
+  --motion-shadow-active: 0 1px 6px rgba(0, 0, 0, 0.12);
+
+  /* ── agent role colors ───────────────────────────────────────────── */
+  --color-role-orchestrator: var(--prim-color-purple-300);  /* #CC9BFA */
+  --color-role-pillar:       var(--color-brand-primary);
+  --color-role-design:       var(--prim-color-pink-300);    /* #FF6DB8 */
+  --color-role-narrative:    var(--prim-color-orange-300);  /* #FFC481 */
+  --color-role-art:          var(--prim-color-sky-300);     /* #7dd3fc */
+  --color-role-coding:       var(--accent-orange);          /* #FFB056 */
+
+  /* ── bus kind colors ─────────────────────────────────────────────── */
+  --color-kind-workbench:     var(--color-brand-primary);
+  --color-kind-agent:         var(--color-role-orchestrator);
+  --color-kind-cli-provider:  var(--prim-color-sky-400);    /* #6cc4ff */
+  --color-kind-model-binding: var(--accent-mint);           /* #63EACF */
+  --color-kind-skill:         var(--color-role-narrative);
+  --color-kind-tool:          var(--color-role-coding);
+
+  /* ── additional status ───────────────────────────────────────────── */
+  --color-status-amber:        #f5b243;
+  --color-status-warning-text: #ffc966;
+
+  /* ── brand hover ─────────────────────────────────────────────────── */
+  --color-brand-primary-hover: #c5f038;
+
+  /* ── accent violet ───────────────────────────────────────────────── */
+  --accent-violet:       #7c5cff;
+  --accent-violet-light: #c084fc;
+
+  /* ── syntax highlighting ─────────────────────────────────────────── */
+  --color-syntax-key:     #79c0ff;
+  --color-syntax-string:  #f0c674;
+  --color-syntax-number:  #b5cea8;
+  --color-syntax-boolean: #d2a8ff;
+
+  /* ── motion (overrides) ──────────────────────────────────────────── */
+  --motion-ease-spring:   cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-out:      cubic-bezier(0.0, 0, 0.2, 1);
+  --motion-ease-standard: ease;
+  --motion-duration-instant: 120ms;
+  --motion-duration-fast:    200ms;
+  --motion-duration-medium:  300ms;
+}

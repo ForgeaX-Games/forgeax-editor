@@ -1,0 +1,1322 @@
+.topbar {
+  background: var(--color-background-elevated);
+  border-bottom: 1px solid var(--color-border-default);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  font-size: 12px;
+  height: 52px;
+  flex-shrink: 0;
+  position: relative;
+}
+.tb-left { display: flex; align-items: center; gap: 0; min-width: 0; overflow: hidden; }
+.tb-dots-cluster { display: flex; align-items: center; gap: 12px; padding: 0 24px; height: 100%; flex-shrink: 0; }
+.tb-left .title {
+  display: inline-flex; align-items: baseline; flex-wrap: nowrap; min-width: 0;
+  overflow: hidden; white-space: nowrap;
+}
+.tb-left .title-head, .tb-left .title-tail, .tb-left .title-sep { flex-shrink: 0; }
+/* Defensive caps for ridiculously long project / branch names (e.g.
+   `feature/long-living-experiment-with-multiple-iterations`): head + tail
+   ellipsis past ~18ch / ~14ch so they don't push the rest of the topbar off
+   screen. Hover title attribute still shows the full string. */
+.tb-left .title-head { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+.tb-left .title-tail { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
+.tb-left .title-mid { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+.tb-left .title-tail { color: var(--color-text-primary); }
+/* Two responsive breakpoints. The hover tooltip on `.title` shows the full
+   string at every width, so visible text only needs to convey "where am I". */
+@media (max-width: 900px) {
+  /* drop the middle path — keep "forgeax · main" */
+  .tb-left .title-mid, .tb-left .title-sep:first-of-type { display: none; }
+}
+@media (max-width: 640px) {
+  /* drop the project name entirely — keep just branch tail */
+  .tb-left .title-head, .tb-left .title-sep { display: none; }
+}
+.tb-left .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-background-floating);
+  flex-shrink: 0;
+  /* P4.65 — subtle 3D bevel + outer ring on the three macOS-style traffic
+     dots. Inset highlight (top) + inset shadow (bottom) gives them a glossy
+     pearl feel; `outline` paints a 1px hairline ring 0.5px outside the
+     circumference so adjacent dots read as discrete buttons rather than a
+     run of flat blobs. No tsx change — purely visual layer on top of the
+     existing 12px circles already rendered by TopBar (".tb-left .dot.r/y/g"
+     spans). */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22),  
+    inset 0 -1px 1px rgba(0, 0, 0, 0.35);
+  outline: 1px solid rgba(255, 255, 255, 0.06);
+  outline-offset: -0.5px;
+  transition: box-shadow 0.15s, outline-color 0.15s;
+}
+.tb-left .dot.r { background: #ff5f57; }
+.tb-left .dot.y { background: #febc2e; }
+.tb-left .dot.g {
+  background: #28c840;
+  /* P4.65 — outer halo on the green "live" dot only. Two-stop emerald glow
+     reads as "session is running" from across the room without needing a
+     tooltip. Stays small (4px outer + 2px inner) so it doesn't bleed past
+     the 12px adjacent yellow dot. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28),  
+    inset 0 -1px 1px rgba(0, 0, 0, 0.35),  
+    0 0 0 2px rgba(40, 200, 64, 0.18);
+}
+.tb-left .title { color: var(--color-text-secondary); margin-left: 4px; }
+
+.tb-center {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--color-background-floating);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  /* Centered on the full topbar width — independent of sidebar/chatpanel widths. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /* Raise above tb-left / tb-right grid children so their buttons don't
+     intercept pointer events on the workspace tabs. */
+  z-index: 1;
+}
+/* Sliding pill indicator — absolutely positioned inside .tb-center,
+   sits behind the tab buttons (z-index 0) and slides via translateX. */
+.mode-tab-slider {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  height: calc(100% - 8px);
+  background: var(--color-brand-primary);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.20);
+  pointer-events: none;
+  z-index: 0;
+  /* No transition on mount — avoids sliding from (0,0) to active tab position. */
+}
+.mode-tab-slider.ready {
+  transition:
+    transform var(--motion-duration-fast) var(--motion-ease-spring),
+    width     var(--motion-duration-fast) var(--motion-ease-spring);
+}
+
+.mode-tab {
+  position: relative;
+  z-index: 1; /* float above the slider */
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--color-text-tertiary);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color var(--motion-duration-fast) var(--motion-ease-spring);
+}
+.mode-tab:hover { color: var(--color-text-primary); }
+.mode-tab.active {
+  color: var(--color-text-on-bright-primary);
+  font-weight: 500;
+}
+.mode-tab.active:hover { color: var(--color-text-on-bright-primary); }
+.mode-tab .kb {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+.mode-tab.active .kb { opacity: 0.55; color: var(--color-text-on-bright-primary); }
+
+/* Right-click context menu for workspace tabs */
+.ws-ctx-menu {
+  z-index: var(--z-menu);
+  min-width: 140px;
+  background: var(--color-background-elevated, #1e1e24);
+  border: 1px solid var(--color-border-default, rgba(255,255,255,0.1));
+  border-radius: var(--radius-md, 8px);
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ws-ctx-item {
+  display: flex; align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ws-ctx-item:hover { background: rgba(255,255,255,0.08); }
+.ws-ctx-item--send { color: var(--color-text-secondary); }
+.ws-ctx-item--send:hover { color: var(--color-text-primary); background: rgba(255,255,255,0.06); }
+.ws-ctx-item--danger { color: var(--color-status-error, #f87171); }
+.ws-ctx-item--danger:hover { background: rgba(248,113,113,0.12); }
+.ws-ctx-separator {
+  height: 1px;
+  background: var(--color-border-subtle, rgba(255,255,255,0.07));
+  margin: 3px 4px;
+}
+
+/* Inline rename input — matches tab typography */
+.ws-rename-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  width: 72px;
+  padding: 0;
+  min-width: 40px;
+}
+
+/* + add workspace button */
+.ws-add-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border: none;
+  background: rgba(255,255,255,0.08);
+  cursor: pointer;
+  color: var(--color-text-secondary, #aaa);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0;
+  margin-left: 4px;
+  flex-shrink: 0;
+  transition: background var(--motion-duration-fast), color var(--motion-duration-fast);
+}
+.ws-add-btn:hover { background: rgba(255,255,255,0.15); color: var(--color-text-primary, #fff); }
+
+/* P3.53 — TopBar mode-tab keyboard nav focus ring + ←→ key-cap glyph.
+ * `.mode-tab` had no focus-visible style before, so the new tablist nav
+ * produced no pixel signal when Tab walked into the row. 2px white
+ * outline matches `.ws-icon-btn:focus-visible` (P3.51) so the same family
+ * of keyboard cues applies to the Sidebar WORKBENCH tab strip AND the
+ * TopBar mode tab strip. `.tb-center-kbd` mirrors `.ss-header-kbd`
+ * (P3.51) and `.ss-footer-kbd` (P3.50) — three identical key-cap chips
+ * across Sidebar header / Sidebar footer / TopBar center signal "←→
+ * works here" without requiring focus. */
+.mode-tab:focus-visible {
+  outline: 2px solid var(--color-border-strong);
+  outline-offset: -1px;
+  border-radius: var(--radius-pill);
+}
+.tb-center-kbd {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  padding: 0 3px;
+  margin: 0 4px 0 2px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+  user-select: none;
+}
+
+/* P3.2 · TopBar Bus 按钮 plugin count chip — 跟 Sidebar BusHealthChip
+   (.bus-chip) 是同色系语言："bus = 一级公民"。差别仅在尺寸：mode-tab 行高
+   只有 ~20px，所以小一号 + 用 inline padding，不带圆点。 */
+.tb-bus-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+}
+.tb-bus-count.is-ok {
+  background: rgba(46, 204, 113, 0.18);
+  color: var(--accent-mint);
+  border: 1px solid rgba(46, 204, 113, 0.32);
+}
+.tb-bus-count.is-warn {
+  background: rgba(255, 176, 32, 0.18);
+  color: var(--color-status-warning-text);
+  border: 1px solid rgba(255, 176, 32, 0.36);
+}
+.tb-bus-count.is-down {
+  background: rgba(255, 95, 87, 0.22);
+  color: var(--accent-error);
+  border: 1px solid rgba(255, 95, 87, 0.4);
+}
+/* When the Bus tab is active the count sits on the primary-color fill,
+   so we soften it to neutral dark so contrast holds. */
+.mode-tab.active .tb-bus-count.is-ok {
+  background: rgba(10, 10, 10, 0.18);
+  color: var(--prim-color-neutral-950);
+  border-color: rgba(10, 10, 10, 0.28);
+}
+.mode-tab.active .tb-bus-count.is-warn {
+  background: rgba(180, 96, 0, 0.32);
+  color: #2a1500;
+  border-color: rgba(180, 96, 0, 0.5);
+}
+
+/* P3.5 · Workbench mode-tab plugin count chip — same shape as .tb-bus-count
+   so the trio (Preview · Workbench · Bus) feels balanced. Color is amber
+   (跟 Sidebar WORKBENCH 区域 header 的色调一致 · 也是 P2.6a wb-* 卡的 hue)
+   而不是 green，避免跟 Bus chip 抢色 — player 扫一眼就能读出
+   "amber=workbench / green=bus / 同色系=插件计数 chip 这一类语言"。 */
+.tb-wb-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  background: rgba(255, 176, 32, 0.16);
+  color: var(--color-status-warning-text);
+  border: 1px solid rgba(255, 176, 32, 0.34);
+}
+.tb-wb-count.is-down {
+  background: rgba(255, 95, 87, 0.22);
+  color: var(--accent-error);
+  border-color: rgba(255, 95, 87, 0.4);
+}
+/* When Workbench tab is active the primary-color fill is amber-ish, so the
+   chip needs to flip to a darker contrast variant like the Bus chip does. */
+.mode-tab.active .tb-wb-count {
+  background: rgba(10, 10, 10, 0.18);
+  color: var(--prim-color-neutral-950);
+  border-color: rgba(10, 10, 10, 0.28);
+}
+
+/* P3.7 · Preview mode-tab WS client count chip — same shape as
+   .tb-bus-count / .tb-wb-count so the trio (Preview · Workbench · Bus)
+   is balanced. Sky-blue palette (rgb(108,196,255) family) reuses the
+   blue we've already established for cli-provider plugins (P2.7d
+   .cb-cli-bus-pill / Sidebar .ss-kind-chip.k-cli-provider), but here it
+   means "WS observers" — distinct from amber=workbench / green=bus so a
+   single scan of the TopBar shows three different signals in their own
+   color family. .is-down keeps the same red palette as .tb-bus-count.is-down
+   for visual consistency on server failure. */
+.tb-preview-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  background: rgba(108, 196, 255, 0.16);
+  color: var(--color-role-art);
+  border: 1px solid rgba(108, 196, 255, 0.34);
+}
+.tb-preview-count.is-down {
+  background: rgba(255, 95, 87, 0.22);
+  color: var(--accent-error);
+  border-color: rgba(255, 95, 87, 0.4);
+}
+/* When Preview tab is active the primary-color (amber) fill replaces the
+   chip background, so flip to a dark contrast variant like the other two. */
+.mode-tab.active .tb-preview-count {
+  background: rgba(10, 10, 10, 0.18);
+  color: var(--prim-color-neutral-950);
+  border-color: rgba(10, 10, 10, 0.28);
+}
+
+/* ── shared vertical divider used in both tb-left and tb-right ── */
+.tb-divider {
+  width: 1px;
+  height: 13.5px;
+  background: var(--color-border-default);
+  flex-shrink: 0;
+  align-self: center;
+  margin: 0 8px;
+}
+
+/* ── simple icon-only button for tb-right ── */
+.tb-icon-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-icon-btn:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.tb-icon-btn.active { color: var(--color-text-primary); }
+
+/* ── publish CTA (icon only, white background) ── */
+.tb-publish-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 56px; height: 24px;
+  background: var(--prim-color-neutral-0, #fff);
+  border: none;
+  border-radius: 4px;
+  color: var(--prim-color-neutral-950, #0a0a0a);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-publish-btn:hover { background: var(--prim-color-neutral-100, #f5f5f5); }
+
+.tb-right { display: flex; align-items: center; gap: 0; justify-self: end; min-width: 0; flex-wrap: nowrap; padding-right: 12px; }
+.pill {
+  padding: 3px 10px;
+  background: var(--color-background-floating);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.pill:hover { color: var(--text-primary); }
+.pill.publish {
+  background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+  color: var(--prim-color-neutral-950);
+  font-weight: 700;
+}
+/* Pill content can be split into icon + label so we can collapse to
+   icon-only at narrow widths instead of hiding the whole pill. */
+.pill { display: inline-flex; align-items: center; gap: 5px; }
+.pill-icon { font-size: 12px; line-height: 1; }
+.pill-label { display: inline; }
+/* P4.67 — extend the P4.65/P4.66 pearl/bevel language from `.tb-left .dot`
+   and `.tb-center` mode-tab strip to the right-side status LED chips
+   (.tb-bus / .tb-model / .tb-providers / .tb-skill / .tb-tool / .tb-agent).
+   Two-stop inset shadow (top white 4% highlight + bottom black 28% shadow)
+   gives every pill a recessed "physical chip" feel that visually rhymes
+   with the segmented mode-tab groove on its left, so the whole TopBar
+   reads as a single tactile control strip rather than a flat ribbon.
+   `.publish` is excluded — it keeps the lime gradient call-to-action
+   look. `:hover` slightly lifts the top highlight + softens the bottom
+   shadow → ledger-style "chip lifts under finger" microinteraction that
+   matches the existing -0.5px translateY on tone-aware hover states. */
+.tb-right .pill:not(.publish) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04),  
+    inset 0 -1px 1px rgba(0, 0, 0, 0.28);
+  transition: box-shadow 0.15s ease;
+}
+.tb-right .pill:not(.publish):hover {
+  box-shadow: inset 0 1px 0 var(--color-divider-default),  
+    inset 0 -1px 1px rgba(0, 0, 0, 0.20);
+}
+/* When the topbar narrows: hide the verbose labels but keep the brand-coded
+   icons (🧠/⚡/🚀) visible & clickable. Publish still keeps its label until a
+   second breakpoint. */
+@media (max-width: 1000px) {
+  .tb-right .pill:not(.publish) .pill-label { display: none; }
+  .tb-right .pill:not(.publish) { padding: 3px 8px; }
+}
+@media (max-width: 720px) {
+  .pill.publish .pill-label { display: none; }
+  .pill.publish { padding: 3px 8px; }
+  .tb-left .title { font-size: 11px; }
+  /* All three pills are icon-only now (≈24px wide). 8px gap makes the trio
+     look glued together at narrow widths — bump to 12px for breathing room,
+     mirrors the 4px-of-icon-width visual rhythm. */
+  .tb-right { gap: 12px; }
+}
+
+/* ── New menu (Plus dropdown in TopBar left) ────────────────────────────── */
+.tb-new-menu { position: relative; padding: 0 4px; display: flex; align-items: center; height: 100%; flex-shrink: 0; }
+.tb-new-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-new-btn:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.tb-new-dropdown {
+  position: absolute; top: 28px; left: 0; z-index: 100;
+  min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  padding: 4px;
+  display: flex; flex-direction: column;
+}
+.tb-new-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 4px;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  text-align: left;
+}
+.tb-new-item:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.tb-new-text { display: flex; flex-direction: column; gap: 1px; }
+.tb-new-title { font-size: 12px; font-weight: 500; }
+.tb-new-sub { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.4)); }
+
+/* ── New game modal ─────────────────────────────────────────────────────── */
+.tb-modal-overlay {
+  position: fixed; inset: 0; z-index: var(--z-popover);
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.tb-modal {
+  background: var(--bg-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 18px 18px 14px;
+  width: 360px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tb-modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.tb-modal-label { font-size: 11px; color: var(--text-muted, rgba(255,255,255,0.5)); margin-top: 4px; }
+.tb-modal-input, .tb-modal-textarea {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  outline: none;
+  font-family: inherit;
+}
+.tb-modal-input:focus, .tb-modal-textarea:focus { border-color: var(--primary); }
+.tb-modal-textarea { resize: vertical; }
+.tb-modal-error {
+  font-size: 11px;
+  color: var(--accent-error);
+  background: rgba(255,107,107,0.08);
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.tb-modal-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 8px;
+}
+.tb-modal-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.tb-modal-btn:hover:not(:disabled):not(.primary) {
+  background: var(--color-interaction-selected-neutral);
+  color: var(--color-text-primary);
+}
+.tb-modal-btn.primary {
+  background: var(--primary);
+  color: var(--color-text-on-bright-primary, var(--prim-color-neutral-950));
+  border-color: var(--primary);
+  font-weight: 600;
+}
+.tb-modal-btn.primary:hover:not(:disabled),
+.tb-modal-btn.primary:active:not(:disabled) {
+  background: var(--color-brand-primary-hover, var(--primary));
+  color: var(--color-text-on-bright-primary, var(--prim-color-neutral-950));
+  border-color: var(--primary);
+}
+.tb-modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Game switcher dropdown ────────────────────────────────────────────── */
+/* z-index lifts the entire switcher's stacking context above Sidebar/Workbench
+   panels that follow in DOM order — otherwise the dropdown's internal z-index:100
+   is trapped inside this context and sibling .ss-active-label etc. paint on top. */
+.tb-game-switcher { position: relative; z-index: 50; }
+.tb-game-switcher:has(.tb-game-dropdown) { z-index: 100; }
+.tb-new-menu { z-index: 50; position: relative; }
+.tb-new-menu:has(.tb-new-dropdown) { z-index: 100; }
+.tb-session-switcher { z-index: 50; }
+.tb-session-switcher:has(.tb-game-dropdown) { z-index: 100; }
+.tb-game-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  width: 140px; height: 28px; padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px; cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.tb-game-btn:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.tb-game-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-game-dropdown {
+  position: absolute; top: 28px; left: 0; z-index: 100;
+  min-width: 260px; max-width: 360px;
+  /* 长 session 列表（>20 条）会顶到视口下沿。限高 + 内滚，"+ 新建 session"
+     在 TSX 里加了 position:sticky 留在顶上不被滚走。 */
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  padding: 4px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+/* When parent has overflow:hidden (e.g. .tb-left), absolute children get
+   clipped. Fixed positioning anchors to the viewport — coordinates computed
+   from the button's getBoundingClientRect on click. */
+.tb-game-dropdown--fixed,
+.tb-new-dropdown--fixed {
+  position: fixed; top: auto; left: auto; z-index: var(--z-popover);
+}
+/* Inside a Radix Popover the content is portaled + popper-positioned, so the
+   menu drops its own absolute positioning and keeps only box styling. */
+.tb-game-dropdown--popover,
+.tb-new-dropdown--popover {
+  position: static; top: auto; left: auto; z-index: auto;
+}
+.tb-game-empty { font-size: 11px; color: var(--text-muted, rgba(255,255,255,0.4)); padding: 8px 10px; }
+.tb-game-row {
+  display: flex; align-items: center; gap: 4px;
+  border-radius: 4px;
+  background: transparent;
+}
+.tb-game-row.active { background: rgba(212,255,72,0.08); }
+.tb-game-row.reset { background: rgba(255,255,255,0.03); margin-top: 2px; padding: 4px 10px; cursor: pointer; border: none; color: var(--text-muted, rgba(255,255,255,0.45)); font-size: 10px; font-family: inherit; }
+.tb-game-row.reset:hover { color: var(--color-text-secondary); background: var(--color-interaction-hover); }
+.tb-game-pick {
+  flex: 1; min-width: 0;
+  background: transparent; border: none; cursor: pointer;
+  padding: 6px 10px; text-align: left;
+  display: flex; flex-direction: column; gap: 1px;
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+}
+.tb-game-pick:hover { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+.tb-game-row.active .tb-game-pick { color: var(--primary); }
+.tb-game-name { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-game-meta { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.4)); }
+.tb-game-del {
+  width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted, rgba(255,255,255,0.4));
+  border-radius: 4px;
+}
+.tb-game-del:hover { color: var(--color-accent-error-default); background: var(--color-interaction-error); }
+
+/* prefix tag on switcher buttons to distinguish ProjectSwitcher / GameSwitcher / SessionSwitcher */
+.tb-game-tag {
+  font-size: 9px;
+  color: var(--text-muted, rgba(255,255,255,0.4));
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-weight: 500;
+  flex-shrink: 0;
+  line-height: 1.1;
+}
+
+.title-legacy { display: none; }
+
+/* ── settings (⚙️) gear button + drawer ──────────────────────────────── */
+.pill-icon-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 50%;
+  color: var(--text-secondary, rgba(255,255,255,0.65));
+  cursor: pointer;
+  padding: 0;
+}
+.pill-icon-btn:hover { background: var(--color-interaction-selected-brand); color: var(--color-brand-primary); }
+
+.settings-overlay {
+  position: fixed; inset: 0; z-index: var(--z-app-modal);
+  background: rgba(0,0,0,0.55);
+  display: flex; justify-content: flex-end;
+}
+.settings-drawer {
+  width: 480px; max-width: 90vw; height: 100%;
+  background: var(--bg-2);
+  border-left: 1px solid var(--color-border-default);
+  display: flex; flex-direction: column;
+  position: relative;
+  animation: slide-in 0.16s ease;
+}
+@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.settings-header {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border-default);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.settings-header h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.settings-close {
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted, rgba(255,255,255,0.5));
+  padding: 4px;
+}
+.settings-close:hover { color: var(--text-primary); }
+.settings-loading { padding: 30px; text-align: center; color: var(--text-muted); }
+.settings-body { flex: 1; overflow-y: auto; padding: 18px; }
+
+.settings-section { margin-bottom: 24px; }
+.settings-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.settings-section-icon { color: var(--primary); }
+.settings-section-title { font-size: 12px; font-weight: 600; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.04em; }
+.settings-section-hint { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.4)); margin-bottom: 10px; }
+.settings-section-body { display: flex; flex-direction: column; gap: 6px; }
+
+.settings-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.settings-row.edit { flex-wrap: wrap; }
+.settings-label { width: 180px; flex-shrink: 0; color: var(--text-secondary, rgba(255,255,255,0.65)); font-family: var(--font-mono); font-size: 10px; }
+.settings-current { flex: 1; font-family: var(--font-mono); color: var(--text-primary); font-size: 11px; }
+.settings-empty { color: var(--text-muted, rgba(255,255,255,0.35)); font-style: italic; }
+.settings-edit-btn, .settings-save-btn, .settings-cancel-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-secondary, rgba(255,255,255,0.7));
+  cursor: pointer; padding: 3px 8px; border-radius: 3px; font-size: 10px;
+  font-family: inherit;
+}
+.settings-edit-btn:hover { background: var(--color-interaction-selected-neutral); color: var(--color-text-primary); }
+.settings-save-btn {
+  background: var(--primary);
+  color: var(--color-text-on-bright-primary, var(--prim-color-neutral-950));
+  border-color: var(--primary);
+  font-weight: 600;
+}
+.settings-save-btn:hover:not(:disabled),
+.settings-save-btn:active:not(:disabled) {
+  background: var(--color-brand-primary-hover);
+  color: var(--color-text-on-bright-primary, var(--prim-color-neutral-950));
+}
+.settings-save-btn:disabled, .settings-edit-btn:disabled, .settings-cancel-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.settings-input {
+  flex: 1; min-width: 200px;
+  background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 11px;
+  padding: 4px 8px; border-radius: 3px;
+  outline: none;
+}
+.settings-input:focus { border-color: var(--primary); }
+.settings-input::placeholder { color: var(--text-muted, rgba(255,255,255,0.35)); font-family: var(--font-mono); }
+.settings-input-wrap {
+  flex: 1; min-width: 200px;
+  position: relative; display: flex; align-items: center;
+}
+.settings-input-wrap > .settings-input { flex: 1; min-width: 0; width: 100%; }
+.settings-input-wrap.with-eye > .settings-input { padding-right: 28px; }
+.settings-eye-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  background: transparent; border: none;
+  color: var(--text-muted, rgba(255,255,255,0.45));
+  cursor: pointer; padding: 4px; line-height: 0; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.settings-eye-btn:hover { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.settings-eye-btn:disabled { color: var(--color-icon-disabled); cursor: not-allowed; }
+.settings-select {
+  flex: 1; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary); font-size: 11px;
+  padding: 4px 8px; border-radius: 3px; cursor: pointer;
+}
+.settings-help { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.45)); margin-top: 6px; line-height: 1.5; }
+.settings-help code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 2px; font-size: 10px; color: var(--color-kind-cli-provider); }
+
+.ok-pill { background: rgba(74,222,128,0.12); color: var(--accent-green); padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
+.err-pill { background: rgba(255,107,107,0.12); color: var(--accent-error); padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
+
+.settings-provider-row {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  margin-bottom: 6px;
+}
+/* Dim capability chips + body of DOWN providers so they read as "this is what
+ * the backend would offer when healthy" not "this is what's available now". */
+.settings-provider-row.is-down .settings-provider-caps,
+.settings-provider-row.is-down .settings-provider-test {
+  opacity: 0.55;
+}
+.settings-provider-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.settings-provider-id {
+  font-size: 11px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(255,255,255,0.05);
+  font-family: var(--font-mono);
+  color: var(--text-default, rgba(255,255,255,0.85));
+}
+.settings-provider-name { font-size: 12px; color: var(--text-muted, rgba(255,255,255,0.55)); }
+.settings-provider-caps { display: flex; gap: 4px; flex-wrap: wrap; }
+.settings-provider-test { display: flex; align-items: center; margin-top: 2px; }
+.settings-cap-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(126,231,196,0.08);
+  color: var(--accent-mint);
+  border: 1px solid rgba(126,231,196,0.18);
+  letter-spacing: 0.02em;
+}
+
+.settings-danger-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(255,107,107,0.08); border: 1px solid rgba(255,107,107,0.25);
+  color: var(--accent-error); cursor: pointer;
+  padding: 6px 12px; border-radius: 4px; font-size: 11px;
+  font-family: inherit;
+  align-self: flex-start;
+}
+.settings-danger-btn:hover:not(:disabled) { background: var(--color-interaction-error-strong); }
+.settings-danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.settings-info { font-family: var(--font-mono); font-size: 10px; line-height: 1.8; color: var(--text-secondary); }
+.settings-info .dim { color: var(--text-muted, rgba(255,255,255,0.4)); display: inline-block; width: 110px; }
+.settings-info code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 2px; color: var(--color-kind-cli-provider); }
+
+.settings-toast {
+  position: absolute; bottom: 16px; left: 16px; right: 16px;
+  padding: 8px 12px; border-radius: 4px;
+  font-size: 11px; text-align: center;
+}
+.settings-toast.ok { background: rgba(74,222,128,0.12); color: var(--accent-green); border: 1px solid rgba(74,222,128,0.3); }
+.settings-toast.err { background: rgba(255,107,107,0.12); color: var(--accent-error); border: 1px solid rgba(255,107,107,0.3); }
+
+/* ── P4.3 · tb-providers ProvidersBadge ────────────────────────────────────
+   CLI provider health pill in tb-right. Three tone classes wrap the same
+   .tb-prov-dot 6×6 LED + .pill-label count text. Hover applies the matching
+   tone's 13% bg + 48% border + 8px glow + -0.5px translateY lift — the same
+   visual grammar as BusHealthLamp / TabStrip ts-bus-chip / CpBusPulse so the
+   strip reads as a coherent "live system status" family across surfaces. */
+.tb-providers {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), border-color var(--motion-duration-instant) var(--motion-ease-standard), transform var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-providers .tb-prov-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.tb-providers.is-ok .tb-prov-dot {
+  background: var(--prim-color-green-400);
+  box-shadow: none;
+}
+.tb-providers.is-warn .tb-prov-dot {
+  background: var(--color-status-amber);
+  box-shadow: none;
+}
+.tb-providers.is-down .tb-prov-dot {
+  background: var(--accent-error);
+  box-shadow: none;
+}
+.tb-providers.is-loading .tb-prov-dot {
+  background: rgba(255,255,255,0.25);
+  animation: tb-prov-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tb-prov-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+.tb-providers.is-ok:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-green), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-providers.is-warn:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-warn), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-providers.is-down:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-error), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-providers.is-loading:hover {
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+/* At narrow widths the surrounding .pill rule already hides .pill-label
+   for non-publish pills, but the count is the whole point of this pill —
+   keep it visible so the player still sees "2/4" even when the model
+   label collapses. */
+@media (max-width: 1000px) {
+  .tb-right .pill.tb-providers .pill-label { display: inline; }
+}
+
+/* ── P4.5 · tb-model BrainPill (model-binding deep-link) ───────────────────
+   Replaces the previously-static Brain pill in tb-right with a live button
+   that surfaces the bus model-binding plugin count and routes a click into
+   Bus admin (kind=model-binding). Color family = teal #7be7c4 to match
+   .cb-mb-row / .ba-chip.k-model-binding / .cp-bus-chip.k-model-binding
+   everywhere else — "teal = model-binding" muscle memory transfers across
+   surfaces. Hover/focus/active grammar mirrors P4.3 .tb-providers (13% bg
+   + 48% border + 8px glow + -0.5px lift) so the two adjacent pills read as
+   one coherent "live status indicator strip". Four tones: is-ok (count > 0,
+   teal LED) / is-empty (count = 0, dim) / is-loading (dim pulse) / is-down
+   (red fallback when bus list errors). */
+.tb-model {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), border-color var(--motion-duration-instant) var(--motion-ease-standard), transform var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-model .tb-model-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.tb-model.is-ok .tb-model-dot {
+  background: var(--accent-mint);
+  box-shadow: none;
+}
+.tb-model.is-empty .tb-model-dot {
+  background: rgba(126,231,196,0.35);
+}
+.tb-model.is-down .tb-model-dot {
+  background: var(--accent-error);
+  box-shadow: none;
+}
+.tb-model.is-loading .tb-model-dot {
+  background: rgba(126,231,196,0.25);
+  animation: tb-model-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tb-model-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+.tb-model .tb-model-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: rgba(126,231,196,0.12);
+  color: var(--accent-mint);
+  border: 1px solid rgba(126,231,196,0.28);
+  line-height: 14px;
+  min-width: 12px;
+  text-align: center;
+}
+.tb-model.is-empty .tb-model-count {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.1);
+}
+.tb-model.is-ok:hover,
+.tb-model.is-empty:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-teal), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-model.is-down:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-error), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-model.is-loading:hover {
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+.tb-model:focus-visible {
+  outline: 2px solid rgba(126,231,196,0.55);
+  outline-offset: 1px;
+}
+.tb-model:active {
+  transform: translateY(0.5px);
+  background: rgba(126,231,196,0.20);
+}
+/* Keep the count visible even when narrow viewports collapse the label —
+   the count is the new live signal, the label is decorative once the dot
+   is already telling the player "teal = model-binding". */
+@media (max-width: 1000px) {
+  .tb-right .pill.tb-model .pill-label { display: inline; }
+}
+
+/* ── P4.20 · tb-skill SkillBadge (skill-kind deep-link) ───────────────────
+   Adds the 4th live LED to tb-right: gold #ffc878 dot + Sparkles glyph +
+   small `Skill N` count, polled every 12s via /api/bus/plugins?kind=skill.
+   Color family is the same gold the rest of the codebase already uses for
+   skill (.ba-chip.k-skill / .ss-kind-chip.k-skill / .dash-kind-row.k-skill /
+   .cp-bus-chip.k-skill / .ba-prov-tag.k-skill) so "gold = skill" reads
+   consistently from the very top bar to deep inside Bus admin. Grammar
+   mirrors P4.5 .tb-model (4 tones: ok/empty/loading/down) and P4.3
+   .tb-providers (13% bg + 48% border + 8px glow + -0.5px lift on hover),
+   making the four tb-right LEDs (bus lime / model teal / providers amber /
+   skill gold) read as one coherent "kind health indicator strip". Click
+   drops into Bus admin with kind-chip solo (kind=skill) — same deep-link
+   pattern P4.3/P4.5 already wired. */
+.tb-skill {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), border-color var(--motion-duration-instant) var(--motion-ease-standard), transform var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-skill .tb-skill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.tb-skill.is-ok .tb-skill-dot {
+  background: var(--color-role-narrative);
+  box-shadow: none;
+}
+.tb-skill.is-empty .tb-skill-dot {
+  background: rgba(255,200,120,0.35);
+}
+.tb-skill.is-down .tb-skill-dot {
+  background: var(--accent-error);
+  box-shadow: none;
+}
+.tb-skill.is-loading .tb-skill-dot {
+  background: rgba(255,200,120,0.25);
+  animation: tb-skill-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tb-skill-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+.tb-skill .tb-skill-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: rgba(255,200,120,0.12);
+  color: var(--color-role-narrative);
+  border: 1px solid rgba(255,200,120,0.28);
+  line-height: 14px;
+  min-width: 12px;
+  text-align: center;
+}
+.tb-skill .tb-skill-count.is-down {
+  background: rgba(255,107,107,0.12);
+  color: var(--accent-error);
+  border-color: rgba(255,107,107,0.32);
+}
+.tb-skill.is-empty .tb-skill-count {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.1);
+}
+.tb-skill.is-ok:hover,
+.tb-skill.is-empty:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-gold), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-skill.is-down:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-error), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-skill.is-loading:hover {
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+.tb-skill:focus-visible {
+  outline: 2px solid rgba(255,200,120,0.55);
+  outline-offset: 1px;
+}
+.tb-skill:active {
+  transform: translateY(0.5px);
+  background: rgba(255,200,120,0.20);
+}
+@media (max-width: 1000px) {
+  .tb-right .pill.tb-skill .pill-label { display: inline; }
+}
+
+/* ── P4.21 · tb-tool ToolBadge (tool-kind deep-link) ──────────────────────
+   Adds the 5th live LED to tb-right: orange #ff8c42 dot + Wrench glyph +
+   small `Tool N` count, polled every 12s via /api/bus/plugins?kind=tool.
+   Same orange family used by .ba-chip.k-tool / .ba-kind-tag.k-tool /
+   .ss-kind-chip.k-tool / .ba-prov-tag.k-tool so "orange = tool" stays
+   consistent from the very top bar into Bus admin. 4-tone grammar
+   (ok/empty/loading/down) mirrors P4.20 .tb-skill exactly; with this fifth
+   pill the tb-right strip reads bus(lime) → model(teal) → prov(amber/sky)
+   → skill(gold) → tool(orange) — 5 of 6 kinds covered (only agent
+   remaining). Click drops into Bus admin with kind-chip solo (kind=tool). */
+.tb-tool {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), border-color var(--motion-duration-instant) var(--motion-ease-standard), transform var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-tool .tb-tool-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.tb-tool.is-ok .tb-tool-dot {
+  background: var(--color-role-coding);
+  box-shadow: none;
+}
+.tb-tool.is-empty .tb-tool-dot {
+  background: rgba(255,140,66,0.35);
+}
+.tb-tool.is-down .tb-tool-dot {
+  background: var(--accent-error);
+  box-shadow: none;
+}
+.tb-tool.is-loading .tb-tool-dot {
+  background: rgba(255,140,66,0.25);
+  animation: tb-tool-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tb-tool-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+.tb-tool .tb-tool-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: rgba(255,140,66,0.12);
+  color: var(--color-role-coding);
+  border: 1px solid rgba(255,140,66,0.28);
+  line-height: 14px;
+  min-width: 12px;
+  text-align: center;
+}
+.tb-tool .tb-tool-count.is-down {
+  background: rgba(255,107,107,0.12);
+  color: var(--accent-error);
+  border-color: rgba(255,107,107,0.32);
+}
+.tb-tool.is-empty .tb-tool-count {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.1);
+}
+.tb-tool.is-ok:hover,
+.tb-tool.is-empty:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-orange), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-tool.is-down:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-error), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-tool.is-loading:hover {
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+.tb-tool:focus-visible {
+  outline: 2px solid rgba(255,140,66,0.55);
+  outline-offset: 1px;
+}
+.tb-tool:active {
+  transform: translateY(0.5px);
+  background: rgba(255,140,66,0.20);
+}
+@media (max-width: 1000px) {
+  .tb-right .pill.tb-tool .pill-label { display: inline; }
+}
+
+/* ── P4.22 · tb-agent AgentBadge (agent-kind deep-link, 6/6 完成) ─────────
+   Final tb-right kind LED, completing 6-color bus-kind mission-control
+   strip: bus(lime) → model(teal) → prov(amber) → skill(gold) → tool(orange)
+   → agent(violet). Color family = violet #c4a3ff matching
+   .ac-role-dot.tribe-* / .ba-chip.k-agent / .ss-kind-chip.k-agent /
+   .cp-agent-bar empty-state so "violet = agent" muscle memory transfers
+   across all agent surfaces. 4-tone grammar (ok/empty/loading/down) cloned
+   from .tb-skill / .tb-tool. */
+.tb-agent {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), border-color var(--motion-duration-instant) var(--motion-ease-standard), transform var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.tb-agent .tb-agent-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--motion-duration-instant) var(--motion-ease-standard), box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.tb-agent.is-ok .tb-agent-dot {
+  background: var(--color-role-orchestrator);
+  box-shadow: none;
+}
+.tb-agent.is-empty .tb-agent-dot {
+  background: rgba(196,163,255,0.35);
+}
+.tb-agent.is-down .tb-agent-dot {
+  background: var(--accent-error);
+  box-shadow: none;
+}
+.tb-agent.is-loading .tb-agent-dot {
+  background: rgba(196,163,255,0.25);
+  animation: tb-agent-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tb-agent-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+.tb-agent .tb-agent-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 8px;
+  background: rgba(196,163,255,0.12);
+  color: var(--color-role-orchestrator);
+  border: 1px solid rgba(196,163,255,0.28);
+  line-height: 14px;
+  min-width: 12px;
+  text-align: center;
+}
+.tb-agent .tb-agent-count.is-down {
+  background: rgba(255,107,107,0.12);
+  color: var(--accent-error);
+  border-color: rgba(255,107,107,0.32);
+}
+.tb-agent.is-empty .tb-agent-count {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.1);
+}
+.tb-agent.is-ok:hover,
+.tb-agent.is-empty:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-violet), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-agent.is-down:hover {
+  background: var(--color-interaction-hover);
+  border-color: rgba(var(--rgb-accent-error), 0.48);
+  transform: translateY(-0.5px);
+}
+.tb-agent.is-loading:hover {
+  background: var(--color-interaction-hover);
+  border-color: var(--color-border-default);
+}
+.tb-agent:focus-visible {
+  outline: 2px solid rgba(196,163,255,0.55);
+  outline-offset: 1px;
+}
+.tb-agent:active {
+  transform: translateY(0.5px);
+  background: rgba(196,163,255,0.20);
+}
+@media (max-width: 1000px) {
+  .tb-right .pill.tb-agent .pill-label { display: inline; }
+}
+
+/* ── Workspace tabs (Blender-style, replaces 3 fixed mode tabs) ─────────────── */
+
+/* Add workspace button */
+.ws-add-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--color-text-tertiary);
+  border-radius: var(--radius-pill);
+  font-size: 14px; font-weight: 400;
+  margin-left: 2px;
+  transition: color var(--motion-duration-fast) var(--motion-ease-spring),
+              background var(--motion-duration-fast) var(--motion-ease-spring);
+}
+.ws-add-btn:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Inline rename input — sits inside the tab button */
+.ws-rename-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  width: 80px;
+  min-width: 40px;
+  padding: 0;
+  caret-color: var(--color-text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+/* Right-click context menu */
+.ws-ctx-menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  background: var(--color-background-floating);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  padding: 4px;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ws-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+}
+.ws-ctx-item:hover { background: rgba(255,255,255,0.08); }
+.ws-ctx-item.ws-ctx-delete { color: var(--color-text-danger, #ff6b6b); }
+.ws-ctx-item.disabled { opacity: 0.4; cursor: not-allowed; }
+.ws-ctx-item.disabled:hover { background: transparent; }
+
+/* ── Package progress overlay ── */
+.tb-progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tb-progress-dialog {
+  background: var(--color-background-floating, #1e1e2e);
+  border: 1px solid var(--color-border-default, #333);
+  border-radius: 8px;
+  padding: 16px 20px;
+  min-width: 340px;
+  max-width: 540px;
+  color: var(--color-text-primary, #e0e0e0);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+@keyframes tb-spin { to { transform: rotate(360deg); } }
+.tb-spinner { animation: tb-spin 1s linear infinite; }

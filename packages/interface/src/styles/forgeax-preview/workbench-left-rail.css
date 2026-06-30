@@ -1,0 +1,220 @@
+/* WorkbenchLeftRail layout — colors from tokens.css / design-tokens.css */
+
+.workbench-left-rail {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  flex-shrink: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--forgeax-divider);
+}
+
+.workbench-left-rail:not(.wb-sidebar--resizing) {
+  transition: width var(--motion-duration-smooth) var(--motion-ease-out);
+}
+
+.wb-sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  opacity: 0;
+  background: var(--forgeax-brand-glow, color-mix(in srgb, var(--primary) 35%, transparent));
+  transition: opacity var(--motion-duration-base) var(--motion-ease-out);
+}
+
+.wb-sidebar-resizer:hover::after,
+body.wb-sidebar-resizing .wb-sidebar-resizer::after {
+  opacity: 1;
+}
+
+body.wb-sidebar-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.wb-icon-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: var(--forgeax-rail-icon-w, 56px);
+  flex-shrink: 0;
+  padding: 10px 0;
+  border-right: 1px solid var(--forgeax-divider);
+  background: color-mix(in srgb, var(--color-background-canvas) 80%, transparent);
+}
+
+.wb-rail-icon-btn {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  background: transparent;
+  transition:
+    transform var(--motion-duration-base) var(--motion-ease-out),
+    background var(--motion-duration-base) var(--motion-ease-out),
+    border-color var(--motion-duration-base) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out),
+    box-shadow var(--motion-duration-smooth) var(--motion-ease-out);
+}
+
+.wb-rail-icon-btn--lg {
+  width: 44px;
+  height: 44px;
+}
+
+.wb-rail-icon-btn:hover {
+  background: var(--color-interaction-hover);
+  color: var(--text-secondary);
+}
+
+.wb-rail-icon-btn.active {
+  background: var(--color-interaction-selected-brand);
+  color: var(--primary);
+  border-color: var(--forgeax-brand-ring, color-mix(in srgb, var(--primary) 35%, transparent));
+  box-shadow:
+    inset 0 0 0 1px var(--forgeax-brand-ring),
+    0 0 16px var(--forgeax-brand-glow);
+}
+
+.wb-drawer {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wb-tools-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.wb-rail-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--forgeax-divider);
+  flex-shrink: 0;
+}
+
+.wb-stat-pill {
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--color-background-elevated);
+  border: 1px solid var(--forgeax-divider);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.wb-rail-title {
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.wb-rail-section {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 11px;
+  text-align: right;
+}
+
+.wb-rail-body,
+.wb-tools-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.wb-module-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.wb-module-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  min-height: 62px;
+  padding: 7px 3px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.wb-module-tile:hover {
+  background: var(--color-interaction-hover);
+  color: var(--text-secondary);
+  border-color: var(--forgeax-divider);
+}
+
+.wb-module-tile.active {
+  background: var(--color-interaction-selected-brand);
+  color: var(--primary);
+  border-color: var(--forgeax-brand-ring);
+  box-shadow: inset 0 0 0 1px var(--forgeax-brand-ring);
+}
+
+.wb-module-tile.active .wb-module-tile-icon {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.wb-module-tile.active .wb-module-tile-label {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.glow-accent {
+  box-shadow:
+    0 0 0 1px var(--forgeax-brand-glow),
+    0 0 24px var(--forgeax-brand-glow);
+}
+
+.pressable:active {
+  transform: scale(var(--motion-press-scale));
+}
+
+.wb-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 6;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  transform: translate(50%);
+}

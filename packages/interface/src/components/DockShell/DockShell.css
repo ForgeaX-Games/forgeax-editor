@@ -1,0 +1,180 @@
+/* DockShell — flush, square, padding-free dock styling (design §0.2.4: 内嵌停靠
+   用平直方角、无 padding/缝隙、彼此贴合、仅 1px 分隔线;圆角只留给浮动窗). We map
+   dockview's theme variables to the studio tokens so it matches the shell skin.
+   The compound selector (.dockview-theme-abyss.fx-dockshell) beats the theme's
+   own variable declarations — otherwise the abyss theme re-declares them at equal
+   specificity and its blue (#007acc) wins in source order. */
+.dockview-theme-abyss.fx-dockshell,
+.fx-dockshell {
+  flex: 1 1 auto;
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+
+  /* ── background / chrome ── */
+  --dv-background-color:                             var(--color-background-base, #0d0d0f);
+  --dv-group-view-background-color:                  var(--color-background-base, #0d0d0f);
+  --dv-tabs-and-actions-container-background-color:  var(--color-background-elevated, #161619);
+
+  /* ── tab colours: same neutral palette, three shades
+        active group / active tab  →  darkest  (#0d0d0f)  fg=primary
+        active group / hidden tab  →  mid       (#161619)  fg=secondary
+        inactive group / active tab→  mid       (#161619)  fg=tertiary
+        inactive group / hidden tab→  lightest  (#1e1e22)  fg=muted
+     No blue. No abyss purple. Consistent with the rest of the studio UI. ── */
+  --dv-activegroup-visiblepanel-tab-background-color:   var(--color-background-base, #0d0d0f);
+  --dv-activegroup-hiddenpanel-tab-background-color:    var(--color-background-elevated, #161619);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-background-elevated, #161619);
+  --dv-inactivegroup-hiddenpanel-tab-background-color:  var(--color-background-overlay, #1e1e22);
+
+  --dv-activegroup-visiblepanel-tab-color:    var(--color-text-primary, #e8eaed);
+  --dv-activegroup-hiddenpanel-tab-color:     var(--color-text-secondary, #9aa0aa);
+  --dv-inactivegroup-visiblepanel-tab-color:  var(--color-text-secondary, #9aa0aa);
+  --dv-inactivegroup-hiddenpanel-tab-color:   var(--color-text-tertiary, #5f6368);
+
+  /* ── borders / separators ── */
+  --dv-tab-divider-color:        var(--color-border-default, #2a2d30);
+  --dv-separator-border:         var(--color-border-default, #2a2d30);
+
+  /* ── interactive accent (sash resize + drop zone): lime, NOT blue ── */
+  --dv-paneview-active-outline-color: var(--lime, #7ee04a);
+  --dv-active-sash-color:             var(--lime, #7ee04a);
+  --dv-tabs-container-scrollbar-color: var(--color-border-default, #2a2d30);
+  --dv-drag-over-background-color:    rgba(126, 224, 74, 0.18);
+  --dv-drag-over-border-color:        var(--lime, #7ee04a);
+
+  /* Neutralise the abyss-theme colour palette that bleeds through (#007acc etc.) */
+  --dv-color-abyss-dark:    var(--color-background-base, #0d0d0f);
+  --dv-color-abyss:         var(--color-background-elevated, #161619);
+  --dv-color-abyss-light:   var(--color-background-overlay, #1e1e22);
+  --dv-color-abyss-lighter: var(--color-background-raised, #252529);
+  --dv-color-abyss-accent:  var(--lime, #7ee04a);
+}
+
+/* Flush + square: no rounded corners, no extra padding on the docked content. */
+.fx-dockshell .dv-react-part,
+.fx-dockshell .dv-tabs-and-actions-container,
+.fx-dockshell .groupview,
+.fx-dockshell .tab,
+.fx-dockshell .dv-tab { border-radius: 0 !important; }
+
+.fx-dockshell .dv-default-tab { padding: 0 10px; }
+.fx-dockshell .content-container { inset: 0; }
+
+/* 1px separators are dockview's sashes already; just tint on hover/active. */
+.fx-dockshell .dv-sash.dv-sash-active,
+.fx-dockshell .sash.active { background: var(--lime, #7ee04a); }
+
+/* Standalone Console dock panel. */
+.fx-console-panel { display: flex; flex-direction: column; height: 100%; background: var(--color-background-base, #0d0d0f); }
+.fx-console-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--color-border-default, #2a2d30); font-family: var(--font-mono, monospace); font-size: 11px; color: var(--color-text-tertiary, #778); }
+.fx-console-title { flex: 1 1 auto; }
+.fx-console-clear { cursor: pointer; background: none; border: none; color: var(--color-text-tertiary, #778); font: inherit; }
+.fx-console-clear:hover { color: var(--color-text-primary, #fff); }
+.fx-console-body { flex: 1 1 auto; overflow: auto; padding: 4px 0; }
+
+/* Per-group popout action in the tab bar's right actions slot. */
+.fx-grp-popout {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 100%; padding: 0 8px; cursor: pointer; background: none; border: none;
+  color: var(--color-text-tertiary, #778); font-size: 13px;
+}
+.fx-grp-popout:hover { color: var(--lime, #7ee04a); }
+
+/* Floating windows DO keep rounded corners + shadow (design: 圆角只留浮动/弹出窗). */
+.fx-dockshell .dv-resize-container { border-radius: 8px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55); overflow: hidden; }
+
+/* Make the hosted panel bodies fill their group content area. */
+.fx-dockshell .dv-react-part > * { height: 100%; width: 100%; }
+
+/* Wrapper so the layout control can pin over the dock. */
+.fx-dockwrap { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
+
+/* While dragging a tab/group anywhere, disable ONLY iframes so dockview's drop
+   overlay receives dragover over iframe panels (iframes swallow native drag).
+   IMPORTANT: do NOT disable .dv-react-part — dockview's own drop detection lives
+   in the panel/content area; disabling it breaks docking onto NON-iframe panels
+   (chat / workbench). Global on <html> since dockview portals floats to <body>. */
+html.fx-dock-dragging iframe { pointer-events: none !important; }
+
+/* Per-group "pop out to OS window" button (rightHeaderActionsComponent). */
+.fx-dock-popout {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin: 0 2px; padding: 0; cursor: pointer;
+  background: transparent; color: var(--color-text-secondary, #aab);
+  border: none; border-radius: 4px; font-size: 13px; line-height: 1;
+}
+.fx-dock-popout:hover { color: var(--color-text-primary, #fff); background: var(--color-background-base, #0e0e10); }
+
+/* Layout control — pinned top-right, above the dock. */
+.fx-dock-layout { position: absolute; top: 4px; right: 8px; z-index: var(--z-dropdown); font-family: var(--font-mono, monospace); }
+.fx-dl-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; cursor: pointer;
+  background: var(--color-background-elevated, #161619); color: var(--color-text-secondary, #aab);
+  border: 1px solid var(--color-border-default, #2a2d30); border-radius: 6px; font-size: 11px;
+}
+.fx-dl-btn:hover { color: var(--color-text-primary, #fff); border-color: var(--lime, #7ee04a); }
+.fx-dl-menu {
+  position: absolute; top: 28px; right: 0; min-width: 160px; padding: 4px;
+  background: var(--color-background-elevated, #161619); border: 1px solid var(--color-border-default, #2a2d30);
+  border-radius: 8px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 1px;
+  max-height: min(480px, calc(100vh - 60px)); overflow-y: auto;
+}
+/* 重置布局 pinned at the top — stays put while the panel list scrolls under it. */
+.fx-dl-reset {
+  position: sticky; top: -4px; z-index: 1;
+  background: var(--color-background-elevated, #161619);
+  color: var(--lime, #7ee04a);
+}
+.fx-dl-menu::-webkit-scrollbar { width: 4px; }
+.fx-dl-menu::-webkit-scrollbar-track { background: transparent; }
+.fx-dl-menu::-webkit-scrollbar-thumb { background: var(--color-border-default, #2a2d30); border-radius: 2px; }
+.fx-dl-menu::-webkit-scrollbar-thumb:hover { background: var(--color-text-tertiary, #778); }
+.fx-dl-head { font-size: 10px; color: var(--color-text-tertiary, #778); padding: 3px 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+.fx-dl-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; text-align: left;
+  background: none; border: none; color: var(--color-text-secondary, #aab); font: inherit; font-size: 11px; border-radius: 5px;
+}
+.fx-dl-item:hover { background: var(--color-interaction-hover, #23262a); color: var(--color-text-primary, #fff); }
+.fx-dl-item.on { color: var(--color-text-primary, #fff); }
+.fx-dl-check { width: 12px; color: var(--lime, #7ee04a); }
+.fx-dl-sep { height: 1px; background: var(--color-border-default, #2a2d30); margin: 3px 0; }
+.fx-dl-empty { font-size: 10px; color: var(--color-text-tertiary, #778); padding: 2px 8px; }
+.fx-dl-preset { display: flex; align-items: center; }
+.fx-dl-grow { flex: 1 1 auto; min-width: 0; }
+.fx-dl-del { cursor: pointer; background: none; border: none; color: var(--color-text-tertiary, #778); font: inherit; padding: 0 6px; }
+.fx-dl-del:hover { color: var(--color-text-primary, #fff); }
+
+/* EditorPanelFrame — editor sub-panels as outer DockShell leaves */
+.ep-frame-wrap { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.ep-frame-iframe { flex: 1 1 auto; width: 100%; height: 100%; border: none; background: var(--dv-background-color, #151618); display: block; }
+.ep-frame-unavailable {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px;
+  background: var(--dv-background-color, #151618);
+  color: var(--color-text-secondary, #aab);
+  font-size: 12px;
+}
+.ep-frame-unavailable-title { color: var(--color-text-primary, #eee); font-weight: 700; }
+.ep-frame-unavailable-desc { color: var(--color-text-tertiary, #778); line-height: 1.45; }
+
+/* WbPluginDockPanel — plugin as a top-level dock leaf */
+.wb-dock-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.wb-dock-standalone { position: relative; }
+.wb-dock-popout-btn {
+  position: absolute; top: 6px; right: 8px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: var(--dv-background-color, #1b1d1f); border: 1px solid var(--dv-separator-border, #2a2d30); color: var(--color-text-secondary, #aaa);
+  cursor: pointer; opacity: 0.8;
+}
+.wb-dock-popout-btn:hover { opacity: 1; color: var(--color-text-primary, #eee); }
+.wb-dock-loading, .wb-dock-placeholder { padding: 16px; font-size: 13px; color: var(--color-text-secondary, #aaa); }
+.wb-dock-name { font-weight: 700; color: var(--color-text-primary, #eee); margin-bottom: 4px; }
+.wb-dock-desc { font-size: 12px; margin-bottom: 8px; }
+.wb-dock-id { font-family: monospace; font-size: 10px; opacity: 0.5; }
