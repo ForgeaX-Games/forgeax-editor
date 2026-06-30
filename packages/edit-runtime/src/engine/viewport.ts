@@ -31,6 +31,7 @@ import {
 import type { EntityId, EditSession } from '@forgeax/editor-core';
 import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
 import type { EngineSync } from './sync';
+import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -421,6 +422,8 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   /** Re-place the gizmo on the current selection (or hide it). Sized by camera
    *  distance so handles stay grabbable at any zoom; shape switches with the mode. */
   function updateGizmo(): void {
+    // Display gate (w23, D-5): display='game' → hide ALL auxiliary entities.
+    if (!isAuxVisible()) { despawnHandles(); return; }
     const sel = getSelection();
     // During a live drag the DOC isn't touched (we only world.set a preview), so
     // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
@@ -505,6 +508,8 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
   function updateParamGizmo(): void {
+    // Display gate (w23): display='game' → hide param gizmos (Light range/spot, Camera frustum).
+    if (!isAuxVisible()) { despawnParam(); return; }
     const sel = getSelection();
     const node = sel !== null ? bus.doc.entities[sel] : undefined;
     if (!node) { despawnParam(); return; }
@@ -861,6 +866,10 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
   const refreshGizmos = (): void => { updateGizmo(); updateParamGizmo(); };
+
+// Display visibility bus (w23, D-5): re-gate gizmos when display toggles so
+// display='game' immediately hides / 'scene' immediately restores visual aides.
+onDisplayModeChange(() => refreshGizmos());
   // The gizmos depend ONLY on the selected entity's own components (updateGizmo
   // reads its local Transform; updateParamGizmo reads its Light/Camera). So an
   // edit to any OTHER entity can't move them — skip the refresh by tracking a

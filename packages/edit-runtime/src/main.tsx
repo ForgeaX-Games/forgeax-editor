@@ -35,6 +35,7 @@ import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange, setEditorCameraEntity, setGameCameraEntity, deriveActiveCameraEntity } from './engine/viewport-quadrant';
 import { setActiveCamera } from '@forgeax/engine-runtime';
+import { _syncDisplayMode } from './engine/display-bus';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, discoverModules, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
@@ -571,6 +572,12 @@ function applyActiveCamera(): void {
 // on the same quadrant change event.
 applyActiveCamera();
 onViewportQuadrantChange(() => applyActiveCamera());
+
+// Wire display bus to quadrant SSOT (w23). The bus holds currentDisplay and a
+// listener set; this bridge synchronizes the two modules once the quadrant is
+// live, then on every quadrant change.
+_syncDisplayMode(getViewportQuadrant().display);
+onViewportQuadrantChange((q) => _syncDisplayMode(q.display));
 
 app.value.start();
 installFpsReport();
