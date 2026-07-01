@@ -635,8 +635,15 @@ onViewportQuadrantChange(() => applyActiveCamera());
 let cachedDefaultScene: unknown;
 async function resolveGameModuleForPlay(): Promise<unknown> {
   const slug = getSceneId();
-  const base = BASE;
-  const gameBase = `${base}/preview/.forgeax/games/${slug}`;
+  // The `/preview/*` route is a ROOT-absolute same-origin proxy served by the
+  // studio server (→ play-runtime's per-game catalog), NOT under the editor's
+  // vite base (`/editor`). Every other /preview reference here is root-absolute
+  // (packIndexUrl @330, fullscreen @254, shared-assets @784); prefixing the
+  // editor BASE here made the HEAD hit `/editor/preview/...` which the vite dev
+  // server answers with the SPA index.html (content-type text/html), so the
+  // `javascript` check failed, loadGame errored, and ▶ Play opened the gate
+  // with ZERO game systems registered — the game never started.
+  const gameBase = `/preview/.forgeax/games/${slug}`;
   // Resolve entry candidates from forge.json (authoritative), then defaults.
   const candidates: string[] = [];
   cachedDefaultScene = undefined;
