@@ -354,12 +354,26 @@ if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.
 
 // ── GameContext (D-2: assembled after instantiate, so defaultSceneRoot +
 // defaultScene are captured in a single readonly literal — no write-back) ──
+// B (controlled UI root): symmetric with the embedded editor host so games have
+// ONE mount path (`ctx.uiRoot`), not a play-vs-edit fork. Here the container is
+// a body-level overlay; teardown is trivial because ■ Stop is location.reload()
+// (see VAG_PREVIEW_RELOAD) which discards the entire document.
+const playUiRoot = document.createElement('div');
+playUiRoot.id = 'game-ui-root';
+playUiRoot.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+document.body.appendChild(playUiRoot);
+
 const ctx: GameContext = {
   world,
   renderer,
   assets: renderer.assets,
   app: app.value,
   registerUpdate(fn) { app.value.registerUpdate(fn); },
+  uiRoot: playUiRoot,
+  // A (cleanup hook): no-op — this host reloads the whole document on ■ Stop,
+  // so every side effect is discarded regardless. Present only to keep the
+  // contract identical to the editor host (games register defensively).
+  registerCleanup() { /* reload-on-stop discards everything */ },
   ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
   ...(defaultScene !== undefined ? { defaultScene } : {}),
 };

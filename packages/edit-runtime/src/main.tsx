@@ -821,6 +821,20 @@ runLifecycle = createRunLifecycle({
     discoverGameCameraFromWorld();
     applyActiveCamera();
   },
+  // B (controlled UI root): on ▶ Play build a disposable container inside the
+  // #ui overlay layer and hand it to the game as ctx.uiRoot; on ■ Stop remove
+  // it whole. Sits above the canvas but below ViewportBar (z-10) / GameOverlay
+  // (z-100); pointer-events:none passes camera input through to the canvas —
+  // game elements opt back in with pointer-events:auto. This is the DOM
+  // counterpart to the ECS-surgical Stop undo (which can't reach the DOM).
+  mountUiRoot: () => {
+    const el = document.createElement('div');
+    el.id = 'game-ui-root';
+    el.style.cssText = 'position:fixed;inset:0;z-index:5;pointer-events:none';
+    (document.getElementById('ui') ?? document.body).appendChild(el);
+    return el;
+  },
+  unmountUiRoot: (el: HTMLElement) => el.remove(),
 });
 
 // Wire display bus to quadrant SSOT (w23). The bus holds currentDisplay and a
