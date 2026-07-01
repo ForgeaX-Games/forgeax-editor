@@ -54,6 +54,6 @@ describe('@forgeax/editor root entry', () => {
       .sort();
     const expected = [...EDITOR_PANELS].sort();
     expect(panelIds).toEqual(expected);
-    expect(panelIds).toHaveLength(8);
+    expect(panelIds).toHaveLength(EDITOR_PANELS.length);
   });
 });

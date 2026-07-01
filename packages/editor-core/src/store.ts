@@ -17,6 +17,7 @@ import {
   type AssetChatRef,
   type MeshStatsWire,
 } from './sync-channel';
+import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './socket-store';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { getApiClient } from './api-client';
 import { findScenePackByGuid } from './assets';
@@ -1195,6 +1196,8 @@ function mainOnMessage(ev: MessageEvent): void {
     case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
       case 'openScene': void switchSceneFile(msg.id); break;
     case 'assetSelect': applyRemoteAssetSelection(msg.asset as SelectedAsset | null); break;
+    case 'clipCtl': setClipControl({ paused: msg.paused, speed: msg.speed, phase: msg.phase, applyPhase: msg.applyPhase }, { remote: true }); break;
+    case 'socketView': requestView(msg.cmd, { remote: true }); break;
     default: break; // 'snapshot'/'sceneChanged' are main→popout only
   }
 }
@@ -1232,6 +1235,10 @@ function initPopout(ch: BroadcastChannel): void {
   bus.undo = () => { postSync({ t: 'undo' }); return true; };
   bus.redo = () => { postSync({ t: 'redo' }); return true; };
   bus.jumpTo = (target: number) => { postSync({ t: 'jumpTo', target }); };
+  // Forward clip-scrubber transport to the main window (which owns the preview
+  // AnimationPlayer). Cleared on pagehide via the channel teardown.
+  setClipControlForwarder((c) => postSync({ t: 'clipCtl', paused: c.paused, speed: c.speed, phase: c.phase, applyPhase: c.applyPhase }));
+  setViewRequestForwarder((cmd) => postSync({ t: 'socketView', cmd }));
   bus.canUndo = () => mirror?.canUndo ?? false;
   bus.canRedo = () => mirror?.canRedo ?? false;
   bus.historySteps = (): HistoryStep[] => mirror?.history ?? [];

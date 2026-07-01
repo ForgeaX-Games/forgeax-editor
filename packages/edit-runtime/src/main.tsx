@@ -1228,14 +1228,113 @@ void (async () => {
     const clipRes = await assets.loadByGuid(firstGid.value);
     if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
     if (getSceneId() !== slug) return; // game switched while loading the clip — don't touch a stale world
-    // loadByGuid returns the PAYLOAD; AnimationPlayer.clip wants a Handle — mint
-    // a shared-ref (brand 'AnimationClip'), same as hellforge Play.
+    // loadByGuid returns the PAYLOAD; AnimationPlayer wants a Handle — mint a
+    // shared-ref (brand 'AnimationClip'), same as hellforge Play. AnimationPlayer
+    // is SoA (clips/times/weights/speeds[4] + paused/looping): slot 0 must carry
+    // BOTH clips[0]=handle AND weights[0]=1, else advanceAnimationPlayer treats
+    // the slot as inactive (weight 0) and nothing animates.
     const clipHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('AnimationClip', clipRes.value);
     (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
       component: AnimationPlayer,
-      data: { clip: clipHandle, time: 0, speed: 1, paused: false, looping: true },
+      data: {
+        clips: [clipHandle, 0, 0, 0],
+        times: new Float32Array([0, 0, 0, 0]),
+        weights: new Float32Array([1, 0, 0, 0]),
+        speeds: new Float32Array([1, 1, 1, 1]),
+        paused: false,
+        looping: true,
+      },
     });
+    const clipDurationSec = Math.max(0.001, Number((clipRes.value as { duration?: number }).duration) || 1);
     console.log(`[editor] preview skin loaded for ${slug} (default clip via guid ${clipGuids[0]!.slice(0, 8)}, ${defaultName})`);
+
+    // ── Socket (绑点) clip scrubber ───────────────────────────────────────────
+    // The socket-editor panel drives play/pause/scrub/speed via editor-core's
+    // clip-control store (cross-window-bridged in store.ts). We hold the live
+    // AnimationPlayer here, so subscribe + write the transport into SoA slot 0:
+    //   paused → paused; speed → speeds[0]; scrub → times[0] = phase × duration.
+    // Scrub seeks (applyPhase) only set times so a plain pause never jumps to 0.
+    try {
+      const { onClipControl, getClipControl } = await import('@forgeax/editor-core');
+      const wAny = world as never as {
+        get: (e: unknown, c: unknown) => { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
+        set: (e: unknown, c: unknown, d: unknown) => unknown;
+      };
+      const applyClip = (): void => {
+        const c = getClipControl();
+        const cur = wAny.get(skinEnt, AnimationPlayer);
+        if (!cur.ok || !cur.value) return;
+        const speeds = Float32Array.from(cur.value.speeds ?? new Float32Array([1, 1, 1, 1]));
+        speeds[0] = c.speed;
+        const data: Record<string, unknown> = { paused: c.paused, speeds };
+        if (c.applyPhase) {
+          const times = Float32Array.from(cur.value.times ?? new Float32Array(4));
+          times[0] = Math.max(0, Math.min(1, c.phase)) * clipDurationSec;
+          data.times = times;
+        }
+        wAny.set(skinEnt, AnimationPlayer, data);
+      };
+      onClipControl(applyClip);
+      applyClip();
+    } catch (cErr) {
+      console.warn('[editor] clip scrubber wiring failed:', (cErr as Error).message ?? cErr);
+    }
+
+    // ── Viewport intents: reset camera / recenter character (需求 §4.1) ────────
+    // The socket-editor panel (possibly popped out) fires one-shot intents over
+    // editor-core's view-request channel. 'resetCamera' re-aims the orbit camera;
+    // 'recenter' normalizes the preview character to stand at the origin.
+    try {
+      const { onViewRequest } = await import('@forgeax/editor-core');
+      const { normalizeSkinTransform } = await import('./engine/socket-preview');
+      onViewRequest((cmd) => {
+        try {
+          if (cmd === 'resetCamera') { viewport.resetCamera(); return; }
+          if (cmd === 'recenter') {
+            const ok = normalizeSkinTransform(world as never, { skinEntity: skinEnt, skinRoot, targetHeight: 1.9 });
+            if (ok) viewport.resetCamera();
+          }
+        } catch (e) { console.warn('[editor] view intent failed:', (e as Error).message ?? e); }
+      });
+    } catch (vErr) {
+      console.warn('[editor] view-intent wiring failed:', (vErr as Error).message ?? vErr);
+    }
+
+    // ── Socket (绑点) live preview ─────────────────────────────────────────────
+    // With the character skin live, mirror the editor's working SocketDoc into
+    // the world: load each socket's prop scene (assetHint = prop scene GUID),
+    // parent it under the named bone, and upsert the Socket component. The engine
+    // `applySocket` system + `propagateTransforms` then give 所见即所得 placement
+    // (开发文档 §6 / §8.1). Convention: a socket whose `assetHint` is not a valid
+    // asset GUID is skipped — preview is opt-in per socket, never wedges boot.
+    try {
+      const { applySocketsToWorld } = await import('./engine/socket-preview');
+      const { getSocketDoc, onSocketPreview } = await import('@forgeax/editor-core');
+      const propBySocketId = new Map<string, unknown>();
+      const ensureProp = async (id: string, assetHint?: string): Promise<void> => {
+        if (propBySocketId.has(id)) return;
+        const hint = assetHint?.trim();
+        if (!hint) return;
+        const pg = AssetGuid.parse(hint);
+        if (!pg.ok) return; // assetHint isn't a GUID → no prop preview for this socket
+        const pres = await assets.loadByGuid(pg.value);
+        if (getSceneId() !== slug) return; // game switched while loading the prop
+        if (!pres.ok) { console.warn('[editor] socket prop load failed:', (pres.error as { code?: string })?.code); return; }
+        const ph = (world as never as { allocSharedRef: (b: string, p: unknown) => unknown }).allocSharedRef('SceneAsset', pres.value);
+        const pinst = assets.instantiate(ph as never, world as never);
+        if (!pinst.ok) { console.warn('[editor] socket prop instantiate failed:', (pinst.error as { code?: string })?.code); return; }
+        propBySocketId.set(id, pinst.value);
+      };
+      const applyAll = async (): Promise<void> => {
+        const doc = getSocketDoc();
+        for (const def of doc.sockets) await ensureProp(def.id, def.assetHint);
+        applySocketsToWorld(world as never, { skinEntity: skinEnt, propBySocketId }, doc.sockets);
+      };
+      onSocketPreview(() => { void applyAll(); });
+      await applyAll();
+    } catch (sErr) {
+      console.warn('[editor] socket preview wiring failed:', (sErr as Error).message ?? sErr);
+    }
   } catch (err) {
     console.warn('[editor] preview skin hook failed:', (err as Error).message ?? err);
   }
