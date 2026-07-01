@@ -32,7 +32,7 @@ import { createEngineSync } from './engine/sync';
 import { setupEditorSkylight } from './engine/skylight';
 import { createViewport } from './engine/viewport';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
@@ -619,19 +619,37 @@ void setupEditorSkylight(
   };
   const emptyStats = (guid: string, error: string) =>
     ({ guid, vertexCount: 0, primitiveCount: 0, indexFormat: 'none' as const, submeshes: [], attributes: [], error });
+  // The "active mesh" mirrors MeshPanel's render precedence so the guid we publish
+  // ALWAYS matches the guid the panel wants to show (else the panel waits forever on
+  // a guid mismatch). Precedence: a selected entity WITH a Mesh component owns the
+  // panel (entity mode) → its meshAsset guid (or null for an inline primitive — no
+  // geometry to load); otherwise a selected mesh sub-asset (asset-preview mode).
+  // Design: docs/design/editor-mesh-panel-ue58-parity.md.
+  const activeMeshGuid = (): string | null => {
+    const selId = getSelection();
+    if (selId !== null) {
+      const mesh = bus.doc.entities[selId]?.components.Mesh as Record<string, unknown> | undefined;
+      if (mesh) {
+        const g = typeof mesh.meshAsset === 'string' ? mesh.meshAsset : '';
+        return g.length > 0 ? g : null; // inline primitive → no guid → no stats
+      }
+      // entity without a Mesh component → panel falls back to asset preview
+    }
+    const a = getAssetSelection();
+    return a?.kind === 'mesh' ? a.guid : null;
+  };
   let lastGuid: string | null = null;
-  const publishForSelection = async (): Promise<void> => {
-    const sel = getAssetSelection();
-    if (!sel || sel.kind !== 'mesh') { lastGuid = null; return; }
-    if (sel.guid === lastGuid) return; // already published for this selection
-    lastGuid = sel.guid;
-    const guid = sel.guid;
+  const publishForActiveMesh = async (): Promise<void> => {
+    const guid = activeMeshGuid();
+    if (guid === lastGuid) return; // active mesh unchanged — skip reload
+    lastGuid = guid;
+    if (guid === null) { publishMeshStats(null); return; } // no mesh in focus → clear
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(guid);
       if (!parsed.ok || parsed.value === undefined) { publishMeshStats(emptyStats(guid, 'bad guid')); return; }
       const res = await (renderer.assets as never as { loadByGuid: (g: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> }).loadByGuid(parsed.value);
-      if (getAssetSelection()?.guid !== guid) return; // selection moved on — drop stale result
+      if (activeMeshGuid() !== guid) return; // focus moved on — drop stale result
       if (!res.ok || res.value === undefined) { publishMeshStats(emptyStats(guid, res.error?.code ?? 'load miss')); return; }
       const mesh = res.value as {
         vertices?: { byteLength?: number };
@@ -673,8 +691,14 @@ void setupEditorSkylight(
       publishMeshStats(emptyStats(guid, (err as Error)?.message ?? 'load failed'));
     }
   };
-  onAssetSelectionChange(() => { void publishForSelection(); });
-  void publishForSelection();
+  // Re-publish when any focus that drives the panel changes: asset selection
+  // (asset-preview), entity selection (entity mode), or a doc edit rebinding the
+  // selected entity's meshAsset. The activeMeshGuid()+lastGuid dedupe keeps the
+  // frequent bus.subscribe callback a cheap string compare unless the guid moved.
+  onAssetSelectionChange(() => { void publishForActiveMesh(); });
+  onSelectionChange(() => { void publishForActiveMesh(); });
+  bus.subscribe(() => { void publishForActiveMesh(); });
+  void publishForActiveMesh();
 }
 
 // Cross-window sync: this is the MAIN window — broadcast snapshots to any
