@@ -406,7 +406,9 @@ function stopSimulation(): void {
   }
 }
 
-(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile, playSimulation, stopSimulation };
+// Expose the viewport quadrant SSOT (get/set/subscribe) so an out-of-iframe AI
+// can script-drive the run x display quadrants (verify V-2 affordances finding).
+(window as unknown as Record<string, unknown>).__forgeax_editor = { app: app.value, world, renderer, bus, switchScene: switchSceneFile, playSimulation, stopSimulation, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange };
 
 	// Wire deferred action references for ViewportChrome callbacks (w24). The
 	// React mount runs before bootEditor, so the callbacks were stubbed. Now
@@ -590,6 +592,10 @@ function discoverGameCamera(): void {
       }
     }
   }
+  // D-8 (requirements §10.2 / plan §3.3): no game Camera in the scene. play·game
+  // will fall back to the editor orbit camera. Surface a structured diagnostic
+  // instead of silently reverting (verify V-1 affordances finding).
+  console.warn('[viewport] no-game-camera: scene has no entity with a Camera component; play·game will render through the editor orbit camera. hint: add a Camera component to a scene entity.');
 }
 // Run game camera discovery after the initial sync populates the world.
 // engineSync is sync (not async), so this runs immediately after project.

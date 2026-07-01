@@ -332,3 +332,8 @@ export type { PathResolver } from './path-resolver';
 // ── EditMode resource injection (▶/■ Simulate, feat-20260630-viewport w11) ──
 export { injectEditMode, EDIT_MODE_KEY } from './edit-mode';
 export type { EditModeState } from './edit-mode';
+// ── Run conditions (notEditing gate + and combinator, feat-20260630 w10) ──
+// Barrel-symmetric with injectEditMode: consumers wiring game systems need the
+// same gate the discoverer uses (verify V-3 affordances finding).
+export { notEditing, and } from './run-conditions';
+export type { RunCondition } from './run-conditions';
