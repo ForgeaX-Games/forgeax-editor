@@ -38,7 +38,8 @@ import { _syncDisplayMode } from './engine/display-bus';
 import { setFps, getFps } from './fps-store';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath, getApiClient, injectEditMode, cloneEditSession } from '@forgeax/editor-core';
+import { openProject, createFetchReader, resolveGamePath, getApiClient, injectEditMode } from '@forgeax/editor-core';
+import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import './theme.css';
@@ -338,20 +339,26 @@ renderer.assets.configurePackIndex(packIndexUrl);
 // (Append-Only/SSOT): no other code path touches EditMode.active.
 injectEditMode(world, true);
 
-// ▶/■ command chain (w11): flip EditMode.active to start/stop the simulation. The
-// flip is a pure resource overwrite (research Finding 1: insertResource → Map.set,
-// zero world teardown), so the world — editor orbit-camera and gizmo systems
-// included — survives untouched across ▶/■; only `notEditing`-gated game systems
-// change tick state.
+// ▶/■ command chain (w11/w12 — bootstrap-entry model, plan-strategy D-1/D-1c).
+// The run lifecycle lives in ./engine/run-lifecycle (testable, DI'd); here we
+// only wire the real world / app / bus / engineSync into it. It is CREATED later
+// (after engineSync + the active-camera derivation exist), so these two names are
+// thin wrappers over a `runLifecycle` holder assigned at that point. The
+// ViewportBar (actions.play/stop) and __forgeax_editor call the wrappers at
+// runtime — long after boot has assigned the holder.
 //
-// Snapshot/restore (w14/w15 — plan-strategy D-3):
-//   ▶  snapshots bus.doc once (AC-07); then injectEditMode(false) releases game systems.
-//   ■  injectEditMode(true) freezes game systems; then replaceDoc(snapshot) restores
-//      the doc to pre▶ state (AC-06); runtime-spawned entities (not in snapshot
-//      projection) are despawned.
-let snapshot: ReturnType<typeof cloneEditSession> | null = null;
-/** Entity handles alive at ▶ time. Used to diff at ■ for runtime entity cleanup (R-C fallback). */
-let prePlayEntityHandles: Set<number> | null = null;
+//   ▶  snapshot bus.doc once (AC-07) → loadGame(slug) → bootstrap(world, ctx)
+//      (game registers systems/callbacks) → injectEditMode(false) opens the gate.
+//   ■  injectEditMode(true) freezes → epoch.bump() silences run callbacks →
+//      removeSystem the bootstrap systems → replaceDoc(snapshot) restores the doc
+//      → despawn runtime-spawned entities (four-layer idempotent undo, D-1c).
+let runLifecycle: RunLifecycle | null = null;
+function playSimulation(): void {
+  void runLifecycle?.playSimulation();
+}
+function stopSimulation(): void {
+  runLifecycle?.stopSimulation();
+}
 
 /**
  * Collect all live entity handles from the world by walking the archetype graph.
@@ -372,38 +379,6 @@ function collectWorldEntityHandles(w: typeof world): Set<number> {
     }
   }
   return handles;
-}
-
-function playSimulation(): void {
-  // w14: Snapshot-once at ▶ click — deep-copy bus.doc before any play mutation
-  // can touch it. The snapshot lives in the viewport session lifecycle and is
-  // never updated during play (snapshot-once, AC-07).
-  snapshot = cloneEditSession(bus.doc);
-  // w15: Record pre▶ entity handles so ■ can diff for runtime entity cleanup.
-  prePlayEntityHandles = collectWorldEntityHandles(world);
-  injectEditMode(world, false); // release game systems — notEditing gate opens
-}
-function stopSimulation(): void {
-  injectEditMode(world, true); // freeze game systems — notEditing gate closes
-
-  // w15: Restore via replaceDoc(snapshot) + cleanup runtime-spawned entities.
-  // replaceDoc triggers EngineSync.forceResync → fullRebuild from snapshot,
-  // covering entity/component/field-level restore (C-2). Runtime-spawned entities
-  // (spawned by game systems outside doc projection) survive scene-instance
-  // rebuild — despawn them via pre▶→post-restore entity diff (R-C fallback).
-  if (snapshot) {
-    bus.replaceDoc(snapshot);
-    if (prePlayEntityHandles) {
-      const postRestoreHandles = collectWorldEntityHandles(world);
-      for (const h of postRestoreHandles) {
-        if (!prePlayEntityHandles.has(h)) {
-          try { world.despawn(h as never); } catch { /* entity already gone */ }
-        }
-      }
-    }
-    snapshot = null;
-    prePlayEntityHandles = null;
-  }
 }
 
 // Expose the viewport quadrant SSOT (get/set/subscribe) so an out-of-iframe AI
@@ -597,6 +572,35 @@ function discoverGameCamera(): void {
   // instead of silently reverting (verify V-1 affordances finding).
   console.warn('[viewport] no-game-camera: scene has no entity with a Camera component; play·game will render through the editor orbit camera. hint: add a Camera component to a scene entity.');
 }
+
+// After ▶ Play's bootstrap, a game may spawn its camera DIRECTLY on the world
+// (e.g. spin-cube / cow-level `world.spawn({ Camera })`) rather than through the
+// authored doc — discoverGameCamera (doc walk) would miss it. Walk the live world
+// archetype graph for the first Camera entity that is not the editor orbit
+// camera and register it as the game camera (D-2 / AC-12 hard cut). Reads
+// @internal `world._getGraph()` — same charter-P4 engine-neutral read as
+// collectWorldEntityHandles.
+function discoverGameCameraFromWorld(): void {
+  interface ArchCam { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }
+  interface WorldGraph { _getGraph: () => { archetypes: ArchCam[] } }
+  const graph = (world as unknown as WorldGraph)._getGraph();
+  const editorCam = cameraEntity as unknown as number;
+  for (const arch of graph.archetypes) {
+    if (!arch.columns.has(Camera.id)) continue;
+    const selfCol = arch.columns.get(Entity.id)?.get('self');
+    if (!selfCol) continue;
+    for (let row = 0; row < arch.size; row++) {
+      const packed = selfCol.view[row]!;
+      if (packed !== 0 && (packed as unknown as number) !== editorCam) {
+        setGameCameraEntity(packed as unknown as number);
+        return;
+      }
+    }
+  }
+  // No non-editor camera found — leave the doc-discovered game camera (if any).
+  // If none was found there either, play·game falls back to first-hit (D-8).
+}
+
 // Run game camera discovery after the initial sync populates the world.
 // engineSync is sync (not async), so this runs immediately after project.
 engineSync.resync();
@@ -616,6 +620,93 @@ function applyActiveCamera(): void {
 // on the same quadrant change event.
 applyActiveCamera();
 onViewportQuadrantChange(() => applyActiveCamera());
+
+// ── ▶ Play run lifecycle (feat-20260630-viewport M2 / w11-w12, D-1/D-1a/D-1c) ──
+// Wire the DI'd run lifecycle to the real world / app / bus / engineSync. The
+// game entry is imported through the SAME /preview/.forgeax/games/<slug>/ proxy
+// play-runtime uses, resolving the entry filename from forge.json (falling back
+// to main.ts / src/main.ts). The BootstrapContext defaultScene comes from the
+// doc projection (D-1a): defaultSceneRoot is EngineSync's instanceRoot (carries
+// the SceneInstance the game reads for its localId→entity mapping), and
+// defaultScene is the SceneAsset PAYLOAD loaded by GUID (read-only data — NOT a
+// second instantiate, which would duplicate the doc-projected entities).
+// getDefaultScene reads a cache resolveGameModule fills, since loadGame (which
+// calls resolveGameModule) always runs before ctx assembly in playSimulation.
+let cachedDefaultScene: unknown;
+async function resolveGameModuleForPlay(): Promise<unknown> {
+  const slug = getSceneId();
+  const base = BASE;
+  const gameBase = `${base}/preview/.forgeax/games/${slug}`;
+  // Resolve entry candidates from forge.json (authoritative), then defaults.
+  const candidates: string[] = [];
+  cachedDefaultScene = undefined;
+  try {
+    const gameForgePath = resolveGamePath(FORGE_JSON);
+    const gp = await loadGameProject(async () => {
+      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { content?: string };
+      if (!j.content) throw new Error('Empty content');
+      return j.content;
+    });
+    if (gp.ok) {
+      const entry = gp.value.entry;
+      if (typeof entry === 'string' && entry) candidates.push(entry.replace(/^\.?\//, ''));
+      // D-1a: load the defaultScene SceneAsset payload (data only) so bootstrap
+      // can recover its author-side entity list (Name → localId). loadByGuid
+      // returns the payload; we do NOT instantiate (the doc projection already
+      // built the live scene, which supplies defaultSceneRoot).
+      const dsGuid = gp.value.defaultScene;
+      if (typeof dsGuid === 'string' && dsGuid.length > 0) {
+        const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+        const parsed = AssetGuid.parse(dsGuid);
+        if (parsed.ok) {
+          await renderer.ready.catch(() => null);
+          const assetRes = await renderer.assets.loadByGuid(parsed.value);
+          if (assetRes.ok) cachedDefaultScene = assetRes.value;
+          else console.warn('[editor] ▶ Play defaultScene load failed:', (assetRes.error as { code?: string })?.code);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[editor] ▶ Play forge.json read failed (using entry defaults):', e);
+  }
+  for (const fallback of ['main.ts', 'src/main.ts']) {
+    if (!candidates.includes(fallback)) candidates.push(fallback);
+  }
+  // Dynamic-import the first candidate that resolves as JS (mirrors play-runtime).
+  for (const rel of candidates) {
+    const url = `${gameBase}/${rel}`;
+    try {
+      const head = await fetch(url, { method: 'HEAD' });
+      const ct = head.headers.get('content-type') ?? '';
+      if (head.ok && ct.includes('javascript')) {
+        return await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
+      }
+    } catch { /* try next candidate */ }
+  }
+  // Signal module-not-found to loadGame (slug in the message → 'module-not-found').
+  throw new Error(`module not found: ${getSceneId()}`);
+}
+
+runLifecycle = createRunLifecycle({
+  world: world as never,
+  app: app.value as never,
+  renderer: renderer as never,
+  bus: bus as never,
+  collectEntityHandles: () => collectWorldEntityHandles(world),
+  resolveGameModule: resolveGameModuleForPlay,
+  getSlug: () => getSceneId(),
+  getDefaultSceneRoot: () => engineSync.sceneRoot(),
+  getDefaultScene: () => cachedDefaultScene,
+  // AC-12: after bootstrap the game may have spawned its own camera directly on
+  // the world (not through the doc). Re-discover it and re-apply the active
+  // camera so play·game hard-cuts to the game camera.
+  onAfterBootstrap: () => {
+    discoverGameCameraFromWorld();
+    applyActiveCamera();
+  },
+});
 
 // Wire display bus to quadrant SSOT (w23). The bus holds currentDisplay and a
 // listener set; this bridge synchronizes the two modules once the quadrant is

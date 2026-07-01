@@ -25,12 +25,17 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { createRunLifecycle, type RunLifecycle } from '../run-lifecycle';
 
+// `World` is imported as a VALUE and used through `InstanceType<typeof World>` to
+// dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World' as
+// a type") — same idiom as edit-mode.ts / systems-panel.tsx in this package.
+type EcsWorld = InstanceType<typeof World>;
+
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
 type EditModeState = { active: boolean };
 
 /** Read the EditMode resource injected by injectEditMode. */
-function editModeActive(world: World): boolean | undefined {
+function editModeActive(world: EcsWorld): boolean | undefined {
   const w = world as unknown as {
     hasResource(k: string): boolean;
     getResource<T>(k: string): T;
@@ -62,7 +67,7 @@ function makeFakeGame() {
   const frameCallbacks: Array<(dt: number) => void> = [];
   let tickCount = 0;
   const module = {
-    async bootstrap(world: World, ctx?: { registerUpdate: (fn: (dt: number) => void) => void }) {
+    async bootstrap(world: EcsWorld, ctx?: { registerUpdate: (fn: (dt: number) => void) => void }) {
       bootstrapCount += 1;
       world.addSystem({
         name: `fake-game-system-${bootstrapCount}`,
@@ -91,7 +96,7 @@ function makeFakeGame() {
 }
 
 function buildLifecycle(): {
-  world: World;
+  world: EcsWorld;
   lifecycle: RunLifecycle;
   game: ReturnType<typeof makeFakeGame>;
   bus: ReturnType<typeof makeFakeBus>;
@@ -132,7 +137,7 @@ describe('w9 — bootstrap ▶/■ roundtrip', () => {
   it('(1) playSimulation runs bootstrap, registers system, opens the gate', async () => {
     await ctx.lifecycle.playSimulation();
     expect(ctx.game.bootstrapCount).toBe(1);
-    const names = ctx.world.inspect().systems.map((s) => s.name);
+    const names = ctx.world.inspect().systems.map((s: { name: string }) => s.name);
     expect(names).toContain('fake-game-system-1');
     expect(editModeActive(ctx.world)).toBe(false);
   });
@@ -141,7 +146,7 @@ describe('w9 — bootstrap ▶/■ roundtrip', () => {
     await ctx.lifecycle.playSimulation();
     ctx.lifecycle.stopSimulation();
     expect(editModeActive(ctx.world)).toBe(true);
-    const names = ctx.world.inspect().systems.map((s) => s.name);
+    const names = ctx.world.inspect().systems.map((s: { name: string }) => s.name);
     expect(names).not.toContain('fake-game-system-1');
     expect(ctx.bus.replaceDocCalls.length).toBe(1);
   });
