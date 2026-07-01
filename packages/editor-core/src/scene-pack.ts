@@ -127,7 +127,9 @@ const BUILTIN_MESH_GUIDS = new Set<string>([CUBE_GUID, SPHERE_GUID, CYLINDER_GUI
 const isBuiltinMeshGuid = (g: string | undefined): boolean => g !== undefined && BUILTIN_MESH_GUIDS.has(g);
 
 // quaternion → euler (XYZ, degrees) — for round-tripping authored rotation.
-function quatToEuler(qx: number, qy: number, qz: number, qw: number): { rotX: number; rotY: number; rotZ: number } {
+// Exported so gltf-flatten emits euler that re-quantizes identically through the
+// codec's eulerToQuat on save (Edit=Play round-trip fidelity).
+export function quatToEuler(qx: number, qy: number, qz: number, qw: number): { rotX: number; rotY: number; rotZ: number } {
   const sinr = 2 * (qw * qx + qy * qz), cosr = 1 - 2 * (qx * qx + qy * qy);
   const rx = Math.atan2(sinr, cosr);
   const sinp = 2 * (qw * qy - qz * qx);

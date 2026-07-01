@@ -32,6 +32,7 @@ export {
   packToSession,
   isScenePack,
   stableGuid,
+  quatToEuler,
   CUBE_GUID,
   SPHERE_GUID,
   CYLINDER_GUID,
@@ -154,6 +155,9 @@ export type { MeshMaterialResolveDeps, MeshAssetRef } from './mesh-original-mate
 // ── glTF import cook (frontend SSOT reuse — engine toAssetPack) ──
 export { cookGltfMeta } from './gltf-cook';
 export type { GltfCookResult } from './gltf-cook';
+
+export { flattenGlbToSpawnDoc } from './gltf-flatten';
+export type { SpawnDoc, SpawnDocEntity, GlbFlattenMeta } from './gltf-flatten';
 
 // ── Pack CRUD (M2) ──
 export {
