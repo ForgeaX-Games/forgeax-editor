@@ -106,21 +106,26 @@ function markBootComplete(): void {
 setSceneId(new URLSearchParams(location.search).get('scene'));
 // Install the game→disk path resolver (layout decoupling, 2026-06-25). editor-core
 // is layout-agnostic: it asks for game-relative paths ('forge.json', 'scenes/…')
-// and THIS adapter (the host) maps them to disk. The studio convention
-// `.forgeax/games/<slug>/…` lives here in the runtime adapter, NOT in the pure
-// library. Three tensions resolved:
-//   (i)  pure lib zero-convention — the literal only lives at this seam;
-//   (ii) self-contained — standalone with no game (slug 'default') yields an
-//        empty root, but the call sites' `currentSceneId === 'default'` guards
-//        mean the resolver is never reached, so the demo seed / build / tests run
-//        with no studio changes;
-//   (iii) studio override seam — a host can pass `?gameRoot=<path>` (flat /
-//        nested / workspace layouts) or replace this resolver entirely before
-//        boot to fully own slug→path translation.
+// and THIS adapter maps them to a host-relative root. The editor holds ZERO
+// on-disk layout convention — the HOST owns it and injects it via `?gameRoot=`:
+//   - standalone  → `?gameRoot=<slug>` (game-backend addresses by <slug>/<rel>)
+//   - studio      → `?gameRoot=<host's game layout>` (studio owns its own layout)
+// Two cases:
+//   (i)  slug 'default' / no slug → empty root (demo seed); the call sites'
+//        `currentSceneId === 'default'` guards keep the resolver off the hot path.
+//   (ii) a REAL slug with NO injected gameRoot → FAIL FAST (§5). We never bake a
+//        layout convention as a silent fallback; the host must pass gameRoot.
 {
   const qp = new URLSearchParams(location.search);
   const slug = (qp.get('scene') ?? '').trim();
-  const gameRoot = qp.get('gameRoot') ?? (slug && slug !== 'default' ? `.forgeax/games/${slug}` : '');
+  const injectedRoot = qp.get('gameRoot');
+  if (slug && slug !== 'default' && injectedRoot === null) {
+    throw new Error(
+      `[edit-runtime] no ?gameRoot= injected for scene="${slug}". The host owns the ` +
+      `game→disk layout and must pass gameRoot; edit-runtime is layout-agnostic.`,
+    );
+  }
+  const gameRoot = injectedRoot ?? '';
   setPathResolver((rel) => (rel ? `${gameRoot}/${rel}` : gameRoot));
 }
 // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
@@ -200,7 +205,7 @@ function seed(): void {
   add('RedBox', { Transform: { x: 3, y: 0.5, z: -2, scaleX: 1, scaleY: 1, scaleZ: 1 }, Mesh: { kind: 'cube' }, Material: { albedo: '#e76f51', metallic: 0, roughness: 0.7 } }, { plugin: 'lowpoly', docId: 'crate-01' });
   add('BlueBall', { Transform: { x: 4.5, y: 0.8, z: 1.5, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#4aa3df', metallic: 0.1, roughness: 0.4 } });
   add('YellowPillar', { Transform: { x: 2, y: 0.75, z: 3.5, scaleX: 0.6, scaleY: 1.5, scaleZ: 0.6 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#f4c542', metallic: 0, roughness: 0.6 } });
-  add('Player', { Transform: { x: 0, y: 0.55, z: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', metallic: 0, roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 }, Velocity: { vx: 0, vy: 0, vz: 0 } });
+  add('Player', { Transform: { x: 0, y: 0.55, z: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', metallic: 0, roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 } });
 }
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
@@ -316,16 +321,23 @@ const app = await createApp(canvas, {
   ...(editPhysics ? { plugins: [physicsPlugin(editPhysics)] } : {}),
 }, {
   shaderManifestUrl: `${BASE}/shaders/manifest.json`,
-  // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss
-  // so the editor viewport can lazily cook glTF sub-assets (skin, animation
-  // clips, skeleton) needed for Edit-mode skeletal animation preview. Studio
-  // outer proxy routes /__import + /__forgeax-ddc to the play engine, which
-  // owns the per-game pluginPack catalog. MUST be in the BundlerOptions (3rd
-  // arg) — the 2nd-arg CreateAppOptions silently drops it (engine #311 split).
+  // Dev-mode import transport — POSTs __import/<guid> on a loadByGuid miss so the
+  // editor viewport can lazily cook glTF sub-assets (skin, animation clips,
+  // skeleton) needed for Edit-mode preview AND Play's default-scene loadByGuid.
+  // Route depends on who owns the catalog (Part C):
+  //   standalone (__FORGEAX_GAME_DIR_ABS__ set): edit-runtime self-hosts pluginPack
+  //     under `${BASE}` (/editor/); POST `${BASE}/__import/<guid>` (packBaseStrip
+  //     strips /editor before pluginPack's middleware).
+  //   studio-embedded: the outer proxy routes bare /__import to play-runtime's
+  //     pluginPack (:15173), which owns the multi-game catalog.
+  // MUST be in the BundlerOptions (3rd arg) — the 2nd-arg CreateAppOptions silently
+  // drops it (engine #311 split).
   importTransport: {
     async fetchPack(guid: string) {
+      const importBase = (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__)
+        ? `${BASE}/__import` : '/__import';
       try {
-        const response = await fetch(`/__import/${guid}`, { method: 'POST' });
+        const response = await fetch(`${importBase}/${guid}`, { method: 'POST' });
         if (!response.ok) return { ok: false };
         try {
           const body = await response.json();
@@ -363,12 +375,17 @@ if (!app.ok) {
 try { sessionStorage.removeItem(CREATE_APP_RETRY_KEY); } catch { /* no storage */ }
 
 const { world, renderer } = app.value;
-// Point at the play engine's per-game catalog (proxied through the studio's
-// /preview/* route) when a game slug is active. Edit-runtime's own pluginPack
-// has empty roots, so without this every loadByGuid on a game asset (witch.glb
-// skin, animation-clip) would miss the catalog and bail before /__import.
+// Point the asset registry at the pack-index catalog for loadByGuid (Part C):
+//   standalone (__FORGEAX_GAME_DIR_ABS__ set): edit-runtime self-hosts pluginPack
+//     over the injected game dir, served at `${BASE}/pack-index.json` (/editor/).
+//   studio-embedded, real slug: the play engine's per-game catalog, proxied via
+//     the studio /preview/* route.
+//   demo / no game: the local empty `${BASE}/pack-index.json`.
+// Without this, every loadByGuid on a game asset (default scene, witch.glb skin,
+// animation-clip) would miss the catalog and bail before __import.
 const sceneSlug = getSceneId();
-const packIndexUrl = (sceneSlug && sceneSlug !== 'default')
+const selfHostPack = typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && !!__FORGEAX_GAME_DIR_ABS__;
+const packIndexUrl = (!selfHostPack && sceneSlug && sceneSlug !== 'default')
   ? `/preview/pack-index/${sceneSlug}.json`
   : `${BASE}/pack-index.json`;
 renderer.assets.configurePackIndex(packIndexUrl);
@@ -666,9 +683,9 @@ onViewportQuadrantChange(() => applyActiveCamera());
 
 // ── ▶ Play run lifecycle (feat-20260630-viewport M2 / w11-w12, D-1/D-1a/D-1c) ──
 // Wire the DI'd run lifecycle to the real world / app / bus / engineSync. The
-// game entry is imported through the SAME /preview/.forgeax/games/<slug>/ proxy
-// play-runtime uses, resolving the entry filename from forge.json (falling back
-// to main.ts / src/main.ts). The BootstrapContext defaultScene comes from the
+// game entry is imported via edit vite's `@fs<gameDir>` transform (resolveGameFsBase),
+// resolving the entry filename from forge.json (falling back to main.ts /
+// src/main.ts). The BootstrapContext defaultScene comes from the
 // doc projection (D-1a): defaultSceneRoot is EngineSync's instanceRoot (carries
 // the SceneInstance the game reads for its localId→entity mapping), and
 // defaultScene is the SceneAsset PAYLOAD loaded by GUID (read-only data — NOT a
@@ -700,11 +717,34 @@ async function getProjectRootAbs(): Promise<string> {
   return cachedProjectRootAbs;
 }
 
+// Injected by edit-runtime vite `define` from FORGEAX_GAME_DIR (cli.mjs `--game`).
+// The ABSOLUTE game dir that DIRECTLY contains forge.json — standalone serves one
+// game at an arbitrary dir, no host server. null when embedded in studio (uses the
+// injected `?gameRoot=` under the project root reported by /api/health, below).
+declare const __FORGEAX_GAME_DIR_ABS__: string | null;
+
+// Resolve the edit-vite `@fs` base for the game's on-disk dir. Two injection paths,
+// zero baked layout convention:
+//   standalone `--game DIR`: __FORGEAX_GAME_DIR_ABS__ IS the game root (forge.json
+//     at its top) → `@fs<gameDirAbs>` directly.
+//   studio embedded: join the host-injected `?gameRoot=` (client-relative game root
+//     the host owns) onto the absolute project root /api/health reports.
+// Both bind the game's @forgeax/engine-* imports to edit vite's SINGLE engine
+// instance (see the /preview-vs-@fs note above) so assets.instantiate's name
+// registry matches the game's defineComponent.
+async function resolveGameFsBase(): Promise<string> {
+  if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
+    return `${BASE}/@fs${__FORGEAX_GAME_DIR_ABS__}`;
+  }
+  const rootAbs = await getProjectRootAbs();
+  const gameRoot = new URLSearchParams(location.search).get('gameRoot') ?? '';
+  return gameRoot ? `${BASE}/@fs${rootAbs}/${gameRoot}` : `${BASE}/@fs${rootAbs}`;
+}
+
 async function resolveGameModuleForPlay(): Promise<unknown> {
   const slug = getSceneId();
-  const rootAbs = await getProjectRootAbs();
   // edit-vite @fs base for this game's on-disk dir (single engine instance).
-  const gameFsBase = `${BASE}/@fs${rootAbs}/.forgeax/games/${slug}`;
+  const gameFsBase = await resolveGameFsBase();
   // Resolve entry candidates from forge.json (authoritative), then defaults.
   const candidates: string[] = [];
   cachedDefaultScene = undefined;
@@ -732,7 +772,12 @@ async function resolveGameModuleForPlay(): Promise<unknown> {
           await renderer.ready.catch(() => null);
           const assetRes = await renderer.assets.loadByGuid(parsed.value);
           if (assetRes.ok) cachedDefaultScene = assetRes.value;
-          else console.warn('[editor] ▶ Play defaultScene load failed:', (assetRes.error as { code?: string })?.code);
+          // Best-effort only: cachedDefaultScene feeds ctx.defaultScene, which a
+          // game reads ONLY if it recovers author-side Name→localId from it. Games
+          // that load their own scene (the canonical loadByGuid path) ignore it, so
+          // a miss here — e.g. a runtime-catalogued GUID with no disk sidecar — is
+          // non-fatal; the game's own loadScene still succeeds. Info, not error.
+          else console.info('[editor] ▶ Play defaultScene preload skipped (best-effort):', (assetRes.error as { code?: string })?.code);
         }
       }
     }

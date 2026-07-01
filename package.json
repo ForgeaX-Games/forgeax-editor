@@ -25,8 +25,7 @@
   },
   "workspaces": [
     "packages/*",
-    "packages/engine/packages/*",
-    "packages/kernel/platform-io"
+    "packages/engine/packages/*"
   ],
   "scripts": {
     "harness:sync": "node scripts/sync-harness.mjs",

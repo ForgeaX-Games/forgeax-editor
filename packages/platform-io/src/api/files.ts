@@ -132,12 +132,11 @@ export function createFilesRouter(backend: FileBackend = studioFileBackend()) {
     const rel = c.req.query('root') ?? '';
     const result = await backend.tree(rel);
     if (!result.ok) {
-      // `optional=1`: the caller probes a dir that legitimately may not exist
-      // (e.g. editor scene/asset discovery scans scenes/ & assets/{monsters,
-      // characters}/ — absent in a fresh template). Return 200 { tree:null } so
+      // `optional=1`: the caller probes a dir that legitimately may not exist yet
+      // (editor scene/asset subtrees in a fresh game). Return 200 { tree:null } so
       // the browser's network panel logs no red 404 for an expected-absent dir.
-      // Mirrors the GET / handler's optional escape hatch above. A genuine 400
-      // (whitelist/traversal) still surfaces; only the 404 is softened.
+      // 404 stays the default for genuine missing-dir errors every other caller
+      // relies on. Mirrors the file GET `optional=1` contract above.
       if (result.status === 404 && c.req.query('optional') === '1') {
         return c.json({ tree: null });
       }

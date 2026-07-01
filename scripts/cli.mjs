@@ -85,7 +85,7 @@ function install() {
   requireCmd('bun', 'install bun: https://bun.sh');
   requireCmd('pnpm', 'install pnpm: https://pnpm.io (engine is a pnpm workspace)');
 
-  step('1/5 fetching submodules (engine + interface) ...');
+  step('1/5 fetching submodules (engine + interface + platform-io) ...');
   sh('git', ['submodule', 'update', '--init', '--recursive']);
   ok('submodules ready');
 

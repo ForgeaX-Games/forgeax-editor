@@ -1,15 +1,16 @@
 // no-baked-game-path.test.ts — regression guard for the layout decoupling
 // (feedback 2026-06-25-editor-bakes-game-path-convention).
 //
-// HARD REQUIREMENT: the pure libraries editor-core / editor-shared must hold
-// ZERO host disk-layout convention. The studio games-directory path is the
-// HOST's concern, injected via setPathResolver — never baked into a string
-// literal in the library. dependency-cruiser guards the package DAG but cannot
-// see string literals; this red-line fills that gap (the feedback's Layer 3 ②).
+// HARD REQUIREMENT: the ENTIRE editor holds ZERO host disk-layout convention.
+// The games-directory layout is each HOST's concern (standalone / studio),
+// injected via setPathResolver (`?gameRoot=`), the EditSurface `gameRoot` prop,
+// and the play-runtime FORGEAX_PREVIEW_GAMES_DIR / FORGEAX_GAMES_URL_PREFIX env —
+// never baked into a string literal (or comment) in editor source. dependency-
+// cruiser guards the package DAG but cannot see string literals; this red-line
+// fills that gap (the feedback's Layer 3 ②).
 //
-// If this fails: you (re)introduced a `.forgeax/games` literal in a pure lib.
-// Use resolveGamePath('<game-relative-path>') instead and let the host
-// (edit-runtime adapter / EditSurface) own the convention.
+// If this fails: you (re)introduced a `.forgeax/games` literal in editor source.
+// Route it through the injection seam instead and let the host own the layout.
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -18,9 +19,12 @@ import { join } from 'node:path';
 // editor-core/src/__tests__ → ../../.. = packages/editor/packages
 const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
 
-// PURE LIBS ONLY. edit-runtime / editor-panels are host/runtime adapters that
-// legitimately own the convention, so they are deliberately NOT scanned here.
-const PURE_LIB_ROOTS = ['editor-core/src', 'editor-shared/src'];
+// ALL editor packages — pure libs AND runtime/host adapters. The convention
+// lives in the hosts (standalone/studio), NOT anywhere in editor source.
+const PURE_LIB_ROOTS = [
+  'editor-core/src', 'editor-shared/src',
+  'edit-runtime/src', 'editor-panels/src', 'play-runtime/src',
+];
 
 const EXCLUDE = /(__tests__|\.test\.|node_modules|broken-syntax|[/\\]fixtures[/\\])/;
 

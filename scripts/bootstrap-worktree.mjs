@@ -32,9 +32,10 @@ function fail(msg) {
 
 const ENGINE = join(ROOT, 'packages', 'engine');
 
-// Pull the vendored submodules (interface + engine) so a fresh standalone clone
-// has DockShell/app-kit (interface) and the engine build inputs present.
-sh('git', ['submodule', 'update', '--init', '--recursive', 'packages/interface', 'packages/engine'], {
+// Pull the vendored submodules (interface + engine + platform-io) so a fresh
+// standalone clone has DockShell/app-kit (interface), the engine build inputs,
+// and the @forgeax/platform-io backend (B2 selfcheck reuses it) present.
+sh('git', ['submodule', 'update', '--init', '--recursive', 'packages/interface', 'packages/engine', 'packages/platform-io'], {
   quiet: true,
 });
 

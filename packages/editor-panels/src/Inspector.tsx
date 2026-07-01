@@ -78,7 +78,6 @@ function NumberScrubField({ label, value, fs, testid, onCommit, compact, appear 
 // Components whose three number fields read as a single vec3 → render inline.
 const VEC3_GROUPS: Record<string, [string, string, string]> = {
   Transform: ['x', 'y', 'z'],
-  Velocity: ['vx', 'vy', 'vz'],
 };
 
 // Addable/resettable components + their default payloads are now derived straight

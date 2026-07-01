@@ -86,18 +86,6 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'cylinder radius', showWhen: { key: 'shape', in: ['cylinder'] } },
     ],
   },
-  Velocity: {
-    name: 'Velocity',
-    fields: [
-      { key: 'vx', type: 'number', step: 0.1, tooltip: 'units/tick along X' },
-      { key: 'vy', type: 'number', step: 0.1, tooltip: 'units/tick along Y' },
-      { key: 'vz', type: 'number', step: 0.1, tooltip: 'units/tick along Z' },
-    ],
-  },
-  Spin: {
-    name: 'Spin',
-    fields: [{ key: 'speed', type: 'number', min: -90, max: 90, step: 1, default: 30, tooltip: 'yaw degrees per tick (Play mode)' }],
-  },
   Camera: {
     name: 'Camera',
     fields: [

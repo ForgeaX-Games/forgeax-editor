@@ -38,9 +38,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 // root was the parent dir (packages/forgeax/), which forced an
 // engine-host-specific index.html to live one level up. With root = here,
 // engine-src/ (studio) and packages/forgeax/engine/ (release) are both
-// self-contained vite roots — a single index.html serves /preview/, and
-// /preview/.forgeax/games/<id>/... resolves to <root>/.forgeax/games/<id>/...
-// which run.sh symlinks to the instance's actual .forgeax in both modes.
+// self-contained vite roots — a single index.html serves /preview/, and the
+// host-injected games dir (FORGEAX_PREVIEW_GAMES_DIR) is served under the vite
+// root so its games resolve; run.sh symlinks it to the instance's actual dir.
 const viteRoot = here;
 
 // ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
@@ -119,8 +119,8 @@ function forgeaxPackBaseStrip() {
 
 // Reject backup/snapshot dirs and hidden dot-dirs from being treated as games.
 // Game optimize/migration tooling drops sibling backups like
-// `<slug>.bak-1782212746` (a FULL copy, including `assets/`) under
-// .forgeax/games. Without this filter gameAssetRoots()/gameSlugs() count those
+// `<slug>.bak-1782212746` (a FULL copy, including `assets/`) under the games
+// dir. Without this filter gameAssetRoots()/gameSlugs() count those
 // as real games → the asset-root set differs from the boot snapshot →
 // forgeaxGameRescan fires server.restart() (repeatedly, as more backups/tsconfig
 // changes land) → the preview iframe gets ECONNREFUSED on :15173 during each
@@ -130,24 +130,29 @@ function isRealGameSlug(slug: string): boolean {
   return !GAME_SLUG_REJECT_RE.test(slug);
 }
 
-// Games dir the pack scan walks. Defaults to this root's .forgeax/games (the
-// dev junction run.ts maintains). A build/CI override (FORGEAX_PREVIEW_GAMES_DIR)
-// lets the desktop production build scope the pack PRE-IMPORT to just the games
-// it ships: otherwise `vite build`'s generateBundle pre-imports EVERY seeded
-// game, where a single broken asset or a cross-game GUID collision fails the
-// whole build (and the dev junction persists after any `bun fx start`, so this
-// bites clean builds too). No env set → unchanged dev behavior.
+// Games dir the pack scan walks. HOST-INJECTED via FORGEAX_PREVIEW_GAMES_DIR — the
+// play-runtime holds ZERO on-disk layout convention; the host (studio run.ts /
+// desktop build / editor standalone) points this at wherever it lays games out.
+// Unset → empty (degraded: no roots scanned), never a baked layout literal.
 function gamesDirRoot(): string {
   const override = process.env.FORGEAX_PREVIEW_GAMES_DIR;
-  return override ? resolve(override) : resolve(here, '.forgeax/games');
+  return override ? resolve(override) : '';
 }
 
+// URL-space games prefix the CLIENT (src/main.ts) prepends to build a game's
+// served URL (`<base>/<prefix>/<id>/…`). Separate from gamesDirRoot() because the
+// disk dir is symlinked UNDER the vite root, so the served URL reflects that mount
+// point, not the abs disk path. HOST-INJECTED via FORGEAX_GAMES_URL_PREFIX; unset →
+// '' (game served directly under base). No baked layout literal.
+const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX ?? '';
+
 // Scan every game's assets/ dir as a pack root. One-level glob over
-// .forgeax/games/<slug>/assets deliberately excludes nested dirs like
+// <gamesDir>/<slug>/assets deliberately excludes nested dirs like
 // shoot/backup/assets, whose .pack.json files reuse the same GUIDs and would
 // trip the scanner's duplicate-guid guard (collapsing the whole catalog).
 function gameAssetRoots(): string[] {
   const gamesDir = gamesDirRoot();
+  if (!gamesDir) return [];
   if (!existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)
@@ -179,13 +184,13 @@ function perGamePackRoots(slug: string): string[] {
   return ['assets', 'scenes'].map((d) => join(base, d)).filter((p) => existsSync(p));
 }
 
-// Return slugs for every game directory under .forgeax/games/ that has an
-// assets/ subdirectory. Symlink game directories are included because
+// Return slugs for every game directory under the host-injected games dir that has
+// an assets/ subdirectory. Symlink game directories are included because
 // existsSync follows symlinks. This mirrors gameAssetRoots() and is the
 // per-game complement.
 function gameSlugs(): string[] {
   const gamesDir = gamesDirRoot();
-  if (!existsSync(gamesDir)) return [];
+  if (!gamesDir || !existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)
     .filter((slug) => existsSync(join(gamesDir, slug, 'assets')));
@@ -274,11 +279,13 @@ function forgeaxGameRescan() {
   return {
     name: 'forgeax:game-rescan',
     configureServer(server: any) {
-      const gamesDir = resolve(here, '.forgeax/games');
+      const gamesDir = gamesDirRoot();
+      if (!gamesDir) return; // host injected no games dir → nothing to watch
+      const gamesDirNorm = gamesDir.split('\\').join('/');
       let known = new Set(gameAssetRoots());
       let timer: ReturnType<typeof setTimeout> | undefined;
       const maybeRestart = (p: string) => {
-        if (!p.split('\\').join('/').includes('/.forgeax/games/')) return;
+        if (!p.split('\\').join('/').startsWith(gamesDirNorm)) return;
         const next = new Set(gameAssetRoots());
         const changed = next.size !== known.size || [...next].some((r) => !known.has(r));
         if (!changed) return;
@@ -357,6 +364,9 @@ export default defineConfig({
   base: '/preview/',
   cacheDir: resolve(here, '.vite'),
   publicDir: resolve(here, 'public'),
+  // Inject the host-owned URL-space games prefix so the client builds game URLs
+  // without a baked layout literal. '' → game served directly under base.
+  define: { __FORGEAX_GAMES_URL_PREFIX__: JSON.stringify(GAMES_URL_PREFIX) },
   plugins: [
     forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
@@ -409,9 +419,9 @@ export default defineConfig({
     // component identities match across the game subgraph. A hand-listed subset
     // had the same drift hazard as the old exclude list.
     dedupe: FORGEAX_WS_PKGS,
-    // User game files live at <studio-root>/.forgeax/games/<slug>/ (entry is a
-    // root-level main.ts, extra modules under src/), reachable via run.sh's
-    // symlink engine-src/.forgeax → <studio-root>/.forgeax.
+    // User game files live under the host-injected games dir, one dir per slug
+    // (entry is a root-level main.ts, extra modules under src/), reachable via
+    // run.sh's symlink of that dir under the vite root.
     // With default preserveSymlinks: false, vite resolves the symlink first and
     // walks up from <studio-root>, where node_modules/@forgeax/ doesn't exist
     // (workspace symlinks live at engine-src/node_modules/@forgeax/*).
@@ -437,13 +447,16 @@ export default defineConfig({
         // Game backup snapshots (`<slug>.bak-<ts>` / `<slug>.bak`) are NOT games;
         // ignore them so vite's tsconfig watcher won't force-reload on their
         // tsconfig.json and forgeaxGameRescan won't restart-loop (preview black
-        // screen / stuck "Loading game"). Mirrors isRealGameSlug().
-        '**/.forgeax/games/*.bak-*/**',
-        '**/.forgeax/games/*.bak/**',
-        // Prevent Vite's internal watcher from triggering concurrent restarts
-        // when the workspace symlink flips and package.json/tsconfig.json change.
-        '**/.forgeax/games/**/package.json',
-        '**/.forgeax/games/**/tsconfig.json',
+        // screen / stuck "Loading game"). Mirrors isRealGameSlug(). Derived from
+        // the host-injected games dir — no baked layout literal.
+        ...(gamesDirRoot() ? [
+          `${gamesDirRoot()}/*.bak-*/**`,
+          `${gamesDirRoot()}/*.bak/**`,
+          // Prevent Vite's internal watcher from triggering concurrent restarts
+          // when the workspace symlink flips and package.json/tsconfig.json change.
+          `${gamesDirRoot()}/**/package.json`,
+          `${gamesDirRoot()}/**/tsconfig.json`,
+        ] : []),
       ],
     },
     fs: { allow: [viteRoot], strict: false },
