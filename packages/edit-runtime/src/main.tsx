@@ -1602,21 +1602,9 @@ function installPreviewControls(): void {
           bus.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
         } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
           const doc = p.doc;
-          // Remap sender-space ids → the ids applyCommand will actually allocate.
-          // The sender's `order`/`parent` live in a self-consistent LOCAL id space
-          // (not this session's). Without pinning, applyCommand allocates FRESH ids
-          // (nextLocalId++) and every parent link misses → the whole transaction
-          // rolls back on INVALID_PARENT (silent import failure). Reserve real ids
-          // from the live nextLocalId, pin each spawn via _id, and rewrite parents
-          // through the same map. Requires doc.order be topo-sorted (parent before
-          // child) — the flatten producer guarantees this.
-          const base = bus.doc.nextLocalId;
-          const idMap = new Map<number, number>();
-          doc.order.forEach((sid, i) => idMap.set(sid, base + i));
-          const cmds = doc.order.map((sid) => {
-            const ent = doc.entities[sid]!;
-            const parent = ent.parent == null ? undefined : idMap.get(ent.parent);
-            return { kind: 'spawnEntity' as const, _id: idMap.get(sid)!, name: ent.name, parent, components: ent.components };
+          const cmds = doc.order.map((id) => {
+            const ent = doc.entities[id]!;
+            return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
           });
           bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
         } else {
