@@ -81,12 +81,23 @@ const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_templat
 // takes effect on the next reload.
 let physics: 'rapier-3d' | 'rapier-2d' | undefined;
 let wantsPointerLock = false;
+// Host-injected (vite define) URL-space games prefix. The host owns the layout;
+// play-runtime bakes no `<games-dir>` literal. '' → game served directly under base.
+declare const __FORGEAX_GAMES_URL_PREFIX__: string;
+
+// Build a game's served URL base from the host-injected prefix + game id.
+function gameUrlBase(base: string, id: string): string {
+  return __FORGEAX_GAMES_URL_PREFIX__
+    ? `${base}/${__FORGEAX_GAMES_URL_PREFIX__}/${id}`
+    : `${base}/${id}`;
+}
+
 // ── Load forge.json ONCE via the authoritative loader (AC-11) ─────────────────
 // fetchRead wraps the browser fetch to match loadGameProject's injection signature.
 // cache:'no-store' preserves the existing behaviour: fresh forge.json on every reload.
 const forgeBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 const fetchRead = (path: string): Promise<string> =>
-  fetch(`${forgeBase}/.forgeax/games/${gameId}/${path}`, { cache: 'no-store' })
+  fetch(`${gameUrlBase(forgeBase, gameId)}/${path}`, { cache: 'no-store' })
     .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); });
 let gpResult: Awaited<ReturnType<typeof loadGameProject>> | null = null;
 {
@@ -363,7 +374,7 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
     return null;
   }
   const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
-  const gameBase = `${base}/.forgeax/games/${id}`;
+  const gameBase = gameUrlBase(base, id);
 
   // Entry resolution. The game entry filename is no longer hardcoded: the
   // authoritative source is forge.json's `entry` field (relative to the game

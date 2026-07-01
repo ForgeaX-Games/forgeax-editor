@@ -5,14 +5,14 @@ Guidance for AI agents working in **forgeax-editor** — the forgeax editor mono
 ## Repo shape
 
 - A **standalone git repo** (`github.com/ForgeaXGame/forgeax-editor`) that studio consumes as a git submodule at `packages/editor`. It must behave as if studio does not exist next to it — the "clone 即跑" promise is CI-gated, not a slogan.
-- **Package manager is `bun`** (bun workspaces), not npm/pnpm. Workspaces glob: `packages/*`, `packages/engine/packages/*`, `packages/kernel/platform-io`.
+- **Package manager is `bun`** (bun workspaces), not npm/pnpm. Workspaces glob: `packages/*`, `packages/engine/packages/*`.
 - **No build step.** All packages point `exports` directly at source (`./src/index.ts`); the consumer's bundler (vite) compiles them in place. `bun run build` is a no-op.
-- **Submodules are load-bearing.** `packages/engine`, `packages/interface`, `packages/kernel`, and `forgeax-editor-assets` are git submodules. An empty submodule dir makes `bun install` fail with `Workspace dependency "@forgeax/interface" not found`. Always `git submodule update --init --recursive` on a fresh clone before `bun install`.
+- **Submodules are load-bearing.** `packages/engine`, `packages/interface`, `packages/platform-io`, and `forgeax-editor-assets` are git submodules. An empty submodule dir makes `bun install` fail with `Workspace dependency "@forgeax/interface" not found`. Always `git submodule update --init --recursive` on a fresh clone before `bun install`.
 
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # REQUIRED first — fetch engine/interface/kernel/assets
+git submodule update --init --recursive   # REQUIRED first — fetch engine/interface/platform-io/assets
 bun install                               # if it fails with simple-git-hooks ENOENT, just re-run once
 ```
 

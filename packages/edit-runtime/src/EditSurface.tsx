@@ -155,16 +155,15 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 
 async function importAssetFile(
   file: File,
-  slug: string,
+  gameRoot: string,
   serverBase: string,
 ): Promise<{ ok: boolean; error?: string; dest?: string }> {
   // EditSurface runs in the HOST (interface) window — a separate JS realm from the
   // editor iframe where setPathResolver is installed, so the editor-core resolver
-  // singleton isn't reachable here. This is a host adapter that owns the studio
-  // layout convention by design (the slug arrives as an explicit prop, not implicit
-  // context) — the same role main.tsx's setPathResolver default adapter plays for
-  // the iframe realm. Pure libs (editor-core/editor-shared) stay convention-free.
-  const dest = `.forgeax/games/${slug}/assets/${file.name}`;
+  // singleton isn't reachable here. The host injects the game root explicitly (the
+  // `gameRoot` prop) — the editor bakes NO on-disk layout convention. Pure libs
+  // (editor-core/editor-shared) stay convention-free; the host owns the layout.
+  const dest = `${gameRoot}/assets/${file.name}`;
   try {
     const buf = await file.arrayBuffer();
     const data = arrayBufferToBase64(buf);
@@ -226,13 +225,19 @@ async function resolveSingleMeshSceneRef(ref: DragAssetRef, serverBase: string):
 
 export interface EditSurfaceProps {
   slug: string;
+  /** Host-injected game root (client-relative). The host owns the on-disk layout
+   *  convention; EditSurface runs in the HOST window (a different JS realm from the
+   *  editor iframe where setPathResolver lives) so it can't reach resolveGamePath —
+   *  the host passes the root explicitly. Threaded into the iframe `?gameRoot=` and
+   *  used to build upload dests. Standalone: `<slug>`. Studio: its own layout. */
+  gameRoot?: string;
   viewportOnly?: boolean;
   serverBase?: string;
 }
 
 // ── EditSurface Component ──────────────────────────────────────────────────────
 
-export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps) {
+export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSurfaceProps) {
   const [fps, setFps] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -289,8 +294,11 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
   }, [slug]);
 
   // ── iframe src ─────────────────────────────────────────────────────────────
+  // Thread the host-injected gameRoot into the iframe so the editor realm's
+  // setPathResolver (main.tsx) receives it — the editor bakes no layout convention.
   const voParam = viewportOnly ? '&viewportOnly=1' : '';
-  const src = `/editor/?scene=${encodeURIComponent(loadedSlug)}${voParam}`;
+  const grParam = gameRoot ? `&gameRoot=${encodeURIComponent(gameRoot)}` : '';
+  const src = `/editor/?scene=${encodeURIComponent(loadedSlug)}${voParam}${grParam}`;
 
   // ── Flush editor's pending save on unmount ─────────────────────────────────
   useEffect(() => {
@@ -469,13 +477,20 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
     const file = e.currentTarget.files?.[0];
     e.currentTarget.value = '';
     if (!file || !slug) return;
+    // Fail fast (§5): the host must inject gameRoot before an asset can be placed.
+    // The editor bakes no on-disk layout, so with no root there is nowhere to write.
+    if (!gameRoot) {
+      setImportStep('error');
+      setImportMsg('no gameRoot injected — host must supply the game layout');
+      return;
+    }
     const isModel = /\.(glb|gltf)$/i.test(file.name);
     const baseName = file.name.replace(/\.(glb|gltf)$/i, '');
 
     try {
       setImportStep('uploading');
       setImportMsg(file.name);
-      const res = await importAssetFile(file, slug, base);
+      const res = await importAssetFile(file, gameRoot, base);
       if (!res.ok || !res.dest) {
         setImportStep('error');
         setImportMsg(res.error ?? 'Upload failed');
@@ -498,7 +513,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
     }
-  }, [slug, base]);
+  }, [slug, gameRoot, base]);
 
   // ── Asset drag-to-scene (D-4/D-5) ───────────────────────────────────────────
   // Spawn a whole-GLB asset (mode A) as a single GltfRef instance. Forcing
@@ -553,7 +568,7 @@ export function EditSurface({ slug, viewportOnly, serverBase }: EditSurfaceProps
       if (meshRef) { await spawnMeshOrAssetRef(meshRef); return; }
 
       // import-scene needs the GLB's *game-relative* path (e.g.
-      // `.forgeax/games/<slug>/assets/Fox.glb`). The scene asset's packPath is
+      // `<gameRoot>/assets/Fox.glb`). The scene asset's packPath is
       // the `.meta.json` sidecar that sits next to the GLB (`Fox.glb.meta.json`),
       // so strip `.meta.json` to recover it. `payload.source` is only the
       // basename (`Fox.glb`) — passing that makes import-scene resolve against

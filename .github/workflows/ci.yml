@@ -11,7 +11,7 @@ name: CI
 # Deliberately LIGHTWEIGHT (no engine pnpm / Rust-wasm build): the B2 selfcheck
 # only drives the /api/files wire (tree/read/write/confinement) through the host
 # vite proxy and the game-backend bun process — it never loads a page that
-# imports the engine. So B2 needs only `bun install` + the kernel submodule, and
+# imports the engine. So B2 needs only `bun install` + the platform-io submodule, and
 # runs in ~1-2 min. Heavier gates (typecheck / api-seam lint / e2e / engine
 # build) live in the studio superrepo CI, which assembles this editor by pin.
 
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 15
     steps:
       # GHA is the kubeela PAT that can read the private ForgeaXGame/forgeax-*
-      # submodules this repo pins (engine / interface / kernel / editor-assets).
+      # submodules this repo pins (engine / interface / platform-io / editor-assets).
       # Same secret name forgeax-engine's CI uses; set it on this repo with
       #   gh secret set GHA --repo ForgeaXGame/forgeax-editor
       - name: Checkout (with submodules)
@@ -60,9 +60,9 @@ jobs:
         run: bun install --ignore-scripts
 
       # Gate 1 — the reused 后L1 backend's confinement contract (whitelist +
-      # single-game slug-strip / traversal). Runs against the kernel this editor
-      # repo pins, so a kernel pin bump that weakens confinement fails here too.
-      - name: Test @forgeax/platform-io (kernel)
+      # single-game slug-strip / traversal). Runs against the platform-io this
+      # editor repo pins, so a pin bump that weakens confinement fails here too.
+      - name: Test @forgeax/platform-io
         run: bun -F @forgeax/platform-io test
 
       # Gate 2 — SELF-BOOT B2: boot the game-backend bun process + host vite

@@ -143,11 +143,11 @@ async function bakeHdrEquirect(
 // "Engine vite has base '/preview/', so ALL its asset/dep URLs are already
 // prefixed"). The runtime fetches each catalog entry's `relativeUrl` verbatim
 // from the iframe origin, so that URL MUST carry the `/preview` prefix —
-// otherwise `/.forgeax/games/<slug>/assets/...` is not matched by the proxy,
+// otherwise the game-relative asset URL is not matched by the proxy,
 // falls through to the interface SPA, returns index.html, and loadByGuid fails
 // with `asset-fetch-failed`. Prefix the root-absolute source path with `base`.
 function withBase(base: string, sourceRel: string): string {
-  const rootAbs = posix.resolve('/', sourceRel); // -> /.forgeax/games/...
+  const rootAbs = posix.resolve('/', sourceRel); // root-absolute game asset path
   const prefix = base.replace(/\/$/, ''); // '/preview/' -> '/preview'
   return prefix ? `${prefix}${rootAbs}` : rootAbs;
 }

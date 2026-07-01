@@ -24,9 +24,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
   { label: 'Camera', components: ['Transform', 'Camera'] },
   { label: 'Object', components: ['Transform', 'Material'] },
   { label: 'Ground', components: ['Transform', 'Mesh', 'Material', 'Collider'], overrides: { Transform: { scaleX: 24, scaleY: 0.2, scaleZ: 24 }, Mesh: { kind: 'cube' }, Material: { albedo: '#7a9e5a', roughness: 0.95 }, Collider: { shape: 'box' } } },
-  { label: 'Character', components: ['Transform', 'Mesh', 'Material', 'Collider', 'Velocity'], overrides: { Transform: { scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 } } },
-  { label: 'Spinner', components: ['Transform', 'Spin'] },
-  { label: 'Mover', components: ['Transform', 'Velocity'] },
+  { label: 'Character', components: ['Transform', 'Mesh', 'Material', 'Collider'], overrides: { Transform: { scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 } } },
   { label: 'Animated', components: ['Transform', 'Mesh', 'Material', 'Anim'] },
   { label: 'MatGraph', components: ['Transform', 'Mesh', 'MatGraph', 'Material'] },
 ];

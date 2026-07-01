@@ -10,7 +10,7 @@
 	path = packages/interface
 	url = ../forgeax-interface.git
 	branch = main
-[submodule "packages/kernel"]
-	path = packages/kernel
-	url = ../forgeax-kernel.git
+[submodule "packages/platform-io"]
+	path = packages/platform-io
+	url = ../forgeax-platform-io.git
 	branch = main

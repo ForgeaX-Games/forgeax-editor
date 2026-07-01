@@ -1,9 +1,12 @@
 import { defineConfig } from 'vite';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import react from '@vitejs/plugin-react';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { gltfImporter } from '@forgeax/engine-gltf';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +38,35 @@ const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? 15280);
 const HOST = process.env.FORGEAX_EDITOR_HOST ?? '0.0.0.0';
 const BASE = '/editor/';
 
+// ── standalone `--game DIR` game root (abs) ───────────────────────────────────
+// The ▶ Play resolver (main.tsx resolveGameModuleForPlay) imports the game entry
+// through edit vite's `/editor/@fs<abs>/…` so its @forgeax/engine-* imports bind to
+// THIS runtime's single engine instance (see 50f82e5). It needs the game's abs dir.
+//
+// In standalone `--game DIR` the dir DIRECTLY contains forge.json (the host serves
+// one arbitrary game dir), and there is NO studio server — so the old path
+// of asking `/api/health` for `projectRootAbs` (a forgeax-server-only route that,
+// even in studio, returns `projectRoot` NOT `projectRootAbs`) 404s and the whole
+// Play crashes with `import-failed`. cli.mjs already exports FORGEAX_GAME_DIR to
+// this process; inject it into the client bundle so the resolver skips the studio
+// route entirely. null when embedded in studio → resolver keeps its legacy branch.
+const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
+  ? resolve(process.env.FORGEAX_GAME_DIR)
+  : null;
+
+// ── standalone self-hosted pack catalog (Part C) ──────────────────────────────
+// In standalone `--game`, Play's assets.loadByGuid needs the engine pack-index
+// catalog. Studio-embedded proxies /preview/* to play-runtime (:15173) for it,
+// but standalone has no :15173 — so edit-runtime registers its OWN pluginPack over
+// the game's assets/ + scenes/ dirs (base '/editor/', reachable through the host
+// proxy). This removes the play-runtime dependency for standalone Edit-preview AND
+// Play. null GAME_DIR_ABS (studio-embedded) → keep the /preview proxy (below).
+function gamePackRoots(): string[] {
+  if (!GAME_DIR_ABS) return [];
+  return ['assets', 'scenes'].map((d) => join(GAME_DIR_ABS, d)).filter((p) => existsSync(p));
+}
+const SELF_HOST_PACK = GAME_DIR_ABS !== null;
+
 // forgeaxShader's configureServer middleware hardcodes `/shaders/manifest.json`,
 // but this vite root uses `base: '/editor/'` so the proxied URL arrives as
 // `/editor/shaders/manifest.json`. Strip the base prefix before forgeaxShader's
@@ -51,16 +83,30 @@ function shaderBaseStrip() {
   };
 }
 
-// pluginPack's dev middleware matches `/pack-index.json` literally (no base
-// awareness); the proxied request arrives as `/editor/pack-index.json`. Strip
-// the base prefix so pluginPack serves the (empty for now) catalog. Mirrors
-// engine-src's forgeaxPackBaseStrip.
+// pluginPack's dev middleware matches its routes literally (no base awareness);
+// under `base: '/editor/'` the proxied requests arrive prefixed with `/editor`.
+// Strip that prefix before pluginPack's (later-registered) middleware sees them,
+// for EVERY pluginPack route the self-hosted catalog serves (Part C):
+//   /editor/pack-index.json            → /pack-index.json          (catalog)
+//   /editor/__import/<guid>            → /__import/<guid>          (lazy cook)
+//   /editor/__forgeax-ddc/<guid>.pack.json → /__forgeax-ddc/...    (meta pack body)
+// Mirrors engine-src's forgeaxPackBaseStrip. Asset URLs pluginPack emits already
+// carry the `/editor/` base (relativeUrl prefixed at build), so they resolve as-is.
+const PACK_ROUTE_PREFIXES = ['/pack-index.json', '/__import/', '/__forgeax-ddc/'];
 function packBaseStrip() {
   return {
     name: 'forgeax:editor-pack-base-strip',
     configureServer(server: { middlewares: { use(fn: (req: { url?: string }, res: unknown, next: () => void) => void): unknown } }) {
       server.middlewares.use((req, _res, next) => {
-        if (req.url === '/editor/pack-index.json') req.url = '/pack-index.json';
+        const u = req.url;
+        if (u) {
+          for (const p of PACK_ROUTE_PREFIXES) {
+            if (u === `/editor${p}` || u.startsWith(`/editor${p}`)) {
+              req.url = u.slice('/editor'.length);
+              break;
+            }
+          }
+        }
         next();
       });
     },
@@ -101,16 +147,23 @@ export default defineConfig({
   base: BASE,
   cacheDir: resolve(here, '.vite'),
   publicDir: resolve(here, 'public'),
+  // Expose the standalone `--game DIR` abs path to the client so the ▶ Play
+  // resolver builds its `@fs<abs>` game-entry URL without the studio-only
+  // `/api/health` round-trip. null (embedded studio) → resolver legacy branch.
+  define: { __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS) },
   plugins: [
     react(),
     shaderBaseStrip() as never,
     packBaseStrip() as never,
-    // pluginPack is intentionally NOT registered here: edit-runtime proxies
-    // /preview/pack-index/*, /__import, and /__forgeax-ddc directly to the
-    // play engine's pluginPack (which holds the per-game gltfImporter +
-    // catalog). A local pluginPack with empty roots would intercept those
-    // routes first and 404 with `meta-not-found`, blocking the skinned-mesh
-    // preview load.
+    // Standalone (Part C): self-host the pack catalog over the injected game dir,
+    // so Play's loadByGuid + Edit sub-asset previews resolve WITHOUT proxying to
+    // play-runtime (:15173). base '/editor/' so its emitted asset URLs + routes
+    // sit under the host-proxied prefix; packBaseStrip strips it for the middleware.
+    // Studio-embedded (GAME_DIR_ABS null): NOT registered — the /preview proxy
+    // (below) reaches play-runtime's pluginPack, which owns the multi-game catalog.
+    ...(SELF_HOST_PACK
+      ? [pluginPack({ roots: gamePackRoots(), base: BASE, importers: [imageImporter, gltfImporter] }) as never]
+      : []),
     silenceShaderEmitInServe(forgeaxShader() as never) as never,
   ],
   optimizeDeps: {
@@ -135,21 +188,31 @@ export default defineConfig({
     strictPort: true,
     open: false,
     watch: { usePolling: true, interval: 300, ignored: ['**/node_modules/**'] },
-    fs: { allow: [here, resolve(here, '../../..')], strict: false },
+    // fs.allow: editor tree (here + repo root) PLUS the standalone `--game DIR`
+    // when it lives OUTSIDE the editor tree (e.g. a sibling forgeax-engine
+    // template). Without this the ▶ Play `@fs<gameDir>/main.ts` transform is
+    // refused by vite's fs guard. GAME_DIR_ABS null (embedded studio) → unchanged.
+    fs: {
+      allow: [here, resolve(here, '../../..'), ...(GAME_DIR_ABS ? [GAME_DIR_ABS] : [])],
+      strict: false,
+    },
     hmr: { clientPort: Number(process.env.FORGEAX_INTERFACE_PORT ?? 18920) },
-    // Scene persistence (store.ts) reads/writes .forgeax/games/<slug>/scene.json
-    // through the server's /api/files. Iframed via the interface (:18920/editor)
+    // Scene persistence (store.ts) reads/writes the game's scene.json through the
+    // host-injected game root via /api/files. Iframed via the interface (:18920/editor)
     // it's same-origin already; this proxy makes a DIRECT :15280 visit work too.
     proxy: {
       '/api': { target: `http://127.0.0.1:${process.env.FORGEAX_SERVER_PORT ?? 18900}`, changeOrigin: true },
-      // Skinned-mesh preview (witch.glb sub-assets) lives in the play engine's
-      // per-game pluginPack catalog. /preview/* serves catalog + DDC bodies;
-      // /__import + /__forgeax-ddc are the gltfImporter cook + read endpoints
-      // (registered bare-prefix by pluginPack — no base awareness). Without
-      // these the edit-runtime preview hook fails with `asset-not-imported`.
-      '/preview': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true, ws: true },
-      '/__import': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
-      '/__forgeax-ddc': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
+      // Studio-embedded ONLY: skinned-mesh preview (witch.glb sub-assets) lives in
+      // the play engine's per-game pluginPack catalog. /preview/* serves catalog +
+      // DDC bodies; /__import + /__forgeax-ddc are the gltfImporter cook + read
+      // endpoints. Standalone (SELF_HOST_PACK) registers its OWN pluginPack over the
+      // injected game dir (above) and serves these under /editor/* locally, so the
+      // :15173 proxy is skipped — there is no play-runtime in standalone `--game`.
+      ...(SELF_HOST_PACK ? {} : {
+        '/preview': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true, ws: true },
+        '/__import': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
+        '/__forgeax-ddc': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
+      }),
     },
   },
   // esnext: the entry (main.tsx) uses top-level await (initSceneList/bootEditor);
