@@ -16,6 +16,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
+import { physicsPlugin } from '@forgeax/engine-physics';
 import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
 import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
 import {
@@ -259,6 +260,44 @@ if (uiRoot) {
   );
 }
 
+// ── Physics gate (per-game opt-in via forge.json "physics") ───────────────────
+// Physics is enabled by passing physicsPlugin(backend) in createApp's `plugins`
+// (the legacy `opts.physics` bridge was deleted in engine M3/w15 — create-app.ts
+// only reads it back as app.physics; it does NOT wire the plugin). physicsPlugin's
+// async build dynamic-imports the rapier backend, loads WASM, and inserts the
+// 'PhysicsWorld' world resource + tick systems. runPlugins is awaited inside
+// createApp, so PhysicsWorld exists before the first frame. The editor reloads on
+// scene switch (switchSceneFile → location.reload), so the active game's slug is
+// known at boot; read its forge.json `physics` here so physics games (cow-level /
+// cow-survivor / hellforge — Collider / RigidBody) actually simulate under ▶ Play.
+// Non-physics games skip the plugin (zero rapier WASM cost). A missing/failed read
+// degrades to no-physics (charter §9).
+let editPhysics: 'rapier-3d' | 'rapier-2d' | undefined;
+{
+  const slug = getSceneId();
+  if (slug && slug !== 'default') {
+    try {
+      const gp = await loadGameProject(async () => {
+        const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { content?: string };
+        if (!j.content) throw new Error('Empty content');
+        return j.content;
+      });
+      if (gp.ok) {
+        const p = gp.value.physics;
+        if (p === '3d' || p === true || p === 'rapier-3d') editPhysics = 'rapier-3d';
+        else if (p === '2d' || p === 'rapier-2d') editPhysics = 'rapier-2d';
+        console.log(`[editor] physics gate: forge.physics=${JSON.stringify(p)} -> ${editPhysics ?? 'none'}`);
+      } else {
+        console.warn('[editor] physics gate: loadGameProject not ok:', (gp.error as { code?: string })?.code ?? gp.error);
+      }
+    } catch (e) {
+      console.warn('[editor] physics gate: forge.json read failed (no physics):', e);
+    }
+  }
+}
+
 // ── Engine boot ───────────────────────────────────────────────────────────────
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
 // options onto the 3rd-arg BundlerOptions. The editor supplies its own manifest
@@ -271,6 +310,10 @@ const app = await createApp(canvas, {
   // viewport input gate reads — only the play·game quadrant captures the cursor.
   // The engine stays editor-agnostic: it only calls this neutral predicate.
   pointerLockAllowed: () => getInputTarget() === 'game',
+  // Per-game physics backend (read above from forge.json). physicsPlugin loads the
+  // rapier WASM + inserts PhysicsWorld; omitted when undefined so non-physics games
+  // skip rapier entirely.
+  ...(editPhysics ? { plugins: [physicsPlugin(editPhysics)] } : {}),
 }, {
   shaderManifestUrl: `${BASE}/shaders/manifest.json`,
   // Dev-mode import transport — POSTs /__import/<guid> on a loadByGuid miss
