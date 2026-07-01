@@ -225,6 +225,33 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     deps.onAfterBootstrap?.();
   }
 
+  // D-1c layer-3: despawn entities the run spawned outside the doc projection —
+  // the pre▶ → now handle diff. Extracted to keep stopSimulation flat (guard
+  // clauses over nested if/for/try). Idempotent: a second ■ finds an empty diff.
+  function despawnRuntimeSpawns(): void {
+    if (!prePlayEntities) return;
+    for (const h of deps.collectEntityHandles()) {
+      if (prePlayEntities.has(h)) continue;
+      try {
+        deps.world.despawn(h as never);
+      } catch {
+        /* entity already gone — idempotent */
+      }
+    }
+  }
+
+  // D-1c layer-1: removeSystem the systems bootstrap added — the pre▶ → now
+  // system-name diff. A second ■ with no ▶ finds an empty diff (prePlaySystems
+  // already covers the surviving names) — idempotent.
+  function removeBootstrapSystems(): void {
+    if (!prePlaySystems) return;
+    for (const s of deps.world.inspect().systems) {
+      if (prePlaySystems.has(s.name)) continue;
+      const r = deps.world.removeSystem(s.name);
+      if (!r.ok) console.warn(`[editor] ■ Stop removeSystem("${s.name}") failed:`, r.error);
+    }
+  }
+
   function stopSimulation(): void {
     // D-1c layer-0: freeze game systems (notEditing gate closes).
     injectEditMode(deps.world as never, true);
@@ -234,34 +261,13 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // repeated ▶/■ — the frame loop has no removeUpdateCallback).
     epoch.bump();
 
-    // D-1c layer-1: removeSystem the systems bootstrap added, computed as the
-    // pre▶ → now diff of world.inspect().systems. A second ■ with no ▶ finds an
-    // empty diff (prePlaySystems already covers the surviving names) — idempotent.
-    if (prePlaySystems) {
-      for (const s of deps.world.inspect().systems) {
-        if (!prePlaySystems.has(s.name)) {
-          const r = deps.world.removeSystem(s.name);
-          if (!r.ok) {
-            console.warn(`[editor] ■ Stop removeSystem("${s.name}") failed:`, r.error);
-          }
-        }
-      }
-    }
+    // D-1c layer-1: drop the systems bootstrap registered.
+    removeBootstrapSystems();
 
     // D-3 / D-1c layer-4 + layer-3: restore the doc, then despawn runtime spawns.
     if (snapshot) {
       deps.bus.replaceDoc(snapshot);
-      if (prePlayEntities) {
-        for (const h of deps.collectEntityHandles()) {
-          if (!prePlayEntities.has(h)) {
-            try {
-              deps.world.despawn(h as never);
-            } catch {
-              /* entity already gone — idempotent */
-            }
-          }
-        }
-      }
+      despawnRuntimeSpawns();
     }
     snapshot = null;
     prePlaySystems = null;
