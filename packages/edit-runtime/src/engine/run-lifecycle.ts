@@ -229,6 +229,25 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-1c layer-0: freeze game systems (notEditing gate closes).
     injectEditMode(deps.world as never, true);
 
+    // D-1c layer-2: bump the run epoch so every registerUpdate callback from
+    // this run short-circuits to no-op on its next frame (no accumulation over
+    // repeated ▶/■ — the frame loop has no removeUpdateCallback).
+    epoch.bump();
+
+    // D-1c layer-1: removeSystem the systems bootstrap added, computed as the
+    // pre▶ → now diff of world.inspect().systems. A second ■ with no ▶ finds an
+    // empty diff (prePlaySystems already covers the surviving names) — idempotent.
+    if (prePlaySystems) {
+      for (const s of deps.world.inspect().systems) {
+        if (!prePlaySystems.has(s.name)) {
+          const r = deps.world.removeSystem(s.name);
+          if (!r.ok) {
+            console.warn(`[editor] ■ Stop removeSystem("${s.name}") failed:`, r.error);
+          }
+        }
+      }
+    }
+
     // D-3 / D-1c layer-4 + layer-3: restore the doc, then despawn runtime spawns.
     if (snapshot) {
       deps.bus.replaceDoc(snapshot);
