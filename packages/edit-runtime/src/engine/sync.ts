@@ -47,6 +47,12 @@ export interface EngineSync {
   forceResync(): void;
   /** The live forgeax entity rendering doc entity `id`, if any (for viewport drag). */
   worldEntityFor(id: EntityId): number | undefined;
+  /** The synthetic root of the doc-projected scene instance (carries the
+   *  `SceneInstance` component), or `undefined` before the first build. This is
+   *  the doc-projection source for ▶ Play's BootstrapContext.defaultSceneRoot
+   *  (D-1a): the game's bootstrap receives the scene EngineSync already built
+   *  from bus.doc, NOT a forge.json GUID re-instantiate (which would duplicate). */
+  sceneRoot(): number | undefined;
   /** Stop listening to the bus. */
   dispose(): void;
 }
@@ -148,6 +154,7 @@ export function createEngineSync(
     resync,
     forceResync() { lastRev = -1; resync(); },
     worldEntityFor: (id) => rendered.get(id)?.entity,
+    sceneRoot: () => (instanceRoot === null ? undefined : instanceRoot),
     dispose() { unsub(); despawnInstance(); rendered = new Map(); },
   };
 }

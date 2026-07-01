@@ -368,6 +368,13 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .vp-btn:disabled { opacity: 0.25; cursor: default; }
 .vp-btn.on { background: var(--lime, #d4ff48); color: var(--bg0, #0e0f10); }
 .vp-sep { width: 1px; height: 16px; background: var(--line, #2a2d30); margin: 0 2px; }
+/* FPS counter in ViewportBar (w25) — monospaced, subdued */
+.vp-fps {
+  font-size: 11px;
+  color: var(--fg3, #6b7177);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
 
 /* SceneSwitcher — level/scene-file picker (multi-scene games) */
 .vp-scene-select {
@@ -451,3 +458,70 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .cap-fields { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .cap-field { font-family: var(--mono); font-size: 10px; color: var(--fg2); background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 .cap-type { color: var(--fg3); }
+
+/* ── Game overlay: minimal semi-transparent hover bar for display='game' (w24) ── */
+.vp-game-overlay-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  z-index: 100;
+  pointer-events: none;
+}
+/* Trigger zone becomes interactive on hover — parent stops forwarding */
+.vp-game-overlay-container:hover {
+  pointer-events: auto;
+}
+.vp-game-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  margin: 0 auto;
+  padding: 0 12px;
+  background: rgba(20, 22, 26, 0.72);
+  backdrop-filter: blur(6px);
+  border-radius: 0 0 8px 8px;
+  opacity: 0;
+  transform: translateY(-100%);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+  max-width: fit-content;
+}
+.vp-game-overlay--visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.vp-game-overlay-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.78);
+  border-radius: 5px;
+  width: 30px;
+  height: 26px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.vp-game-overlay-btn:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.vp-game-overlay-sep {
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.10);
+}
+.vp-game-overlay-fps {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.48);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}

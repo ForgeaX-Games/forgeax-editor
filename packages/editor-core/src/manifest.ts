@@ -21,6 +21,7 @@ export const EDITOR_PANELS = [
   'launcher',
   'asset-inspector',
   'systems',
+  'socket-editor',
 ] as const;
 
 /** Union type of all editor panel IDs — derived from EDITOR_PANELS. */

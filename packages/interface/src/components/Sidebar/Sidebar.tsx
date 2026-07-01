@@ -85,7 +85,7 @@ const HOST_SIDEBAR_SCHEMA = {
   type: 'object',
   properties: {
     workbenchTab: { type: 'string', description: 'Currently active workbench tab id (e.g. agents, files, wb:character)' },
-    mode: { type: 'string', enum: ['preview', 'workbench', 'edit', 'bus'] },
+    mode: { type: 'string', enum: ['edit', 'workbench', 'bus'] },
     entries: {
       type: 'array',
       items: {
@@ -102,7 +102,7 @@ const HOST_SIDEBAR_SCHEMA = {
 
 interface HostSidebarSnapshot {
   workbenchTab: string;
-  mode: 'preview' | 'workbench' | 'edit' | 'bus';
+  mode: 'edit' | 'workbench' | 'bus';
   entries: Array<{ id: string; label: string; kind: 'builtin' | 'bus' }>;
 }
 
@@ -249,11 +249,11 @@ export function Sidebar() {
         argsSchema: {
           type: 'object',
           required: ['mode'],
-          properties: { mode: { type: 'string', enum: ['preview', 'workbench', 'edit', 'bus'] } },
+          properties: { mode: { type: 'string', enum: ['edit', 'workbench', 'bus'] } },
         },
         run: (raw) => {
           const a = (raw ?? {}) as { mode?: unknown };
-          if (a.mode === 'preview' || a.mode === 'workbench' || a.mode === 'edit' || a.mode === 'bus') {
+          if (a.mode === 'edit' || a.mode === 'workbench' || a.mode === 'bus') {
             useAppStore.getState().setMode(a.mode);
           }
         },

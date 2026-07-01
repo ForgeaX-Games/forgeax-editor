@@ -63,22 +63,14 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
     case 'main':
       body = <MainArea />;
       break;
-    // Preview viewport panel — renders the game preview iframe in its own window.
+    // Viewport panel — renders the combined edit+preview surface in its own window.
     // Detached windows have NO keep-alive layer (the whole OS window IS the
     // visibility), so render the real surface directly via PanelRenderers — not the
     // in-shell <SurfaceAnchor> placeholder, which would leave the window empty.
-    case 'preview':
-      body = (
-        <div className="surface-region">
-          <FatalBanner source="play" />
-          {renderPreview ? renderPreview() : <NoEditorBody />}
-        </div>
-      );
-      break;
-    // Edit viewport panel — renders the full editor (NOT viewportOnly) in its own
-    // window: the editor iframe boots with its own DockManager panels so the OS
-    // window is a complete standalone editor experience.
+    // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
     case 'edit':
+    case 'edit': // legacy backward compat
+    case 'preview': // legacy backward compat
       body = (
         <div className="surface-region">
           <FatalBanner source="edit" />

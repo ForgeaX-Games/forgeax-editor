@@ -12,8 +12,9 @@ import type { ReactNode } from 'react';
 import type { IDockviewPanelProps } from 'dockview';
 import { Sidebar } from '../Sidebar/Sidebar';
 import { MainArea } from '../MainArea/MainArea';
-import { PreviewPanel } from '../MainArea/SurfacePanels';
+import { ViewportPanel } from '../MainArea/SurfacePanels';
 import { EditPanel } from '../MainArea/SurfacePanels';
+import { PreviewPanel } from '../MainArea/SurfacePanels';
 import { ChatPanel } from '../ChatPanel/ChatPanel';
 import { AgentsPanel } from '../Sidebar/AgentsPanel';
 import { FilesPanel } from '../Sidebar/FilesPanel';
@@ -49,10 +50,10 @@ export const CORE_PANELS: PanelDef[] = [
   { id: 'workbench', title: 'Tools', group: 'core', canPopOut: true, render: () => <Sidebar /> },
   // 'main' is a backward-compat alias kept for saved layouts (renders MainArea).
   { id: 'main', title: 'Workbench', group: 'core', canPopOut: true, render: () => <MainArea /> },
-  { id: 'preview', title: 'Preview', group: 'core', canPopOut: true, render: () => <PreviewPanel /> },
-  // In flat-architecture mode 'edit' is a VIEWPORT-only panel (engine canvas +
+  // In flat-architecture mode 'viewport' is the combined panel (engine canvas +
   // gizmo); the editor's React sub-panels live as ep:* panels.
-  { id: 'edit', title: 'Edit', group: 'core', canPopOut: true, render: () => <EditPanel viewportOnly /> },
+  // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
+  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, render: () => <ViewportPanel /> },
   { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, render: () => <ChatPanel /> },
 ];
 
@@ -103,7 +104,7 @@ export const PANEL_TITLE: Record<string, string> = {
 };
 
 /** Core panel ids offered in the layout menu's main-panels section (excludes 'main' alias). */
-export const CORE_PANEL_IDS = ['workbench', 'preview', 'edit', 'chat'] as const;
+export const CORE_PANEL_IDS = ['workbench', 'viewport', 'chat'] as const;
 /** Optional panel ids (layout menu more-panels section). */
 export const OPTIONAL_PANEL_IDS = OPTIONAL_PANELS.map((p) => p.id) as readonly string[];
 /** Panels that can pop out into a real OS window. */

@@ -1,5 +1,5 @@
 import { useAppStore } from '../../store';
-import { PreviewPanel, EditPanel } from './SurfacePanels';
+import { ViewportPanel } from './SurfacePanels';
 import { WorkbenchMode } from './WorkbenchMode';
 import { CenterPluginLayer } from './CenterPluginLayer';
 import './MainArea.css';
@@ -8,16 +8,16 @@ import './MainArea.css';
 // Bus inventory is now a "Plugins" section inside SettingsPanel (overlay,
 // opened via gear icon).  AppMode union still has 'bus' for backward compat
 // with persisted store state — falls through to no render here.
+// 2026-06-30: 'preview'/'edit' merged into single 'viewport' mode.
 export function MainArea() {
   const mode = useAppStore((s) => s.mode);
   return (
     <main className="main-area">
-      {mode === 'preview' && <PreviewPanel />}
+      {mode === 'edit' && <ViewportPanel />}
       {mode === 'workbench' && <WorkbenchMode />}
-      {mode === 'edit' && <EditPanel />}
       {/* Always-mounted keep-alive overlay for standalone center plugins. Lives
           here (above the mode/tab conditionals) so plugin iframes survive
-          preview↔workbench and tab switches instead of cold-restarting. It
+          viewport↔workbench and tab switches instead of cold-restarting. It
           self-hides when no standalone plugin is expanded. */}
       <CenterPluginLayer />
     </main>

@@ -13,6 +13,7 @@ import {
   MaterialGraphPanel,
   LauncherPanel,
   AssetInspectorPanel,
+  SocketEditorPanel,
 } from '@forgeax/editor-panels';
 import { SystemsPanel } from './panels/systems-panel';
 import { InspectorWithAddComponent } from './panels/inspector';
@@ -40,6 +41,7 @@ const TITLE: Record<string, string> = {
   launcher: 'Launcher',
   'asset-inspector': 'Asset Inspector',
   systems: 'Systems',
+  'socket-editor': '绑点编辑器',
 };
 const BODY: Record<string, () => ReactNode> = {
   hierarchy: () => <HierarchyPanel />,
@@ -54,6 +56,7 @@ const BODY: Record<string, () => ReactNode> = {
   matgraph: () => <MaterialGraphPanel />,
   'asset-inspector': () => <AssetInspectorPanel />,
   systems: () => <SystemsPanel world={null} sceneId={getSceneId() ?? 'default'} />,
+  'socket-editor': () => <SocketEditorPanel />,
 };
 
 export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {

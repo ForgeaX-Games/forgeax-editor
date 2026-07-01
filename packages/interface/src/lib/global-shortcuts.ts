@@ -6,7 +6,7 @@
  *   Ctrl+Shift+B  toggle Sidebar
  *   Ctrl+Shift+C  toggle ChatPanel
  *   Ctrl+Shift+D  toggle Dashboard overlay
- *   Ctrl+Shift+1  mode: Preview
+ *   Ctrl+Shift+1  mode: Viewport
  *   Ctrl+Shift+2  mode: Workbench
  *   Ctrl+Shift+3  open Settings → Plugins (was the Bus mode tab)
  *   Ctrl+/        focus chat composer
@@ -167,9 +167,9 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+1',
       group: 'mode',
-      label: t('shortcuts.modePreview'),
+      label: t('shortcuts.modeViewport'),
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit1' || e.key === '1' || e.key === '!'),
-      run: () => { store().setMode('preview'); return true; },
+      run: () => { store().setMode('edit'); return true; },
     },
     {
       combo: 'Ctrl+Shift+2',

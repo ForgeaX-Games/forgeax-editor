@@ -130,12 +130,24 @@ function isRealGameSlug(slug: string): boolean {
   return !GAME_SLUG_REJECT_RE.test(slug);
 }
 
+// Games dir the pack scan walks. Defaults to this root's .forgeax/games (the
+// dev junction run.ts maintains). A build/CI override (FORGEAX_PREVIEW_GAMES_DIR)
+// lets the desktop production build scope the pack PRE-IMPORT to just the games
+// it ships: otherwise `vite build`'s generateBundle pre-imports EVERY seeded
+// game, where a single broken asset or a cross-game GUID collision fails the
+// whole build (and the dev junction persists after any `bun fx start`, so this
+// bites clean builds too). No env set → unchanged dev behavior.
+function gamesDirRoot(): string {
+  const override = process.env.FORGEAX_PREVIEW_GAMES_DIR;
+  return override ? resolve(override) : resolve(here, '.forgeax/games');
+}
+
 // Scan every game's assets/ dir as a pack root. One-level glob over
 // .forgeax/games/<slug>/assets deliberately excludes nested dirs like
 // shoot/backup/assets, whose .pack.json files reuse the same GUIDs and would
 // trip the scanner's duplicate-guid guard (collapsing the whole catalog).
 function gameAssetRoots(): string[] {
-  const gamesDir = resolve(here, '.forgeax/games');
+  const gamesDir = gamesDirRoot();
   if (!existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)
@@ -163,7 +175,7 @@ function sharedAssetRoots(): string[] {
 // can't loadByGuid a level pack that lives in scenes/ (the editor still shows
 // it, but Play 404s the GUID) — keep this in sync with the editor convention.
 function perGamePackRoots(slug: string): string[] {
-  const base = resolve(here, '.forgeax', 'games', slug);
+  const base = join(gamesDirRoot(), slug);
   return ['assets', 'scenes'].map((d) => join(base, d)).filter((p) => existsSync(p));
 }
 
@@ -172,7 +184,7 @@ function perGamePackRoots(slug: string): string[] {
 // existsSync follows symlinks. This mirrors gameAssetRoots() and is the
 // per-game complement.
 function gameSlugs(): string[] {
-  const gamesDir = resolve(here, '.forgeax/games');
+  const gamesDir = gamesDirRoot();
   if (!existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)

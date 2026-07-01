@@ -81,11 +81,17 @@ export type {
 
 // ── Edit session (authoring working state) ──
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
-export { makeEditSession, projectSessionAsset } from './edit-session';
+export { makeEditSession, projectSessionAsset, cloneEditSession } from './edit-session';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
 export { schemaFingerprint, decideReloadTier } from './hot-reload';
 export type { ReloadTier, SchemaSource } from './hot-reload';
+
+// ── Module discoverer (feat-20260630-viewport M2 / w9: edit-runtime wires the
+// game systems into the single edit world through this; the only production
+// system-registration path) ──
+export { discoverModules } from './discoverer';
+export type { DiscoveredModule, DiscoverResult } from './discoverer';
 
 // ── Schema ──
 export {
@@ -322,3 +328,66 @@ export {
   EditorPathResolverError,
 } from './path-resolver';
 export type { PathResolver } from './path-resolver';
+
+// ── EditMode resource injection (▶/■ Simulate, feat-20260630-viewport w11) ──
+export { injectEditMode, EDIT_MODE_KEY } from './edit-mode';
+export type { EditModeState } from './edit-mode';
+// ── Run conditions (notEditing gate + and combinator, feat-20260630 w10) ──
+// Barrel-symmetric with injectEditMode: consumers wiring game systems need the
+// same gate the discoverer uses (verify V-3 affordances finding).
+export { notEditing, and } from './run-conditions';
+export type { RunCondition } from './run-conditions';
+// ── Socket (绑点) editor ──
+export {
+  SOCKET_DOC_VERSION,
+  SOCKET_EULER_ORDER,
+  SocketAuxSchema,
+  SocketDefSchema,
+  SocketDocSchema,
+  emptySocketDoc,
+  defaultSocket,
+  uniqueSocketId,
+  normalizeScale,
+  targetLenToScale,
+  scaleToTargetLen,
+  findSocket,
+} from './socket';
+export type { SocketAux, SocketDef, SocketDoc } from './socket';
+export {
+  exportSocketJson,
+  importSocketJson,
+  validateSocketDoc,
+  loadSocketDoc,
+  saveSocketDoc,
+} from './socket-io';
+export type { SocketImportResult } from './socket-io';
+export {
+  getSocketDoc,
+  setSocketDoc,
+  getSocketDocVersion,
+  useSocketDocVersion,
+  addSocket,
+  removeSocket,
+  updateSocket,
+  setSkeletonId,
+  getSelectedSocketId,
+  setSelectedSocketId,
+  useSelectedSocketId,
+  getCoordSpace,
+  setCoordSpace,
+  useCoordSpace,
+  getPivot,
+  setPivot,
+  usePivot,
+  onSocketPreview,
+  getClipControl,
+  getClipControlVersion,
+  setClipControl,
+  setClipControlForwarder,
+  onClipControl,
+  useClipControl,
+  onViewRequest,
+  requestView,
+  setViewRequestForwarder,
+} from './socket-store';
+export type { SocketCoordSpace, SocketPivot, ClipControl, SocketViewCmd } from './socket-store';

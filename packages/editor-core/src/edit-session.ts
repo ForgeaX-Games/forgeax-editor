@@ -85,3 +85,30 @@ export function makeEditSession(
 export function createEditSession(): EditSession {
   return makeEditSession({}, [], 1);
 }
+
+/**
+ * Deep-copy an EditSession for snapshot purposes (w14/w15 — plan-strategy D-3).
+ *
+ * The clone is a true fork: mutations to the original do not affect the snapshot
+ * and vice versa. EntityNode fields (components / source / hidden) are deep-copied
+ * via structuredClone so the snapshot carries no reference-sharing with the live
+ * session. The `asset` getter is revived via makeEditSession.
+ *
+ * This is called at ▶ click (snapshot once — requirements AC-07), then stored
+ * until ■ Stop for replaceDoc-based restore.
+ */
+export function cloneEditSession(session: EditSession): EditSession {
+  const entities: Record<EntityId, EntityNode> = {};
+  for (const [id, node] of Object.entries(session.entities)) {
+    const nid = Number(id) as EntityId;
+    entities[nid] = {
+      id: node.id,
+      name: node.name,
+      parent: node.parent,
+      components: structuredClone(node.components) as Record<string, unknown>,
+      ...(node.source ? { source: structuredClone(node.source) } : {}),
+      ...(node.hidden !== undefined ? { hidden: node.hidden } : {}),
+    };
+  }
+  return makeEditSession(entities, [...session.order], session.nextLocalId);
+}

@@ -26,8 +26,9 @@ import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/plat
 import { bootAppMode } from './lib/workspaces';
 
 // P2.6d — 'bus' joins as a top-level mode for the Bus admin panel.
-// Mirrors the Preview / Workbench switch in the TopBar; rendered by MainArea.
-export type AppMode = 'preview' | 'workbench' | 'edit' | 'bus';
+// Mirrors the Viewport / Workbench switch in the TopBar; rendered by MainArea.
+// 2026-06-30: 'preview'/'play' removed; 'edit' retained as the 2x2 viewport workspace (OOS-5).
+export type AppMode = 'edit' | 'workbench' | 'bus';
 
 // Shared file descriptor used by the multi-tab workbench editor.
 export interface PreviewFile {

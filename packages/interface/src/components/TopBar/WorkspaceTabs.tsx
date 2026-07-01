@@ -19,14 +19,13 @@ import { useTranslation } from '@/i18n';
 import { FloatingMenu } from '../ui/FloatingMenu';
 import { buildWorkspacePill, REFERENCE_LABEL } from '../Composer/referenceRegistry';
 
-export function modeForWorkspace(id: string): 'preview' | 'workbench' | 'edit' {
-  if (id === 'preview') return 'preview';
+export function modeForWorkspace(id: string): 'edit' | 'workbench' {
   if (id === 'edit') return 'edit';
   // 'workbench' id AND all custom workspaces → plugin gallery, not the editor iframe
   return 'workbench';
 }
 
-export function WorkspaceTabs({ setMode }: { setMode: (m: 'preview' | 'workbench' | 'edit') => void }) {
+export function WorkspaceTabs({ setMode }: { setMode: (m: 'edit' | 'workbench') => void }) {
   const { t } = useTranslation();
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => subscribeWorkspaces(bump), []);

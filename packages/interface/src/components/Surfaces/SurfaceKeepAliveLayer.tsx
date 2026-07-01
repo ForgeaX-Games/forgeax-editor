@@ -1,9 +1,13 @@
-// SurfaceKeepAliveLayer — always-mounted owner of the Play + Edit viewport surfaces.
+// SurfaceKeepAliveLayer — always-mounted owner of the Viewport surface.
 //
-// THE FIX for the Play↔Edit freeze. Play / Edit / AI are separate dockview
+// THE FIX for the Viewport↔AI freeze. Viewport / AI are separate dockview
 // *workspaces*; switching tabs rebuilds the dock tree, which previously destroyed +
 // cold-rebooted the heavy viewport iframes on EVERY switch (full WebGPU init + the
 // editor's top-level-await boot → intermittent WKWebView wedge = the freeze).
+//
+// 2026-06-30: 'preview'/'edit' merged into single 'viewport'. Only the edit
+// surface is kept alive across workspace switches. The play-runtime (/preview)
+// is now a standalone fullscreen-only entry point (AC-14).
 //
 // This layer is a sibling of DockShell (App.tsx, inside `.studio-body`) that never
 // unmounts. It mounts each surface ONCE (lazily, on first visit) and keeps it alive
@@ -29,15 +33,14 @@ import {
 } from '../../lib/surfaceAnchors';
 import './SurfaceKeepAlive.css';
 
-type AppMode = 'preview' | 'workbench' | 'edit';
+type AppMode = 'edit' | 'workbench';
 
 function kindForMode(mode: AppMode): SurfaceKind | null {
-  if (mode === 'preview') return 'play';
   if (mode === 'edit') return 'edit';
   return null; // workbench / custom workspaces show neither surface
 }
 
-const ALL_KINDS: SurfaceKind[] = ['play', 'edit'];
+const ALL_KINDS: SurfaceKind[] = ['edit'];
 
 export function SurfaceKeepAliveLayer(): ReactNode {
   const mode = useAppStore((s) => s.mode) as AppMode;
@@ -140,7 +143,7 @@ export function SurfaceKeepAliveLayer(): ReactNode {
   }, [activeKind]);
 
   const renderSurface = (kind: SurfaceKind): ReactNode => {
-    if (kind === 'play') return renderPreview ? renderPreview() : <NoEditor kind="play" />;
+    if (kind === 'edit') return renderEdit ? renderEdit({ viewportOnly: true }) : <NoEditor kind="edit" />;
     return renderEdit ? renderEdit({ viewportOnly: true }) : <NoEditor kind="edit" />;
   };
 

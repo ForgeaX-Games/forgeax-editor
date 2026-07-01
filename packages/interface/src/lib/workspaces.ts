@@ -23,10 +23,18 @@ const LAYOUT_VERSION_KEY = STORAGE_KEYS.wsLayoutVersion;
 // Capabilities group instead of floating top-right.
 // Version 5: 2026-06 — add the Mesh panel as a tab in the top-right
 // Inspector/Material group (was registered but never seeded into the layout).)
-export const CURRENT_LAYOUT_VERSION = 5;
+export const CURRENT_LAYOUT_VERSION = 6;
 
 // Core workspace IDs — always present, cannot be deleted.
-export const CORE_WORKSPACE_IDS = new Set(['preview', 'edit', 'workbench']);
+// 2026-06-30: 'preview'/'play' removed; 'edit' retained as 2x2 viewport workspace.
+export const CORE_WORKSPACE_IDS = new Set(['edit', 'workbench']);
+
+// Retired workspace IDs — folded into 'edit' by the 2x2 redesign ('edit' now
+// hosts the run x display viewport). Old persisted state may still carry these
+// as entries; they must be DROPPED on migration (not kept as "custom" tabs),
+// else stale 'play'/'preview'/'viewport' tabs resurface alongside 'edit'.
+// (AC-02 one-shot migration.)
+export const RETIRED_WORKSPACE_IDS = new Set(['play', 'preview', 'viewport']);
 
 /**
  * One-shot migration: when the built-in layout schema version advances, wipe
@@ -51,7 +59,6 @@ export function migrateLayoutVersion(): void {
 }
 
 export const DEFAULT_WORKSPACES: WorkspaceEntry[] = [
-  { id: 'preview',   name: 'Play' },
   { id: 'edit',      name: 'Edit' },
   { id: 'workbench', name: 'AI' },  // "AI" display name; id stays 'workbench'
 ];
@@ -84,7 +91,11 @@ export function loadWorkspaces(): WorkspaceState {
   // Core workspaces are always authoritative: names come from DEFAULT_WORKSPACES,
   // order matches DEFAULT_WORKSPACES (user-added workspaces go at the end).
   const normalise = (list: WorkspaceEntry[]): WorkspaceEntry[] => {
-    const customs = list.filter((w) => !CORE_WORKSPACE_IDS.has(w.id));
+    // Drop retired ids (play/preview/viewport → edit) AND core ids (re-added
+    // canonically below), keeping only genuine user-added workspaces.
+    const customs = list.filter(
+      (w) => !CORE_WORKSPACE_IDS.has(w.id) && !RETIRED_WORKSPACE_IDS.has(w.id),
+    );
     return [
       ...DEFAULT_WORKSPACES,   // always present, always in order, always canonical names
       ...customs,
@@ -147,10 +158,11 @@ export function setActiveWorkspace(id: string): void {
  * tab-then-content flash. Mirrors `modeForWorkspace()` in WorkspaceTabs.tsx
  * (kept standalone here to avoid a store ↔ component import cycle).
  */
-export function bootAppMode(): 'preview' | 'workbench' | 'edit' {
+export function bootAppMode(): 'edit' | 'workbench' {
   const { activeId } = loadWorkspaces();
-  if (activeId === 'preview') return 'preview';
   if (activeId === 'edit') return 'edit';
+  if (activeId === 'preview') return 'edit';
+  if (activeId === 'play') return 'edit';
   return 'workbench';
 }
 

@@ -39,19 +39,19 @@ import './DockShell.css';
 //
 // Panel taxonomy + the full id/title/group/pop-out table now live in
 // ./panelRegistry.tsx — add a panel THERE, not by editing constants here.
-//   CORE     — workbench / preview / edit / chat
+//   CORE     — workbench / viewport / chat
 //   OPTIONAL — agents / files / console (布局 menu toggles)
 //   EDITOR   — ep:* editor sub-panels (iframe to /editor/?panel=<id>)
 //   PLUGINS  — wb:<pluginId> panels merged in at runtime (below)
 
 const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migration to workspace layouts
 
-function buildDefault(api: DockviewApi, workspaceId: string = 'edit'): void {
-  if (workspaceId === 'preview') {
-    // Preview workspace: game preview + CLI chat side by side
-    api.addPanel({ id: 'preview', component: 'preview', title: 'Preview' });
-    api.addPanel({ id: 'chat', component: 'chat', title: 'ForgeaX CLI', position: { referencePanel: 'preview', direction: 'right' } });
-    try { api.getPanel('chat')?.api.setSize({ width: 360 }); } catch { /* sizing best-effort */ }
+export function buildDefault(api: DockviewApi, workspaceId: string = 'edit'): void {
+  if (workspaceId === 'edit') {
+    // Full editor workspace: hierarchy | viewport (2x2 run x display) | inspector
+    // + material/mesh/matgraph tabs, assets/history/timeline/capabilities/info
+    // groups, and chat. The viewport panel itself carries the ▶/■/G 2x2 model.
+    buildFullEditorLayout(api);
     return;
   }
   if (workspaceId === 'workbench') {
@@ -66,41 +66,32 @@ function buildDefault(api: DockviewApi, workspaceId: string = 'edit'): void {
     return;
   }
 
-  // Custom workspaces (not edit/preview/workbench): use the AI layout as a
-  // sensible starting point — Tools sidebar | Workbench main | Chat.
+  // Custom workspaces: use the AI layout as a sensible starting point.
+  // Tools sidebar | Workbench main | Chat.
   // This avoids blank ep:* iframe panels when the editor server isn't running.
-  if (workspaceId !== 'edit') {
-    api.addPanel({ id: 'workbench', component: 'workbench', title: 'Tools' });
-    api.addPanel({ id: 'main', component: 'main', title: 'Workbench', position: { referencePanel: 'workbench', direction: 'right' } });
-    api.addPanel({ id: 'chat', component: 'chat', title: 'ForgeaX CLI', position: { referencePanel: 'main', direction: 'right' } });
-    try {
-      api.getPanel('workbench')?.api.setSize({ width: 300 });
-      api.getPanel('chat')?.api.setSize({ width: 380 });
-    } catch { /* sizing best-effort */ }
-    return;
-  }
+  api.addPanel({ id: 'workbench', component: 'workbench', title: 'Tools' });
+  api.addPanel({ id: 'main', component: 'main', title: 'Workbench', position: { referencePanel: 'workbench', direction: 'right' } });
+  api.addPanel({ id: 'chat', component: 'chat', title: 'ForgeaX CLI', position: { referencePanel: 'main', direction: 'right' } });
+  try {
+    api.getPanel('workbench')?.api.setSize({ width: 300 });
+    api.getPanel('chat')?.api.setSize({ width: 380 });
+  } catch { /* sizing best-effort */ }
+}
 
-  // 'edit' workspace: full editor layout (3 columns, each split top/bottom).
-  //   ┌──────────┬─────────────────────────┬──────────────┐
-  //   │ Hierarchy│      Edit viewport      │ Inspector·Mat │
-  //   │──────────│   (dominant, largest)   │──────────────│
-  //   │ Assets   │ History·Timeline·Capab  │ ForgeaX CLI   │
-  //   └──────────┴─────────────────────────┴──────────────┘
-  //
-  // ORDER MATTERS: add the three TOP-ROW anchors first (hierarchy → edit →
-  // inspector) so dockview commits to 3 real columns; only THEN split each
-  // column downward. Adding a bottom panel (e.g. Assets) before the columns
-  // exist makes dockview attach it full-width across the bottom — the old bug
-  // that crushed the viewport and stranded Assets in an empty full-width strip.
+// Full editor workspace layout: the pre-redesign 'edit' default — hierarchy +
+// viewport + inspector/material/mesh/matgraph + assets + history/timeline/
+// capabilities/info + chat + launcher. The viewport panel carries the 2x2
+// run x display model (▶/■/G). Extracted so the 'edit' workspace seeds it.
+export function buildFullEditorLayout(api: DockviewApi): void {
   api.addPanel({ id: 'ep:hierarchy', component: 'ep:hierarchy', title: PANEL_TITLE['ep:hierarchy'] ?? 'Hierarchy' });
-  api.addPanel({ id: 'edit', component: 'edit', title: 'Edit', position: { referencePanel: 'ep:hierarchy', direction: 'right' } });
-  api.addPanel({ id: 'ep:inspector', component: 'ep:inspector', title: PANEL_TITLE['ep:inspector'] ?? 'Inspector', position: { referencePanel: 'edit', direction: 'right' } });
+  api.addPanel({ id: 'viewport', component: 'viewport', title: 'Viewport', position: { referencePanel: 'ep:hierarchy', direction: 'right' } });
+  api.addPanel({ id: 'ep:inspector', component: 'ep:inspector', title: PANEL_TITLE['ep:inspector'] ?? 'Inspector', position: { referencePanel: 'viewport', direction: 'right' } });
   // Top-right tab group: Inspector + Material + Mesh (Inspector active).
   api.addPanel({ id: 'ep:material', component: 'ep:material', title: PANEL_TITLE['ep:material'] ?? 'Material', position: { referencePanel: 'ep:inspector', direction: 'within' } });
   api.addPanel({ id: 'ep:mesh', component: 'ep:mesh', title: PANEL_TITLE['ep:mesh'] ?? 'Mesh', position: { referencePanel: 'ep:material', direction: 'within' } });
   // Split each column downward now that all three columns are established.
   api.addPanel({ id: 'ep:assets', component: 'ep:assets', title: PANEL_TITLE['ep:assets'] ?? 'Assets', position: { referencePanel: 'ep:hierarchy', direction: 'below' } });
-  api.addPanel({ id: 'ep:history', component: 'ep:history', title: PANEL_TITLE['ep:history'] ?? 'History', position: { referencePanel: 'edit', direction: 'below' } });
+  api.addPanel({ id: 'ep:history', component: 'ep:history', title: PANEL_TITLE['ep:history'] ?? 'History', position: { referencePanel: 'viewport', direction: 'below' } });
   api.addPanel({ id: 'ep:timeline', component: 'ep:timeline', title: PANEL_TITLE['ep:timeline'] ?? 'Timeline', position: { referencePanel: 'ep:history', direction: 'within' } });
   api.addPanel({ id: 'ep:capabilities', component: 'ep:capabilities', title: PANEL_TITLE['ep:capabilities'] ?? 'Capabilities', position: { referencePanel: 'ep:history', direction: 'within' } });
   // Info (health/log feed) docks in the SAME bottom group as History/Timeline/
@@ -288,14 +279,14 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
     api.onDidDrop(() => { dropHandledRef.current = true; });
 
     // Restore the active workspace's layout, falling back to legacy LS_KEY for
-    // the 'edit' workspace on first migration, else build the workspace default.
+    // the viewport workspace on first migration, else build the workspace default.
     const { activeId } = loadWorkspaces();
     prevWorkspaceIdRef.current = activeId;
     let restored = false;
     // isValidLayout — checks the raw serialized JSON BEFORE giving it to dockview.
     // Rejects it early so we never briefly flash the wrong layout on screen.
     const isValidLayout = (parsed: { panels?: Record<string, unknown> }, wsId: string): boolean => {
-      const isCoreWs = wsId === 'edit' || wsId === 'preview' || wsId === 'workbench';
+      const isCoreWs = wsId === 'edit' || wsId === 'workbench';
       if (!isCoreWs && parsed.panels) {
         // Custom workspaces must not have ep:* editor panels — those come from the
         // old buildDefault that used the 'edit' branch for all unknown workspaces.
@@ -316,7 +307,7 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         api.fromJSON(parsed as any);
-        const hasViewport = api.getPanel('edit') || api.getPanel('main') || api.getPanel('preview') || api.getPanel('workbench');
+        const hasViewport = api.getPanel('viewport') || api.getPanel('main') || api.getPanel('workbench');
         const hasAny = hasViewport || api.getPanel('chat') || api.panels.length > 0;
         if (!hasAny) { api.clear(); return false; }
         return true;
@@ -368,7 +359,7 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
       if (saved) {
         try {
           // Validate raw JSON before loading — avoids flashing the wrong layout.
-          const isCoreWs = newId === 'edit' || newId === 'preview' || newId === 'workbench';
+          const isCoreWs = newId === 'edit' || newId === 'workbench';
           const panels = (saved as { panels?: Record<string, unknown> }).panels ?? {};
           const hasStaleEpPanels = !isCoreWs && Object.keys(panels).some((k) => k.startsWith('ep:'));
           const missingMain = newId === 'workbench' && !panels['main'];
@@ -377,7 +368,7 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
             // fall through to buildDefault
           } else {
             api.fromJSON(saved);
-            const anchor = newId === 'preview' ? 'preview' : newId === 'workbench' ? 'main' : null;
+            const anchor = newId === 'workbench' ? 'main' : null;
             if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
             // anchor missing — fall through to buildDefault
           }
@@ -429,6 +420,20 @@ export function DockShell({ hideChatAndForge }: DockShellProps = {}) {
     };
     window.addEventListener(APP_EVENTS.openPanel, onOpen);
     return () => { window.removeEventListener(APP_EVENTS.openPanel, onOpen); };
+  }, []);
+
+  // Focus-only: bring a panel to front IF it already exists in the layout. Unlike
+  // openPanel this never reopens / force-inserts a closed tab — used by the editor
+  // "double-click a mesh → Mesh tab" flow so a user who closed the Mesh panel
+  // keeps their layout. Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id as string | undefined;
+      if (!id) return;
+      try { apiRef.current?.getPanel(id)?.api.setActive(); } catch { /* noop */ }
+    };
+    window.addEventListener(APP_EVENTS.focusPanel, onFocus);
+    return () => { window.removeEventListener(APP_EVENTS.focusPanel, onFocus); };
   }, []);
 
   // On mount: load workspace layouts from server into localStorage (only when

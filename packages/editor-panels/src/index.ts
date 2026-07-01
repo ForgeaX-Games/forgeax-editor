@@ -27,3 +27,4 @@ export { MaterialGraphPanel } from './MaterialGraph';
 export { TimelinePanel } from './Timeline';
 export { LauncherPanel } from './Launcher';
 export { AssetInspectorPanel } from './AssetInspector';
+export { SocketEditorPanel } from './socket-editor';
