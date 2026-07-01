@@ -54,6 +54,13 @@ interface RunBootstrapContext {
   readonly registerUpdate: (fn: (dt: number) => void) => void;
   readonly defaultSceneRoot?: number;
   readonly defaultScene?: unknown;
+  // B (controlled UI root) + A (cleanup hook): the two channels that make Stop
+  // reach beyond the ECS world. uiRoot is the disposable DOM boundary games
+  // mount into; registerCleanup collects non-DOM teardown (listeners/audio/
+  // timers). Mirror of the same-named optional fields on engine-app's
+  // BootstrapContext (see the shim note above).
+  readonly uiRoot?: HTMLElement;
+  readonly registerCleanup?: (fn: () => void) => void;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -149,6 +156,20 @@ export interface RunLifecycleDeps {
    * active camera (AC-12 hard cut). Optional — omitted in headless tests.
    */
   readonly onAfterBootstrap?: () => void;
+  /**
+   * Create the controlled UI container for a run and return it. Called at the
+   * START of ▶ Play (before bootstrap, so the game mounts its UI into it). The
+   * host builds a `<div>` inside the `#ui` overlay layer; the returned element
+   * is handed to the game as `ctx.uiRoot`. Optional — headless tests omit it,
+   * and games then fall back to `document.body`.
+   */
+  readonly mountUiRoot?: () => HTMLElement;
+  /**
+   * Tear down the UI container returned by {@link mountUiRoot}. Called on ■ Stop
+   * — removing this one element discards ALL game DOM in a single cut (B). No-op
+   * if mountUiRoot was never called.
+   */
+  readonly unmountUiRoot?: (el: HTMLElement) => void;
 }
 
 /** The ▶/■ pair plus the epoch guard so callers can assert on it (tests). */
@@ -179,6 +200,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   let snapshot: EditSession | null = null;
   let prePlaySystems: Set<string> | null = null;
   let prePlayEntities: Set<number> | null = null;
+  // B (controlled UI root) + A (cleanup hook) run-scoped state. uiRoot is the
+  // disposable DOM boundary the host mounts for this run; cleanups collects the
+  // game's non-DOM teardown callbacks. Both are reset at ▶ and drained at ■.
+  let uiRoot: HTMLElement | null = null;
+  let cleanups: Array<() => void> = [];
 
   async function playSimulation(): Promise<void> {
     // D-3 snapshot-once: deep-copy the doc before any play mutation touches it.
@@ -186,6 +212,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-1c layer-1 / layer-3 baselines: system names + entity handles at ▶.
     prePlaySystems = new Set(deps.world.inspect().systems.map((s) => s.name));
     prePlayEntities = deps.collectEntityHandles();
+    // B/A: build the controlled UI container BEFORE bootstrap (the game mounts
+    // its UI inside bootstrap) and start with an empty cleanup list for this run.
+    uiRoot = deps.mountUiRoot?.() ?? null;
+    cleanups = [];
 
     // D-1: resolve + validate the game entry (same contract as play-runtime).
     const slug = deps.getSlug();
@@ -220,6 +250,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       registerUpdate: (fn: (dt: number) => void) => {
         deps.app.registerUpdate(epoch.wrap(fn));
       },
+      // B: hand the game the controlled UI container (falls back to body inside
+      // the game when absent). A: collect the game's non-DOM teardown callbacks.
+      registerCleanup: (fn: () => void) => {
+        cleanups.push(fn);
+      },
+      ...(uiRoot !== null ? { uiRoot } : {}),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
@@ -262,7 +298,41 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     }
   }
 
+  // A (cleanup hook): flush the game's non-DOM teardown callbacks in reverse
+  // registration order (unwind semantics — last effect set up is torn down
+  // first). Each is guarded so one throwing callback can't strand the rest
+  // (charter §9 graceful degradation). Idempotent: a second ■ finds [].
+  function flushCleanups(): void {
+    for (let i = cleanups.length - 1; i >= 0; i--) {
+      try {
+        cleanups[i]!();
+      } catch (err) {
+        console.warn('[editor] ■ Stop cleanup callback failed:', err);
+      }
+    }
+    cleanups = [];
+  }
+
+  // B (controlled UI root): discard the whole run UI container in one cut — no
+  // per-element bookkeeping. Idempotent: a second ■ finds uiRoot === null.
+  function teardownUiRoot(): void {
+    if (!uiRoot) return;
+    try {
+      (deps.unmountUiRoot ?? ((el: HTMLElement) => el.remove()))(uiRoot);
+    } catch (err) {
+      console.warn('[editor] ■ Stop unmountUiRoot failed:', err);
+    }
+    uiRoot = null;
+  }
+
   function stopSimulation(): void {
+    // Layer A + B (non-ECS side effects) run FIRST, before the four ECS-surgical
+    // undo layers: drain the game's cleanup callbacks, then drop its DOM whole.
+    // These reach what the ECS undo structurally cannot (DOM / listeners / audio
+    // / timers) — the root cause of UI-remnant-after-stop.
+    flushCleanups();
+    teardownUiRoot();
+
     // D-1c layer-0: freeze game systems (notEditing gate closes).
     injectEditMode(deps.world as never, true);
 
