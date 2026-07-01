@@ -38,7 +38,16 @@ import { loadGame, isLoadGameError } from '@forgeax/engine-app';
 // tsc program (TS2709 "Cannot use namespace as a type" — same shim gap as
 // edit-mode.ts / open-project.ts), so ctx is built against this local shape and
 // passed to the entry (whose param is `ctx?: BootstrapContext`) structurally.
+//
+// `world` is intentionally on the ctx even though bootstrap(world, ctx?) already
+// takes world as its first param: play-runtime (the authoritative game-facing
+// host at :15173) builds a GameContext that carries `world`, and games type
+// their internal `Ctx = Parameters<GameEntry>[0]` (= GameContext) and read
+// `ctx.world` (e.g. cow-survivor's EnemyManager → world.allocSharedRef). Dropping
+// it here diverged edit-runtime's contract from play-runtime's and crashed those
+// games with "Cannot read properties of undefined (reading 'allocSharedRef')".
 interface RunBootstrapContext {
+  readonly world: unknown;
   readonly renderer?: unknown;
   readonly assets: unknown;
   readonly app: unknown;
@@ -204,6 +213,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     const defaultSceneRoot = deps.getDefaultSceneRoot();
     const defaultScene = deps.getDefaultScene();
     const ctx: RunBootstrapContext = {
+      world: deps.world,
       renderer: deps.renderer,
       assets: deps.renderer.assets,
       app: deps.app,

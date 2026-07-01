@@ -66,9 +66,14 @@ function makeFakeGame() {
   let bootstrapCount = 0;
   const frameCallbacks: Array<(dt: number) => void> = [];
   let tickCount = 0;
+  let lastCtx: { world?: unknown; registerUpdate: (fn: (dt: number) => void) => void } | undefined;
   const module = {
-    async bootstrap(world: EcsWorld, ctx?: { registerUpdate: (fn: (dt: number) => void) => void }) {
+    async bootstrap(
+      world: EcsWorld,
+      ctx?: { world?: unknown; registerUpdate: (fn: (dt: number) => void) => void },
+    ) {
       bootstrapCount += 1;
+      lastCtx = ctx;
       world.addSystem({
         name: `fake-game-system-${bootstrapCount}`,
         queries: [],
@@ -87,6 +92,10 @@ function makeFakeGame() {
     },
     get tickCount() {
       return tickCount;
+    },
+    /** The ctx object the last bootstrap call received (contract regression). */
+    get lastCtx() {
+      return lastCtx;
     },
     /** Simulate one frame: fire every registered (epoch-wrapped) callback. */
     tickFrame() {
@@ -140,6 +149,15 @@ describe('w9 — bootstrap ▶/■ roundtrip', () => {
     const names = ctx.world.inspect().systems.map((s: { name: string }) => s.name);
     expect(names).toContain('fake-game-system-1');
     expect(editModeActive(ctx.world)).toBe(false);
+  });
+
+  it('(1b) bootstrap ctx carries world (play-runtime GameContext parity)', async () => {
+    // Games type Ctx = Parameters<GameEntry>[0] (= GameContext) and read
+    // ctx.world (e.g. cow-survivor EnemyManager -> world.allocSharedRef).
+    // play-runtime puts world on the ctx; edit-runtime must match or those
+    // games crash "Cannot read properties of undefined (reading 'allocSharedRef')".
+    await ctx.lifecycle.playSimulation();
+    expect(ctx.game.lastCtx?.world).toBe(ctx.world);
   });
 
   it('(2) stopSimulation closes the gate, removes the system, restores the doc', async () => {
