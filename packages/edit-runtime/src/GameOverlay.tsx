@@ -13,7 +13,7 @@
 // budget count as an in-component FPS value so the overlay is self-contained).
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { getViewportQuadrant, onViewportQuadrantChange, type ViewportQuadrant } from '../engine/viewport-quadrant';
+import { getViewportQuadrant, onViewportQuadrantChange, type ViewportQuadrant } from './engine/viewport-quadrant';
 
 interface GameOverlayProps {
   fps: number;

@@ -17,7 +17,7 @@ import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@
 import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
-import { getViewportQuadrant, onViewportQuadrantChange } from '../engine/viewport-quadrant';
+import { getViewportQuadrant, onViewportQuadrantChange } from './engine/viewport-quadrant';
 
 interface ViewportBarProps {
   onPlay: () => void;

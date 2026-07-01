@@ -9,7 +9,7 @@
 // value is passed through from the frame-loop accumulator held in main.tsx.
 
 import { useState, useEffect } from 'react';
-import { getViewportQuadrant, onViewportQuadrantChange } from '../engine/viewport-quadrant';
+import { getViewportQuadrant, onViewportQuadrantChange } from './engine/viewport-quadrant';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
 import { GameOverlay } from './GameOverlay';
