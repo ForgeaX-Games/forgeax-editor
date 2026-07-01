@@ -633,17 +633,35 @@ onViewportQuadrantChange(() => applyActiveCamera());
 // getDefaultScene reads a cache resolveGameModule fills, since loadGame (which
 // calls resolveGameModule) always runs before ctx assembly in playSimulation.
 let cachedDefaultScene: unknown;
+// Absolute on-disk project root (from /api/health), cached. edit-runtime imports
+// the game through edit VITE's own `/editor/@fs<abspath>` transform — NOT the
+// `/preview/*` proxy. WHY: the /preview proxy is play-runtime's separate vite
+// (:15173), so a game imported through it binds its `@forgeax/engine-*` imports
+// to play-runtime's engine INSTANCE. defineComponent writes to that instance's
+// global component registry; edit-runtime's assets.instantiate reads a DIFFERENT
+// instance's registry (`/editor/node_modules/...`), so scene .pack.json instantiate
+// throws `component-not-defined` (e.g. shoot-opt's "Enemy"). Serving the game via
+// `/editor/@fs<abspath>` makes edit vite transform it — its engine imports resolve
+// to `/editor/node_modules/@forgeax/engine-*`, the SAME instance edit-runtime uses,
+// so defineComponent and resolveComponent share ONE registry. (spin-cube worked
+// before only because it uses component TOKENS directly via world.addSystem/spawn,
+// never the name-registry path that instantiate needs.)
+let cachedProjectRootAbs: string | undefined;
+async function getProjectRootAbs(): Promise<string> {
+  if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
+  const r = await getApiClient().fetch('/api/health', { cache: 'no-store' });
+  if (!r.ok) throw new Error(`/api/health HTTP ${r.status}`);
+  const j = (await r.json()) as { projectRootAbs?: string };
+  if (!j.projectRootAbs) throw new Error('/api/health missing projectRootAbs');
+  cachedProjectRootAbs = j.projectRootAbs;
+  return cachedProjectRootAbs;
+}
+
 async function resolveGameModuleForPlay(): Promise<unknown> {
   const slug = getSceneId();
-  // The `/preview/*` route is a ROOT-absolute same-origin proxy served by the
-  // studio server (→ play-runtime's per-game catalog), NOT under the editor's
-  // vite base (`/editor`). Every other /preview reference here is root-absolute
-  // (packIndexUrl @330, fullscreen @254, shared-assets @784); prefixing the
-  // editor BASE here made the HEAD hit `/editor/preview/...` which the vite dev
-  // server answers with the SPA index.html (content-type text/html), so the
-  // `javascript` check failed, loadGame errored, and ▶ Play opened the gate
-  // with ZERO game systems registered — the game never started.
-  const gameBase = `/preview/.forgeax/games/${slug}`;
+  const rootAbs = await getProjectRootAbs();
+  // edit-vite @fs base for this game's on-disk dir (single engine instance).
+  const gameFsBase = `${BASE}/@fs${rootAbs}/.forgeax/games/${slug}`;
   // Resolve entry candidates from forge.json (authoritative), then defaults.
   const candidates: string[] = [];
   cachedDefaultScene = undefined;
@@ -681,14 +699,16 @@ async function resolveGameModuleForPlay(): Promise<unknown> {
   for (const fallback of ['main.ts', 'src/main.ts']) {
     if (!candidates.includes(fallback)) candidates.push(fallback);
   }
-  // Dynamic-import the first candidate that resolves as JS (mirrors play-runtime).
+  // Dynamic-import the first candidate that resolves. edit vite serves .ts via
+  // /editor/@fs and transforms it (200 + module); a missing file 404s or returns
+  // the SPA index.html — the import throws and we try the next candidate.
   for (const rel of candidates) {
-    const url = `${gameBase}/${rel}`;
+    const url = `${gameFsBase}/${rel}`;
     try {
-      const head = await fetch(url, { method: 'HEAD' });
-      const ct = head.headers.get('content-type') ?? '';
-      if (head.ok && ct.includes('javascript')) {
-        return await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
+      const mod = await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
+      // Guard against the SPA-fallback HTML masquerading as a module (no bootstrap).
+      if (mod && typeof (mod as { bootstrap?: unknown }).bootstrap === 'function') {
+        return mod;
       }
     } catch { /* try next candidate */ }
   }
