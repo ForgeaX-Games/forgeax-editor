@@ -8,7 +8,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["bun-types"],
+    "types": ["bun"],
     "noEmit": true,
     "isolatedModules": true,
     "esModuleInterop": true,
@@ -16,5 +16,10 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src"]
+  "include": ["src", "../../types/forgeax-engine-shims.d.ts"],
+  // broken-syntax.ts is an INTENTIONALLY malformed fixture loaded as raw text by
+  // the discoverer test (discoverer.test.ts) to prove error handling — it must
+  // never be typechecked (it would trip TS1005). Everything else under
+  // __tests__/ is typechecked normally.
+  "exclude": ["src/__tests__/fixtures/discoverer/broken-syntax.ts"]
 }

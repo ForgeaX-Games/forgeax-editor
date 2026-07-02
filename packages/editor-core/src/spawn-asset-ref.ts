@@ -11,7 +11,11 @@ import type { AssetChatRef } from './sync-channel';
 function toDragRef(ref: AssetChatRef): DragAssetRef {
   return {
     type: 'asset',
-    guid: ref.guid,
+    // AssetChatRef.guid is optional (folder refs carry none); a spawnable
+    // DragAssetRef requires a string. Only 'asset' refs reach spawn, so guid is
+    // present in practice — default to '' to satisfy the type without changing
+    // the prior (any-typed) runtime flow.
+    guid: ref.guid ?? '',
     kind: ref.kind,
     name: ref.name,
     path: ref.path,

@@ -219,7 +219,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
 
     // D-1: resolve + validate the game entry (same contract as play-runtime).
     const slug = deps.getSlug();
-    const result = await loadGame(slug, async () => deps.resolveGameModule());
+    // resolveGameModule stays `Promise<unknown>` (the editor keeps the game
+    // module opaque); loadGame validates the entry shape at runtime, so the
+    // resolver cast to its GameEntryResolver type is safe.
+    const result = await loadGame(slug, (async () => deps.resolveGameModule()) as Parameters<typeof loadGame>[1]);
     if (!result.ok) {
       if (isLoadGameError(result.error)) {
         console.warn(

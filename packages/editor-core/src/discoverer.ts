@@ -20,6 +20,8 @@ import { getRegisteredComponents, getRegisteredSystems, World } from '@forgeax/e
 import type { SystemHandle } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
+// Re-export so consumers/tests can import the error type from the discoverer barrel.
+export type { DiscoverError } from './discoverer-errors';
 import { and, notEditing } from './run-conditions';
 
 // `World` is imported as a VALUE and used through `InstanceType<typeof World>`

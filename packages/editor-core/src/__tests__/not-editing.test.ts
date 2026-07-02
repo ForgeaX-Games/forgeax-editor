@@ -45,7 +45,7 @@ export const PatrolSystem = defineSystem({
   queries: [{ with: [Position] }],
   labels: [], // No transform/render/animation label → gameplay
   runIf: (_world: World) => true,
-  fn(_world: World, _results: never[], _commands: never) {
+  fn() {
     gameplayExecuted += 1;
   },
 });
@@ -56,7 +56,7 @@ export const TransformDebug = defineSystem({
   name: 'TransformDebug',
   queries: [{ with: [Transform] }],
   labels: ['transform'], // Has transform label → structure (not frozen)
-  fn(_world: World, _results: never[], _commands: never) {
+  fn() {
     structureExecuted += 1;
   },
 });

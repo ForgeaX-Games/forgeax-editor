@@ -47,7 +47,7 @@ function CBKindDropdown({ filter }: { filter: FilterAPI }) {
   const active = filter.filters.filter(f => f.active);
   const triggerLabel =
     active.length === 0 ? 'All Types'
-    : active.length === 1 ? active[0].label
+    : active.length === 1 ? active[0]!.label
     : `${active.length} types`;
 
   return (
@@ -58,8 +58,8 @@ function CBKindDropdown({ filter }: { filter: FilterAPI }) {
         onClick={() => setOpen(o => !o)}
         title="Filter by asset kind"
       >
-        {active.length === 1 && active[0].icon && (
-          <span className="cb-pill-icon">{active[0].icon}</span>
+        {active.length === 1 && active[0]!.icon && (
+          <span className="cb-pill-icon">{active[0]!.icon}</span>
         )}
         <span className="cb-kind-trigger-label">{triggerLabel}</span>
         <span className="cb-kind-caret">▾</span>

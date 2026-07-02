@@ -262,7 +262,9 @@ export function sceneEntities(doc: EditSession, ctx: InstantiateCtx, caches: Sce
     if (rx || ry || rz) {
       const q = quat.create();
       quat.fromEuler(q, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = q[0]; data.quatY = q[1]; data.quatZ = q[2]; data.quatW = q[3];
+      // q is a length-4 Quat (Float32Array); indices 0..3 are always present —
+      // assert past noUncheckedIndexedAccess's `number | undefined`.
+      data.quatX = q[0]!; data.quatY = q[1]!; data.quatZ = q[2]!; data.quatW = q[3]!;
     }
     return data;
   };

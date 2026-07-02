@@ -2,14 +2,14 @@ import { useCallback, useMemo, useState } from 'react';
 import { ASSET_KINDS, type AssetKind, type CBAsset, type CBFilter } from '../types';
 
 const KIND_ICONS: Record<AssetKind, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
+  mesh: '◫', texture: '🖼', image: '🖼', 'cube-texture': '🧊', sampler: '⚙',
   material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
   skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
   'render-pipeline': '🔧', tileset: '🧱',
 };
 
 const KIND_LABELS: Record<AssetKind, string> = {
-  mesh: 'Mesh', texture: 'Texture', 'cube-texture': 'Cube Texture',
+  mesh: 'Mesh', texture: 'Texture', image: 'Image', 'cube-texture': 'Cube Texture',
   sampler: 'Sampler', material: 'Material', scene: 'Scene',
   shader: 'Shader', skeleton: 'Skeleton', skin: 'Skin',
   'animation-clip': 'Animation Clip', audio: 'Audio', font: 'Font',

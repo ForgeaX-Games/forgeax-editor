@@ -375,7 +375,11 @@ if (!app.ok) {
 // Booted cleanly — refill the auto-reload budget for the next reload/scene switch.
 try { sessionStorage.removeItem(CREATE_APP_RETRY_KEY); } catch { /* no storage */ }
 
-const { world, renderer } = app.value;
+// `app` is a Result; the `!app.ok` guard above narrowed it, but that narrowing
+// does not carry into the nested functions below (installFpsReport, VAG handlers).
+// Capture the unwrapped App once so those closures reference a plain value.
+const editorApp = app.value;
+const { world, renderer } = editorApp;
 // Point the asset registry at the pack-index catalog for loadByGuid (Part C):
 //   standalone (__FORGEAX_GAME_DIR_ABS__ set): edit-runtime self-hosts pluginPack
 //     over the injected game dir, served at `${BASE}/pack-index.json` (/editor/).
@@ -718,11 +722,9 @@ async function getProjectRootAbs(): Promise<string> {
   return cachedProjectRootAbs;
 }
 
-// Injected by edit-runtime vite `define` from FORGEAX_GAME_DIR (cli.mjs `--game`).
-// The ABSOLUTE game dir that DIRECTLY contains forge.json — standalone serves one
-// game at an arbitrary dir, no host server. null when embedded in studio (uses the
-// injected `?gameRoot=` under the project root reported by /api/health, below).
-declare const __FORGEAX_GAME_DIR_ABS__: string | null;
+// __FORGEAX_GAME_DIR_ABS__ (vite `define`-injected) is declared ambiently in
+// src/globals.d.ts — the absolute game dir that directly contains forge.json
+// (standalone `--game DIR`), or null when embedded in studio.
 
 // Resolve the edit-vite `@fs` base for the game's on-disk dir. Two injection paths,
 // zero baked layout convention:
@@ -1260,7 +1262,7 @@ void (async () => {
     const sceneHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('SceneAsset', sceneRes.value);
     const inst = assets.instantiate(sceneHandle as never, world as never);
     if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
-    const skinRoot = inst.value as { generation: number; index: number };
+    const skinRoot = inst.value as unknown as { generation: number; index: number };
     // Apply preview placement (pos + scale) on the SceneInstance root.
     const [px, py, pz] = skin.pos ?? [0, 0, 0];
     const s = skin.scale ?? 1;
@@ -1391,7 +1393,7 @@ onVagMessage(window, {
 // ── VAG postMessage bridge (parity with preview-runtime) ──────────────────────
 function installFpsReport(): void {
   let frames = 0, accum = 0;
-  app.value.registerUpdate((dt: number) => {
+  editorApp.registerUpdate((dt: number) => {
     frames++; accum += dt;
     if (accum >= 1) {
       const fps = Math.round(frames / accum);
@@ -1435,7 +1437,9 @@ function installNetworkBridge(): void {
   };
   const origFetch = window.fetch?.bind(window);
   if (origFetch) {
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    // The wrapper covers the call signature; `typeof fetch` also carries a
+    // `.preconnect` static the proxy doesn't need — cast over it.
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const t0 = performance.now();
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
       const method = (init?.method ?? (input instanceof Request ? input.method : 'GET') ?? 'GET').toUpperCase();
@@ -1447,7 +1451,7 @@ function installNetworkBridge(): void {
         send('fetch', method, url, 0, performance.now() - t0, false);
         throw e;
       }
-    };
+    }) as typeof fetch;
   }
   const XHR = window.XMLHttpRequest;
   if (XHR) {
@@ -1555,8 +1559,8 @@ function installPreviewControls(): void {
   onVagMessage(window, {
     allowedOrigins: allowedParentOrigins(),
     handlers: {
-      VAG_PREVIEW_PAUSE: () => app.value.pause(),
-      VAG_PREVIEW_PLAY: () => app.value.resume(),
+      VAG_PREVIEW_PAUSE: () => editorApp.pause(),
+      VAG_PREVIEW_PLAY: () => editorApp.resume(),
       VAG_PREVIEW_RELOAD: () => location.reload(),
 
       // Emitted by the interface shell after a successful auto-import pipeline

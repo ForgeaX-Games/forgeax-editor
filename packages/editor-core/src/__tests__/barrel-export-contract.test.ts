@@ -74,7 +74,7 @@ function walk(dir: string): string[] {
 function parseTypeExportSurface(src: string): Set<string> {
   const names = new Set<string>();
   for (const m of src.matchAll(/export\s+type\s*\{([^}]*)\}/g)) {
-    for (const raw of m[1].split(',')) {
+    for (const raw of m[1]!.split(',')) {
       const id = raw.trim().split(/\s+as\s+/).pop()!.trim();
       if (id) names.add(id);
     }
@@ -94,7 +94,7 @@ function parseBarrelImports(src: string): { values: string[]; types: string[] } 
     /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]@forgeax\/editor-core['"]/g;
   for (const m of src.matchAll(re)) {
     const blockIsType = Boolean(m[1]);
-    for (const raw of m[2].split(',')) {
+    for (const raw of m[2]!.split(',')) {
       let spec = raw.trim();
       if (!spec) continue;
       let isType = blockIsType;
@@ -102,7 +102,7 @@ function parseBarrelImports(src: string): { values: string[]; types: string[] } 
         isType = true;
         spec = spec.slice('type '.length).trim();
       }
-      const name = spec.split(/\s+as\s+/)[0].trim();
+      const name = spec.split(/\s+as\s+/)[0]!.trim();
       if (!name || name.startsWith('//')) continue;
       (isType ? types : values).push(name);
     }

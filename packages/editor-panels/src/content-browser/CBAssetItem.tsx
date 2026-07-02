@@ -78,7 +78,7 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
           <span className="cb-grid-icon">{thumb.icon}</span>
         )}
         {thumb.badge && <span className="cb-thumb-badge">{thumb.badge}</span>}
-        {asset.payload?.cookError && <span className="cb-thumb-warn" title={String(asset.payload.cookError)}>⚠</span>}
+        {Boolean(asset.payload?.cookError) && <span className="cb-thumb-warn" title={String(asset.payload?.cookError)}>⚠</span>}
       </div>
       <div className="cb-grid-label" title={asset.name}>{asset.name}</div>
 

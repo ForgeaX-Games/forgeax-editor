@@ -107,10 +107,16 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
   // name, so we skip the popout header and the panel's own h3 title.
   const chromeless = new URLSearchParams(location.search).has('chromeless');
 
+  // BODY/TITLE are keyed by string; `panel` is a SyncPanelId that may not have a
+  // matching entry (e.g. a panel with no detached body) — narrow past
+  // noUncheckedIndexedAccess and render nothing rather than crash.
+  const renderBody = BODY[panel];
+  const title = TITLE[panel] ?? panel;
+
   if (chromeless) {
     return (
       <div className="ed-overlay ed-popout ep-chromeless" data-testid="editor-panel-embed" data-panel={panel}>
-        <div className="popout-body ep-chromeless-body">{BODY[panel]()}</div>
+        <div className="popout-body ep-chromeless-body">{renderBody?.()}</div>
       </div>
     );
   }
@@ -118,7 +124,7 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
   return (
     <div className="ed-overlay ed-popout" data-testid="editor-popout" data-panel={panel}>
       <div className="popout-head">
-        <span className="ph-title">⠿ {TITLE[panel]}</span>
+        <span className="ph-title">⠿ {title}</span>
         <span className="ph-sp" />
         <button
           type="button"
@@ -129,7 +135,7 @@ export function DetachedPanel({ panel }: { panel: SyncPanelId }): ReactNode {
           ⊟ {t('editor.detachedPanel.redock')}
         </button>
       </div>
-      <div className="popout-body">{BODY[panel]()}</div>
+      <div className="popout-body">{renderBody?.()}</div>
     </div>
   );
 }

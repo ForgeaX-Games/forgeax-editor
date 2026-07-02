@@ -273,7 +273,7 @@ function registerMaterial(world: WorldLike, payload: Record<string, unknown>): u
         baseColor: base as [number, number, number, number],
         roughness: typeof pv.roughness === 'number' ? pv.roughness : 0.8,
         metallic: typeof pv.metallic === 'number' ? pv.metallic : 0,
-        ...(Array.isArray(pv.emissive) ? { emissive: pv.emissive as number[], emissiveIntensity: typeof pv.emissiveIntensity === 'number' ? pv.emissiveIntensity : 1 } : {}),
+        ...(Array.isArray(pv.emissive) ? { emissive: pv.emissive as [number, number, number], emissiveIntensity: typeof pv.emissiveIntensity === 'number' ? pv.emissiveIntensity : 1 } : {}),
       });
   return world.allocSharedRef('MaterialAsset', desc);
 }

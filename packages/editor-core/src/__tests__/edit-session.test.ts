@@ -44,9 +44,9 @@ describe('EditSession — fresh session shape', () => {
     expect(s.asset.kind).toBe('scene');
     expect(s.asset.entities).toEqual([]);
     // A0 red line: the SceneAsset POD must NOT carry editor-only ID fields.
-    expect((s.asset as Record<string, unknown>).nextId).toBeUndefined();
-    expect((s.asset as Record<string, unknown>).nextLocalId).toBeUndefined();
-    expect((s.asset as Record<string, unknown>).order).toBeUndefined();
+    expect((s.asset as unknown as Record<string, unknown>).nextId).toBeUndefined();
+    expect((s.asset as unknown as Record<string, unknown>).nextLocalId).toBeUndefined();
+    expect((s.asset as unknown as Record<string, unknown>).order).toBeUndefined();
   });
 });
 

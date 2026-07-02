@@ -28,6 +28,7 @@ import {
   HANDLE_CUBE,
   meshFromInterleaved,
 } from '@forgeax/engine-runtime';
+import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 import type { EntityId, EditSession } from '@forgeax/editor-core';
 import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
 import type { EngineSync } from './sync';
@@ -215,9 +216,9 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   let fwd: Vec3 = [0, 0, -1], rgt: Vec3 = [1, 0, 0], upv: Vec3 = [0, 1, 0];
 
   const qCam = quat.create(), qY = quat.create(), qP = quat.create();
-  const tmp = new Float32Array(3);
+  const tmp = new Float32Array(3) as EngineVec3;
   const tv = (out: Vec3, src: Vec3): Vec3 => {
-    quat.transformVec3(tmp, qCam, src);
+    quat.transformVec3(tmp, qCam, src as unknown as EngineVec3);
     out[0] = tmp[0]!; out[1] = tmp[1]!; out[2] = tmp[2]!;
     return out;
   };
@@ -505,7 +506,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   function forwardOf(t?: Record<string, number>): Vec3 {
     const q = quat.create();
     quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
-    const o = new Float32Array(3); quat.transformVec3(o, q, [0, 0, -1]);
+    const o = new Float32Array(3) as EngineVec3; quat.transformVec3(o, q, [0, 0, -1] as unknown as EngineVec3);
     return [o[0]!, o[1]!, o[2]!];
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
@@ -581,7 +582,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const rx = g('rotX', 0), ry = g('rotY', 0), rz = g('rotZ', 0);
     if (rx || ry || rz) {
       quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+      data.quatX = qd[0]!; data.quatY = qd[1]!; data.quatZ = qd[2]!; data.quatW = qd[3]!;
     } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
     world.set(wid, Transform, data);
   }
@@ -646,7 +647,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
     if (rx || ry || rz) {
       quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+      data.quatX = qd[0]!; data.quatY = qd[1]!; data.quatZ = qd[2]!; data.quatW = qd[3]!;
     } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
     world.set(dragWorld, Transform, data);
     // Mirror the changed fields into the Inspector live (no command) — the

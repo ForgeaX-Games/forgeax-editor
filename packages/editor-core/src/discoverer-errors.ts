@@ -15,6 +15,8 @@ export interface DiscoverError extends Error {
   readonly expected: string;
   /** Actionable repair hint for humans/AI agents. */
   readonly hint: string;
+  /** Source file (pack-relative) the error came from; set for import failures. */
+  readonly relPath?: string;
 }
 
 /** Error codes produced by the discoverer. */

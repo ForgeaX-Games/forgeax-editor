@@ -17,7 +17,22 @@ import { dirname, posix, relative, resolve } from 'node:path';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry, TextureAsset } from '@forgeax/engine-types';
+import type { ImageMetadata, PackIndexEntry, TextureAsset } from '@forgeax/engine-types';
+
+// The engine retired its `CubeTextureMetadata` type (cube-texture → equirect
+// internalization). This catalog still emits a cube-texture sidecar row for
+// legacy sky.hdr assets; keep the historical metadata shape as a LOCAL type so
+// the emitted JSON is byte-identical to before (it was `any`-typed via the old
+// engine shim). PackIndexEntry.metadata only types ImageMetadata, so the row's
+// metadata is cast at the push below.
+interface CubeTextureMetadata {
+  readonly kind: 'cube-texture';
+  readonly width: number;
+  readonly height: number;
+  readonly format: string;
+  readonly colorSpace: 'srgb' | 'linear';
+  readonly mipLevels: number;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -225,7 +240,10 @@ async function processMetaSidecar(
           const faceSize = meta.importSettings.cubeFaceSize ?? 256;
           cubeMetadata = { kind: 'cube-texture', width: faceSize, height: faceSize, format: 'rgba16float', colorSpace: 'linear', mipLevels: 1 };
         }
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'cube-texture', sourcePath: sourceRel, metadata: cubeMetadata });
+        // metadata is a cube-texture shape (see CubeTextureMetadata above); the
+        // PackIndexEntry.metadata field types only ImageMetadata, so cast to keep
+        // the emitted row identical to the pre-typecheck (any-shim) output.
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'cube-texture', sourcePath: sourceRel, metadata: cubeMetadata as unknown as ImageMetadata });
       }
     }
   }
