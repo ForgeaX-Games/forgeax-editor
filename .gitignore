@@ -41,3 +41,4 @@ playwright-report/
 .env.*
 !.env.example
 .forgeax-debug/
+.worktrees/
