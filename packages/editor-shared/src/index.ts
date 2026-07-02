@@ -108,40 +108,8 @@ export {
 } from '@forgeax/editor-core';
 export type { PathResolver } from '@forgeax/editor-core';
 
-// ── Socket (绑点) editor ──
+// ── Viewport clip transport + view intents (preview animation scrubber) ──
 export {
-  SOCKET_DOC_VERSION,
-  SOCKET_EULER_ORDER,
-  emptySocketDoc,
-  defaultSocket,
-  uniqueSocketId,
-  normalizeScale,
-  targetLenToScale,
-  scaleToTargetLen,
-  findSocket,
-  exportSocketJson,
-  importSocketJson,
-  validateSocketDoc,
-  loadSocketDoc,
-  saveSocketDoc,
-  getSocketDoc,
-  setSocketDoc,
-  getSocketDocVersion,
-  useSocketDocVersion,
-  addSocket,
-  removeSocket,
-  updateSocket,
-  setSkeletonId,
-  getSelectedSocketId,
-  setSelectedSocketId,
-  useSelectedSocketId,
-  getCoordSpace,
-  setCoordSpace,
-  useCoordSpace,
-  getPivot,
-  setPivot,
-  usePivot,
-  onSocketPreview,
   getClipControl,
   getClipControlVersion,
   setClipControl,
@@ -150,13 +118,4 @@ export {
   onViewRequest,
   requestView,
 } from '@forgeax/editor-core';
-export type {
-  SocketAux,
-  SocketDef,
-  SocketDoc,
-  SocketImportResult,
-  SocketCoordSpace,
-  SocketPivot,
-  ClipControl,
-  SocketViewCmd,
-} from '@forgeax/editor-core';
+export type { ClipControl, ViewCmd } from '@forgeax/editor-core';

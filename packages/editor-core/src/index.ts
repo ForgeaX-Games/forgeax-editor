@@ -146,6 +146,7 @@ export type { PackAsset, RawAsset } from './assets';
 // ── Drag-to-scene (Content Browser → viewport spawn) ──
 export { buildSpawnEntityFromDragRef } from './drag-asset-spawn';
 export type { DragAssetRef, SpawnRefEntity } from './drag-asset-spawn';
+export { spawnAssetRefToScene, spawnAssetRefToScene as spawnAssetToScene } from './spawn-asset-ref';
 
 // ── Imported mesh → original per-submesh materials (drag / Add to Scene) ──
 export { resolveMeshOriginalMaterials, _clearMeshMaterialCache } from './mesh-original-materials';
@@ -153,6 +154,7 @@ export type { MeshMaterialResolveDeps, MeshAssetRef } from './mesh-original-mate
 
 // ── glTF import cook (frontend SSOT reuse — engine toAssetPack) ──
 export { cookGltfMeta } from './gltf-cook';
+export { cookFbxMeta, type FbxCookResult } from './fbx-cook';
 export type { GltfCookResult } from './gltf-cook';
 
 // ── Pack CRUD (M2) ──
@@ -335,49 +337,8 @@ export type { EditModeState } from './edit-mode';
 // same gate the discoverer uses (verify V-3 affordances finding).
 export { notEditing, and } from './run-conditions';
 export type { RunCondition } from './run-conditions';
-// ── Socket (绑点) editor ──
+// ── Viewport clip transport + view intents (preview animation scrubber) ──
 export {
-  SOCKET_DOC_VERSION,
-  SOCKET_EULER_ORDER,
-  SocketAuxSchema,
-  SocketDefSchema,
-  SocketDocSchema,
-  emptySocketDoc,
-  defaultSocket,
-  uniqueSocketId,
-  normalizeScale,
-  targetLenToScale,
-  scaleToTargetLen,
-  findSocket,
-} from './socket';
-export type { SocketAux, SocketDef, SocketDoc } from './socket';
-export {
-  exportSocketJson,
-  importSocketJson,
-  validateSocketDoc,
-  loadSocketDoc,
-  saveSocketDoc,
-} from './socket-io';
-export type { SocketImportResult } from './socket-io';
-export {
-  getSocketDoc,
-  setSocketDoc,
-  getSocketDocVersion,
-  useSocketDocVersion,
-  addSocket,
-  removeSocket,
-  updateSocket,
-  setSkeletonId,
-  getSelectedSocketId,
-  setSelectedSocketId,
-  useSelectedSocketId,
-  getCoordSpace,
-  setCoordSpace,
-  useCoordSpace,
-  getPivot,
-  setPivot,
-  usePivot,
-  onSocketPreview,
   getClipControl,
   getClipControlVersion,
   setClipControl,
@@ -387,5 +348,5 @@ export {
   onViewRequest,
   requestView,
   setViewRequestForwarder,
-} from './socket-store';
-export type { SocketCoordSpace, SocketPivot, ClipControl, SocketViewCmd } from './socket-store';
+} from './clip-control';
+export type { ClipControl, ViewCmd } from './clip-control';

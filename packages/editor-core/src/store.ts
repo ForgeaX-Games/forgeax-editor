@@ -17,12 +17,13 @@ import {
   type AssetChatRef,
   type MeshStatsWire,
 } from './sync-channel';
-import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './socket-store';
+import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './clip-control';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { getApiClient } from './api-client';
 import { findScenePackByGuid } from './assets';
 import { fetchWithTimeout } from './net';
 import { resolveGamePath } from './path-resolver';
+import { spawnAssetRefToScene } from './spawn-asset-ref';
 
 // App-level singletons. The bus is the authoritative mutable path; selection is
 // transient view state (NOT a command) — but selecting is exactly what turns a
@@ -398,12 +399,13 @@ export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
  *  spawn entity (split sub-asset) or runs import-scene (whole GLB). A popped-out
  *  panel forwards via the sync channel to the main window first. */
 export function requestAddAssetToScene(ref: AssetChatRef): void {
-  if (IS_POPOUT) { postSync({ t: 'addAssetToScene', ref }); return; }
-  try {
-    window.parent?.postMessage({ type: 'FORGEAX_ADD_ASSET_TO_SCENE', ref }, '*');
-  } catch {
-    /* cross-origin — non-fatal */
+  if (IS_POPOUT) {
+    console.info('[CB:import] addAssetToScene.viaSync', { kind: ref.kind, guid: ref.guid, name: ref.name });
+    postSync({ t: 'addAssetToScene', ref });
+    return;
   }
+  console.info('[CB:import] addAssetToScene.direct', { kind: ref.kind, guid: ref.guid, name: ref.name });
+  void spawnAssetRefToScene(ref);
 }
 
 // Re-render hook: bumps a version on every bus change so panels re-read doc.
@@ -1191,7 +1193,10 @@ function mainOnMessage(ev: MessageEvent): void {
     case 'refEntity': requestRefEntity(msg.id); break;
     case 'refAsset': requestRefAsset(msg.asset); break;
     case 'addAssetToChat': requestAddAssetsToChat(msg.refs); break;
-    case 'addAssetToScene': requestAddAssetToScene(msg.ref); break;
+    case 'addAssetToScene':
+      console.info('[CB:import] addAssetToScene.mainReceived', { kind: msg.ref.kind, guid: msg.ref.guid });
+      void spawnAssetRefToScene(msg.ref);
+      break;
     case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
     case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
       case 'openScene': void switchSceneFile(msg.id); break;

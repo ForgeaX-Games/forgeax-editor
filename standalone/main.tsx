@@ -48,9 +48,10 @@
 // Refs: implement-review §R2-2 (R2 plain-DOM display:none rejected),
 //       §R2-3 (D-4 / D-10 / RL-3 architecture restored).
 
-import { StrictMode } from 'react';
+import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DockShell } from '@forgeax/interface/components/DockShell/DockShell';
+import { ContextMenu } from '@forgeax/interface/components/ContextMenu/ContextMenu';
 import {
   PanelRenderersProvider,
   DEFAULT_PANEL_RENDERERS,
@@ -59,6 +60,8 @@ import { SurfaceKeepAliveLayer } from '@forgeax/interface/components/Surfaces/Su
 import { useAppStore } from '@forgeax/interface/store';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import '@forgeax/interface/styles/global.css';
+import './standalone-chrome.css';
+import './standalone-menu.css';
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
 // null when the stack was started without `cli.mjs run --game <dir>` — in that
@@ -103,6 +106,29 @@ const standaloneRenderers = {
 };
 
 function StandaloneShell() {
+  // Content Browser (ep:assets iframe) posts FORGEAX_ADD_ASSET_TO_SCENE to this
+  // shell window. Studio mounts EditSurface here to handle it; standalone has no
+  // EditSurface — forward into the edit-runtime viewport iframe instead.
+  useEffect(() => {
+    const forwardToEditViewport = (data: unknown) => {
+      const iframe = document.querySelector<HTMLIFrameElement>('iframe[title="Edit"]');
+      iframe?.contentWindow?.postMessage(data, '*');
+    };
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data as { type?: string } | null;
+      if (!d?.type) return;
+      if (
+        d.type === 'FORGEAX_ADD_ASSET_TO_SCENE'
+        || d.type === 'FORGEAX_DRAG_ASSET_START'
+        || d.type === 'FORGEAX_DRAG_ASSET_END'
+      ) {
+        forwardToEditViewport(d);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   // DockShell's root (.fx-dockwrap) is `flex: 1 1 auto` — it needs a flex
   // parent with a definite height, exactly as studio's .studio-shell/.studio-
   // body chain provides. Without `display:flex` here the dock collapses to 0
@@ -122,6 +148,10 @@ function StandaloneShell() {
             that anchor's rect. Without it the Edit panel stays black. Mirrors
             interface App.tsx (DockShell + SurfaceKeepAliveLayer siblings). */}
         <SurfaceKeepAliveLayer />
+        {/* Editor ep:* iframes post VAG_CONTEXT_MENU here — without this host,
+            Assets/Hierarchy right-click menus are swallowed (preventDefault in
+            the panel) but never painted. Mirrors interface App.tsx. */}
+        <ContextMenu />
       </PanelRenderersProvider>
     </div>
   );

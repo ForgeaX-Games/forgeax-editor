@@ -1,9 +1,9 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
 import { generateAssetGuid, addAssetToPack, createPack, createDirectory } from '@forgeax/editor-core';
 import { ASSET_KINDS, type AssetKind } from './types';
 import { importFiles, type ImportProgress } from './import-pipeline';
-import { buildAcceptString } from './import-registry';
+import { buildAcceptString, logImport } from './import-registry';
 
 interface Props {
   currentPath: string;
@@ -27,8 +27,20 @@ const EMPTY_PAYLOADS: Partial<Record<AssetKind, () => Record<string, unknown>>> 
 export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const acceptString = buildAcceptString();
 
   const basePath = resolveGamePath(currentPath || 'assets');
+
+  useEffect(() => {
+    const input = fileInputRef.current;
+    logImport('CBToolbar.mount', {
+      currentPath,
+      basePath,
+      accept: acceptString,
+      hasFbx: acceptString.includes('.fbx'),
+      acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
+    });
+  }, [acceptString, basePath, currentPath]);
 
   const handleCreateAsset = useCallback(async (kind: AssetKind) => {
     setAddMenuOpen(false);
@@ -59,12 +71,30 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   }, [basePath, onReload]);
 
   const handleImport = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
+    const input = fileInputRef.current;
+    logImport('CBToolbar.import.click', {
+      currentPath,
+      basePath,
+      accept: acceptString,
+      hasFbx: acceptString.includes('.fbx'),
+      acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
+    });
+    input?.click();
+  }, [acceptString, basePath, currentPath]);
 
   const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0) {
+      logImport('CBToolbar.import.cancel', { reason: 'no files selected' });
+      return;
+    }
+
+    logImport('CBToolbar.import.selected', {
+      count: files.length,
+      names: Array.from(files).map(f => f.name),
+      currentPath,
+      basePath,
+    });
 
     onImportProgress?.({ total: files.length, completed: 0, current: '', results: [] });
 
@@ -74,6 +104,10 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
       (progress) => onImportProgress?.(progress),
       onReload,
     );
+
+    logImport('CBToolbar.import.done', {
+      results: results.map(r => ({ filename: r.filename, status: r.status, error: r.error })),
+    });
 
     const errors = results.filter(r => r.status === 'error');
     if (errors.length > 0) {
@@ -117,7 +151,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
           ref={fileInputRef}
           type="file"
           multiple
-          accept={buildAcceptString()}
+          accept={acceptString}
           style={{ display: 'none' }}
           onChange={e => void handleFileSelected(e)}
         />

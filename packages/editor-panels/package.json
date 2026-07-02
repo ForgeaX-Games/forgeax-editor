@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "fbx-cook": "workspace:*",
     "@forgeax/editor-shared": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",

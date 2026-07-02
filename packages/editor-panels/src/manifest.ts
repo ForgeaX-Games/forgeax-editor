@@ -22,7 +22,6 @@ import { MaterialGraphPanel } from './MaterialGraph';
 import { TimelinePanel } from './Timeline';
 import { LauncherPanel } from './Launcher';
 import { AssetInspectorPanel } from './AssetInspector';
-import { SocketEditorPanel } from './socket-editor';
 
 export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   hierarchy: HierarchyPanel,
@@ -36,5 +35,4 @@ export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   matgraph: MaterialGraphPanel,
   launcher: LauncherPanel,
   'asset-inspector': AssetInspectorPanel,
-  'socket-editor': SocketEditorPanel,
 };

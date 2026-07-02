@@ -86,6 +86,7 @@ export function buildAssetContextMenu(
     // ── Scene ──
     { id: 'add-to-scene', label: 'Add to Scene', action: () => {
       const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload };
+      console.info('[CB:import] Add to Scene', { kind: ref.kind, guid: ref.guid, name: ref.name, path: ref.path });
       requestAddAssetToScene(ref);
     }},
     { id: 'assign', label: 'Assign to Selected Entity', action: () => {

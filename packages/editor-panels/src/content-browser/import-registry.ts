@@ -3,7 +3,7 @@
  * and default import settings (aligned with meta.schema.json).
  */
 
-export type ImporterKey = 'image' | 'gltf' | 'audio' | 'font' | 'pack';
+export type ImporterKey = 'image' | 'gltf' | 'fbx' | 'audio' | 'font' | 'pack';
 
 /** Sub-asset kind enum from meta.schema.json subAsset.kind. */
 export type SubAssetKind =
@@ -37,8 +37,15 @@ export const IMPORT_FORMATS: ImportFormat[] = [
   },
   {
     extensions: ['.glb', '.gltf'],
-    label: '3D Model',
+    label: '3D Model (GLB/glTF)',
     importer: 'gltf',
+    subAssetKind: 'scene',
+    defaultSettings: {},
+  },
+  {
+    extensions: ['.fbx'],
+    label: '3D Model (FBX)',
+    importer: 'fbx',
     subAssetKind: 'scene',
     defaultSettings: {},
   },
@@ -73,9 +80,29 @@ export function buildAcceptString(): string {
   return IMPORT_FORMATS.flatMap(f => f.extensions).join(',');
 }
 
+/** Diagnostic snapshot — kept exported for HMR/stale-chunk compatibility. */
+export function getImportRegistrySnapshot() {
+  const extensions = IMPORT_FORMATS.flatMap(f => f.extensions);
+  const accept = buildAcceptString();
+  return {
+    moduleUrl: import.meta.url,
+    formatCount: IMPORT_FORMATS.length,
+    importers: IMPORT_FORMATS.map(f => f.importer),
+    extensions,
+    accept,
+    hasFbx: extensions.includes('.fbx'),
+  };
+}
+
 /** Check if a filename has a recognized importable extension. */
 export function isImportable(filename: string): boolean {
   const dot = filename.lastIndexOf('.');
   if (dot < 0) return false;
   return extMap.has(filename.slice(dot).toLowerCase());
+}
+
+/** Dev tracing — filter console: CB:import */
+export function logImport(step: string, data?: Record<string, unknown>): void {
+  const href = typeof location !== 'undefined' ? location.href : undefined;
+  console.info('[CB:import]', step, { ...data, href });
 }

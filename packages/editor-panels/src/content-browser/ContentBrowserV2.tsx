@@ -16,7 +16,7 @@ import { CBColumn } from './CBColumn';
 import { CBStatusBar } from './CBStatusBar';
 import { CBToolbar } from './CBToolbar';
 import { importFiles, type ImportProgress } from './import-pipeline';
-import { isImportable } from './import-registry';
+import { isImportable, buildAcceptString, logImport } from './import-registry';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
@@ -80,6 +80,11 @@ export function ContentBrowserV2() {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+
+  useEffect(() => {
+    const accept = buildAcceptString();
+    logImport('ContentBrowserV2.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
+  }, [gameSlug]);
 
   useEffect(() => {
     const handler = (e: MessageEvent) => {
@@ -161,12 +166,16 @@ export function ContentBrowserV2() {
   }), [reload]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, asset: CBAsset) => {
+    e.preventDefault();
+    e.stopPropagation();
     const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
-    showContextMenu(e, menuItems.filter(m => !m.separator).map(m => ({
+    const items = menuItems.filter(m => !m.separator).map(m => ({
       label: m.label,
       onClick: m.action,
       disabled: m.disabled,
-    })));
+    }));
+    if (items.length === 0) return;
+    showContextMenu(e, items);
   }, [multiSelect.selection, allAssets, crudCallbacks]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
@@ -225,7 +234,13 @@ export function ContentBrowserV2() {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => isImportable(f.name));
+    const all = Array.from(e.dataTransfer.files);
+    const files = all.filter(f => isImportable(f.name));
+    logImport('ContentBrowserV2.drop', {
+      allNames: all.map(f => f.name),
+      importableNames: files.map(f => f.name),
+      currentPath: nav.currentPath,
+    });
     if (files.length === 0 || !gameSlug || gameSlug === 'default') return;
     void importFiles(
       files,

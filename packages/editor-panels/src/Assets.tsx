@@ -2,7 +2,13 @@ import { Component, Suspense, lazy } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 
 const ContentBrowserV2 = lazy(() =>
-  import('./content-browser/ContentBrowserV2').then(m => ({ default: m.ContentBrowserV2 }))
+  import('./content-browser/ContentBrowserV2').then(m => {
+    console.info('[CB:import]', 'AssetsPanel.lazyLoad', {
+      moduleUrl: import.meta.url,
+      href: typeof location !== 'undefined' ? location.href : undefined,
+    });
+    return { default: m.ContentBrowserV2 };
+  })
 );
 
 class CBErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {

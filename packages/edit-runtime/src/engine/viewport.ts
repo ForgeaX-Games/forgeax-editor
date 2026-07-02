@@ -823,7 +823,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
 
   /** Re-aim to the default character framing: target chest-height, ~4.5m back,
-   *  slight downward tilt — matches the socket-editor preview which grounds the
+   *  slight downward tilt — matches the recenter view intent which grounds the
    *  character at the origin (~1.9m tall). */
   function resetCamera(): void {
     target = [0, 1, 0];

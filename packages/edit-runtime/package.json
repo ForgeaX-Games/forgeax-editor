@@ -61,7 +61,8 @@
     "@tanstack/virtual-core": "^3.17.1",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "scheduler": "^0.27.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

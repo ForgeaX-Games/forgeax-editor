@@ -25,7 +25,7 @@ import type { EditorCommand, EntityId, EditSession } from './types';
 // major editor feature work), and the runtime cost of a second source
 // for an 8-element const array is negligible.
 
-/** The 12 dockable business panels of the forgeax editor. */
+/** The dockable business panels of the forgeax editor. */
 const EDITOR_PANELS = [
   'hierarchy',
   'inspector',
@@ -39,7 +39,6 @@ const EDITOR_PANELS = [
   'launcher',
   'asset-inspector',
   'systems',
-  'socket-editor',
 ] as const;
 
 /** Union type of all editor panel IDs. */
@@ -109,12 +108,12 @@ export type EditorSyncMsg =
   | { t: 'addAssetToChat'; refs: AssetChatRef[] }
   // panel → main: add an asset to the Scene viewport (context-menu Add to Scene, D-6)
   | { t: 'addAssetToScene'; ref: AssetChatRef }
-  // socket-editor panel → main: drive the preview AnimationPlayer (绑点 clip
-  // scrubber, 开发文档 §9). `phase` is normalized 0..1 (main maps to seconds via
-  // the loaded clip duration); `applyPhase` distinguishes a scrub-seek from a
-  // pause/speed-only change so freezing in place never jumps the pose to 0.
+  // viewport clip scrubber → main: drive the preview AnimationPlayer. `phase` is
+  // normalized 0..1 (main maps to seconds via the loaded clip duration);
+  // `applyPhase` distinguishes a scrub-seek from a pause/speed-only change so
+  // freezing in place never jumps the pose to 0.
   | { t: 'clipCtl'; paused: boolean; speed: number; phase: number; applyPhase: boolean }
-  // socket-editor panel → main: one-shot viewport intents (需求 §4.1).
+  // viewport clip scrubber → main: one-shot viewport intents.
   //   'resetCamera' re-aims the orbit camera to the default character framing;
   //   'recenter' normalizes the preview character (scale-to-height + center XZ +
   //   ground Y) so it stands at the origin regardless of the source rig's offset.

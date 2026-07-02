@@ -9,9 +9,9 @@
  *   4. Notify listeners (broadcastAssetsChanged)
  */
 
-import { cookGltfMeta, generateAssetGuid, getApiClient } from '@forgeax/editor-core';
+import { cookFbxMeta, cookGltfMeta, generateAssetGuid, getApiClient } from '@forgeax/editor-core';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-shared';
-import { getImportFormat, isImportable, type ImportFormat } from './import-registry';
+import { getImportFormat, isImportable, logImport, type ImportFormat } from './import-registry';
 
 export type ImportFileStatus = 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'error';
 
@@ -129,6 +129,22 @@ async function processGltf(file: File, destPath: string): Promise<{ ok: boolean;
   return wrote ? { ok: true } : { ok: false, error: 'Failed to write .meta.json sidecar' };
 }
 
+/** Cook an FBX into a canonical meta.json on the frontend (ufbx WASM) and write it. */
+async function processFbx(file: File, destPath: string): Promise<{ ok: boolean; error?: string }> {
+  logImport('pipeline.processFbx.start', { destPath, size: file.size });
+  const metaPath = `${destPath}.meta.json`;
+  const sourceName = destPath.slice(destPath.lastIndexOf('/') + 1);
+  const existing = await readExistingMeta(metaPath);
+  const cooked = await cookFbxMeta(await file.arrayBuffer(), sourceName, existing);
+  if (!cooked.ok || !cooked.metaJson) {
+    logImport('pipeline.processFbx.fail', { destPath, error: cooked.error ?? 'FBX cook failed' });
+    return { ok: false, error: cooked.error ?? 'FBX cook failed' };
+  }
+  const wrote = await writeMetaContent(metaPath, cooked.metaJson);
+  logImport('pipeline.processFbx.done', { destPath, wrote, subAssets: cooked.summary?.total });
+  return wrote ? { ok: true } : { ok: false, error: 'Failed to write .fbx.meta.json sidecar' };
+}
+
 /**
  * Import a single file into the game's asset directory.
  *
@@ -140,6 +156,13 @@ export async function importSingleFile(
 ): Promise<ImportFileResult> {
   const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
   const format = getImportFormat(ext);
+
+  logImport('pipeline.importSingleFile', {
+    filename: file.name,
+    ext,
+    importer: format?.importer ?? null,
+    currentPath,
+  });
 
   if (!format) {
     return { filename: file.name, status: 'error', error: `Unsupported format: ${ext}` };
@@ -164,6 +187,15 @@ export async function importSingleFile(
       const result = await processGltf(file, destPath);
       if (!result.ok) {
         return { filename: file.name, status: 'error', error: result.error ?? 'glTF import failed' };
+      }
+      return { filename: file.name, status: 'done', guid };
+    }
+
+    if (format.importer === 'fbx') {
+      // FBX: browser-side ufbx WASM cook → same external-asset-package meta shape.
+      const result = await processFbx(file, destPath);
+      if (!result.ok) {
+        return { filename: file.name, status: 'error', error: result.error ?? 'FBX import failed' };
       }
       return { filename: file.name, status: 'done', guid };
     }
@@ -203,8 +235,25 @@ export async function importFiles(
   onProgress?: ImportProgressCallback,
   onReload?: () => void,
 ): Promise<ImportFileResult[]> {
+  logImport('pipeline.importFiles.start', {
+    total: files.length,
+    names: files.map(f => f.name),
+    currentPath,
+  });
+
   const importable = files.filter(f => isImportable(f.name));
-  if (importable.length === 0) return [];
+  if (importable.length === 0) {
+    logImport('pipeline.importFiles.skip', {
+      reason: 'no importable files',
+      rejected: files.map(f => f.name),
+    });
+    return [];
+  }
+
+  logImport('pipeline.importFiles.accepted', {
+    count: importable.length,
+    names: importable.map(f => f.name),
+  });
 
   const results: ImportFileResult[] = [];
   const progress: ImportProgress = {

@@ -26,7 +26,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, createDefaultApiClient, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -119,9 +119,9 @@ type ImportStep = 'uploading' | 'processing' | 'importing' | 'done' | 'error' | 
 const IMPORT_FORMATS = [
   {
     label: '3D Model',
-    desc: '.glb  .gltf',
-    hint: 'GLB / GLTF 2.0 · mesh + material + animation + skeleton',
-    accept: '.glb,.gltf',
+    desc: '.glb  .gltf  .fbx',
+    hint: 'GLB / GLTF 2.0 / FBX · mesh + material + animation + skeleton',
+    accept: '.glb,.gltf,.fbx',
   },
   {
     label: 'Image Texture',
@@ -206,10 +206,8 @@ function singleMeshGuidFromMeta(metaText: string): string | null {
 
 async function resolveSingleMeshSceneRef(ref: DragAssetRef, serverBase: string): Promise<DragAssetRef | null> {
   const metaPath = ref.path;
-  // Only the canonical `*.glb.meta.json` sidecar carries the sub-asset table
-  // (same constraint as resolveMeshOriginalMaterials — .gltf w/ external
-  // resources is unsupported in-browser and falls back to the GltfRef path).
-  if (typeof metaPath !== 'string' || !/\.glb\.meta\.json$/i.test(metaPath)) return null;
+  // Only the canonical `*.meta.json` sidecar carries the sub-asset table.
+  if (typeof metaPath !== 'string' || !/\.meta\.json$/i.test(metaPath)) return null;
   try {
     const r = await createDefaultApiClient(serverBase).fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
     if (!r.ok) return null;
@@ -473,6 +471,46 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
     }
   }, [slug, base, spawnMeshOrAssetRef]);
 
+  // FBX import: browser-side ufbx WASM cook → meta.json (no mode dialog; whole asset).
+  const runFbxImport = useCallback(async (dest: string, baseName: string, file: File) => {
+    if (!slug) return;
+    try {
+      setImportStep('processing');
+      setImportMsg(baseName);
+      const api = createDefaultApiClient(base);
+      const metaPath = `${dest}.meta.json`;
+      let existing: unknown;
+      try {
+        const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        if (r.ok) existing = JSON.parse(await r.text());
+      } catch { /* first import */ }
+      const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
+      const cooked = await cookFbxMeta(await file.arrayBuffer(), sourceName, existing);
+      if (!cooked.ok || !cooked.metaJson) {
+        setImportStep('error');
+        setImportMsg(cooked.error ?? 'FBX processing failed');
+        return;
+      }
+      const wrote = await api.fetch('/api/files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
+      });
+      if (!wrote.ok) {
+        setImportStep('error');
+        setImportMsg('Failed to write .fbx.meta.json');
+        return;
+      }
+      sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+      setImportStep('done');
+      setImportMsg(`${baseName} (${cooked.summary?.total ?? 0} sub-assets)`);
+      setTimeout(() => setImportStep(null), 4000);
+    } catch (err) {
+      setImportStep('error');
+      setImportMsg((err as Error).message ?? String(err));
+    }
+  }, [slug, base]);
+
   const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.currentTarget.files?.[0];
     e.currentTarget.value = '';
@@ -484,8 +522,10 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       setImportMsg('no gameRoot injected — host must supply the game layout');
       return;
     }
-    const isModel = /\.(glb|gltf)$/i.test(file.name);
-    const baseName = file.name.replace(/\.(glb|gltf)$/i, '');
+    const isGlb = /\.(glb|gltf)$/i.test(file.name);
+    const isFbx = /\.fbx$/i.test(file.name);
+    const isModel = isGlb || isFbx;
+    const baseName = file.name.replace(/\.(glb|gltf|fbx)$/i, '');
 
     try {
       setImportStep('uploading');
@@ -494,6 +534,11 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       if (!res.ok || !res.dest) {
         setImportStep('error');
         setImportMsg(res.error ?? 'Upload failed');
+        return;
+      }
+
+      if (isFbx) {
+        await runFbxImport(res.dest, baseName, file);
         return;
       }
 
@@ -513,7 +558,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
     }
-  }, [slug, gameRoot, base]);
+  }, [slug, gameRoot, base, runFbxImport]);
 
   // ── Asset drag-to-scene (D-4/D-5) ───────────────────────────────────────────
   // Spawn a whole-GLB asset (mode A) as a single GltfRef instance. Forcing
@@ -578,8 +623,16 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
         ? metaPath.replace(/\.meta\.json$/i, '')
         : ((ref.payload?.source as string | undefined) ?? metaPath);
       const name = ref.name ?? 'GLB';
-      if (typeof src === 'string' && /\.(glb|gltf)$/i.test(src)) void spawnSceneFromGlb(src, name);
-      else console.warn('[editor] scene asset has no resolvable GLB source — cannot spawn:', metaPath);
+      if (typeof src === 'string' && /\.(glb|gltf|fbx)$/i.test(src)) {
+        if (/\.fbx$/i.test(src)) {
+          const meshRef = await resolveSingleMeshSceneRef(ref, base);
+          if (meshRef) { await spawnMeshOrAssetRef(meshRef); return; }
+          console.warn('[editor] FBX scene spawn needs Phase 2.5 DDC — try Add to Scene on a mesh sub-asset:', metaPath);
+          return;
+        }
+        void spawnSceneFromGlb(src, name);
+      }
+      else console.warn('[editor] scene asset has no resolvable source — cannot spawn:', metaPath);
       return;
     }
     await spawnMeshOrAssetRef(ref);
