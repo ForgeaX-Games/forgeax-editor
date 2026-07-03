@@ -38,7 +38,7 @@ import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax
 // M7-a (AC-15): doc.entities mirror deleted — enumerate/read entities via world helpers.
 import { entIds, entComponent } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, getLoadedSceneRoot, rebindLoadedScene, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
-import { openProject, createFetchReader, resolveGamePath, getApiClient, injectEditMode } from '@forgeax/editor-core';
+import { resolveGamePath, getApiClient, injectEditMode } from '@forgeax/editor-core';
 import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
@@ -514,28 +514,6 @@ function collectWorldEntityHandles(w: typeof world): Set<number> {
 	  setViewportQuadrant({ run: 'edit', display: 'scene' });
 	};
 
-  // ── openProject proof-of-life (M3 w15): call openProject with fetch reader ──
-  // This call path is an ADDITION (does not replace the existing EditSession
-  // flow). It proves the openProject contract works end-to-end; both paths now
-  // project through SceneAsset (M6). The result world is exposed on the window
-  // object for manual verification (AC-06 human part).
-  if (sceneSlug && sceneSlug !== 'default') {
-    openProject(sceneSlug, createFetchReader()).then((projectResult) => {
-      if (projectResult.sceneRoot !== null) {
-        // NOTE: do NOT bind defaultSceneRoot here — openProject instantiates into
-        // its OWN throwaway World, so its sceneRoot is meaningless in the live
-        // editor world that ▶ Play snapshots. defaultSceneRoot is bound from
-        // getLoadedSceneRoot() (the live-world load) above. This call stays as a
-        // proof-of-life for the openProject contract (result exposed on window).
-        console.log(`[editor] openProject: scene instantiated (${projectResult.world.inspect().entityCount} entities, root=${projectResult.sceneRoot})`);
-      } else {
-        console.log('[editor] openProject: no defaultScene, graceful skip');
-      }
-      (window as unknown as Record<string, unknown>).__forgeax_project = projectResult;
-    }).catch((err: unknown) => {
-      console.warn('[editor] openProject failed:', err);
-    });
-  }
 void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
   if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
 });
