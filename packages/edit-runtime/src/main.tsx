@@ -736,12 +736,21 @@ async function getProjectRootAbs(): Promise<string> {
 // instance (see the /preview-vs-@fs note above) so assets.instantiate's name
 // registry matches the game's defineComponent.
 async function resolveGameFsBase(): Promise<string> {
+  // Vite's @fs expects `/@fs/<absolute-path>`. On POSIX the absolute path
+  // starts with `/`, so `@fs${abs}` naturally produces `@fs/path`. On Windows
+  // the path starts with a drive letter (`E:\…`), so we must insert the `/`
+  // separator explicitly and normalise backslashes to forward slashes.
+  const toFsUrl = (abs: string) => {
+    const norm = abs.replace(/\\/g, '/');
+    return `${BASE}/@fs${norm.startsWith('/') ? '' : '/'}${norm}`;
+  };
   if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
-    return `${BASE}/@fs${__FORGEAX_GAME_DIR_ABS__}`;
+    return toFsUrl(__FORGEAX_GAME_DIR_ABS__);
   }
   const rootAbs = await getProjectRootAbs();
   const gameRoot = new URLSearchParams(location.search).get('gameRoot') ?? '';
-  return gameRoot ? `${BASE}/@fs${rootAbs}/${gameRoot}` : `${BASE}/@fs${rootAbs}`;
+  const fsBase = toFsUrl(rootAbs);
+  return gameRoot ? `${fsBase}/${gameRoot}` : fsBase;
 }
 
 async function resolveGameModuleForPlay(): Promise<unknown> {
