@@ -42,3 +42,6 @@ playwright-report/
 !.env.example
 .forgeax-debug/
 .worktrees/
+
+# local scratch games for manual editor testing (not tracked)
+.forgeax-scratch/
