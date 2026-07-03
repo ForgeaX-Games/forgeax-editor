@@ -9,8 +9,6 @@ import {
   CapabilitiesPanel,
   MaterialPanel,
   MeshPanel,
-  TimelinePanel,
-  MaterialGraphPanel,
   LauncherPanel,
   AssetInspectorPanel,
 } from '@forgeax/editor-panels';
@@ -35,8 +33,6 @@ const TITLE: Record<string, string> = {
   capabilities: 'Capabilities',
   material: 'Material',
   mesh: 'Mesh',
-  timeline: 'Timeline',
-  matgraph: 'Mat Graph',
   launcher: 'Launcher',
   'asset-inspector': 'Asset Inspector',
   systems: 'Systems',
@@ -50,8 +46,6 @@ const BODY: Record<string, () => ReactNode> = {
   material: () => <MaterialPanel />,
   mesh: () => <MeshPanel />,
   launcher: () => <LauncherPanel />,
-  timeline: () => <TimelinePanel />,
-  matgraph: () => <MaterialGraphPanel />,
   'asset-inspector': () => <AssetInspectorPanel />,
   systems: () => <SystemsPanel world={null} sceneId={getSceneId() ?? 'default'} />,
 };

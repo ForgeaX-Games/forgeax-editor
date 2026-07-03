@@ -1,10 +1,20 @@
 import { useSyncExternalStore } from 'react';
-import { sessionToPack, packToSession, isScenePack, stableGuid } from './scene-pack';
+import { isScenePack, stableGuid } from './scene-pack';
+// M5: import engine-native serialize APIs for worldToPack (replaces sessionToPack)
+import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
+// M4: packToSession removed — scene-load now uses engine-native world.instantiateScene.
 import { EditorBus } from './bus';
 import type { CommandOrigin, HistoryStep } from './bus';
 import { createEditSession } from './document';
-import { makeEditSession } from './edit-session';
 import type { EditorCommand, EntityId, EditSession } from './types';
+import {
+  entExists,
+  entName,
+  entLegacyId,
+  entComponents,
+  entPopulate,
+  entRootHandles,
+} from './entity-state';
 import {
   getPopoutPanel,
   openSyncChannel,
@@ -16,7 +26,12 @@ import {
   type SyncPanelId,
   type AssetChatRef,
   type MeshStatsWire,
+  type WorldEntityState,
+  type WorldState,
 } from './sync-channel';
+import { Name, Transform, ChildOf, Children } from '@forgeax/engine-runtime';
+import type { EntityHandle } from './scene-types';
+import { EditorHidden } from './components/EditorHidden';
 import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './clip-control';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
 import { getApiClient } from './api-client';
@@ -309,26 +324,6 @@ export function useFieldPreview(): { id: EntityId; key: string; value: number } 
   );
 }
 
-// Animation scrub-preview signal: the Timeline publishes a sampled clip (channel→
-// value) for an entity while scrubbing/playing; the viewport applies it to that
-// entity's world Transform live (no doc churn) and resyncs from the doc when it
-// clears. Main-window only (the viewport lives there); a popped-out Timeline still
-// authors keys via the bus, it just can't drive the main viewport's live preview.
-let animPreview: { id: EntityId; values: Record<string, number> } | null = null;
-const animPreviewListeners = new Set<() => void>();
-export function setAnimPreview(id: EntityId | null, values?: Record<string, number>): void {
-  if (id === null) { if (!animPreview) return; animPreview = null; }
-  else animPreview = { id, values: values ?? {} };
-  for (const fn of animPreviewListeners) fn();
-}
-export function getAnimPreview(): { id: EntityId; values: Record<string, number> } | null {
-  return animPreview;
-}
-export function onAnimPreview(fn: () => void): () => void {
-  animPreviewListeners.add(fn);
-  return () => animPreviewListeners.delete(fn);
-}
-
 // Reference-request signal: "pin entity N into the ForgeaX chat context". The
 // chat panel lives in the parent interface shell (we are an iframe), so we post
 // a deixis handle up via the VAG postMessage channel rather than owning ref
@@ -337,14 +332,14 @@ export function requestRefEntity(id: EntityId): void {
   // From a popout, route to the main editor window — only IT is an iframe whose
   // parent is the interface shell that owns the ForgeaX chat.
   if (IS_POPOUT) { postSync({ t: 'refEntity', id }); return; }
-  const node = bus.doc.entities[id];
-  if (!node) return;
+  // M7 / AC-15: entity name + component keys read from world (SSOT) via
+  // entity-state helpers; doc.entities dual-write mirror deleted.
+  if (!entExists(bus.doc, id)) return;
   const handle = {
     kind: 'entity' as const,
     id,
-    name: node.name,
-    components: Object.keys(node.components),
-    ...(node.source ? { source: node.source } : {}),
+    name: entName(bus.doc, id),
+    components: Object.keys(entComponents(bus.doc, id)),
   };
   try {
     window.parent?.postMessage({ type: 'VAG_EDITOR_REF', payload: handle }, '*');
@@ -355,11 +350,11 @@ export function requestRefEntity(id: EntityId): void {
 
 /** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
 export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
-  const node = bus.doc.entities[entityId];
-  if (!node) return;
+  // M7 / AC-15: entity name read from world (SSOT); doc.entities mirror deleted.
+  if (!entExists(bus.doc, entityId)) return;
   try {
     window.parent?.postMessage(
-      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: node.name, comp, value } },
+      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: entName(bus.doc, entityId), comp, value } },
       '*',
     );
   } catch { /* cross-origin — non-fatal */ }
@@ -468,6 +463,21 @@ const DOC_KEY_PREFIX = 'forgeax:editor:doc:v1';
 let currentSceneId = 'default';
 function docKey(id: string): string {
   return `${DOC_KEY_PREFIX}:${id}${currentSceneFile ? `:${currentSceneFile}` : ''}`;
+}
+
+// ── Editor-only hidden sidecar (plan-strategy §2 D-4) ─────────────────────────
+// Hidden entities are editor view-layer state (OOS-6: no Enable/Disable component
+// in the engine). They are NOT stored in SceneAsset pack payload — the pack schema's
+// additionalProperties:false three-layer validation is the fail-fast guarantee
+// (requirements AC-01, AC-10). Instead, hidden ids live in localStorage sidecar
+// keys, following the same {sceneId}:{sceneFile} scoping convention as docKey().
+const HIDDEN_SIDECAR_KEY_PREFIX = 'forgeax:editor:hidden:v1';
+export function buildHiddenKey(sceneId?: string, sceneFile?: string | null): string {
+  const sid = sceneId || currentSceneId;
+  const sfile = sceneFile !== undefined ? sceneFile : currentSceneFile;
+  return sfile
+    ? `${HIDDEN_SIDECAR_KEY_PREFIX}:${sid}:${sfile}`
+    : `${HIDDEN_SIDECAR_KEY_PREFIX}:${sid}`;
 }
 
 export function setSceneId(id: string | null | undefined): void {
@@ -762,7 +772,11 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   // A NEW level gets its own stable, path-derived GUID — never the source
   // scene's GUID (duplicate must be a distinct asset) and never an order-derived
   // one (which would drift on the first edit).
-  const packContent = JSON.stringify(sessionToPack(sourceDoc, stableGuid('scene|' + newPath)), null, 2) + '\n';
+  // M5: construct a minimal empty-scene pack directly (sessionToPack deleted).
+  // A new empty scene has no entities — the pack is just a skeleton.
+  const newSceneGuid = stableGuid('scene|' + newPath);
+  const newPack = { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [{ guid: newSceneGuid, kind: 'scene', payload: { entities: [] }, refs: [] }] };
+  const packContent = JSON.stringify(newPack, null, 2) + '\n';
   try {
     const w1 = await getApiClient().fetch('/api/files', {
       method: 'POST',
@@ -779,49 +793,38 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   return true;
 }
 
-/** Revive a plain parsed object (localStorage mirror / legacy scene.json) into a
- *  live EditSession with the engine-POD `asset` getter. Reads either the current
- *  `nextLocalId` field or a legacy `nextId` (pre-M6 persisted mirrors). */
-function reviveSession(parsed: {
-  entities: EditSession['entities'];
-  order?: EntityId[];
-  nextLocalId?: EntityId;
-  nextId?: EntityId;
-}): EditSession {
-  const order = parsed.order ?? Object.keys(parsed.entities).map(Number);
-  const next = parsed.nextLocalId ?? parsed.nextId ?? (order.reduce((m, id) => Math.max(m, id), 0) + 1);
-  return makeEditSession(parsed.entities, order, next);
+/** Revive an EditSession that arrived over the BroadcastChannel (replaceDoc /
+ *  snapshot). structuredClone strips the SessionInternals symbol-keyed state,
+ *  so we re-seed a fresh internals bag around the incoming world.
+ *
+ *  feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+ *  EditSession is now just {world, registry} — the engine World is the entity
+ *  SSOT. The legacy `.entities`/order/nextLocalId revive path is deleted; the
+ *  popout entity map is repopulated from EditorSnapshot.worldState in
+ *  applySnapshot (entPopulate). */
+function reviveSession(doc: EditSession): EditSession {
+  const fresh = createEditSession();
+  fresh.world = doc.world;
+  if (doc.registry !== undefined) fresh.registry = doc.registry;
+  return fresh;
 }
 
 export function loadDocFromStorage(): boolean {
-  if (typeof localStorage === 'undefined') return false;
-  try {
-    const raw = localStorage.getItem(docKey(currentSceneId));
-    if (!raw) return false;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.entities) {
-      bus.doc = reviveSession(parsed);
-      docVersion++;
-      for (const fn of docListeners) fn();
-      return true;
-    }
-  } catch {
-    /* corrupt → ignore, fall back to seed */
-  }
+  // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+  // The legacy localStorage doc-mirror stored the EntityNode/doc.entities dual
+  // write. With the engine World as the sole entity SSOT, that mirror can no
+  // longer rehydrate into a live World (structuredClone of a World POD is inert),
+  // so scene state now reloads exclusively from the on-disk pack
+  // (loadDocFromDisk → loadWorldFromPack → world.instantiateScene). This
+  // localStorage fast-path is retired.
   return false;
 }
 
-// Save synchronously on every change so a reload/navigation right after an edit
-// never loses it (the doc is small; cost is negligible at this scale). Saved
-// under the CURRENT scene's key so games stay isolated.
-bus.subscribe(() => {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(docKey(currentSceneId), JSON.stringify(bus.doc));
-  } catch {
-    /* quota / unavailable — non-fatal */
-  }
-});
+// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+// The per-change localStorage doc-mirror is retired. It stored the deleted
+// EntityNode/doc.entities structure; serializing the {world} EditSession yields
+// an inert World POD that loadDocFromStorage can no longer rehydrate. Durable
+// state lives in the on-disk scene pack (loadDocFromDisk/saveDocToDisk).
 
 // ── Disk persistence: the game's authored scene-asset ────────────────────────
 // Design (editor-feature-spec §15): the EditSession is the SSOT, serialized as
@@ -844,9 +847,6 @@ function scenePath(): string | null {
   }
   return resolveGamePath('scene.pack.json');
 }
-function legacyScenePath(): string | null {
-  return currentSceneId === 'default' ? null : resolveGamePath('scene.json');
-}
 /** The scene asset GUID to persist for the active scene. Prefers the GUID we
  *  read from disk (the scene's stable identity, e.g. the one forge.json's
  *  defaultScene points at); for a brand-new scene with no file yet, derives a
@@ -859,14 +859,79 @@ function sceneGuidForSave(): string | undefined {
   return p ? stableGuid('scene|' + p) : undefined;
 }
 
+/**
+ * Engine-native world→pack serialization (M5 / AC-08).
+ * Replaces sessionToPack: uses rootsToSceneAsset + serializeSceneAssetToPack
+ * on the live engine World. Returns null if world/registry unavailable or
+ * collection/serialization fails.
+ */
+/** Remove the editor-only `EditorHidden` marker from a collected SceneAsset's
+ *  entities so it never lands in the persisted pack (AC-04), while the entities
+ *  themselves stay (AC-05). SceneAsset/entities are readonly, so rebuild. */
+export function stripEditorHiddenMarker(asset: unknown): unknown {
+  const a = asset as { kind: string; entities?: ReadonlyArray<{ localId: unknown; components: Record<string, unknown> }> };
+  if (!a || !Array.isArray(a.entities)) return asset;
+  return {
+    ...a,
+    entities: a.entities.map((e) => {
+      if (!e.components || !('EditorHidden' in e.components)) return e;
+      const { EditorHidden: _drop, ...rest } = e.components;
+      return { ...e, components: rest };
+    }),
+  };
+}
+
+function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w: any = doc.world;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reg: any = doc.registry;
+  if (!w || !reg) {
+    console.warn('[editor-core] worldToPack: world or registry missing');
+    return null;
+  }
+  // Collect ALL root entities (visible AND hidden) so hidden entities survive
+  // the round-trip (AC-05: "隐藏一个实体 → save → reopen，实体仍在" — the entity is
+  // serialized normally; only its EditorHidden MARKER is stripped so the pack
+  // carries no hidden field, AC-04: "pack 序列化不含 hidden 字段"). Filtering the
+  // whole hidden entity out (the earlier impl) reproduced exactly the
+  // scene-pack.ts:178 data-loss bug AC-05 exists to fix (verify F6 / AGENTS.md #2).
+  // Derive roots from the SSOT handle map (World exposes no `rootEntities` field
+  // — see entRootHandles).
+  const rootHandles: EntityHandle[] = entRootHandles(doc, w);
+  // Use engine's rootsToSceneAsset + serializeSceneAssetToPack pipeline.
+  const assetR = (rootsToSceneAsset as any)(reg, w, rootHandles);
+  if (!assetR.ok) {
+    console.warn('[editor-core] worldToPack: rootsToSceneAsset failed:', assetR.error);
+    return null;
+  }
+  // Strip the editor-only EditorHidden marker from every collected entity — it
+  // is a registered component so rootsToSceneAsset would otherwise emit it into
+  // the pack (AC-04). The entity itself stays (AC-05). SceneAsset is readonly →
+  // rebuild entities without the marker.
+  const strippedAsset = stripEditorHiddenMarker(assetR.value);
+  const packR = (serializeSceneAssetToPack as any)(strippedAsset, sceneGuid);
+  if (!packR.ok) {
+    console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
+    return null;
+  }
+  return JSON.stringify(packR.value, null, 2) + '\n';
+}
+
 /** The exact byte content saveDocToDisk would write for the current doc (used by
  *  the disk watcher to recognise its own echo). */
 function serializedPack(): string {
-  return JSON.stringify(sessionToPack(bus.doc, sceneGuidForSave()), null, 2) + '\n';
+  return worldToPack(bus.doc, sceneGuidForSave()) ?? '';
 }
 
 /** Load the active game's scene from disk (native pack preferred, legacy
- *  scene.json fallback). Returns true if a valid doc was loaded. */
+ *  scene.json fallback). Returns true if a valid doc was loaded.
+ *
+ *  M4: scene-load uses engine-native world.instantiateScene instead of the
+ *  deleted packToSession projection layer (AC-09). The pack JSON is parsed
+ *  into a SceneAsset POD, refs indices resolved to GUID strings, then
+ *  allocSharedRef('SceneAsset', ...) + world.instantiateScene materialises
+ *  entities directly into the world — no doc.entities intermediate. */
 export async function loadDocFromDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
@@ -882,36 +947,133 @@ export async function loadDocFromDisk(): Promise<boolean> {
         const parsed = JSON.parse(j.content);
         if (isScenePack(parsed)) {
           // Preserve the scene asset's GUID across edits (its stable identity).
-          const sceneAsset = parsed.assets.find((a) => a.kind === 'scene');
-          if (sceneAsset?.guid) currentSceneGuid = sceneAsset.guid;
-          bus.doc = packToSession(parsed);
-          docVersion++;
-          for (const fn of docListeners) fn();
-          return true;
-        }
-      }
-    }
-  } catch { /* fall through to legacy / localStorage / seed */ }
-  // Legacy scene.json (pre-native-pack) — load it; the next save writes a pack.
-  const lp = legacyScenePath();
-  if (lp) {
-    try {
-      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(lp)}`);
-      if (r.ok) {
-        const j = (await r.json()) as { content?: string };
-        if (j.content) {
-          const parsed = JSON.parse(j.content);
-          if (parsed && typeof parsed === 'object' && parsed.entities) {
-            bus.doc = reviveSession(parsed);
+          const sceneAssetEntry = parsed.assets.find((a: { kind?: string }) => a.kind === 'scene');
+          if (sceneAssetEntry?.guid) currentSceneGuid = sceneAssetEntry.guid;
+          // M4: load via engine-native path — parse pack into SceneAsset
+          // POD, allocate shared ref, and instantiateScene into the world.
+          const ok = loadWorldFromPack(parsed);
+          if (!ok) {
+            // Engine-native path failed (e.g. pack schema mismatch —
+            // charter P3). Fall through to legacy/localStorage/seed.
+          } else {
             docVersion++;
             for (const fn of docListeners) fn();
             return true;
           }
         }
       }
-    } catch { /* fall through */ }
-  }
+    }
+  } catch { /* fall through to seed */ }
+  // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+  // The legacy pre-native-pack `scene.json` load path (which revived a
+  // doc.entities EditSession) is retired — M4 already deleted packToSession, so
+  // there is no converter from the flat entities format into the engine World.
+  // Only engine-native scene packs (loadWorldFromPack) load; a legacy scene.json
+  // is migrated on the next save.
   return false;
+}
+
+// ── M4 scene-load helpers (pack → SceneAsset → world.instantiateScene) ─────
+//
+// AC-09: scene-load uses loadByGuid-style pack resolution via world APIs.
+// Field names that carry handle<> or array<handle<>> indices into the pack's
+// refs[] array — must be resolved to GUID strings before instantiateScene.
+// Mirrors engine parseScenePayload HANDLE_FIELD_NAMES / HANDLE_ARRAY_FIELD_NAMES.
+
+const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
+  'assetHandle', 'material', 'skeleton', 'clip', 'equirect',
+]);
+const HANDLE_ARRAY_FIELD_NAMES: ReadonlySet<string> = new Set(['materials']);
+
+/**
+ * Resolve integer refs indices in scene entity components to GUID strings.
+ * Mirrors engine's parseScenePayload logic (asset-registry.ts:412).
+ * Returns the resolved components dict (shallow copy), or null on error.
+ */
+function resolveRefsInComponents(
+  rawComponents: Record<string, Record<string, unknown>>,
+  refs: string[],
+): Record<string, Record<string, unknown>> | null {
+  const resolved: Record<string, Record<string, unknown>> = {};
+  for (const compName of Object.keys(rawComponents)) {
+    const rawFields = rawComponents[compName];
+    if (!rawFields) continue;
+    const resolvedFields: Record<string, unknown> = {};
+    for (const fieldName of Object.keys(rawFields)) {
+      const value = rawFields[fieldName];
+      if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'number' && Number.isInteger(value)) {
+        const idx = value;
+        if (idx < 0 || idx >= refs.length) return null; // out of bounds → skip, not crash
+        resolvedFields[fieldName] = refs[idx];
+      } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
+        const resolvedArr: string[] = [];
+        for (const elem of value) {
+          if (typeof elem === 'number' && Number.isInteger(elem)) {
+            if (elem < 0 || elem >= refs.length) return null;
+            resolvedArr.push(refs[elem]!);
+          } else {
+            resolvedArr.push(String(elem ?? ''));
+          }
+        }
+        if (resolvedArr.length === value.length) resolvedFields[fieldName] = resolvedArr;
+        else resolvedFields[fieldName] = value;
+      } else {
+        resolvedFields[fieldName] = value;
+      }
+    }
+    resolved[compName] = resolvedFields;
+  }
+  return resolved;
+}
+
+/**
+ * Load a native scene pack into the world via engine-native APIs.
+ * Called from loadDocFromDisk after the pack JSON is parsed.
+ * Returns true if the world was loaded successfully.
+ */
+function loadWorldFromPack(pack: { assets?: Array<{ kind?: string; guid?: string; payload?: unknown; refs?: string[] }> }): boolean {
+  // M4: bus.doc.world is the engine World — engine type shim degrades
+  // interface to namespace (TS2709), so type is accessed via Record.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w: any = (bus.doc as any).world;
+  if (!w) return false;
+  const assets = pack.assets ?? [];
+  const sceneEntry = assets.find((a) => a.kind === 'scene');
+  if (!sceneEntry?.payload) return false;
+  const refs: string[] = Array.isArray(sceneEntry.refs) ? sceneEntry.refs : [];
+
+  // Resolve scene entities from the pack payload.
+  const rawPayload = sceneEntry.payload as { entities?: Array<{ localId?: number; components?: Record<string, Record<string, unknown>> }> };
+  const rawEntities = rawPayload.entities;
+  if (!Array.isArray(rawEntities)) return false;
+
+  const entities: Array<{ localId: number; components: Record<string, Record<string, unknown>> }> = [];
+  for (const rn of rawEntities) {
+    if (typeof rn.localId !== 'number') return false;
+    const cc = rn.components ?? {};
+    const resolved = resolveRefsInComponents(cc as Record<string, Record<string, unknown>>, refs);
+    if (resolved === null) continue; // entity with unrecoverable refs → skip
+    entities.push({ localId: rn.localId, components: resolved });
+  }
+
+  // Build SceneAsset POD and materialise into the world.
+  const sceneAsset = {
+    kind: 'scene' as const,
+    entities: entities.map((e) => ({
+      localId: e.localId as number,
+      components: e.components,
+    })),
+  };
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handle = w.allocSharedRef('SceneAsset', sceneAsset as any);
+    const r = w.instantiateScene(handle);
+    if (!r.ok) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Write the active game's scene to disk as a native engine scene pack. This is
@@ -1004,15 +1166,11 @@ export function initDiskWatch(): void {
   let reloadTimer: ReturnType<typeof setTimeout> | null = null;
   let backoff = 1000;
 
-  // Apply an externally-loaded doc WITHOUT rewriting it back to disk. replaceDoc
-  // fires the bus → marks the scene dirty; we clear that dirty flag so a later
-  // flush/save does NOT overwrite the agent's just-written file with our
-  // canonical reformat. Rewriting it would (a) churn the file under the agent and
-  // (b) risk a reformat ping-pong / flicker. The next LOCAL edit re-marks dirty.
-  const applyExternal = (next: EditSession): void => {
-    replaceDoc(next);
-    _isDirty = false;
-  };
+  // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+  // applyExternal (which called replaceDoc with a revived .entities session for
+  // the legacy scene.json disk-watch path) is deleted along with that path. The
+  // engine-native pack reload below clears _isDirty inline after
+  // loadWorldFromPack.
 
   const reloadFromDisk = async (): Promise<void> => {
     const p = scenePath();
@@ -1023,17 +1181,25 @@ export function initDiskWatch(): void {
       const j = (await r.json()) as { content?: string };
       if (!j.content) return;
       const parsed = JSON.parse(j.content);
-      const next = isScenePack(parsed) ? packToSession(parsed)
-        : (parsed && typeof parsed === 'object' && parsed.entities) ? reviveSession(parsed)
-        : null;
-      if (!next) return;
-      // CANONICAL compare: normalise BOTH the incoming doc and the current doc
-      // through sessionToPack, then compare. This skips not just our own autosave echo
-      // but any reload that wouldn't actually change the scene (formatting / GUID /
-      // float-rounding differences in the agent's write) — the definitive
-      // no-op-reload / flicker-loop guard.
-      if (JSON.stringify(sessionToPack(next)) === JSON.stringify(sessionToPack(bus.doc))) return;
-      applyExternal(next);
+      if (isScenePack(parsed)) {
+        // M4: disk-watch reload uses engine-native world path.
+        const ok = loadWorldFromPack(parsed);
+        if (!ok) return;
+        // CANONICAL compare: normalise incoming parsed pack vs our current
+        // world's serialization via worldToPack (M5: replaces sessionToPack).
+        const currentPack = worldToPack(bus.doc, currentSceneGuid ?? undefined);
+        if (currentPack && JSON.stringify(parsed) === currentPack) return;
+        // Fire doc listeners (world was already loaded by loadWorldFromPack).
+        docVersion++;
+        for (const fn of docListeners) fn();
+        _isDirty = false;
+        return;
+      }
+      // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+      // Only engine-native scene packs (handled above via loadWorldFromPack)
+      // reload live. A non-pack legacy scene.json can no longer be revived into
+      // the World (packToSession deleted in M4), so external edits to that
+      // format are ignored until the next in-editor save migrates it.
     } catch { /* server unreachable / parse error → keep current doc */ }
   };
 
@@ -1095,8 +1261,11 @@ export function clearDocStorage(): void {
 let mirror: EditorSnapshot | null = null;
 
 function buildSnapshot(): EditorSnapshot {
+  // Build worldState from world + sidecar (plan-strategy §2 D-4 popout compat)
+  const worldState = buildWorldState();
   return {
     doc: bus.doc,
+    worldState,
     selection: [...selectionList],
     gizmo: gizmoMode,
     history: bus.historySteps(),
@@ -1104,6 +1273,65 @@ function buildSnapshot(): EditorSnapshot {
     canUndo: bus.canUndo(),
     canRedo: bus.canRedo(),
   };
+}
+
+/** Enumerate world entities + sidecar into a lightweight WorldState for popout. */
+function buildWorldState(): WorldState {
+  const w = bus.doc.world;
+  const entities: WorldEntityState[] = [];
+  const hidden: EntityId[] = [];
+  // Derive roots from the SSOT handle map (World exposes no `rootEntities`
+  // field — see entRootHandles), then DFS via Children below.
+  const visited = new Set<EntityHandle>();
+  for (const rootE of entRootHandles(bus.doc, w)) {
+    // DFS: root first, then descendants
+    const stack = [rootE];
+    while (stack.length > 0) {
+      const eH = stack.pop()!;
+      if (visited.has(eH)) continue;
+      visited.add(eH);
+      // Name
+      const nameResult = w.get(eH, Name);
+      if (!nameResult.ok) continue;
+      const name = (nameResult.value as { value: string }).value;
+      // Find legacy ID from editor entities map
+      const legacyId = findLegacyIdByEngineHandle(eH);
+      if (legacyId === undefined) continue;
+      // Components: collect all known component keys from entity
+      const comps: Record<string, unknown> = {};
+      // Transform
+      const tResult = w.get(eH, Transform);
+      if (tResult.ok) comps['Transform'] = { ...tResult.value as Record<string, unknown> };
+      // ChildOf → parent
+      let parent: EntityId | null = null;
+      const coResult = w.get(eH, ChildOf);
+      if (coResult.ok) {
+        const coVal = coResult.value as { parent: number };
+        const parentLegacy = findLegacyIdByEngineHandle(coVal.parent as EntityHandle);
+        parent = parentLegacy ?? null;
+      }
+      // EditorHidden
+      if (w.get(eH, EditorHidden).ok) hidden.push(legacyId);
+      entities.push({ id: legacyId, name, parent, components: comps, engineHandle: eH as number });
+      // Push children onto stack for DFS
+      const chResult = w.get(eH, Children);
+      if (chResult.ok) {
+        const chVal = chResult.value as { entities: number[] | Uint32Array };
+        const arr = Array.isArray(chVal.entities) ? chVal.entities : Array.from(chVal.entities as Uint32Array);
+        for (const child of arr) {
+          // Children.entities holds live engine handles; brand for the DFS stack.
+          if (!visited.has(child as EntityHandle)) stack.push(child as EntityHandle);
+        }
+      }
+    }
+  }
+  return { entities, hidden, selection: [...selectionList] };
+}
+
+function findLegacyIdByEngineHandle(engineHandle: EntityHandle): number | undefined {
+  // M7 / AC-15: legacy ID ↔ engine handle map now lives in SessionInternals
+  // (entity-state), not doc.entities.
+  return entLegacyId(bus.doc, engineHandle);
 }
 
 function broadcastSnapshot(): void {
@@ -1132,6 +1360,14 @@ function applySnapshot(snap: EditorSnapshot): void {
     // BroadcastChannel structuredClone drops the EditSession `asset` getter —
     // revive it so popout panels reading bus.doc.asset stay live (w34).
     bus.doc = reviveSession(snap.doc);
+    // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15 (D-4
+    // popout compat): the popout window's world is an inert structuredClone, so
+    // entity reads route through the entity-state popout cache. Repopulate it
+    // from the snapshot's worldState (name/parent/components/handle) so popout
+    // panels see fresh main-derived data.
+    if (snap.worldState) {
+      applyWorldStateToWorld(snap.worldState);
+    }
     const selChanged = !sameIdList(selectionList, snap.selection);
     if (selChanged) selectionList = [...snap.selection];
     if (gizmoMode !== snap.gizmo) {
@@ -1147,6 +1383,24 @@ function applySnapshot(snap: EditorSnapshot): void {
   } finally {
     applyingSnapshot = false;
   }
+}
+
+/** Populate the entity-state popout cache from worldState for the popout compat
+ *  view. feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+ *  rebuilds the popout entity cache (name/parent/components/handle) + the
+ *  legacy ID → handle map from WorldEntityState, replacing the deleted
+ *  doc.entities merge. */
+function applyWorldStateToWorld(ws: WorldState): void {
+  entPopulate(
+    bus.doc,
+    ws.entities.map((we) => ({
+      id: we.id,
+      name: we.name,
+      parent: we.parent,
+      components: we.components,
+      engineHandle: we.engineHandle,
+    })),
+  );
 }
 
 // Dock (main window only) listens here to redock a panel when its popped-out OS

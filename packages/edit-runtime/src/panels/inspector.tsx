@@ -14,19 +14,19 @@ import type { ReactNode } from 'react';
 import { InspectorPanel } from '@forgeax/editor-panels';
 import { useSelection } from '@forgeax/editor-shared';
 import { bus } from '@forgeax/editor-shared';
+import { entComponents, entExists } from '@forgeax/editor-core';
 import { AddComponentMenu } from './add-component-menu';
 
 export function InspectorWithAddComponent(): ReactNode {
   const sel = useSelection();
 
   // Derive currently-mounted component names from the selected entity.
+  // M7-a (AC-15): doc.entities mirror deleted — read component set from the
+  // world (SSOT) via entComponents. Keys are engine component names.
   const mountedComponents: string[] = [];
-  if (sel !== null) {
-    const entity = bus.doc.entities[sel];
-    if (entity) {
-      for (const key of Object.keys(entity.components)) {
-        mountedComponents.push(key);
-      }
+  if (sel !== null && entExists(bus.doc, sel)) {
+    for (const key of Object.keys(entComponents(bus.doc, sel))) {
+      mountedComponents.push(key);
     }
   }
 

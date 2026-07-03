@@ -16,8 +16,6 @@ export const EDITOR_PANELS = [
   'capabilities',
   'material',
   'mesh',
-  'timeline',
-  'matgraph',
   'launcher',
   'asset-inspector',
   'systems',

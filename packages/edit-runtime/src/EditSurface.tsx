@@ -345,28 +345,15 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
     const kind = ref.kind ?? '';
     const entity = buildSpawnEntityFromDragRef(ref);
     if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
-    if (kind === 'mesh') {
-      try {
-        const api = createDefaultApiClient(base);
-        const readRaw = async (p: string): Promise<Response | null> => {
-          try { const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`); return r.ok ? r : null; }
-          catch { return null; }
-        };
-        const subs = await resolveMeshOriginalMaterials(
-          { guid: ref.guid, path: ref.path, payload: ref.payload },
-          {
-            fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
-            fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
-          },
-        );
-        if (subs && subs.length > 0) {
-          const mat = (entity.components.Material ?? (entity.components.Material = {})) as Record<string, unknown>;
-          mat.submeshMaterials = subs;
-        }
-      } catch (err) {
-        console.warn('[editor] original-material recovery failed:', (err as Error)?.message ?? err);
-      }
-    }
+    // F-1 review round 1: buildSpawnEntityFromDragRef now emits engine-native
+    // components only (Transform{quat} + MeshFilter{HANDLE_CUBE}); the editor
+    // auto-adds a default-material MeshRenderer. The former per-submesh original-
+    // material recovery wrote `Material.submeshMaterials` — a component the
+    // collapse deleted, so it was silently dropped by spawnComponentData. Real
+    // imported-mesh geometry + original-material association is engine-MVP-OOS
+    // (feat-future-asset-system, engine mesh-filter.ts:44). Follow-up: review F-4.
+    // TODO(imported-mesh-materials): rewire to MeshRenderer{materials} once the
+    // asset system can register imported MeshAsset/MaterialAsset handles.
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
       mode: 'reference', entity, name: entity.name,
     });

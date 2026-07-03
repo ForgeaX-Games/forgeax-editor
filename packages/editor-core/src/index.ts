@@ -1,72 +1,43 @@
 // @forgeax/editor-core — pure logic layer (no UI/React)
 //
+// M4: instantiate.ts + gltf-runtime.ts projection layer deleted (AC-12).
+// M6: anim.ts + matgraph.ts deleted (AC-12/13).
+//
 // Re-exports:
 //   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
-//   Scene pack (sessionToPack, packToSession, isScenePack, CUBE_GUID, SPHERE_GUID, CYLINDER_GUID)
-//   Instantiate (buildNativeScene, instantiateNative, sceneEntities, etc.)
-//   glTF runtime (loadGltfRuntime, LoadedGltf, etc.)
+//   Scene pack (isScenePack, stableGuid, CUBE_GUID, SPHERE_GUID)
 //   EditorCommand & types
 //   EditorBus & bus types
 //   Command session (createEditSession, applyCommand, etc.)
 //   Component schema (listComponentSchemas, getComponentSchema, etc.)
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
-//   Anim (Clip, Track, Interp, etc.)
 //   Assets (PackAsset, RawAsset, loadGameAssets, etc.)
-//   Matgraph (MatGraph, etc.)
 //   Presets (ENTITY_PRESETS, getPreset, buildPresetComponents, etc.)
 
 // ── Scene types (SSOT definitions) ──
+// M7 / AC-15: EntityNode deleted (world is the SSOT for entity state).
 export type {
   EntityId,
   EntitySource,
-  EntityNode,
   EditSession,
   SceneAsset,
 } from './types';
+
+// EntityHandle / WorldType: local structural aliases (scene-types) — see their
+// docs for why EntityHandle is not re-imported from @forgeax/engine-ecs (TS2709
+// under the strict engine-.d.ts typecheck gate).
+export type { EntityHandle, WorldType } from './scene-types';
 
 export type { EditorCommand, CommandError, ApplyResult } from './types';
 
 // ── Scene pack ──
 export {
-  sessionToPack,
-  packToSession,
   isScenePack,
   stableGuid,
   CUBE_GUID,
   SPHERE_GUID,
-  CYLINDER_GUID,
 } from './scene-pack';
 export type { ScenePack } from './scene-pack';
-
-// ── Instantiate ──
-export {
-  buildNativeScene,
-  instantiateNative,
-  sceneEntities,
-  instantiateSceneEntities,
-  makeSceneCaches,
-  SCENE_COMPONENT_TOKENS,
-  hexToRgba,
-} from './instantiate';
-export type {
-  WorldLike,
-  AssetsLike,
-  InstantiateCtx,
-  NativeSceneResult,
-  NativeInstance,
-  SceneEntity,
-  SceneCaches,
-  SceneEntitiesResult,
-} from './instantiate';
-
-// ── glTF runtime ──
-export {
-  loadGltfRuntime,
-  getLoadedGltf,
-  isGltfLoaded,
-  _clearGltfCache,
-} from './gltf-runtime';
-export type { LoadedGltf, LoadedGltfNode } from './gltf-runtime';
 
 // ── Bus ──
 export { EditorBus } from './bus';
@@ -78,8 +49,25 @@ export type {
 } from './bus';
 
 // ── Edit session (authoring working state) ──
+// M7 / AC-15: makeEditSession/projectSessionAsset/cloneEditSession deleted
+// (they served the EntityNode/doc.entities dual-write mirror).
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './document';
-export { makeEditSession, projectSessionAsset, cloneEditSession } from './edit-session';
+
+// ── Entity state (M7 / AC-15: world-SSOT reads replacing doc.entities) ──
+// Panels/consumers read entity name/parent/components/handle/existence through
+// these helpers (world.get on main, popout cache on popout windows).
+export {
+  entHandle,
+  entLegacyId,
+  entExists,
+  entIds,
+  entHandles,
+  entName,
+  entParent,
+  entAlive,
+  entComponent,
+  entComponents,
+} from './entity-state';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
 export { schemaFingerprint, decideReloadTier } from './hot-reload';
@@ -107,6 +95,12 @@ export type {
   FieldType,
 } from './schema';
 
+// ── Euler↔quat conversion (SSOT, XYZ order, AGENTS.md #6) ──
+export { quatToEuler, eulerToQuat } from './euler-quat';
+
+// ── Hex↔float color conversion (M6, AC-19 Material panel) ──
+export { hexToFloat, floatToHex } from './color-utils';
+
 // ── Sync channel ──
 export {
   getPopoutPanel,
@@ -121,15 +115,6 @@ export type {
   PopoutGeom,
   AssetChatRef,
 } from './sync-channel';
-
-// ── Anim ──
-export {
-  emptyClip,
-  sampleClip,
-  setKey,
-  removeKey,
-} from './anim';
-export type { Clip, Track, Interp } from './anim';
 
 // ── Assets ──
 export {
@@ -170,53 +155,16 @@ export {
   createDirectory,
 } from './pack-ops';
 
-// ── Matgraph ──
-export {
-  evaluate,
-  connect,
-  disconnect,
-  setParam,
-  moveNode,
-  removeNode,
-  addNode,
-  defaultGraph,
-  resetGraphIds,
-  hasPath,
-  pinType,
-  rgbToHex,
-  hexToRgb,
-  KINDS,
-} from './matgraph';
-export type {
-  MatGraph,
-  GraphNode,
-  Edge,
-  NodeKind,
-  PinType,
-  RGB,
-  Value,
-  MaterialResult,
-} from './matgraph';
-
-// ── Presets ──
+// ── Scene types (extended, for games) ──
 export {
   ENTITY_PRESETS,
   getPreset,
   buildPresetComponents,
 } from './presets';
 
-// ── Scene types (extended, for games) ──
-export type {
-  TransformData,
-  MeshData,
-  MeshKind,
-  MaterialData,
-  LightData,
-  LightType,
-  ColliderData,
-  ColliderShape,
-  Collider,
-} from './scene-types';
+// M7 / AC-15: authored component types (TransformData/MeshData/MaterialData/
+// LightData/ColliderData/etc.) deleted — the engine World is the SSOT for all
+// entity component state; no parallel authored type mirror remains.
 
 // ── Manifest (SSOT for panel IDs) ──
 export { EDITOR_PANELS } from './manifest';
@@ -230,14 +178,12 @@ export {
   getSelection,
   getSelectionList,
   getGizmoMode,
-  getAnimPreview,
   replaceDoc,
   saveDocToDisk,
   setGizmoMode,
   setSceneId,
   setSelection,
   setSelectionMany,
-  setAnimPreview,
   setHoverEntity,
   setFieldPreview,
   toggleSelection,
@@ -245,7 +191,6 @@ export {
   onRenameRequest,
   requestRename,
   onGizmoModeChange,
-  onAnimPreview,
   onPopoutClosed,
   onPopoutGeom,
   announcePopoutClosing,
@@ -337,6 +282,9 @@ export type { EditModeState } from './edit-mode';
 // same gate the discoverer uses (verify V-3 affordances finding).
 export { notEditing, and } from './run-conditions';
 export type { RunCondition } from './run-conditions';
+// ── EditorHidden (editor-only component, plan-strategy §2 D-7 / AC-04/05) ──
+export { EditorHidden } from './components/EditorHidden';
+
 // ── Viewport clip transport + view intents (preview animation scrubber) ──
 export {
   getClipControl,

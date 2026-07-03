@@ -18,8 +18,6 @@ import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
 import { MaterialPanel } from './Material';
 import { MeshPanel } from './Mesh';
-import { MaterialGraphPanel } from './MaterialGraph';
-import { TimelinePanel } from './Timeline';
 import { LauncherPanel } from './Launcher';
 import { AssetInspectorPanel } from './AssetInspector';
 
@@ -31,8 +29,6 @@ export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   capabilities: CapabilitiesPanel,
   material: MaterialPanel,
   mesh: MeshPanel,
-  timeline: TimelinePanel,
-  matgraph: MaterialGraphPanel,
   launcher: LauncherPanel,
   'asset-inspector': AssetInspectorPanel,
 };

@@ -1,11 +1,12 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
-import { clampToField, defaultComponentData, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, type FieldSchema } from '@forgeax/editor-core';
-import { focusPanel, openSourcePanel } from '@forgeax/editor-shared';
+import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
 import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-shared';
+import { entHandle, entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-shared';
 import type { EditorCommand, EntityId } from '@forgeax/editor-core';
+import { Transform } from '@forgeax/engine-runtime';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -77,7 +78,7 @@ function NumberScrubField({ label, value, fs, testid, onCommit, compact, appear 
 
 // Components whose three number fields read as a single vec3 → render inline.
 const VEC3_GROUPS: Record<string, [string, string, string]> = {
-  Transform: ['x', 'y', 'z'],
+  Transform: ['posX', 'posY', 'posZ'],
 };
 
 // Addable/resettable components + their default payloads are now derived straight
@@ -109,7 +110,8 @@ function descendantsAndSelf(id: EntityId): Set<EntityId> {
 // Components present on EVERY selected entity (batch edit operates on these).
 function commonComponents(ids: EntityId[]): string[] {
   if (ids.length === 0) return [];
-  const sets = ids.map((id) => new Set(Object.keys(bus.doc.entities[id]?.components ?? {})));
+  // M7 / AC-15: component keys read from world (SSOT) via entity-state.
+  const sets = ids.map((id) => new Set(Object.keys(entComponents(bus.doc, id))));
   return [...sets[0]!].filter((c) => sets.every((s) => s.has(c)));
 }
 
@@ -127,9 +129,10 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
 
   // Align all selected to the primary's value on one axis (one undo step).
   function alignAxis(axis: 'x' | 'y' | 'z') {
-    const t = bus.doc.entities[primary]?.components.Transform as Record<string, unknown> | undefined;
+    const posKey = `pos${axis.toUpperCase()}` as string;
+    const t = entComponent(bus.doc, primary, 'Transform');
     if (!t) return;
-    setAll('Transform', axis, Number(t[axis] ?? 0));
+    setAll('Transform', posKey, Number(t[posKey] ?? 0));
   }
 
   const hasTransform = common.includes('Transform');
@@ -145,8 +148,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
           title="copy all selected entities as a JSON array (for AI / cross-scene paste)"
           onClick={() => {
             const arr = ids.map((id) => {
-              const n = bus.doc.entities[id];
-              return { id, name: n?.name, components: n?.components };
+              return { id, name: entName(bus.doc, id), components: entComponents(bus.doc, id) };
             });
             void navigator.clipboard?.writeText(JSON.stringify(arr, null, 2));
           }}
@@ -170,7 +172,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
               setSelectionMany([...ids.filter((x) => x !== id), id]);
             }}
           >
-            {bus.doc.entities[id]?.name ?? id}
+            {entName(bus.doc, id) || id}
             {id === primary ? ' ★' : ''}
           </button>
         ))}
@@ -187,7 +189,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
       )}
       {common.length === 0 && <div className="field muted">{t('editor.inspector.noCommonComponents')}</div>}
       {common.map((comp) => {
-        const value = bus.doc.entities[primary]?.components[comp];
+        const value = entComponent(bus.doc, primary, comp);
         if (typeof value !== 'object' || value === null) return null;
         return (
           <div key={comp}>
@@ -263,6 +265,19 @@ export function InspectorPanel() {
   const fieldPrev = useFieldPreview();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
+  // euler React state — scheme B (plan-strategy §2 D-2): quat SSOT in world, euler is transient overlay
+  const [euler, setEuler] = useState<{ rotX: number; rotY: number; rotZ: number }>({ rotX: 0, rotY: 0, rotZ: 0 });
+  // On entity switch: read world quat → euler to reset React state (scheme B)
+  useEffect(() => {
+    if (sel === null) return;
+    // M7 / AC-15: legacy ID → engine handle via entity-state (doc.entities gone).
+    const handle = entHandle(bus.doc, sel);
+    if (handle === undefined) return;
+    const t = bus.doc.world.get(handle, Transform);
+    if (!t.ok) return;
+    const q = t.value as { quatX: number; quatY: number; quatZ: number; quatW: number };
+    setEuler(quatToEuler(q.quatX, q.quatY, q.quatZ, q.quatW));
+  }, [sel]);
   const toggleComp = (comp: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -273,7 +288,7 @@ export function InspectorPanel() {
   if (selList.length > 1) {
     return <BatchPanel ids={selList} />;
   }
-  if (sel === null || !bus.doc.entities[sel]) {
+  if (sel === null || !entExists(bus.doc, sel)) {
     return (
       <div className="panel" data-testid="panel-inspector">
         <h3>Inspector</h3>
@@ -281,10 +296,14 @@ export function InspectorPanel() {
       </div>
     );
   }
-  const node = bus.doc.entities[sel];
+  // M7 / AC-15: entity name/parent/components read from world (SSOT) via
+  // entity-state; doc.entities/doc.order/EntityNode.source deleted.
+  const nodeName = entName(bus.doc, sel);
+  const nodeParent = entParent(bus.doc, sel);
+  const nodeComponents = entComponents(bus.doc, sel);
   const blocked = descendantsAndSelf(sel);
-  const parentOptions = bus.doc.order.filter((id) => !blocked.has(id));
-  const missingComponents = ADDABLE_COMPONENTS.filter((c) => node.components[c] === undefined);
+  const parentOptions = entIds(bus.doc).filter((id) => !blocked.has(id));
+  const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
   return (
     <div className="panel" data-testid="panel-inspector">
       <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -307,7 +326,7 @@ export function InspectorPanel() {
             data-testid="insp-copy-json"
             title="copy this entity as JSON (for AI / cross-scene paste)"
             onClick={() => {
-              const json = JSON.stringify({ name: node.name, components: node.components }, null, 2);
+              const json = JSON.stringify({ name: nodeName, components: nodeComponents }, null, 2);
               void navigator.clipboard?.writeText(json);
               setCopied(true);
               window.setTimeout(() => setCopied(false), 1200);
@@ -317,48 +336,35 @@ export function InspectorPanel() {
           </button>
         </span>
       </h3>
-      {node.source && (
-        <div className="insp-source" data-testid="insp-source">
-          <span className="src-badge" title="this instance was baked from a Workbench source">
-            ⤴ {node.source.plugin}
-          </span>
-          <button
-            type="button"
-            className="tbtn"
-            data-testid="insp-edit-source"
-            onClick={() => node.source && openSourcePanel(node.source.plugin, node.source.docId)}
-          >
-            {t('editor.inspector.editSource')}
-          </button>
-        </div>
-      )}
+      {/* M7 / AC-15: EntityNode.source deleted — the edit-source affordance is
+          dropped (entity provenance is no longer tracked in the authoring layer). */}
       <div className="field">
         <label>Name</label>
-        <NameField key={sel} value={node.name} onCommit={(name) => { if (name && name !== node.name) dispatch({ kind: 'rename', entity: sel, name }); }} />
+        <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) dispatch({ kind: 'rename', entity: sel, name }); }} />
       </div>
       <div className="field">
         <label>Parent</label>
         <select
           data-testid="insp-parent"
-          value={node.parent ?? ''}
+          value={nodeParent ?? ''}
           onChange={(e) => dispatch({ kind: 'reparent', entity: sel, parent: e.target.value === '' ? null : Number(e.target.value) })}
         >
           <option value="">(root)</option>
           {parentOptions.map((id) => (
             <option key={id} value={id}>
-              {bus.doc.entities[id]?.name} #{id}
+              {entName(bus.doc, id)} #{id}
             </option>
           ))}
         </select>
       </div>
-      {Object.entries(node.components).map(([comp, value]) => (
+      {Object.entries(nodeComponents).map(([comp, value]) => (
         <div key={comp}>
           <div
             className="compname"
             style={{ display: 'flex', justifyContent: 'space-between' }}
             onContextMenu={(e) => showContextMenu(e, [
-              { label: t('editor.inspector.refToChat'), onClick: () => requestRefComponent(sel, comp, node.components[comp]) },
-              { label: t('editor.inspector.copyJson'), onClick: () => { void navigator.clipboard?.writeText(JSON.stringify({ [comp]: node.components[comp] }, null, 2)); } },
+              { label: t('editor.inspector.refToChat'), onClick: () => requestRefComponent(sel, comp, value) },
+              { label: t('editor.inspector.copyJson'), onClick: () => { void navigator.clipboard?.writeText(JSON.stringify({ [comp]: value }, null, 2)); } },
             ])}
           >
             <span style={{ cursor: 'pointer' }} data-testid={`insp-comp-toggle-${comp}`} onClick={() => toggleComp(comp)}>
@@ -417,18 +423,25 @@ export function InspectorPanel() {
                   );
                 }
                 if (comp === 'Transform') {
-                  const authoredYaw = ((data.rotation as { y?: unknown } | undefined)?.y as number) || 0;
-                  // live-follow the viewport rotation gizmo while it is being dragged
-                  const rotY = fieldPrev && fieldPrev.id === sel && fieldPrev.key === 'Transform.rot.y' ? fieldPrev.value : authoredYaw;
+                  // euler React state (scheme B): read local React state, blur→eulerToQuat→world setComponent
+                  // AGENTS.md #6: conversion on editor side, XYZ order, quat SSOT in world
+                  const commitEuler = (key: string, deg: number) => {
+                    const next = { ...euler, [key]: deg };
+                    setEuler(next);
+                    const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
+                    dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quatX: qx, quatY: qy, quatZ: qz, quatW: qw } });
+                  };
+                  const ROTATIONS = [
+                    { key: 'rotX', label: 'rotX', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
+                    { key: 'rotY', label: 'rotY', tooltip: 'rotation around Y (degrees)', testid: 'insp-Transform-rotY' },
+                    { key: 'rotZ', label: 'rotZ', tooltip: 'rotation around Z (degrees)', testid: 'insp-Transform-rotZ' },
+                  ];
                   out.push(
-                    <NumberScrubField
-                      key="__roty"
-                      label="rot.y"
-                      value={rotY}
-                      fs={{ key: 'rot.y', type: 'number', step: 1, tooltip: 'yaw (degrees, around +Y) — drives the heading ray' }}
-                      testid="insp-Transform-roty"
-                      onCommit={(val) => dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { rotation: { y: val } } })}
-                    />,
+                    <div className="vec3-row" data-testid="insp-Transform-rot-vec3" key="__rot">
+                      {ROTATIONS.map((r) => (
+                        <NumberScrubField key={r.key} label={r.label} value={euler[r.key as keyof typeof euler]} fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }} testid={r.testid} compact onCommit={(val) => commitEuler(r.key, val)} />
+                      ))}
+                    </div>,
                   );
                 }
                 for (const k of keys) {
@@ -498,18 +511,6 @@ export function InspectorPanel() {
                           onChange={(e) => setField(e.target.value)}
                         />
                       )}
-                    </div>,
-                  );
-                }
-                if (comp === 'Track') {
-                  const legacy = typeof data.channel === 'string' && Array.isArray(data.keys) && (data.keys as unknown[]).length > 0 ? 1 : 0;
-                  const extra = Array.isArray(data.tracks) ? (data.tracks as unknown[]).length : 0;
-                  out.push(
-                    <div className="field muted" key="__tracksummary" data-testid="insp-track-summary" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span>{t('editor.inspector.trackChannels', { count: legacy + extra })}</span>
-                      <button type="button" className="tbtn" data-testid="insp-open-timeline" title="open the Timeline panel to edit keyframes" onClick={() => focusPanel('timeline')}>
-                        ⤳ Timeline
-                      </button>
                     </div>,
                   );
                 }

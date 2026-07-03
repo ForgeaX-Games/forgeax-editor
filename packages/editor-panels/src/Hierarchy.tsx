@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
-import { openSourcePanel } from '@forgeax/editor-shared';
+import { entExists, entName, entComponents, entComponent, entIds } from '@forgeax/editor-shared';
 import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-shared';
 import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-shared';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
@@ -72,14 +72,20 @@ function Row({
   const [editing, setEditing] = useState(false);
   // F2 (or any panel) can request this row to enter inline-rename mode.
   useEffect(() => onRenameRequest((rid) => rid === id && setEditing(true)), [id]);
-  const node = bus.doc.entities[id];
-  if (!node) return null;
+  // M7 / AC-15: entity view read from world (SSOT) via entity-state helpers;
+  // doc.entities/EntityNode deleted. `hidden` derives from the EditorHidden
+  // component; `components` from the world component walk. EntitySource (the old
+  // EntityNode.source) is gone — edit-source affordances are dropped with it.
+  if (!entExists(bus.doc, id)) return null;
+  const nodeName = entName(bus.doc, id);
+  const nodeComponents = entComponents(bus.doc, id);
+  const nodeHidden = entComponent(bus.doc, id, 'EditorHidden') !== undefined;
   const kids = flat ? [] : childrenOf(bus.doc, id);
   const isCollapsed = collapsed?.has(id) ?? false;
   function commitRename(next: string) {
     setEditing(false);
     const name = next.trim();
-    if (name && node && name !== node.name) dispatch({ kind: 'rename', entity: id, name });
+    if (name && name !== nodeName) dispatch({ kind: 'rename', entity: id, name });
   }
   return (
     <>
@@ -87,7 +93,7 @@ function Row({
         className={`tn${selList.includes(id) ? ' sel' : ''}${over ? ' drop' : ''}${hoverId === id ? ' hov' : ''}`}
         style={{ paddingLeft: 10 + depth * 14 }}
         data-testid={`hier-row-${id}`}
-        title={`${node.name} · #${id}${node.source ? ` · ⤴ ${node.source.plugin}` : ''}`}
+        title={`${nodeName} · #${id}`}
         onMouseEnter={() => setHoverEntity(id)}
         onMouseLeave={() => setHoverEntity(null)}
         onClick={(e) => (e.shiftKey || e.metaKey || e.ctrlKey ? toggleSelection(id) : setSelection(id))}
@@ -135,7 +141,7 @@ function Row({
             className="rename-input"
             data-testid={`hier-rename-${id}`}
             autoFocus
-            defaultValue={node.name}
+            defaultValue={nodeName}
             onFocus={(e) => e.target.select()}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
@@ -146,17 +152,17 @@ function Row({
           />
         ) : (
           <span
-            style={node.hidden ? { opacity: 0.45 } : undefined}
+            style={nodeHidden ? { opacity: 0.45 } : undefined}
             onDoubleClick={(e) => {
               e.stopPropagation();
               setEditing(true);
             }}
           >
-            {highlight ? highlightName(node.name, highlight) : node.name}
+            {highlight ? highlightName(nodeName, highlight) : nodeName}
           </span>
         )}
         <span className="comp-badges" data-testid={`hier-badges-${id}`}>
-          {Object.keys(node.components).map((c) => (
+          {Object.keys(nodeComponents).map((c) => (
             <span key={c} className="comp-badge" title={c}>
               {c[0]}
             </span>
@@ -174,13 +180,13 @@ function Row({
         <span
           className="vis"
           data-testid={`hier-vis-${id}`}
-          title={node.hidden ? 'show in viewport' : 'hide in viewport'}
+          title={nodeHidden ? 'show in viewport' : 'hide in viewport'}
           onClick={(e) => {
             e.stopPropagation();
-            dispatch({ kind: 'setHidden', entity: id, hidden: !node.hidden });
+            dispatch({ kind: 'setHidden', entity: id, hidden: !nodeHidden });
           }}
         >
-          {node.hidden ? '⊘' : '◉'}
+          {nodeHidden ? '⊘' : '◉'}
         </span>
       </div>
       {!isCollapsed &&
@@ -211,7 +217,8 @@ export function HierarchyPanel() {
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
   const openMenu = (m: Menu) => {
-    const node = bus.doc.entities[m.id];
+    // M7 / AC-15: entity name/components read from world (SSOT); doc.entities +
+    // EntityNode.source deleted, so the edit-source menu item is dropped.
     const multi = getSelectionList().length > 1;
     const items: MenuItemDef[] = [];
     if (multi) {
@@ -219,9 +226,8 @@ export function HierarchyPanel() {
       items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: getSelectionList().length }), onClick: () => deleteManyCascade(getSelectionList()) });
       items.push({ sep: true });
     }
-    items.push({ label: node?.source ? t('editor.hierarchy.menu.editSource', { plugin: node.source.plugin }) : t('editor.hierarchy.menu.editSourceNone'), disabled: !node?.source, onClick: () => { if (node?.source) openSourcePanel(node.source.plugin, node.source.docId); } });
     items.push({ label: t('editor.hierarchy.menu.duplicate'), onClick: () => duplicateEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { const n = bus.doc.entities[m.id]; if (n) void navigator.clipboard?.writeText(JSON.stringify({ name: n.name, components: n.components }, null, 2)); } });
+    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { if (entExists(bus.doc, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(bus.doc, m.id), components: entComponents(bus.doc, m.id) }, null, 2)); } });
     items.push({ label: t('editor.hierarchy.menu.refToChat'), onClick: () => requestRefEntity(m.id) });
     if (childrenOf(bus.doc, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), onClick: () => ungroupEntity(m.id) });
     items.push({ label: t('editor.hierarchy.menu.delete'), danger: true, onClick: () => deleteEntity(m.id) });
@@ -231,11 +237,11 @@ export function HierarchyPanel() {
   // When filtering, flatten to all entities whose NAME or any COMPONENT name
   // matches (tree semantics dropped so deep matches surface immediately). Matching
   // by component lets a human/AI find entities by capability, e.g. "light".
+  // M7 / AC-15: entity list + name/components come from world (SSOT) via
+  // entity-state; doc.order/doc.entities deleted.
   const matches = q
-    ? bus.doc.order.filter((id) => {
-        const n = bus.doc.entities[id];
-        if (!n) return false;
-        return n.name.toLowerCase().includes(q) || Object.keys(n.components).some((c) => c.toLowerCase().includes(q));
+    ? entIds(bus.doc).filter((id) => {
+        return entName(bus.doc, id).toLowerCase().includes(q) || Object.keys(entComponents(bus.doc, id)).some((c) => c.toLowerCase().includes(q));
       })
     : [];
   return (
@@ -246,7 +252,7 @@ export function HierarchyPanel() {
           type="button"
           className="tbtn"
           data-testid="btn-add-entity"
-          onClick={() => dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { x: 0, y: 0, z: 0 } } })}
+          onClick={() => dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } } })}
         >
           + Entity
         </button>
@@ -280,7 +286,7 @@ export function HierarchyPanel() {
           data-testid="btn-collapse-all"
           title="collapse / expand all parent nodes"
           onClick={() => {
-            const parents = bus.doc.order.filter((id) => childrenOf(bus.doc, id).length > 0);
+            const parents = entIds(bus.doc).filter((id) => childrenOf(bus.doc, id).length > 0);
             const allCollapsed = parents.length > 0 && parents.every((id) => collapsed.has(id));
             const next = allCollapsed ? new Set<EntityId>() : new Set(parents);
             setCollapsed(next);

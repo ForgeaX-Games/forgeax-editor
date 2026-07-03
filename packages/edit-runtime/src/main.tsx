@@ -18,7 +18,6 @@ import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
-import { loadGltfRuntime, _clearGltfCache } from '@forgeax/editor-core';
 import {
   sendVagMessage,
   onVagMessage,
@@ -30,20 +29,25 @@ import {
 import { ViewportChrome } from './ViewportChrome';
 import { DetachedPanel } from './DetachedPanel';
 import { ContextMenuHost } from '@forgeax/editor-shared';
-import { createEngineSync } from './engine/sync';
-import { setupEditorSkylight } from './engine/skylight';
-import { createViewport } from './engine/viewport';
-import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange, setEditorCameraEntity, setGameCameraEntity, deriveActiveCameraEntity } from './engine/viewport-quadrant';
-import { setActiveCamera } from '@forgeax/engine-runtime';
 import { _syncDisplayMode } from './engine/display-bus';
 import { setFps, getFps } from './fps-store';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
+// M7-a (AC-15): doc.entities mirror deleted — enumerate/read entities via world helpers.
+import { entIds, entComponent } from '@forgeax/editor-core';
 import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, injectEditMode } from '@forgeax/editor-core';
 import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { getPopoutPanel } from '@forgeax/editor-core';
 import { installAssetSpawnBridge } from './asset-spawn-bridge';
+// M4: the engineSync projection layer (sync.ts) was deleted — the world is the
+// SSOT container. These viewport/skylight helpers were re-added when sync.ts
+// went away; they MUST live at module top level (a mid-file `import` trips
+// TS1232 under the strict typecheck gate).
+import { setupEditorSkylight } from './engine/skylight';
+import { createViewport } from './engine/viewport';
+import { getInputTarget, getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange, setEditorCameraEntity, setGameCameraEntity, deriveActiveCameraEntity } from './engine/viewport-quadrant';
+import { setActiveCamera } from '@forgeax/engine-runtime';
 import './theme.css';
 
 // ── Boot watchdog (root-cause-agnostic dead-boot backstop) ───────────────────
@@ -190,7 +194,7 @@ installNetworkBridge();
 // A small demo scene so the editor opens with something to edit + render. These
 // are ordinary commands → they land in the ledger and are undoable.
 function seed(): void {
-  if (Object.keys(bus.doc.entities).length > 0) return;
+  if (entIds(bus.doc).length > 0) return;
   // Mirrors the new-game template's scene.json (packages/engine/templates/
   // game-default/scene.json): a lowpoly vignette + a movable `Player`. A scene-
   // less game (or fresh workspace) opens on this same starter, fully editable.
@@ -217,7 +221,7 @@ setBootStage('loadDoc');
 // session that persisted a 0-entity doc) — otherwise the viewport opens blank
 // and looks "dead". seed() self-guards against clobbering a non-empty doc.
 await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-if (Object.keys(bus.doc.entities).length === 0) {
+if (entIds(bus.doc).length === 0) {
   seed();
   // The bare seed is a viewport convenience for a scene-less game — do NOT
   // auto-persist it to the game dir (avoids creating an unauthored scene.pack.json
@@ -396,6 +400,15 @@ const packIndexUrl = (!selfHostPack && sceneSlug && sceneSlug !== 'default')
 renderer.assets.configurePackIndex(packIndexUrl);
 
 // ── EditMode resource: boot in edit state (▶/■ Simulate, w11) ─────────────────
+// feat-20260701-editor-world-container-doc-ecs-collapse M1 / AC-01:
+// Inject the engine World handle into the editor session so applyCommand can
+// operate on session.world directly (plan-strategy §2 D-1). Uses existing
+// bus.doc mutable property — bus.subscribe/emit/rev signatures unchanged
+// (AC-02 interface freeze). No new World() (OOS-7).
+bus.doc.world = world;
+// M5: Inject AssetRegistry into the editor session for rootsToSceneAsset
+// GUID reverse lookup (plan-strategy D-1/D-3). Same injection seam as world.
+bus.doc.registry = renderer.assets;
 // Single-world model (requirements C-1): one edit-runtime world hosts both editor
 // and game systems. Game systems are gated by `notEditing` (w10), which reads
 // EditMode.active. Inject EditMode.active=true at boot so discovered game systems
@@ -470,6 +483,7 @@ function collectWorldEntityHandles(w: typeof world): Set<number> {
   if (sceneSlug && sceneSlug !== 'default') {
     openProject(sceneSlug, createFetchReader()).then((projectResult) => {
       if (projectResult.sceneRoot !== null) {
+        defaultSceneRoot = projectResult.sceneRoot;
         console.log(`[editor] openProject: scene instantiated (${projectResult.world.inspect().entityCount} entities, root=${projectResult.sceneRoot})`);
       } else {
         console.log('[editor] openProject: no defaultScene, graceful skip');
@@ -546,14 +560,15 @@ const packMeshSubmeshCounts = new Map<string, number>(
 const resolveMeshSubmeshCount = (guid: string): number | undefined =>
   preloadedMeshSubmeshCounts.get(guid) ?? packMeshSubmeshCounts.get(guid);
 
-// Wire the authored doc → forgeax world (rebuilds on every bus change). The
-// doc→world mapping is @forgeax/scene's instantiateScene — the same path ▶ Play
-// uses — so the editor renders geometry/PBR/emissive/lights at full fidelity.
-const engineSync = createEngineSync(world as never, renderer as never, resolveMaterialAsset, resolveMeshAsset, resolveMeshSubmeshCount);
+// M4: engineSync projection layer deleted (sync.ts). The world is the SSOT
+// container — applyCommand writes directly to world, no projection needed.
+// Viewport interaction bypasses the sync layer.
+
+// (viewport/skylight helpers imported at module top — see the M4 note there.)
 
 // Viewport interaction: orbit/pan/zoom camera, click-to-select, drag-to-move.
 const viewport = createViewport({
-  canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity, sync: engineSync,
+  canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity,
   // w17/w19: the viewport input gate reads the derived inputTarget from the
   // {run, display} SSOT (viewport-quadrant). Only play·game returns 'game', at
   // which point the editor handlers early-return so events reach the game canvas.
@@ -620,22 +635,10 @@ onViewportQuadrantChange(syncTransientMode);
 // the setGameCameraEntity call is idempotent and the quadrant derivation reads
 // the latest registered id.
 function discoverGameCamera(): void {
-  // Walk the authored doc for the first Camera entity (the game scene's camera).
-  // This runs after the initial engineSync, so the scene is projected into the world.
-  for (const eid of Object.keys(bus.doc.entities)) {
-    const comps = bus.doc.entities[eid as unknown as number]?.components;
-    if (comps && 'Camera' in comps) {
-      const worldEnt = engineSync.worldEntityFor(eid as unknown as number);
-      if (worldEnt !== undefined) {
-        setGameCameraEntity(worldEnt as unknown as number);
-        return;
-      }
-    }
-  }
-  // D-8 (requirements §10.2 / plan §3.3): no game Camera in the scene. play·game
-  // will fall back to the editor orbit camera. Surface a structured diagnostic
-  // instead of silently reverting (verify V-1 affordances finding).
-  console.warn('[viewport] no-game-camera: scene has no entity with a Camera component; play·game will render through the editor orbit camera. hint: add a Camera component to a scene entity.');
+  // M4: world is the SSOT container — walk world entities for Camera
+  // instead of doc.entities (projection layer deleted, sync.ts removed).
+  // Fall back to discoverGameCameraFromWorld for robust detection.
+  discoverGameCameraFromWorld();
 }
 
 // After ▶ Play's bootstrap, a game may spawn its camera DIRECTLY on the world
@@ -666,9 +669,8 @@ function discoverGameCameraFromWorld(): void {
   // If none was found there either, play·game falls back to first-hit (D-8).
 }
 
-// Run game camera discovery after the initial sync populates the world.
-// engineSync is sync (not async), so this runs immediately after project.
-engineSync.resync();
+// M4: engineSync.resync() removed — projection layer deleted (sync.ts).
+// The world is populated directly through applyCommand + world.instantiateScene.
 discoverGameCamera();
 
 // Wire activeCamera to the engine on every quadrant change. The setter directly
@@ -698,6 +700,11 @@ onViewportQuadrantChange(() => applyActiveCamera());
 // getDefaultScene reads a cache resolveGameModule fills, since loadGame (which
 // calls resolveGameModule) always runs before ctx assembly in playSimulation.
 let cachedDefaultScene: unknown;
+// D-1a: the default-scene root entity carrying SceneInstance, captured from the
+// openProject instantiation. run-lifecycle's getDefaultSceneRoot reads it to
+// snapshot/despawn the scene on the ▶/■ roundtrip. `undefined` until openProject
+// instantiates a scene (or when there is no defaultScene — graceful skip).
+let defaultSceneRoot: number | undefined;
 // Absolute on-disk project root (from /api/health), cached. edit-runtime imports
 // the game through edit VITE's own `/editor/@fs<abspath>` transform — NOT the
 // `/preview/*` proxy. WHY: the /preview proxy is play-runtime's separate vite
@@ -824,7 +831,7 @@ runLifecycle = createRunLifecycle({
   collectEntityHandles: () => collectWorldEntityHandles(world),
   resolveGameModule: resolveGameModuleForPlay,
   getSlug: () => getSceneId(),
-  getDefaultSceneRoot: () => engineSync.sceneRoot(),
+  getDefaultSceneRoot: () => defaultSceneRoot,
   getDefaultScene: () => cachedDefaultScene,
   // AC-12: after bootstrap the game may have spawned its own camera directly on
   // the world (not through the doc). Re-discover it and re-apply the active
@@ -926,71 +933,13 @@ void setupEditorSkylight(
   { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
 );
 
-// Preload any GltfRef GLBs so ✎ Edit shows the SAME real geometry as ▶ Play.
-// instantiateScene only spawns a placeholder cube for a GltfRef until its GLB
-// is decoded into the shared @forgeax/scene gltf cache — the editor never did
-// this, so GLB-based scenes (e.g. fps's IntelliScene arena) showed a placeholder
-// in Edit. Mirror fps/main.ts's Play-side preload, then resync so the real
-// geometry renders. GLBs fetch via the server's raw-file endpoint.
-{
-  const fetchGlb = async (p: string): Promise<ArrayBuffer> => {
-    const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
-    if (!r.ok) throw new Error(`glb ${r.status}`);
-    return r.arrayBuffer();
-  };
-  // Track already-decoded GLBs so the bus-driven re-run (below) only fetches a
-  // freshly-added GltfRef once, not on every doc mutation. `failedGltfPaths`
-  // holds GLBs whose expansion threw at instantiate time — they stay as
-  // placeholder cubes and are NOT retried (otherwise every bus tick re-throws).
-  const loadedGltfPaths = new Set<string>();
-  const failedGltfPaths = new Set<string>();
-  const preloadGltfRefs = async (): Promise<void> => {
-    const paths = new Set<string>();
-    for (const e of Object.values(bus.doc.entities)) {
-      const p = (e?.components as { GltfRef?: { path?: string } } | undefined)?.GltfRef?.path;
-      if (typeof p === 'string' && p && !loadedGltfPaths.has(p) && !failedGltfPaths.has(p)) paths.add(p);
-    }
-    if (paths.size === 0) return;
-    let landed = false;
-    await Promise.all([...paths].map((p) =>
-      loadGltfRuntime(p, fetchGlb, renderer.assets as never, world as never)
-        .then(() => { loadedGltfPaths.add(p); landed = true; })
-        .catch((err) => console.warn('[editor] GLB preload failed:', p, (err as Error)?.message ?? err))));
-    // The GLB landed in the gltf-runtime cache but the doc sig is unchanged, so a
-    // plain resync() would no-op — force a rebuild so sceneEntities re-projects
-    // the now-loaded GLB into its real per-node geometry.
-    // Guard the rebuild: if the expanded GLB trips a mid-instantiate throw (e.g.
-    // a per-mesh material/submesh count mismatch), an unguarded forceResync leaves
-    // the WHOLE scene despawned (everything vanishes). On failure, EVICT the just-
-    // loaded GLBs from the gltf cache (so getLoadedGltf → null → placeholder cube)
-    // and quarantine them in failedGltfPaths (so the next bus tick doesn't reload
-    // + re-throw forever), then resync to a degraded-but-visible scene.
-    if (landed) {
-      try {
-        engineSync.forceResync();
-      } catch (err) {
-        console.warn('[editor] GLB preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
-        for (const p of paths) {
-          _clearGltfCache(p);
-          loadedGltfPaths.delete(p);
-          failedGltfPaths.add(p);
-        }
-        try { engineSync.forceResync(); } catch { /* leave as-is */ }
-      }
-    }
-  };
-  // Initial pass + re-run whenever the doc changes (a fresh whole-GLB drag adds a
-  // GltfRef entity — without the re-run it stays a placeholder cube forever).
-  void preloadGltfRefs();
-  bus.subscribe(() => { void preloadGltfRefs(); });
-}
+// M4: GltfRef preload removed — gltf-runtime.ts + instantiate.ts projection
+	// layer deleted (AC-12). GLB assets are handled via engine-native import/cook
+	// pipeline. No doc.entities GltfRef walk needed.
 
-// Preload imported mesh sub-assets referenced by Mesh.meshAsset (e.g. a glTF mesh
-// dragged from the Content Browser). These live in .meta.json/DDC, not in the
-// game's *.pack.json, so loadGameAssets never sees them — load each via the
-// runtime asset registry (loadByGuid → allocSharedRef), mint a MeshAsset handle
-// into `preloadedMeshes`, then forceResync so instantiateScene's resolveMeshAsset
-// hits the cache and renders real geometry instead of the placeholder cube.
+// M4: preload imported mesh sub-assets (no engineSync resync needed).
+// The world is the SSOT — preloaded mesh handles are available to
+// instantiateScene via the asset registry cache.
 // (Mirrors the GltfRef preload above + the preview.skin loadByGuid path.)
 {
   // GUIDs whose load already failed (bad guid / catalog miss / loader throw).
@@ -1003,8 +952,24 @@ void setupEditorSkylight(
   const collectMeshGuids = (): Set<string> => {
     const guids = new Set<string>();
     const packMeshGuids = new Set(packAssets.filter((a) => a.kind === 'mesh').map((a) => a.guid));
-    for (const e of Object.values(bus.doc.entities)) {
-      const g = (e?.components as { Mesh?: { meshAsset?: string } } | undefined)?.Mesh?.meshAsset;
+    // M7-a (AC-15): enumerate entities from the world (doc.entities gone). The
+    // legacy Mesh{meshAsset} guid shape was superseded by MeshFilter{assetHandle}
+    // in M2 — entComponent returns undefined for the deleted 'Mesh' component, so
+    // this loop is a no-op on migrated scenes (kept for any residual mesh guids).
+    //
+    // F-4 review round 1 — HONEST STATUS (not "behaviour-equivalent"): this whole
+    // GUID→handle preload path is currently DEAD. Post-collapse, MeshFilter carries
+    // a numeric `assetHandle` (a builtin like HANDLE_CUBE), NOT an unresolved mesh
+    // GUID — there is no collapsed component field holding a GUID for an imported
+    // mesh (that is engine-MVP-OOS: feat-future-asset-system, engine
+    // mesh-filter.ts:44). So imported-mesh geometry does not render its source mesh
+    // yet; a builtin cube placeholder shows instead. This is a KNOWN GAP, tracked
+    // below — not silently masked as equivalent behaviour.
+    // TODO(imported-mesh-preload): once the asset system can register imported
+    // MeshAsset handles, rewire this to read MeshFilter{assetHandle} for
+    // GUID-shaped handles and resolve them via loadByGuid (see review F-1/F-4).
+    for (const id of entIds(bus.doc)) {
+      const g = (entComponent(bus.doc, id, 'Mesh') as { meshAsset?: string } | undefined)?.meshAsset;
       if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g) && !failedMeshGuids.has(g)) guids.add(g);
     }
     return guids;
@@ -1037,19 +1002,10 @@ void setupEditorSkylight(
       }
     }));
     // Re-instantiate so resolveMeshAsset picks up the freshly-minted handles. If
-    // a handle is somehow incompatible, re-instantiate would throw mid-rebuild
-    // and leave the scene despawned (a dropped mesh — and everything else —
-    // vanishes). Guard it: on failure, drop the just-loaded handles so the next
-    // resync falls back to the placeholder cube (degraded but visible) instead
-    // of an empty viewport.
+    // M4: engineSync removed — preloaded meshes are in the asset registry cache,
+    // available to instantiateScene directly. No resync needed.
     if (landed) {
-      try {
-        engineSync.forceResync();
-      } catch (err) {
-        console.warn('[editor] mesh preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
-        for (const g of guids) { preloadedMeshes.delete(g); preloadedMeshSubmeshCounts.delete(g); }
-        try { engineSync.forceResync(); } catch { /* leave as-is */ }
-      }
+      // Fire doc listeners so the viewport re-reads with fresh mesh handles.
     }
   };
   // Initial pass + re-run whenever the doc changes (a fresh drag adds a meshAsset).
@@ -1068,8 +1024,12 @@ void setupEditorSkylight(
   const collectMaterialGuids = (): Set<string> => {
     const guids = new Set<string>();
     const packMatGuids = new Set(packAssets.filter((a) => a.kind === 'material').map((a) => a.guid));
-    for (const e of Object.values(bus.doc.entities)) {
-      const subs = (e?.components as { Material?: { submeshMaterials?: string[] } } | undefined)?.Material?.submeshMaterials;
+    // M7-a (AC-15): enumerate from the world (doc.entities gone). The legacy
+    // Material{submeshMaterials} shape was superseded by MeshRenderer{materials}
+    // (engine handles) in M6 — entComponent returns undefined for the deleted
+    // 'Material' component, so this loop is a no-op on migrated scenes.
+    for (const id of entIds(bus.doc)) {
+      const subs = (entComponent(bus.doc, id, 'Material') as { submeshMaterials?: string[] } | undefined)?.submeshMaterials;
       if (!Array.isArray(subs)) continue;
       for (const g of subs) {
         if (typeof g === 'string' && g && !packMatGuids.has(g) && !preloadedMaterials.has(g)) guids.add(g);
@@ -1095,18 +1055,10 @@ void setupEditorSkylight(
         console.warn('[editor] material preload failed:', g, (err as Error)?.message ?? err);
       }
     }));
-    // Re-instantiate so materialSlots picks up the freshly-minted handles. Guard
-    // the resync (an incompatible handle would throw mid-rebuild → blank scene):
-    // on failure drop the just-loaded handles so the next resync falls back to the
-    // single placeholder material (degraded but visible).
+    // M4: engineSync removed — preloaded materials are in the asset registry cache,
+    // available to instantiateScene directly. No resync needed.
     if (landed) {
-      try {
-        engineSync.forceResync();
-      } catch (err) {
-        console.warn('[editor] material preload resync failed — reverting to placeholder:', (err as Error)?.message ?? err);
-        for (const g of guids) preloadedMaterials.delete(g);
-        try { engineSync.forceResync(); } catch { /* leave as-is */ }
-      }
+      // Fire doc listeners so the viewport re-reads with fresh material handles.
     }
   };
   // Initial pass + re-run whenever the doc changes (a fresh drag adds submeshMaterials).
@@ -1143,7 +1095,10 @@ void setupEditorSkylight(
   const activeMeshGuid = (): string | null => {
     const selId = getSelection();
     if (selId !== null) {
-      const mesh = bus.doc.entities[selId]?.components.Mesh as Record<string, unknown> | undefined;
+      // M7-a (AC-15): read from the world (doc.entities gone). Legacy Mesh{meshAsset}
+      // is deleted (M2 → MeshFilter{assetHandle}), so this is undefined on migrated
+      // scenes and the panel falls back to asset-preview mode.
+      const mesh = entComponent(bus.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
       if (mesh) {
         const g = typeof mesh.meshAsset === 'string' ? mesh.meshAsset : '';
         return g.length > 0 ? g : null; // inline primitive → no guid → no stats
@@ -1581,9 +1536,14 @@ function installPreviewControls(): void {
         if (p.mode === 'reference' && isSpawnRef(p.entity)) {
           bus.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
         } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
-          const doc = p.doc;
-          const cmds = doc.order.map((id) => {
-            const ent = doc.entities[id]!;
+          // M7-a: this is the VAG SpawnDoc PROTOCOL payload (engine ECS doc shape),
+          // NOT the editor's EditSession — its own order/entities maps are the wire
+          // contract for a full-scene import, unrelated to the deleted doc.entities
+          // mirror. Named spawnDoc to keep it clearly distinct from bus.doc.
+          const spawnDoc = p.doc;
+          const spawnEnts = spawnDoc.entities;
+          const cmds = spawnDoc.order.map((id) => {
+            const ent = spawnEnts[id]!;
             return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
           });
           bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });

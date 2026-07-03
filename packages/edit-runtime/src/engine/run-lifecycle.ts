@@ -29,8 +29,10 @@
 // P3 (loadGame returns structured Result on every failure arm) + OOS-4 (zero
 // editor semantics reach the engine — the engine sees world / entity ids only).
 
+// M4: cloneEditSession removed — Play snapshot now uses engine-native
+// world.getSceneInstanceState / world.despawnScene (AC-10).
+import { injectEditMode } from '@forgeax/editor-core';
 import type { EditSession } from '@forgeax/editor-core';
-import { cloneEditSession, injectEditMode } from '@forgeax/editor-core';
 import { loadGame, isLoadGameError } from '@forgeax/engine-app';
 
 // Structural mirror of @forgeax/engine-app's BootstrapContext. The engine `.d.ts`
@@ -113,11 +115,17 @@ export function makeEpochGuard(): EpochGuard {
 // Dependency-injected run lifecycle
 // ────────────────────────────────────────────────────────────────────────────
 
+// M4: added getSceneInstanceState + despawnScene + instantiateScene for
+// engine-native Play snapshot (AC-10).
 /** Minimal world surface the lifecycle needs (engine ECS World, structurally). */
 export interface RunWorld {
   inspect(): { readonly systems: ReadonlyArray<{ readonly name: string }> };
   removeSystem(name: string): { ok: boolean; error?: unknown };
   despawn(handle: never): unknown;
+  getSceneInstanceState(root: number): { ok: boolean; error?: unknown; value?: { source: unknown; entityToLocalId: Map<number, number> } };
+  despawnScene(root: number): { ok: boolean; error?: unknown; value?: number };
+  instantiateScene(handle: unknown, parent?: number): { ok: boolean; error?: unknown; value?: { root: number } };
+  allocSharedRef(kind: string, payload: unknown): unknown;
 }
 
 /** Minimal bus surface (EditorBus, structurally). */
@@ -197,7 +205,10 @@ export interface RunLifecycle {
  */
 export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   const epoch = makeEpochGuard();
-  let snapshot: EditSession | null = null;
+  // M4: snapshot is the SceneAsset source handle + scene root —
+  // captured via getSceneInstanceState before Play mutations.
+  let snapshotSource: unknown = null;
+  let snapshotRoot: number | null = null;
   let prePlaySystems: Set<string> | null = null;
   let prePlayEntities: Set<number> | null = null;
   // B (controlled UI root) + A (cleanup hook) run-scoped state. uiRoot is the
@@ -207,8 +218,17 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   let cleanups: Array<() => void> = [];
 
   async function playSimulation(): Promise<void> {
-    // D-3 snapshot-once: deep-copy the doc before any play mutation touches it.
-    snapshot = cloneEditSession(deps.bus.doc);
+    // M4 / AC-10: snapshot the scene via engine-native getSceneInstanceState
+    // instead of cloneEditSession(bus.doc). Captures the SceneAsset source
+    // handle so ■ can despawn + re-instantiate the same asset.
+    const defaultSceneRoot = deps.getDefaultSceneRoot();
+    if (defaultSceneRoot !== undefined) {
+      const stateRes = deps.world.getSceneInstanceState(defaultSceneRoot);
+      if (stateRes.ok && stateRes.value) {
+        snapshotSource = stateRes.value.source;
+        snapshotRoot = defaultSceneRoot;
+      }
+    }
     // D-1c layer-1 / layer-3 baselines: system names + entity handles at ▶.
     prePlaySystems = new Set(deps.world.inspect().systems.map((s) => s.name));
     prePlayEntities = deps.collectEntityHandles();
@@ -243,7 +263,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // registerUpdate is epoch-gated (D-1c layer-2). defaultSceneRoot /
     // defaultScene come from the doc projection, NOT a forge.json GUID re-
     // instantiate (would duplicate the entities EngineSync already projected).
-    const defaultSceneRoot = deps.getDefaultSceneRoot();
+    // F-3 review round 1: `defaultSceneRoot` is already bound above (the ▶
+    // snapshot capture); re-`const`-ing it here was a duplicate block-scoped
+    // declaration (runtime SyntaxError on module load — edit-runtime tests RED).
+    // Reuse the existing binding; only fetch the companion defaultScene.
     const defaultScene = deps.getDefaultScene();
     const ctx: RunBootstrapContext = {
       world: deps.world,
@@ -347,12 +370,20 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-1c layer-1: drop the systems bootstrap registered.
     removeBootstrapSystems();
 
-    // D-3 / D-1c layer-4 + layer-3: restore the doc, then despawn runtime spawns.
-    if (snapshot) {
-      deps.bus.replaceDoc(snapshot);
+    // M4 / AC-10: restore the scene by despawnScene + re-instantiate
+    // from the captured snapshot source (engine-native, no cloneEditSession).
+    // This replaces the old doc projection path (bus.replaceDoc(cloneEditSession)).
+    if (snapshotRoot !== null && snapshotSource !== null) {
+      deps.world.despawnScene(snapshotRoot);
+      // Re-instantiate from the same SceneAsset source to restore pre-Play state.
+      const r = deps.world.instantiateScene(snapshotSource);
+      if (!r.ok) {
+        console.warn('[editor] ■ Stop re-instantiateScene failed:', (r as { error?: unknown }).error);
+      }
       despawnRuntimeSpawns();
     }
-    snapshot = null;
+    snapshotSource = null;
+    snapshotRoot = null;
     prePlaySystems = null;
     prePlayEntities = null;
   }

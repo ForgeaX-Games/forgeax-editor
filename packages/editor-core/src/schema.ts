@@ -2,6 +2,15 @@
 // has and their constraints. The Inspector reflects it into widgets; the AI
 // bridge reflects the SAME data into `getComponentSchema`. Add a component here
 // → inspector + AI tool both cover it with zero bespoke UI.
+//
+// feat-20260701-editor-world-container-doc-ecs-collapse M3 / AC-22:
+// REGISTRY rewritten to engine-verbatim component schemas. All field names
+// match engine defineComponent fields exactly. Old editor-authored schemas
+// (Mesh, Material, Light, Anim, MatGraph, GltfRef) deleted (M3 + M6 sweep).
+//
+// plan-strategy S2 D-2: Transform quatX/Y/Z/W SSOT, euler in Inspector only
+// plan-strategy S2 D-3: Light scheme A (three independent components)
+// research F-EngineComponents: field names verbatim from engine submodule
 
 export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum';
 
@@ -30,97 +39,112 @@ export interface ComponentSchema {
 }
 
 const REGISTRY: Record<string, ComponentSchema> = {
+  // ── Transform: engine-native quatX/Y/Z/W + posX/Y/Z + scaleX/Y/Z ─────────────
+  // Engine: transform.ts:71 defineComponent
+  // `world` (mat4) is engine-derived column — excluded from editor schema (D-2).
+  // Euler (rotX/rotY/rotZ) is Inspector React state only, NOT in schema/world.
   Transform: {
     name: 'Transform',
     fields: [
-      { key: 'x', type: 'number', step: 0.1 },
-      { key: 'y', type: 'number', step: 0.1 },
-      { key: 'z', type: 'number', step: 0.1 },
+      { key: 'posX', type: 'number', step: 0.1 },
+      { key: 'posY', type: 'number', step: 0.1 },
+      { key: 'posZ', type: 'number', step: 0.1 },
+      { key: 'quatX', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion X (SSOT, euler is Inspector overlay)' },
+      { key: 'quatY', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion Y (SSOT, euler is Inspector overlay)' },
+      { key: 'quatZ', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion Z (SSOT, euler is Inspector overlay)' },
+      { key: 'quatW', type: 'number', step: 0.01, default: 1, tooltip: 'rotation quaternion W (SSOT, euler is Inspector overlay)' },
       { key: 'scaleX', type: 'number', step: 0.1, default: 1, tooltip: 'scale along X (box width)' },
       { key: 'scaleY', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Y (box height)' },
       { key: 'scaleZ', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Z (box depth)' },
-      { key: 'rotX', type: 'number', step: 1, default: 0, tooltip: 'rotation about X (degrees)' },
-      { key: 'rotY', type: 'number', step: 1, default: 0, tooltip: 'rotation about Y (degrees)' },
-      { key: 'rotZ', type: 'number', step: 1, default: 0, tooltip: 'rotation about Z (degrees)' },
     ],
   },
-  Mesh: {
-    name: 'Mesh',
+  // ── MeshFilter: engine-native assetHandle (replaces Mesh{kind}) ──────────────
+  // Engine: mesh-filter.ts:57 defineComponent { assetHandle: shared<MeshAsset> }
+  MeshFilter: {
+    name: 'MeshFilter',
     fields: [
-      { key: 'kind', type: 'enum', options: ['cube', 'sphere', 'cylinder'], default: 'cube', tooltip: 'primitive geometry' },
+      { key: 'assetHandle', type: 'asset', tooltip: 'shared mesh asset handle (built-in or imported)' },
     ],
   },
-  Light: {
-    name: 'Light',
+  // ── MeshRenderer: engine-native materials[] (replaces Material) ───────────────
+  // Engine: mesh-renderer.ts:59 defineComponent
+  MeshRenderer: {
+    name: 'MeshRenderer',
     fields: [
-      { key: 'type', type: 'enum', options: ['point', 'spot', 'directional'], tooltip: 'light source kind' },
+      { key: 'materials', type: 'asset', tooltip: 'array of shared MaterialAsset handles' },
+    ],
+  },
+  // ── DirectionalLight: engine-native per-channel scalars ──────────────────────
+  // Engine: directional-light.ts:92 defineComponent (directionX/Y/Z, colorR/G/B, intensity, castShadow)
+  DirectionalLight: {
+    name: 'DirectionalLight',
+    fields: [
+      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X' },
+      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y' },
+      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z' },
+      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
+      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
+      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
       { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
-      { key: 'color', type: 'color', default: '#ffffff', tooltip: 'emitted light color (hue; magnitude in intensity)' },
-      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 0, tooltip: 'falloff distance (0 = infinite)', showWhen: { key: 'type', in: ['point', 'spot'] } },
-      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X', showWhen: { key: 'type', in: ['directional'] } },
-      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y', showWhen: { key: 'type', in: ['directional'] } },
-      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z', showWhen: { key: 'type', in: ['directional'] } },
       { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
-      { key: 'spotAngle', type: 'number', min: 1, max: 90, step: 1, default: 30, tooltip: 'spot cone half-angle (degrees)', showWhen: { key: 'type', in: ['spot'] } },
     ],
   },
-  Material: {
-    name: 'Material',
+  // ── PointLight: engine-native per-channel + range ────────────────────────────
+  // Engine: point-light.ts:56 defineComponent
+  PointLight: {
+    name: 'PointLight',
     fields: [
-      { key: 'materialAsset', type: 'asset', tooltip: '引用一个材质资产 (GUID);设置后覆盖下面的内联 PBR(留空则用内联)' },
-      { key: 'albedo', type: 'color', default: '#cccccc' },
-      { key: 'metallic', type: 'number', min: 0, max: 1, step: 0.01 },
-      { key: 'roughness', type: 'number', min: 0, max: 1, step: 0.01, default: 0.8 },
-      { key: 'emissive', type: 'color', default: '#000000', tooltip: 'emissive color (hue; magnitude in emissiveIntensity)' },
-      { key: 'emissiveIntensity', type: 'number', min: 0, max: 8, step: 0.05, default: 1, tooltip: 'emissive HDR magnitude (glow strength)' },
-      { key: 'shading', type: 'enum', options: ['standard', 'unlit'], default: 'standard', tooltip: 'standard = PBR lit; unlit = flat self-color' },
-      { key: 'albedoMap', type: 'asset' },
-      { key: 'normalMap', type: 'asset' },
-      { key: 'ormMap', type: 'asset' },
+      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
+      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
+      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
+      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
+      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
     ],
   },
-  Collider: {
-    name: 'Collider',
+  // ── SpotLight: engine-native cone + per-channel ─────────────────────────────
+  // Engine: spot-light.ts:102 defineComponent
+  SpotLight: {
+    name: 'SpotLight',
     fields: [
-      { key: 'shape', type: 'enum', options: ['none', 'box', 'cylinder'], default: 'none', tooltip: 'collision primitive (box = from scale; cylinder = radius)' },
-      { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'cylinder radius', showWhen: { key: 'shape', in: ['cylinder'] } },
+      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X' },
+      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y' },
+      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z' },
+      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
+      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
+      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
+      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
+      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
+      { key: 'innerConeDeg', type: 'number', min: 0, max: 90, step: 1, default: 0, tooltip: 'inner cone half-angle (degrees)' },
+      { key: 'outerConeDeg', type: 'number', min: 1, max: 90, step: 1, default: 45, tooltip: 'outer cone half-angle (degrees)' },
+      { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
     ],
   },
+  // ── Camera: engine-native fields ─────────────────────────────────────────────
+  // Engine: camera.ts:295 defineComponent (fov, aspect, near, far, projection, ...)
   Camera: {
     name: 'Camera',
     fields: [
-      { key: 'projection', type: 'enum', options: ['perspective', 'orthographic'], tooltip: 'camera projection model' },
+      { key: 'projection', type: 'number', step: 1, min: 0, max: 1, default: 0, tooltip: '0=perspective, 1=orthographic' },
       { key: 'fov', type: 'number', min: 10, max: 120, step: 1, default: 60, tooltip: 'vertical field of view (degrees)' },
-      { key: 'near', type: 'number', min: 0.01, max: 100, step: 0.01, default: 0.1, tooltip: 'near clip plane' },
-      { key: 'far', type: 'number', min: 1, max: 10000, step: 1, default: 1000, tooltip: 'far clip plane' },
+      { key: 'aspect', type: 'number', min: 0.1, max: 10, step: 0.01, tooltip: 'aspect ratio (auto if autoAspect=1)' },
+      { key: 'near', type: 'number', min: 0.001, max: 100, step: 0.001, default: 0.1, tooltip: 'near clip plane' },
+      { key: 'far', type: 'number', min: 1, max: 100000, step: 1, default: 1000, tooltip: 'far clip plane' },
     ],
   },
-  // ── Bespoke components (design §17/§18 "编辑器扩展点") ─────────────────────
-  // These are authored through dedicated panels (Timeline / Material Graph), not
-  // the generic Inspector. The schema entry marks them as bespoke so:
-  //  • the Inspector renders a minimal banner + link instead of raw field widgets;
-  //  • `+ Component` / presets can still add the component by its default;
-  //  • Capabilities panel documents them alongside the schema-driven components.
-  Anim: {
-    name: 'Anim',
+  // ── Collider: engine-native fields ───────────────────────────────────────────
+  // Engine: physics/src/components.ts:150 defineComponent
+  Collider: {
+    name: 'Collider',
     fields: [
-      { key: 'duration', type: 'number', min: 0.1, max: 600, step: 0.1, default: 4, tooltip: 'clip length in seconds' },
+      { key: 'shape', type: 'number', min: 0, max: 2, step: 1, default: 0, tooltip: 'collision shape: 0=cuboid, 1=sphere, 2=capsule' },
+      { key: 'halfExtentsX', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'halfExtentsY', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'halfExtentsZ', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'halfHeight', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'friction', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5 },
+      { key: 'restitution', type: 'number', min: 0, max: 1, step: 0.01, default: 0 },
     ],
-    bespoke: { editorId: 'timeline', hint: 'Edit keyframes in the Timeline panel.' },
-  },
-  MatGraph: {
-    name: 'MatGraph',
-    fields: [],
-    bespoke: { editorId: 'matgraph', hint: 'Build this material in the Mat Graph panel.' },
-  },
-  GltfRef: {
-    name: 'GltfRef',
-    fields: [
-      { key: 'path', type: 'string', tooltip: 'path to the source .glb/.gltf file' },
-      { key: 'nodeCount', type: 'number', step: 1, default: 0, tooltip: 'number of nodes in the GLB (read-only)' },
-      { key: 'meshCount', type: 'number', step: 1, default: 0, tooltip: 'number of meshes in the GLB (read-only)' },
-    ],
-    bespoke: { editorId: 'assets', hint: 'GLB reference — renders as placeholder in editor, full geometry in Play mode.' },
   },
 };
 

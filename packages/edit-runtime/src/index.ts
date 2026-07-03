@@ -17,8 +17,8 @@ export { DetachedPanel } from './DetachedPanel';
 export { ViewportBar } from './ViewportBar';
 export { ViewportHints } from './ViewportHints';
 
+// M4: createEngineSync removed — sync.ts deleted (projection layer collapse).
 // ── Engine ──
-export { createEngineSync } from './engine/sync';
 export { setupEditorSkylight } from './engine/skylight';
 export { createViewport } from './engine/viewport';
 

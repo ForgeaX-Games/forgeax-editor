@@ -19,6 +19,31 @@ import { z } from 'zod';
 import type { CommandOrigin, HistoryStep } from './bus';
 import type { EditorCommand, EntityId, EditSession } from './types';
 
+// ── World state for popout cross-window sync (plan-strategy §2 D-4) ──────────
+// feat-20260701-editor-world-container-doc-ecs-collapse M3:
+// The main window enumerates world entities + sidecar hidden states into a
+// lightweight WorldEntityState struct (no engine handle deps, full POD).
+// Popout windows reconstruct their bus.doc.entities compatible view from
+// this struct, avoiding the EditSession deep-clone tight coupling.
+// Old `EditorSnapshot.doc: EditSession` is preserved for M7 deletion.
+
+/** Lightweight world entity for popout cross-window transport. */
+export interface WorldEntityState {
+  /** Editor-local entity ID (nextLocalId allocation). */
+  id: EntityId;
+  name: string;
+  parent: EntityId | null;
+  components: Record<string, unknown>;
+  /** Engine entity handle (world.spawn return value). */
+  engineHandle: number;
+}
+
+export interface WorldState {
+  entities: WorldEntityState[];
+  hidden: EntityId[];
+  selection: EntityId[];
+}
+
 // Panel IDs are defined in @forgeax/editor-shared (SSOT). To avoid a
 // dep cycle (core → shared → core), we inline the list here instead of
 // importing from shared. The 8-panel set is stable (only changes during
@@ -34,8 +59,6 @@ const EDITOR_PANELS = [
   'capabilities',
   'material',
   'mesh',
-  'timeline',
-  'matgraph',
   'launcher',
   'asset-inspector',
   'systems',
@@ -58,6 +81,12 @@ export type SyncPanelId = EditorPanelId;
  *  The engine `SceneAsset` POD is a derived projection, never the wire payload. */
 export interface EditorSnapshot {
   doc: EditSession;
+  /** feat-20260701 M3 popout compat layer (plan-strategy §2 D-4):
+   *  Main window populates this from world + sidecar on buildSnapshot().
+   *  Popout uses this to reconstruct doc.entities compatible view.
+   *  Old `doc` field preserved; M7 deletes both doc and worldState once
+   *  popout reads world directly. */
+  worldState?: WorldState;
   selection: EntityId[];
   gizmo: 'translate' | 'rotate' | 'scale';
   history: HistoryStep[];

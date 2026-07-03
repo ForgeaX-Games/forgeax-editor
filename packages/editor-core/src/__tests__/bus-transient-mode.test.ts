@@ -8,17 +8,21 @@
 // emit (so the engine sync repaints), but it skips undoStack / ledger / origins
 // growth. This test pins exactly that: stacks frozen when true, normal when false.
 import { describe, it, expect, beforeEach } from 'bun:test';
+import { Transform } from '@forgeax/engine-runtime';
+import type { EntityHandle } from '../scene-types';
 import { EditorBus } from '../bus';
+import { entHandle } from '../entity-state';
 import type { EditorCommand } from '../types';
 
 function seedEntity(bus: EditorBus): void {
   // Spawn one entity so setComponent has a target. The spawn itself runs in
   // normal (non-transient) mode so the fixture is deterministic.
-  bus.dispatch({ kind: 'spawnEntity', name: 'box', components: { Transform: { x: 0, y: 0, z: 0 } } });
+  bus.dispatch({ kind: 'spawnEntity', name: 'box', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } });
 }
 
-const move = (entity: number, x: number): EditorCommand =>
-  ({ kind: 'setComponent', entity, component: 'Transform', patch: { x } });
+// M7 / AC-15: Transform is native engine POD (posX field), asserted via world.
+const move = (entity: number, posX: number): EditorCommand =>
+  ({ kind: 'setComponent', entity, component: 'Transform', patch: { posX } });
 
 describe('EditorBus.transientMode (w27, AC-11)', () => {
   let bus: EditorBus;
@@ -47,8 +51,12 @@ describe('EditorBus.transientMode (w27, AC-11)', () => {
     seedEntity(bus);
     bus.transientMode = true;
     bus.dispatch(move(1, 42));
-    // applyCommand ran: the doc reflects the edit even though it is non-committed.
-    expect((bus.doc.entities[1]!.components.Transform as Record<string, number>).x).toBe(42);
+    // applyCommand ran: the world reflects the edit even though it is
+    // non-committed. M7 / AC-15: read via world SSOT (doc.entities deleted).
+    const handle = entHandle(bus.doc, 1)! as EntityHandle;
+    const t = bus.doc.world.get(handle, Transform);
+    expect(t.ok).toBe(true);
+    if (t.ok) expect((t.value as unknown as Record<string, number>).posX).toBe(42);
   });
 
   it('transient dispatch STILL emits (rev bumps so engine sync repaints)', () => {

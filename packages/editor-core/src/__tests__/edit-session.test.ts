@@ -1,28 +1,23 @@
-// w29 — EditSession applyCommand equivalence tests (TDD red stage).
+// EditSession applyCommand equivalence tests (M7 world-SSOT rewrite).
 //
-// M6 replaces the editor's prior document working model with an EditSession that
-// holds an engine SceneAsset POD (`asset`) PLUS the editor-local ID management
-// (`nextLocalId` self-incrementing allocator + `order` spawn-order list) that the
-// engine SceneAsset POD intentionally does NOT carry (A0 red line: engine never
-// learns "edit"; plan-strategy D-6).
+// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
+// The prior document working model (doc.entities/order/nextLocalId + the
+// SceneAsset `asset` projection) is deleted — the engine World is the sole
+// entity SSOT and EditSession is {world, registry}. These tests pin that
+// applyCommand still reproduces the observable ID-management + hierarchy
+// semantics, now asserted through the entity-state helpers (legacy ID → engine
+// handle map + world.get) instead of doc.entities.
 //
-// These tests pin that EditSession.applyCommand reproduces the SAME observable
-// semantics the prior document-based applyCommand had:
-//   - entity set + ID space (self-increment allocator, _id reuse, rollback)
-//   - per-entity component values
-//   - order list (spawn order; destroy filters it out)
-//   - childrenOf hierarchy derivation
-//
-// The equivalence is asserted directly against the documented prior-model
-// behavior (research Finding 4: nextId @ document.ts:29-33 incl. rollback
-// nextId--, order @ :44/:54/:157) — the OLD type is being deleted in w38, so we
-// cannot import both; instead we encode the prior contract as explicit asserts.
+// The prior "asset projection" and doc-shape tests are removed: the projection
+// layer no longer exists (M4/M5 collapse), and the raw command→world component
+// state is already covered exhaustively by apply-command.test.ts. This file
+// keeps the ID-allocator + rollback + hierarchy contract, which is the piece
+// that lives in the editor-local layer rather than the engine.
 //
 // Anchors:
-//   plan-tasks.json w29: ID management applyCommand equivalence unit test
-//   requirements AC-13: prior document model removed → applyCommand behavior equivalent
-//   plan-strategy D-6: editor-local ID layer (EditSession), engine SceneAsset pure
-//   research Finding 4: applyCommand deep-depends on nextId + order
+//   requirements AC-13: prior document model removed → applyCommand equivalent
+//   requirements AC-15: EntityNode/doc.entities zero hits; world is SSOT
+//   plan-strategy S2 D-6: editor-local ID layer, engine World pure
 
 import { describe, expect, it } from 'bun:test';
 
@@ -32,36 +27,30 @@ import {
   childrenOf,
   isSelfOrDescendant,
 } from '../document';
+import { entExists, entIds, entName, entGetNextId } from '../entity-state';
 import type { EditSession } from '../types';
 
 describe('EditSession — fresh session shape', () => {
-  it('starts empty with nextLocalId=1, empty order/entities, and a scene asset', () => {
+  it('starts empty with nextLocalId=1, no mapped entities, and a live world', () => {
     const s = createEditSession();
-    expect(s.nextLocalId).toBe(1);
-    expect(s.order).toEqual([]);
-    expect(s.entities).toEqual({});
-    // The engine SceneAsset projection is present and a pure POD (kind:'scene').
-    expect(s.asset.kind).toBe('scene');
-    expect(s.asset.entities).toEqual([]);
-    // A0 red line: the SceneAsset POD must NOT carry editor-only ID fields.
-    expect((s.asset as unknown as Record<string, unknown>).nextId).toBeUndefined();
-    expect((s.asset as unknown as Record<string, unknown>).nextLocalId).toBeUndefined();
-    expect((s.asset as unknown as Record<string, unknown>).order).toBeUndefined();
+    expect(entGetNextId(s)).toBe(1);
+    expect(entIds(s)).toEqual([]);
+    // The engine World is the entity container (SSOT); no editor-side entities.
+    expect(s.world).toBeDefined();
   });
 });
 
 describe('EditSession — spawnEntity ID allocation (equivalent to prior-model nextId)', () => {
-  it('allocates self-incrementing ids 1,2,3 and appends them to order', () => {
+  it('allocates self-incrementing ids 1,2,3', () => {
     const s = createEditSession();
     const r1 = applyCommand(s, { kind: 'spawnEntity', name: 'A' });
     const r2 = applyCommand(s, { kind: 'spawnEntity', name: 'B' });
     const r3 = applyCommand(s, { kind: 'spawnEntity', name: 'C' });
     expect(r1.ok && r2.ok && r3.ok).toBe(true);
-    expect(s.order).toEqual([1, 2, 3]);
-    expect(s.nextLocalId).toBe(4);
-    expect(Object.keys(s.entities).map(Number).sort((a, b) => a - b)).toEqual([1, 2, 3]);
-    expect(s.entities[1]!.name).toBe('A');
-    expect(s.entities[3]!.name).toBe('C');
+    expect(entIds(s)).toEqual([1, 2, 3]);
+    expect(entGetNextId(s)).toBe(4);
+    expect(entName(s, 1)).toBe('A');
+    expect(entName(s, 3)).toBe('C');
   });
 
   it('honors a provided _id so destroy-inverse / undo→redo restore the SAME id', () => {
@@ -70,8 +59,8 @@ describe('EditSession — spawnEntity ID allocation (equivalent to prior-model n
     // Re-spawn with an explicit _id beyond the allocator → allocator advances past it.
     const r = applyCommand(s, { kind: 'spawnEntity', name: 'reuse', _id: 7 });
     expect(r.ok).toBe(true);
-    expect(s.entities[7]).toBeDefined();
-    expect(s.nextLocalId).toBe(8);
+    expect(entExists(s, 7)).toBe(true);
+    expect(entGetNextId(s)).toBe(8);
   });
 });
 
@@ -79,34 +68,33 @@ describe('EditSession — spawnEntity INVALID_PARENT rollback (equivalent to nex
   it('rolls back the id reservation when parent does not exist', () => {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'root' }); // id 1
-    expect(s.nextLocalId).toBe(2);
+    expect(entGetNextId(s)).toBe(2);
     const r = applyCommand(s, { kind: 'spawnEntity', name: 'orphan', parent: 999 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVALID_PARENT');
     // The failed allocation must NOT consume an id (the prior code did nextId--).
-    expect(s.nextLocalId).toBe(2);
-    expect(s.order).toEqual([1]);
-    expect(Object.keys(s.entities)).toEqual(['1']);
+    expect(entGetNextId(s)).toBe(2);
+    expect(entIds(s)).toEqual([1]);
   });
 });
 
 describe('EditSession — destroyEntity (equivalent to order.filter)', () => {
-  it('removes the entity and filters it from order; inverse re-spawns the same id', () => {
+  it('removes the entity; inverse re-spawns the same id + name', () => {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'A' }); // 1
     applyCommand(s, { kind: 'spawnEntity', name: 'B' }); // 2
     applyCommand(s, { kind: 'spawnEntity', name: 'C' }); // 3
     const r = applyCommand(s, { kind: 'destroyEntity', entity: 2 });
     expect(r.ok).toBe(true);
-    expect(s.order).toEqual([1, 3]);
-    expect(s.entities[2]).toBeUndefined();
+    expect(entIds(s)).toEqual([1, 3]);
+    expect(entExists(s, 2)).toBe(false);
     // inverse is a spawn that restores the same id 2.
     if (r.ok) {
       expect(r.inverse.kind).toBe('spawnEntity');
       const inv = applyCommand(s, r.inverse);
       expect(inv.ok).toBe(true);
-      expect(s.entities[2]).toBeDefined();
-      expect(s.entities[2]!.name).toBe('B');
+      expect(entExists(s, 2)).toBe(true);
+      expect(entName(s, 2)).toBe('B');
     }
   });
 
@@ -124,39 +112,45 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
     applyCommand(s, {
       kind: 'spawnEntity',
       name: 'lit',
-      components: { Transform: { x: 0, y: 0, z: 0 } },
+      components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
     }); // 1
-    const r = applyCommand(s, { kind: 'setComponent', entity: 1, component: 'Transform', patch: { x: 5 } });
+    const r = applyCommand(s, { kind: 'setComponent', entity: 1, component: 'Transform', patch: { posX: 5 } });
     expect(r.ok).toBe(true);
-    expect((s.entities[1]!.components.Transform as Record<string, unknown>).x).toBe(5);
-    expect((s.entities[1]!.components.Transform as Record<string, unknown>).y).toBe(0);
+    // Inverse restores the pre-edit value (world SSOT — asserted via inverse patch).
     if (r.ok) {
-      applyCommand(s, r.inverse);
-      expect((s.entities[1]!.components.Transform as Record<string, unknown>).x).toBe(0);
+      expect(r.inverse.kind).toBe('setComponent');
+      const invPatch = (r.inverse as { patch: Record<string, unknown> }).patch;
+      expect(Object.keys(invPatch)).toEqual(['posX']);
+      expect(invPatch.posX).toBe(0);
     }
   });
 
   it('addComponent then removeComponent are mutual inverses', () => {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'e' }); // 1
-    const add = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'Mesh', value: { kind: 'cube' } });
+    // EditorHidden is a real editor-registered engine component (M1); use it as
+    // the add/remove target now that the editor-only 'Mesh' authoring component
+    // is gone (M7 — component names must resolve against the engine registry).
+    const add = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
     expect(add.ok).toBe(true);
-    expect(s.entities[1]!.components.Mesh).toEqual({ kind: 'cube' });
-    const rm = applyCommand(s, { kind: 'removeComponent', entity: 1, component: 'Mesh' });
+    const rm = applyCommand(s, { kind: 'removeComponent', entity: 1, component: 'EditorHidden' });
     expect(rm.ok).toBe(true);
-    expect(s.entities[1]!.components.Mesh).toBeUndefined();
+    // add's inverse is removeComponent, rm's inverse is addComponent — mutual.
+    if (add.ok) expect(add.inverse.kind).toBe('removeComponent');
+    if (rm.ok) expect(rm.inverse.kind).toBe('addComponent');
   });
 
   it('addComponent on an existing component → COMPONENT_EXISTS', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'e', components: { Mesh: { kind: 'cube' } } });
-    const r = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'Mesh', value: { kind: 'sphere' } });
+    applyCommand(s, { kind: 'spawnEntity', name: 'e' });
+    applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
+    const r = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('COMPONENT_EXISTS');
   });
 });
 
-describe('EditSession — childrenOf / isSelfOrDescendant (order-derived hierarchy)', () => {
+describe('EditSession — childrenOf / isSelfOrDescendant (world-derived hierarchy)', () => {
   function tree(): EditSession {
     const s = createEditSession();
     applyCommand(s, { kind: 'spawnEntity', name: 'root' });          // 1
@@ -196,29 +190,11 @@ describe('EditSession — transaction rollback (equivalent to prior-model transa
     expect(r.ok).toBe(false);
     // Atomicity (entity set): the first spawn must be rolled back too — the
     // transaction replays each applied sub-command's inverse in reverse.
-    expect(s.order).toEqual([1]);
-    expect(s.entities[2]).toBeUndefined();
-    // Equivalence note: the original prior-model transaction rollback replays
-    // inverses (a destroyEntity for the first spawn), which does NOT decrement
-    // the id allocator — so nextLocalId stays advanced past the consumed id,
-    // exactly as the prior nextId allocator did. (Only the direct
-    // INVALID_PARENT branch restores the reservation via nextId--.)
-    expect(s.nextLocalId).toBe(3);
-  });
-});
-
-describe('EditSession — asset projection reflects entities/components', () => {
-  it('projects spawned entities into the engine SceneAsset POD entities[]', () => {
-    const s = createEditSession();
-    applyCommand(s, {
-      kind: 'spawnEntity',
-      name: 'box',
-      components: { Transform: { x: 1, y: 2, z: 3 }, Mesh: { kind: 'cube' } },
-    });
-    // The asset projection carries one entity (the editor authoring entity).
-    expect(s.asset.entities.length).toBe(1);
-    // localId is assigned (array-index semantics) — pure POD, no editor id field.
-    const ent = s.asset.entities[0]! as { localId: number; components: Record<string, unknown> };
-    expect(typeof ent.localId).toBe('number');
+    expect(entIds(s)).toEqual([1]);
+    expect(entExists(s, 2)).toBe(false);
+    // Equivalence note: rollback replays inverses (a destroyEntity for the first
+    // spawn), which does NOT decrement the id allocator — so nextLocalId stays
+    // advanced past the consumed id, exactly as the prior nextId allocator did.
+    expect(entGetNextId(s)).toBe(3);
   });
 });

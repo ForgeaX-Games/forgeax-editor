@@ -17,14 +17,12 @@ export {
   getSelection,
   getSelectionList,
   getGizmoMode,
-  getAnimPreview,
   replaceDoc,
   saveDocToDisk,
   setGizmoMode,
   setSceneId,
   setSelection,
   setSelectionMany,
-  setAnimPreview,
   setHoverEntity,
   setFieldPreview,
   toggleSelection,
@@ -32,7 +30,6 @@ export {
   onRenameRequest,
   requestRename,
   onGizmoModeChange,
-  onAnimPreview,
   onPopoutClosed,
   onPopoutGeom,
   announcePopoutClosing,
@@ -90,6 +87,20 @@ export {
   groupSelected,
   ungroupEntity,
   reparentEntity,
+} from '@forgeax/editor-core';
+
+// ── Entity state (M7 / AC-15: world-SSOT reads replacing doc.entities) ──
+export {
+  entHandle,
+  entLegacyId,
+  entExists,
+  entIds,
+  entHandles,
+  entName,
+  entParent,
+  entAlive,
+  entComponent,
+  entComponents,
 } from '@forgeax/editor-core';
 
 // ── Context menu service ──

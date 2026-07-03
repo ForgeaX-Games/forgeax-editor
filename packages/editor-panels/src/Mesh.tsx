@@ -14,7 +14,7 @@
 //   • Entity mode — an entity with a `Mesh` component is selected: shows the
 //     primitive `kind` + bound `meshAsset` GUID (read-only in v1).
 import { useCallback, useState } from 'react';
-import { bus, useDocVersion, useSelection, useAssetSelection, useMeshStats } from '@forgeax/editor-shared';
+import { bus, useDocVersion, useSelection, useAssetSelection, useMeshStats, entExists, entName, entComponent } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 
 const short = (g: string): string => (g.length > 12 ? `${g.slice(0, 8)}…${g.slice(-3)}` : g);
@@ -189,14 +189,17 @@ export function MeshPanel() {
   // selected entity's bound meshAsset guid. The MAIN window publishes stats for the
   // active mesh (entity-bound or asset-selected) — see edit-runtime main.tsx.
   const meshStatsRaw = useMeshStats();
-  const node = sel !== null ? bus.doc.entities[sel] : undefined;
-  const mesh = node?.components.Mesh as Record<string, unknown> | undefined;
+  // M7 / AC-15: entity name/components read from world (SSOT) via entity-state;
+  // doc.entities/EntityNode deleted.
+  const hasEntity = sel !== null && entExists(bus.doc, sel);
+  const nodeName = hasEntity ? entName(bus.doc, sel) : '';
+  const mesh = hasEntity ? (entComponent(bus.doc, sel, 'Mesh') as Record<string, unknown> | undefined) : undefined;
 
   // No entity selected but a mesh asset is selected in the Content Browser.
-  if ((sel === null || !node) && assetSel?.kind === 'mesh') {
+  if (!hasEntity && assetSel?.kind === 'mesh') {
     return <PackMeshPreview name={assetSel.name} guid={assetSel.guid} payload={assetSel.payload} />;
   }
-  if (sel === null || !node) {
+  if (!hasEntity) {
     return (
       <div className="panel ed-mesh" data-testid="panel-mesh">
         <h3>Mesh</h3>
@@ -209,7 +212,7 @@ export function MeshPanel() {
     return (
       <div className="panel ed-mesh" data-testid="panel-mesh">
         <h3>Mesh</h3>
-        <div className="muted mat-empty">{t('editor.mesh.noComponent', { name: node.name })}</div>
+        <div className="muted mat-empty">{t('editor.mesh.noComponent', { name: nodeName })}</div>
       </div>
     );
   }
@@ -220,7 +223,7 @@ export function MeshPanel() {
   // Material Slots (v2): the editor models a single `Material` component (not the
   // engine's per-section MeshRenderer.materials[]), so we reflect it as one slot.
   // Per-submesh material binding lives on the instance — noted, not faked.
-  const material = node.components.Material as Record<string, unknown> | undefined;
+  const material = sel !== null ? (entComponent(bus.doc, sel, 'Material') as Record<string, unknown> | undefined) : undefined;
   const matGuid = material && typeof material.materialAsset === 'string' ? (material.materialAsset as string) : '';
   // Geometry stats for the bound mesh asset (published by the main window keyed by
   // GUID). Inline primitives (no meshAsset GUID) have no loadable geometry, so we
@@ -229,7 +232,7 @@ export function MeshPanel() {
   const entityStats = guid !== '' && meshStatsRaw != null && meshStatsRaw.guid === guid ? meshStatsRaw : null;
   return (
     <div className="panel ed-mesh" data-testid="panel-mesh">
-      <h3>Mesh · {node.name}</h3>
+      <h3>Mesh · {nodeName}</h3>
       {/* `kind` (cube/sphere/cylinder) is the builtin-primitive fallback; when a
           meshAsset GUID is bound it WINS and the engine ignores `kind` (often a
           stale default 'cube' — see drag-asset-spawn.ts / scene-types MeshData).
