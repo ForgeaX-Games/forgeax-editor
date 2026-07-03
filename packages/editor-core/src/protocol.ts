@@ -243,6 +243,45 @@ export const VagSpawnEntitySchema = z.object({
 });
 export type VagSpawnEntityMessage = z.infer<typeof VagSpawnEntitySchema>;
 
+// ── VAG_ACTION_*(UI 语义操作层 P1-12,flat 家族)─────────────────────────────
+// 编辑器面板把自己的可调功能登记进 interface 的 ActionRegistry:
+//   iframe → host : VAG_ACTION_MANIFEST { actions:[decl…] }(整表替换语义)
+//   host → iframe : VAG_ACTION_INVOKE   { reqId, id, args }
+//   iframe → host : VAG_ACTION_RESULT   { reqId, result }(result = ActionResult 形)
+// 只传可序列化声明,handler 留 iframe 本地(照 VAG_CONTEXT_MENU 先例)。
+// host 半边:interface/src/lib/vag-action-bridge.ts;iframe 半边:actionBridge.ts。
+// capability 是权限声明(host 侧 trust-gate 按它分级弹卡),非法值 host 会整条丢弃。
+export const VagActionManifestSchema = z.object({
+  type: z.literal('VAG_ACTION_MANIFEST'),
+  actions: z.array(
+    z.object({
+      id: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string().optional(),
+      inputSchema: z.record(z.unknown()).optional(),
+      capability: z.enum(['read', 'write', 'delete', 'exec', 'network', 'credential', 'delegate', 'other']),
+      surface: z.enum(['ui', 'server', 'both']).optional(),
+      timeoutMs: z.number().positive().optional(),
+    }),
+  ),
+});
+export type VagActionManifestMessage = z.infer<typeof VagActionManifestSchema>;
+
+export const VagActionInvokeSchema = z.object({
+  type: z.literal('VAG_ACTION_INVOKE'),
+  reqId: z.string().min(1),
+  id: z.string().min(1),
+  args: z.record(z.unknown()).optional(),
+});
+export type VagActionInvokeMessage = z.infer<typeof VagActionInvokeSchema>;
+
+export const VagActionResultSchema = z.object({
+  type: z.literal('VAG_ACTION_RESULT'),
+  reqId: z.string().min(1),
+  result: z.unknown(),
+});
+export type VagActionResultMessage = z.infer<typeof VagActionResultSchema>;
+
 // ── sendVagMessage — generic typed postMessage helper ───────────────────────────
 //
 // Replaces every bare `postMessage({ type: 'VAG_*', ... })` call site with
@@ -277,6 +316,7 @@ function vagSchemaUnion() {
     VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema,
     VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
     VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema, VagSpawnEntitySchema,
+    VagActionManifestSchema, VagActionInvokeSchema, VagActionResultSchema,
   ]);
 }
 

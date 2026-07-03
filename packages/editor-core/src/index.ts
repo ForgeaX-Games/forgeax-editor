@@ -302,3 +302,7 @@ export {
   setViewRequestForwarder,
 } from './clip-control';
 export type { ClipControl, ViewCmd } from './clip-control';
+
+// UI 语义操作层(P1-12):面板 action 登记 → interface host 的 ActionRegistry。
+export { registerPanelAction } from './actionBridge';
+export type { PanelActionDef, PanelActionResult } from './actionBridge';
