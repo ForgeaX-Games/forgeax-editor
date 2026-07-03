@@ -61,9 +61,21 @@ const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
 // the game's assets/ + scenes/ dirs (base '/editor/', reachable through the host
 // proxy). This removes the play-runtime dependency for standalone Edit-preview AND
 // Play. null GAME_DIR_ABS (studio-embedded) → keep the /preview proxy (below).
+// Shared template assets (forgeax-editor-assets/template-game-default) hold the
+// default game's environment sky.hdr equirect — a 1.3MB sidecar NOT duplicated
+// into each game's assets/. play-runtime folds this into every per-game catalog
+// via its own sharedAssetRoots(); the standalone editor's pluginPack must do the
+// same or the scene's equirect GUID (81eec382) misses the catalog and
+// loadByGuid → instantiate aborts the whole scene load. Absent (older deploy) →
+// [] so catalogs degrade to game-only.
+function sharedTemplateRoots(): string[] {
+  const dir = resolve(here, '../../forgeax-editor-assets/template-game-default');
+  return existsSync(dir) ? [dir] : [];
+}
 function gamePackRoots(): string[] {
   if (!GAME_DIR_ABS) return [];
-  return ['assets', 'scenes'].map((d) => join(GAME_DIR_ABS, d)).filter((p) => existsSync(p));
+  const perGame = ['assets', 'scenes'].map((d) => join(GAME_DIR_ABS, d)).filter((p) => existsSync(p));
+  return [...perGame, ...sharedTemplateRoots()];
 }
 const SELF_HOST_PACK = GAME_DIR_ABS !== null;
 

@@ -8,7 +8,14 @@
       html, body { margin: 0; height: 100%; background: #16161a; overflow: hidden; }
       #app { position: fixed; inset: 0; }
       #app > canvas { display: block; width: 100%; height: 100%; }
-      #ui { position: fixed; inset: 0; }
+      /* #ui is the full-screen overlay ABOVE the engine canvas. It must be
+         click-through by default so viewport clicks (e.g. a Play-mode game's
+         canvas 'click'/'mousedown' shoot/pick listeners) reach the canvas in
+         #app; only its interactive chrome (ViewportBar / GameOverlay / boot +
+         error overlays) opts back in via pointer-events:auto. Without this the
+         opaque #ui swallowed every viewport click — F-key shooting worked (a
+         window keydown, layer-independent) but left-click shooting did not. */
+      #ui { position: fixed; inset: 0; pointer-events: none; }
     </style>
   </head>
   <body>

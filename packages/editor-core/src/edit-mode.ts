@@ -7,15 +7,10 @@
 //   plan-strategy D-5: EditMode resource — editor injects world.insertResource('EditMode', {active:true})
 //   requirements AC-08: gameplay systems frozen in edit mode
 
-import { World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 
-// `World` is imported as a VALUE and used through `InstanceType<typeof World>`
-// to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
-// as a type") that fires once this module is pulled into a consumer's tsc program
-// via the editor-core barrel (w11 exports injectEditMode). Same idiom + reason as
-// discoverer.ts `EcsWorld` and open-project.ts `OpenProjectWorld`; the runtime
-// value is unused at type position — purely a type-resolution shim.
-type EcsWorld = InstanceType<typeof World>;
+// Local alias for the engine `World` class type (imported type-only).
+type EcsWorld = World;
 
 export const EDIT_MODE_KEY = 'EditMode';
 

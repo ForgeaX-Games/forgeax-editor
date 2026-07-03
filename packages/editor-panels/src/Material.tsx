@@ -1,4 +1,4 @@
-import { bus, dispatch, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-shared';
+import { bus, dispatch, useDocVersion, useSelection, useAssetSelection, entIsDeadWorld } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { floatToHex, hexToFloat } from '@forgeax/editor-core';
 import {
@@ -192,12 +192,29 @@ export function MaterialPanel() {
   const world = bus.doc.world;
 
   // If a material asset is selected in Content Browser, show read-only preview.
+  // (This path needs no live world — the payload rides the asset selection.)
   if (assetSel?.kind === 'material') {
     return <PackMaterialPreview payload={assetSel.payload} name={assetSel.name} guid={assetSel.guid} />;
   }
 
   if (sel === null) {
     return <div className="panel ed-material" data-testid="panel-material"><h3>Material</h3><div className="muted mat-empty">{t('editor.material.selectEntityHint')}</div></div>;
+  }
+
+  // Popout guard: in a popped-out window bus.doc.world is null (snapshot revive
+  // keeps it inert) AND the MaterialAsset shared-ref payloads aren't in the popout
+  // cache, so entity-material editing genuinely can't run here. Every path below
+  // dereferences the live world (world.get / world.sharedRefs.resolve) — without
+  // this guard selecting an entity NPE'd ("reading 'get'"), same class as the
+  // childrenOf (#5) / Inspector (#10) popout crashes. Degrade gracefully: the
+  // editable Material panel lives in the main window.
+  if (world === null || entIsDeadWorld(bus.doc)) {
+    return (
+      <div className="panel ed-material" data-testid="panel-material">
+        <h3>Material</h3>
+        <div className="muted mat-empty">Material editing is available in the main editor window.</div>
+      </div>
+    );
   }
   // useSelection yields a plain EntityId (number); brand it once as the engine's
   // EntityHandle so every world API below (get / EntityMaterialEditor entity) is

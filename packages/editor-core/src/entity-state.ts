@@ -134,17 +134,19 @@ export function entClearPopoutCache(): void {
 /** True if the session's world reference is known dead (popout window).
  *  A popout window receives its EditSession over BroadcastChannel, whose
  *  structuredClone strips all methods — so the live World's `get` function is
- *  gone. On the main window `world.get` is a real method. This is a reliable
- *  liveness discriminator (the World class exposes no plain-data `rootEntities`
- *  field to test against). */
-function _isDeadWorld(session: EditSession): boolean {
+ *  gone (and snapshots now carry an explicit null world). On the main window
+ *  `world.get` is a real method. This is a reliable liveness discriminator (the
+ *  World class exposes no plain-data `rootEntities` field to test against). */
+export function entIsDeadWorld(session: EditSession): boolean {
   try {
-    const w = session.world as unknown as { get?: unknown };
-    return typeof w.get !== 'function';
+    const w = session.world as unknown as { get?: unknown } | null;
+    return !w || typeof w.get !== 'function';
   } catch {
     return true;
   }
 }
+// Internal alias kept for the existing call sites below.
+const _isDeadWorld = entIsDeadWorld;
 
 // ── Entity info accessors (main = world, popout = cache) ────────────────────
 

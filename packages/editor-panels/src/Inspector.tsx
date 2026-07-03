@@ -4,9 +4,8 @@ import { showContextMenu } from '@forgeax/editor-shared';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
 import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-shared';
-import { entHandle, entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-shared';
+import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-shared';
 import type { EditorCommand, EntityId } from '@forgeax/editor-core';
-import { Transform } from '@forgeax/engine-runtime';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -270,12 +269,14 @@ export function InspectorPanel() {
   // On entity switch: read world quat → euler to reset React state (scheme B)
   useEffect(() => {
     if (sel === null) return;
-    // M7 / AC-15: legacy ID → engine handle via entity-state (doc.entities gone).
-    const handle = entHandle(bus.doc, sel);
-    if (handle === undefined) return;
-    const t = bus.doc.world.get(handle, Transform);
-    if (!t.ok) return;
-    const q = t.value as { quatX: number; quatY: number; quatZ: number; quatW: number };
+    // M7 / AC-15: read Transform through entComponent (the dead-world-aware SSOT
+    // reader). In a popout window bus.doc.world is null (snapshot revive keeps it
+    // inert), so a raw bus.doc.world.get(...) NPE'd on selection — entComponent
+    // resolves from the popout cache instead. On the main window it reads the live
+    // world. Mirrors the childrenOf popout fix.
+    const tv = entComponent(bus.doc, sel, 'Transform');
+    if (!tv) return;
+    const q = tv as { quatX: number; quatY: number; quatZ: number; quatW: number };
     setEuler(quatToEuler(q.quatX, q.quatY, q.quatZ, q.quatW));
   }, [sel]);
   const toggleComp = (comp: string) =>

@@ -49,6 +49,8 @@ export {
   useFieldPreview,
   loadDocFromStorage,
   loadDocFromDisk,
+  getLoadedSceneRoot,
+  rebindLoadedScene,
   initSync,
   initDiskWatch,
   initSceneList,
@@ -101,6 +103,7 @@ export {
   entAlive,
   entComponent,
   entComponents,
+  entIsDeadWorld,
 } from '@forgeax/editor-core';
 
 // ── Context menu service ──

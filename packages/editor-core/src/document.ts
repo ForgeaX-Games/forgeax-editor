@@ -28,11 +28,12 @@ import {
   Name,
   Transform,
 } from '@forgeax/engine-runtime';
-import { getRegisteredComponents, World } from '@forgeax/engine-ecs';
+import { getRegisteredComponents } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from './scene-types';
 import { EditorHidden } from './components/EditorHidden';
 import { getInternals } from './edit-session';
-import { entHandle, entLegacyId, entMap, entUnmap, entNextId, entSetNextId, entGetNextId } from './entity-state';
+import { entHandle, entLegacyId, entMap, entUnmap, entNextId, entSetNextId, entGetNextId, entIsDeadWorld, entIds, entParent } from './entity-state';
 
 export { createEditSession } from './edit-session';
 
@@ -66,7 +67,7 @@ function clone<T>(v: T): T {
 function spawnComponentData(
   name: string,
   parent: EntityHandle | null,
-  world: InstanceType<typeof World>,
+  world: World,
   extraComponents?: Record<string, unknown>,
 ): Array<{ component: CToken; data: Record<string, unknown> }> {
   const transformDefaults: Record<string, unknown> = {
@@ -151,7 +152,7 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
         if (!reuse) entSetNextId(session, id);
         return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
       }
-      const compData = spawnComponentData(cmd.name ?? `Entity ${id}`, parentEng, w as InstanceType<typeof World>, cmd.components);
+      const compData = spawnComponentData(cmd.name ?? `Entity ${id}`, parentEng, w as World, cmd.components);
       const r = w.spawn(...compData as any);
       if (!r.ok) { if (!reuse) entSetNextId(session, id); return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } }; }
       const eH = r.value as EntityHandle;
@@ -323,6 +324,16 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
 // entities that have no ChildOf component.
 
 export function childrenOf(doc: EditSession, parent: EntityId | null): EntityId[] {
+  // Popout window: the live World is absent (snapshots carry a null world so the
+  // BroadcastChannel structuredClone stays valid — see store.buildSnapshot). Read
+  // the parent relation from the popout cache via entParent (dead-world-aware)
+  // instead of doc.world.get, which would throw on null. Derive children by
+  // filtering all mapped ids on their parent.
+  if (entIsDeadWorld(doc)) {
+    return entIds(doc)
+      .filter((id) => entParent(doc, id) === parent)
+      .sort((a, b) => a - b);
+  }
   if (parent !== null) {
     const pE = toEntity(doc, parent);
     const ch = doc.world.get(pE, Children);

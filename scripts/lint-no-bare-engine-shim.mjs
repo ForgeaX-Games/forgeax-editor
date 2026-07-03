@@ -62,6 +62,16 @@ function findShimFiles() {
   } catch {
     // shared shim absent — fine (engine may ship all .d.ts)
   }
+  // The repo-root program's shim slot. It was DELETED (the root tsconfig now
+  // includes the shared SSOT shim and resolves engine-ecs/types/… to real
+  // dist), but scan it anyway as defense-in-depth: a re-added bare shim here
+  // would re-erase the engine surface to `any` for the root typecheck program.
+  const rootShim = resolve(EDITOR_ROOT, 'src', 'forgeax-engine.d.ts');
+  try {
+    if (statSync(rootShim).isFile()) out.push(rootShim);
+  } catch {
+    // no root shim — the intended steady state.
+  }
   for (const pkg of SCAN_PACKAGES) {
     const candidate = join(PACKAGES_DIR, pkg, 'src', 'forgeax-engine.d.ts');
     try {

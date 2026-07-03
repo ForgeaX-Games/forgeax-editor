@@ -35,6 +35,12 @@ import {
 } from './sync-channel';
 import { Name, Transform, ChildOf, Children, SceneInstance } from '@forgeax/engine-runtime';
 import type { EntityHandle } from './scene-types';
+
+// Engine wire constant for an unspawned SceneInstance.mapping slot (gap left by
+// a deleted entity). Kept as a local literal because engine-runtime does not
+// re-export it and editor-core deliberately does not import from engine-ecs;
+// the value is stable (@forgeax/engine-ecs entity-handle.ts ENTITY_NULL_RAW).
+const ENTITY_NULL_RAW = 0xffffffff;
 import { EditorHidden } from './components/EditorHidden';
 import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './clip-control';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
@@ -521,6 +527,12 @@ let currentSceneGuid: string | null = null;
 // a disk-watch reload can despawnScene it before re-instantiating (avoids a
 // double-spawn). null when no scene is loaded (seed / fresh workspace).
 let currentSceneRoot: number | null = null;
+/** The synthetic SceneInstance root of the scene loaded into the LIVE editor
+ *  world (bus.doc.world) by loadSceneByGuid. run-lifecycle reads this to snapshot
+ *  the scene for ▶ Play / ■ Stop (getSceneInstanceState/despawnScene must use a
+ *  root in the SAME world the game runs in — NOT openProject's throwaway world).
+ *  null when no scene is loaded (seed / fresh workspace). */
+export function getLoadedSceneRoot(): number | null { return currentSceneRoot; }
 const sceneListListeners = new Set<() => void>();
 function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
 function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${currentSceneId}`; }
@@ -937,9 +949,18 @@ function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
 }
 
 /** The exact byte content saveDocToDisk would write for the current doc (used by
- *  the disk watcher to recognise its own echo). */
-function serializedPack(): string {
-  return worldToPack(bus.doc, sceneGuidForSave()) ?? '';
+ *  the disk watcher to recognise its own echo).
+ *
+ *  Returns `null` when serialization FAILS (world/registry missing, or the engine
+ *  rootsToSceneAsset / serializeSceneAssetToPack pipeline errors — e.g. a spawned
+ *  entity carries a component the pack serializer can't persist). Callers MUST
+ *  treat null as "do not write": the earlier `?? ''` fallback wrote an EMPTY
+ *  string to disk on any serialize failure, silently clobbering the real
+ *  scene.pack.json with 0 bytes (the "add City_Sample_512 → scene destroyed" data
+ *  loss). A failed save must abort, never overwrite good data (AGENTS.md #2:
+ *  authoring data must round-trip or it's a data-loss bug). */
+function serializedPack(): string | null {
+  return worldToPack(bus.doc, sceneGuidForSave());
 }
 
 /** Load the active game's scene from disk (native pack preferred, legacy
@@ -1060,33 +1081,78 @@ async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const instRes = reg.instantiate(sceneHandle, w);
     if (!instRes.ok) return false;
     const root = instRes.value;
-    currentSceneRoot = root as number;
-
-    // Recover authored-localId → engine-handle from SceneInstance.mapping (a
-    // Uint32Array indexed by localId) and register each into the session map.
-    // The synthetic scene root itself is NOT an authored entity — skip it.
-    const instComp = w.get(root, SceneInstance);
-    if (!instComp.ok) return false;
-    const mappingArr: ArrayLike<number> = instComp.value.mapping;
-    const nodes = (loadRes.value as { entities?: Array<{ localId?: number }> }).entities ?? [];
-    let maxId = entGetNextId(bus.doc) - 1;
-    for (const n of nodes) {
-      const localId = n.localId;
-      if (typeof localId !== 'number') continue;
-      const h = mappingArr[localId];
-      // NOTE: entity handle 0 IS valid (the first spawned entity). Only skip
-      // truly absent slots.
-      if (h === undefined) continue;
-      entMap(bus.doc, localId, h as EntityHandle);
-      if (localId > maxId) maxId = localId;
-    }
-    // Advance the id allocator past every loaded localId so new spawns don't
-    // collide with authored ids.
-    entSetNextId(bus.doc, maxId + 1);
-    return true;
+    // Populate _e2h/_h2e (+ advance the id allocator) from the freshly
+    // instantiated scene root. Shared with the ▶/■ Stop rebind path (SSOT).
+    return populateSessionMapFromSceneRoot(w, root as number);
   } catch {
     return false;
   }
+}
+
+/**
+ * Recover the authored-localId ↔ engine-handle mapping (`_e2h`/`_h2e`) from a
+ * freshly instantiated SceneInstance root and register it into the editor
+ * session, then advance the id allocator past every loaded localId. Also binds
+ * `currentSceneRoot` to `root`.
+ *
+ * The source of truth is the SceneInstance's `mapping` (Uint32Array indexed by
+ * localId → engine-handle raw u32). The synthetic scene root itself is NOT an
+ * authored entity, so it is not entered into the map.
+ *
+ * Shared by two callers (SSOT, AGENTS.md #1 — one resolution path):
+ *  - loadSceneByGuid (initial disk load)
+ *  - rebindLoadedScene (▶/■ Stop re-instantiate — the scene root changes so the
+ *    prior _e2h points at despawned handles and must be rebuilt).
+ *
+ * Returns true when the root carried a resolvable SceneInstance.mapping.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function populateSessionMapFromSceneRoot(w: any, root: number): boolean {
+  const instComp = w.get(root, SceneInstance);
+  if (!instComp.ok) return false;
+  const mappingArr: ArrayLike<number> = instComp.value.mapping;
+  // Clear stale entries first so a rebind onto a new root doesn't leave the
+  // pre-Play handles (now despawned) in the map.
+  const internals = getInternals(bus.doc);
+  internals._e2h.clear();
+  internals._h2e.clear();
+  currentSceneRoot = root;
+  let maxId = -1;
+  // mapping[localId] is the engine handle; ENTITY_NULL_RAW (0xffffffff) marks an
+  // unspawned slot. Handle 0 IS valid (first spawn: gen=0+idx=0). Skip only the
+  // null sentinel + absent slots.
+  for (let localId = 0; localId < mappingArr.length; localId += 1) {
+    const h = mappingArr[localId];
+    if (h === undefined || h === ENTITY_NULL_RAW) continue;
+    entMap(bus.doc, localId, h as EntityHandle);
+    if (localId > maxId) maxId = localId;
+  }
+  // Advance the id allocator past every loaded localId so new spawns don't
+  // collide with authored ids (never regress below the current allocator).
+  const nextFloor = entGetNextId(bus.doc) - 1;
+  entSetNextId(bus.doc, Math.max(maxId, nextFloor) + 1);
+  return true;
+}
+
+/**
+ * Rebind the editor session onto a scene root the ▶/■ Stop path just
+ * re-instantiated. Stop despawns the played scene and re-instantiates the same
+ * SceneAsset, which mints FRESH handles under a NEW synthetic root — the prior
+ * `_e2h` now points at despawned handles, so hierarchy/selection/save go dead
+ * ("scene not restored"). This rebuilds `_e2h`/`_h2e` + `currentSceneRoot` from
+ * the new root and fires the doc listeners so panels re-read.
+ *
+ * Returns the bound root (so the host can also rebind its defaultSceneRoot), or
+ * null if the root had no resolvable SceneInstance (rebind skipped).
+ */
+export function rebindLoadedScene(newRoot: number): number | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w: any = (bus.doc as any).world;
+  if (!w) return null;
+  if (!populateSessionMapFromSceneRoot(w, newRoot)) return null;
+  docVersion++;
+  for (const fn of docListeners) fn();
+  return newRoot;
 }
 
 /** Write the active game's scene to disk as a native engine scene pack. This is
@@ -1095,11 +1161,18 @@ async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
 export async function saveDocToDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
+  // Serialize FIRST and bail if it failed — never POST an empty body over a good
+  // scene (the 0-byte data-loss bug). Keep _isDirty set so the next save retries.
+  const content = serializedPack();
+  if (content === null) {
+    console.error('[editor-core] saveDocToDisk: serialize failed — aborting write to protect on-disk scene');
+    return false;
+  }
   try {
     const r = await getApiClient().fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: p, content: serializedPack() }),
+      body: JSON.stringify({ path: p, content }),
     });
     if (r.ok) _isDirty = false;
     return r.ok;
@@ -1149,9 +1222,18 @@ export function flushPendingSaveBeacon(): void {
   if (!_isDirty) return; // nothing dirty
   const p = scenePath();
   if (!p) return;
+  // Serialize BEFORE clearing dirty / sending — if it fails, do NOT beacon an
+  // empty body over a good scene (this unload-time path was the silent 0-byte
+  // clobber: add City_Sample_512 → dirty → pagehide → beacon empty). Keep dirty
+  // set so a later successful save can still persist.
+  const content = serializedPack();
+  if (content === null) {
+    console.error('[editor-core] flushPendingSaveBeacon: serialize failed — skipping beacon to protect on-disk scene');
+    return;
+  }
   _isDirty = false;
   try {
-    const blob = new Blob([JSON.stringify({ path: p, content: serializedPack() })], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ path: p, content })], { type: 'application/json' });
     const ok = navigator.sendBeacon('/api/files', blob);
     // sendBeacon can refuse (queue full / too large); fall back to a keepalive
     // fetch which also survives teardown for small bodies.

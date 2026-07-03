@@ -16,21 +16,16 @@
 //   requirements AC-07/09/10: dual-enum hit, duplicate gate, broken state
 //   charter P3: explicit failure — structured errors with property access
 
-import { getRegisteredComponents, getRegisteredSystems, World } from '@forgeax/engine-ecs';
-import type { SystemHandle } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, getRegisteredSystems } from '@forgeax/engine-ecs';
+import type { SystemHandle, World } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
 // Re-export so consumers/tests can import the error type from the discoverer barrel.
 export type { DiscoverError } from './discoverer-errors';
 import { and, notEditing } from './run-conditions';
 
-// `World` is imported as a VALUE and used through `InstanceType<typeof World>`
-// to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
-// as a type") that fires when this file is pulled into a consumer's tsc program
-// via the editor-core barrel (the same idiom + reason documented in
-// open-project.ts `OpenProjectWorld`). The runtime value is unused at type
-// position; this is purely a type-resolution shim.
-type EcsWorld = InstanceType<typeof World>;
+// Local alias for the engine `World` class type (imported type-only).
+type EcsWorld = World;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

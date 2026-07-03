@@ -23,9 +23,10 @@ export type {
   SceneAsset,
 } from './types';
 
-// EntityHandle / WorldType: local structural aliases (scene-types) — see their
-// docs for why EntityHandle is not re-imported from @forgeax/engine-ecs (TS2709
-// under the strict engine-.d.ts typecheck gate).
+// EntityHandle / WorldType: thin re-exports of the engine's real types via
+// scene-types (EntityHandle straight from @forgeax/engine-ecs, WorldType = the
+// `World` class type). Kept re-exported here so consumers can import them from
+// the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene-types';
 
 export type { EditorCommand, CommandError, ApplyResult } from './types';
@@ -67,6 +68,7 @@ export {
   entAlive,
   entComponent,
   entComponents,
+  entIsDeadWorld,
 } from './entity-state';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
@@ -210,6 +212,8 @@ export {
   useFieldPreview,
   loadDocFromStorage,
   loadDocFromDisk,
+  getLoadedSceneRoot,
+  rebindLoadedScene,
   initSync,
   initDiskWatch,
   initSceneList,

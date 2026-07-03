@@ -12,19 +12,20 @@
 //   plan-strategy S7 M7: type sweep — EditSession only world(+registry)
 
 import type { SceneAsset } from '@forgeax/engine-types';
-import { World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 
 /** Engine World handle type (plan-strategy S2 D-1 / AC-01).
- *  Use InstanceType<typeof World> to avoid TS2709 when the module shim
- *  exports a class with a companion namespace. */
-export type WorldType = InstanceType<typeof World>;
+ *  Now a direct alias of the engine `World` class type: since every editor tsc
+ *  program (the 5 sub-packages AND the repo-root program) resolves
+ *  `@forgeax/engine-ecs` to its real dist `.d.ts`, `World` is a genuine class
+ *  and needs no `InstanceType<typeof World>` TS2709 dodge. */
+export type WorldType = World;
 
 /** Engine entity handle — the branded number identifying an ECS row.
- *  Derived from the engine `World.despawn` signature via the value-space `World`
- *  class (same channel as `WorldType` above): yields the engine's EXACT branded
- *  type, assignable across all world APIs, while avoiding the TS2709 namespace
- *  resolution of a direct `import type { EntityHandle }`. */
-export type EntityHandle = Parameters<WorldType['despawn']>[0];
+ *  Re-exported straight from the engine ecs barrel (its cleanly-exported
+ *  `EntityHandle` branded number), so downstream `import { EntityHandle } from
+ *  '@forgeax/editor-core'` keeps working. */
+export type { EntityHandle };
 
 export type EntityId = number;
 

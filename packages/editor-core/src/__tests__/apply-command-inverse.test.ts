@@ -27,7 +27,7 @@ import type { EditorCommand, EditSession } from '../types';
 // → engine handle read via entHandle (doc.entities deleted).
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World() as InstanceType<typeof World>;
+  session.world = new World();
   return session;
 }
 

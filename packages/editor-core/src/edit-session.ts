@@ -9,7 +9,7 @@ import { World } from '@forgeax/engine-ecs';
 import type { EditSession } from './scene-types';
 import type { EntityId, EntityHandle } from './scene-types';
 
-type WorldType = InstanceType<typeof World>;
+type WorldType = World;
 
 /** Internal session state (not on EditSession interface — document.ts internal).
  *  Carries the legacy ID allocator + legacy ID → engine handle mapping that

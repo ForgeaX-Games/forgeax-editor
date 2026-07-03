@@ -33,13 +33,11 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import { loadGameProject } from '@forgeax/engine-project';
 
 /**
- * A forgeax engine World returned by openProject.
- *
- * Use InstanceType<typeof World> to avoid TS2709 when the module shim
- * (declare module) creates an ambient namespace conflict with the real
- * class export.
+ * A forgeax engine World returned by openProject — direct alias of the engine
+ * `World` class type (every editor tsc program now resolves engine-ecs to its
+ * real dist `.d.ts`, so no `InstanceType<typeof World>` dodge is needed).
  */
-export type OpenProjectWorld = InstanceType<typeof World>;
+export type OpenProjectWorld = World;
 
 /**
  * Discriminant for an openProject outcome — lets an AI user / caller tell a

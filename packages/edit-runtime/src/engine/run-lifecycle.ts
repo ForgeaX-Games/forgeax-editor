@@ -165,6 +165,15 @@ export interface RunLifecycleDeps {
    */
   readonly onAfterBootstrap?: () => void;
   /**
+   * Called on ■ Stop AFTER the scene is despawned + re-instantiated, with the
+   * NEW SceneInstance root. ■ mints fresh handles under a new synthetic root, so
+   * the editor session's localId↔handle map (`_e2h`/`_h2e`) and the host's
+   * defaultSceneRoot both point at despawned handles ("scene not restored").
+   * The host rebinds them here (store.rebindLoadedScene + defaultSceneRoot).
+   * Optional — headless tests omit it.
+   */
+  readonly rebindSceneInstance?: (newRoot: number) => void;
+  /**
    * Create the controlled UI container for a run and return it. Called at the
    * START of ▶ Play (before bootstrap, so the game mounts its UI into it). The
    * host builds a `<div>` inside the `#ui` overlay layer; the returned element
@@ -370,17 +379,31 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-1c layer-1: drop the systems bootstrap registered.
     removeBootstrapSystems();
 
+    // D-1c layer-3: despawn the entities the run spawned OUTSIDE the doc scene
+    // (bullets/enemies/etc.) — the pre▶ → now handle diff. This MUST run BEFORE
+    // the scene re-instantiate below: re-instantiate mints FRESH handles for the
+    // restored scene that are (correctly) absent from prePlayEntities, so a
+    // post-instantiate diff would sweep the freshly restored scene away
+    // ("scene not restored"). Ordering it here keeps the diff measured against
+    // the played scene's handles only.
+    despawnRuntimeSpawns();
+
     // M4 / AC-10: restore the scene by despawnScene + re-instantiate
     // from the captured snapshot source (engine-native, no cloneEditSession).
     // This replaces the old doc projection path (bus.replaceDoc(cloneEditSession)).
+    // AC-06: re-instantiate mints fresh handles under a NEW synthetic root, so
+    // rebindSceneInstance re-syncs the editor session map + host defaultSceneRoot
+    // onto the new root (else hierarchy/selection/save go dead on despawned ids).
     if (snapshotRoot !== null && snapshotSource !== null) {
       deps.world.despawnScene(snapshotRoot);
       // Re-instantiate from the same SceneAsset source to restore pre-Play state.
       const r = deps.world.instantiateScene(snapshotSource);
       if (!r.ok) {
         console.warn('[editor] ■ Stop re-instantiateScene failed:', (r as { error?: unknown }).error);
+      } else {
+        const newRoot = r.value?.root;
+        if (typeof newRoot === 'number') deps.rebindSceneInstance?.(newRoot);
       }
-      despawnRuntimeSpawns();
     }
     snapshotSource = null;
     snapshotRoot = null;

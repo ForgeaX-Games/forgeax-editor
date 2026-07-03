@@ -8,15 +8,10 @@
 //   research Finding 6: engine has no and() — editor must supply it
 //   charter P4: consistent abstraction — editor helpers don't leak engine internals
 
-import { World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 
-// `World` is imported as a VALUE and used through `InstanceType<typeof World>`
-// to dodge the engine `.d.ts` module-shim TS2709 ("Cannot use namespace 'World'
-// as a type") that fires once this module is pulled into a consumer's tsc program
-// via the editor-core barrel (discoverer → run-conditions, w10). Same idiom +
-// reason as discoverer.ts `EcsWorld` and open-project.ts `OpenProjectWorld`; the
-// runtime value is unused at type position — purely a type-resolution shim.
-type EcsWorld = InstanceType<typeof World>;
+// Local alias for the engine `World` class type (imported type-only).
+type EcsWorld = World;
 
 export type RunCondition = (world: EcsWorld) => boolean;
 

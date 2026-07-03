@@ -37,7 +37,7 @@ import { setFps, getFps } from './fps-store';
 import { loadGameAssets, makeMaterialResolver, makeMeshResolver } from '@forgeax/editor-core';
 // M7-a (AC-15): doc.entities mirror deleted — enumerate/read entities via world helpers.
 import { entIds, entComponent } from '@forgeax/editor-core';
-import { bus, loadDocFromStorage, loadDocFromDisk, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
+import { bus, loadDocFromStorage, loadDocFromDisk, getLoadedSceneRoot, rebindLoadedScene, setSceneId, getSceneId, switchSceneFile, initSync, initDiskWatch, initSceneList, broadcastAssetsChanged, flushPendingSaveBeacon, cancelPendingDiskSave, setPathResolver, getAssetSelection, onAssetSelectionChange, getSelection, onSelectionChange, publishMeshStats } from '@forgeax/editor-shared';
 import { openProject, createFetchReader, resolveGamePath, getApiClient, injectEditMode } from '@forgeax/editor-core';
 import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
@@ -426,6 +426,11 @@ injectEditMode(world, true);
 // ran against a throwaway world with no registry and was discarded on the world
 // swap — which is why the viewport opened empty. Load order: on-disk authored
 // scene → localStorage mirror → demo seed; seed only when the result is EMPTY.
+// D-1a: the default-scene root entity carrying SceneInstance. run-lifecycle's
+// getDefaultSceneRoot reads it to snapshot/despawn the scene on the ▶/■ roundtrip.
+// Bound below from getLoadedSceneRoot() (the root loadSceneByGuid instantiated
+// into the LIVE editor world). `undefined` when no scene loaded (seed/fresh).
+let defaultSceneRoot: number | undefined;
 setBootStage('loadDoc');
 await renderer.ready.catch(() => null);
 await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
@@ -436,6 +441,19 @@ if (entIds(bus.doc).length === 0) {
   // first real edit re-schedules a save.
   cancelPendingDiskSave();
 }
+// Bind the run-lifecycle's default-scene root to the scene root loaded into the
+// LIVE editor world (bus.doc.world) by loadSceneByGuid. ▶ Play snapshots the
+// scene via world.getSceneInstanceState(defaultSceneRoot) and ■ Stop restores
+// from it — both must use a root in THIS world, not openProject's throwaway one.
+// Without this, defaultSceneRoot stayed undefined (openProject sets a root in a
+// different world), so Play captured no snapshot and Stop couldn't restore.
+{
+  const loadedRoot = getLoadedSceneRoot();
+  if (loadedRoot !== null) defaultSceneRoot = loadedRoot;
+}
+// Breadcrumb: entity count after load (23 = full game-default; 9 = seed fallback)
+// + the default-scene root. Doubles as the Play/Stop restore-fidelity probe.
+emitBoot(`scene ▸ loaded entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
 
 // ▶/■ command chain (w11/w12 — bootstrap-entry model, plan-strategy D-1/D-1c).
 // The run lifecycle lives in ./engine/run-lifecycle (testable, DI'd); here we
@@ -455,6 +473,7 @@ function playSimulation(): void {
   void runLifecycle?.playSimulation();
 }
 function stopSimulation(): void {
+  emitBoot('scene ▸ stop requested');
   runLifecycle?.stopSimulation();
 }
 
@@ -503,7 +522,11 @@ function collectWorldEntityHandles(w: typeof world): Set<number> {
   if (sceneSlug && sceneSlug !== 'default') {
     openProject(sceneSlug, createFetchReader()).then((projectResult) => {
       if (projectResult.sceneRoot !== null) {
-        defaultSceneRoot = projectResult.sceneRoot;
+        // NOTE: do NOT bind defaultSceneRoot here — openProject instantiates into
+        // its OWN throwaway World, so its sceneRoot is meaningless in the live
+        // editor world that ▶ Play snapshots. defaultSceneRoot is bound from
+        // getLoadedSceneRoot() (the live-world load) above. This call stays as a
+        // proof-of-life for the openProject contract (result exposed on window).
         console.log(`[editor] openProject: scene instantiated (${projectResult.world.inspect().entityCount} entities, root=${projectResult.sceneRoot})`);
       } else {
         console.log('[editor] openProject: no defaultScene, graceful skip');
@@ -720,11 +743,8 @@ onViewportQuadrantChange(() => applyActiveCamera());
 // getDefaultScene reads a cache resolveGameModule fills, since loadGame (which
 // calls resolveGameModule) always runs before ctx assembly in playSimulation.
 let cachedDefaultScene: unknown;
-// D-1a: the default-scene root entity carrying SceneInstance, captured from the
-// openProject instantiation. run-lifecycle's getDefaultSceneRoot reads it to
-// snapshot/despawn the scene on the ▶/■ roundtrip. `undefined` until openProject
-// instantiates a scene (or when there is no defaultScene — graceful skip).
-let defaultSceneRoot: number | undefined;
+// (defaultSceneRoot is declared earlier — right before the scene load — so the
+// load block can bind it from getLoadedSceneRoot(); see there.)
 // Absolute on-disk project root (from /api/health), cached. edit-runtime imports
 // the game through edit VITE's own `/editor/@fs<abspath>` transform — NOT the
 // `/preview/*` proxy. WHY: the /preview proxy is play-runtime's separate vite
@@ -859,6 +879,18 @@ runLifecycle = createRunLifecycle({
   onAfterBootstrap: () => {
     discoverGameCameraFromWorld();
     applyActiveCamera();
+  },
+  // AC-06: ■ Stop despawns the played scene and re-instantiates the same
+  // SceneAsset, minting fresh handles under a NEW synthetic root. Re-sync the
+  // editor session's localId↔handle map + this host's defaultSceneRoot onto the
+  // new root — otherwise hierarchy/selection/save (and the NEXT ▶ snapshot)
+  // point at despawned handles and the scene reads as "not restored".
+  rebindSceneInstance: (newRoot: number) => {
+    const bound = rebindLoadedScene(newRoot);
+    if (bound !== null) defaultSceneRoot = bound;
+    // Restore-fidelity probe: entity count + new root after ■ Stop rebind. A
+    // healthy restore keeps the same count as the loaded scene (AC-06).
+    emitBoot(`scene ▸ restored entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
   },
   // B (controlled UI root): on ▶ Play build a disposable container inside the
   // #ui overlay layer and hand it to the game as ctx.uiRoot; on ■ Stop remove
