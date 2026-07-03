@@ -42,6 +42,13 @@ const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
 const ENGINE_DIR = join(ROOT, 'packages', 'engine');
 const WASM_DIR = join(ENGINE_DIR, 'packages', 'wgpu-wasm');
 const WASM_FILE = join(WASM_DIR, 'pkg', 'wgpu_wasm_bg.wasm');
+// fbx-wasm: ufbx compiled by emcc; pkg/ is gitignored (zero-binary invariant)
+// like wgpu, so it must be built here. Both emcc outputs (.mjs glue + .wasm)
+// are needed — editor-core's fbx-cook statically imports the .mjs, which
+// fetches the .wasm at runtime.
+const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx-wasm');
+const FBX_WASM_MJS = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.mjs');
+const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
 const PORTS = [15290, 15280, 15281, 15173];
 const GAME_API_PORT = 15281;
@@ -80,6 +87,25 @@ function ensureWasm() {
   ok('wasm built');
 }
 
+function ensureFbxWasm() {
+  if (existsSync(FBX_WASM_MJS) && existsSync(FBX_WASM_FILE)) {
+    ok('fbx wasm present (skip build): packages/fbx-wasm/pkg/fbx-wasm.{mjs,wasm}');
+    return;
+  }
+  step('fbx wasm missing — building from ufbx (fbx-wasm build:wasm, needs emcc) ...');
+  requireCmd(
+    'emcc',
+    'fbx wasm build needs Emscripten. install: brew install emscripten  (or emsdk: https://emscripten.org/docs/getting_started/downloads.html, then `emsdk activate latest`)',
+  );
+  // build:wasm = fetch-ufbx (idempotent, downloads ufbx.c) + emcc. Invoke via
+  // the package script so the emcc flag set stays owned by fbx-wasm.
+  sh('pnpm', ['-F', '@forgeax/engine-fbx-wasm', 'build:wasm'], { cwd: ENGINE_DIR });
+  if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
+    die(`fbx wasm build ran but ${FBX_WASM_MJS} / ${FBX_WASM_FILE} still absent.`);
+  }
+  ok('fbx wasm built');
+}
+
 function install() {
   requireCmd('git', 'install git first.');
   requireCmd('bun', 'install bun: https://bun.sh');
@@ -97,14 +123,17 @@ function install() {
   sh('pnpm', ['install'], { cwd: ENGINE_DIR });
   ok('engine deps ready');
 
-  step('4/5 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
+  step('4/6 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
   // Only the library packages emit the dist/ the editor imports. apps/hello/*
   // are example apps that need extra fixtures and are NOT needed here.
   sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
   ok('engine dist built');
 
-  step('5/5 ensuring wgpu wasm binary ...');
+  step('5/6 ensuring wgpu wasm binary ...');
   ensureWasm();
+
+  step('6/6 ensuring fbx wasm binary ...');
+  ensureFbxWasm();
 
   step('verifying critical artifacts ...');
   let missing = false;
@@ -116,6 +145,10 @@ function install() {
   }
   if (!existsSync(WASM_FILE)) {
     warn(`missing wasm: ${WASM_FILE}`);
+    missing = true;
+  }
+  if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
+    warn(`missing fbx wasm: packages/fbx-wasm/pkg/fbx-wasm.{mjs,wasm}`);
     missing = true;
   }
   if (missing) die("install incomplete — see warnings above. Re-run 'node scripts/cli.mjs install'.");

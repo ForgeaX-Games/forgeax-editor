@@ -16,6 +16,12 @@ git submodule update --init --recursive   # REQUIRED first — fetch engine/inte
 bun install                               # if it fails with simple-git-hooks ENOENT, just re-run once
 ```
 
+For the **full standalone stack** (`bun run setup` → `bun run start --game <dir>`), `setup` also builds the engine's two gitignored wasm artefacts (zero-binary invariant):
+- **wgpu-wasm** (`pkg/wgpu_wasm_bg.wasm`) — needs Rust + `wasm-pack`.
+- **fbx-wasm** (`pkg/fbx-wasm.{mjs,wasm}`) — needs **Emscripten `emcc`** (`brew install emscripten`, or emsdk). Without it `setup` errors with the install command; the editor's browser FBX import stays unavailable until built (glTF unaffected).
+
+Both are rebuilt on demand — never committed. A bare `bun install` alone does NOT build them; use `bun run setup` (or `bun -F @forgeax/engine-fbx-wasm build:wasm`).
+
 ## Commands
 
 | Task | Command |

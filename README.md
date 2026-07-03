@@ -62,6 +62,19 @@ bun run lint:dep                          # dependency-cruiser — assert no cyc
 > backend (see [`standalone/game-backend.ts`](./standalone/game-backend.ts)).
 > Run it yourself: `bun run selfcheck:b2`.
 
+> [!IMPORTANT]
+> **Full standalone stack** (`bun run setup` → `bun run start --game <dir>`) also
+> builds the engine's two gitignored wasm artefacts (zero-binary invariant — the
+> compiled binaries are never committed, always rebuilt):
+> - **wgpu-wasm** — needs Rust + [`wasm-pack`](https://rustwasm.github.io/wasm-pack/).
+> - **fbx-wasm** (browser FBX import) — needs **Emscripten `emcc`**
+>   (`brew install emscripten`, or [emsdk](https://emscripten.org/docs/getting_started/downloads.html)).
+>
+> `bun run setup` builds both and errors with the exact install command if a
+> toolchain is missing. A bare `bun install` does **not** build them — that path
+> only covers the lightweight dev/B2 flow above. Missing `emcc` disables browser
+> FBX import only (glTF unaffected).
+
 ## Run
 
 The editor runs in two contexts. **Standalone** (this repo on its own) is the
