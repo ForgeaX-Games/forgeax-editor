@@ -46,3 +46,25 @@ declare module '@forgeax/engine-fbx-wasm' {
   export const parseFbx: any;
   export const isFbxWasmReady: any;
 }
+
+// engine-fbx — the native (fbxsdk) importer's parse-*.ts helpers. It DOES ship
+// real .d.ts after a full `tsc -b` engine build (so editor's own CI never needs
+// this block), but the studio consumer builds engine with tsup only (.mjs, no
+// .d.ts), so editor-core/src/fbx-cook.ts's imports must resolve via this shim
+// there. value + type space — fbx-cook imports both the parse-*.ts functions and
+// the FbxRaw* types. These are REAL engine-fbx exports.
+declare module '@forgeax/engine-fbx' {
+  export const parseMesh: any;
+  export const parseScene: any;
+  export const parseMaterial: any;
+  export const parseSkeleton: any;
+  export const parseSkin: any;
+  export const parseAnimationClips: any;
+  export type FbxRawDocument = any;
+  export type FbxRawMesh = any;
+  export type FbxRawNodes = any;
+  export type FbxRawMaterial = any;
+  export type FbxRawSkeletonDoc = any;
+  export type FbxRawSkinDoc = any;
+  export type FbxRawAnimDoc = any;
+}
