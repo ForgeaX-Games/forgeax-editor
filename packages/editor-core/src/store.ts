@@ -6,6 +6,7 @@ import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-ru
 import { EditorBus } from './bus';
 import type { CommandOrigin, HistoryStep } from './bus';
 import { createEditSession } from './document';
+import { getInternals } from './edit-session';
 import type { EditorCommand, EntityId, EditSession } from './types';
 import {
   entExists,
@@ -14,6 +15,9 @@ import {
   entComponents,
   entPopulate,
   entRootHandles,
+  entMap,
+  entSetNextId,
+  entGetNextId,
 } from './entity-state';
 import {
   getPopoutPanel,
@@ -29,7 +33,7 @@ import {
   type WorldEntityState,
   type WorldState,
 } from './sync-channel';
-import { Name, Transform, ChildOf, Children } from '@forgeax/engine-runtime';
+import { Name, Transform, ChildOf, Children, SceneInstance } from '@forgeax/engine-runtime';
 import type { EntityHandle } from './scene-types';
 import { EditorHidden } from './components/EditorHidden';
 import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from './clip-control';
@@ -513,6 +517,10 @@ let sceneList: SceneFileEntry[] = [];
 // must not mint a new GUID. Saving re-uses this so the pack on disk keeps the
 // GUID forge.json points at. Reset on every load attempt; null until known.
 let currentSceneGuid: string | null = null;
+// The synthetic SceneInstance root handle of the currently loaded scene, kept so
+// a disk-watch reload can despawnScene it before re-instantiating (avoids a
+// double-spawn). null when no scene is loaded (seed / fresh workspace).
+let currentSceneRoot: number | null = null;
 const sceneListListeners = new Set<() => void>();
 function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
 function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${currentSceneId}`; }
@@ -804,8 +812,18 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
  *  applySnapshot (entPopulate). */
 function reviveSession(doc: EditSession): EditSession {
   const fresh = createEditSession();
-  fresh.world = doc.world;
-  if (doc.registry !== undefined) fresh.registry = doc.registry;
+  // Snapshots now carry a world-less doc (buildSnapshot omits the live World so
+  // the BroadcastChannel structuredClone doesn't choke on Component tokens'
+  // toSchemaJSON methods). When no live world came through (the wire-snapshot
+  // case), NULL out fresh's live-but-empty World so `_isDeadWorld` returns true
+  // and popout reads route to the worldState-populated popout cache (entPopulate
+  // in applySnapshot) — reading fresh's empty World would show an empty scene.
+  if (doc.world) {
+    fresh.world = doc.world;
+  } else {
+    (fresh as unknown as { world: unknown }).world = null;
+  }
+  if (doc.registry !== undefined && doc.registry !== null) fresh.registry = doc.registry;
   return fresh;
 }
 
@@ -947,19 +965,26 @@ export async function loadDocFromDisk(): Promise<boolean> {
         const parsed = JSON.parse(j.content);
         if (isScenePack(parsed)) {
           // Preserve the scene asset's GUID across edits (its stable identity).
-          const sceneAssetEntry = parsed.assets.find((a: { kind?: string }) => a.kind === 'scene');
+          const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
           if (sceneAssetEntry?.guid) currentSceneGuid = sceneAssetEntry.guid;
-          // M4: load via engine-native path — parse pack into SceneAsset
-          // POD, allocate shared ref, and instantiateScene into the world.
-          const ok = loadWorldFromPack(parsed);
-          if (!ok) {
-            // Engine-native path failed (e.g. pack schema mismatch —
-            // charter P3). Fall through to legacy/localStorage/seed.
-          } else {
-            docVersion++;
-            for (const fn of docListeners) fn();
-            return true;
+          // Load via the engine's canonical loadByGuid -> instantiate path (the
+          // SAME sequence the game's main.ts uses). This resolves refs[] ->
+          // GUID -> user-tier handle inside the engine (allocSharedRef mint), so
+          // shared refs are live before spawn retains them — the earlier
+          // hand-rolled loadWorldFromPack fed GUID STRINGS straight to
+          // instantiateScene, which coerced them to 0 and tripped
+          // SharedRefReleasedError. It also populates _e2h from the
+          // SceneInstance.mapping so entIds() reflects the loaded scene (else the
+          // seed() fallback misfires and drops the old vocab).
+          if (sceneAssetEntry?.guid) {
+            const ok = await loadSceneByGuid(sceneAssetEntry.guid);
+            if (ok) {
+              docVersion++;
+              for (const fn of docListeners) fn();
+              return true;
+            }
           }
+          // GUID missing or engine load failed → fall through to seed.
         }
       }
     }
@@ -973,103 +998,91 @@ export async function loadDocFromDisk(): Promise<boolean> {
   return false;
 }
 
-// ── M4 scene-load helpers (pack → SceneAsset → world.instantiateScene) ─────
+// ── Scene-load: canonical engine loadByGuid → instantiate (engine SSOT) ─────
 //
-// AC-09: scene-load uses loadByGuid-style pack resolution via world APIs.
-// Field names that carry handle<> or array<handle<>> indices into the pack's
-// refs[] array — must be resolved to GUID strings before instantiateScene.
-// Mirrors engine parseScenePayload HANDLE_FIELD_NAMES / HANDLE_ARRAY_FIELD_NAMES.
+// The editor loads a scene the SAME way the game's main.ts does — the engine's
+// AssetRegistry.loadByGuid<SceneAsset>() (which recursively pulls the scene AND
+// its refs[] material/mesh/equirect siblings from the configured pack-index),
+// then allocSharedRef + registry.instantiate(). The engine's _resolveSceneGuids
+// mints one user-tier shared handle per unique GUID (allocSharedRef) BEFORE the
+// spawn retains it, so shared refs are always live. The prior hand-rolled path
+// (resolveRefsInComponents → world.instantiateScene with GUID STRINGS still in
+// the shared<T> fields) fed non-numeric values into Uint32 columns; `as number`
+// is erased at runtime, so retain saw a released/never-alloc'd slot →
+// SharedRefReleasedError. AGENTS.md #1: converge on the engine primitive, do not
+// re-hand-roll GUID resolution.
 
-const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
-  'assetHandle', 'material', 'skeleton', 'clip', 'equirect',
-]);
-const HANDLE_ARRAY_FIELD_NAMES: ReadonlySet<string> = new Set(['materials']);
-
-/**
- * Resolve integer refs indices in scene entity components to GUID strings.
- * Mirrors engine's parseScenePayload logic (asset-registry.ts:412).
- * Returns the resolved components dict (shallow copy), or null on error.
- */
-function resolveRefsInComponents(
-  rawComponents: Record<string, Record<string, unknown>>,
-  refs: string[],
-): Record<string, Record<string, unknown>> | null {
-  const resolved: Record<string, Record<string, unknown>> = {};
-  for (const compName of Object.keys(rawComponents)) {
-    const rawFields = rawComponents[compName];
-    if (!rawFields) continue;
-    const resolvedFields: Record<string, unknown> = {};
-    for (const fieldName of Object.keys(rawFields)) {
-      const value = rawFields[fieldName];
-      if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'number' && Number.isInteger(value)) {
-        const idx = value;
-        if (idx < 0 || idx >= refs.length) return null; // out of bounds → skip, not crash
-        resolvedFields[fieldName] = refs[idx];
-      } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
-        const resolvedArr: string[] = [];
-        for (const elem of value) {
-          if (typeof elem === 'number' && Number.isInteger(elem)) {
-            if (elem < 0 || elem >= refs.length) return null;
-            resolvedArr.push(refs[elem]!);
-          } else {
-            resolvedArr.push(String(elem ?? ''));
-          }
-        }
-        if (resolvedArr.length === value.length) resolvedFields[fieldName] = resolvedArr;
-        else resolvedFields[fieldName] = value;
-      } else {
-        resolvedFields[fieldName] = value;
-      }
-    }
-    resolved[compName] = resolvedFields;
+/** Tear down the currently loaded scene before a fresh (re)load: despawn the
+ *  SceneInstance subtree via the engine primitive and clear the session's
+ *  legacy-id↔handle map. No-op when nothing is loaded. */
+function teardownCurrentScene(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w: any = (bus.doc as any).world;
+  if (w && currentSceneRoot !== null) {
+    try { w.despawnScene(currentSceneRoot); } catch { /* best-effort */ }
   }
-  return resolved;
+  currentSceneRoot = null;
+  const internals = getInternals(bus.doc);
+  internals._e2h.clear();
+  internals._h2e.clear();
 }
 
 /**
- * Load a native scene pack into the world via engine-native APIs.
- * Called from loadDocFromDisk after the pack JSON is parsed.
- * Returns true if the world was loaded successfully.
+ * Load the game's scene by GUID via the engine's canonical loadByGuid →
+ * instantiate pipeline, then populate the session's legacy-id↔handle map
+ * (`_e2h`/`_h2e`) from the resulting SceneInstance.mapping so the editor's
+ * hierarchy/selection see the loaded entities (and entIds() is non-empty, so the
+ * seed() fallback in main.tsx does NOT misfire). Returns true on success.
  */
-function loadWorldFromPack(pack: { assets?: Array<{ kind?: string; guid?: string; payload?: unknown; refs?: string[] }> }): boolean {
-  // M4: bus.doc.world is the engine World — engine type shim degrades
-  // interface to namespace (TS2709), so type is accessed via Record.
+async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
+  // engine World / AssetRegistry are injected on bus.doc; the engine type shim
+  // degrades to namespace (TS2709) so access via any.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w: any = (bus.doc as any).world;
-  if (!w) return false;
-  const assets = pack.assets ?? [];
-  const sceneEntry = assets.find((a) => a.kind === 'scene');
-  if (!sceneEntry?.payload) return false;
-  const refs: string[] = Array.isArray(sceneEntry.refs) ? sceneEntry.refs : [];
-
-  // Resolve scene entities from the pack payload.
-  const rawPayload = sceneEntry.payload as { entities?: Array<{ localId?: number; components?: Record<string, Record<string, unknown>> }> };
-  const rawEntities = rawPayload.entities;
-  if (!Array.isArray(rawEntities)) return false;
-
-  const entities: Array<{ localId: number; components: Record<string, Record<string, unknown>> }> = [];
-  for (const rn of rawEntities) {
-    if (typeof rn.localId !== 'number') return false;
-    const cc = rn.components ?? {};
-    const resolved = resolveRefsInComponents(cc as Record<string, Record<string, unknown>>, refs);
-    if (resolved === null) continue; // entity with unrecoverable refs → skip
-    entities.push({ localId: rn.localId, components: resolved });
-  }
-
-  // Build SceneAsset POD and materialise into the world.
-  const sceneAsset = {
-    kind: 'scene' as const,
-    entities: entities.map((e) => ({
-      localId: e.localId as number,
-      components: e.components,
-    })),
-  };
-
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reg: any = (bus.doc as any).registry;
+  if (!w || !reg) return false;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = w.allocSharedRef('SceneAsset', sceneAsset as any);
-    const r = w.instantiateScene(handle);
-    if (!r.ok) return false;
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    const parsed = AssetGuid.parse(sceneGuid);
+    if (!parsed.ok) return false;
+
+    // Clear any previously loaded scene first so a reload doesn't double-spawn
+    // and _e2h has no stale entries.
+    teardownCurrentScene();
+
+    // loadByGuid pulls the scene + recursively its refs[] into the registry
+    // catalog; the returned payload has each handle field resolved to a GUID
+    // string. instantiate then mints GUID→handle and spawns every node.
+    const loadRes = await reg.loadByGuid(parsed.value);
+    if (!loadRes.ok) return false;
+    const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
+    const instRes = reg.instantiate(sceneHandle, w);
+    if (!instRes.ok) return false;
+    const root = instRes.value;
+    currentSceneRoot = root as number;
+
+    // Recover authored-localId → engine-handle from SceneInstance.mapping (a
+    // Uint32Array indexed by localId) and register each into the session map.
+    // The synthetic scene root itself is NOT an authored entity — skip it.
+    const instComp = w.get(root, SceneInstance);
+    if (!instComp.ok) return false;
+    const mappingArr: ArrayLike<number> = instComp.value.mapping;
+    const nodes = (loadRes.value as { entities?: Array<{ localId?: number }> }).entities ?? [];
+    let maxId = entGetNextId(bus.doc) - 1;
+    for (const n of nodes) {
+      const localId = n.localId;
+      if (typeof localId !== 'number') continue;
+      const h = mappingArr[localId];
+      // NOTE: entity handle 0 IS valid (the first spawned entity). Only skip
+      // truly absent slots.
+      if (h === undefined) continue;
+      entMap(bus.doc, localId, h as EntityHandle);
+      if (localId > maxId) maxId = localId;
+    }
+    // Advance the id allocator past every loaded localId so new spawns don't
+    // collide with authored ids.
+    entSetNextId(bus.doc, maxId + 1);
     return true;
   } catch {
     return false;
@@ -1182,14 +1195,19 @@ export function initDiskWatch(): void {
       if (!j.content) return;
       const parsed = JSON.parse(j.content);
       if (isScenePack(parsed)) {
-        // M4: disk-watch reload uses engine-native world path.
-        const ok = loadWorldFromPack(parsed);
-        if (!ok) return;
-        // CANONICAL compare: normalise incoming parsed pack vs our current
-        // world's serialization via worldToPack (M5: replaces sessionToPack).
+        // CANONICAL compare FIRST: normalise the incoming pack against our live
+        // world's serialization. If identical, this is our own save echo — skip
+        // (no teardown/reload). Comparing before the reload also avoids a
+        // needless despawn+reinstantiate on every self-save.
         const currentPack = worldToPack(bus.doc, currentSceneGuid ?? undefined);
         if (currentPack && JSON.stringify(parsed) === currentPack) return;
-        // Fire doc listeners (world was already loaded by loadWorldFromPack).
+        // Genuine external edit → reload via the engine-native loadByGuid path
+        // (loadSceneByGuid tears down the current scene + repopulates _e2h).
+        const sceneEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
+        if (!sceneEntry?.guid) return;
+        if (sceneEntry.guid) currentSceneGuid = sceneEntry.guid;
+        const ok = await loadSceneByGuid(sceneEntry.guid);
+        if (!ok) return;
         docVersion++;
         for (const fn of docListeners) fn();
         _isDirty = false;
@@ -1264,7 +1282,14 @@ function buildSnapshot(): EditorSnapshot {
   // Build worldState from world + sidecar (plan-strategy §2 D-4 popout compat)
   const worldState = buildWorldState();
   return {
-    doc: bus.doc,
+    // NEVER put the live engine World in the snapshot. structuredClone (the
+    // BroadcastChannel wire) cannot clone it — the World's archetype graph holds
+    // Component tokens carrying a `toSchemaJSON()` method (a function), so
+    // postMessage throws DataCloneError. The popout reconstructs its entity view
+    // entirely from `worldState` (applySnapshot → entPopulate), so the doc only
+    // needs to be a world-less shell; `_isDeadWorld` then routes reads to the
+    // popout cache. (M7 EditSession is {world, registry} — send neither live.)
+    doc: { world: null, registry: null } as unknown as EditSession,
     worldState,
     selection: [...selectionList],
     gizmo: gizmoMode,

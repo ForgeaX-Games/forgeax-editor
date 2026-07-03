@@ -13,6 +13,9 @@ import {
   Camera,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
+  HANDLE_CUBE,
+  HANDLE_SPHERE,
+  HANDLE_CYLINDER,
 } from '@forgeax/engine-runtime';
 import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
@@ -203,31 +206,30 @@ function seed(): void {
   const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
     bus.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
 
-  add('Ground', { Transform: { x: 0, y: -0.1, z: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, Mesh: { kind: 'cube' }, Material: { albedo: '#7a9e5a', metallic: 0, roughness: 0.95 }, Collider: { shape: 'box' } });
-  add('Sun', { Transform: { x: 0, y: 6, z: 0 }, Light: { type: 'directional', color: '#fff5e0', intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
-  add('TreeTrunk', { Transform: { x: -4, y: 0.9, z: -3, scaleX: 0.4, scaleY: 1.8, scaleZ: 0.4 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#8a5a2b', metallic: 0, roughness: 0.9 } });
-  add('TreeCanopy', { Transform: { x: -4, y: 2.4, z: -3, scaleX: 1.4, scaleY: 1.4, scaleZ: 1.4 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#5fae4f', metallic: 0, roughness: 0.85 } });
-  add('RedBox', { Transform: { x: 3, y: 0.5, z: -2, scaleX: 1, scaleY: 1, scaleZ: 1 }, Mesh: { kind: 'cube' }, Material: { albedo: '#e76f51', metallic: 0, roughness: 0.7 } }, { plugin: 'lowpoly', docId: 'crate-01' });
-  add('BlueBall', { Transform: { x: 4.5, y: 0.8, z: 1.5, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8 }, Mesh: { kind: 'sphere' }, Material: { albedo: '#4aa3df', metallic: 0.1, roughness: 0.4 } });
-  add('YellowPillar', { Transform: { x: 2, y: 0.75, z: 3.5, scaleX: 0.6, scaleY: 1.5, scaleZ: 0.6 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#f4c542', metallic: 0, roughness: 0.6 } });
-  add('Player', { Transform: { x: 0, y: 0.55, z: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, Mesh: { kind: 'cylinder' }, Material: { albedo: '#ff79c6', metallic: 0, roughness: 0.5 }, Collider: { shape: 'cylinder', radius: 0.35 } });
+  // Engine-native vocabulary (post editor-collapse): Transform uses posX/Y/Z;
+  // geometry is MeshFilter{assetHandle: builtin handle}; a default MeshRenderer
+  // (gray MaterialAsset) is auto-added by spawnComponentData when MeshFilter is
+  // present without one; lights are DirectionalLight. The old Mesh/Material/Light
+  // + Transform{x,y,z} + Collider vocab was deleted in the collapse and would be
+  // dropped-with-warning here.
+  add('Ground', { Transform: { posX: 0, posY: -0.1, posZ: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, MeshFilter: { assetHandle: HANDLE_CUBE } });
+  add('Sun', { Transform: { posX: 0, posY: 6, posZ: 0 }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
+  add('TreeTrunk', { Transform: { posX: -4, posY: 0.9, posZ: -3, scaleX: 0.4, scaleY: 1.8, scaleZ: 0.4 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
+  add('TreeCanopy', { Transform: { posX: -4, posY: 2.4, posZ: -3, scaleX: 1.4, scaleY: 1.4, scaleZ: 1.4 }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
+  add('RedBox', { Transform: { posX: 3, posY: 0.5, posZ: -2, scaleX: 1, scaleY: 1, scaleZ: 1 }, MeshFilter: { assetHandle: HANDLE_CUBE } }, { plugin: 'lowpoly', docId: 'crate-01' });
+  add('BlueBall', { Transform: { posX: 4.5, posY: 0.8, posZ: 1.5, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8 }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
+  add('YellowPillar', { Transform: { posX: 2, posY: 0.75, posZ: 3.5, scaleX: 0.6, scaleY: 1.5, scaleZ: 0.6 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
+  add('Player', { Transform: { posX: 0, posY: 0.55, posZ: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
 }
 // Load order: the game's on-disk authored scene → localStorage mirror → demo
 // seed. So opening a game shows ITS saved scene (if authored); a fresh game
 // starts from the seed and persists per-game from there.
-setBootStage('loadDoc');
-// Load order: on-disk authored scene → localStorage mirror → demo seed. Seed
-// whenever the result is EMPTY (sceneless game, fresh workspace, OR a prior
-// session that persisted a 0-entity doc) — otherwise the viewport opens blank
-// and looks "dead". seed() self-guards against clobbering a non-empty doc.
-await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-if (entIds(bus.doc).length === 0) {
-  seed();
-  // The bare seed is a viewport convenience for a scene-less game — do NOT
-  // auto-persist it to the game dir (avoids creating an unauthored scene.pack.json
-  // / masking a real scene). The user's first real edit re-schedules a save.
-  cancelPendingDiskSave();
-}
+// NOTE: the on-disk scene load runs LATER (loadAuthoredScene(), after the engine
+// World + AssetRegistry are injected into bus.doc). The canonical
+// loadByGuid → registry.instantiate path needs bus.doc.registry, which is only
+// wired once the renderer exists (below). Loading here (pre-renderer) would run
+// against a throwaway world with no registry — the scene would bail to seed and
+// then be discarded when bus.doc.world is swapped to the renderer's.
 
 // Mount the React chrome immediately so the editor is usable even if WebGPU is
 // unavailable (the canvas behind it shows the diagnostic overlay in that case).
@@ -416,6 +418,24 @@ bus.doc.registry = renderer.assets;
 // them tick; ■ Stop flips it back to true. This is the ONLY EditMode writer chain
 // (Append-Only/SSOT): no other code path touches EditMode.active.
 injectEditMode(world, true);
+
+// Load the authored scene NOW — after the engine World + AssetRegistry are the
+// renderer's (injected just above) and the pack-index is configured, so the
+// canonical loadByGuid → registry.instantiate path resolves refs[] GUIDs into
+// live shared handles. Loading before this point (the old pre-renderer position)
+// ran against a throwaway world with no registry and was discarded on the world
+// swap — which is why the viewport opened empty. Load order: on-disk authored
+// scene → localStorage mirror → demo seed; seed only when the result is EMPTY.
+setBootStage('loadDoc');
+await renderer.ready.catch(() => null);
+await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
+if (entIds(bus.doc).length === 0) {
+  seed();
+  // The bare seed is a viewport convenience for a scene-less game — do NOT
+  // auto-persist it to the game dir (avoids masking a real scene). The user's
+  // first real edit re-schedules a save.
+  cancelPendingDiskSave();
+}
 
 // ▶/■ command chain (w11/w12 — bootstrap-entry model, plan-strategy D-1/D-1c).
 // The run lifecycle lives in ./engine/run-lifecycle (testable, DI'd); here we
