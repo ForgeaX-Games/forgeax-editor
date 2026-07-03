@@ -15,7 +15,27 @@
 // main.tsx's existing `as never` engine access) so it can be wired without
 // reshaping the engine boot.
 
-import { ChildOf, Name, Skin, Socket, Transform } from '@forgeax/engine-runtime';
+import { ChildOf, Name, Skin, Transform } from '@forgeax/engine-runtime';
+import { defineComponent } from '@forgeax/engine-ecs';
+
+/**
+ * Socket (绑点) component — carries bone-local TRS for attaching a prop to a
+ * skeleton joint. Defined locally until the engine-runtime exports it
+ * (pending engine-side applySocket system landing).
+ */
+const Socket = defineComponent('Socket', {
+  boneName: { type: 'string' },
+  boneEntity: { type: 'entity' },
+  posX: { type: 'f32' },
+  posY: { type: 'f32' },
+  posZ: { type: 'f32' },
+  rotDegX: { type: 'f32' },
+  rotDegY: { type: 'f32' },
+  rotDegZ: { type: 'f32' },
+  scaleX: { type: 'f32' },
+  scaleY: { type: 'f32' },
+  scaleZ: { type: 'f32' },
+});
 import { normalizeScale, type SocketDef } from '@forgeax/editor-core';
 
 /** Minimal world surface used here (mirrors main.tsx's loose engine access). */
