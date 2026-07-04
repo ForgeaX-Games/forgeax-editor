@@ -17,10 +17,10 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import type { EntityHandle } from '../scene-types';
+import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Name, Transform } from '@forgeax/engine-runtime';
-import { applyCommand, createEditSession } from '../document';
-import { entHandle } from '../entity-state';
+import { applyCommand, createEditSession } from '../session/document';
+import { entHandle } from '../store/entity-state';
 import type { EditorCommand, EditSession } from '../types';
 
 // M7 / AC-15: sessions built via createEditSession + injected world; legacy ID

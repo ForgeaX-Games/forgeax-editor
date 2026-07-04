@@ -9,8 +9,8 @@
 import { useEffect, useState } from 'react';
 import {
   getSceneId, useSceneList, useSceneFile, readPlayConfig, writePlayConfig,
-} from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+} from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 
 const CAMPAIGN = '__campaign__';
 

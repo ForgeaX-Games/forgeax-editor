@@ -1,5 +1,5 @@
-import { bus, setSelection, useDocVersion } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+import { bus, setSelection, useDocVersion } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
 // mutation (human UI OR AI tool-call) is one EditorCommand on the bus, so this is

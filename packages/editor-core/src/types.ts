@@ -10,9 +10,9 @@ export type {
   EntityId,
   EntitySource,
   EditSession,
-} from './scene-types';
+} from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
-import type { EntityId, EntitySource } from './scene-types';
+import type { EntityId, EntitySource } from './scene/scene-types';
 
 // ── Commands ────────────────────────────────────────────────────────────────
 // Each command is a plain JSON object = it doubles as an AI tool-call payload.

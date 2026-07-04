@@ -1,5 +1,5 @@
-import { bus, dispatch, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+import { bus, dispatch, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 import { floatToHex, hexToFloat } from '@forgeax/editor-core';
 import {
   MeshRenderer,

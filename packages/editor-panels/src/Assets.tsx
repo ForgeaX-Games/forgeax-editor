@@ -2,7 +2,7 @@ import { Component, Suspense, lazy } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 
 const ContentBrowserV2 = lazy(() =>
-  import('./content-browser/ContentBrowserV2').then(m => {
+  import('@forgeax/editor-content-browser').then(m => {
     console.info('[CB:import]', 'AssetsPanel.lazyLoad', {
       moduleUrl: import.meta.url,
       href: typeof location !== 'undefined' ? location.href : undefined,

@@ -26,7 +26,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { existsSync } from 'node:fs';
-import { engineVitePreset } from './packages/edit-runtime/src/engine/engine-vite-preset';
+import { engineVitePreset } from './packages/editor-edit-runtime/src/engine/engine-vite-preset';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 

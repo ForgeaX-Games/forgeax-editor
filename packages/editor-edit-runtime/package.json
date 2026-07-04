@@ -1,0 +1,83 @@
+{
+  "name": "@forgeax/editor-edit-runtime",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "forgeax editor Edit mode runtime — engine boot + camera + skylight + seed + sync + dock shell + zustand store + EditorApp shell + context menu service",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./surface": {
+      "types": "./src/EditSurface.tsx",
+      "import": "./src/EditSurface.tsx"
+    },
+    "./host-boot": {
+      "types": "./src/host-boot.ts",
+      "import": "./src/host-boot.ts"
+    },
+    "./engine/viewport-component": {
+      "types": "./src/engine/ViewportComponent.tsx",
+      "import": "./src/engine/ViewportComponent.tsx"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "index.html",
+    "vite.config.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@forgeax/editor-core": "workspace:*",
+    "@forgeax/editor-panels": "workspace:*",
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier2d": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
+    "@forgeax/engine-project": "workspace:*",
+    "@forgeax/engine-render-graph": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@tanstack/react-virtual": "^3.14.3",
+    "@tanstack/virtual-core": "^3.17.1",
+    "lucide-react": "^0.460.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "scheduler": "^0.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/bun": "^1.3.13",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.5"
+  }
+}

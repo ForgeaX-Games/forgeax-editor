@@ -11,7 +11,7 @@
 // plan-strategy §2 D-2, D-3 / requirements AC-22
 
 import { describe, expect, it } from 'bun:test';
-import { getComponentSchema } from '../schema';
+import { getComponentSchema } from '../scene/schema';
 
 describe('m3-test-schema-red: schema engine-native field assertions', () => {
   // ── Transform: quatX/Y/Z/W, posX/Y/Z, scaleX/Y/Z; NO rotX/rotY/rotZ ─────────

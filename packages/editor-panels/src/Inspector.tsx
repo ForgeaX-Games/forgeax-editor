@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
-import { showContextMenu } from '@forgeax/editor-shared';
+import { useTranslation } from '@forgeax/editor-core/i18n';
+import { showContextMenu } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
-import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-shared';
-import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-shared';
+import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-core';
 import type { EditorCommand, EntityId } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While

@@ -19,7 +19,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World, defineComponent } from '@forgeax/engine-ecs';
-import type { EntityHandle } from '../scene-types';
+import type { EntityHandle } from '../scene/scene-types';
 import {
   AssetRegistry,
   ChildOf,
@@ -31,7 +31,7 @@ import {
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { EditorHidden } from '../components/EditorHidden';
-import { stripEditorHiddenMarker } from '../store';
+import { stripEditorHiddenMarker } from '../store/store';
 
 // ── Minimal mock ShaderRegistry for AssetRegistry constructor ──────────────
 

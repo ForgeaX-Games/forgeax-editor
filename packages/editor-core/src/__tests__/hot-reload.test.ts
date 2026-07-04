@@ -22,7 +22,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { schemaFingerprint, decideReloadTier } from '../hot-reload';
+import { schemaFingerprint, decideReloadTier } from '../util/hot-reload';
 
 // A minimal stand-in for the engine `Component` token surface the fingerprint
 // reads: just `toSchemaJSON()`. We model schema changes by changing the JSON it

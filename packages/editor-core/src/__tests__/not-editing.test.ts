@@ -18,8 +18,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { World, defineComponent, defineSystem, getRegisteredSystems } from '@forgeax/engine-ecs';
 
-import { and, notEditing } from '../run-conditions';
-import { injectEditMode } from '../edit-mode';
+import { and, notEditing } from '../session/run-conditions';
+import { injectEditMode } from '../session/edit-mode';
 
 // ── Test fixtures: define components + systems ───────────────────────────────
 

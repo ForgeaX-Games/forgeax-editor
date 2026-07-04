@@ -14,7 +14,7 @@
 // AGENTS.md #6: conversion on editor side, XYZ order, pinned both sides.
 
 import { describe, expect, it } from 'bun:test';
-import { eulerToQuat, quatToEuler } from '../euler-quat';
+import { eulerToQuat, quatToEuler } from '../util/euler-quat';
 
 describe('m3-test-euler-red: euler↔quat round-trip', () => {
   // ── (a) No gimbal-lock: known quaternion → euler is consistent ─────────────

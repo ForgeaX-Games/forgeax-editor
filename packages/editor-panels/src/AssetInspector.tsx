@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { useAssetSelection } from '@forgeax/editor-shared';
+import { useAssetSelection } from '@forgeax/editor-core';
 import { PREVIEW_COMPONENTS } from './asset-inspector';
 
 const KIND_BADGE: Record<string, string> = {

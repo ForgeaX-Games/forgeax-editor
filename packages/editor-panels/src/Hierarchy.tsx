@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
-import { showContextMenu, type MenuItemDef } from '@forgeax/editor-shared';
+import { useTranslation } from '@forgeax/editor-core/i18n';
+import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entComponents, entComponent, entIds } from '@forgeax/editor-shared';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-shared';
-import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-shared';
+import { entExists, entName, entComponents, entComponent, entIds } from '@forgeax/editor-core';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-core';
+import { bus, dispatch, getSelectionList, onRenameRequest, requestRefEntity, setHoverEntity, setSelection, toggleSelection, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityId } from '@forgeax/editor-core';
 

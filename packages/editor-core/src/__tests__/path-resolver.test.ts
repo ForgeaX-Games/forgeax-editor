@@ -16,7 +16,7 @@ import {
   resolveGamePath,
   hasPathResolver,
   EditorPathResolverError,
-} from '../path-resolver';
+} from '../util/path-resolver';
 
 // Each test owns the global singleton; always uninstall after.
 afterEach(() => setPathResolver(null));

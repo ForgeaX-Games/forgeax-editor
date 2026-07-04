@@ -120,7 +120,7 @@ function mapReader(
 // Tests — will be RED until openProject is implemented (TDD)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import { openProject, type OpenProjectResult } from '../open-project';
+import { openProject, type OpenProjectResult } from '../session/open-project';
 
 describe('w13 — openProject projection', () => {
   it('(a) fixture with defaultScene -> world has entityCount > 0', async () => {

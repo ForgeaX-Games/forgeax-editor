@@ -14,24 +14,25 @@
 
 | Package | Purpose |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | Core logic layer — EditSession, EditorBus, undo/redo, schema, animation, material graph, assets, presets |
-| [`@forgeax/editor-shared`](./packages/editor-shared/) | Cross-layer shared runtime — zustand store, entity ops, context menu, dock bridge, panel manifest SSOT |
-| [`@forgeax/editor-panels`](./packages/editor-panels/) | 8 business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Timeline, MaterialGraph) + panel-component injection |
-| [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
-| [`@forgeax/editor-play-runtime`](./packages/play-runtime/) | Play-mode thick host — FPS capture, physics gate, pack-index, diagnostics overlay, VAG_CONSOLE bridge |
+| [`@forgeax/editor-core`](./packages/editor-core/) | Core logic layer — EditSession, EditorBus, undo/redo, schema, store, entity ops, context menu, dock bridge, panel manifest SSOT, i18n, assets, presets |
+| [`@forgeax/editor-content-browser`](./packages/editor-content-browser/) | Content Browser sub-application — grid/list/column views, filter/sort/nav hooks, import pipeline. Lazy-loaded by the Assets panel |
+| [`@forgeax/editor-panels`](./packages/editor-panels/) | Business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Mesh, Launcher, AssetInspector, Systems) + panel-component injection |
+| [`@forgeax/editor-edit-runtime`](./packages/editor-edit-runtime/) | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
+| [`@forgeax/editor-play-runtime`](./packages/editor-play-runtime/) | Play-mode thick host — FPS capture, physics gate, pack-index, diagnostics overlay, VAG_CONSOLE bridge |
 
 ## Dependency structure
 
 ```mermaid
 flowchart RL
-    shared["editor-shared"] --> core["editor-core"]
-    panels["editor-panels"] --> shared
+    cb["editor-content-browser"] --> core["editor-core"]
+    panels["editor-panels"] --> core
+    panels --> cb
     edit["editor-edit-runtime"] --> panels
     play["editor-play-runtime"] -.->|"iframe VAG_* protocol"| core
 ```
 
-The DAG is `core ← shared ← panels ← edit-runtime`; `play-runtime` is a separate
-thick host that talks to `core` only over the `VAG_*` iframe protocol.
+The DAG is `core ← content-browser ← panels ← edit-runtime`; `play-runtime` is a
+separate thick host that talks to `core` only over the `VAG_*` iframe protocol.
 `bun run lint:dep` (dependency-cruiser) fails the build if any import breaks it.
 
 ## Quick start
@@ -180,5 +181,5 @@ P3 SSOT-relocation loop closes the OQ-1 gap.
 | `bun install`: `simple-git-hooks` postinstall `ENOENT … package.json` | first-extract race on the engine submodule's git-hook dep | just re-run `bun install` — the file is in place on the retry |
 | `bun install` reports `unresolved workspace` | engine submodule not fetched or `workspace:*` pin broken | `git submodule update --init --recursive`; stacks resolve via the parent repo's bun workspaces glob |
 | `bun run typecheck` fails | a package's deps aren't installed or types mismatch | run `bun install` first, then `bun run typecheck` |
-| `bun run lint:dep` reports no-circular | a new cross-package import broke the DAG | check `.dependency-cruiser.cjs` rules; keep the DAG `core ← shared ← panels ← edit-runtime` |
+| `bun run lint:dep` reports no-circular | a new cross-package import broke the DAG | check `.dependency-cruiser.cjs` rules; keep the DAG `core ← content-browser ← panels ← edit-runtime` |
 | port `15290` / `15280` / `15173` in use | another vite instance wasn't stopped | `bash stop.sh` (studio repo) or manually `kill` the PID |

@@ -9,9 +9,9 @@
 // growth. This test pins exactly that: stacks frozen when true, normal when false.
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { Transform } from '@forgeax/engine-runtime';
-import type { EntityHandle } from '../scene-types';
-import { EditorBus } from '../bus';
-import { entHandle } from '../entity-state';
+import type { EntityHandle } from '../scene/scene-types';
+import { EditorBus } from '../io/bus';
+import { entHandle } from '../store/entity-state';
 import type { EditorCommand } from '../types';
 
 function seedEntity(bus: EditorBus): void {

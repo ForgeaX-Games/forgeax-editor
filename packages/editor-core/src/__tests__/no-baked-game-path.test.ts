@@ -22,8 +22,8 @@ const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
 // ALL editor packages — pure libs AND runtime/host adapters. The convention
 // lives in the hosts (standalone/studio), NOT anywhere in editor source.
 const PURE_LIB_ROOTS = [
-  'editor-core/src', 'editor-shared/src',
-  'edit-runtime/src', 'editor-panels/src', 'play-runtime/src',
+  'editor-core/src', 'editor-content-browser/src',
+  'editor-edit-runtime/src', 'editor-panels/src', 'editor-play-runtime/src',
 ];
 
 const EXCLUDE = /(__tests__|\.test\.|node_modules|broken-syntax|[/\\]fixtures[/\\])/;

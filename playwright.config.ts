@@ -66,7 +66,7 @@ export default defineConfig({
       // /preview/?game=<slug> (fullscreen play path). OOS-4: play-runtime is
       // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
       command: 'bunx vite --port 15173 --strictPort',
-      cwd: './packages/play-runtime',
+      cwd: './packages/editor-play-runtime',
       env: { ...process.env, FORGEAX_ENGINE_PORT: '15173' },
       url: 'http://127.0.0.1:15173/preview/',
       reuseExistingServer: !process.env.CI,

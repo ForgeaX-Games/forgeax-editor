@@ -8,7 +8,7 @@
 // RUNTIME (vite ESM, editor :15280): "does not provide an export named
 // 'hasPendingDiskSave'". CI never caught it — two blind spots:
 //   1. typecheck fan-out (ci.yml) skips the editor SUBpackages
-//      (editor-core/edit-runtime/play-runtime/editor-shared/editor-panels), so
+//      (editor-core/edit-runtime/play-runtime/editor-panels), so
 //      the consumer's TS2305 was never compiled.
 //   2. ci.yml runs no unit tests; nightly only tests types/host-sdk/server.
 // Adding those subpackages to a tsc gate isn't viable (pre-existing engine-
@@ -41,10 +41,10 @@ const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
 const BARREL_SRC = readFileSync(join(PKGS_ROOT, 'editor-core', 'src', 'index.ts'), 'utf8');
 
 const CONSUMER_ROOTS = [
-  'edit-runtime/src',
+  'editor-edit-runtime/src',
   'editor-panels/src',
-  'editor-shared/src',
-  'play-runtime/src',
+  'editor-content-browser/src',
+  'editor-play-runtime/src',
   'editor-core/src',
 ];
 

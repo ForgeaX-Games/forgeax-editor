@@ -1,4 +1,4 @@
-// @forgeax/editor-shared — panel manifest (single-SSOT for all editor panel IDs)
+// @forgeax/editor-core — panel manifest (single-SSOT for all editor panel IDs)
 //
 // This is the single source of truth for editor panel IDs. After
 // feat-20260703 (single-realm injection), sync-channel.ts and its inline
@@ -6,7 +6,7 @@
 // file is the ONLY place an EDITOR_PANELS literal exists.
 //
 // Every consumer that needs panel IDs imports from this file:
-//   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';
+//   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-core';
 
 /** The dockable business panels of the forgeax editor. */
 export const EDITOR_PANELS = [

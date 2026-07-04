@@ -14,8 +14,8 @@
 //   • Entity mode — an entity with a `Mesh` component is selected: shows the
 //     primitive `kind` + bound `meshAsset` GUID (read-only in v1).
 import { useCallback, useState } from 'react';
-import { bus, useDocVersion, useSelection, useAssetSelection, useMeshStats, entExists, entName, entComponent } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+import { bus, useDocVersion, useSelection, useAssetSelection, useMeshStats, entExists, entName, entComponent } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 
 const short = (g: string): string => (g.length > 12 ? `${g.slice(0, 8)}…${g.slice(-3)}` : g);
 

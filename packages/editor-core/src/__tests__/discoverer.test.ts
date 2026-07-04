@@ -29,7 +29,7 @@ import {
   type DiscoverResult,
   type DiscoveredModule,
   type DiscoverError,
-} from '../discoverer';
+} from '../assets/discoverer';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 

@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World, defineComponent } from '@forgeax/engine-ecs';
-import type { EntityHandle } from '../scene-types';
+import type { EntityHandle } from '../scene/scene-types';
 import { AssetRegistry, rootsToSceneAsset } from '@forgeax/engine-runtime';
 import type { LocalEntityId, SceneEntity } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';

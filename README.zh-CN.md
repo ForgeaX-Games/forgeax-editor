@@ -14,23 +14,24 @@
 
 | 包 | 用途 |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、动画、材质图、资源、预设 |
-| [`@forgeax/editor-shared`](./packages/editor-shared/) | 跨层共享运行时 — zustand store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT |
-| [`@forgeax/editor-panels`](./packages/editor-panels/) | 8 个业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Timeline、MaterialGraph）+ 面板组件注入 |
-| [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
-| [`@forgeax/editor-play-runtime`](./packages/play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
+| [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT、i18n、资源、预设 |
+| [`@forgeax/editor-content-browser`](./packages/editor-content-browser/) | 内容浏览器子应用 — 网格/列表/分栏视图、过滤/排序/导航 hooks、导入管线。由 Assets 面板 lazy-load |
+| [`@forgeax/editor-panels`](./packages/editor-panels/) | 业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Mesh、Launcher、AssetInspector、Systems）+ 面板组件注入 |
+| [`@forgeax/editor-edit-runtime`](./packages/editor-edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
+| [`@forgeax/editor-play-runtime`](./packages/editor-play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
 
 ## 依赖结构
 
 ```mermaid
 flowchart RL
-    shared["editor-shared"] --> core["editor-core"]
-    panels["editor-panels"] --> shared
+    cb["editor-content-browser"] --> core["editor-core"]
+    panels["editor-panels"] --> core
+    panels --> cb
     edit["editor-edit-runtime"] --> panels
     play["editor-play-runtime"] -.->|"iframe VAG_* 协议"| core
 ```
 
-DAG 为 `core ← shared ← panels ← edit-runtime`；`play-runtime` 是独立厚 host，仅通过
+DAG 为 `core ← content-browser ← panels ← edit-runtime`；`play-runtime` 是独立厚 host，仅通过
 `VAG_*` iframe 协议与 `core` 通信。`bun run lint:dep`（dependency-cruiser）会在任何
 import 打破该 DAG 时让构建失败。
 
@@ -171,5 +172,5 @@ HMR `clientPort` 默认值（`18920`）正好正确。**这种场景别起 stand
 | `bun install` 报 `simple-git-hooks` postinstall `ENOENT … package.json` | engine submodule 的 git-hook 依赖首次解压竞态 | 直接重跑 `bun install` —— 重试时文件已就位 |
 | `bun install` 报 `unresolved workspace` | engine submodule 未拉取或 `workspace:*` pin 失效 | `git submodule update --init --recursive`；stacks 通过父仓的 bun workspaces glob 解析 |
 | `bun run typecheck` 失败 | 某个包的依赖未安装或类型不匹配 | 先 `bun install`，再 `bun run typecheck` |
-| `bun run lint:dep` 报 no-circular | 新增了跨包 import 打破 DAG | 检查 `.dependency-cruiser.cjs` 规则；确保 DAG 为 `core ← shared ← panels ← edit-runtime` |
+| `bun run lint:dep` 报 no-circular | 新增了跨包 import 打破 DAG | 检查 `.dependency-cruiser.cjs` 规则；确保 DAG 为 `core ← content-browser ← panels ← edit-runtime` |
 | 端口 `15290` / `15280` / `15173` 被占用 | 另一个 vite 实例未停止 | `bash stop.sh`（studio 仓）或手动 `kill` 对应 PID |

@@ -26,8 +26,8 @@ import {
   applyCommand,
   childrenOf,
   isSelfOrDescendant,
-} from '../document';
-import { entExists, entIds, entName, entGetNextId } from '../entity-state';
+} from '../session/document';
+import { entExists, entIds, entName, entGetNextId } from '../store/entity-state';
 import type { EditSession } from '../types';
 
 describe('EditSession — fresh session shape', () => {

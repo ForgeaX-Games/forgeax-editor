@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "forgeax editor business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Timeline, MaterialGraph) + panel manifest SSOT",
+  "description": "forgeax editor business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Mesh, Launcher, AssetInspector, Systems) + panel manifest SSOT. The Assets panel lazy-loads @forgeax/editor-content-browser.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -30,20 +30,10 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
-    "fbx-cook": "workspace:*",
-    "@forgeax/editor-shared": "workspace:*",
-    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/editor-content-browser": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
-    "@forgeax/engine-gltf": "workspace:*",
-    "@forgeax/engine-math": "workspace:*",
-    "@forgeax/engine-rhi": "workspace:*",
-    "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*",
-    "@tanstack/react-virtual": "^3.14.3",
-    "@tanstack/virtual-core": "^3.17.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.13",
