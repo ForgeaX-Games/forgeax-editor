@@ -11,6 +11,7 @@
 // runs entirely in the browser (no Node.js, no Autodesk FBX SDK).
 
 import { initFbxWasm, parseFbx, isFbxWasmReady } from '@forgeax/engine-fbx-wasm';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   parseMesh,
   parseScene,
@@ -49,11 +50,11 @@ function serializeFbxMeta(meta: unknown): string {
   return `${JSON.stringify(sortKeysDeep(meta), null, 2)}\n`;
 }
 
+// Mint a fresh asset GUID via the engine's authoritative generator
+// (UUIDv7, dash-form string). AGENTS.md #1 / architecture-principles §2:
+// never hand-roll a second GUID generator — the engine owns this.
 function generateGuid(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
+  return AssetGuid.format(AssetGuid.random());
 }
 
 /**

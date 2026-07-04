@@ -1,39 +1,39 @@
-// euler-quat — authoritative XYZ-order euler↔quat conversion (SSOT for whole editor)
+// euler-quat — editor-side degree adapter over the engine euler↔quat SSOT.
 //
-// Extracted from scene-pack.ts:139-161 (verified implementation). All editor
-// consumers (Inspector, scene-pack, tests) import this module — NEVER write a
-// second quat→euler or euler→quat anywhere else.
+// The math is NOT reimplemented here. `@forgeax/engine-math` already owns the
+// gimbal-safe, 6-order conversion (euler.fromQuat / quat.fromEuler, Three.js
+// intrinsic-rotation + Hamilton convention). This module is a thin boundary
+// adapter that translates the engine's (radians, Euler object, XYZ..XZY order)
+// surface into the editor's UI contract:
+//   - degrees in/out (the Inspector edits degrees)
+//   - {rotX, rotY, rotZ} display shape + [qx, qy, qz, qw] tuple
+//   - XYZ order pinned in BOTH directions (AGENTS.md #6)
+//   - quatToEuler rounds display to 1e-4 for deterministic React state
 //
-// AGENTS.md #6 (cross-repo unit/order convention): conversion happens ON THE
-// EDITOR SIDE. Order is XYZ (both directions). The engine `Transform` stores
-// quatX/Y/Z/W; euler is a transient React state in the Inspector only.
+// AGENTS.md #1 / architecture-principles §2 (Derive): the conversion formulas
+// have exactly one home — the engine. NEVER hand-roll a second quat↔euler here.
 //
 // Plan-strategy §2 D-2 (scheme B): quat SSOT in world, euler React state instant.
 //
 // feat-20260701-editor-world-container-doc-ecs-collapse M3 / AC-22
 
+import { euler, quat } from '@forgeax/engine-math';
+
+const RAD2DEG = 180 / Math.PI;
+const DEG2RAD = Math.PI / 180;
+
 /** quaternion → euler (XYZ order, degrees).
- *  Uses internal rounding to 1e-4 for deterministic display. */
+ *  Rounds to 1e-4 for deterministic display. */
 export function quatToEuler(
   qx: number,
   qy: number,
   qz: number,
   qw: number,
 ): { rotX: number; rotY: number; rotZ: number } {
-  const sinr = 2 * (qw * qx + qy * qz);
-  const cosr = 1 - 2 * (qx * qx + qy * qy);
-  const rx = Math.atan2(sinr, cosr);
-  const sinp = 2 * (qw * qy - qz * qx);
-  const ry =
-    Math.abs(sinp) >= 1 ? (Math.sign(sinp) * Math.PI) / 2 : Math.asin(sinp);
-  const siny = 2 * (qw * qz + qx * qy);
-  const cosy = 1 - 2 * (qy * qy + qz * qz);
-  const rz = Math.atan2(siny, cosy);
-  const deg = (r: number) => Math.round((r * 180) / Math.PI * 1e4) / 1e4;
-  return { rotX: deg(rx), rotY: deg(ry), rotZ: deg(rz) };
+  const e = euler.fromQuat(euler.create(), [qx, qy, qz, qw], 'XYZ');
+  const deg = (r: number) => Math.round(r * RAD2DEG * 1e4) / 1e4;
+  return { rotX: deg(e.x), rotY: deg(e.y), rotZ: deg(e.z) };
 }
-
-const DEG2RAD = Math.PI / 180;
 
 /** euler (XYZ order, degrees) → quaternion [qx, qy, qz, qw]. */
 export function eulerToQuat(
@@ -41,17 +41,12 @@ export function eulerToQuat(
   ry: number,
   rz: number,
 ): [number, number, number, number] {
-  const cx = Math.cos((rx * DEG2RAD) / 2);
-  const sx = Math.sin((rx * DEG2RAD) / 2);
-  const cy = Math.cos((ry * DEG2RAD) / 2);
-  const sy = Math.sin((ry * DEG2RAD) / 2);
-  const cz = Math.cos((rz * DEG2RAD) / 2);
-  const sz = Math.sin((rz * DEG2RAD) / 2);
-  // XYZ order
-  return [
-    sx * cy * cz + cx * sy * sz,
-    cx * sy * cz - sx * cy * sz,
-    cx * cy * sz + sx * sy * cz,
-    cx * cy * cz - sx * sy * sz,
-  ];
+  const q = quat.fromEuler(
+    quat.create(),
+    rx * DEG2RAD,
+    ry * DEG2RAD,
+    rz * DEG2RAD,
+    'XYZ',
+  );
+  return [q[0] as number, q[1] as number, q[2] as number, q[3] as number];
 }

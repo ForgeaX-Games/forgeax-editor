@@ -5,10 +5,10 @@
 // AC-22: quat SSOT in world.Transform; euler is Inspector React state instant.
 // Tests use the extracted euler-quat.ts SSOT (never hand-roll second conversions).
 //
-// IMPORTANT: eulerToQuat uses XYZ intrinsic order; quatToEuler uses YXZ intrinsic
-// extraction. They are NOT exact euler-space inverses (the two orders produce the
-// same quaternion from different euler triplets). The quaternion IS the SSOT.
-// Each function is tested for self-consistency, not for mutual inversion.
+// IMPORTANT: both directions delegate to @forgeax/engine-math with XYZ intrinsic
+// order (euler.fromQuat / quat.fromEuler). Even so, they are NOT exact euler-space
+// inverses at gimbal-lock (many euler triplets map to one quaternion). The
+// quaternion IS the SSOT. Each function is tested for self-consistency.
 //
 // plan-strategy S3.2: user types 370, blur → quat, quat never "corrects" 370.
 // AGENTS.md #6: conversion on editor side, XYZ order, pinned both sides.
