@@ -1,8 +1,9 @@
-// @forgeax/editor-shared — panel manifest (SSOT for all panel IDs)
+// @forgeax/editor-shared — panel manifest (single-SSOT for all editor panel IDs)
 //
-// This is the single source of truth for the 8 dockable editor panel IDs.
-// editor-core/sync-channel.ts imports from here; editor-panels/manifest.ts
-// re-exports from here and injects the concrete panel component list.
+// This is the single source of truth for editor panel IDs. After
+// feat-20260703 (single-realm injection), sync-channel.ts and its inline
+// EDITOR_PANELS copy were deleted. lint:sync-channel now guards that this
+// file is the ONLY place an EDITOR_PANELS literal exists.
 //
 // Every consumer that needs panel IDs imports from this file:
 //   import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-shared';

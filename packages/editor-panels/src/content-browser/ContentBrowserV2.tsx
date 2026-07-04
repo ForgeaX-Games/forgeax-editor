@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { loadGameAssets, loadMetaAssets, type PackAsset } from '@forgeax/editor-core';
-import { getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
+import { bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-shared';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -20,34 +19,29 @@ import { isImportable, buildAcceptString, logImport } from './import-registry';
 import type { CBAsset, CBViewMode } from './types';
 import './content-browser.css';
 
-// D-7 (§4): present meta sub-assets according to their import mode. A pack
-// imported as 'whole' shows ONLY its `scene` resource at top level (the
-// mesh/material/texture children are internal deps — still loadable by GUID for
-// drag/refs, just not flattened into the browser). 'split' (or legacy/missing)
-// flattens every sub-asset. Grouped by packPath since one .meta.json == one pack.
-function filterByImportMode(assets: PackAsset[]): PackAsset[] {
-  const modeByPack = new Map<string, string>();
-  for (const a of assets) {
-    const mode = (a.payload?.importSettings as { importMode?: unknown } | undefined)?.importMode;
-    if (typeof mode === 'string') modeByPack.set(a.packPath, mode);
-  }
-  return assets.filter((a) => {
-    if (modeByPack.get(a.packPath) !== 'whole') return true;
-    return a.kind === 'scene';
-  });
-}
+// M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
+// (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
+// The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
+// reads directly from it via bus.doc.registry.listCatalog().
+// registry entries carry {guid, kind, name?, relativeUrl} — no payload/packPath,
+// so import-mode filtering and payload-derived fields are removed.
 
-function packAssetToCBAsset(pa: PackAsset, index: number): CBAsset {
+function registryEntryToCBAsset(
+  e: { guid: string; kind: string; name?: string; relativeUrl: string },
+  index: number,
+): CBAsset {
+  // Use relativeUrl as a proxy for packPath for folder-tree navigation.
+  // CRUD operations on disk packs use this to locate the .pack.json.
   return {
     type: 'asset',
-    guid: pa.guid,
-    kind: pa.kind,
-    name: pa.name,
-    payload: { ...pa.payload, _packPath: pa.packPath },
-    packPath: pa.packPath,
+    guid: e.guid,
+    kind: e.kind,
+    name: e.name ?? e.guid.slice(0, 8),
+    payload: {},
+    packPath: e.relativeUrl,
     packIndex: index,
     refs: [],
-    estimatedSize: JSON.stringify(pa.payload).length,
+    estimatedSize: 0,
   };
 }
 
@@ -69,14 +63,18 @@ export function ContentBrowserV2() {
     const slug = getSceneId();
     if (!slug || slug === 'default') return;
     setLoading(true);
-    void Promise.all([loadGameAssets(slug), loadMetaAssets(slug)]).then(([packAssets, metaAssets]) => {
-      const pack = packAssets.map(packAssetToCBAsset);
-      const meta = filterByImportMode(metaAssets).map(packAssetToCBAsset);
-      const seen = new Set(pack.map((a: CBAsset) => a.guid));
-      const merged = [...pack, ...meta.filter((a: CBAsset) => !seen.has(a.guid))];
-      setAllAssets(merged);
+    // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
+    // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
+    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] } | undefined;
+    const entries = registry?.listCatalog?.();
+    if (!entries || entries.length === 0) {
+      setAllAssets([]);
       setLoading(false);
-    });
+    } else {
+      const catalog = entries.map(registryEntryToCBAsset);
+      setAllAssets(catalog);
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { reload(); }, [reload]);

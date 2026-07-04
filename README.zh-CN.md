@@ -14,7 +14,7 @@
 
 | 包 | 用途 |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、sync-channel、动画、材质图、资源、预设 |
+| [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、动画、材质图、资源、预设 |
 | [`@forgeax/editor-shared`](./packages/editor-shared/) | 跨层共享运行时 — zustand store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT |
 | [`@forgeax/editor-panels`](./packages/editor-panels/) | 8 个业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Timeline、MaterialGraph）+ 面板组件注入 |
 | [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |

@@ -1,32 +1,26 @@
-// lint-sync-channel-panels.test.mjs (M2 / w6 red-first TDD anchor)
+// lint-sync-channel-panels.test.mjs (M4 / w27 single-SSOT guard)
 //
-// Drives w7 to green. The lint script under test compares two physical
-// arrays:
-//   * SSOT — packages/editor-shared/src/manifest.ts EDITOR_PANELS
-//   * inline — packages/editor-core/src/sync-channel.ts inline 8-panel
-//     literal (kept inline to avoid the shared->core dep cycle, locked by
-//     plan-strategy §2 D-2)
+// Drives w27 to green. The lint script under test now guards the
+// single-SSOT invariant: EDITOR_PANELS must exist in exactly one file
+// (editor-core/src/manifest.ts). Any second copy trips CI.
 //
-// The script exits 0 when the two arrays are byte-identical (order
-// sensitive) and exits non-zero with a readable stderr diff otherwise.
+// The script exits 0 when exactly one EDITOR_PANELS literal is found,
+// exits 1 when 2+ copies exist (drift), exits 2 when 0 copies are found.
 //
 // Coverage:
-//   (a) happy:  real repo files agree -> exit 0, stderr clean.
-//   (b) drift:  inline reordered     -> exit non-zero, stderr lists the
-//               specific add/remove/order-change diff with panel id
-//               literals.
-//   (c) drift:  inline element added -> exit non-zero, stderr names the
-//               extra panel id.
+//   (a) happy:  real repo has exactly one EDITOR_PANELS → exit 0.
+//   (b) drift:  two files each define EDITOR_PANELS → exit 1, stderr names
+//               both files + panel id literals.
+//   (c) zero:   no file defines EDITOR_PANELS → exit 2.
 //
 // AC anchors:
-//   AC-02 (lint script ordering-sensitive comparison)
+//   AC-07 (lint:sync-channel green after semantic upgrade)
 // Plan anchors:
-//   §2 D-2 (inline locked, lint backstop)
-//   §2 D-10 (script lives at packages/editor/scripts/)
-//   §5.3 must-have test row 3
+//   plan-strategy S2 D3 (lint upgraded from dual-compare to single-SSOT guard)
+//   AGENTS.md invariant #3 (single-SSOT, not dual-copy)
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,8 +29,7 @@ import { describe, expect, test } from 'bun:test';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EDITOR_ROOT = resolve(__dirname, '..');
 const SCRIPT = resolve(__dirname, 'lint-sync-channel-panels.mjs');
-const REAL_SHARED = resolve(EDITOR_ROOT, 'packages/editor-shared/src/manifest.ts');
-const REAL_CORE = resolve(EDITOR_ROOT, 'packages/editor-core/src/sync-channel.ts');
+const REAL_SSOT = resolve(EDITOR_ROOT, 'packages/editor-core/src/manifest.ts');
 
 function runScript(args = []) {
   return spawnSync(process.execPath, [SCRIPT, ...args], {
@@ -45,105 +38,109 @@ function runScript(args = []) {
   });
 }
 
-function makeFixturePair(sharedPanels, corePanels) {
+/**
+ * Create a temp directory with fixture files for scan-based testing.
+ * Each entry in `fileDefs` is { name, panels } or just { name } (no literal).
+ */
+function makeFixtureDir(fileDefs) {
   const dir = mkdtempSync(join(tmpdir(), 'lint-sync-fix-'));
-  const sharedPath = join(dir, 'manifest.ts');
-  const corePath = join(dir, 'sync-channel.ts');
-  writeFileSync(
-    sharedPath,
-    `export const EDITOR_PANELS = [\n${sharedPanels.map((p) => `  '${p}',`).join('\n')}\n] as const;\n`,
-  );
-  writeFileSync(
-    corePath,
-    `// inline copy lives here\nconst EDITOR_PANELS = [\n${corePanels.map((p) => `  '${p}',`).join('\n')}\n] as const;\n`,
-  );
-  return { dir, sharedPath, corePath };
+  for (const def of fileDefs) {
+    const content = def.panels
+      ? `export const EDITOR_PANELS = [\n${def.panels.map((p) => `  '${p}',`).join('\n')}\n] as const;\n`
+      : '// no EDITOR_PANELS here\n';
+    writeFileSync(join(dir, def.name), content);
+  }
+  return dir;
 }
 
-describe('lint-sync-channel-panels: happy path (real repo files)', () => {
-  test('exits 0 when SSOT and inline agree', () => {
-    const r = runScript();
+describe('lint-sync-channel-panels: single-SSOT happy path (real repo)', () => {
+  test('exits 0 when exactly one EDITOR_PANELS literal exists', () => {
+    const r = runScript(['--ssoot-path', REAL_SSOT]);
     expect(r.status).toBe(0);
   });
-  test('stderr is clean on happy path', () => {
-    const r = runScript();
-    expect(r.stderr).toBe('');
+  test('stdout confirms single SSOT', () => {
+    const r = runScript(['--ssoot-path', REAL_SSOT]);
+    expect(r.stdout).toContain('single SSOT');
   });
 });
 
 describe('lint-sync-channel-panels: drift detection', () => {
-  test('exits non-zero when inline reordered', () => {
-    const reordered = [
-      'inspector', // swap with hierarchy
-      'hierarchy',
-      'assets',
-      'history',
-      'capabilities',
-      'material',
-      'timeline',
-      'matgraph',
-    ];
-    const ssot = [
-      'hierarchy',
-      'inspector',
-      'assets',
-      'history',
-      'capabilities',
-      'material',
-      'timeline',
-      'matgraph',
-    ];
-    const fix = makeFixturePair(ssot, reordered);
+  test('exits 1 when two files each define EDITOR_PANELS', () => {
+    const fix = makeFixtureDir([
+      { name: 'manifest.ts', panels: ['hierarchy', 'inspector', 'assets'] },
+      { name: 'sync-channel.ts', panels: ['hierarchy', 'inspector', 'assets'] },
+    ]);
     try {
-      const r = runScript(['--shared-path', fix.sharedPath, '--core-path', fix.corePath]);
-      expect(r.status).not.toBe(0);
-      // Diff must name the specific panel literals that disagree.
-      expect(r.stderr).toContain('hierarchy');
-      expect(r.stderr).toContain('inspector');
+      const r = runScript(['--scan-dir', fix]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('drift');
+      expect(r.stderr).toContain('2 copies');
     } finally {
-      rmSync(fix.dir, { recursive: true, force: true });
+      rmSync(fix, { recursive: true, force: true });
     }
   });
 
-  test('exits non-zero when inline has an extra panel', () => {
-    const ssot = ['hierarchy', 'inspector'];
-    const inline = ['hierarchy', 'inspector', 'phantom'];
-    const fix = makeFixturePair(ssot, inline);
+  test('exits 1 when panels differ (order or content)', () => {
+    const fix = makeFixtureDir([
+      { name: 'manifest.ts', panels: ['hierarchy', 'inspector', 'assets'] },
+      { name: 'other.ts', panels: ['hierarchy', 'assets', 'inspector'] },
+    ]);
     try {
-      const r = runScript(['--shared-path', fix.sharedPath, '--core-path', fix.corePath]);
-      expect(r.status).not.toBe(0);
+      const r = runScript(['--scan-dir', fix]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('drift');
+      expect(r.stderr).toContain('2 copies');
+      // Both file paths should appear in stderr.
+      expect(r.stderr).toContain('manifest.ts');
+      expect(r.stderr).toContain('other.ts');
+    } finally {
+      rmSync(fix, { recursive: true, force: true });
+    }
+  });
+
+  test('exits 1 when inline has an extra panel', () => {
+    const fix = makeFixtureDir([
+      { name: 'manifest.ts', panels: ['hierarchy', 'inspector'] },
+      { name: 'other.ts', panels: ['hierarchy', 'inspector', 'phantom'] },
+    ]);
+    try {
+      const r = runScript(['--scan-dir', fix]);
+      expect(r.status).toBe(1);
       expect(r.stderr).toContain('phantom');
     } finally {
-      rmSync(fix.dir, { recursive: true, force: true });
-    }
-  });
-
-  test('exits non-zero when inline drops a panel', () => {
-    const ssot = ['hierarchy', 'inspector', 'assets'];
-    const inline = ['hierarchy', 'inspector'];
-    const fix = makeFixturePair(ssot, inline);
-    try {
-      const r = runScript(['--shared-path', fix.sharedPath, '--core-path', fix.corePath]);
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain('assets');
-    } finally {
-      rmSync(fix.dir, { recursive: true, force: true });
+      rmSync(fix, { recursive: true, force: true });
     }
   });
 });
 
-describe('lint-sync-channel-panels: byte-level sanity (real repo)', () => {
-  test('SSOT and inline arrays parse to identical sequences', () => {
-    // Independent sanity check that mirrors the script's own comparison —
-    // if this ever diverges, w7 (and the inline locked by plan §2 D-2)
-    // need a real fix, not a lint relax.
-    const sharedSrc = readFileSync(REAL_SHARED, 'utf8');
-    const coreSrc = readFileSync(REAL_CORE, 'utf8');
-    const extract = (src) => {
-      const m = src.match(/EDITOR_PANELS\s*=\s*\[([\s\S]*?)\]\s*as\s+const/);
-      if (!m) throw new Error('EDITOR_PANELS literal not found');
-      return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-    };
-    expect(extract(sharedSrc)).toEqual(extract(coreSrc));
+describe('lint-sync-channel-panels: zero-copy detection', () => {
+  test('exits 2 when no file defines EDITOR_PANELS', () => {
+    const fix = makeFixtureDir([
+      { name: 'foo.ts' },
+      { name: 'bar.ts' },
+    ]);
+    try {
+      const r = runScript(['--scan-dir', fix]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('not found');
+    } finally {
+      rmSync(fix, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('lint-sync-channel-panels: scan-dir isolation', () => {
+  test('single copy exits 0 when only one file has EDITOR_PANELS', () => {
+    const fix = makeFixtureDir([
+      { name: 'manifest.ts', panels: ['hierarchy', 'inspector'] },
+      { name: 'helper.ts' },
+      { name: 'utils.ts' },
+    ]);
+    try {
+      const r = runScript(['--scan-dir', fix, '--ssoot-path', join(fix, 'manifest.ts')]);
+      expect(r.status).toBe(0);
+    } finally {
+      rmSync(fix, { recursive: true, force: true });
+    }
   });
 });

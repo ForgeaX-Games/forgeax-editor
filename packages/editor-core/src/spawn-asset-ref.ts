@@ -6,7 +6,7 @@ import { bus, broadcastAssetsChanged } from '@forgeax/editor-shared';
 import { getApiClient } from './api-client';
 import { buildSpawnEntityFromDragRef, type DragAssetRef } from './drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
-import type { AssetChatRef } from './sync-channel';
+import type { AssetChatRef } from './cross-panel-types';
 
 function toDragRef(ref: AssetChatRef): DragAssetRef {
   return {

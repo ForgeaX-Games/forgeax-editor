@@ -13,26 +13,12 @@ import {
   entName,
   entLegacyId,
   entComponents,
-  entPopulate,
   entRootHandles,
   entMap,
   entSetNextId,
   entGetNextId,
 } from './entity-state';
-import {
-  getPopoutPanel,
-  openSyncChannel,
-  openControlChannel,
-  parseEditorSyncMsg,
-  type EditorSnapshot,
-  type EditorSyncMsg,
-  type PopoutGeom,
-  type SyncPanelId,
-  type AssetChatRef,
-  type MeshStatsWire,
-  type WorldEntityState,
-  type WorldState,
-} from './sync-channel';
+import type { AssetChatRef, MeshStatsWire } from './cross-panel-types';
 import { Name, Transform, ChildOf, Children, SceneInstance } from '@forgeax/engine-runtime';
 import type { EntityHandle } from './scene-types';
 
@@ -60,83 +46,7 @@ import { spawnAssetRefToScene } from './spawn-asset-ref';
 // surface keeps the authored doc static and projects it onto the forgeax world.
 export const bus = new EditorBus(createEditSession());
 
-// ── Cross-window sync (design §0.2.2 Pop-out) ────────────────────────────────
-// `?panel=<id>` marks a popped-out OS window that renders a SINGLE panel and
-// mirrors the main window's bus over a same-origin BroadcastChannel. In the main
-// window IS_POPOUT is false and the channel is used to broadcast snapshots +
-// receive forwarded edits. Channel is opened lazily by initSync() (after the
-// scene id is known) so the name keys per game.
-export const IS_POPOUT = getPopoutPanel() !== null;
-let syncChannel: BroadcastChannel | null = null;
-// Per-GAME control channel (survives scene-file switches) — carries only the
-// file-independent navigation signals so a scene switch re-pairs every window IN
-// PLACE (no location.reload → no WebGPU context recreate → no WKWebView wedge).
-let controlChannel: BroadcastChannel | null = null;
-let applyingSnapshot = false; // guard: applying a remote snapshot must not re-emit upstream
-
-// Single re-entrancy invariant for cross-window selection sync. While we are
-// APPLYING a remote update (a localStorage `storage` echo OR a BroadcastChannel
-// snapshot mirror), every OUTBOUND propagation channel must stay silent —
-// otherwise the windows ping-pong forever (see
-// docs/design/editor-cross-window-selection-sync-loop.md).
-//
-// IMPORTANT: this only suppresses *echoes*. A genuine inbound selection from a
-// popout arrives via mainOnMessage → setSelectionMany (applyingRemote === false),
-// so the main window still persists + broadcasts it (legitimate fan-out). Do NOT
-// widen this guard to cover setSelection/setSelectionMany themselves.
-//
-// INVARIANT (do not break): applyingExternalSel / applyingSnapshot are plain
-// booleans, not depth counters. They are only correct because every site sets →
-// emits SYNCHRONOUSLY → resets within one call frame, with no `await`/microtask
-// in between and no nesting (storage events + channel messages are delivered as
-// separate, serial tasks). If a future change makes emit() async or re-entrant,
-// convert these to a depth counter before relying on them.
-function applyingRemote(): boolean {
-  return applyingExternalSel || applyingSnapshot;
-}
-
-// Channel-択一 (single transport) for cross-window SELECTION sync. The editor
-// has two cross-window transports — BroadcastChannel (snapshots + 'selection'
-// upstream) and a localStorage `storage`-event mirror. Running BOTH for selection
-// double-delivers and is the structural cause of the historical echo loop (see
-// docs/design/editor-cross-window-selection-sync-loop.md §4.3). So:
-//   • BroadcastChannel OPEN  → it is the SOLE selection transport; the
-//     localStorage selKey mirror is fully disabled (no writes, no reads).
-//   • BroadcastChannel CLOSED → fall back to the localStorage mirror (Tauri
-//     cross-process WebviewWindows, where BroadcastChannel can't reach, or before
-//     initSync has opened the channel).
-// NOTE: the selKey value is NEVER read at load time (selection is transient, not
-// restored), so disabling it loses nothing in the browser path.
-//
-// DETECTION — must NOT be `syncChannel !== null`: in Tauri the BroadcastChannel
-// object EXISTS but cannot span WebviewWindow processes, so the object's presence
-// does not prove cross-window delivery. We instead require PROOF: the channel is
-// only treated as the live transport once we have actually RECEIVED a cross-window
-// message over it (`broadcastProven`). In the browser (same-process iframes) the
-// init handshake (`hello`/`snapshot`) flips this on within a tick; in Tauri it
-// never flips, so the localStorage fallback stays active.
-let broadcastProven = false;
-function markBroadcastProven(): void { broadcastProven = true; }
-function broadcastActive(): boolean {
-  return broadcastProven;
-}
-
-// Order-sensitive id-list equality (selection is small; the last element is the
-// primary, so order matters). Used to short-circuit redundant remote selection
-// applications before they emit + re-render.
-function sameIdList(a: EntityId[], b: EntityId[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-function postSync(msg: EditorSyncMsg): void {
-  syncChannel?.postMessage(msg);
-}
-function postControl(msg: EditorSyncMsg): void {
-  controlChannel?.postMessage(msg);
-}
-
+// Selection is a list
 // Selection is a list; the LAST element is the "primary" (drives single-target
 // panels like Inspector). Multi-select feeds deixis (reference many).
 let selectionList: EntityId[] = [];
@@ -146,19 +56,7 @@ const selectionListeners = new Set<() => void>();
 // processes, where BroadcastChannel can't reach). Persisted per scene; other
 // windows pick it up via a `storage` event (see initSync). Guarded so applying a
 // remote selection doesn't echo back.
-let applyingExternalSel = false;
-function selKey(): string { return `forgeax:editor:sel:${currentSceneId}`; }
-function persistSelection(): void {
-  // applyingRemote(): a window mirroring a remote selection must NOT write the
-  // authoritative localStorage key — that write would `storage`-event back into
-  // every other window and start an unbounded cross-window echo.
-  // broadcastActive(): when BroadcastChannel is the live transport, the
-  // localStorage selection mirror is redundant (channel-択一) — skip it entirely.
-  if (applyingRemote() || broadcastActive() || typeof localStorage === 'undefined') return;
-  try { localStorage.setItem(selKey(), JSON.stringify(selectionList)); } catch { /* quota */ }
-}
-
-// Dev-only runaway-propagation net: if selection emits storm within a short
+// Dev-only runaway-propagation// Dev-only runaway-propagation net: if selection emits storm within a short
 // window it almost always means a cross-window echo loop regressed. Warns once
 // per window so it's visible without re-instrumenting. No-op in production.
 let _emitWindowStart = 0;
@@ -178,7 +76,6 @@ function emitSelection(): void {
     }
   }
   for (const fn of selectionListeners) fn();
-  persistSelection();
 }
 
 export function getSelection(): EntityId | null {
@@ -200,26 +97,17 @@ export function setSelection(id: EntityId | null): void {
     selectionList = [id];
   }
   emitSelection();
-  syncSelectionUpstream();
 }
 
 /** Shift/Ctrl-click semantics: toggle membership, keep last-clicked as primary. */
 export function toggleSelection(id: EntityId): void {
   selectionList = selectionList.includes(id) ? selectionList.filter((x) => x !== id) : [...selectionList, id];
   emitSelection();
-  syncSelectionUpstream();
 }
 
 export function setSelectionMany(ids: EntityId[]): void {
   selectionList = [...ids];
   emitSelection();
-  syncSelectionUpstream();
-}
-
-// A popout forwards selection to the main window (the authority); the main window
-// echoes it back inside its snapshot. Suppressed while applying a snapshot.
-function syncSelectionUpstream(): void {
-  if (IS_POPOUT && !applyingRemote()) postSync({ t: 'selection', ids: selectionList });
 }
 
 function subscribeSelection(fn: () => void): () => void {
@@ -239,7 +127,6 @@ export function setGizmoMode(m: GizmoMode): void {
   if (m === gizmoMode) return;
   gizmoMode = m;
   for (const fn of gizmoListeners) fn();
-  if (IS_POPOUT && !applyingSnapshot) postSync({ t: 'gizmo', mode: m });
 }
 export function onGizmoModeChange(fn: () => void): () => void {
   gizmoListeners.add(fn);
@@ -260,8 +147,6 @@ export function useSelectionList(): EntityId[] {
 // In editor-runtime the forgeax camera consumes this (engine/sync.ts).
 const frameListeners = new Set<() => void>();
 export function requestFrame(): void {
-  // A popout has no viewport — ask the main window's camera to frame instead.
-  if (IS_POPOUT) { postSync({ t: 'frame' }); return; }
   for (const fn of frameListeners) fn();
 }
 export function onFrameRequest(fn: () => void): () => void {
@@ -339,9 +224,6 @@ export function useFieldPreview(): { id: EntityId; key: string; value: number } 
 // a deixis handle up via the VAG postMessage channel rather than owning ref
 // state locally — exactly the "human points → AI gets a concrete handle" path.
 export function requestRefEntity(id: EntityId): void {
-  // From a popout, route to the main editor window — only IT is an iframe whose
-  // parent is the interface shell that owns the ForgeaX chat.
-  if (IS_POPOUT) { postSync({ t: 'refEntity', id }); return; }
   // M7 / AC-15: entity name + component keys read from world (SSOT) via
   // entity-state helpers; doc.entities dual-write mirror deleted.
   if (!entExists(bus.doc, id)) return;
@@ -373,7 +255,6 @@ export function requestRefComponent(entityId: EntityId, comp: string, value: unk
 /** Pin an ASSET (material/texture/mesh) into the ForgeaX chat as a deixis handle
  * — same channel as requestRefEntity, payload.kind === 'asset'. */
 export function requestRefAsset(asset: { guid: string; kind: string; name: string; packPath?: string }): void {
-  if (IS_POPOUT) { postSync({ t: 'refAsset', asset }); return; }
   try {
     window.parent?.postMessage(
       { type: 'VAG_EDITOR_REF', payload: { kind: 'asset', guid: asset.guid, assetKind: asset.kind, name: asset.name, packPath: asset.packPath } },
@@ -388,7 +269,6 @@ export function requestRefAsset(asset: { guid: string; kind: string; name: strin
  *  Carries full payload so the AI can reason about asset contents. */
 export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
   if (refs.length === 0) return;
-  if (IS_POPOUT) { postSync({ t: 'addAssetToChat', refs }); return; }
   try {
     window.parent?.postMessage(
       { type: 'FORGEAX_ADD_ASSET_TO_CHAT', refs },
@@ -402,13 +282,8 @@ export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
 /** Add an asset to the active Scene viewport (context-menu equivalent of dragging
  *  it onto the viewport — D-6). Routes to the Shell, where EditSurface builds the
  *  spawn entity (split sub-asset) or runs import-scene (whole GLB). A popped-out
- *  panel forwards via the sync channel to the main window first. */
+ */
 export function requestAddAssetToScene(ref: AssetChatRef): void {
-  if (IS_POPOUT) {
-    console.info('[CB:import] addAssetToScene.viaSync', { kind: ref.kind, guid: ref.guid, name: ref.name });
-    postSync({ t: 'addAssetToScene', ref });
-    return;
-  }
   console.info('[CB:import] addAssetToScene.direct', { kind: ref.kind, guid: ref.guid, name: ref.name });
   void spawnAssetRefToScene(ref);
 }
@@ -428,38 +303,7 @@ export function useDocVersion(): number {
   return useSyncExternalStore(subscribeDoc, () => docVersion, () => docVersion);
 }
 
-// ── Popout ↔ main connectivity (design §0.2.2) ───────────────────────────────
-// A popped-out / ep:* panel is a pure MIRROR: it has no authoritative bus and
-// only shows content once the MAIN viewport (the BroadcastChannel "main") has
-// answered its `hello` with a snapshot. Until then History/Timeline render an
-// empty state that is INDISTINGUISHABLE from "viewport open but nothing edited
-// yet" — so a panel docked without an open Edit viewport looks silently broken
-// ("没接通"). This flag makes the distinction legible: false = no main has
-// answered (show a "open the Edit viewport" hint); true = mirroring a live
-// viewport (empty is then genuinely empty). Always true in the main window.
-let mainConnected = !IS_POPOUT;
-const connectedListeners = new Set<() => void>();
-function markMainConnected(): void {
-  if (mainConnected) return;
-  mainConnected = true;
-  for (const fn of connectedListeners) fn();
-}
-function subscribeConnected(fn: () => void): () => void {
-  connectedListeners.add(fn);
-  return () => connectedListeners.delete(fn);
-}
-/** True once this surface has authority (main window) or a live snapshot from
- *  one (popout). False in a popout whose Edit viewport isn't open yet. */
-export function useMainConnected(): boolean {
-  return useSyncExternalStore(subscribeConnected, () => mainConnected, () => mainConnected);
-}
-
 export function dispatch(cmd: EditorCommand): void {
-  // In a popout the bus is a read-only mirror: forward the command to the main
-  // window (the authority), which applies it and broadcasts the new snapshot
-  // back. We ids-allocated in ops.ts off the synced bus.doc.nextLocalId, so they line
-  // up with the main doc at dispatch time.
-  if (IS_POPOUT) { postSync({ t: 'cmd', cmd, origin: 'human' }); return; }
   bus.dispatch(cmd);
 }
 
@@ -716,17 +560,11 @@ export async function switchSceneFile(id: string): Promise<boolean> {
     const ok = await loadDocFromDisk();
     if (!ok) loadDocFromStorage();
     // loadDocFromDisk/Storage set bus.doc DIRECTLY and notify React doc listeners,
-    // but NOT the bus.subscribe listeners createEngineSync uses to (re)build the
+    // but NOT the bus.subscribe listeners the viewport uses to (re)build the
     // RENDERED scene — so without this the viewport keeps showing the OLD scene
     // (verified: doc updates 64→136 but world stays 67). Fire them via replaceDoc,
     // which also clears the previous scene's undo history (correct for a swap).
-    // Run BEFORE repairSceneChannelMain so its broadcastSnapshot carries the NEW doc.
     replaceDoc(bus.doc);
-    repairSceneChannelMain();
-    // Panels are separate DOM iframes (no WebGPU) — reloading them is cheap + safe.
-    // Sent on the per-GAME control channel so they hear it regardless of which
-    // per-file channel they were paired on.
-    postControl({ t: 'sceneChanged', id });
     return true;
   } catch (e) {
     console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
@@ -813,28 +651,20 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   return true;
 }
 
-/** Revive an EditSession that arrived over the BroadcastChannel (replaceDoc /
- *  snapshot). structuredClone strips the SessionInternals symbol-keyed state,
- *  so we re-seed a fresh internals bag around the incoming world.
+/** Rebuild an EditSession's SessionInternals bag around an incoming {world,
+ *  registry} so its `asset` getter and internals stay live after a scene swap.
  *
- *  feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
- *  EditSession is now just {world, registry} — the engine World is the entity
- *  SSOT. The legacy `.entities`/order/nextLocalId revive path is deleted; the
- *  popout entity map is repopulated from EditorSnapshot.worldState in
- *  applySnapshot (entPopulate). */
+ *  feat-20260701 M7 / AC-15: EditSession is just {world, registry} with the
+ *  engine World as the entity SSOT. feat-20260703 (single realm): the cross-
+ *  window snapshot/BroadcastChannel revive path is gone — callers always pass a
+ *  locally-built doc with a live world. */
 function reviveSession(doc: EditSession): EditSession {
   const fresh = createEditSession();
-  // Snapshots now carry a world-less doc (buildSnapshot omits the live World so
-  // the BroadcastChannel structuredClone doesn't choke on Component tokens'
-  // toSchemaJSON methods). When no live world came through (the wire-snapshot
-  // case), NULL out fresh's live-but-empty World so `_isDeadWorld` returns true
-  // and popout reads route to the worldState-populated popout cache (entPopulate
-  // in applySnapshot) — reading fresh's empty World would show an empty scene.
-  if (doc.world) {
-    fresh.world = doc.world;
-  } else {
-    (fresh as unknown as { world: unknown }).world = null;
-  }
+  // Single realm (feat-20260703): every doc reaching here is locally built and
+  // carries a live engine World (the cross-window BroadcastChannel snapshot path
+  // + dead-world cache were deleted with the sync engine). Reattach the incoming
+  // world/registry onto a fresh EditSession so its `asset` getter is restored.
+  fresh.world = doc.world;
   if (doc.registry !== undefined && doc.registry !== null) fresh.registry = doc.registry;
   return fresh;
 }
@@ -1256,7 +1086,6 @@ export function flushPendingSaveBeacon(): void {
 // (2) skip while we have unsaved local edits pending (_isDirty) so an agent
 // write never clobbers what the user is mid-editing.
 export function initDiskWatch(): void {
-  if (IS_POPOUT) return; // popouts mirror the main window over BroadcastChannel
   let ws: WebSocket | null = null;
   let reloadTimer: ReturnType<typeof setTimeout> | null = null;
   let backoff = 1000;
@@ -1335,11 +1164,9 @@ export function initDiskWatch(): void {
 /** Replace the entire authored document (scene load/import). Resets selection
  * and undo history since old inverses no longer apply to the new doc. */
 export function replaceDoc(doc: EditSession): void {
-  if (IS_POPOUT && !applyingSnapshot) { postSync({ t: 'replaceDoc', doc }); return; }
-  // A doc arriving over the BroadcastChannel (replaceDoc message) is a
-  // structuredClone that has lost the EditSession `asset` getter — revive it so
-  // downstream `bus.doc.asset` reads stay live (w34). A locally-built session
-  // already carries the getter; reviveSession rebuilds it idempotently.
+  // reviveSession rebuilds the SessionInternals bag around the incoming
+  // {world, registry} so downstream `bus.doc.asset` reads stay live (w34); it's
+  // idempotent on an already-live locally-built session.
   bus.replaceDoc(reviveSession(doc));
   selectionList = [];
   emitSelection();
@@ -1352,364 +1179,6 @@ export function clearDocStorage(): void {
     localStorage.removeItem(docKey(currentSceneId));
   } catch {
     /* noop */
-  }
-}
-
-// ── Cross-window sync wiring (design §0.2.2 Pop-out) ──────────────────────────
-// Open the channel (keyed by the active scene) and wire the role-specific
-// handlers. Call AFTER setSceneId so the channel name matches across windows.
-let mirror: EditorSnapshot | null = null;
-
-function buildSnapshot(): EditorSnapshot {
-  // Build worldState from world + sidecar (plan-strategy §2 D-4 popout compat)
-  const worldState = buildWorldState();
-  return {
-    // NEVER put the live engine World in the snapshot. structuredClone (the
-    // BroadcastChannel wire) cannot clone it — the World's archetype graph holds
-    // Component tokens carrying a `toSchemaJSON()` method (a function), so
-    // postMessage throws DataCloneError. The popout reconstructs its entity view
-    // entirely from `worldState` (applySnapshot → entPopulate), so the doc only
-    // needs to be a world-less shell; `_isDeadWorld` then routes reads to the
-    // popout cache. (M7 EditSession is {world, registry} — send neither live.)
-    doc: { world: null, registry: null } as unknown as EditSession,
-    worldState,
-    selection: [...selectionList],
-    gizmo: gizmoMode,
-    history: bus.historySteps(),
-    applied: bus.appliedCount(),
-    canUndo: bus.canUndo(),
-    canRedo: bus.canRedo(),
-  };
-}
-
-/** Enumerate world entities + sidecar into a lightweight WorldState for popout. */
-function buildWorldState(): WorldState {
-  const w = bus.doc.world;
-  const entities: WorldEntityState[] = [];
-  const hidden: EntityId[] = [];
-  // Derive roots from the SSOT handle map (World exposes no `rootEntities`
-  // field — see entRootHandles), then DFS via Children below.
-  const visited = new Set<EntityHandle>();
-  for (const rootE of entRootHandles(bus.doc, w)) {
-    // DFS: root first, then descendants
-    const stack = [rootE];
-    while (stack.length > 0) {
-      const eH = stack.pop()!;
-      if (visited.has(eH)) continue;
-      visited.add(eH);
-      // Name
-      const nameResult = w.get(eH, Name);
-      if (!nameResult.ok) continue;
-      const name = (nameResult.value as { value: string }).value;
-      // Find legacy ID from editor entities map
-      const legacyId = findLegacyIdByEngineHandle(eH);
-      if (legacyId === undefined) continue;
-      // Components: collect all known component keys from entity
-      const comps: Record<string, unknown> = {};
-      // Transform
-      const tResult = w.get(eH, Transform);
-      if (tResult.ok) comps['Transform'] = { ...tResult.value as Record<string, unknown> };
-      // ChildOf → parent
-      let parent: EntityId | null = null;
-      const coResult = w.get(eH, ChildOf);
-      if (coResult.ok) {
-        const coVal = coResult.value as { parent: number };
-        const parentLegacy = findLegacyIdByEngineHandle(coVal.parent as EntityHandle);
-        parent = parentLegacy ?? null;
-      }
-      // EditorHidden
-      if (w.get(eH, EditorHidden).ok) hidden.push(legacyId);
-      entities.push({ id: legacyId, name, parent, components: comps, engineHandle: eH as number });
-      // Push children onto stack for DFS
-      const chResult = w.get(eH, Children);
-      if (chResult.ok) {
-        const chVal = chResult.value as { entities: number[] | Uint32Array };
-        const arr = Array.isArray(chVal.entities) ? chVal.entities : Array.from(chVal.entities as Uint32Array);
-        for (const child of arr) {
-          // Children.entities holds live engine handles; brand for the DFS stack.
-          if (!visited.has(child as EntityHandle)) stack.push(child as EntityHandle);
-        }
-      }
-    }
-  }
-  return { entities, hidden, selection: [...selectionList] };
-}
-
-function findLegacyIdByEngineHandle(engineHandle: EntityHandle): number | undefined {
-  // M7 / AC-15: legacy ID ↔ engine handle map now lives in SessionInternals
-  // (entity-state), not doc.entities.
-  return entLegacyId(bus.doc, engineHandle);
-}
-
-function broadcastSnapshot(): void {
-  // Never re-broadcast a state we are CURRENTLY applying from a remote source —
-  // otherwise an inbound storage echo / snapshot mirror is bounced straight back
-  // out, closing the cross-window loop. Genuine local edits run with
-  // applyingRemote() === false and broadcast normally.
-  if (applyingRemote()) return;
-  if (syncChannel) postSync({ t: 'snapshot', snap: buildSnapshot() });
-}
-
-/** Notify all ep:* panel iframes that the asset file list changed (triggers
- *  reload in the Assets panel's Files tab). No-op when not main or no channel. */
-export function broadcastAssetsChanged(): void {
-  if (!IS_POPOUT) postSync({ t: 'assetsChanged' });
-}
-
-// POPOUT: adopt the main window's authoritative state. We set bus.doc directly
-// and fan out the React-facing listener sets WITHOUT touching the bus's own
-// listeners (those drive main-only persistence), and we guard re-broadcasts.
-function applySnapshot(snap: EditorSnapshot): void {
-  applyingSnapshot = true;
-  try {
-    mirror = snap;
-    markMainConnected(); // a main answered → this panel is live, not orphaned
-    // BroadcastChannel structuredClone drops the EditSession `asset` getter —
-    // revive it so popout panels reading bus.doc.asset stay live (w34).
-    bus.doc = reviveSession(snap.doc);
-    // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15 (D-4
-    // popout compat): the popout window's world is an inert structuredClone, so
-    // entity reads route through the entity-state popout cache. Repopulate it
-    // from the snapshot's worldState (name/parent/components/handle) so popout
-    // panels see fresh main-derived data.
-    if (snap.worldState) {
-      applyWorldStateToWorld(snap.worldState);
-    }
-    const selChanged = !sameIdList(selectionList, snap.selection);
-    if (selChanged) selectionList = [...snap.selection];
-    if (gizmoMode !== snap.gizmo) {
-      gizmoMode = snap.gizmo;
-      for (const fn of gizmoListeners) fn();
-    }
-    docVersion++;
-    for (const fn of docListeners) fn();
-    // Only re-emit selection when it actually changed — avoids redundant panel
-    // re-renders on every snapshot (doc edits arrive far more often than
-    // selection changes).
-    if (selChanged) emitSelection();
-  } finally {
-    applyingSnapshot = false;
-  }
-}
-
-/** Populate the entity-state popout cache from worldState for the popout compat
- *  view. feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
- *  rebuilds the popout entity cache (name/parent/components/handle) + the
- *  legacy ID → handle map from WorldEntityState, replacing the deleted
- *  doc.entities merge. */
-function applyWorldStateToWorld(ws: WorldState): void {
-  entPopulate(
-    bus.doc,
-    ws.entities.map((we) => ({
-      id: we.id,
-      name: we.name,
-      parent: we.parent,
-      components: we.components,
-      engineHandle: we.engineHandle,
-    })),
-  );
-}
-
-// Dock (main window only) listens here to redock a panel when its popped-out OS
-// window closes (the popout posts 'bye' on unload).
-const popoutClosedListeners = new Set<(panel: SyncPanelId) => void>();
-export function onPopoutClosed(cb: (panel: SyncPanelId) => void): () => void {
-  popoutClosedListeners.add(cb);
-  return () => popoutClosedListeners.delete(cb);
-}
-/** Tell the channel this popout is closing so the main window redocks it. */
-export function announcePopoutClosing(panel: SyncPanelId): void {
-  postSync({ t: 'bye', panel });
-}
-
-// Geometry memory (design §0.2.3): the popout reports its window size/position so
-// the main window persists it and reopens the panel where the user left it.
-const popoutGeomListeners = new Set<(panel: SyncPanelId, geom: PopoutGeom) => void>();
-export function onPopoutGeom(cb: (panel: SyncPanelId, geom: PopoutGeom) => void): () => void {
-  popoutGeomListeners.add(cb);
-  return () => popoutGeomListeners.delete(cb);
-}
-export function announcePopoutGeom(panel: SyncPanelId, geom: PopoutGeom): void {
-  postSync({ t: 'geom', panel, ...geom });
-}
-
-// Extracted so repairSceneChannelMain() can re-attach it to a fresh per-file
-// channel after an IN-PLACE scene switch (no page reload). The bus/selection/gizmo
-// subscriptions live in initMain (attached ONCE) and post to whatever syncChannel
-// is current via postSync — so swapping the channel needs only onmessage + a push.
-function mainOnMessage(ev: MessageEvent): void {
-  markBroadcastProven(); // receiving anything proves the channel reaches siblings
-  const msg = parseEditorSyncMsg(ev.data);
-  if (!msg) { console.warn('[sync] dropped malformed channel message (main)', ev.data); return; }
-  switch (msg.t) {
-    case 'hello': broadcastSnapshot(); break;
-    case 'cmd': bus.dispatch(msg.cmd, msg.origin); break;
-    case 'undo': bus.undo(); break;
-    case 'redo': bus.redo(); break;
-    case 'jumpTo': bus.jumpTo(msg.target); break;
-    case 'replaceDoc': replaceDoc(msg.doc); break;
-    case 'selection': setSelectionMany(msg.ids); break;
-    case 'gizmo': setGizmoMode(msg.mode); break;
-    case 'frame': requestFrame(); break;
-    case 'refEntity': requestRefEntity(msg.id); break;
-    case 'refAsset': requestRefAsset(msg.asset); break;
-    case 'addAssetToChat': requestAddAssetsToChat(msg.refs); break;
-    case 'addAssetToScene':
-      console.info('[CB:import] addAssetToScene.mainReceived', { kind: msg.ref.kind, guid: msg.ref.guid });
-      void spawnAssetRefToScene(msg.ref);
-      break;
-    case 'geom': for (const fn of popoutGeomListeners) fn(msg.panel, { w: msg.w, h: msg.h, x: msg.x, y: msg.y }); break;
-    case 'bye': for (const fn of popoutClosedListeners) fn(msg.panel); break;
-      case 'openScene': void switchSceneFile(msg.id); break;
-    case 'assetSelect': applyRemoteAssetSelection(msg.asset as SelectedAsset | null); break;
-    case 'clipCtl': setClipControl({ paused: msg.paused, speed: msg.speed, phase: msg.phase, applyPhase: msg.applyPhase }, { remote: true }); break;
-    case 'socketView': requestView(msg.cmd, { remote: true }); break;
-    default: break; // 'snapshot'/'sceneChanged' are main→popout only
-  }
-}
-
-function initMain(ch: BroadcastChannel): void {
-  bus.subscribe(() => broadcastSnapshot());
-  onSelectionChange(() => broadcastSnapshot());
-  onGizmoModeChange(() => broadcastSnapshot());
-  ch.onmessage = mainOnMessage;
-  // Push the freshly-loaded doc to panels that were ALREADY open before this
-  // main window (re)booted — e.g. after a scene switch navigation, the paired
-  // Hierarchy/Inspector iframes must immediately mirror the new scene without
-  // waiting for the first edit.
-  broadcastSnapshot();
-}
-
-// Swap the MAIN window's per-file sync channel to the current scene file WITHOUT a
-// page reload — reloading the main window re-creates the WebGPU device, which
-// wedges WKWebView's GPU process. The bus subscriptions from initMain persist and
-// post to the new channel (postSync reads the current syncChannel), so we only
-// re-attach onmessage + push a fresh snapshot for the reloaded panels.
-function repairSceneChannelMain(): void {
-  try { syncChannel?.close(); } catch { /* already closed */ }
-  syncChannel = openSyncChannel(`${getSceneId()}::${currentSceneFile ?? 'main'}`);
-  if (syncChannel) { syncChannel.onmessage = mainOnMessage; broadcastSnapshot(); }
-}
-
-function initPopout(ch: BroadcastChannel): void {
-  // Re-point the bus mutators at the channel: a popout never mutates locally, it
-  // asks the main window to. Read-only accessors come from the last snapshot.
-  bus.dispatch = (cmd: EditorCommand, origin: CommandOrigin = 'human') => {
-    postSync({ t: 'cmd', cmd, origin });
-    return { ok: true } as const;
-  };
-  bus.undo = () => { postSync({ t: 'undo' }); return true; };
-  bus.redo = () => { postSync({ t: 'redo' }); return true; };
-  bus.jumpTo = (target: number) => { postSync({ t: 'jumpTo', target }); };
-  // Forward clip-scrubber transport to the main window (which owns the preview
-  // AnimationPlayer). Cleared on pagehide via the channel teardown.
-  setClipControlForwarder((c) => postSync({ t: 'clipCtl', paused: c.paused, speed: c.speed, phase: c.phase, applyPhase: c.applyPhase }));
-  setViewRequestForwarder((cmd) => postSync({ t: 'socketView', cmd }));
-  bus.canUndo = () => mirror?.canUndo ?? false;
-  bus.canRedo = () => mirror?.canRedo ?? false;
-  bus.historySteps = (): HistoryStep[] => mirror?.history ?? [];
-  bus.appliedCount = () => mirror?.applied ?? 0;
-  ch.onmessage = (ev: MessageEvent) => {
-    markBroadcastProven(); // receiving anything proves the channel reaches siblings
-    const msg = parseEditorSyncMsg(ev.data);
-    if (!msg) { console.warn('[sync] dropped malformed channel message (popout)', ev.data); return; }
-    if (msg.t === 'snapshot') { applySnapshot(msg.snap); return; }
-    if (msg.t === 'sceneChanged') {
-      // Our authority viewport navigated to another scene — follow it: reload
-      // re-reads the persisted scene file and re-pairs on the new channel.
-      if (msg.id !== currentSceneFile) location.reload();
-      return;
-    }
-    if (msg.t === 'assetsChanged') {
-      // Relay as a window message so the Assets panel's listener can reload.
-      try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
-      return;
-    }
-    if (msg.t === 'assetSelect') {
-      applyRemoteAssetSelection(msg.asset as SelectedAsset | null);
-      return;
-    }
-    if (msg.t === 'meshStats') {
-      applyRemoteMeshStats(msg.stats as MeshStats | null);
-      return;
-    }
-  };
-  // Request the current state on open. A SINGLE hello is lost if the main
-  // viewport hasn't booted yet — and in the studio DockShell the reload
-  // coordinator serializes iframe loads one-at-a-time, so a panel routinely
-  // connects SECONDS before its Edit viewport ("main") is ready to answer. The
-  // panel would then wait for the next edit-triggered snapshot (looking
-  // "没接通" until the user happens to edit). Re-poll a few times so we latch
-  // onto a late-booting main; stop as soon as a snapshot lands (markMainConnected).
-  postSync({ t: 'hello' });
-  let tries = 0;
-  const poll = setInterval(() => {
-    if (mainConnected || ++tries > 20) { clearInterval(poll); return; }
-    postSync({ t: 'hello' });
-  }, 500);
-}
-
-export function initSync(): void {
-  if (syncChannel) return; // idempotent
-  // Cross-process doc sync (works even when BroadcastChannel can't span Tauri
-  // WebviewWindow processes): the main window persists the doc to localStorage on
-  // every edit; other same-origin windows get a `storage` event and re-read it.
-  // (Fires only in OTHER contexts, never the writer — so no loop; loadDocFromStorage
-  // sets bus.doc + bumps the React version without re-persisting.)
-  if (typeof window !== 'undefined') {
-    const onStorage = (e: StorageEvent): void => {
-      if (e.key === docKey(currentSceneId) && e.newValue) { loadDocFromStorage(); return; }
-      // Channel-択一: only honour the localStorage selection mirror when the
-      // BroadcastChannel transport is NOT live (fallback path). When the channel
-      // is open it is the sole selection transport, so ignore selKey writes.
-      if (!broadcastActive() && e.key === selKey() && e.newValue) {
-        try {
-          const ids = JSON.parse(e.newValue);
-          // Short-circuit identical echoes so a redundant `storage` event never
-          // re-emits / re-renders (defence-in-depth alongside applyingRemote).
-          if (Array.isArray(ids) && !sameIdList(selectionList, ids)) {
-            applyingExternalSel = true; selectionList = ids; emitSelection(); applyingExternalSel = false;
-          }
-        } catch { /* ignore */ }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    // Lifecycle: the channel + storage listener live for the document's lifetime,
-    // but explicitly release them on pagehide so a reused bfcache document or a
-    // popout that navigates doesn't leak a dangling channel / double-handle.
-    window.addEventListener('pagehide', () => {
-      try { syncChannel?.close(); } catch { /* already closed */ }
-      try { controlChannel?.close(); } catch { /* already closed */ }
-      syncChannel = null;
-      controlChannel = null;
-      window.removeEventListener('storage', onStorage);
-    }, { once: true });
-  }
-  // The channel IS the viewport↔panels pair: keyed per game AND per scene
-  // file, so an editor instance editing level1 and another editing level2
-  // (same game, separate windows) never cross-talk. Panels resolve the same
-  // scene file via initSceneList before connecting.
-  syncChannel = openSyncChannel(`${getSceneId()}::${currentSceneFile ?? 'main'}`);
-  if (!syncChannel) return; // BroadcastChannel unavailable → still have storage sync
-  if (IS_POPOUT) initPopout(syncChannel);
-  else initMain(syncChannel);
-
-  // Per-GAME control channel — survives scene-file switches so an in-place
-  // switchSceneFile re-pairs every window WITHOUT a page reload (no WebGPU context
-  // recreate → no WKWebView wedge). Main: a panel's openScene → switch in place.
-  // Panels: the viewport's sceneChanged → reload the (GPU-less) panel iframe to
-  // re-pair on the new per-file channel.
-  controlChannel = openControlChannel(getSceneId());
-  if (controlChannel) {
-    controlChannel.onmessage = (ev: MessageEvent) => {
-      const msg = parseEditorSyncMsg(ev.data);
-      if (!msg) return;
-      if (!IS_POPOUT) {
-        if (msg.t === 'openScene') void switchSceneFile(msg.id);
-      } else if (msg.t === 'sceneChanged' && msg.id !== currentSceneFile) {
-        location.reload();
-      }
-    };
   }
 }
 
@@ -1730,18 +1199,11 @@ let selectedAsset: SelectedAsset | null = null;
 const assetSelListeners = new Set<() => void>();
 function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
 
-let applyingRemoteAssetSel = false;
 export function setAssetSelection(asset: SelectedAsset | null): void {
   if (selectedAsset?.guid === asset?.guid) return;
   selectedAsset = asset;
   emitAssetSel();
-  if (!applyingRemoteAssetSel) postSync({ t: 'assetSelect', asset });
-}
-export function applyRemoteAssetSelection(asset: SelectedAsset | null): void {
-  applyingRemoteAssetSel = true;
-  selectedAsset = asset;
-  emitAssetSel();
-  applyingRemoteAssetSel = false;
+
 }
 export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
 function subscribeAssetSel(fn: () => void): () => void {
@@ -1771,19 +1233,12 @@ let selectedMeshStats: MeshStats | null = null;
 const meshStatsListeners = new Set<() => void>();
 function emitMeshStats(): void { for (const fn of meshStatsListeners) fn(); }
 
-let applyingRemoteMeshStats = false;
 /** MAIN window: publish derived stats for the currently-selected mesh (broadcasts
  *  to popouts/panels). Pass null to clear. */
 export function publishMeshStats(stats: MeshStats | null): void {
   selectedMeshStats = stats;
   emitMeshStats();
-  if (!applyingRemoteMeshStats) postSync({ t: 'meshStats', stats });
-}
-export function applyRemoteMeshStats(stats: MeshStats | null): void {
-  applyingRemoteMeshStats = true;
-  selectedMeshStats = stats;
-  emitMeshStats();
-  applyingRemoteMeshStats = false;
+
 }
 export function getMeshStats(): MeshStats | null { return selectedMeshStats; }
 function subscribeMeshStats(fn: () => void): () => void {
@@ -1794,4 +1249,10 @@ function subscribeMeshStats(fn: () => void): () => void {
  *  selected asset before rendering — a stale entry may linger during a switch). */
 export function useMeshStats(): MeshStats | null {
   return useSyncExternalStore(subscribeMeshStats, getMeshStats, getMeshStats);
+}
+
+/** Notify in-process panels that the asset file list changed.
+ *  M3: single-realm — panels are in-process React components. */
+export function broadcastAssetsChanged(): void {
+  try { window.postMessage({ type: 'VAG_ASSETS_CHANGED' }, '*'); } catch { /* */ }
 }

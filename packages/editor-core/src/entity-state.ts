@@ -94,75 +94,12 @@ export function entGetNextId(session: EditSession): EntityId {
   return getInternals(session)._nextId;
 }
 
-// ── Popout entity cache ────────────────────────────────────────────────────
-// In popout windows, the EditSession.world is a dead clone (structuredClone
-// over BroadcastChannel strips engine handles). Entity reads must go through
-// a snapshot-derived cache rather than world.get().
-
-interface PopoutEntInfo {
-  name: string;
-  parent: EntityId | null;
-  handle: number;
-  /** Component name → component data dict. */
-  components: Record<string, Record<string, unknown>>;
-}
-
-let _popoutCache: Map<EntityId, PopoutEntInfo> | null = null;
-
-/** Populate the popout entity cache from EditorSnapshot.worldState.
- *  Called by store.ts applySnapshot on popout windows only. */
-export function entPopulate(
-  session: EditSession,
-  entities: Array<{ id: EntityId; name: string; parent: EntityId | null; components: Record<string, unknown>; engineHandle: number }>,
-): void {
-  const m = new Map<EntityId, PopoutEntInfo>();
-  for (const e of entities) {
-    entMap(session, e.id, e.engineHandle as EntityHandle);
-    const comps: Record<string, Record<string, unknown>> = {};
-    for (const [k, v] of Object.entries(e.components)) {
-      if (typeof v === 'object' && v !== null) comps[k] = v as Record<string, unknown>;
-    }
-    m.set(e.id, { name: e.name, parent: e.parent, handle: e.engineHandle, components: comps });
-  }
-  _popoutCache = m;
-}
-
-export function entClearPopoutCache(): void {
-  _popoutCache = null;
-}
-
-/** True if the session's world reference is known dead (popout window).
- *  A popout window receives its EditSession over BroadcastChannel, whose
- *  structuredClone strips all methods — so the live World's `get` function is
- *  gone (and snapshots now carry an explicit null world). On the main window
- *  `world.get` is a real method. This is a reliable liveness discriminator (the
- *  World class exposes no plain-data `rootEntities` field to test against). */
-export function entIsDeadWorld(session: EditSession): boolean {
-  try {
-    const w = session.world as unknown as { get?: unknown } | null;
-    return !w || typeof w.get !== 'function';
-  } catch {
-    return true;
-  }
-}
-// Internal alias kept for the existing call sites below.
-const _isDeadWorld = entIsDeadWorld;
-
 // ── Entity info accessors (main = world, popout = cache) ────────────────────
 
+/** Get entity name from live world (SSOT).
+ *  M3: single-realm — dead-world branch deleted, world is always live. */
 export function entName(session: EditSession, id: EntityId): string {
-  // Discriminate strictly on world liveness: a populated (module-level) popout
-  // cache must NOT shadow live main-window reads — gating on the cache being
-  // non-null leaked stale popout state into the main session. Dead world (popout
-  // structuredClone) → cache; live world → read from world (SSOT).
-  if (_isDeadWorld(session)) {
-    if (_popoutCache) {
-      const c = _popoutCache.get(id);
-      if (c) return c.name;
-    }
-    return `#${id}`;
-  }
-  // Main window: read from world
+  // Read from world (SSOT)
   const h = entHandle(session, id);
   if (h === undefined) return `#${id}`;
   try {
@@ -173,13 +110,6 @@ export function entName(session: EditSession, id: EntityId): string {
 }
 
 export function entParent(session: EditSession, id: EntityId): EntityId | null {
-  if (_isDeadWorld(session)) {
-    if (_popoutCache) {
-      const c = _popoutCache.get(id);
-      if (c) return c.parent;
-    }
-    return null;
-  }
   const h = entHandle(session, id);
   if (h === undefined) return null;
   try {
@@ -193,9 +123,6 @@ export function entParent(session: EditSession, id: EntityId): EntityId | null {
 }
 
 export function entAlive(session: EditSession, id: EntityId): boolean {
-  if (_isDeadWorld(session)) {
-    return _popoutCache !== null && _popoutCache.has(id);
-  }
   const h = entHandle(session, id);
   if (h === undefined) return false;
   try {
@@ -205,19 +132,13 @@ export function entAlive(session: EditSession, id: EntityId): boolean {
   }
 }
 
-/** Get a specific component's value dict from world (main) or popout cache. */
+/** Get a specific component's value dict from world.
+ *  M3: single-realm — world is always live. */
 export function entComponent(
   session: EditSession,
   id: EntityId,
   compName: string,
 ): Record<string, unknown> | undefined {
-  if (_isDeadWorld(session)) {
-    if (_popoutCache) {
-      const c = _popoutCache.get(id);
-      if (c && compName in c.components) return c.components[compName];
-    }
-    return undefined;
-  }
   const h = entHandle(session, id);
   if (h === undefined) return undefined;
   // Try to resolve component token from engine registry
@@ -239,22 +160,11 @@ export function entComponent(
   return undefined;
 }
 
-/** Get entity components dict (component name → value) from popout cache
- *  (popout) or by walking the engine component registry against the world
- *  (main). M7: replaces EntityNode.components. */
+/** Get entity components dict by walking the engine component registry
+ *  against the live world. M7: replaces EntityNode.components.
+ *  M3: single-realm — dead-world branch deleted, world is always live. */
 export function entComponents(session: EditSession, id: EntityId): Record<string, unknown> {
-  if (_isDeadWorld(session)) {
-    if (_popoutCache) {
-      const c = _popoutCache.get(id);
-      if (c) {
-        const flat: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(c.components)) flat[k] = v;
-        return flat;
-      }
-    }
-    return {};
-  }
-  // Main window: walk registered components and probe the world for presence.
+  // Walk registered components and probe the world for presence.
   const h = entHandle(session, id);
   if (h === undefined) return {};
   const out: Record<string, unknown> = {};

@@ -14,6 +14,14 @@
       "types": "./src/EditSurface.tsx",
       "import": "./src/EditSurface.tsx"
     },
+    "./host-boot": {
+      "types": "./src/host-boot.ts",
+      "import": "./src/host-boot.ts"
+    },
+    "./engine/viewport-component": {
+      "types": "./src/engine/ViewportComponent.tsx",
+      "import": "./src/engine/ViewportComponent.tsx"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",

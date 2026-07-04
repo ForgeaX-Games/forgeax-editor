@@ -10,10 +10,6 @@
       "row1": "<b>Middle</b> orbit · <b>Shift+Middle</b> pan · <b>Ctrl+Middle / Wheel</b> zoom · <b>Left</b> select",
       "row2": "<b>W / E / R</b> move·rotate·scale · <b>F</b> focus selection · trackpad <b>Alt+Left</b> orbit · <b>⇧Alt</b> pan"
     },
-    "detachedPanel": {
-      "redock": "Redock",
-      "redockTitle": "Dock back to the main window"
-    },
     "hierarchy": {
       "menu": {
         "group": "Group ({{n}})",
@@ -28,7 +24,6 @@
       }
     },
     "history": {
-      "waitingForViewport": "Waiting for Edit viewport… Open the \"Edit\" panel and every operation will show here in real time.",
       "empty": "No operations",
       "jumpToStep": "Jump to step {{step}}",
       "originAi": "AI",

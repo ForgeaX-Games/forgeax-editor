@@ -1,25 +1,24 @@
-// Playwright config for @forgeax/editor — AC-09/12/14/15 e2e gate.
+// Playwright config for @forgeax/editor — AC-04/05/09 e2e gate (single realm).
 //
-// Two webServers (mode-C from research F-4 + plan-strategy 2 D-9): the
-// editor's standalone chrome host on :15290 (root = standalone/, renders
-// <DockShell hideChatAndForge /> with the viewport as renderEdit's Edit
-// panel), and the editor-edit-runtime vite root on :15280 (the iframe
-// target the dock's panels — including the viewport — point at via the
-// :15290 /editor proxy, at `?viewportOnly=1`).
-//
-// Single-server hint from the M5 task description named only `bun -F
-// editor dev` because that is the host page; the iframe target server is
-// still required for the standalone-shell specs to materialise the panel
-// iframes from the runtime, so it is added as the second webServer entry.
-// Both servers reuse the legacy :15290/:15280 ports — OOS-8 forbids new ports.
+// M2 single-realm webServer simplification (plan-strategy S5.5-B; requirements
+// AC-04/AC-09; OOS-4 keeps play-runtime untouched):
+//   Before M2 this needed the :15280 edit-runtime vite server too, because the
+//   dock rendered the viewport + panels as iframes to `/editor/…` (proxied from
+//   :15290). M2 collapses to a single realm — the :15290 host boots the engine
+//   in-process (D7 engine-vite-preset serves the shader manifest + pack catalog
+//   locally) and renders the viewport + panels as in-process components. No page
+//   reaches :15280 anymore, so that webServer entry is REMOVED. What stays:
+//     - :15290 — the standalone host (`bun run dev`, cwd '.'). The single
+//                document under test; boots the engine in-process.
+//     - :15173 — play-runtime preview (OOS-4: zero changes). Kept for e2e that
+//                open `/preview/?game=<slug>` (fullscreen play path).
 //
 // Anchors:
+//   requirements AC-04/AC-05 (single realm — no panel iframe, in-host canvas)
 //   requirements AC-09 (hideChatAndForge=true hides chat-panel + forge-entry)
-//   requirements AC-10/AC-11 (DockShell registers all panels + viewport; visible)
-//   requirements AC-12 (e2e green after the move from standalone-editor-demo)
 //   requirements AC-14 (bun -F editor test:e2e exit 0)
+//   plan-strategy S5.5-B (webServer array trimmed with the iframe deletion)
 //   research F-4 (webServer array + 10s expect.poll fallback)
-//   research F-6 C-1 (viewport URL = /editor/?viewportOnly=1, proxied to :15280)
 
 import { defineConfig } from '@playwright/test';
 
@@ -48,39 +47,24 @@ export default defineConfig({
   },
   webServer: [
     {
-      // editor standalone chrome host on :15290 — renders
-      // <DockShell hideChatAndForge /> on module load. Started via
-      // `bun -F editor dev` so the editor package's vite.config.ts
-      // (root=standalone/, port=15290) applies.
+      // editor standalone chrome host on :15290 — renders <DockShell
+      // hideChatAndForge /> and boots the engine IN-PROCESS on module load
+      // (single realm, M2). Started via `bun run dev` so the root vite.config.ts
+      // (root=standalone/, port=15290, engine-vite-preset serve) applies. This
+      // is the ONLY document the e2e specs load. The :15280 edit-runtime server
+      // is GONE — nothing on the page reaches it (D7 serves the engine here).
       command: 'bun run dev',
       cwd: '.',
       url: 'http://127.0.0.1:15290',
-      reuseExistingServer: !process.env.CI,
-      timeout: 60_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      // editor-edit-runtime — iframe target at app.entryUrl. Started
-      // from its own package dir so the package's vite.config.ts
-      // (PORT=15280, base='/editor/') applies unchanged.
-      command: 'bunx vite --port 15280 --strictPort',
-      cwd: './packages/edit-runtime',
-      // Standalone host is :15290 (it proxies /editor → :15280 with ws:true),
-      // NOT the studio :18920. edit-runtime's HMR clientPort defaults to 18920
-      // for the studio-embed case; override it so the vite HMR socket connects
-      // back through the standalone host instead of a dead :18920.
-      env: { ...process.env, FORGEAX_INTERFACE_PORT: '15290' },
-      url: 'http://127.0.0.1:15280/editor/',
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
       stdout: 'pipe',
       stderr: 'pipe',
     },
     {
-      // engine vite dev server on :15173 — serves play-runtime preview
-      // at /preview/?game=<slug> for M5 e2e smoke tests (AC-08/09).
-      // Port 15173 is the play-runtime vite.config.ts default.
+      // engine vite dev server on :15173 — serves play-runtime preview at
+      // /preview/?game=<slug> (fullscreen play path). OOS-4: play-runtime is
+      // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
       command: 'bunx vite --port 15173 --strictPort',
       cwd: './packages/play-runtime',
       env: { ...process.env, FORGEAX_ENGINE_PORT: '15173' },

@@ -8,11 +8,18 @@ name: CI
 # permanent gate on that promise — every push / PR re-proves a fresh checkout
 # installs and reaches B2.
 #
-# The B2 self-boot job is deliberately LIGHTWEIGHT (no engine build): the B2
-# selfcheck only drives the /api/files wire (tree/read/write/confinement) through
-# the host vite proxy and the game-backend bun process — it never loads a page
-# that imports the engine. So B2 needs only `bun install` + the platform-io
-# submodule, and runs in ~1-2 min.
+# The B2 self-boot job boots the standalone host (`bun run dev`, :15290) and
+# drives the /api/files wire (tree/read/write/confinement) through the host vite
+# proxy + game-backend bun process — NO studio server, NO page render. Since the
+# single-realm collapse (feat-20260703), the :15290 host bundler is no longer a
+# thin react()+proxy shell: its vite config consumes engineVitePreset (the shared
+# engine dev-serve fragment), which statically imports the engine's vite plugins
+# (@forgeax/engine-vite-plugin-shader/-pack, engine-gltf, engine-image). Vite
+# bundles its config through rolldown, so those plugins' dist/*.mjs must exist for
+# `bun run dev` to even load its config — hence B2 now needs the engine LIBRARY
+# dist (the same .mjs + wgpu-wasm pkg the typecheck job builds), reused via the
+# SAME engine-SHA cache below. B2 still never renders a frame, so no runtime wasm
+# execution is exercised — only config-load resolution needs dist to be present.
 #
 # The `typecheck` job (below) is the second gate: it builds the engine's .d.ts
 # (cached by submodule SHA — no Rust/cargo, the wasm is committed) and typechecks
@@ -47,6 +54,62 @@ jobs:
           submodules: recursive
           fetch-depth: 1
           token: ${{ secrets.GHA }}
+
+      # ── engine LIBRARY dist (needed since single-realm: the :15290 host vite
+      # config consumes engineVitePreset → imports the engine vite plugins, whose
+      # dist/*.mjs must exist for `bun run dev` to load its config). Shares the
+      # engine-SHA cache with the typecheck job: once either job warms it for a
+      # given engine pin, the other hits it instantly (no Rust/tsup rebuild). ──
+      - name: Resolve engine submodule SHA
+        id: engine
+        run: echo "sha=$(git -C packages/engine rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache engine dist (.d.ts + .mjs) + wgpu-wasm pkg
+        id: engine-dist-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/engine/packages/*/dist
+            packages/engine/packages/wgpu-wasm/pkg
+          key: engine-dist-${{ steps.engine.outputs.sha }}
+
+      # ── cache-miss only: build the engine library (mirrors the typecheck job) ──
+      - name: Setup Rust toolchain (for wgpu-wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup wasm-pack
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+
+      - name: Setup pnpm
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node (for engine pnpm build)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Build wgpu-wasm (Rust → wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: cd packages/engine && bash packages/wgpu-wasm/build.sh
+
+      - name: Build engine library types (.mjs + .d.ts, no demos)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/engine
+          pnpm install --frozen-lockfile
+          pnpm -r --filter "./packages/*" build
+          pnpm exec tsc -b --clean
+          pnpm exec tsc -b
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2

@@ -1,6 +1,16 @@
 // Vite config for the standalone editor chrome (`packages/editor/standalone/`).
-// Serves :15290 with the React + DockShell + EditorPanelFrame self-rendered
-// shell from standalone/main.tsx (plan §2 D-4 R3).
+// Serves :15290 with the React + DockShell shell from standalone/main.tsx, which
+// (post-M2) boots the forgeax engine IN-PROCESS in this host window and renders
+// the viewport + ep:* panels as in-process components — no edit-runtime iframe.
+//
+// REPLAN D7 (in-process engine serve): this host bundler now serves the engine
+// itself (shader manifest, pack-index / __import catalog, symlink-dedupe, TLA
+// esnext) by consuming engineVitePreset — the SAME shared serve fragment
+// edit-runtime/vite.config.ts uses. Before M2 this config had only react() + an
+// `/editor` -> :15280 proxy and borrowed edit-runtime's serve through an iframe;
+// M2 deletes that proxy because the engine is served here directly (S4 R7:
+// without engine serve the in-process boot's fetch('/shaders/manifest.json')
+// 404s and createApp fails).
 //
 // Aliases mirror packages/interface/vite.config.ts so that DockShell's deep
 // import chain (@forgeax/design/*, @forgeax/host-sdk, @/components/ui/*) all
@@ -8,19 +18,15 @@
 // package imports (@forgeax/editor, @forgeax/editor-shared, dockview, react,
 // react-dom, etc.) automatically.
 //
-// optimizeDeps.exclude='@forgeax/engine-runtime' — same reason as interface:
-// pre-bundling drops some named exports the lazy editor-core code expects.
-//
-// server.proxy '/editor' -> :15280 so EditorPanelFrame's relative src
-// `/editor/?panel=...` (rendered at :15290 origin) reaches edit-runtime.
-//
-// Anchors: AC-07, AC-08, AC-10, AC-11, plan §2 D-4 R3, §2 D-10b, §4 R-9 R3.
+// Anchors: AC-04, AC-05, AC-07, AC-08, plan-strategy S2 D4/D7, S3.1 host bundler
+// layer, S4 R7, S5.6 selfcheck:b2 (9/9 held: --game /api proxy branch preserved).
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { existsSync } from 'node:fs';
+import { engineVitePreset } from './packages/edit-runtime/src/engine/engine-vite-preset';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +56,18 @@ const GAME_DIR = process.env.FORGEAX_GAME_DIR
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
 const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
+
+// D7: the shared engine-serve fragment. base '/' (this IS the host origin —
+// shader/pack routes arrive un-prefixed, no base-strip needed); gameDirAbs =
+// GAME_DIR so the in-process engine self-hosts the game's pack catalog
+// (pack-index / __import / __forgeax-ddc) the SAME way edit-runtime did.
+// preserveSymlinks:false — this host bundle pulls dockview + @radix-ui through
+// packages/interface/node_modules; under preserveSymlinks vite resolves the
+// symlinked interface to its realpath and then can't find those NESTED transitive
+// deps, 500-ing the whole shell. The host relies on realpath dedupe instead
+// (resolve.dedupe still collapses the @forgeax family to one instance). null
+// (no --game) -> demo seed, shader plugin alone serves the manifest.
+const enginePreset = engineVitePreset({ base: '/', gameDirAbs: GAME_DIR, preserveSymlinks: false });
 
 // INTERFACE_DIR resolution — embedded vs standalone:
 //   - Embedded in studio: the parent studio tree's packages/interface (../../
@@ -81,15 +99,30 @@ if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 export default defineConfig({
   root: resolve(PACKAGE_DIR, 'standalone'),
   base: '/',
-  plugins: [react()],
-  // Expose the game slug to the standalone client bundle so it can pin the
-  // game and thread ?scene=/?gameRoot= into the editor iframes. null = no --game.
-  define: { __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG) },
+  // react() + the D7 engine-serve plugins (shader manifest emit + optional
+  // self-hosted pluginPack catalog). This is what lets the engine boot
+  // in-process in this host window (no /editor proxy).
+  plugins: [react(), ...enginePreset.plugins],
+  // Expose the game slug + abs dir to the standalone client bundle. The slug
+  // pins the game (setPinnedSlug) and threads ?scene=/?gameRoot=; the abs dir
+  // (__FORGEAX_GAME_DIR_ABS__) is read by the in-process engine boot (host-boot
+  // / ViewportComponent) exactly as edit-runtime's config injected it — it
+  // selects the self-hosted pack routes + the Play @fs game-entry base. null =
+  // no --game (demo seed).
+  define: {
+    __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
+    __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR),
+  },
   resolve: {
     // dockview declares react as a peer dep; under bun's isolated node_modules
     // it can resolve a SECOND react copy and crash with "Invalid hook call /
-    // resolveDispatcher null". Force a single instance.
-    dedupe: ['react', 'react-dom'],
+    // resolveDispatcher null". Force a single instance. D7: also dedupe the whole
+    // @forgeax family (preset.resolve.dedupe) so the in-process engine + editor
+    // packages resolve to one realpath. preserveSymlinks stays false here (the
+    // preset default is overridden to false for this host — see the preset call)
+    // because dockview/@radix nested deps live under the interface symlink target.
+    dedupe: enginePreset.resolve.dedupe,
+    preserveSymlinks: enginePreset.resolve.preserveSymlinks,
     alias: {
       // Order matters — vite picks first matching prefix. Most-specific first.
       '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
@@ -108,9 +141,13 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    // Same exclusion as interface vite — pre-bundle would drop named exports
-    // that lazy editor-core code expects.
-    exclude: ['@forgeax/engine-runtime'],
+    // D7: exclude the ENTIRE @forgeax workspace family (engine-* + editor-*)
+    // from pre-bundle — served as native ESM, single instance (SSOT-derived by
+    // the preset, cannot drift). This supersedes the old single
+    // '@forgeax/engine-runtime' exclusion: the in-process engine boot pulls the
+    // whole family, and pre-bundling any of it under preserveSymlinks OOMs on
+    // the nested symlink graph (see preset comment).
+    exclude: enginePreset.optimizeDeps.exclude,
     // Pre-bundle react so the single-instance dedupe holds. dockview /
     // @forgeax/interface are NOT listed: optimizeDeps.include resolves from the
     // vite ROOT (standalone/), but those packages live in the vendored
@@ -134,15 +171,17 @@ export default defineConfig({
         : [PACKAGE_DIR],
     },
     proxy: {
-      // EditorPanelFrame writes `iframe.src = '/editor/?panel=<id>...'` —
-      // a root-relative URL that, on :15290, would otherwise be served by the
-      // standalone vite SPA fallback. Route the prefix to edit-runtime.
-      '/editor': { target: 'http://127.0.0.1:15280', changeOrigin: true, ws: true },
+      // D7: the `/editor` -> :15280 proxy is DELETED. The engine now boots
+      // in-process in this host window (single realm, AC-04), so there is no
+      // edit-runtime iframe to proxy to. The shader manifest + pack catalog are
+      // served locally by enginePreset.plugins.
+      //
       // --game: proxy /api → the standalone game-backend bun process (R3), which
       // mounts the real @forgeax/platform-io createFilesRouter confined to the
       // game. Same-origin from :15290 so editor-core's relative fetch('/api/…')
       // and raw-media <img src="/api/files/raw…"> both reach it. No --game → no
       // entry → /api 404s through the SPA fallback (demo-seed path, unchanged).
+      // selfcheck:b2 (9/9) exercises exactly this branch — do NOT remove it.
       ...(GAME_DIR
         ? { '/api': { target: `http://127.0.0.1:${GAME_API_PORT}`, changeOrigin: true } }
         : {}),
@@ -151,5 +190,7 @@ export default defineConfig({
   build: {
     outDir: resolve(PACKAGE_DIR, 'dist'),
     emptyOutDir: true,
+    // esnext: the in-process engine boot entry uses top-level await (D7 preset).
+    target: enginePreset.build.target,
   },
 });

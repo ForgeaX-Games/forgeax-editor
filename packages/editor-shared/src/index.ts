@@ -30,10 +30,6 @@ export {
   onRenameRequest,
   requestRename,
   onGizmoModeChange,
-  onPopoutClosed,
-  onPopoutGeom,
-  announcePopoutClosing,
-  announcePopoutGeom,
   requestFrame,
   requestRefComponent,
   requestRefAsset,
@@ -41,7 +37,6 @@ export {
   requestAddAssetsToChat,
   requestAddAssetToScene,
   useDocVersion,
-  useMainConnected,
   useGizmoMode,
   useSelection,
   useSelectionList,
@@ -51,7 +46,6 @@ export {
   loadDocFromDisk,
   getLoadedSceneRoot,
   rebindLoadedScene,
-  initSync,
   initDiskWatch,
   initSceneList,
   getSceneFile,
@@ -103,7 +97,6 @@ export {
   entAlive,
   entComponent,
   entComponents,
-  entIsDeadWorld,
 } from '@forgeax/editor-core';
 
 // ── Context menu service ──

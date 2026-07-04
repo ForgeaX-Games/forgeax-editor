@@ -1,7 +1,7 @@
-// panels/index.ts — edit-runtime panel component barrel (M5 w25/w26).
+// panels/index.ts — edit-runtime panel component barrel.
 //
-// Each panel exported here is rendered by DetachedPanel when the
-// corresponding ep:* iframe loads with ?panel=<id>.
+// Each panel is rendered as an in-process React component via the
+// renderEditorPanel injection slot (single-realm M2).
 
 export { SystemsPanel } from './systems-panel';
 export type { SystemsPanelProps } from './systems-panel';

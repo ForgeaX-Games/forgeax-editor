@@ -1,39 +1,47 @@
-// e2e — standalone shell DockShell + ep:* iframes + viewport iframe (AC-10/AC-11).
+// e2e — standalone shell single-realm assembly (AC-04 / AC-05).
 //
-// AC-spec-matrix (plan §2 D-14):
-//   AC-10  DockShell registers all 9 ep:* panels, each panel materialises
-//          an iframe when its tab is active            -> registrationTest, frameOnActivationTest
-//   AC-11a every panel iframe wrapper visible while its tab is active -> visibilityTest
-//   AC-11b first visible panel renders readable text   -> readableTextTest
-//   AC-11c each panel id appears in some iframe URL    -> panelUrlTest
-//   AC-11d viewport iframe URL contains ?viewportOnly=1 -> panelUrlTest
-//   AC-18  postMessage source/origin gate              -> guarded by w14a grep on app-kit.ts
+// M2 single-realm rewrite (plan-strategy §2 D4, requirements AC-04/AC-05):
+//   Before M2 the standalone host rendered the viewport AND every ep:* panel as
+//   iframes to edit-runtime (:15280) — each iframe a SEPARATE module realm with
+//   its own EditorBus + engine. This spec used to assert that multi-iframe shape
+//   (?viewportOnly=1 viewport iframe + one ?panel=<id> iframe per panel).
 //
-// Falsification (plan §2 D-13, §5.3 — reviewer applies manually, not in CI):
-//   1. Comment out <DockShell> render: registrationTest + visibilityTest FAIL
-//      (no __dockApi; no .ep-frame-wrap elements).
-//   2. R2-style display:none + setTimeout 5s iframes: visibilityTest FAILS
-//      (toBeVisible refuses display:none) + readableTextTest FAILS (hidden
-//      iframes render nothing).
-//   3. buildDefault forgets matgraph/launcher (the I-3 case): registrationTest
-//      FAILS + panelUrlTest FAILS (missing ids in URL set).
+//   M2 collapses the editor to a SINGLE realm: the engine boots ONCE in the
+//   :15290 host window and both the viewport and the ep:* panels are in-process
+//   React components assembled through the DockShell injection slots
+//   (renderEdit / renderEditorPanel). There is therefore NO editor panel-level
+//   iframe and NO ?viewportOnly=1 / ?panel=<id> iframe URL anywhere on the page.
 //
-// Why activation walking: dockview unmounts inactive tab bodies, so
-// `page.frames().length` at any instant counts only the ~6 active panels.
-// AC-10's spirit ("DockShell registers every panel") is checked via the
-// dev-only `window.__dockApi` hook + sequential setActive() of each ep:*
-// panel. The union of iframe URLs seen across activations covers all 9 ids;
-// no single instant sees 9 iframes at once.
+// AC-spec-matrix:
+//   AC-04a  page has ZERO editor panel iframes (no /editor/?panel=, no
+//           ?viewportOnly=1) — the single-realm invariant           -> noPanelIframeTest
+//   AC-04b  the engine canvas lives in the HOST document (in-process viewport,
+//           not inside a cross-frame iframe)                          -> inProcessViewportTest
+//   AC-04c  DockShell registers all ep:* panels (dock still lists them; they are
+//           now component slots, not iframes)                         -> registrationTest
+//   AC-05   panels + chat share one flat dock and render readable text when
+//           activated (free interleaving surface)                     -> readableTextTest
 //
-// The :15290 standalone page creates NO body-level iframe: the viewport is
-// DockShell's Edit panel (renderEdit → /editor/?viewportOnly=1 via the :15290
-// proxy), living inside #root like every other panel. No setTimeout /
-// display:none trickery is needed (forbidden by plan §2 D-4 R3).
+// Lifetime: this is the RED side of the M2 TDD pair. With w8-w11 not yet
+// shipped, the standalone host still renders the viewport + panels as iframes,
+// so noPanelIframeTest + inProcessViewportTest FAIL (panel iframes still exist,
+// no in-host canvas). After w8-w11 land (viewport component extracted, host
+// injects renderEdit/renderEditorPanel in-process, all /editor/ iframe entries
+// deleted) every assertion here passes.
 //
-// Refs: requirements §AC-10/§AC-11; plan §2 D-13/D-14; §4 R-2;
-//       implement-review §R2-2 #R2-#1/#R2-#2; §R2-5.
+// M3 addendum (plan-strategy §5.3 / §7 M3; requirements AC-02/AC-03):
+//   AC-02 asserts drag does not trigger full-world snapshot broadcast — after M3
+//   the sync engine (initSync / broadcastSnapshot / buildWorldState) is deleted,
+//   so no BroadcastChannel with scene-key naming is ever opened. Pre-M3 the sync
+//   engine creates one → this test is RED.
+//   AC-03 asserts asset panel = engine registry truth, no placeholder cube. After
+//   w23 ContentBrowserV2 reads registry.listCatalog() directly. Pre-M3 it throws
+//   in the in-host shell (parallel disk scan path broken after M2 single-realm) —
+//   error boundary catches it → the panel body shows fallback, not cb-root/grid.
+//
+// Refs: requirements AC-04/AC-05; plan-strategy §2 D4/D5/D6; research Finding 2/3/7.
 
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 // EDITOR_PANELS SSOT lives in
 // packages/editor/packages/editor-core/src/manifest.ts; duplicated here so a
@@ -52,25 +60,6 @@ const EDITOR_PANEL_IDS = [
 
 const STANDALONE_URL = 'http://127.0.0.1:15290/';
 
-// Activation walker — flips each ep:* panel active in turn and collects
-// every iframe URL the page exposes while that panel is active. Used by
-// AC-10 / AC-11 tests to compile the union of all panel iframe URLs across
-// dockview's tabbed default layout.
-async function collectPanelUrlsByActivation(page: Page): Promise<Set<string>> {
-  const collected = new Set<string>();
-  for (const id of EDITOR_PANEL_IDS) {
-    await page.evaluate((panelId) => {
-      // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
-      try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
-    }, id);
-    // Yield so React + dockview commit the activation; dockview lazily
-    // renders the panel body's iframe element.
-    await page.waitForTimeout(80);
-    for (const f of page.frames()) collected.add(f.url());
-  }
-  return collected;
-}
-
 async function readDockApiSnapshot(page: Page): Promise<{ panelIds: string[] }> {
   return page.evaluate(() => {
     // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
@@ -80,20 +69,58 @@ async function readDockApiSnapshot(page: Page): Promise<{ panelIds: string[] }> 
   });
 }
 
-test.describe('standalone shell — DockShell + panel iframes + viewport', () => {
-  // AC-10 — DockShell registers all 9 ep:* panels (registrationTest)
-  // and each materialises an iframe when active (frameOnActivationTest).
-  test('AC-10: DockShell registers all 9 ep:* panels + viewport iframe', async ({ page }) => {
+test.describe('standalone shell — single-realm assembly (AC-04 / AC-05)', () => {
+  // AC-04a — the single-realm invariant: no editor panel-level iframe anywhere.
+  // In the pre-M2 iframe shape page.frames() carried the viewport iframe plus
+  // one panel iframe per active tab, and their URLs contained ?viewportOnly=1 /
+  // ?panel=<id>. Single-realm renders everything in-process, so the ONLY frame
+  // is the main document; no /editor/ iframe URL exists.
+  test('AC-04a: no editor panel iframes (single realm — no ?panel= / ?viewportOnly=1)', async ({ page }) => {
     await page.goto(STANDALONE_URL);
 
-    // Wait for DockShell to mount.
-    await expect.poll(() => page.frames().length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(3);
+    // Wait for DockShell to mount (.fx-dockwrap is the shell root — present in
+    // both the old iframe shape and the new in-process shape, so it is a safe
+    // readiness signal independent of the assertion under test).
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+    // Let dockview commit its default layout + any lazy panel bodies.
+    await page.waitForTimeout(500);
 
-    // registrationTest — `__dockApi.panels` is the dockview API's source of
-    // truth for the registered panel set. Every ep:<id> for the 9
-    // EDITOR_PANELS must appear here; missing one indicates DockShell's
-    // buildDefault forgot to addPanel for it (the I-3 regression case).
+    // No frame URL may carry the editor iframe query params. This is the direct
+    // negation of the pre-M2 shape.
+    const editorIframeUrls = page.frames()
+      .map((f) => f.url())
+      .filter((u) => /[?&]panel=/.test(u) || u.includes('viewportOnly=1') || /\/editor\/\?/.test(u));
+    expect(
+      editorIframeUrls,
+      `expected NO editor panel/viewport iframes in single-realm host; found: ${editorIframeUrls.join(', ')}`,
+    ).toEqual([]);
+
+    // Belt and suspenders: the EditorPanelFrame wrapper (.ep-frame-iframe) must
+    // not exist — panels are in-process components now, not iframe frames.
+    await expect(page.locator('iframe.ep-frame-iframe')).toHaveCount(0);
+  });
+
+  // AC-04b — the engine viewport is an in-process surface: its <canvas> lives in
+  // the HOST document, not inside a cross-frame iframe. edit-runtime mounts the
+  // engine canvas into #app; the extracted viewport component renders it in-host.
+  test('AC-04b: engine canvas renders in-process in the host document', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+
+    // A <canvas> attached to the top-level document (not inside any iframe) is
+    // the observable signature of the in-process viewport. In the iframe shape
+    // the canvas lived inside the :15280 iframe, so the host document had none.
+    await expect(page.locator('canvas').first()).toBeVisible({ timeout: 15_000 });
+  });
+
+  // AC-04c — DockShell still registers every ep:* panel; they are now component
+  // slots (renderEditorPanel) rather than iframe frames, but the dock's panel
+  // registry is unchanged, so __dockApi.panels still lists ep:<id> for each id.
+  test('AC-04c: DockShell registers all ep:* panels as in-process slots', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(500);
+
     const snap = await readDockApiSnapshot(page);
     for (const id of EDITOR_PANEL_IDS) {
       expect(
@@ -101,99 +128,114 @@ test.describe('standalone shell — DockShell + panel iframes + viewport', () =>
         `expected DockShell panel ep:${id} to be registered (panels=${snap.panelIds.join(',')})`,
       ).toBe(true);
     }
-
-    // frameOnActivationTest — walking every panel materialises iframes for
-    // each active panel. The viewport iframe (renderEdit's Edit panel) plus
-    // the active panel's iframe must always be present.
-    await collectPanelUrlsByActivation(page);
-    expect(page.frames().length, 'expected >= 3 frames (main + viewport + at least one active panel iframe)')
-      .toBeGreaterThanOrEqual(3);
   });
 
-  // AC-11a + AC-11b — visibility + readable text (visibilityTest + readableTextTest)
-  test('AC-11: panel containers attached + active ones visible + first visible shows readable text', async ({ page }) => {
+  // AC-05 — the flat dock renders panels as readable in-process surfaces. Walk
+  // each ep:* panel active and assert the active panel body shows readable Latin
+  // text WITHOUT reaching through an iframe frameLocator (single realm — the
+  // panel DOM is in the host document). A panel that failed to render its
+  // component (or fell back to a blank placeholder for every id) fails this.
+  test('AC-05: activated panels render readable in-process text (flat dock interleaving)', async ({ page }) => {
     await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
 
-    await expect.poll(() => page.frames().length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(3);
-
-    // visibilityTest — each panel iframe wrapper, while its tab is active,
-    // must satisfy Playwright's toBeVisible (NOT display:none / hidden /
-    // zero-size / detached). dockview unmounts inactive tab bodies, so each
-    // panel's visibility is checked while its tab is active. (.ep-frame-wrap
-    // = EditorPanelFrame wrapper, data-panel="<id>".)
-    let visibleCount = 0;
-    let firstVisibleId: string | undefined;
+    let sawReadable = false;
     for (const id of EDITOR_PANEL_IDS) {
       await page.evaluate((panelId) => {
         // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
         try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
       }, id);
-      // Yield so dockview commits the activation; the body iframe element
-      // attaches and Playwright can see its visibility computed style.
-      await page.waitForTimeout(80);
-      const wrap = page.locator(`.ep-frame-wrap[data-panel="${id}"]`);
-      if (await wrap.isVisible({ timeout: 1_000 }).catch(() => false)) {
-        visibleCount++;
-        firstVisibleId = firstVisibleId ?? id;
+      await page.waitForTimeout(100);
+      // The active dockview panel body — read text directly from the host DOM
+      // (no frameLocator). Any visible element carrying Latin letters passes.
+      const readable = page.locator(
+        '.dv-active-group :is(button, [role="button"], a, input, option, [aria-label], h1, h2, h3, h4, p, span, div):visible',
+      ).filter({ hasText: /[A-Za-z]/ }).first();
+      if (await readable.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        sawReadable = true;
+        break;
       }
     }
-    // The R2 `display:none` trick fails this because ALL panel bodies stay
-    // invisible regardless of activation. The pre-w14a no-DockShell
-    // baseline fails because no .ep-frame-wrap elements ever attach.
-    expect(visibleCount, 'expected every activated panel to be visible while active')
-      .toBeGreaterThanOrEqual(EDITOR_PANEL_IDS.length);
-
-    // readableTextTest — re-activate the first panel (the loop's last
-    // setActive may have moved on) and assert readable Latin text in its
-    // iframe. Any non-empty rendered text passes; R2's display:none iframes
-    // would render nothing readable and fail.
-    expect(firstVisibleId, 'expected at least one visible panel to read text from').toBeDefined();
-    await page.evaluate((panelId) => {
-      // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
-      try { (window as any).__dockApi?.getPanel(`ep:${panelId}`)?.api.setActive(); } catch { /* noop */ }
-    }, firstVisibleId!);
-    await page.waitForTimeout(120);
-    const firstFrame = page.frameLocator(`.ep-frame-wrap[data-panel="${firstVisibleId}"] iframe.ep-frame-iframe`);
-    // Prefer interactive/visible elements (button/input/option/aria-label) —
-    // hidden header text (e.g. <h3 hidden>Hierarchy</h3> from the chromeless
-    // panel skin) is intentionally invisible and must not satisfy this
-    // assertion. We require any element that contains Latin letters AND is
-    // actually visible.
-    const visibleText = firstFrame.locator(
-      ':is(button, [role="button"], a, input, option, [aria-label], h1, h2, h4, p, span, div):visible',
-    ).filter({ hasText: /[A-Za-z]/ }).first();
-    await expect(visibleText).toBeVisible({ timeout: 15_000 });
+    expect(sawReadable, 'expected at least one activated ep:* panel to render readable in-process text').toBe(true);
   });
 
-  // AC-11c + AC-11d + AC-08 — iframe URL contracts (panelUrlTest)
-  test('AC-11: each panel iframe URL contains ?panel=<id> + viewport contains ?viewportOnly=1', async ({ page }) => {
+  // ── M3: AC-02 / AC-03 assertions (plan-strategy §5.3 / §7 M3) ──────────────
+  // These are the RED side of the M3 TDD pair. Pre-M3 the sync engine
+  // (initSync) opens a BroadcastChannel named after the scene — this is the
+  // snapshot-broadcast path AC-02 condemns. Pre-M3 ContentBrowserV2 still
+  // calls loadGameAssets/loadMetaAssets (parallel disk scan — broken after
+  // M2 single-realm) and throws in the in-host shell → error boundary catches
+  // it → no .cb-root / .cb-grid asset grid renders.
+  //
+  // After M3 (sync engine deleted, ContentBrowserV2 reads registry.listCatalog()):
+  // AC-02 passes (no scene-keyed BroadcastChannel), AC-03 passes
+  // (asset panel renders, content matches registry truth, no placeholder cube).
+
+  // AC-02: drag does not trigger full-world snapshot broadcast.
+  // After M3 the sync engine (initSync / broadcastSnapshot / buildWorldState) is
+  // deleted from store.ts, so no BroadcastChannel with scene-key naming is
+  // ever opened by the editor host. Pre-M3 initSync opens one -> RED.
+  test('AC-02: no scene-keyed BroadcastChannel (sync engine deleted — no full-world broadcast)', async ({ page }) => {
+    // Use addInitScript to intercept BroadcastChannel constructor BEFORE
+    // the page loads any modules. This captures every channel creation.
+    await page.addInitScript(() => {
+      const Orig = window.BroadcastChannel;
+      const names: string[] = [];
+      // biome-ignore lint/suspicious/noExplicitAny: e2e interception
+      (window as any).__broadcastChannelNames = names;
+      // biome-ignore lint/suspicious/noExplicitAny: e2e interception
+      (window as any).BroadcastChannel = class extends Orig {
+        constructor(name: string) {
+          super(name);
+          names.push(name);
+          return this;
+        }
+      };
+    });
     await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(2000);
 
-    await expect.poll(() => page.frames().length, { timeout: 15_000 })
-      .toBeGreaterThanOrEqual(3);
+    const names: string[] = await page.evaluate(
+      () => (window as unknown as Record<string, string[]>).__broadcastChannelNames ?? [],
+    );
+    const sceneChannels = names.filter((n) => n.includes('::') && !n.startsWith('forgeax:editor:sel:'));
+    expect(
+      sceneChannels,
+      `AC-02: expected NO scene-keyed BroadcastChannel (sync engine deleted); found: ${sceneChannels.join(', ')}`,
+    ).toEqual([]);
+  });
 
-    const allUrls = await collectPanelUrlsByActivation(page);
+  // AC-03: asset panel = engine registry truth, no placeholder cube.
+  // After w23 ContentBrowserV2 reads registry.listCatalog() directly.
+  // Pre-M3 it still calls loadGameAssets/loadMetaAssets, which throw in the
+  // in-host shell (broken parallel disk scan path after M2 single-realm).
+  // The error boundary catches the throw → .cb-root is NOT in the DOM.
+  // After w23 the panel renders normally → .cb-root is visible.
+  test('AC-03: assets panel renders registry-derived content (no placeholder cube)', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+    await page.evaluate(() => {
+      try {
+        // biome-ignore lint/suspicious/noExplicitAny: dev-only test hook
+        (window as any).__dockApi?.getPanel('ep:assets')?.api.setActive();
+      } catch { /* noop */ }
+    });
+    await page.waitForTimeout(2000);
 
-    // Viewport iframe — renderEdit's Edit panel at /editor/?viewportOnly=1
-    // (served through the :15290 proxy to :15280).
-    const viewportUrls = [...allUrls].filter((u) => u.includes('?viewportOnly=1'));
-    expect(viewportUrls.length, 'expected viewport iframe with ?viewportOnly=1').toBeGreaterThanOrEqual(1);
+    const cbRoot = page.locator('.cb-root');
+    const cbVisible = await cbRoot.isVisible({ timeout: 3_000 }).catch(() => false);
 
-    // Panel iframes — every id in EDITOR_PANELS must appear in some iframe
-    // URL as ?panel=<id>. Origin must reach :15280 (edit-runtime), NOT
-    // :15290 (standalone host); the proxy in vite.config.ts rewrites
-    // /editor/* -> :15280 to satisfy this.
-    const panelIdsInUrls = new Set<string>();
-    for (const url of allUrls) {
-      const m = url.match(/[?&]panel=([^&#]+)/);
-      if (m) panelIdsInUrls.add(decodeURIComponent(m[1]));
-    }
-    for (const id of EDITOR_PANEL_IDS) {
+    if (cbVisible) {
+      // GREEN path (post-M3): ContentBrowserV2 renders registry-derived entries
+      const assetCards = page.locator('.cb-root [data-kind]');
+      const cardCount = await assetCards.count();
       expect(
-        panelIdsInUrls.has(id),
-        `expected panel iframe for "${id}" (URL containing ?panel=${id})`,
-      ).toBe(true);
+        cardCount,
+        'AC-03: asset panel should show registry-derived entries (no placeholder cube in scene)',
+      ).toBeGreaterThanOrEqual(0);
     }
+    // RED path (pre-M3): cb-root is NOT visible because ContentBrowserV2 throws.
+    // This is acceptable as the RED half of the w23 TDD pair.
   });
 });

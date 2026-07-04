@@ -61,6 +61,10 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@playwright/test": "^1.45.0",
     "@vitejs/plugin-react": "^4.3.0",
     "dependency-cruiser": "^17.4.3",

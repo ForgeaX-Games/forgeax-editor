@@ -1,4 +1,4 @@
-import { bus, setSelection, useDocVersion, useMainConnected } from '@forgeax/editor-shared';
+import { bus, setSelection, useDocVersion } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
@@ -9,7 +9,6 @@ import { useTranslation } from '@forgeax/editor-shared/i18n';
 export function HistoryPanel() {
   const { t } = useTranslation();
   useDocVersion(); // re-render on every bus change
-  const connected = useMainConnected(); // false = no Edit viewport answering yet
   const steps = bus.historySteps();
   const head = bus.appliedCount();
 
@@ -17,11 +16,7 @@ export function HistoryPanel() {
     <div className="panel" data-testid="panel-history">
       <h3>History</h3>
       <div className="hist-list" data-testid="hist-list">
-        {!connected ? (
-          <div className="muted" style={{ padding: '4px 10px' }} data-testid="hist-disconnected">
-            {t('editor.history.waitingForViewport')}
-          </div>
-        ) : steps.length === 0 ? (
+        {steps.length === 0 ? (
           <div className="muted" style={{ padding: '4px 10px' }}>{t('editor.history.empty')}</div>
         ) : (
           steps.map((s, i) => (

@@ -33,7 +33,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from './scene-types';
 import { EditorHidden } from './components/EditorHidden';
 import { getInternals } from './edit-session';
-import { entHandle, entLegacyId, entMap, entUnmap, entNextId, entSetNextId, entGetNextId, entIsDeadWorld, entIds, entParent } from './entity-state';
+import { entHandle, entLegacyId, entMap, entUnmap, entNextId, entSetNextId, entGetNextId, entIds, entParent } from './entity-state';
 
 export { createEditSession } from './edit-session';
 
@@ -324,16 +324,7 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
 // entities that have no ChildOf component.
 
 export function childrenOf(doc: EditSession, parent: EntityId | null): EntityId[] {
-  // Popout window: the live World is absent (snapshots carry a null world so the
-  // BroadcastChannel structuredClone stays valid — see store.buildSnapshot). Read
-  // the parent relation from the popout cache via entParent (dead-world-aware)
-  // instead of doc.world.get, which would throw on null. Derive children by
-  // filtering all mapped ids on their parent.
-  if (entIsDeadWorld(doc)) {
-    return entIds(doc)
-      .filter((id) => entParent(doc, id) === parent)
-      .sort((a, b) => a - b);
-  }
+  // M3: single-realm — world is always live, dead-world branch deleted.
   if (parent !== null) {
     const pE = toEntity(doc, parent);
     const ch = doc.world.get(pE, Children);
@@ -347,12 +338,21 @@ export function childrenOf(doc: EditSession, parent: EntityId | null): EntityId[
     }
     return [];
   }
-  // Root entities: all mapped entities with no ChildOf component
+  // Root entities: mapped entities with no ChildOf, OR whose ChildOf.parent is
+  // not an editor-tracked handle. The second clause is essential after a scene
+  // load: populateSessionMapFromSceneRoot maps every authored entity but NOT the
+  // synthetic SceneInstance root, so the scene's top-level entities carry a
+  // ChildOf pointing at that untracked root — a bare `!co.ok` check drops them
+  // all and the hierarchy renders empty. This predicate reads the live world's
+  // ChildOf.parent relation (single-realm SSOT) and is kept byte-identical to
+  // entRootHandles (entity-state.ts) — the two must not drift.
   const internals = getInternals(doc);
   const rootIds: EntityId[] = [];
   for (const [id, h] of internals._e2h) {
     const co = doc.world.get(h as EntityHandle, ChildOf);
-    if (!co.ok) rootIds.push(id);
+    if (!co.ok || !internals._h2e.has((co.value as { parent: number }).parent as EntityHandle)) {
+      rootIds.push(id);
+    }
   }
   rootIds.sort((a, b) => a - b);
   return rootIds;

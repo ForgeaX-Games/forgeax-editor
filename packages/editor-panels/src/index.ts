@@ -13,7 +13,7 @@
 // ── Manifest (re-exported from @forgeax/editor-shared) ──
 export { EDITOR_PANELS } from './manifest';
 export type { EditorPanelId } from './manifest';
-export { PANEL_COMPONENTS } from './manifest';
+export { EDITOR_PANEL_COMPONENTS } from './manifest';
 
 // ── Panel components ──
 export { AssetsPanel } from './Assets';

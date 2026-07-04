@@ -64,7 +64,7 @@ engine ← editor-core ← editor-shared ← editor-panels ← edit-runtime
 
 1. **No import cycles.** Keep the DAG `core ← shared ← panels ← edit-runtime`. New cross-package import broke it? Fix the direction, don't add to `.dependency-cruiser.cjs`.
 2. **Backend only through the injected `ApiClient`** (`editor-core/src/api-client.ts`). A raw `fetch('/api/...')` in editor-proper source re-hardcodes the transport and trips `lint:api-seam`. Use `getApiClient().fetch(...)`. (`packages/interface`, `api-client.ts` itself, and tests are exempt.)
-3. **EDITOR_PANELS is duplicated** between `editor-core/src/manifest.ts` (SSOT) and `editor-core/src/sync-channel.ts` (inline copy — the inline copy avoids a shared→core cycle). `lint:sync-channel` guards drift; if you edit one, edit both in the same order.
+3. **EDITOR_PANELS is single-SSOT** in `editor-core/src/manifest.ts`. `lint:sync-channel` (upgraded from dual-compare guard) asserts that no other file defines a duplicate `EDITOR_PANELS` literal — any second copy trips CI.
 4. **Single engine world.** The one edit-runtime world hosts both editor and game systems. `lint-no-second-world.mjs` (diff-scoped) forbids a feature from adding a net-new `new World()` / `createWorld()`.
 5. **VAG protocol SSOT** lives in `editor-core/src/protocol.ts` (16 `VAG_*` schemas). play-runtime reaches core only through it — never via direct import.
 6. **README is bilingual.** Any change to `README.md` must update `README.zh-CN.md` in the same commit.

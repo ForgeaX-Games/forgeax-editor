@@ -68,7 +68,6 @@ export {
   entAlive,
   entComponent,
   entComponents,
-  entIsDeadWorld,
 } from './entity-state';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
@@ -103,25 +102,11 @@ export { quatToEuler, eulerToQuat } from './euler-quat';
 // ── Hex↔float color conversion (M6, AC-19 Material panel) ──
 export { hexToFloat, floatToHex } from './color-utils';
 
-// ── Sync channel ──
-export {
-  getPopoutPanel,
-  getEditorRole,
-  openSyncChannel,
-} from './sync-channel';
-export type {
-  EditorRole,
-  SyncPanelId,
-  EditorSnapshot,
-  EditorSyncMsg,
-  PopoutGeom,
-  AssetChatRef,
-} from './sync-channel';
+// ── Cross-panel types ──
+export type { AssetChatRef, MeshStatsWire } from './cross-panel-types';
 
 // ── Assets ──
 export {
-  loadGameAssets,
-  loadMetaAssets,
   loadRawAssets,
   materialSwatch,
   makeMaterialResolver,
@@ -193,10 +178,6 @@ export {
   onRenameRequest,
   requestRename,
   onGizmoModeChange,
-  onPopoutClosed,
-  onPopoutGeom,
-  announcePopoutClosing,
-  announcePopoutGeom,
   requestFrame,
   requestRefComponent,
   requestRefAsset,
@@ -204,7 +185,6 @@ export {
   requestAddAssetsToChat,
   requestAddAssetToScene,
   useDocVersion,
-  useMainConnected,
   useGizmoMode,
   useSelection,
   useSelectionList,
@@ -214,7 +194,6 @@ export {
   loadDocFromDisk,
   getLoadedSceneRoot,
   rebindLoadedScene,
-  initSync,
   initDiskWatch,
   initSceneList,
   getSceneFile,

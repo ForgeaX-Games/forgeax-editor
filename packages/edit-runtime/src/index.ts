@@ -13,7 +13,6 @@
 // Re-exported for AppKit / standalone consumers.
 
 // ── UI / Components ──
-export { DetachedPanel } from './DetachedPanel';
 export { ViewportBar } from './ViewportBar';
 export { ViewportHints } from './ViewportHints';
 

@@ -21,7 +21,17 @@ import { MeshPanel } from './Mesh';
 import { LauncherPanel } from './Launcher';
 import { AssetInspectorPanel } from './AssetInspector';
 
-export const PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
+// D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
+// disambiguate from interface's own same-named PANEL_COMPONENTS
+// (panelRegistry.tsx). The host injects this map into DockShell's
+// renderEditorPanel slot; the EDITOR_ prefix lets an agent grep the correct
+// symbol in one hit (research §8 naming; AC-04/AC-05 single-realm injection).
+//
+// To add a panel: (1) register its id in the EDITOR_PANELS SSOT
+// (@forgeax/editor-shared manifest.ts); (2) add the component here keyed by that
+// id. The host reads this map via renderEditorPanel(id); an unmapped id falls
+// back to the "panel not assembled" placeholder (no crash).
+export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   hierarchy: HierarchyPanel,
   inspector: InspectorPanel,
   assets: AssetsPanel,

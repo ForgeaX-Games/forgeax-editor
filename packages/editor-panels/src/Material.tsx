@@ -1,4 +1,4 @@
-import { bus, dispatch, useDocVersion, useSelection, useAssetSelection, entIsDeadWorld } from '@forgeax/editor-shared';
+import { bus, dispatch, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-shared';
 import { useTranslation } from '@forgeax/editor-shared/i18n';
 import { floatToHex, hexToFloat } from '@forgeax/editor-core';
 import {
@@ -208,7 +208,7 @@ export function MaterialPanel() {
   // this guard selecting an entity NPE'd ("reading 'get'"), same class as the
   // childrenOf (#5) / Inspector (#10) popout crashes. Degrade gracefully: the
   // editable Material panel lives in the main window.
-  if (world === null || entIsDeadWorld(bus.doc)) {
+  if (world === null) {
     return (
       <div className="panel ed-material" data-testid="panel-material">
         <h3>Material</h3>

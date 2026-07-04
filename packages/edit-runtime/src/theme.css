@@ -353,7 +353,13 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 
 /* ViewportBar — minimal toolbar in viewportOnly mode */
 .vp-bar {
-  position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 10;
+  /* single-realm (feat-20260703): the viewport chrome anchors to the
+     .ep-viewport-root panel (position:relative), NOT the browser window. Under
+     the old iframe-per-panel arch edit-runtime owned the whole iframe so
+     position:fixed coincided with the viewport; in the single realm the viewport
+     is one dock panel among many, so fixed would escape it. absolute keeps the
+     bar/hints/clip pinned inside the viewport panel. */
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 10;
   display: flex; align-items: center; gap: 3px; padding: 3px 8px;
   background: rgba(21, 22, 24, 0.85); border-radius: 0 0 8px 8px;
   border: 1px solid var(--line, #2a2d30); border-top: none;
@@ -378,7 +384,8 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 
 /* ViewportClipScrubber — animation playhead, bottom-center of the scene viewport */
 .vp-clip {
-  position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
+  /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
   display: flex; align-items: center; gap: 4px; padding: 3px 8px;
   background: rgba(21, 22, 24, 0.85); border-radius: 8px;
   border: 1px solid var(--line, #2a2d30);
@@ -422,7 +429,8 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 
 /* Dismissible controls cheat-sheet pinned to the bottom-center of the viewport. */
 .vp-hints {
-  position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 9;
+  /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 9;
   display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px);
   padding: 6px 30px 6px 12px; pointer-events: auto;
   background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
@@ -444,7 +452,8 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .vp-hints-close:hover { background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed); }
 /* Collapsed state — a tiny "?" pill at the bottom-right to reopen the sheet. */
 .vp-hints-toggle {
-  position: fixed; bottom: 10px; right: 12px; z-index: 9; pointer-events: auto;
+  /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
+  position: absolute; bottom: 10px; right: 12px; z-index: 9; pointer-events: auto;
   width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
   border-radius: 50%; backdrop-filter: blur(8px); cursor: pointer;

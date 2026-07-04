@@ -12,14 +12,14 @@ import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels';
 import { HierarchyPanel, InspectorPanel } from '@forgeax/editor-panels';
 
 // 面板组件查找表
-import { PANEL_COMPONENTS } from '@forgeax/editor-panels';
+import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor-panels';
 ```
 
 ## exports 子入口
 
 | 入口 | 导出 | 说明 |
 |:--|:--|:--|
-| `.` | `HierarchyPanel`, `InspectorPanel`, `AssetsPanel`, `HistoryPanel`, `CapabilitiesPanel`, `MaterialPanel`, `EDITOR_PANELS`, `EditorPanelId`, `PANEL_COMPONENTS` | 面板组件 + manifest re-export + 组件查找表 |
+| `.` | `HierarchyPanel`, `InspectorPanel`, `AssetsPanel`, `HistoryPanel`, `CapabilitiesPanel`, `MaterialPanel`, `EDITOR_PANELS`, `EditorPanelId`, `EDITOR_PANEL_COMPONENTS` | 面板组件 + manifest re-export + 组件查找表 |
 | `./panels` | `EDITOR_PANELS`（常量数组）, `EditorPanelId`（联合类型） | 面板 manifest（re-export from `@forgeax/editor-shared`） |
 
 ### `EDITOR_PANELS` 常量
