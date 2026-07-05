@@ -27,8 +27,8 @@ Both are rebuilt on demand — never committed. A bare `bun install` alone does 
 | Task | Command |
 |:--|:--|
 | Typecheck (all packages) | `bun run typecheck` (`tsc --noEmit`) |
-| Full lint | `bun run lint` (sync-channel + api-seam gates) |
-| Dependency-cycle gate | `bun run lint:dep` (dependency-cruiser — asserts the DAG) |
+| Full lint | `bun run lint` (sync-channel + api-seam + engine-shim + no-second-world gates) |
+| Dependency-cycle gate | `bun run lint:dep` (dependency-cruiser — asserts the DAG and direction rules) |
 | Standalone dev (recommended) | `bun run dev:standalone` → http://localhost:15290 |
 | Edit-runtime only | `bun run dev:edit-runtime` (:15280, HMR→15290) |
 | Standalone host only | `bun run dev` (:15290, expects :15280 up) |
@@ -46,28 +46,28 @@ Both are rebuilt on demand — never committed. A bare `bun install` alone does 
 Five workspace packages forming an **acyclic DAG** — `bun run lint:dep` fails the build if any import breaks it:
 
 ```
-engine ← editor-core ← editor-shared ← editor-panels ← edit-runtime
-                                                        play-runtime  (separate thick host)
+engine ← editor-core ← editor-content-browser ← editor-panels ← edit-runtime
+                                                                           play-runtime  (separate thick host)
 ```
 
 | Package | Role |
 |:--|:--|
 | `@forgeax/editor-core` | Core logic — EditSession, EditorBus, undo/redo, schema, sync-channel, animation, material graph, assets, presets, sockets, the injected **ApiClient** backend seam |
-| `@forgeax/editor-shared` | Cross-layer runtime — zustand store, entity ops, context menu, dock bridge, **panel manifest SSOT** |
+| `@forgeax/editor-content-browser` | Asset browser — grid/list/column views, filter/sort/history, drag-spawn, import pipeline (FBX/glTF cook via core) |
 | `@forgeax/editor-panels` | 8 business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Timeline, MaterialGraph) + panel-component injection |
 | `@forgeax/editor-edit-runtime` | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
 | `@forgeax/editor-play-runtime` | Play-mode **thick host** — FPS capture, physics gate, pack-index, diagnostics overlay. Talks to `core` **only** over the `VAG_*` iframe protocol (dashed edge — no direct import) |
 
-**Top-level `src/` entries** (the published surface) are deliberately thin pass-throughs — `edit.ts`/`play.ts`/`protocol.ts`/`app-kit.ts` re-export from sub-packages. `src/index.ts` is **zero-transitive** on purpose: it imports only `defineApp` and the `EDITOR_PANELS` const via a *relative* path into editor-shared/manifest, avoiding the barrel that would drag the whole engine chain into scope under bun's `file:` resolution. Don't "clean this up" into a normal barrel import — the relative path is intentional.
+**Top-level `src/` entries** (the published surface) are deliberately thin pass-throughs — `edit.ts`/`play.ts`/`protocol.ts`/`app-kit.ts` re-export from sub-packages. `src/index.ts` is **zero-transitive** on purpose: it imports only `defineApp` and the `EDITOR_PANELS` const via a *relative* path into editor-core/manifest, avoiding the barrel that would drag the whole engine chain into scope under bun's `file:` resolution. Don't "clean this up" into a normal barrel import — the relative path is intentional.
 
-## Invariants agents must respect (CI-enforced)
+## Invariants agents must respect (CI-enforced where noted)
 
-1. **No import cycles.** Keep the DAG `core ← shared ← panels ← edit-runtime`. New cross-package import broke it? Fix the direction, don't add to `.dependency-cruiser.cjs`.
-2. **Backend only through the injected `ApiClient`** (`editor-core/src/api-client.ts`). A raw `fetch('/api/...')` in editor-proper source re-hardcodes the transport and trips `lint:api-seam`. Use `getApiClient().fetch(...)`. (`packages/interface`, `api-client.ts` itself, and tests are exempt.)
-3. **EDITOR_PANELS is single-SSOT** in `editor-core/src/manifest.ts`. `lint:sync-channel` (upgraded from dual-compare guard) asserts that no other file defines a duplicate `EDITOR_PANELS` literal — any second copy trips CI.
-4. **Single engine world.** The one edit-runtime world hosts both editor and game systems. `lint-no-second-world.mjs` (diff-scoped) forbids a feature from adding a net-new `new World()` / `createWorld()`.
-5. **VAG protocol SSOT** lives in `editor-core/src/protocol.ts` (16 `VAG_*` schemas). play-runtime reaches core only through it — never via direct import.
-6. **README is bilingual.** Any change to `README.md` must update `README.zh-CN.md` in the same commit.
+1. **No import cycles + direction rules.** Keep the DAG `core ← content-browser ← panels ← edit-runtime`. `bun run lint:dep` (dependency-cruiser) enforces both no-circular and upward-import direction rules. New cross-package import broke it? Fix the direction, don't add to `.dependency-cruiser.cjs`.
+2. **Backend only through the injected `ApiClient`** (`editor-core/src/api-client.ts`). A raw `fetch('/api/...')` in editor-proper source re-hardcodes the transport and trips `lint-no-direct-api-fetch.mjs` (wired into `bun run lint`). Use `getApiClient().fetch(...)`. (`packages/interface`, `api-client.ts` itself, and tests are exempt.)
+3. **EDITOR_PANELS is single-SSOT** in `editor-core/src/manifest.ts`. `lint-sync-channel-panels.mjs` (wired into `bun run lint`) asserts that no other file defines a duplicate `EDITOR_PANELS` literal — any second copy trips CI.
+4. **Single engine world.** The one edit-runtime world hosts both editor and game systems. `lint-no-second-world.mjs` (diff-scoped, wired into `bun run lint`) forbids a feature from adding a net-new `new World()` / `createWorld()`.
+5. **VAG protocol SSOT** lives in `editor-core/src/protocol.ts` (16 `VAG_*` schemas). play-runtime reaches core only through it — never via direct import (convention — not machine-enforced; `bun run lint:dep` direction rules prevent wrong-direction imports but do not gate the VAG protocol path specifically).
+6. **README is bilingual.** Any change to `README.md` must update `README.zh-CN.md` in the same commit (convention — not machine-enforced; reviewers gate this in PR review).
 
 ## Self-boot levels
 

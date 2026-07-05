@@ -4,7 +4,7 @@
  */
 import { bus, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
 import { apiFetch } from '../io/api-client';
-import { buildSpawnEntityFromDragRef, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { buildSpawnEntityFromDragRef, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
 import { entHandle } from '../store/entity-state';
 import type { AssetChatRef } from '../io/cross-panel-types';
@@ -22,11 +22,6 @@ function toDragRef(ref: AssetChatRef): DragAssetRef {
     path: ref.path,
     payload: ref.payload,
   };
-}
-
-function stemName(ref: DragAssetRef): string {
-  const raw = ref.name?.trim() || ref.guid.slice(0, 8);
-  return raw.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'Asset';
 }
 
 async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {

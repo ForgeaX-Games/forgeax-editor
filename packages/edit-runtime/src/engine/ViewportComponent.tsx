@@ -210,7 +210,7 @@ async function bootViewport(
   // scene manifest) BEFORE anything reads a game file. In the single-realm host
   // this is the ONLY place it runs (no edit-runtime iframe did it first); shared
   // with edit-runtime's thin main.tsx so the two hosts can't drift. Without this
-  // the Assets panel's ContentBrowserV2 throws PATH_RESOLVER_NOT_SET.
+  // the Assets panel's ContentBrowser throws PATH_RESOLVER_NOT_SET.
   await configureHostSession();
 
   // canvas (was :185-191) — owned by this component, full-size, behind the overlay.

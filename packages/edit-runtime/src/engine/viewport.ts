@@ -1,5 +1,5 @@
 // Viewport interaction — the "human directly manipulates the scene" half of Edit
-// mode (design EDITOR-MODE P1: 视口导航 / 点选 / gizmo). The forgeax port shipped
+// mode (design EDITOR-MODE P1: viewport navigation / picking / gizmo). The forgeax port shipped
 // only the data model + Hierarchy + Inspector + doc→world render, leaving the
 // canvas inert; this module adds:
 //   • orbit camera   — Blender DEFAULT: MMB = orbit · Shift+MMB = pan ·
@@ -29,6 +29,17 @@ import {
   meshFromInterleaved,
 } from '@forgeax/engine-runtime';
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
+import { ray, vec3 } from '@forgeax/engine-math';
+
+// feat-20260705 M3 typecheck-sweep fix: `Box3Like` is NOT a top-level export of
+// `@forgeax/engine-math` (only re-exported via its `box3` namespace module, which
+// a value import cannot surface as a type). Derive it from the engine's own
+// `ray.rayAabbIntersects` signature so this stays SSOT-tied to the engine (no
+// divergent local copy) — the prior top-level type import (of Box3Like + RayLike)
+// was a latent M2/w6 error the M2 CI sweep did not run typecheck to catch. RayLike
+// is no longer aliased: the ray buffer stays a mutable Float32Array (RayLike is
+// read-only) and is structurally accepted by the engine call.
+type Box3Like = Parameters<typeof ray.rayAabbIntersects>[1];
 import type { EntityId, EditSession } from '@forgeax/editor-core';
 import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-core';
@@ -92,10 +103,10 @@ export function ndcFromClient(x: number, y: number, w: number, h: number): [numb
   return [(x / w) * 2 - 1, 1 - (y / h) * 2];
 }
 
-const norm = (v: Vec3): Vec3 => {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-};
+// Reusable Float32Array buffer for engine vec3 operations (tuple↔typed-array bridge).
+// Single buffer is safe here: normalize/cross are called sequentially in the pure
+// geometry section, never concurrently. vec3.dot needs no buffer (returns scalar).
+const _v3 = new Float32Array(3) as EngineVec3;
 
 /** Ray direction through an NDC point given the camera basis + vertical FOV. */
 export function rayDirection(
@@ -103,27 +114,37 @@ export function rayDirection(
   ndcX: number, ndcY: number, fovY: number, aspect: number,
 ): Vec3 {
   const t = Math.tan(fovY / 2);
-  return norm([
+  vec3.normalize(_v3, [
     forward[0] + right[0] * ndcX * t * aspect + up[0] * ndcY * t,
     forward[1] + right[1] * ndcX * t * aspect + up[1] * ndcY * t,
     forward[2] + right[2] * ndcX * t * aspect + up[2] * ndcY * t,
   ]);
+  return [_v3[0]!, _v3[1]!, _v3[2]!];
 }
 
-/** Ray vs axis-aligned box (center + half-extents). Returns entry distance or null. */
+/** Ray vs axis-aligned box (center + half-extents). Returns entry distance or null.
+ *  @plan D-1: thin adapter over engine rayAabbIntersects — center+half → Box3Like
+ *  @plan S-1: inside-origin returns 0 (engine clamp), not old tmax exit */
 export function rayAABB(origin: Vec3, dir: Vec3, center: Vec3, half: Vec3): number | null {
-  let tmin = -Infinity, tmax = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const o = origin[i]!, d = dir[i]!, lo = center[i]! - half[i]!, hi = center[i]! + half[i]!;
-    if (Math.abs(d) < 1e-9) { if (o < lo || o > hi) return null; continue; }
-    let t1 = (lo - o) / d, t2 = (hi - o) / d;
-    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-    if (t1 > tmin) tmin = t1;
-    if (t2 < tmax) tmax = t2;
-    if (tmin > tmax) return null;
-  }
-  if (tmax < 0) return null;
-  return tmin >= 0 ? tmin : tmax;
+  // center+half → Box3Like [minX,minY,minZ, maxX,maxY,maxZ]
+  const boxMin = new Float32Array(3) as EngineVec3;
+  const boxMax = new Float32Array(3) as EngineVec3;
+  vec3.sub(boxMin, center, half);
+  vec3.add(boxMax, center, half);
+  const box3Like: Box3Like = [
+    boxMin[0]!, boxMin[1]!, boxMin[2]!,
+    boxMax[0]!, boxMax[1]!, boxMax[2]!,
+  ];
+
+  // origin+dir → RayLike Float32Array[6] {ox,oy,oz,dx,dy,dz}. Keep the local as a
+  // mutable Float32Array (RayLike = ArrayLike<number> is read-only); it is
+  // structurally a RayLike when handed to the engine call below.
+  const rayLike = new Float32Array(6);
+  rayLike[0] = origin[0]; rayLike[1] = origin[1]; rayLike[2] = origin[2];
+  rayLike[3] = dir[0];    rayLike[4] = dir[1];    rayLike[5] = dir[2];
+
+  const r = ray.rayAabbIntersects(rayLike, box3Like);
+  return r.hit ? r.tmin : null;
 }
 
 /** Ray vs horizontal plane y = planeY. Returns the world hit point or null. */
@@ -138,32 +159,31 @@ export function rayPlaneY(origin: Vec3, dir: Vec3, planeY: number): Vec3 | null 
  *  cursor ray. Used by the move gizmo to constrain a drag to one axis. */
 export function closestAxisT(rayO: Vec3, rayD: Vec3, axisO: Vec3, axisU: Vec3): number {
   const w0: Vec3 = [rayO[0] - axisO[0], rayO[1] - axisO[1], rayO[2] - axisO[2]];
-  const dot = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
-  const a = dot(rayD, rayD), b = dot(rayD, axisU), c = dot(axisU, axisU);
-  const d = dot(rayD, w0), e = dot(axisU, w0);
+  const a = vec3.dot(rayD, rayD), b = vec3.dot(rayD, axisU), c = vec3.dot(axisU, axisU);
+  const d = vec3.dot(rayD, w0), e = vec3.dot(axisU, w0);
   const denom = a * c - b * b;
   if (Math.abs(denom) < 1e-9) return -e / (c || 1); // ray ∥ axis → project origin
   return (a * e - b * d) / denom;
 }
 
-const dot3 = (p: Vec3, q: Vec3): number => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
-const cross3 = (p: Vec3, q: Vec3): Vec3 => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
-
 /** Ray vs an arbitrary plane (point + normal). Returns the hit point or null. */
 export function rayPlane(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3): Vec3 | null {
-  const denom = dot3(dir, normal);
+  const denom = vec3.dot(dir, normal);
   if (Math.abs(denom) < 1e-9) return null;
-  const t = dot3([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]], normal) / denom;
+  const t = vec3.dot([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]], normal) / denom;
   if (t < 0) return null;
   return [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
 }
 
 /** Two orthonormal vectors spanning the plane ⊥ `axis` (for measuring rotation). */
 export function orthoBasis(axis: Vec3): [Vec3, Vec3] {
-  const a = norm(axis);
+  vec3.normalize(_v3, axis);
+  const a: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
   const ref: Vec3 = Math.abs(a[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
-  const u = norm(cross3(ref, a));
-  return [u, cross3(a, u)];
+  vec3.cross(_v3, ref, a); vec3.normalize(_v3, _v3);
+  const u: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
+  vec3.cross(_v3, a, u);
+  return [u, [_v3[0]!, _v3[1]!, _v3[2]!]];
 }
 
 /** Signed angle (radians) of the cursor ray's hit on the plane ⊥ `axis` through
@@ -173,7 +193,7 @@ export function angleOnAxis(rayO: Vec3, rayD: Vec3, center: Vec3, axis: Vec3): n
   if (!hit) return null;
   const [u, v] = orthoBasis(axis);
   const d: Vec3 = [hit[0] - center[0], hit[1] - center[1], hit[2] - center[2]];
-  return Math.atan2(dot3(d, v), dot3(d, u));
+  return Math.atan2(vec3.dot(d, v), vec3.dot(d, u));
 }
 
 const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -226,7 +246,7 @@ export interface Viewport {
   dispose(): void;
   /** Re-aim the camera (e.g. on resize the aspect changes). */
   refresh(): void;
-  /** Re-aim the orbit camera to a default ~human-character framing (需求 §4.1). */
+  /** Re-aim the orbit camera to a default ~human-character framing (requirements §4.1). */
   resetCamera(): void;
 }
 
@@ -558,7 +578,8 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (light) {
       const type = (light.type as string) ?? 'point';
       if (type === 'directional') {
-        const dir = norm([num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+        vec3.normalize(_v3, [num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+        const dir: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
         const len = Math.max(2, dist * 0.18);
         const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];
         addSeg(pts, center, tip, 16);
@@ -673,7 +694,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (dragWorld === undefined) return;
     world.set(dragWorld, Transform, toEnginePatch({ ...dragOrig, ...patch }));
     // Mirror the changed fields into the Inspector live (no command) — the
-    // "预览" loop: numbers track the drag, the single commit lands on release.
+    // "preview" loop: numbers track the drag, the single commit lands on release.
     if (dragId !== null) for (const k in patch) setFieldPreview(dragId, `Transform.${k}`, patch[k]!);
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
