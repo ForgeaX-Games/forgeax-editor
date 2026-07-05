@@ -14,11 +14,11 @@
 
 | Package | Purpose |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | Core logic layer — EditSession, EditorBus, undo/redo, schema, store, entity ops, context menu, dock bridge, panel manifest SSOT, i18n, assets, presets |
-| [`@forgeax/editor-content-browser`](./packages/editor-content-browser/) | Content Browser sub-application — grid/list/column views, filter/sort/nav hooks, import pipeline. Lazy-loaded by the Assets panel |
-| [`@forgeax/editor-panels`](./packages/editor-panels/) | Business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Mesh, Launcher, AssetInspector, Systems) + panel-component injection |
-| [`@forgeax/editor-edit-runtime`](./packages/editor-edit-runtime/) | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
-| [`@forgeax/editor-play-runtime`](./packages/editor-play-runtime/) | Play-mode thick host — FPS capture, physics gate, pack-index, diagnostics overlay, VAG_CONSOLE bridge |
+| [`@forgeax/editor-core`](./packages/core/) | Core logic layer — EditSession, EditorBus, undo/redo, schema, store, entity ops, context menu, dock bridge, panel manifest SSOT, i18n, assets, presets |
+| [`@forgeax/editor-content-browser`](./packages/content-browser/) | Content Browser sub-application — grid/list/column views, filter/sort/nav hooks, import pipeline. Lazy-loaded by the Assets panel |
+| [`@forgeax/editor-panels`](./packages/panels/) | Business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Mesh, Launcher, AssetInspector, Systems) + panel-component injection |
+| [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
+| [`@forgeax/editor-play-runtime`](./packages/play-runtime/) | Play-mode thick host — FPS capture, physics gate, pack-index, diagnostics overlay, VAG_CONSOLE bridge |
 
 ## Dependency structure
 

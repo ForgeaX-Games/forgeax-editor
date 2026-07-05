@@ -18,7 +18,7 @@
 //   so the barrel pulls the entire engine chain into scope and AC-04
 //   (file: install) cannot resolve the engine workspaces under an
 //   external consumer's node_modules tree. Going relative to
-//   `../packages/editor-core/src/manifest` reaches the SSOT file
+//   `../packages/core/src/manifest` reaches the SSOT file
 //   directly (its only export is the EDITOR_PANELS const tuple — no
 //   side-effect imports). C-08's "5-subpkg-freeze" is preserved: this
 //   relative path is read-only from the entry above the 5 subpkgs and
@@ -34,7 +34,7 @@
 //   plan-strategy §4 R2 (no side-effect imports of runtime sub-packages)
 
 import { defineApp } from './app-kit';
-import { EDITOR_PANELS } from '../packages/editor-core/src/manifest';
+import { EDITOR_PANELS } from '../packages/core/src/manifest';
 
 // `viewportOnly=1` query param: runtime contract.
 //

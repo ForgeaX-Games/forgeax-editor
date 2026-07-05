@@ -18,8 +18,8 @@
 // simply be deleted so the real types take over.
 //
 // SCANS  types/forgeax-engine-shims.d.ts (the shared SSOT surface) AND any
-//        stray packages/{editor-core,editor-panels,editor-edit-runtime,
-//        editor-play-runtime}/src/forgeax-engine.d.ts (defense-in-depth: catches a
+//        stray packages/{core,panels,edit-runtime,
+//        play-runtime}/src/forgeax-engine.d.ts (defense-in-depth: catches a
 //        re-added per-package bare shim even though the shared file is canonical).
 // SKIPS  packages/interface (git submodule — studio's shared shell, its own
 //        repo's concern), and any other submodule this repo doesn't own.
@@ -40,11 +40,11 @@ const PACKAGES_DIR = resolve(EDITOR_ROOT, 'packages');
 // Editor-proper packages only — mirrors lint-no-direct-api-fetch.mjs's scope.
 // packages/interface & platform-io are git submodules (other repos' concern).
 const SCAN_PACKAGES = [
-  'editor-core',
-  'editor-content-browser',
-  'editor-panels',
-  'editor-edit-runtime',
-  'editor-play-runtime',
+  'core',
+  'content-browser',
+  'panels',
+  'edit-runtime',
+  'play-runtime',
 ];
 
 // A `declare module '@forgeax/engine-...'` whose declaration is bodyless:

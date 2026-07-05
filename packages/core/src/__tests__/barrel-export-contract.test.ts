@@ -36,16 +36,16 @@ import { join } from 'node:path';
 
 import * as barrel from '../index';
 
-// editor-core/src/__tests__ → ../../.. = packages/editor/packages
+// core/src/__tests__ → ../../.. = packages/
 const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
-const BARREL_SRC = readFileSync(join(PKGS_ROOT, 'editor-core', 'src', 'index.ts'), 'utf8');
+const BARREL_SRC = readFileSync(join(PKGS_ROOT, 'core', 'src', 'index.ts'), 'utf8');
 
 const CONSUMER_ROOTS = [
-  'editor-edit-runtime/src',
-  'editor-panels/src',
-  'editor-content-browser/src',
-  'editor-play-runtime/src',
-  'editor-core/src',
+  'edit-runtime/src',
+  'panels/src',
+  'content-browser/src',
+  'play-runtime/src',
+  'core/src',
 ];
 
 const EXCLUDE = /(__tests__|\.test\.|node_modules|broken-syntax|[/\\]fixtures[/\\])/;

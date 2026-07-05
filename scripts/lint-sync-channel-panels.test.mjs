@@ -2,7 +2,7 @@
 //
 // Drives w27 to green. The lint script under test now guards the
 // single-SSOT invariant: EDITOR_PANELS must exist in exactly one file
-// (editor-core/src/manifest.ts). Any second copy trips CI.
+// (core/src/manifest.ts). Any second copy trips CI.
 //
 // The script exits 0 when exactly one EDITOR_PANELS literal is found,
 // exits 1 when 2+ copies exist (drift), exits 2 when 0 copies are found.
@@ -29,7 +29,7 @@ import { describe, expect, test } from 'bun:test';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EDITOR_ROOT = resolve(__dirname, '..');
 const SCRIPT = resolve(__dirname, 'lint-sync-channel-panels.mjs');
-const REAL_SSOT = resolve(EDITOR_ROOT, 'packages/editor-core/src/manifest.ts');
+const REAL_SSOT = resolve(EDITOR_ROOT, 'packages/core/src/manifest.ts');
 
 function runScript(args = []) {
   return spawnSync(process.execPath, [SCRIPT, ...args], {

@@ -8,7 +8,7 @@
 // removes (roadmap §4/§5, ideal-clean-architecture.md). This gate trips CI on
 // any such call in editor-proper source so the seam can't rot.
 //
-// SCANS  packages/{editor-core,editor-panels,editor-edit-runtime,editor-play-runtime}/src
+// SCANS  packages/{core,panels,edit-runtime,play-runtime}/src
 //        (the reusable editor packages)
 // SKIPS  packages/interface (studio's shared shell — R4's job, not R2's),
 //        api-client.ts (the seam itself), *.test.* / __tests__ (mock fetch),
@@ -30,11 +30,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const EDITOR_ROOT = resolve(__dirname, '..');
 
 const SCAN_PACKAGES = [
-  'editor-core',
-  'editor-content-browser',
-  'editor-panels',
-  'editor-edit-runtime',
-  'editor-play-runtime',
+  'core',
+  'content-browser',
+  'panels',
+  'edit-runtime',
+  'play-runtime',
 ];
 
 // A `fetch(` whose URL literal starts with `/api` or `${base}/api` etc.

@@ -6,7 +6,7 @@ module.exports = {
       severity: 'error',
       comment: 'acyclic DAG: engine ← core ← content-browser ← panels ← edit-runtime / play-runtime',
       from: {
-        path: '^packages/editor-',
+        path: '^packages/(core|content-browser|panels|edit-runtime|play-runtime)/',
       },
       to: {
         circular: true,
@@ -17,7 +17,7 @@ module.exports = {
     doNotFollow: {
       path: ['node_modules', 'dist', '.vite'],
     },
-    includeOnly: '^packages/editor-',
+    includeOnly: '^packages/(core|content-browser|panels|edit-runtime|play-runtime)/',
     tsPreCompilationDeps: false,
   },
 };

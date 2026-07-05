@@ -235,7 +235,7 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
   it('(e) [RED] store.ts scene-load path currently uses packToSession (will be removed)', () => {
     // Documentation checkpoint: after m4-impl-sceneload, the packToSession import
     // and all its call sites in store.ts will be removed.
-    // Verification: grep packToSession packages/editor-core/src/store.ts
+    // Verification: grep packToSession packages/core/src/store.ts
     expect(true).toBe(true);
   });
 });

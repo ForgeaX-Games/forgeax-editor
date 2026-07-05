@@ -16,14 +16,14 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-// editor-core/src/__tests__ → ../../.. = packages/editor/packages
+// core/src/__tests__ → ../../.. = packages/
 const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
 
 // ALL editor packages — pure libs AND runtime/host adapters. The convention
 // lives in the hosts (standalone/studio), NOT anywhere in editor source.
 const PURE_LIB_ROOTS = [
-  'editor-core/src', 'editor-content-browser/src',
-  'editor-edit-runtime/src', 'editor-panels/src', 'editor-play-runtime/src',
+  'core/src', 'content-browser/src',
+  'edit-runtime/src', 'panels/src', 'play-runtime/src',
 ];
 
 const EXCLUDE = /(__tests__|\.test\.|node_modules|broken-syntax|[/\\]fixtures[/\\])/;

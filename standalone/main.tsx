@@ -41,7 +41,7 @@ import { AppKitError } from '@forgeax/editor/app-kit';
 import { ViewportComponent } from '@forgeax/editor-edit-runtime/engine/viewport-component';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
-// `./panels` export (-> packages/editor-panels/src/manifest.ts), the same
+// `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
 import '@forgeax/interface/styles/global.css';

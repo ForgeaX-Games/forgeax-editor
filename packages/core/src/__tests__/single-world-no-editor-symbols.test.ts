@@ -32,7 +32,7 @@ import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-// editor-core/src/__tests__ → ../../.. = packages/editor/packages
+// core/src/__tests__ → ../../.. = packages/
 const PKGS_ROOT = join(import.meta.dir, '..', '..', '..');
 
 const EXCLUDE = /(__tests__|\.test\.|\.test-d\.|node_modules|dist|\.vite|broken-syntax|[/\\]fixtures[/\\]|\.d\.ts$)/;
@@ -68,7 +68,7 @@ function engineSrcFiles(): string[] {
 }
 
 const EDITOR_LAYER_FILES = [
-  ...walk(join(PKGS_ROOT, 'editor-core', 'src')),
+  ...walk(join(PKGS_ROOT, 'core', 'src')),
   ...walk(join(PKGS_ROOT, 'edit-runtime', 'src')),
 ];
 

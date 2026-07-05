@@ -14,11 +14,11 @@
 
 | 包 | 用途 |
 |:--|:--|
-| [`@forgeax/editor-core`](./packages/editor-core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT、i18n、资源、预设 |
-| [`@forgeax/editor-content-browser`](./packages/editor-content-browser/) | 内容浏览器子应用 — 网格/列表/分栏视图、过滤/排序/导航 hooks、导入管线。由 Assets 面板 lazy-load |
-| [`@forgeax/editor-panels`](./packages/editor-panels/) | 业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Mesh、Launcher、AssetInspector、Systems）+ 面板组件注入 |
-| [`@forgeax/editor-edit-runtime`](./packages/editor-edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
-| [`@forgeax/editor-play-runtime`](./packages/editor-play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
+| [`@forgeax/editor-core`](./packages/core/) | 核心逻辑层 — EditSession、EditorBus、undo/redo、schema、store、实体操作、右键菜单、dock 桥接、面板 manifest SSOT、i18n、资源、预设 |
+| [`@forgeax/editor-content-browser`](./packages/content-browser/) | 内容浏览器子应用 — 网格/列表/分栏视图、过滤/排序/导航 hooks、导入管线。由 Assets 面板 lazy-load |
+| [`@forgeax/editor-panels`](./packages/panels/) | 业务面板（Hierarchy、Inspector、Assets、History、Capabilities、Material、Mesh、Launcher、AssetInspector、Systems）+ 面板组件注入 |
+| [`@forgeax/editor-edit-runtime`](./packages/edit-runtime/) | Edit 模式主入口 — 引擎 boot + 相机 + dock shell + EditorApp |
+| [`@forgeax/editor-play-runtime`](./packages/play-runtime/) | Play 模式厚 host — FPS 捕获、physics gate、pack-index、诊断遮罩、VAG_CONSOLE 桥接 |
 
 ## 依赖结构
 

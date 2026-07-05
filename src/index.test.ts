@@ -17,7 +17,7 @@ import * as mod from './index';
 // Bypass the editor-shared barrel (which transitively loads engine-runtime
 // via editor-core); read EDITOR_PANELS straight from its manifest file —
 // same source the implementation reads. See src/index.ts comment block.
-import { EDITOR_PANELS } from '../packages/editor-core/src/manifest';
+import { EDITOR_PANELS } from '../packages/core/src/manifest';
 
 describe('@forgeax/editor root entry', () => {
   test('default export carries a manifest object', () => {

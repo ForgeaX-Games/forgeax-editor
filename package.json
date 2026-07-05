@@ -4,7 +4,7 @@
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "forgeax editor monorepo — 5 packages (editor-core / editor-content-browser / editor-panels / editor-edit-runtime / editor-play-runtime) + 5 entry points (. / ./edit / ./play / ./panels / ./protocol) for the forgeax editor",
+  "description": "forgeax editor monorepo — 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + 5 entry points (. / ./edit / ./play / ./panels / ./protocol) for the forgeax editor",
   "repository": {
     "type": "git",
     "url": "https://github.com/ForgeaXGame/forgeax-studio.git",
@@ -18,7 +18,7 @@
     ".": "./src/index.ts",
     "./app-kit": "./src/app-kit.ts",
     "./edit": "./src/edit.ts",
-    "./panels": "./packages/editor-panels/src/manifest.ts",
+    "./panels": "./packages/panels/src/manifest.ts",
     "./play": "./src/play.ts",
     "./protocol": "./src/protocol.ts",
     "./package.json": "./package.json"

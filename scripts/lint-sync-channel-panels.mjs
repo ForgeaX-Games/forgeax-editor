@@ -6,7 +6,7 @@
 // After feat-20260703 (single-realm injection): the inline copy of EDITOR_PANELS
 // that lived in sync-channel.ts was deleted along with the sync-channel mechanism
 // itself. The lint now guards the opposite invariant: EDITOR_PANELS must exist
-// in EXACTLY ONE place (editor-core/src/manifest.ts). Any second copy is drift
+// in EXACTLY ONE place (core/src/manifest.ts). Any second copy is drift
 // and trips CI.
 //
 // Usage:
@@ -31,7 +31,7 @@ const EDITOR_ROOT = resolve(__dirname, '..');
 
 const DEFAULT_SSOT = resolve(
   EDITOR_ROOT,
-  'packages/editor-core/src/manifest.ts',
+  'packages/core/src/manifest.ts',
 );
 const DEFAULT_SCAN_DIR = resolve(EDITOR_ROOT, 'packages');
 
@@ -151,7 +151,7 @@ function main() {
     );
   }
   process.stderr.write(
-    '  fix: EDITOR_PANELS must exist in exactly one file (editor-core/src/manifest.ts).\n',
+    '  fix: EDITOR_PANELS must exist in exactly one file (core/src/manifest.ts).\n',
   );
   process.stderr.write(
     '  Delete any duplicate literal and re-import from the SSOT.\n',

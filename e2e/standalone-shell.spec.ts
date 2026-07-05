@@ -44,7 +44,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // EDITOR_PANELS SSOT lives in
-// packages/editor/packages/editor-core/src/manifest.ts; duplicated here so a
+// packages/core/src/manifest.ts; duplicated here so a
 // drift between the panel list and the spec surfaces as a missing-id failure.
 const EDITOR_PANEL_IDS = [
   'hierarchy',
