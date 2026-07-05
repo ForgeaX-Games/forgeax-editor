@@ -945,10 +945,8 @@ export async function instantiateSceneRefUnderWorld(
   sceneGuid: string,
   parentHandle: number,
 ): Promise<number | null> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w: any = (bus.doc as any).world;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reg: any = (bus.doc as any).registry;
+  const w: WorldType = bus.doc.world;
+  const reg: AssetRegistry | undefined = bus.doc.registry;
   if (!w || !reg) return null;
   try {
     const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -960,7 +958,10 @@ export async function instantiateSceneRefUnderWorld(
     const loadRes = await reg.loadByGuid(parsed.value);
     if (!loadRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error); return null; }
     const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
-    const instRes = reg.instantiate(sceneHandle, w, parentHandle);
+    // parentHandle is a raw engine handle at the host boundary (typed number,
+    // same convention as run-lifecycle / line ~1031); brand it before the
+    // engine-typed instantiate call.
+    const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
     if (!instRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
     return instRes.value as number;
   } catch (err) {
