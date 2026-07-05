@@ -28,11 +28,30 @@ name: CI
 # engine does not export fails here, not at the user's runtime in studio.
 # Remaining heavier gates (e2e) still live in the studio superrepo CI.
 
+# Doc-only changes are exempt: the B2 self-boot + typecheck gates below can only
+# be affected by code / config / submodule pins, never by prose. `paths-ignore`
+# skips this heavy workflow for pushes/PRs that touch ONLY these paths (a mixed
+# commit that also touches code still runs the full gate).
+#
+# `main`'s ruleset makes `b2-self-boot` + `typecheck` REQUIRED status checks, so a
+# plain skip would leave them "Expected — Waiting for status" forever and deadlock
+# the PR. The companion workflow `ci-docs.yml` runs on the INVERSE path filter and
+# reports the SAME two check names as an instant pass — so a doc-only PR satisfies
+# the ruleset in seconds without booting the engine. The two workflows' path
+# filters must stay mutually exclusive; keep them in sync.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
 
 # A newer push to the same ref cancels the in-flight run.
 concurrency:
