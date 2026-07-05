@@ -52,6 +52,9 @@ declare module '@forgeax/engine-fbx' {
   export const initFbxWasm: any;
   export const parseFbx: any;
   export const isFbxWasmReady: any;
+  // fbxImporter — the build-time Importer registered into the edit-runtime
+  // pluginPack so /__import can cook meta.importer==='fbx' (engine-vite-preset).
+  export const fbxImporter: any;
   export const parseMesh: any;
   export const parseScene: any;
   export const parseMaterial: any;

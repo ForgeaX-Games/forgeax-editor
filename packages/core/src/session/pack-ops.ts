@@ -3,26 +3,13 @@
 // All writes go through the server's POST /api/files. Reads use GET /api/files.
 // Schema validation is deferred to engine load time — the editor reads pack
 // files as loose JSON and preserves schemaVersion + kind verbatim.
+//
+// M1: PackAssetEntry/PackFile dual definitions deleted — import from scene-pack.ts
+// SSOT (plan-strategy D-4, research Finding #9).
 
-import { getApiClient } from '../io/api-client';
+import { apiFetch } from '../io/api-client';
 import { fetchWithTimeout } from '../io/net';
-import { stableGuid } from '../scene/scene-pack';
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface PackAssetEntry {
-  guid: string;
-  kind: string;
-  name?: string;
-  payload: unknown;
-  refs: string[];
-}
-
-interface PackFile {
-  schemaVersion: string;
-  kind: 'internal-text-package';
-  assets: PackAssetEntry[];
-}
+import { stableGuid, validatePackShell, type PackFile } from '../scene/scene-pack';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +19,11 @@ async function readPack(packPath: string): Promise<PackFile | null> {
     if (!r.ok) return null;
     const j = (await r.json()) as { content?: string };
     if (!j.content) return null;
-    return JSON.parse(j.content) as PackFile;
+    // M1: validate pack shell before returning (AC-01 — plan-strategy D-1/D-3).
+    // Replaces the bare `JSON.parse(j.content) as PackFile` cast.
+    const parsed = JSON.parse(j.content);
+    const result = validatePackShell(parsed);
+    return result.ok ? result.pack : null;
   } catch {
     return null;
   }
@@ -40,7 +31,14 @@ async function readPack(packPath: string): Promise<PackFile | null> {
 
 async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
   try {
-    const r = await getApiClient().fetch('/api/files', {
+    // M1: validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
+    // Bad packs are rejected — disk is never touched with invalid data.
+    const validation = validatePackShell(pack);
+    if (!validation.ok) {
+      console.warn('[editor-core] writePack: pack shell validation failed — rejecting write', validation.error);
+      return false;
+    }
+    const r = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: packPath, content: JSON.stringify(pack, null, 2) + '\n' }),
@@ -53,7 +51,7 @@ async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
 
 async function deleteFile(filePath: string): Promise<boolean> {
   try {
-    const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const r = await apiFetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
     return r.ok;
   } catch {
     return false;
@@ -203,7 +201,7 @@ async function readJsonFile(path: string): Promise<Record<string, unknown> | nul
 
 async function writeJsonFile(path: string, obj: Record<string, unknown>): Promise<boolean> {
   try {
-    const r = await getApiClient().fetch('/api/files', {
+    const r = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path, content: JSON.stringify(obj, null, 2) + '\n' }),
@@ -253,7 +251,7 @@ export async function createPack(
 /** Create a directory via the server API. */
 export async function createDirectory(dirPath: string): Promise<boolean> {
   try {
-    const r = await getApiClient().fetch('/api/files', {
+    const r = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dirPath, content: '', mkdir: true }),

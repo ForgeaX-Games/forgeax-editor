@@ -32,13 +32,17 @@ export type { EntityHandle, WorldType } from './scene/scene-types';
 export type { EditorCommand, CommandError, ApplyResult } from './types';
 
 // ── Scene pack ──
+// M1: validatePackShell + PackShellValidationError exported for AI-user discovery
+// (charter F1: barrel single-entry discoverability).
 export {
   isScenePack,
   stableGuid,
   CUBE_GUID,
   SPHERE_GUID,
+  validatePackShell,
+  PackShellValidationError,
 } from './scene/scene-pack';
-export type { ScenePack } from './scene/scene-pack';
+export type { ScenePack, PackFile, ValidatePackShellResult } from './scene/scene-pack';
 
 // ── Bus ──
 export { EditorBus } from './io/bus';
@@ -205,6 +209,8 @@ export {
   readPlayConfig,
   writePlayConfig,
   broadcastAssetsChanged,
+  instantiateSceneRefUnderWorld,
+  notifyDocChanged,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
@@ -235,13 +241,11 @@ export type { MenuItemDef } from './ui/context-menu-service';
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './io/dock-bridge';
 
-// ── Backend transport seam (R2 DIP) ──
-export {
-  getApiClient,
-  setApiClient,
-  createDefaultApiClient,
-  type ApiClient,
-} from './io/api-client';
+// ── Backend transport (M4 same-origin /api helper) ──
+// The former DIP seam (get/set/create-default accessors + ApiClient interface)
+// was a dead abstraction that never switched; M4 collapsed it to one same-origin
+// function (AC-06). Boot-path timeout calls use fetchWithTimeout (net.ts).
+export { apiFetch } from './io/api-client';
 
 // ── Project authoring (M3) ──
 export { openProject, type OpenProjectResult } from './session/open-project';

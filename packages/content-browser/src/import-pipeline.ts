@@ -9,7 +9,7 @@
  *   4. Notify listeners (broadcastAssetsChanged)
  */
 
-import { cookFbxMeta, cookGltfMeta, generateAssetGuid, getApiClient } from '@forgeax/editor-core';
+import { apiFetch, cookFbxMeta, cookGltfMeta, generateAssetGuid } from '@forgeax/editor-core';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-core';
 import { getImportFormat, isImportable, logImport, type ImportFormat } from './import-registry';
 
@@ -44,7 +44,7 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 async function uploadFile(destPath: string, file: File): Promise<boolean> {
   const buf = await file.arrayBuffer();
   const data = arrayBufferToBase64(buf);
-  const r = await getApiClient().fetch('/api/files/upload', {
+  const r = await apiFetch('/api/files/upload', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: destPath, data }),
@@ -70,7 +70,7 @@ async function writeMetaSidecar(
       kind: format.subAssetKind,
     }],
   };
-  const r = await getApiClient().fetch('/api/files', {
+  const r = await apiFetch('/api/files', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -97,7 +97,7 @@ async function triggerCook(guid: string): Promise<string | undefined> {
 /** Read an existing `.meta.json` (text) for reimport GUID reuse; undefined on first import. */
 async function readExistingMeta(metaPath: string): Promise<unknown> {
   try {
-    const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+    const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
     if (!r.ok) return undefined;
     return JSON.parse(await r.text());
   } catch {
@@ -107,7 +107,7 @@ async function readExistingMeta(metaPath: string): Promise<unknown> {
 
 /** Write a pre-built meta.json string to disk via the file API. */
 async function writeMetaContent(metaPath: string, content: string): Promise<boolean> {
-  const r = await getApiClient().fetch('/api/files', {
+  const r = await apiFetch('/api/files', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: metaPath, content }),

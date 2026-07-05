@@ -45,7 +45,7 @@ function registryEntryToCBAsset(
   };
 }
 
-export function ContentBrowserV2() {
+export function ContentBrowser() {
   useDocVersion();
   const gameSlug = getSceneId();
   const [allAssets, setAllAssets] = useState<CBAsset[]>([]);
@@ -81,7 +81,7 @@ export function ContentBrowserV2() {
 
   useEffect(() => {
     const accept = buildAcceptString();
-    logImport('ContentBrowserV2.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
+    logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
   }, [gameSlug]);
 
   useEffect(() => {
@@ -234,7 +234,7 @@ export function ContentBrowserV2() {
     setDragOver(false);
     const all = Array.from(e.dataTransfer.files);
     const files = all.filter(f => isImportable(f.name));
-    logImport('ContentBrowserV2.drop', {
+    logImport('ContentBrowser.drop', {
       allNames: all.map(f => f.name),
       importableNames: files.map(f => f.name),
       currentPath: nav.currentPath,

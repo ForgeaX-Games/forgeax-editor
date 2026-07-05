@@ -86,10 +86,19 @@ function spawnComponentData(
     out.push({ component: ChildOf, data: { parent } });
   }
   const BASELINE_NAMES = new Set(['Name', 'Transform', 'ChildOf', 'MeshRenderer']);
+  // verify F-1 (round 1): `Editor*`-prefixed keys are intentional transient
+  // editor-side markers (e.g. `EditorPendingMeshAsset`, carrying a real GUID for
+  // the edit-runtime drag-spawn resolver to consume via `lastCommand.components`
+  // BEFORE this drop happens). They are DESIGNED never to reach the world — so
+  // dropping them here is expected, not the data-loss case below. Skipping them
+  // keeps the migration warning a true signal (real orphaned vocabulary only),
+  // instead of firing on every mesh drag and drowning out genuine divergence.
+  const isIntentionalEditorMarker = (n: string): boolean => n.startsWith('Editor');
   if (extraComponents) {
     let hasMeshFilter = false;
     for (const [compName, value] of Object.entries(extraComponents)) {
       if (BASELINE_NAMES.has(compName)) continue;
+      if (isIntentionalEditorMarker(compName)) continue;
       const tok = resolveToken(compName);
       if (tok) {
         out.push({ component: tok, data: (value ?? {}) as Record<string, unknown> });

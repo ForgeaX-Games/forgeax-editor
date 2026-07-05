@@ -21,7 +21,7 @@
 //   OOS-4: fetch reader only, fs/FSA reader deferred
 //   research Finding 5: edit-runtime existing /api/files JSON chain usable as reader
 
-import { getApiClient } from './api-client';
+import { apiFetch } from './api-client';
 import { resolveGamePath } from '../util/path-resolver';
 
 /**
@@ -34,7 +34,7 @@ import { resolveGamePath } from '../util/path-resolver';
 export function createFetchReader(): (path: string) => Promise<string> {
   return async (path: string): Promise<string> => {
     const fullPath = resolveGamePath(path);
-    const r = await getApiClient().fetch(
+    const r = await apiFetch(
       `/api/files?path=${encodeURIComponent(fullPath)}`,
       { cache: 'no-store' },
     );

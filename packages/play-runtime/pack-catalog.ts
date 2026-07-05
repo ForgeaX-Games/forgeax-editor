@@ -14,6 +14,7 @@
 
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
+import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
@@ -37,7 +38,7 @@ interface CubeTextureMetadata {
 // ── Types ──────────────────────────────────────────────────────────────
 
 interface PackJson {
-  readonly assets?: ReadonlyArray<{ guid: string; kind: string }>;
+  readonly assets?: ReadonlyArray<{ guid: string; kind: string; name?: string }>;
 }
 
 interface ExternalAssetMetaJson {
@@ -59,6 +60,11 @@ interface ExternalAssetMetaJson {
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
+    /** Optional display name from the source (e.g. glTF mesh.name); derived from
+     *  the source basename when absent (deriveAssetName), mirroring the engine's
+     *  build-catalog.ts so a runtime-imported GLB's sub-assets are not blank in
+     *  the Content Browser. */
+    readonly name?: string;
   }>;
 }
 
@@ -205,6 +211,14 @@ async function processMetaSidecar(
   const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
   const normalizedUrl = withBase(base, sourceRel);
 
+  // Mirror the engine's build-catalog.ts: the source file is the "package", each
+  // subAsset an artifact from it. deriveAssetName applies the XOR name rule
+  // (single-/no-storedName sub-asset -> source basename), so a GLB's 1000+
+  // sub-assets show as "<file>.glb" in the Content Browser instead of blank.
+  const subAssetCount = meta.subAssets.length;
+  const subName = (sub: { readonly name?: string }): string =>
+    deriveAssetName(sourceAbsPath, subAssetCount, sub.name);
+
   if (meta.importer === 'image') {
     const metadata = buildImageMetadata(meta);
     const isHdr = meta.source.toLowerCase().endsWith('.hdr');
@@ -220,6 +234,7 @@ async function processMetaSidecar(
               relativeUrl: withBase(base, binRel),
               kind: 'texture',
               sourcePath: sourceRel,
+              name: subName(sub),
               metadata: {
                 kind: 'texture',
                 width: baked.width,
@@ -234,7 +249,7 @@ async function processMetaSidecar(
           // Bake failed -> fall through to the raw .hdr row (loadByGuid then
           // tries the dev /__import cook as a best-effort fallback).
         }
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, metadata });
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, name: subName(sub), metadata });
       } else if (sub.kind === 'cube-texture') {
         if (cubeMetadata === undefined) {
           const faceSize = meta.importSettings.cubeFaceSize ?? 256;
@@ -243,7 +258,7 @@ async function processMetaSidecar(
         // metadata is a cube-texture shape (see CubeTextureMetadata above); the
         // PackIndexEntry.metadata field types only ImageMetadata, so cast to keep
         // the emitted row identical to the pre-typecheck (any-shim) output.
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'cube-texture', sourcePath: sourceRel, metadata: cubeMetadata as unknown as ImageMetadata });
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'cube-texture', sourcePath: sourceRel, name: subName(sub), metadata: cubeMetadata as unknown as ImageMetadata });
       }
     }
   }
@@ -251,7 +266,7 @@ async function processMetaSidecar(
   if (meta.importer === 'audio') {
     for (const sub of meta.subAssets) {
       if (sub.kind === 'audio') {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'audio', sourcePath: sourceRel });
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'audio', sourcePath: sourceRel, name: subName(sub) });
       }
     }
   }
@@ -266,7 +281,7 @@ async function processMetaSidecar(
     const GLTF_KINDS = new Set(['mesh', 'material', 'scene', 'texture', 'skeleton', 'skin', 'animation-clip']);
     for (const sub of meta.subAssets) {
       if (GLTF_KINDS.has(sub.kind)) {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel });
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel, name: subName(sub) });
       }
     }
   }
@@ -324,12 +339,16 @@ export async function buildPerGameCatalog(
       const parsed = JSON.parse(content) as PackJson;
       const rel = relative(cwd, rawPath).replace(/\\/g, '/');
       const normalizedUrl = withBase(base, rel);
-      for (const asset of parsed.assets ?? []) {
+      const assetList = parsed.assets ?? [];
+      // .pack.json arm: the pack file IS the package (deriveAssetName rule 1/2/3
+      // keyed on assetList.length), mirroring engine build-catalog.ts foldPaths.
+      for (const asset of assetList) {
         catalog.push({
           guid: asset.guid,
           relativeUrl: normalizedUrl,
           kind: asset.kind,
           sourcePath: rel,
+          name: deriveAssetName(rawPath, assetList.length, asset.name),
         });
       }
     } catch {

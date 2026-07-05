@@ -210,7 +210,7 @@ async function bootViewport(
   // scene manifest) BEFORE anything reads a game file. In the single-realm host
   // this is the ONLY place it runs (no edit-runtime iframe did it first); shared
   // with edit-runtime's thin main.tsx so the two hosts can't drift. Without this
-  // the Assets panel's ContentBrowserV2 throws PATH_RESOLVER_NOT_SET.
+  // the Assets panel's ContentBrowser throws PATH_RESOLVER_NOT_SET.
   await configureHostSession();
 
   // canvas (was :185-191) — owned by this component, full-size, behind the overlay.
@@ -569,6 +569,11 @@ function isSpawnDoc(x: unknown): x is SpawnDoc {
     && typeof d.entities === 'object' && d.entities !== null;
 }
 
+// Re-entrancy guard for the VAG_ASSETS_CHANGED → refreshCatalog → re-broadcast
+// cycle: the re-broadcast is itself a VAG_ASSETS_CHANGED that reaches this same
+// handler (self-origin is allowed), so without this flag it would loop forever.
+let refreshingCatalog = false;
+
 function installPreviewControls(editorApp: { pause(): void; resume(): void }): () => void {
   return onVagMessage(window, {
     allowedOrigins: allowedParentOrigins(),
@@ -594,7 +599,29 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
         }
         broadcastAssetsChanged();
       },
-      VAG_ASSETS_CHANGED: () => broadcastAssetsChanged(),
+      VAG_ASSETS_CHANGED: () => {
+        // A newly imported asset wrote a fresh pack-index on disk, but the
+        // registry cached the pre-import index at boot and only re-fetches on a
+        // per-GUID miss — so the new scene/mesh GUIDs are absent from listCatalog
+        // (Content Browser shows nothing new until reload) AND unresolvable by
+        // loadByGuid (Add to Scene silently no-ops per spawn-asset-ref.ts:162).
+        // refreshCatalog() re-fetches the whole index NOW so the panel's next
+        // synchronous listCatalog() and the subsequent Add-to-Scene loadByGuid
+        // both see the new asset — no page reload needed. The panel is a separate
+        // VAG_ASSETS_CHANGED listener that reloads from listCatalog; to hand it
+        // fresh data we re-fire the event AFTER the refresh lands, guarded by a
+        // module flag so this handler's own re-fire doesn't recurse forever
+        // (allowedParentOrigins includes self.origin, so self-posts reach here).
+        if (refreshingCatalog) return;
+        const reg = bus.doc.registry;
+        if (reg?.refreshCatalog) {
+          refreshingCatalog = true;
+          void reg.refreshCatalog().finally(() => {
+            refreshingCatalog = false;
+            broadcastAssetsChanged();
+          });
+        }
+      },
     },
   });
 }

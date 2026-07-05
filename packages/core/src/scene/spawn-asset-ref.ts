@@ -2,10 +2,11 @@
  * Content Browser → scene spawn (Add to Scene / drag-drop).
  * Runs on the MAIN viewport bus — ep:* panel iframes forward via BroadcastChannel.
  */
-import { bus, broadcastAssetsChanged } from '../store/store';
-import { getApiClient } from '../io/api-client';
-import { buildSpawnEntityFromDragRef, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { bus, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
+import { apiFetch } from '../io/api-client';
+import { buildSpawnEntityFromDragRef, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
+import { entHandle } from '../store/entity-state';
 import type { AssetChatRef } from '../io/cross-panel-types';
 
 function toDragRef(ref: AssetChatRef): DragAssetRef {
@@ -23,11 +24,6 @@ function toDragRef(ref: AssetChatRef): DragAssetRef {
   };
 }
 
-function stemName(ref: DragAssetRef): string {
-  const raw = ref.name?.trim() || ref.guid.slice(0, 8);
-  return raw.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'Asset';
-}
-
 async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   const kind = ref.kind ?? '';
   const entity = buildSpawnEntityFromDragRef(ref);
@@ -35,10 +31,9 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
 
   if (kind === 'mesh') {
     try {
-      const api = getApiClient();
       const readRaw = async (p: string): Promise<Response | null> => {
         try {
-          const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+          const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
           return r.ok ? r : null;
         } catch {
           return null;
@@ -67,7 +62,7 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
 }
 
 async function readMetaSubAssets(metaPath: string): Promise<Array<{ guid: string; kind: string; name?: string }>> {
-  const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+  const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
   if (!r.ok) return [];
   const meta = JSON.parse(await r.text()) as { subAssets?: Array<{ guid: string; kind: string; name?: string }> };
   return (meta.subAssets ?? []).filter((s) => s?.guid && s?.kind);
@@ -94,42 +89,55 @@ async function resolveMeshSceneRefs(ref: DragAssetRef): Promise<DragAssetRef[]> 
   }
 }
 
-async function spawnGlbScene(path: string, name: string): Promise<void> {
-  const sceneRes = await getApiClient().fetch('/api/assets/import-scene', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, mode: 'reference' }),
-  });
-  const sceneJ = await sceneRes.json() as {
-    mode?: string;
-    entity?: { name: string; components: Record<string, unknown> };
-    doc?: { order: number[]; entities: Record<number, { name: string; parent?: number | null; components: Record<string, unknown> }> };
-    error?: string;
-  };
-  if (!sceneRes.ok) {
-    console.warn('[spawn-asset] import-scene failed:', sceneJ.error ?? sceneRes.status);
-    return;
+/** Resolve the whole-GLB `kind:'scene'` sub-asset GUID for a scene drag ref.
+ *  Prefer the ref's own guid (the Content Browser stamps the scene sub-asset GUID
+ *  directly on a kind:'scene' ref); fall back to reading the `.meta.json` sidecar
+ *  for its `kind:'scene'` subAsset entry (drag/older refs). Returns null if none. */
+async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | null> {
+  if (ref.guid && /^[0-9a-f]{8}-/i.test(ref.guid)) return ref.guid;
+  const metaPath = ref.path;
+  if (typeof metaPath !== 'string' || !/\.meta\.json$/i.test(metaPath)) return null;
+  try {
+    const subAssets = await readMetaSubAssets(metaPath);
+    return subAssets.find((s) => s.kind === 'scene')?.guid ?? null;
+  } catch {
+    return null;
   }
-  if (sceneJ.mode === 'full' && sceneJ.doc) {
-    const doc = sceneJ.doc;
-    const cmds = doc.order.map((id) => {
-      const ent = doc.entities[id]!;
-      return {
-        kind: 'spawnEntity' as const,
-        name: ent.name,
-        parent: ent.parent ?? undefined,
-        components: ent.components,
-      };
-    });
-    bus.dispatch({ kind: 'transaction', label: `Import: ${name}`, commands: cmds });
-  } else if (sceneJ.entity) {
-    bus.dispatch({ kind: 'spawnEntity', name: sceneJ.entity.name, components: sceneJ.entity.components });
-  } else {
-    console.warn('[spawn-asset] import-scene returned no entity/doc');
-    return;
+}
+
+/** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
+ *  spawn an `_e2h`-tracked wrapper entity via the bus (so it is the mount ROOT →
+ *  round-trips as one `mounts[]` entry), then instantiate the scene sub-asset
+ *  under it via the engine's canonical loadByGuid → instantiate spine
+ *  (instantiateSceneRefUnderWorld). This renders the REAL GLB geometry (not a
+ *  HANDLE_CUBE placeholder) and survives save → reopen → Play through the
+ *  engine's native mount mechanism. Returns true on success. On failure the
+ *  wrapper is left in place (harmless empty node) and we return false — callers
+ *  MUST NOT fall back to cubes. */
+async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<boolean> {
+  // Identity-Transform wrapper via the bus (undoable, marks the doc dirty, and
+  // gives us a real _e2h handle to parent the nested instance under).
+  const cmd = {
+    kind: 'spawnEntity' as const,
+    name,
+    components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  } as { kind: 'spawnEntity'; name: string; components: Record<string, unknown>; _id?: number };
+  bus.dispatch(cmd);
+  const wrapperId = cmd._id;
+  const wrapperHandle = wrapperId !== undefined ? entHandle(bus.doc, wrapperId) : undefined;
+  if (wrapperHandle === undefined) {
+    console.warn('[spawn-asset] could not resolve wrapper handle for GLB mount');
+    return false;
   }
+  const root = await instantiateSceneRefUnderWorld(sceneGuid, wrapperHandle as unknown as number);
+  if (root === null) {
+    console.warn('[spawn-asset] GLB scene instantiate failed — NOT falling back to cubes:', { sceneGuid, name });
+    return false;
+  }
+  notifyDocChanged();
   broadcastAssetsChanged();
-  console.info('[CB:import] spawn.scene', { path, name });
+  console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapperId, root });
+  return true;
 }
 
 export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Promise<void> {
@@ -140,6 +148,27 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
   if (await spawnReferenceEntity(drag)) return;
 
   if (kind === 'scene') {
+    const label = drag.name ?? stemName(drag);
+
+    // PRIMARY: instantiate the whole-GLB `kind:'scene'` sub-asset as a nested
+    // SceneInstance mount — renders the REAL geometry + hierarchy and round-trips
+    // through save → reopen → Play via the engine's native mounts[] mechanism
+    // (AGENTS.md #1/#2: converge on the engine primitive, no HANDLE_CUBE
+    // placeholder, no parallel format). This replaces the old spawnGlbScene path
+    // that produced one builtin cube per node.
+    const sceneGuid = await resolveSceneSubAssetGuid(drag);
+    if (sceneGuid) {
+      if (await spawnGlbSceneAsMount(sceneGuid, label)) return;
+      // Mount failed (e.g. GUID not yet in the catalog) — do NOT fall back to
+      // cubes. Warn and stop; a page-reload after import makes the GUID
+      // resolvable, and re-adding then succeeds.
+      console.warn('[spawn-asset] GLB scene mount failed — aborting Add to Scene (no cube fallback):', { sceneGuid, label });
+      return;
+    }
+
+    // FALLBACK: a scene package that carries only mesh sub-assets (e.g. some FBX
+    // exports) and no `kind:'scene'` sub-asset. Keep the existing single-/multi-
+    // mesh reference spawn path for those.
     const meshRefs = await resolveMeshSceneRefs(drag);
     if (meshRefs.length === 1) {
       if (await spawnReferenceEntity(meshRefs[0]!)) return;
@@ -157,20 +186,9 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
       }
     }
 
-    const metaPath = drag.path;
-    const src = typeof metaPath === 'string' && /\.meta\.json$/i.test(metaPath)
-      ? metaPath.replace(/\.meta\.json$/i, '')
-      : ((drag.payload?.source as string | undefined) ?? metaPath);
-    const label = drag.name ?? stemName(drag);
-
-    if (typeof src === 'string' && /\.(glb|gltf)$/i.test(src)) {
-      await spawnGlbScene(src, label);
-      return;
-    }
-
     console.warn(
-      '[spawn-asset] no spawnable mesh in scene package — select a mesh sub-asset, or complete Phase 2.5 DDC:',
-      { importer: drag.payload?.importer, meshCount: meshRefs.length, metaPath },
+      '[spawn-asset] no spawnable scene/mesh sub-asset in package:',
+      { importer: drag.payload?.importer, meshCount: meshRefs.length, metaPath: drag.path },
     );
     return;
   }

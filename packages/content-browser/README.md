@@ -4,14 +4,14 @@
 
 ## 职责
 
-资源浏览器的完整功能域：网格 / 列表 / 分栏三种视图、过滤 / 排序 / 导航历史 / 多选 / 收藏 / 缩略图 hooks、拖拽生成、导入管线（FBX / glTF cook 经 editor-core）。它以一个 panel 的形式呈现（Assets 面板 lazy-import 本包的 `ContentBrowserV2`），但代码量与内聚度已是独立包级别。
+资源浏览器的完整功能域：网格 / 列表 / 分栏三种视图、过滤 / 排序 / 导航历史 / 多选 / 收藏 / 缩略图 hooks、拖拽生成、导入管线（FBX / glTF cook 经 editor-core）。它以一个 panel 的形式呈现（Assets 面板 lazy-import 本包的 `ContentBrowser`），但代码量与内聚度已是独立包级别。
 
 ## 导入示例
 
 ```ts
 // Assets 面板通过 lazy import 消费本包（唯一入口）
-const ContentBrowserV2 = lazy(() =>
-  import('@forgeax/editor-content-browser').then(m => ({ default: m.ContentBrowserV2 }))
+const ContentBrowser = lazy(() =>
+  import('@forgeax/editor-content-browser').then(m => ({ default: m.ContentBrowser }))
 );
 
 // 子组件 / hooks / 类型

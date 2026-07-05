@@ -13,6 +13,7 @@
 
 import type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { AssetRegistry } from '@forgeax/engine-runtime';
 
 /** Engine World handle type (plan-strategy S2 D-1 / AC-01).
  *  Now a direct alias of the engine `World` class type: since every editor tsc
@@ -53,5 +54,5 @@ export interface EditSession {
   /** feat-20260701-editor-world-container-doc-ecs-collapse M5 / AC-08:
    *  The engine AssetRegistry for rootsToSceneAsset GUID reverse lookup.
    *  Injected by edit-runtime at boot; used by worldToPack in store.ts. */
-  registry?: unknown;
+  registry?: AssetRegistry;
 }

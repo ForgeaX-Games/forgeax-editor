@@ -90,6 +90,67 @@ test('angleOnAxis: rotation about Y advances the in-plane angle', () => {
   expect(angleOnAxis([3, 0, 0], [1, 0, 0], center, axis)).toBeNull();
 });
 
+// ── M2 w4: rayAABB thin-adapter red tests (D-1, S-1) ─────────────────────────
+
+test('rayAABB: inside-origin returns 0 (engine clamp, S-1 delta vs old tmax exit)', () => {
+  // Origin inside the box, pointing toward +Z. Old viewport slab (viewport.ts:126)
+  // returns tmax=3 (exit distance); engine rayAabbIntersects clamps tmin to 0
+  // (ray.ts:232). The adapter must return 0, not tmax.
+  const result = rayAABB([0, 0, -1], [0, 0, 1], [0, 0, 0], [2, 2, 2]);
+  expect(result).toBe(0);
+});
+
+test('rayAABB: negative-half Box3Like conversion — invalid extent returns null', () => {
+  // half=[2, 2, -2] on Z axis: minZ = centerZ-halfZ = 0-(-2) = 2,
+  // maxZ = centerZ+halfZ = 0+(-2) = -2, so minZ > maxZ → invalid Box3Like.
+  // Engine Kay-Kajiya slab interprets minZ=2, maxZ=-2 with invZ<0:
+  // t1z=(2-5)*(-1)=3, t2z=(-2-5)*(-1)=7, swap → t1z=7, t2z=3,
+  // tnear=7 > tfar=3 → miss. Adapter maps {hit:false} → null.
+  // OLD viewport slab: lo=0-(-2)=2, hi=0+(-2)=-2, 3 < 7 no swap,
+  // tmin=3, tmax=7, return 3. RED because old returns 3, adapter returns null.
+  const result = rayAABB([0, 0, 5], [0, 0, -1], [0, 0, 0], [2, 2, -2]);
+  expect(result).toBeNull();
+});
+
+test('rayAABB: zero-extent degenerate AABB still yields a legal result', () => {
+  // half=[0,0,0] → box is a single point at center. Engine Kay-Kajiya slab
+  // with NaN-safe axis skip handles zero-volume by returning {hit:false}
+  // when the ray does not pass through the point (ray.ts:217,231).
+  // Ray through a different point: origin=[2,2,10], dir=[0,0,-1],
+  // zero-volume box at [5,5,0] → miss.
+  const miss = rayAABB([2, 2, 10], [0, 0, -1], [5, 5, 0], [0, 0, 0]);
+  expect(miss).toBeNull();
+  // Ray exactly through the zero-volume point: origin=[5,5,10], dir=[0,0,-1]
+  // → hits the point at t=10.
+  const hit = rayAABB([5, 5, 10], [0, 0, -1], [5, 5, 0], [0, 0, 0]);
+  expect(typeof hit).toBe('number');
+  expect(hit!).toBeCloseTo(10, 5);
+});
+
+test('rayAABB: {hit:false} maps to null (engine RayAabbResult to viewport contract)', () => {
+  // Engine returns RayAabbResult { hit: boolean, tmin: number }. Adapter must
+  // map {hit:false} → null to maintain the existing viewport contract.
+  const result = rayAABB([0, 0, 10], [0, 1, 0], [5, 0, 0], [1, 1, 1]);
+  expect(result).toBeNull();
+});
+
+test('rayAABB: {hit:true,tmin} maps to tmin value (engine RayAabbResult to viewport contract)', () => {
+  // Engine returns {hit:true, tmin:N}. Adapter must map to just the tmin number.
+  const result = rayAABB([0, 0, 10], [0, 0, -1], [0, 0, 0], [1, 1, 1]);
+  expect(typeof result).toBe('number');
+  expect(result!).toBeCloseTo(9, 5);
+});
+
+test('rayAABB: origin outside box returns entry distance > 0', () => {
+  // Normal hit from outside: origin at z=10, box center at z=0, half=[1,1,1].
+  // Box spans z=-1 to z=1. Ray dir [0,0,-1]. Entry: t=(1-10)/(-1)=9.
+  // Center x=1 changes the X interval to [0,2], ray starts at x=0 which is inside
+  // the X slab — so X axis does not block the entry.
+  const result = rayAABB([0, 0, 10], [0, 0, -1], [1, 0, 0], [1, 1, 1]);
+  expect(typeof result).toBe('number');
+  expect(result!).toBeCloseTo(9, 5);
+});
+
 test('entityBox: center from position, half from scale, thin slabs padded', () => {
   const b = entityBox({ x: 1, y: 2, z: 3, scaleX: 4, scaleY: 0.04, scaleZ: 6 });
   expect(b.center).toEqual([1, 2, 3]);

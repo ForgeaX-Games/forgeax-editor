@@ -87,15 +87,17 @@ describe('probeServer (success path)', () => {
     expect(result.slug).toBe(fakeSlug);
   });
 
-  it('should prepend serverBase to the probe URL', async () => {
+  it('should probe the same-origin /api endpoint (serverBase retired, D-7)', async () => {
     let fetchedUrl = '';
     mockFetch(async (url: string) => {
       fetchedUrl = url;
       return { ok: true, status: 200, json: async () => ({ activeSlug: 't' }) };
     });
 
-    await probeServer('https://example.com');
-    expect(fetchedUrl).toBe('https://example.com/api/workbench/active-slug');
+    // probeServer takes no serverBase arg anymore — backend is always same-origin
+    // /api via apiFetch (M4 / plan-strategy D-7). The probe hits a relative path.
+    await probeServer();
+    expect(fetchedUrl).toBe('/api/workbench/active-slug');
   });
 });
 

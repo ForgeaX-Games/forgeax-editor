@@ -55,12 +55,10 @@ import {
   broadcastAssetsChanged,
 } from '@forgeax/editor-core';
 import {
-  makeMaterialResolver,
-  makeMeshResolver,
   entIds,
   entComponent,
   resolveGamePath,
-  getApiClient,
+  apiFetch,
 } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import {
@@ -69,6 +67,7 @@ import {
 } from '@forgeax/editor-core/protocol';
 import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
 import { setupEditorSkylight } from './engine/skylight';
+import { installDragSpawnMeshResolver } from './engine/drag-spawn-resolve';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -128,7 +127,7 @@ export async function resolveEditPhysics(): Promise<PhysicsBackend | undefined> 
   if (!slug || slug === 'default') return undefined;
   try {
     const gp = await loadGameProject(async () => {
-      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
+      const r = await apiFetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { content?: string };
       if (!j.content) throw new Error('Empty content');
@@ -254,7 +253,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
 
   // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
   // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
-  // gated on renderer.ready). The Assets panel (ContentBrowserV2) mounts and reads
+  // gated on renderer.ready). The Assets panel (ContentBrowser) mounts and reads
   // registry.listCatalog() BEFORE that completes, so its first read is empty and
   // nothing re-triggers it — the panel stayed blank until a manual page refresh.
   // Fire the existing "assets changed" signal now that the catalog is live so any
@@ -287,7 +286,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   let cachedProjectRootAbs: string | undefined;
   const getProjectRootAbs = async (): Promise<string> => {
     if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
-    const r = await getApiClient().fetch('/api/health', { cache: 'no-store' });
+    const r = await apiFetch('/api/health', { cache: 'no-store' });
     if (!r.ok) throw new Error(`/api/health HTTP ${r.status}`);
     const j = (await r.json()) as { projectRootAbs?: string };
     if (!j.projectRootAbs) throw new Error('/api/health missing projectRootAbs');
@@ -315,7 +314,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     try {
       const gameForgePath = resolveGamePath(FORGE_JSON);
       const gp = await loadGameProject(async () => {
-        const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+        const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { content?: string };
         if (!j.content) throw new Error('Empty content');
@@ -394,113 +393,15 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
   );
 
-  // ── Asset packs + preload resolvers (was bootEditor :550 + :974) ────────────
-  // M3: loadGameAssets deleted (plan-strategy S7 M3). The material/mesh resolver
-  // seams are dormant post-collapse (MeshFilter now carries a numeric builtin
-  // handle) — keep the resolver struct empty so the seam survives for future
-  // asset-system rewire.
-  const packAssets: Array<{ guid: string; kind: string; name: string; payload: Record<string, unknown>; packPath: string }> = [];
-  const preloadedMaterials = new Map<string, unknown>();
-  const baseMaterialResolver = makeMaterialResolver(world as never, packAssets);
-  // resolveMaterialAsset / resolveMeshAsset are the sync resolvers the
-  // instantiator consults; post-collapse these paths are dormant (MeshFilter now
-  // carries a numeric builtin handle, not a GUID) but kept intact so a future
-  // asset-system rewire has the seam. See the F-4 note below.
-  const resolveMaterialAsset = (guid: string): unknown | null =>
-    preloadedMaterials.has(guid) ? (preloadedMaterials.get(guid) ?? null) : baseMaterialResolver(guid);
-  const preloadedMeshes = new Map<string, unknown>();
-  const resolveMeshAsset = makeMeshResolver(world as never, packAssets, preloadedMeshes);
-  const preloadedMeshSubmeshCounts = new Map<string, number>();
-  const packMeshSubmeshCounts = new Map<string, number>(
-    packAssets
-      .filter((a) => a.kind === 'mesh')
-      .map((a) => {
-        const subs = (a.payload as { submeshes?: { length?: number } } | undefined)?.submeshes;
-        return [a.guid, typeof subs?.length === 'number' && subs.length > 0 ? subs.length : 1] as const;
-      }),
-  );
-  const resolveMeshSubmeshCount = (guid: string): number | undefined =>
-    preloadedMeshSubmeshCounts.get(guid) ?? packMeshSubmeshCounts.get(guid);
-  // Touch the resolvers so the intentionally-retained (dormant, post-collapse)
-  // seam is not tree-shaken / flagged unused; they re-activate when the asset
-  // system can register imported MeshAsset handles (TODO imported-mesh-preload).
-  void resolveMaterialAsset;
-  void resolveMeshAsset;
-  void resolveMeshSubmeshCount;
-
-  // preload imported mesh sub-assets (was bootEditor :974). Dormant post-collapse
-  // (MeshFilter{assetHandle} is a builtin, not a GUID) — the loop is a no-op on
-  // migrated scenes; kept as the imported-mesh preload seam.
-  {
-    const failedMeshGuids = new Set<string>();
-    const collectMeshGuids = (): Set<string> => {
-      const guids = new Set<string>();
-      const packMeshGuids = new Set(packAssets.filter((a) => a.kind === 'mesh').map((a) => a.guid));
-      for (const id of entIds(bus.doc)) {
-        const g = (entComponent(bus.doc, id, 'Mesh') as { meshAsset?: string } | undefined)?.meshAsset;
-        if (typeof g === 'string' && g && !packMeshGuids.has(g) && !preloadedMeshes.has(g) && !failedMeshGuids.has(g)) guids.add(g);
-      }
-      return guids;
-    };
-    const preloadMeshes = async (): Promise<void> => {
-      const guids = collectMeshGuids();
-      if (guids.size === 0) return;
-      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-      await Promise.all([...guids].map(async (g) => {
-        try {
-          const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
-          if (!parsed.ok || parsed.value === undefined) { failedMeshGuids.add(g); console.warn('[editor] mesh preload bad guid:', g); return; }
-          const res = await renderer.assets.loadByGuid(parsed.value);
-          if (!res.ok) { failedMeshGuids.add(g); console.warn('[editor] mesh preload miss:', g, res.error?.code); return; }
-          const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MeshAsset', res.value);
-          preloadedMeshes.set(g, handle);
-          const subs = (res.value as { submeshes?: { length?: number } } | undefined)?.submeshes;
-          if (typeof subs?.length === 'number' && subs.length > 0) preloadedMeshSubmeshCounts.set(g, subs.length);
-        } catch (err) {
-          failedMeshGuids.add(g);
-          console.warn('[editor] mesh preload failed:', g, (err as Error)?.message ?? err);
-        }
-      }));
-    };
-    void preloadMeshes();
-    bus.subscribe(() => { void preloadMeshes(); });
-  }
-
-  // preload ORIGINAL per-submesh materials (was bootEditor :1053). Same dormant
-  // seam for Material{submeshMaterials} recovered from DDC/meta.
-  {
-    const collectMaterialGuids = (): Set<string> => {
-      const guids = new Set<string>();
-      const packMatGuids = new Set(packAssets.filter((a) => a.kind === 'material').map((a) => a.guid));
-      for (const id of entIds(bus.doc)) {
-        const subs = (entComponent(bus.doc, id, 'Material') as { submeshMaterials?: string[] } | undefined)?.submeshMaterials;
-        if (!Array.isArray(subs)) continue;
-        for (const g of subs) {
-          if (typeof g === 'string' && g && !packMatGuids.has(g) && !preloadedMaterials.has(g)) guids.add(g);
-        }
-      }
-      return guids;
-    };
-    const preloadMaterials = async (): Promise<void> => {
-      const guids = collectMaterialGuids();
-      if (guids.size === 0) return;
-      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-      await Promise.all([...guids].map(async (g) => {
-        try {
-          const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(g);
-          if (!parsed.ok || parsed.value === undefined) { console.warn('[editor] material preload bad guid:', g); return; }
-          const res = await renderer.assets.loadByGuid(parsed.value);
-          if (!res.ok) { console.warn('[editor] material preload miss:', g, res.error?.code); return; }
-          const handle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('MaterialAsset', res.value);
-          preloadedMaterials.set(g, handle);
-        } catch (err) {
-          console.warn('[editor] material preload failed:', g, (err as Error)?.message ?? err);
-        }
-      }));
-    };
-    void preloadMaterials();
-    bus.subscribe(() => { void preloadMaterials(); });
-  }
+  // ── Drag-spawn mesh GUID bridge (feat-20260705 M3, plan-strategy §D-3/D-4/D-9) ─
+  // Content Browser mesh drops spawn with MeshFilter.assetHandle=0 + a command-
+  // level EditorPendingMeshAsset{guid} marker (core/assets/drag-asset-spawn.ts).
+  // This resolver subscribes to the bus, parses the guid, loadByGuid ->
+  // allocSharedRef('MeshAsset') and patches the real handle back over the bus
+  // (AC-10/AC-11). The former post-collapse preload seams (the mesh/material
+  // pre-resolve loops + their sync resolvers) are deleted (AC-13) — this is
+  // their live successor.
+  installDragSpawnMeshResolver(bus, world as never, renderer);
 
   // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
   installMeshStatsPublisher(renderer);
@@ -628,7 +529,7 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
   try {
     const gameForgePath = resolveGamePath(FORGE_JSON);
     const fetchRead = async (): Promise<string> => {
-      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+      const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { content?: string };
       if (!j.content) throw new Error('Empty content');

@@ -17,12 +17,26 @@
 // it without a circular import — store.ts already imports findScenePackByGuid
 // from assets.ts, and the boot path runs through assets.ts too.
 //
-// R2: the timeout-race body moved into the injected ApiClient (api-client.ts);
-// this is now a thin delegate so the 16 existing call sites keep their `url`
-// argument unchanged. `url` is the path (e.g. `/api/files?...`); the client
-// prepends its base ('' in studio mode ⇒ byte-identical relative fetch).
-import { getApiClient } from './api-client';
-
+// M4 (AC-08 / plan-strategy D-5): the timeout-race body is now SELF-CONTAINED
+// here. It previously lived in the injected ApiClient's `fetchSafe`
+// (api-client.ts:45-62), which this module delegated to. The DIP seam is gone
+// (the client never actually switched), so the race — AbortController +
+// Promise.race([fetch, timer-reject]) + finally clearTimeout — moves back in
+// beside the WKWebView rationale above. `url` is the path (e.g. `/api/files?...`)
+// fetched same-origin (relative), byte-identical to the prior default client
+// (base=''); the request path/method/headers/body are still decided by callers.
 export async function fetchWithTimeout(url: string, ms = 6000): Promise<Response> {
-  return getApiClient().fetchSafe(url, undefined, ms);
+  const ctrl = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { ctrl.abort(); } catch { /* ignore */ }
+      reject(new Error('fetch-timeout'));
+    }, ms);
+  });
+  try {
+    return await Promise.race([fetch(url, { signal: ctrl.signal }), timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
