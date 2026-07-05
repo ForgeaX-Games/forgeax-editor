@@ -20,7 +20,7 @@ For the **full standalone stack** (`bun run setup` → `bun run start --game <di
 - **wgpu-wasm** (`pkg/wgpu_wasm_bg.wasm`) — needs Rust + `wasm-pack`.
 - **fbx-wasm** (`pkg/fbx-wasm.{mjs,wasm}`) — needs **Emscripten `emcc`** (`brew install emscripten`, or emsdk). Without it `setup` errors with the install command; the editor's browser FBX import stays unavailable until built (glTF unaffected).
 
-Both are rebuilt on demand — never committed. A bare `bun install` alone does NOT build them; use `bun run setup` (or `bun -F @forgeax/engine-fbx-wasm build:wasm`).
+Both are rebuilt on demand — never committed. A bare `bun install` alone does NOT build them; use `bun run setup` (or `bun -F @forgeax/engine-fbx build:wasm` — the collapse-fbx-to-ufbx refactor folded the old `engine-fbx-wasm` package into `engine-fbx`).
 
 ## Commands
 

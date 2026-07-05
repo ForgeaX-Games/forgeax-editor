@@ -39,6 +39,7 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { fbxImporter } from '@forgeax/engine-fbx';
 
 // This helper's own directory: packages/edit-runtime/src/engine/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
@@ -232,7 +233,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       pluginPack({
         roots: gamePackRoots(gameDirAbs),
         base,
-        importers: [imageImporter, gltfImporter],
+        importers: [imageImporter, gltfImporter, fbxImporter],
       }) as unknown as PluginOption,
     );
   }

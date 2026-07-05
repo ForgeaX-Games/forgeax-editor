@@ -2,9 +2,11 @@
 # tracked (zero-binary invariant; the 62MB city GLB stays out of git).
 assets/*.glb
 assets/*.gltf
+assets/*.fbx
 assets/*.bin
 assets/*.glb.meta.json
 assets/*.gltf.meta.json
+assets/*.fbx.meta.json
 
 # platform-io writes UI prefs / workspace-layout here when the editor opens the game.
 .forgeax/

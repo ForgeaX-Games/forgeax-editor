@@ -42,11 +42,13 @@ const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
 const ENGINE_DIR = join(ROOT, 'packages', 'engine');
 const WASM_DIR = join(ENGINE_DIR, 'packages', 'wgpu-wasm');
 const WASM_FILE = join(WASM_DIR, 'pkg', 'wgpu_wasm_bg.wasm');
-// fbx-wasm: ufbx compiled by emcc; pkg/ is gitignored (zero-binary invariant)
+// fbx wasm: ufbx compiled by emcc; pkg/ is gitignored (zero-binary invariant)
 // like wgpu, so it must be built here. Both emcc outputs (.mjs glue + .wasm)
-// are needed — editor-core's fbx-cook statically imports the .mjs, which
-// fetches the .wasm at runtime.
-const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx-wasm');
+// are needed — editor-core's fbx-cook lazily imports the .mjs, which fetches the
+// .wasm at runtime. NOTE the engine's collapse-fbx-to-ufbx refactor (#603) folded
+// the old packages/fbx-wasm/ into packages/fbx/ (@forgeax/engine-fbx); the build
+// output + package name moved with it.
+const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx');
 const FBX_WASM_MJS = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.mjs');
 const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
@@ -89,17 +91,17 @@ function ensureWasm() {
 
 function ensureFbxWasm() {
   if (existsSync(FBX_WASM_MJS) && existsSync(FBX_WASM_FILE)) {
-    ok('fbx wasm present (skip build): packages/fbx-wasm/pkg/fbx-wasm.{mjs,wasm}');
+    ok('fbx wasm present (skip build): packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
     return;
   }
-  step('fbx wasm missing — building from ufbx (fbx-wasm build:wasm, needs emcc) ...');
+  step('fbx wasm missing — building from ufbx (engine-fbx build:wasm, needs emcc) ...');
   requireCmd(
     'emcc',
     'fbx wasm build needs Emscripten. install: brew install emscripten  (or emsdk: https://emscripten.org/docs/getting_started/downloads.html, then `emsdk activate latest`)',
   );
   // build:wasm = fetch-ufbx (idempotent, downloads ufbx.c) + emcc. Invoke via
-  // the package script so the emcc flag set stays owned by fbx-wasm.
-  sh('pnpm', ['-F', '@forgeax/engine-fbx-wasm', 'build:wasm'], { cwd: ENGINE_DIR });
+  // the package script so the emcc flag set stays owned by @forgeax/engine-fbx.
+  sh('pnpm', ['-F', '@forgeax/engine-fbx', 'build:wasm'], { cwd: ENGINE_DIR });
   if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
     die(`fbx wasm build ran but ${FBX_WASM_MJS} / ${FBX_WASM_FILE} still absent.`);
   }
@@ -148,7 +150,7 @@ function install() {
     missing = true;
   }
   if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
-    warn(`missing fbx wasm: packages/fbx-wasm/pkg/fbx-wasm.{mjs,wasm}`);
+    warn(`missing fbx wasm: packages/fbx/pkg/fbx-wasm.{mjs,wasm}`);
     missing = true;
   }
   if (missing) die("install incomplete — see warnings above. Re-run 'node scripts/cli.mjs install'.");
