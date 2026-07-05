@@ -29,8 +29,10 @@
 // P3 (loadGame returns structured Result on every failure arm) + OOS-4 (zero
 // editor semantics reach the engine — the engine sees world / entity ids only).
 
+// M4: cloneEditSession removed — Play snapshot now uses engine-native
+// world.getSceneInstanceState / world.despawnScene (AC-10).
+import { injectEditMode } from '@forgeax/editor-core';
 import type { EditSession } from '@forgeax/editor-core';
-import { cloneEditSession, injectEditMode } from '@forgeax/editor-core';
 import { loadGame, isLoadGameError } from '@forgeax/engine-app';
 
 // Structural mirror of @forgeax/engine-app's BootstrapContext. The engine `.d.ts`
@@ -54,6 +56,13 @@ interface RunBootstrapContext {
   readonly registerUpdate: (fn: (dt: number) => void) => void;
   readonly defaultSceneRoot?: number;
   readonly defaultScene?: unknown;
+  // B (controlled UI root) + A (cleanup hook): the two channels that make Stop
+  // reach beyond the ECS world. uiRoot is the disposable DOM boundary games
+  // mount into; registerCleanup collects non-DOM teardown (listeners/audio/
+  // timers). Mirror of the same-named optional fields on engine-app's
+  // BootstrapContext (see the shim note above).
+  readonly uiRoot?: HTMLElement;
+  readonly registerCleanup?: (fn: () => void) => void;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -106,11 +115,17 @@ export function makeEpochGuard(): EpochGuard {
 // Dependency-injected run lifecycle
 // ────────────────────────────────────────────────────────────────────────────
 
+// M4: added getSceneInstanceState + despawnScene + instantiateScene for
+// engine-native Play snapshot (AC-10).
 /** Minimal world surface the lifecycle needs (engine ECS World, structurally). */
 export interface RunWorld {
   inspect(): { readonly systems: ReadonlyArray<{ readonly name: string }> };
   removeSystem(name: string): { ok: boolean; error?: unknown };
   despawn(handle: never): unknown;
+  getSceneInstanceState(root: number): { ok: boolean; error?: unknown; value?: { source: unknown; entityToLocalId: Map<number, number> } };
+  despawnScene(root: number): { ok: boolean; error?: unknown; value?: number };
+  instantiateScene(handle: unknown, parent?: number): { ok: boolean; error?: unknown; value?: { root: number } };
+  allocSharedRef(kind: string, payload: unknown): unknown;
 }
 
 /** Minimal bus surface (EditorBus, structurally). */
@@ -149,6 +164,29 @@ export interface RunLifecycleDeps {
    * active camera (AC-12 hard cut). Optional — omitted in headless tests.
    */
   readonly onAfterBootstrap?: () => void;
+  /**
+   * Called on ■ Stop AFTER the scene is despawned + re-instantiated, with the
+   * NEW SceneInstance root. ■ mints fresh handles under a new synthetic root, so
+   * the editor session's localId↔handle map (`_e2h`/`_h2e`) and the host's
+   * defaultSceneRoot both point at despawned handles ("scene not restored").
+   * The host rebinds them here (store.rebindLoadedScene + defaultSceneRoot).
+   * Optional — headless tests omit it.
+   */
+  readonly rebindSceneInstance?: (newRoot: number) => void;
+  /**
+   * Create the controlled UI container for a run and return it. Called at the
+   * START of ▶ Play (before bootstrap, so the game mounts its UI into it). The
+   * host builds a `<div>` inside the `#ui` overlay layer; the returned element
+   * is handed to the game as `ctx.uiRoot`. Optional — headless tests omit it,
+   * and games then fall back to `document.body`.
+   */
+  readonly mountUiRoot?: () => HTMLElement;
+  /**
+   * Tear down the UI container returned by {@link mountUiRoot}. Called on ■ Stop
+   * — removing this one element discards ALL game DOM in a single cut (B). No-op
+   * if mountUiRoot was never called.
+   */
+  readonly unmountUiRoot?: (el: HTMLElement) => void;
 }
 
 /** The ▶/■ pair plus the epoch guard so callers can assert on it (tests). */
@@ -176,20 +214,44 @@ export interface RunLifecycle {
  */
 export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   const epoch = makeEpochGuard();
-  let snapshot: EditSession | null = null;
+  // M4: snapshot is the SceneAsset source handle + scene root —
+  // captured via getSceneInstanceState before Play mutations.
+  let snapshotSource: unknown = null;
+  let snapshotRoot: number | null = null;
   let prePlaySystems: Set<string> | null = null;
   let prePlayEntities: Set<number> | null = null;
+  // B (controlled UI root) + A (cleanup hook) run-scoped state. uiRoot is the
+  // disposable DOM boundary the host mounts for this run; cleanups collects the
+  // game's non-DOM teardown callbacks. Both are reset at ▶ and drained at ■.
+  let uiRoot: HTMLElement | null = null;
+  let cleanups: Array<() => void> = [];
 
   async function playSimulation(): Promise<void> {
-    // D-3 snapshot-once: deep-copy the doc before any play mutation touches it.
-    snapshot = cloneEditSession(deps.bus.doc);
+    // M4 / AC-10: snapshot the scene via engine-native getSceneInstanceState
+    // instead of cloneEditSession(bus.doc). Captures the SceneAsset source
+    // handle so ■ can despawn + re-instantiate the same asset.
+    const defaultSceneRoot = deps.getDefaultSceneRoot();
+    if (defaultSceneRoot !== undefined) {
+      const stateRes = deps.world.getSceneInstanceState(defaultSceneRoot);
+      if (stateRes.ok && stateRes.value) {
+        snapshotSource = stateRes.value.source;
+        snapshotRoot = defaultSceneRoot;
+      }
+    }
     // D-1c layer-1 / layer-3 baselines: system names + entity handles at ▶.
     prePlaySystems = new Set(deps.world.inspect().systems.map((s) => s.name));
     prePlayEntities = deps.collectEntityHandles();
+    // B/A: build the controlled UI container BEFORE bootstrap (the game mounts
+    // its UI inside bootstrap) and start with an empty cleanup list for this run.
+    uiRoot = deps.mountUiRoot?.() ?? null;
+    cleanups = [];
 
     // D-1: resolve + validate the game entry (same contract as play-runtime).
     const slug = deps.getSlug();
-    const result = await loadGame(slug, async () => deps.resolveGameModule());
+    // resolveGameModule stays `Promise<unknown>` (the editor keeps the game
+    // module opaque); loadGame validates the entry shape at runtime, so the
+    // resolver cast to its GameEntryResolver type is safe.
+    const result = await loadGame(slug, (async () => deps.resolveGameModule()) as Parameters<typeof loadGame>[1]);
     if (!result.ok) {
       if (isLoadGameError(result.error)) {
         console.warn(
@@ -210,7 +272,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // registerUpdate is epoch-gated (D-1c layer-2). defaultSceneRoot /
     // defaultScene come from the doc projection, NOT a forge.json GUID re-
     // instantiate (would duplicate the entities EngineSync already projected).
-    const defaultSceneRoot = deps.getDefaultSceneRoot();
+    // F-3 review round 1: `defaultSceneRoot` is already bound above (the ▶
+    // snapshot capture); re-`const`-ing it here was a duplicate block-scoped
+    // declaration (runtime SyntaxError on module load — edit-runtime tests RED).
+    // Reuse the existing binding; only fetch the companion defaultScene.
     const defaultScene = deps.getDefaultScene();
     const ctx: RunBootstrapContext = {
       world: deps.world,
@@ -220,6 +285,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       registerUpdate: (fn: (dt: number) => void) => {
         deps.app.registerUpdate(epoch.wrap(fn));
       },
+      // B: hand the game the controlled UI container (falls back to body inside
+      // the game when absent). A: collect the game's non-DOM teardown callbacks.
+      registerCleanup: (fn: () => void) => {
+        cleanups.push(fn);
+      },
+      ...(uiRoot !== null ? { uiRoot } : {}),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
@@ -262,7 +333,41 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     }
   }
 
+  // A (cleanup hook): flush the game's non-DOM teardown callbacks in reverse
+  // registration order (unwind semantics — last effect set up is torn down
+  // first). Each is guarded so one throwing callback can't strand the rest
+  // (charter §9 graceful degradation). Idempotent: a second ■ finds [].
+  function flushCleanups(): void {
+    for (let i = cleanups.length - 1; i >= 0; i--) {
+      try {
+        cleanups[i]!();
+      } catch (err) {
+        console.warn('[editor] ■ Stop cleanup callback failed:', err);
+      }
+    }
+    cleanups = [];
+  }
+
+  // B (controlled UI root): discard the whole run UI container in one cut — no
+  // per-element bookkeeping. Idempotent: a second ■ finds uiRoot === null.
+  function teardownUiRoot(): void {
+    if (!uiRoot) return;
+    try {
+      (deps.unmountUiRoot ?? ((el: HTMLElement) => el.remove()))(uiRoot);
+    } catch (err) {
+      console.warn('[editor] ■ Stop unmountUiRoot failed:', err);
+    }
+    uiRoot = null;
+  }
+
   function stopSimulation(): void {
+    // Layer A + B (non-ECS side effects) run FIRST, before the four ECS-surgical
+    // undo layers: drain the game's cleanup callbacks, then drop its DOM whole.
+    // These reach what the ECS undo structurally cannot (DOM / listeners / audio
+    // / timers) — the root cause of UI-remnant-after-stop.
+    flushCleanups();
+    teardownUiRoot();
+
     // D-1c layer-0: freeze game systems (notEditing gate closes).
     injectEditMode(deps.world as never, true);
 
@@ -274,12 +379,34 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-1c layer-1: drop the systems bootstrap registered.
     removeBootstrapSystems();
 
-    // D-3 / D-1c layer-4 + layer-3: restore the doc, then despawn runtime spawns.
-    if (snapshot) {
-      deps.bus.replaceDoc(snapshot);
-      despawnRuntimeSpawns();
+    // D-1c layer-3: despawn the entities the run spawned OUTSIDE the doc scene
+    // (bullets/enemies/etc.) — the pre▶ → now handle diff. This MUST run BEFORE
+    // the scene re-instantiate below: re-instantiate mints FRESH handles for the
+    // restored scene that are (correctly) absent from prePlayEntities, so a
+    // post-instantiate diff would sweep the freshly restored scene away
+    // ("scene not restored"). Ordering it here keeps the diff measured against
+    // the played scene's handles only.
+    despawnRuntimeSpawns();
+
+    // M4 / AC-10: restore the scene by despawnScene + re-instantiate
+    // from the captured snapshot source (engine-native, no cloneEditSession).
+    // This replaces the old doc projection path (bus.replaceDoc(cloneEditSession)).
+    // AC-06: re-instantiate mints fresh handles under a NEW synthetic root, so
+    // rebindSceneInstance re-syncs the editor session map + host defaultSceneRoot
+    // onto the new root (else hierarchy/selection/save go dead on despawned ids).
+    if (snapshotRoot !== null && snapshotSource !== null) {
+      deps.world.despawnScene(snapshotRoot);
+      // Re-instantiate from the same SceneAsset source to restore pre-Play state.
+      const r = deps.world.instantiateScene(snapshotSource);
+      if (!r.ok) {
+        console.warn('[editor] ■ Stop re-instantiateScene failed:', (r as { error?: unknown }).error);
+      } else {
+        const newRoot = r.value?.root;
+        if (typeof newRoot === 'number') deps.rebindSceneInstance?.(newRoot);
+      }
     }
-    snapshot = null;
+    snapshotSource = null;
+    snapshotRoot = null;
     prePlaySystems = null;
     prePlayEntities = null;
   }

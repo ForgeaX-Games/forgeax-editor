@@ -13,21 +13,31 @@ import type { IDockviewPanelProps } from 'dockview';
 import { Sidebar } from '../Sidebar/Sidebar';
 import { MainArea } from '../MainArea/MainArea';
 import { ViewportPanel } from '../MainArea/SurfacePanels';
-import { EditPanel } from '../MainArea/SurfacePanels';
-import { PreviewPanel } from '../MainArea/SurfacePanels';
-import { ChatPanel } from '../ChatPanel/ChatPanel';
 import { AgentsPanel } from '../Sidebar/AgentsPanel';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
 import { TelemetryViewer } from '../MainArea/TelemetryViewer';
 import { InfoPanel } from '../StatusBar/InfoPanel';
-import { EditorPanelFrame, type EditorPanelId } from './EditorPanelFrame';
 import { RecoveryBoundary } from '../ErrorBoundary';
 // Editor panel ids (ep:*) are injected at runtime via PanelRenderers context
 // so interface stays editor-agnostic (no `@forgeax/editor*` import). The
 // DEFAULT_* list here is the neutral fallback for interface-alone; studio
 // overrides it with the editor-shared SSOT through the context provider.
-import { DEFAULT_EDITOR_PANEL_IDS, DEFAULT_EDITOR_PANEL_TITLES } from './panelRenderers';
+import { DEFAULT_EDITOR_PANEL_IDS, DEFAULT_EDITOR_PANEL_TITLES, usePanelRenderers } from './panelRenderers';
+
+// Chat panel body comes from the injected `renderChat` slot (R4: chat is a
+// 前L2 @forgeax/chat app, NOT an interface import). studio injects it; when
+// absent (interface-alone / standalone editor) we render a neutral placeholder
+// so the dock slot stays valid. Mirrors the renderEdit/renderPreview seam.
+function ChatPanelSlot(): ReactNode {
+  const { renderChat } = usePanelRenderers();
+  if (renderChat) return renderChat();
+  return (
+    <div className="surface-placeholder">
+      <div className="surface-placeholder-title">No chat app configured</div>
+    </div>
+  );
+}
 
 export interface PanelDef {
   /** dockview panel id + component key (must be unique). */
@@ -54,7 +64,8 @@ export const CORE_PANELS: PanelDef[] = [
   // gizmo); the editor's React sub-panels live as ep:* panels.
   // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
   { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, render: () => <ViewportPanel /> },
-  { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, render: () => <ChatPanel /> },
+  // R4: chat body comes from the injected renderChat slot (ChatPanelSlot).
+  { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, render: () => <ChatPanelSlot /> },
 ];
 
 export const OPTIONAL_PANELS: PanelDef[] = [
@@ -71,12 +82,13 @@ export const OPTIONAL_PANELS: PanelDef[] = [
 ];
 
 // ── editor panel family (ep:*) ───────────────────────────────────────────────
-// Each renders an iframe to /editor/?panel=<id> connected via BroadcastChannel.
-// The default id list lives in ./panelRenderers (a plain string list, NOT an
-// editor-package import) so interface is self-contained; studio injects the
-// real editor-shared SSOT through PanelRenderers context. These module-level
-// exports are the interface-alone fallback used by buildDefault.
-export const EDITOR_PANEL_IDS: EditorPanelId[] = [...DEFAULT_EDITOR_PANEL_IDS] as EditorPanelId[];
+// Each panel renders as an in-process React component via the injected
+// renderEditorPanel slot (single-realm M2). The default id list lives in
+// ./panelRenderers (a plain string list, NOT an editor-package import) so
+// interface is self-contained; studio injects the real editor SSOT through
+// PanelRenderers context. These module-level exports are the interface-alone
+// fallback used by buildDefault.
+export const EDITOR_PANEL_IDS: string[] = [...DEFAULT_EDITOR_PANEL_IDS] as string[];
 export const EDITOR_PANEL_TITLE: Record<string, string> = DEFAULT_EDITOR_PANEL_TITLES;
 
 // ── derived lookup maps (DockShell consumes these; never edit by hand) ────────
@@ -90,11 +102,31 @@ function withBoundary(scope: string, render: () => ReactNode): () => ReactNode {
   return () => <RecoveryBoundary scope={scope} fullscreen={false}>{render()}</RecoveryBoundary>;
 }
 
+/** Editor panel body — resolved from the injected renderEditorPanel slot
+ *  (single-realm M2: the host injects EDITOR_PANEL_COMPONENTS[id] as an
+ *  in-process React component). Falls back to a neutral "panel not mounted"
+ *  placeholder when no host is wired (interface-alone) or the id has no
+ *  registered component (D6: timeline / matgraph / systems drift ids).
+ *  EditorPanelFrame.tsx (pre-M2 iframe panel shell) was deleted in M4.
+ *  withBoundary (E1) still wraps it so a render throw in one panel doesn't
+ *  take down the host.
+ *  Anchors: plan-strategy S2 D6 / S4 R5; requirements AC-04/AC-05, edge E1. */
+function EditorPanelSlot({ id }: { id: string }): ReactNode {
+  const { renderEditorPanel } = usePanelRenderers();
+  const body = renderEditorPanel?.(id);
+  if (body !== undefined && body !== null) return body;
+  return (
+    <div className="surface-placeholder" data-panel={id} data-panel-unmounted="1">
+      <div className="surface-placeholder-title">Panel not mounted</div>
+    </div>
+  );
+}
+
 /** dockview component map: id → renderer (incl. ep:* editor panels). The
  *  wb:<pluginId> dynamic plugin renderers are merged in by DockShell at runtime. */
 export const PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> = {
   ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, withBoundary(`panel:${p.id}`, p.render)])),
-  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, () => <EditorPanelFrame panelId={id} />)])),
+  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, () => <EditorPanelSlot id={id} />)])),
 };
 
 /** id → title (incl. ep:* editor panels). */

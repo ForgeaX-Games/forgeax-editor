@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Bot, Files, PanelLeftClose, PanelLeftOpen, Wrench, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useAppStore } from '../../store';
+import { emitDeepLink } from '../../lib/deep-link-bus';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
 import { AgentsPanel } from './AgentsPanel';
 import { FilesPanel } from './FilesPanel';
@@ -111,8 +112,6 @@ export function Sidebar() {
   const { workbenchTab, setWorkbenchTab } = useAppStore();
   const mode = useAppStore((s) => s.mode);
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const floatingSurfaces = useAppStore((s) => s.floatingSurfaces);
@@ -508,16 +507,14 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   const descriptionEn = pickLang(m.description, 'en', '');
   const showEn = descriptionEn && descriptionEn !== description;
   const setMode = useAppStore((s) => s.setMode);
-  const setPendingBusExpandId = useAppStore((s) => s.setPendingBusExpandId);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
-  const openSettingsStore = useAppStore((s) => s.openSettings);
+  const openSettingsStore = useAppStore((s) => s.openOverlay);
   const dir = m.id.startsWith('@forgeax-plugin/')
     ? m.id.slice('@forgeax-plugin/'.length)
     : m.id;
   const manifestPath = `packages/marketplace/plugins/${dir}/manifest.json`;
   const openInBus = () => {
-    setPendingBusExpandId(m.id);
-    openSettingsStore('plugins');
+    emitDeepLink('bus:expand-plugin', m.id);
+    openSettingsStore('settings', 'plugins');
   };
   // P4.99 — click jumps to Bus admin AND solos kind=workbench so the player
   // immediately sees all sibling workbench plugins side by side. Reuses
@@ -526,9 +523,9 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   // above already tells you "I'm #N in the row"; this row answers "who are
   // the other N-1 siblings?" — one click and Bus admin shows them all.
   const openSiblings = () => {
-    setPendingBusKindFilter('workbench');
-    setPendingBusExpandId(m.id);
-    openSettingsStore('plugins');
+    emitDeepLink('bus:filter-kind', 'workbench');
+    emitDeepLink('bus:expand-plugin', m.id);
+    openSettingsStore('settings', 'plugins');
   };
   return (
     <div className="tool-placeholder bus-tool">

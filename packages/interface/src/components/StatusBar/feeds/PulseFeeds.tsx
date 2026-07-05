@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import { Brain, Sparkles, Wrench, Bot, Gauge } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../../store';
+import { emitDeepLink } from '../../../lib/deep-link-bus';
 import { listBusPlugins } from '../../../lib/bus-api';
 import { dashApi } from '../../../lib/dashboard-api';
 import { useStatusBarItem } from '../store';
@@ -92,8 +93,7 @@ function ResourcePulseFeed() {
 function ModelBindingPulseFeed() {
   const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -134,7 +134,7 @@ function ModelBindingPulseFeed() {
         label="MB"
         value={value}
         title={title}
-        onClick={() => { openSettings('plugins'); setPendingBusKindFilter('model-binding'); }}
+        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'model-binding'); }}
       />
     ),
   });
@@ -146,8 +146,7 @@ function ModelBindingPulseFeed() {
 function SkillPulseFeed() {
   const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -187,7 +186,7 @@ function SkillPulseFeed() {
         label="SKILL"
         value={value}
         title={title}
-        onClick={() => { openSettings('plugins'); setPendingBusKindFilter('skill'); }}
+        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'skill'); }}
       />
     ),
   });
@@ -199,8 +198,7 @@ function SkillPulseFeed() {
 function ToolPulseFeed() {
   const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -240,7 +238,7 @@ function ToolPulseFeed() {
         label="TOOL"
         value={value}
         title={title}
-        onClick={() => { openSettings('plugins'); setPendingBusKindFilter('tool'); }}
+        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'tool'); }}
       />
     ),
   });
@@ -252,8 +250,7 @@ function ToolPulseFeed() {
 function AgentPulseFeed() {
   const { t } = useTranslation();
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -293,7 +290,7 @@ function AgentPulseFeed() {
         label="AGENT"
         value={value}
         title={title}
-        onClick={() => { openSettings('plugins'); setPendingBusKindFilter('agent'); }}
+        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'agent'); }}
       />
     ),
   });

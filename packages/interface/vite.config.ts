@@ -55,7 +55,7 @@ export default defineConfig({
       '@forgeax/design/theme': resolve(PACKAGE_DIR, 'packages/design/theme.ts'),
       '@forgeax/design/tokens.css': resolve(PACKAGE_DIR, 'packages/design/tokens.css'),
       '@forgeax/design': resolve(PACKAGE_DIR, 'packages/design/index.ts'),
-      '@forgeax/types': resolve(PACKAGE_DIR, '../types/src/index.ts'),
+      '@forgeax/types': resolve(PACKAGE_DIR, '../contracts/types/src/index.ts'),
       '@forgeax/host-sdk': resolve(PACKAGE_DIR, '../host-sdk/src/index.ts'),
     },
   },

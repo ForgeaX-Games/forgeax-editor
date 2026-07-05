@@ -63,8 +63,8 @@ describe('display toggle orthogonality (w21, §3.2 hard constraint 2)', () => {
     for (const { to, expectRun } of transitions) {
       setViewportQuadrant({ display: to as 'scene' | 'game' });
       const q = getViewportQuadrant();
-      expect(q.run).toBe(expectRun);
-      expect(q.display).toBe(to);
+      expect(q.run).toBe(expectRun as typeof q.run);
+      expect(q.display).toBe(to as typeof q.display);
     }
   });
 

@@ -125,21 +125,21 @@ export function buildShortcuts(): ShortcutDef[] {
       group: 'overlay',
       label: t('shortcuts.toggleDashboard'),
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyD',
-      run: () => { const s = store(); s.setDashboardOpen(!s.dashboardOpen); return true; },
+      run: () => { const s = store(); s.activeOverlay === 'dashboard' ? s.closeOverlay() : s.openOverlay('dashboard'); return true; },
     },
     {
       combo: 'Ctrl+,',
       group: 'overlay',
       label: t('shortcuts.toggleSettings'),
       match: (e) => mod(e) && !e.shiftKey && (e.key === ',' || e.code === 'Comma'),
-      run: () => { const s = store(); s.setSettingsOpen(!s.settingsOpen); return true; },
+      run: () => { const s = store(); s.activeOverlay === 'settings' ? s.closeOverlay() : s.openOverlay('settings'); return true; },
     },
     {
       combo: 'Ctrl+H',
       group: 'overlay',
       label: t('shortcuts.openChangelog'),
       match: (e) => mod(e) && !e.shiftKey && e.code === 'KeyH',
-      run: () => { store().openSettings('changelog'); return true; },
+      run: () => { store().openOverlay('settings', 'changelog'); return true; },
     },
     {
       combo: 'Esc',
@@ -157,8 +157,7 @@ export function buildShortcuts(): ShortcutDef[] {
           return true;
         }
         if (s.fullscreen)     { s.setFullscreen(false); return true; }
-        if (s.settingsOpen)   { s.setSettingsOpen(false); return true; }
-        if (s.dashboardOpen)  { s.setDashboardOpen(false); return true; }
+        if (s.activeOverlay)  { s.closeOverlay(); return true; }
         return false;
       },
     },
@@ -183,7 +182,7 @@ export function buildShortcuts(): ShortcutDef[] {
       group: 'mode',
       label: t('shortcuts.openPlugins'),
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit3' || e.key === '3' || e.key === '#'),
-      run: () => { store().openSettings('plugins'); return true; },
+      run: () => { store().openOverlay('settings', 'plugins'); return true; },
     },
 
     // ── Focus ──

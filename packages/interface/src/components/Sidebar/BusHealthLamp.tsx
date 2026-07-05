@@ -38,7 +38,7 @@ export function BusHealthLamp() {
   const { t } = useTranslation();
   const [state, setState] = useState<BusState>({ kind: 'loading' });
   const setMode = useAppStore((s) => s.setMode);
-  const openSettings = useAppStore((s) => s.openSettings);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const mode = useAppStore((s) => s.mode);
 
   useEffect(() => {
@@ -116,7 +116,7 @@ export function BusHealthLamp() {
       className={`bus-chip bus-chip-${tone} is-link${isOnBus ? ' is-active' : ''}`}
       title={title}
       aria-label={title}
-      onClick={() => openSettings('plugins')}
+      onClick={() => openOverlay('settings', 'plugins')}
     >
       <span className="bus-chip-dot" />
       {showSigma && <span className="bus-chip-sigma" aria-hidden="true">Σ</span>}

@@ -25,7 +25,7 @@ type Step = 'intro' | 'key';
 
 export function FirstRunSetup() {
   const { t } = useTranslation();
-  const openSettings = useAppStore((s) => s.openSettings);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const [needsKey, setNeedsKey] = useState(false);
   const [step, setStep] = useState<Step>('intro');
   const [key, setKey] = useState('');
@@ -64,7 +64,7 @@ export function FirstRunSetup() {
   // CLI logged in can leave immediately. "useLocalCli" additionally deep-links
   // to the CLI Providers settings so they can verify/select their CLI.
   const dismiss = () => { markSeen(); setNeedsKey(false); };
-  const useLocalCli = () => { markSeen(); setNeedsKey(false); openSettings('cli-providers'); };
+  const useLocalCli = () => { markSeen(); setNeedsKey(false); openOverlay('settings', 'cli-providers'); };
 
   const save = async () => {
     if (!key.trim()) { setErr(t('firstRun.errMissingKey')); return; }

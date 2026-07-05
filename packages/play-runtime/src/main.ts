@@ -5,6 +5,7 @@ import {
   type BootstrapEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera, Transform, createCylinderGeometry } from '@forgeax/engine-runtime';
+import { physicsPlugin } from '@forgeax/engine-physics';
 import {
   sendVagMessage,
   onVagMessage,
@@ -124,7 +125,11 @@ if (gpResult?.ok) {
 // CreateAppOptions onto the 3rd-arg BundlerOptions. Passing it on the 2nd arg
 // is silently dropped (structural subtyping), causing the engine to fall back
 // to the bare '/shaders/manifest.json' which 404s + SPA-falls-back to HTML.
-const app = await createApp(canvas, physics ? { physics } : {}, {
+// Physics is enabled by passing physicsPlugin(backend) in createApp's `plugins`
+// (mirrors edit-runtime). CreateAppOptions.physics is a READBACK field (a
+// PhysicsWorld handle), NOT the backend selector — passing the backend string
+// there was silently dropped, so Play never actually got physics.
+const app = await createApp(canvas, physics ? { plugins: [physicsPlugin(physics)] } : {}, {
   shaderManifestUrl: '/preview/shaders/manifest.json',
   // Dev-mode import transport with explicit URL that matches the engine
   // pluginPack middleware's literal route. The default
@@ -354,12 +359,27 @@ if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.
 
 // ── GameContext (D-2: assembled after instantiate, so defaultSceneRoot +
 // defaultScene are captured in a single readonly literal — no write-back) ──
+// B (controlled UI root): symmetric with the embedded editor host so games have
+// ONE mount path (`ctx.uiRoot`), not a play-vs-edit fork. Here the container is
+// a body-level overlay; teardown is trivial because ■ Stop is location.reload()
+// (see VAG_PREVIEW_RELOAD) which discards the entire document.
+const playUiRoot = document.createElement('div');
+playUiRoot.id = 'game-ui-root';
+playUiRoot.style.cssText = 'position:fixed;inset:0;pointer-events:none';
+document.body.appendChild(playUiRoot);
+
 const ctx: GameContext = {
   world,
-  renderer,
+  // GameContext no longer carries `renderer` (engine moved the registry to the
+  // top-level `assets` field); keep only what the interface declares.
   assets: renderer.assets,
   app: app.value,
   registerUpdate(fn) { app.value.registerUpdate(fn); },
+  uiRoot: playUiRoot,
+  // A (cleanup hook): no-op — this host reloads the whole document on ■ Stop,
+  // so every side effect is discarded regardless. Present only to keep the
+  // contract identical to the editor host (games register defensively).
+  registerCleanup() { /* reload-on-stop discards everything */ },
   ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
   ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
@@ -434,13 +454,14 @@ if (entry) {
 app.value.start();
 
 // ── Device-lost → ask the shell to self-heal (reload this iframe) ──
-// The engine's onError fan-out carries the RhiError 'device-lost'/'context-lost'
-// arms. PlaySurface listens for VAG_DEVICE_LOST and reloads. Previously NOTHING
-// emitted it, so a real GPU loss left a dead canvas with no recovery. Send once
-// (device-lost is terminal — the engine runs its cleanup funnel).
+// The engine's onError fan-out carries the RhiError 'device-lost' arm (the
+// engine error union has no 'context-lost' code). PlaySurface listens for
+// VAG_DEVICE_LOST and reloads. Previously NOTHING emitted it, so a real GPU loss
+// left a dead canvas with no recovery. Send once (device-lost is terminal — the
+// engine runs its cleanup funnel).
 let deviceLostSent = false;
 app.value.onError((err) => {
-  if ((err.code === 'device-lost' || err.code === 'context-lost') && !deviceLostSent) {
+  if (err.code === 'device-lost' && !deviceLostSent) {
     deviceLostSent = true;
     sendVagMessage(window.parent, VagDeviceLostSchema, {});
   }

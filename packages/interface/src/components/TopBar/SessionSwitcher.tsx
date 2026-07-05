@@ -60,6 +60,7 @@ export function SessionSwitcher() {
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const activeSid = useAppStore((s) => s.activeSid);
   const tabs = useAppStore((s) => s.tabs);
+  const busyByAgentBySid = useAppStore((s) => s.busyByAgentBySid);
   const createNewSession = useAppStore((s) => s.createNewSession);
   const switchToSession = useAppStore((s) => s.switchToSession);
   const closeSession = useAppStore((s) => s.closeSession);
@@ -147,6 +148,7 @@ export function SessionSwitcher() {
             const isActive = tab.sid === activeSid;
             const label = tab.displayName?.trim() || `session ${tab.sid.slice(0, 6)}`;
             const rel = formatRelative(tab.lastActivityAt);
+            const isBusy = Object.values(busyByAgentBySid[tab.sid] ?? {}).some(Boolean);
             return (
               <div key={tab.sid} className={`tb-game-row ${isActive ? 'is-active' : ''}`} data-session-id={tab.sid} data-session-name={label}>
                 <button
@@ -159,7 +161,7 @@ export function SessionSwitcher() {
                     {isActive && <span style={{ marginLeft: 6, color: 'var(--color-role-art)' }}>·</span>}
                   </span>
                   <span className="tb-game-meta">
-                    {tab.sid.slice(0, 8)}{tab.agentId ? ` · ${tab.agentId}` : ''}{tab.isStreaming ? ' · ●' : ''}{rel ? ` · ${rel}` : ''}
+                    {tab.sid.slice(0, 8)}{tab.agentId ? ` · ${tab.agentId}` : ''}{isBusy ? ' · ●' : ''}{rel ? ` · ${rel}` : ''}
                   </span>
                 </button>
                 <button

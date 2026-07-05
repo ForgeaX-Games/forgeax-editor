@@ -8,12 +8,15 @@
         "@forgeax/editor-core": "workspace:*",
         "@forgeax/editor-edit-runtime": "workspace:*",
         "@forgeax/editor-play-runtime": "workspace:*",
-        "@forgeax/editor-shared": "workspace:*",
         "@forgeax/interface": "workspace:*",
         "@forgeax/platform-io": "workspace:*",
         "zod": "^3.25.0",
       },
       "devDependencies": {
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@playwright/test": "^1.45.0",
         "@vitejs/plugin-react": "^4.3.0",
         "dependency-cruiser": "^17.4.3",
@@ -23,13 +26,60 @@
         "vite": "*",
       },
     },
+    "packages/content-browser": {
+      "name": "@forgeax/editor-content-browser",
+      "version": "0.1.0",
+      "dependencies": {
+        "@forgeax/editor-core": "workspace:*",
+        "@tanstack/react-virtual": "^3.14.3",
+        "@tanstack/virtual-core": "^3.17.1",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "@types/node": "^20.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "typescript": "^5.6.3",
+      },
+    },
+    "packages/core": {
+      "name": "@forgeax/editor-core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-fbx": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-project": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "react": "^19.0.0",
+        "zod": "^3.25.0",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "@types/react": "^19.0.0",
+        "typescript": "^5.6.3",
+      },
+    },
     "packages/edit-runtime": {
       "name": "@forgeax/editor-edit-runtime",
       "version": "0.1.0",
       "dependencies": {
         "@forgeax/editor-core": "workspace:*",
         "@forgeax/editor-panels": "workspace:*",
-        "@forgeax/editor-shared": "workspace:*",
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
@@ -57,6 +107,7 @@
         "lucide-react": "^0.460.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
+        "scheduler": "^0.27.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.13",
@@ -66,74 +117,6 @@
         "@vitejs/plugin-react": "^4.3.4",
         "typescript": "^5.6.3",
         "vite": "^6.0.5",
-      },
-    },
-    "packages/editor-core": {
-      "name": "@forgeax/editor-core",
-      "version": "0.1.0",
-      "dependencies": {
-        "@forgeax/engine-app": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-gltf": "workspace:*",
-        "@forgeax/engine-image": "workspace:*",
-        "@forgeax/engine-input": "workspace:*",
-        "@forgeax/engine-math": "workspace:*",
-        "@forgeax/engine-pack": "workspace:*",
-        "@forgeax/engine-project": "workspace:*",
-        "@forgeax/engine-rhi": "workspace:*",
-        "@forgeax/engine-rhi-webgpu": "workspace:*",
-        "@forgeax/engine-rhi-wgpu": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-        "@forgeax/engine-shader": "workspace:*",
-        "@forgeax/engine-types": "workspace:*",
-        "@forgeax/engine-vite-plugin-pack": "workspace:*",
-        "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "react": "^19.0.0",
-        "zod": "^3.25.0",
-      },
-      "devDependencies": {
-        "@types/react": "^19.0.0",
-        "typescript": "^5.6.3",
-      },
-    },
-    "packages/editor-panels": {
-      "name": "@forgeax/editor-panels",
-      "version": "0.1.0",
-      "dependencies": {
-        "@forgeax/editor-core": "workspace:*",
-        "@forgeax/editor-shared": "workspace:*",
-        "@forgeax/engine-app": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-gltf": "workspace:*",
-        "@forgeax/engine-math": "workspace:*",
-        "@forgeax/engine-rhi": "workspace:*",
-        "@forgeax/engine-rhi-webgpu": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-        "@forgeax/engine-types": "workspace:*",
-        "@tanstack/react-virtual": "^3.14.3",
-        "@tanstack/virtual-core": "^3.17.1",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-      },
-      "devDependencies": {
-        "@types/node": "^20.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "typescript": "^5.6.3",
-      },
-    },
-    "packages/editor-shared": {
-      "name": "@forgeax/editor-shared",
-      "version": "0.1.0",
-      "dependencies": {
-        "@forgeax/editor-core": "workspace:*",
-        "react": "^19.0.0",
-      },
-      "devDependencies": {
-        "@types/node": "^20.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "typescript": "^5.6.3",
       },
     },
     "packages/engine": {
@@ -264,7 +247,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
-        "node-addon-api": "^8.0.0",
       },
       "devDependencies": {
         "@types/node": "^20.14.0",
@@ -631,7 +613,7 @@
     },
     "packages/interface": {
       "name": "@forgeax/interface",
-      "version": "0.1.0",
+      "version": "0.3.7",
       "dependencies": {
         "@google/model-viewer": "^4.2.0",
         "@radix-ui/react-alert-dialog": "^1.1.6",
@@ -674,6 +656,24 @@
         "tailwindcss-animate": "^1.0.7",
         "typescript": "^5.6.3",
         "vite": "^6.0.5",
+      },
+    },
+    "packages/panels": {
+      "name": "@forgeax/editor-panels",
+      "version": "0.1.0",
+      "dependencies": {
+        "@forgeax/editor-content-browser": "workspace:*",
+        "@forgeax/editor-core": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "react": "^19.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "@types/node": "^20.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "typescript": "^5.6.3",
       },
     },
     "packages/platform-io": {
@@ -946,15 +946,15 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
-    "@forgeax/editor-core": ["@forgeax/editor-core@workspace:packages/editor-core"],
+    "@forgeax/editor-content-browser": ["@forgeax/editor-content-browser@workspace:packages/content-browser"],
+
+    "@forgeax/editor-core": ["@forgeax/editor-core@workspace:packages/core"],
 
     "@forgeax/editor-edit-runtime": ["@forgeax/editor-edit-runtime@workspace:packages/edit-runtime"],
 
-    "@forgeax/editor-panels": ["@forgeax/editor-panels@workspace:packages/editor-panels"],
+    "@forgeax/editor-panels": ["@forgeax/editor-panels@workspace:packages/panels"],
 
     "@forgeax/editor-play-runtime": ["@forgeax/editor-play-runtime@workspace:packages/play-runtime"],
-
-    "@forgeax/editor-shared": ["@forgeax/editor-shared@workspace:packages/editor-shared"],
 
     "@forgeax/engine": ["@forgeax/engine@workspace:packages/engine/packages/engine"],
 
@@ -1362,7 +1362,7 @@
 
     "@vitest/utils": ["@vitest/utils@4.1.5", "", { "dependencies": { "@vitest/pretty-format": "4.1.5", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug=="],
 
-    "@webgpu/types": ["@webgpu/types@0.1.70", "", {}, "sha512-LFiNHHKMvmAEvwVew3JLJmTdShhbdwRFSImUshGhE2mGE8ybQzIo63l5uRp+YKnNx+8Qno8Kf6gN+DKMreIJCA=="],
+    "@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
 
     "@zappar/msdf-generator": ["@zappar/msdf-generator@1.2.4", "", { "dependencies": { "comlink": "^4.4.2" } }, "sha512-6S/MCk0Ky0ipewZJw4xFEzH/2aYfWmPXEkTdBtNyDDfkbicrNwgJgtxZ4SnTDyNe9XHMqDA4sL9srRsgDLRMqA=="],
 
@@ -1922,8 +1922,6 @@
 
     "neo-async": ["neo-async@2.6.2", "", {}, "sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw=="],
 
-    "node-addon-api": ["node-addon-api@8.8.0", "", {}, "sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA=="],
-
     "node-releases": ["node-releases@2.0.47", "", {}, "sha512-Uzmd6LXpouKo8EUK68IjH4+E01w/hXyV3R3g/geCJo+rXLNfh1xucB+LOzYEOQPSiUK3h/xZf0cQGcSsmyL2Og=="],
 
     "node-sarif-builder": ["node-sarif-builder@4.1.0", "", { "dependencies": { "@types/sarif": "^2.1.7", "fs-extra": "^11.1.1" } }, "sha512-IWqZF6u0EI/07HTBm+zZ+MgXgWl09dnSJRGaDCPBSlOqilDcx6pj3Mpb3HvPN8V2Gr+ISw7ZrMsL7STWs1F++w=="],
@@ -2306,32 +2304,6 @@
 
     "@forgeax/editor-play-runtime/vite": ["vite@6.4.3", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A=="],
 
-    "@forgeax/engine-app/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-gltf/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-naga/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-render-graph/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-rhi/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-rhi-debug/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-rhi-null/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-rhi-webgpu/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-rhi-wgpu/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-shader/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-shader-compiler/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-types/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
-    "@forgeax/engine-vite-plugin-shader/@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
-
     "@forgeax/interface/vite": ["vite@6.4.3", "", { "dependencies": { "esbuild": "^0.25.0", "fdir": "^6.4.4", "picomatch": "^4.0.2", "postcss": "^8.5.3", "rollup": "^4.34.9", "tinyglobby": "^0.2.13" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^18.0.0 || ^20.0.0 || >=22.0.0", "jiti": ">=1.21.0", "less": "*", "lightningcss": "^1.21.0", "sass": "*", "sass-embedded": "*", "stylus": "*", "sugarss": "*", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A=="],
 
     "@forgeax/platform-io/@types/node": ["@types/node@22.20.0", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-QWlFW2wf3nTjC13/DqRnBpR4ZO36VJH/JVBkA/vcnmbTBNQIlnObqyqZE1tUR7+Ni23Lda8R1BxMfbXRpCUx5g=="],
@@ -2399,6 +2371,8 @@
     "tsup/esbuild": ["esbuild@0.27.7", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.27.7", "@esbuild/android-arm": "0.27.7", "@esbuild/android-arm64": "0.27.7", "@esbuild/android-x64": "0.27.7", "@esbuild/darwin-arm64": "0.27.7", "@esbuild/darwin-x64": "0.27.7", "@esbuild/freebsd-arm64": "0.27.7", "@esbuild/freebsd-x64": "0.27.7", "@esbuild/linux-arm": "0.27.7", "@esbuild/linux-arm64": "0.27.7", "@esbuild/linux-ia32": "0.27.7", "@esbuild/linux-loong64": "0.27.7", "@esbuild/linux-mips64el": "0.27.7", "@esbuild/linux-ppc64": "0.27.7", "@esbuild/linux-riscv64": "0.27.7", "@esbuild/linux-s390x": "0.27.7", "@esbuild/linux-x64": "0.27.7", "@esbuild/netbsd-arm64": "0.27.7", "@esbuild/netbsd-x64": "0.27.7", "@esbuild/openbsd-arm64": "0.27.7", "@esbuild/openbsd-x64": "0.27.7", "@esbuild/openharmony-arm64": "0.27.7", "@esbuild/sunos-x64": "0.27.7", "@esbuild/win32-arm64": "0.27.7", "@esbuild/win32-ia32": "0.27.7", "@esbuild/win32-x64": "0.27.7" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-IxpibTjyVnmrIQo5aqNpCgoACA/dTKLTlhMHihVHhdkxKyPO1uBBthumT0rdHmcsk9uMonIWS0m4FljWzILh3w=="],
 
     "vitest/tinyexec": ["tinyexec@1.2.4", "", {}, "sha512-SHf/r48b7vOrjve9PxJo3MN5v5yuyjHvdUcrQffT3WXMUfnGmHDVbC4k3sHJaJTgZCwpUplIaAo5ANtMyp3YHg=="],
+
+    "webgpu/@webgpu/types": ["@webgpu/types@0.1.70", "", {}, "sha512-LFiNHHKMvmAEvwVew3JLJmTdShhbdwRFSImUshGhE2mGE8ybQzIo63l5uRp+YKnNx+8Qno8Kf6gN+DKMreIJCA=="],
 
     "@babel/register/make-dir/pify": ["pify@4.0.1", "", {}, "sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g=="],
 

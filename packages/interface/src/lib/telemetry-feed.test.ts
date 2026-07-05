@@ -1,10 +1,12 @@
 /**
  * Observability telemetry feed 单测(Track UI):store slice + 两条入信道
- * (WS `handleDaemonWs` / postMessage `VAG_TELEMETRY`)汇入同一 500-cap slice。
+ * 汇入同一 500-cap slice。R5/P1 起，WS 侧 telemetry 帧改经 broadcast-stream →
+ * bootBroadcast 的 subscribeBroadcast('telemetry') → pushTelemetry（薄接线，不在此测）；
+ * 本文件测 store slice 语义 + postMessage(VAG_TELEMETRY) 入信道。
  */
-import './telemetry-test-prelude'; // 必须先于 store import:阻止 daemon-WS 自动连接(见该文件)
+import './telemetry-test-prelude'; // 历史前置(现为 no-op)：早期阻止 store module-load 自动连 WS
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { useAppStore, handleDaemonWs, type TelemetryRecord } from '../store';
+import { useAppStore, type TelemetryRecord } from '../store';
 import { ingestVagTelemetry } from '../components/StatusBar/healthBridge';
 
 const span = (id: string): TelemetryRecord => ({ kind: 'span', traceId: 't', spanId: id, name: 'n', startTs: 1 });
@@ -32,20 +34,6 @@ describe('telemetry store slice', () => {
   it('clearTelemetry empties the slice', () => {
     useAppStore.getState().pushTelemetry([span('a')]);
     useAppStore.getState().clearTelemetry();
-    expect(useAppStore.getState().telemetry.length).toBe(0);
-  });
-});
-
-describe('WS dispatch (handleDaemonWs telemetry branch)', () => {
-  it('routes {type:telemetry, records} into the slice', () => {
-    handleDaemonWs({ type: 'telemetry', records: [span('w1')] });
-    expect(useAppStore.getState().telemetry.length).toBe(1);
-  });
-  it('non-array records → no push; non-object msg → no throw', () => {
-    handleDaemonWs({ type: 'telemetry', records: 'oops' });
-    expect(useAppStore.getState().telemetry.length).toBe(0);
-    handleDaemonWs(null); // 早退,不抛
-    handleDaemonWs({ type: 'telemetry' }); // records 缺 → 空
     expect(useAppStore.getState().telemetry.length).toBe(0);
   });
 });

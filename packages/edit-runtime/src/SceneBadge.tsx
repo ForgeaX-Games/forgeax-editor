@@ -4,8 +4,8 @@
 // Switching what a window edits happens by double-clicking a level / asset in
 // the Assets panel — never from a toolbar dropdown. Play settings live in the
 // standalone 启动器 panel.
-import { getSceneId, useSceneFile, useSceneList } from '@forgeax/editor-shared';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+import { getSceneId, useSceneFile, useSceneList } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 
 export function SceneBadge() {
   const { t } = useTranslation();

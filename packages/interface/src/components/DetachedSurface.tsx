@@ -16,8 +16,6 @@ import type { SurfaceDescriptor } from '../lib/platform';
 import { useTranslation } from '@/i18n';
 import { usePluginManifest } from '../lib/use-plugin-manifest';
 import { StandalonePluginIframe } from './MainArea/StandalonePluginIframe';
-import { AgentsMainArea, WorkbenchModeDefault } from './MainArea/WorkbenchMode';
-import { ChatPanel } from './ChatPanel/ChatPanel';
 import { ConsolePanel } from './MainArea/ConsolePanel';
 import { Sidebar } from './Sidebar/Sidebar';
 import { MainArea } from './MainArea/MainArea';
@@ -41,17 +39,21 @@ export function DetachedSurface({ surface }: Props): ReactElement {
  *  Wrapped full-bleed since they normally live inside a sized layout slot. */
 function DetachedPanelSurface({ surface }: Props): ReactElement {
   const { t } = useTranslation();
-  const { renderPreview, renderEdit } = usePanelRenderers();
+  const { renderPreview, renderEdit, renderChat, renderWorkbench } = usePanelRenderers();
   let body: ReactElement;
   switch (surface.id) {
     case 'chat':
-      body = <ChatPanel />;
+      // chat is a 前L2 @forgeax/chat app injected via renderChat (R4); a
+      // detached chat window has no keep-alive layer so render it directly.
+      body = <>{renderChat ? renderChat() : <NoEditorBody />}</>;
       break;
     case 'agents':
-      body = <AgentsMainArea />;
+      // 前L2 @forgeax/workbench via renderWorkbench (R4): agents browser variant.
+      body = <>{renderWorkbench ? renderWorkbench('agents') : <NoEditorBody />}</>;
       break;
     case 'files':
-      body = <WorkbenchModeDefault showGalleryWhenEmpty={false} />;
+      // 前L2 @forgeax/workbench via renderWorkbench (R4): file workbench variant.
+      body = <>{renderWorkbench ? renderWorkbench('files') : <NoEditorBody />}</>;
       break;
     // DockShell panels popped into their own OS window (design §0.2.2 / #10).
     case 'console':

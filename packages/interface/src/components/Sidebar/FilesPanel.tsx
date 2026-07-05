@@ -12,6 +12,8 @@ import {
   File as FileIcon,
 } from 'lucide-react';
 import { useAppStore } from '../../store';
+import { publish } from '../../lib/bus';
+import { useBusSnapshot } from '../../lib/use-bus-snapshot';
 import { useTranslation } from '@/i18n';
 
 // P4.1 — FilesPanel fp-types ext-distribution mini-strip.
@@ -144,8 +146,9 @@ function ancestorsOf(path: string, rootPath: string): string[] {
 }
 
 export function FilesPanel() {
-  const openFile = useAppStore((s) => s.openFile);
-  const activeFilePath = useAppStore((s) => s.activeFilePath);
+  // ③ 文件预览态归 workbench（bus 'workbench:files'）—— 打开走命令，高亮读快照。
+  const openFile = (path: string) => { publish('workbench:open-file', { path } as never); };
+  const activeFilePath = (useBusSnapshot('workbench:files') as { activeFilePath?: string | null } | undefined)?.activeFilePath ?? null;
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const [autoSlug, setAutoSlug] = useState<string | null>(null);
   const activeSlug = pinnedSlug ?? autoSlug;

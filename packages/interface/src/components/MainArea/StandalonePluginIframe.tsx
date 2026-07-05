@@ -25,6 +25,7 @@ import type { BusPluginInfo } from '../../lib/bus-api';
 import { upsertSurface, removePluginSurfaces } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
 import { useAppStore } from '../../store';
+import { emitForgeaXMessage } from '../../lib/forgeax-bridge';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
@@ -230,23 +231,26 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
       });
 
       // Doc 06 §chat-bridge — plugin → ChatPanel. Plugin calls
-      // `host.chat.post(text)` and we route it into the active session as if
-      // the user typed it. Attachments aren't yet supported by sendMessage;
-      // for now we drop them with a dev-mode warning.
+      // `host.chat.post(text)`; we emit it onto the active session's EventBus
+      // (server reflects user_input → session-stream renders the bubble). This
+      // is the app-agnostic send path — the shell never imports chat. Attachments
+      // aren't carried by the bus emit yet; dropped with a dev-mode warning.
       port.onChat((e) => {
         if (!e.text || !e.text.trim()) return;
         if (e.attachments && e.attachments.length > 0 && import.meta.env.DEV) {
           // eslint-disable-next-line no-console
           console.warn('[plugin chat.post] attachments dropped (not yet supported):', plugin.id, e.attachments);
         }
-        try {
-          void useAppStore.getState().sendMessage(e.text);
-        } catch (err) {
+        const st = useAppStore.getState();
+        const sid = st.activeSid;
+        if (!sid) return;
+        const to = st.tabs.find((tb) => tb.sid === sid)?.agentId ?? undefined;
+        void emitForgeaXMessage(sid, e.text, to ? { to } : {}).catch((err) => {
           if (import.meta.env.DEV) {
             // eslint-disable-next-line no-console
-            console.warn('[plugin chat.post] sendMessage failed:', plugin.id, err);
+            console.warn('[plugin chat.post] emit failed:', plugin.id, err);
           }
-        }
+        });
       });
       // Phase D2 — forward plugin tool.call to /api/tools/call. Caller is
       // marked `workbench` so the server-side ToolRegistry can attribute the

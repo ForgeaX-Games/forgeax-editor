@@ -1,6 +1,4 @@
-import { buildReferenceFor, REFERENCE_LABEL } from '../Composer/referenceRegistry';
-import type { PillPayload } from '../Composer/pill';
-import { useAppStore } from '../../store';
+import { buildReferenceFor, REFERENCE_LABEL, requestComposerInsert, type PillPayload } from '../../lib/composer-bridge';
 import { t } from '@/i18n';
 
 export type MenuItem =
@@ -72,7 +70,7 @@ function buildInputMenu(input: HTMLInputElement | HTMLTextAreaElement, selection
 /** "引用到 Chat" menu item for a concrete pill, or null. */
 function referenceItemFor(pill: PillPayload | null): MenuItem | null {
   if (!pill) return null;
-  return { kind: 'item', label: REFERENCE_LABEL, onClick: () => useAppStore.getState().requestComposerInsert(pill) };
+  return { kind: 'item', label: REFERENCE_LABEL, onClick: () => requestComposerInsert(pill) };
 }
 
 /** Selected-text fallback pill (when the target isn't a registered unit). */

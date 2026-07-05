@@ -18,8 +18,8 @@ import { initAegis } from './lib/aegis';
 import { BrandProvider } from './brand';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { bootStageEntry } from './boot/driver';
+import { bootBroadcast } from './boot/broadcast';
 import { isTrustedMessageOrigin } from './lib/trustedOrigins';
-import { subscribeSessionStream } from './lib/session-stream';
 import { subscribeNarrativeCopilot } from './lib/narrative-copilot';
 import { subscribeFileActivityStream } from './lib/file-activity-stream';
 import { subscribePermissionStream } from './lib/permission-stream';
@@ -108,17 +108,16 @@ if (detachedSurface) {
   bootFullShell(rootEl);
 }
 
-// Shared store/stream bootstrap. Order matters: subscribeSessionStream must
-// attach its onSessionEvent handler BEFORE initSessions → connectForgeaXWs, or
-// the first WS frames have no listener.
+// Shared store/stream bootstrap. NOTE (R4): chat's session-stream lives in
+// `@forgeax/chat` now and is wired by the L3 host (studio). The standalone
+// interface AppKit boot is chat-agnostic — it does not subscribe the chat
+// message stream (L1 must not import L2 chat).
 function bootStore() {
   // Health/INFO bridge — capture shell errors + iframe-forwarded health signals
   // (Play/Edit/plugin) into the status bar. Must run before any iframe mounts so
   // early createApp failures are caught. Idempotent.
   installHealthBridge();
-  subscribeSessionStream();
-  // 叙事工坊「完成即重唤醒」闭环：监听 Kotone 调 narrative:start-pipeline → 轮询后端
-  // 直到管线进终态 → 投系统提示唤醒 Kotone 做完成总结。需在 session-stream 之后挂。
+  bootBroadcast(); // R5/P1 唯一公共广播 socket（telemetry / workspace-changed）
   subscribeNarrativeCopilot();
   subscribeFileActivityStream();
   subscribePermissionStream();

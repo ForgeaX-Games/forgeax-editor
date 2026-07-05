@@ -97,7 +97,7 @@ export interface MountStandaloneOptions {
    * Plumbing: plain prop drilling on `App.tsx` (one prop, two conditional
    * render sites — see ADR `docs/decisions/0018-editor-consolidation.md`,
    * landed by w16). The flag is intentionally NOT bound to the zustand
-   * store's chat slice (`chatpanelCollapsed`, `composerPendingInsert`,
+   * store's chat slice (`chatpanelCollapsed`,
    * `pendingChatPanelBusFlash`), so studio behaviour stays untouched.
    *
    * BANDAGE — scheduled removal: this option exists only until the chat

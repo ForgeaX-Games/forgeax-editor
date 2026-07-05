@@ -1,0 +1,11 @@
+/* Standalone shell wrapper — mirrors .studio-shell layout tokens used by
+   DockShell without pulling in the full studio App.css tree. */
+.forgeax-standalone-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  overflow: hidden;
+}

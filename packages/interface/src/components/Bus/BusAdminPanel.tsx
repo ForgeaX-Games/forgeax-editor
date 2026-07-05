@@ -91,6 +91,7 @@ import { useTranslation, type TFunction } from '@/i18n';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useAppStore } from '../../store';
+import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
 import './BusAdminPanel.css';
 
 // P4.14 — health roll-up for the cli-provider KindSection header LED.
@@ -418,26 +419,12 @@ export function BusAdminPanel() {
   //查看 →" button. Consumed once on mount + whenever it flips non-null, then
   // cleared so a back-and-forth between Sidebar/Bus tab doesn't re-expand
   // (player may have manually collapsed it since).
-  const pendingBusExpandId = useAppStore((s) => s.pendingBusExpandId);
-  const setPendingBusExpandId = useAppStore((s) => s.setPendingBusExpandId);
-  // P3.37 — sister deep-link to pendingBusExpandId: Sidebar BUS KINDS footer
-  // chips set this slot + setMode('bus'); consume it here once items have
-  // loaded by soloing that kind in the filter row (sets enabledKinds = {kind}),
-  // then clear so a back-and-forth doesn't keep re-applying.
-  const pendingBusKindFilter = useAppStore((s) => s.pendingBusKindFilter);
-  const setPendingBusKindFilter = useAppStore((s) => s.setPendingBusKindFilter);
-  // P3.38 — reverse of P3.37. When the player clicks a chip in our local filter
-  // row, set this slot so the Sidebar BUS KINDS footer chip pulse-flashes for
-  // ~1.5s. Confirms the same kind in the peripheral surface and reinforces
-  // "this chip is the cross-surface mate of the one you just clicked".
-  const setPendingSidebarKindFlash = useAppStore((s) => s.setPendingSidebarKindFlash);
-  // P3.40 — sister flash signal to setPendingSidebarKindFlash but for the
-  // ChatPanel TabStrip .ts-bus-chip. Fires every time the player toggles a
-  // plugin row (expand OR collapse); TabStrip pulses for ~0.8s. 9th deep-link
-  // surface, but distinct from prior 8 because TabStrip lives on the right
-  // edge (peripheral confirmation for a click that happens in MainArea's
-  // bus table — different visual axis than Sidebar (left edge)).
-  const setPendingChatPanelBusFlash = useAppStore((s) => s.setPendingChatPanelBusFlash);
+  // R5/P2 — deep-links moved off the L1 store onto the bus (retain semantics).
+  const [pendingBusExpandId, clearBusExpandId] = useDeepLink('bus:expand-plugin');
+  // P3.37 — sister deep-link to bus:expand-plugin: Sidebar BUS KINDS footer
+  // chips emit this + setMode('bus'); consume it here once items have loaded by
+  // soloing that kind in the filter row (enabledKinds = {kind}), then clear.
+  const [pendingBusKindFilter, clearBusKindFilter] = useDeepLink('bus:filter-kind');
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
 
   useEffect(() => {
@@ -763,8 +750,8 @@ export function BusAdminPanel() {
         row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     });
-    setPendingBusExpandId(null);
-  }, [pendingBusExpandId, items.length, setPendingBusExpandId]);
+    clearBusExpandId();
+  }, [pendingBusExpandId, items.length, clearBusExpandId]);
 
   // P3.37 — consume Sidebar footer chip click. Wait until items load so the
   // kind set is non-empty (and the chip filter row is mounted). Soloing a kind
@@ -775,15 +762,15 @@ export function BusAdminPanel() {
     if (items.length === 0) return;
     const target = pendingBusKindFilter;
     setEnabledKinds(new Set([target]));
-    setPendingBusKindFilter(null);
-  }, [pendingBusKindFilter, items.length, setPendingBusKindFilter]);
+    clearBusKindFilter();
+  }, [pendingBusKindFilter, items.length, clearBusKindFilter]);
 
   const toggleExpand = (id: string) => {
     // P3.40 — fire the ChatPanel TabStrip bus-chip flash on every toggle
     // (expand AND collapse). Both directions are "I just touched a bus row";
     // TabStrip dedupes via its own timer reset, so spam-clicking the same row
     // doesn't compound — each click starts a fresh 0.8s pulse from peak.
-    setPendingChatPanelBusFlash(id);
+    emitDeepLink('chat:flash-bus-chip', id);
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -855,7 +842,7 @@ export function BusAdminPanel() {
     // because the player's mental model is "I touched THIS kind, confirm it
     // over in the Sidebar". Sidebar will reset its own timer if the same chip
     // is clicked rapidly, so spamming doesn't break the animation.
-    setPendingSidebarKindFlash(kind);
+    emitDeepLink('sidebar:flash-kind', kind);
     setEnabledKinds((prev) => {
       // First click from "all on" → solo that kind (most common UX: "show me
       // just workbench"). Re-click solo'd kind → back to "all on".
@@ -1019,7 +1006,7 @@ export function BusAdminPanel() {
                   aria-label={led.aria}
                   aria-pressed={soloed}
                   onClick={() => {
-                    setPendingSidebarKindFlash(led.kind);
+                    emitDeepLink('sidebar:flash-kind', led.kind);
                     setEnabledKinds((prev) =>
                       prev !== null && prev.size === 1 && prev.has(led.kind)
                         ? null
@@ -1350,7 +1337,7 @@ export function BusAdminPanel() {
             expandedIds={expandedIds}
             onToggle={toggleExpand}
             rowRefs={rowRefs}
-            onFlashKind={setPendingSidebarKindFlash}
+            onFlashKind={(k) => emitDeepLink('sidebar:flash-kind', k)}
             onSoloKind={(k) => setEnabledKinds(new Set([k]))}
             focusedRowId={focusedRowId}
             onSetFocusedRowId={setFocusedRowId}
@@ -1867,15 +1854,11 @@ function PluginDetail({
   // Together with P3.32's forward AgentsPanel pill + P2.7f's wb-tab "在 Bus
   // 详情查看 →" button, this completes the Sidebar ⇄ Bus admin round-trip.
   const openWorkbench = useAppStore((s) => s.openWorkbench);
-  const setPendingSidebarFocusPluginId = useAppStore((s) => s.setPendingSidebarFocusPluginId);
-  // P3.43 — reuse the P3.38 pendingSidebarKindFlash pipeline (BusAdmin filter-chip
-  // click → Sidebar BUS KINDS chip pulse) from inside the detail row, so kinds
-  // that lack a kind-specific backlink (cli-provider / model-binding / skill /
-  // tool / event) still get a reverse deep-link surface. Brings deep-link
-  // coverage from 4/6 kinds (P3.42) to 6/6.
-  const setPendingSidebarKindFlash = useAppStore((s) => s.setPendingSidebarKindFlash);
+  // R5/P2 — reverse deep-links now emit bus intents (their consumers —
+  // AgentsPanel scroll / Sidebar kind-flash — were lost in R4 and are re-added
+  // in P4/P6 in the right app; publishing is harmless while unsubscribed).
   const onBackToSidebar = () => {
-    setPendingSidebarFocusPluginId(p.id);
+    emitDeepLink('sidebar:focus-plugin', p.id);
     // Stay on the bus tab — Sidebar is always visible. Player sees flash in
     // the Sidebar without losing the BusAdminPanel context they came from.
   };
@@ -1887,7 +1870,7 @@ function PluginDetail({
     openWorkbench({ tab: `wb:${wb.id}`, expandedPluginId: null });
   };
   const onFlashKindFooter = () => {
-    setPendingSidebarKindFlash(p.kind);
+    emitDeepLink('sidebar:flash-kind', p.kind);
     // Stay on bus tab — Sidebar BUS KINDS footer is always rendered, so the
     // 1.5s pulse is visible in the player's peripheral vision (left edge).
   };

@@ -1,6 +1,6 @@
 {
   "name": "@forgeax/interface",
-  "version": "0.1.0",
+  "version": "0.3.7",
   "private": true,
   "type": "module",
   "exports": {
@@ -22,7 +22,7 @@
     "test": "bun test src/lib src/components",
     "test:e2e": "node test/e2e/smoke.mjs",
     "lint": "tsc --noEmit -p tsconfig.lint.json",
-    "lint:agnostic": "! grep -rEn \"(from|import\\()\\s*['\\\"]@forgeax/editor\" src --include='*.ts' --include='*.tsx'",
+    "lint:agnostic": "! grep -rEn \"(from|import\\()\\s*['\\\"]@forgeax/(editor|chat|workbench|settings|dashboard)\" src --include='*.ts' --include='*.tsx'",
     "lint:dep": "depcruise -c .dependency-cruiser.cjs src"
   },
   "dependencies": {

@@ -38,6 +38,19 @@ module.exports = {
         dependencyTypesNot: ['type-only'],
       },
     },
+    {
+      name: 'interface-no-l2-apps',
+      severity: 'error',
+      comment:
+        'interface (前L1 AppKit 底座) must not import any 前L2 app runtime ' +
+        '(editor / chat / workbench / settings / dashboard). Apps are injected by ' +
+        'studio via PanelRenderers / app composition; interface holds abstractions only. ' +
+        'This locks R4 (docs/v2-vision/architecture-evolution/17): once an app is extracted, ' +
+        'a reverse import here is a structural regression and fails CI instead of a ' +
+        'standalone runtime crash.',
+      from: { path: '^src' },
+      to: { path: 'node_modules/@forgeax/(editor|chat|workbench|settings|dashboard)(/|$)' },
+    },
   ],
   options: {
     doNotFollow: { path: ['node_modules', 'dist', '.vite'] },

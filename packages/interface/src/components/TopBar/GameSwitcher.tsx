@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Gamepad2, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAppStore } from '../../store';
+import { emitForgeaXMessage } from '../../lib/forgeax-bridge';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
 import { useTranslation } from '@/i18n';
 import './TopBar.css';
@@ -154,7 +155,6 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const sendMessage = useAppStore((s) => s.sendMessage);
   const switchGame = useAppStore((s) => s.switchGame);
 
   const submit = async () => {
@@ -184,8 +184,16 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
       await switchGame(cleaned);
       onClose();
       // Kick Forge with the brief so the design pipeline starts immediately.
+      // Emit straight onto the new session's EventBus (server reflects
+      // user_input → chat session-stream renders it). The shell never imports
+      // chat — the bus IS the app-agnostic send channel.
       if (brief.trim()) {
-        void sendMessage(t('gameSwitcher.kickoffMessage', { slug: cleaned, brief: brief.trim() }));
+        const st = useAppStore.getState();
+        const sid = st.activeSid;
+        if (sid) {
+          const to = st.tabs.find((tb) => tb.sid === sid)?.agentId ?? undefined;
+          void emitForgeaXMessage(sid, t('gameSwitcher.kickoffMessage', { slug: cleaned, brief: brief.trim() }), to ? { to } : {});
+        }
       }
     } catch (e) {
       setErr((e as Error).message);

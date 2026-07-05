@@ -28,10 +28,42 @@ import {
   HANDLE_CUBE,
   meshFromInterleaved,
 } from '@forgeax/engine-runtime';
+import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 import type { EntityId, EditSession } from '@forgeax/editor-core';
-import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
-import type { EngineSync } from './sync';
+import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-core';
+// M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
+
+// ── M7-a (AC-15): doc.entities mirror deleted — gizmo/pick read the WORLD ──────
+// The dual-write mirror (EntityNode.components) is gone; the world is the SSOT.
+// entComponent(session, id, 'Transform') returns the engine-native POD
+// (posX/posY/posZ + quatX/Y/Z/W + scaleX/Y/Z). The viewport gizmo/drag math is
+// written against the editor euler-degree shape (x/y/z + rotX/rotY/rotZ), so read
+// once through this adapter and convert quat→euler HERE (euler-quat.ts is the SSOT
+// for that conversion — AGENTS.md #6). Returns undefined for organizational nodes
+// (no Transform) so callers keep their "nothing to gizmo/pick" fast-exit.
+type EditorTransform = {
+  x: number; y: number; z: number;
+  rotX: number; rotY: number; rotZ: number;
+  scaleX: number; scaleY: number; scaleZ: number;
+};
+function readEntTransform(session: EditSession, id: EntityId): EditorTransform | undefined {
+  const t = entComponent(session, id, 'Transform');
+  if (!t) return undefined;
+  const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+  const e = quatToEuler(n(t.quatX, 0), n(t.quatY, 0), n(t.quatZ, 0), n(t.quatW, 1));
+  return {
+    x: n(t.posX, 0), y: n(t.posY, 0), z: n(t.posZ, 0),
+    rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
+    scaleX: n(t.scaleX, 1), scaleY: n(t.scaleY, 1), scaleZ: n(t.scaleZ, 1),
+  };
+}
+// EditorHidden is an editor-only marker; the entComponents walk surfaces it on
+// both the main window (world) and popout windows (snapshot cache).
+function isEntHidden(session: EditSession, id: EntityId): boolean {
+  return 'EditorHidden' in entComponents(session, id);
+}
 
 const DEG2RAD = Math.PI / 180;
 
@@ -172,12 +204,12 @@ interface AssetsLike {
   register?(desc: unknown): { unwrap(): unknown };
 }
 
+// M4: EngineSync dependency removed — world is SSOT, no doc→world mapping needed.
 export interface ViewportDeps {
   canvas: HTMLCanvasElement;
   world: WorldLike;
   assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via world.allocSharedRef
   camera: number;        // the editor camera entity
-  sync: EngineSync;      // doc→world handle lookup (live drag) + resync
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
    *  origin instead of the arena-scale default. */
   initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
@@ -200,7 +232,7 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, camera, sync, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+export function createViewport({ canvas, world, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
   // Input-routing gate (requirements C-4 / AC-10): in the play·game quadrant the
   // game owns input, so every editor handler bails before doing orbit/pick/gizmo
   // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
@@ -215,9 +247,9 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   let fwd: Vec3 = [0, 0, -1], rgt: Vec3 = [1, 0, 0], upv: Vec3 = [0, 1, 0];
 
   const qCam = quat.create(), qY = quat.create(), qP = quat.create();
-  const tmp = new Float32Array(3);
+  const tmp = new Float32Array(3) as EngineVec3;
   const tv = (out: Vec3, src: Vec3): Vec3 => {
-    quat.transformVec3(tmp, qCam, src);
+    quat.transformVec3(tmp, qCam, src as unknown as EngineVec3);
     out[0] = tmp[0]!; out[1] = tmp[1]!; out[2] = tmp[2]!;
     return out;
   };
@@ -431,7 +463,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
     // — otherwise the gizmo lags at the pre-drag position until release.
     const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
-    const t = live ?? (sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined);
+    const t = live ?? (sel !== null ? readEntTransform(bus.doc, sel) : undefined);
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
@@ -505,7 +537,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   function forwardOf(t?: Record<string, number>): Vec3 {
     const q = quat.create();
     quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
-    const o = new Float32Array(3); quat.transformVec3(o, q, [0, 0, -1]);
+    const o = new Float32Array(3) as EngineVec3; quat.transformVec3(o, q, [0, 0, -1] as unknown as EngineVec3);
     return [o[0]!, o[1]!, o[2]!];
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
@@ -513,12 +545,15 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     // Display gate (w23): display='game' → hide param gizmos (Light range/spot, Camera frustum).
     if (!isAuxVisible()) { despawnParam(); return; }
     const sel = getSelection();
-    const node = sel !== null ? bus.doc.entities[sel] : undefined;
-    if (!node) { despawnParam(); return; }
-    const t = node.components.Transform as Record<string, number> | undefined;
+    // M7-a (AC-15): read the selected entity's components from the world (SSOT),
+    // not the deleted doc.entities mirror. entComponents returns component-name →
+    // POD for every component the entity carries.
+    const comps = sel !== null ? entComponents(bus.doc, sel) : undefined;
+    if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
+    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
-    const light = node.components.Light as Record<string, unknown> | undefined;
-    const cam = node.components.Camera as Record<string, unknown> | undefined;
+    const light = comps.Light as Record<string, unknown> | undefined;
+    const cam = comps.Camera as Record<string, unknown> | undefined;
     const pts: Vec3[] = [];
     if (light) {
       const type = (light.type as string) ?? 'point';
@@ -565,41 +600,21 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
 
   // ── animation scrub preview (Timeline) ──────────────────────────────────────
-  // Apply a sampled clip's Transform channels to the previewed entity's world
-  // transform live (no doc churn). Clearing it resyncs the world from the doc.
-  function applyAnimPreview(): void {
-    const ap = getAnimPreview();
-    if (!ap) { sync.resync(); return; }
-    const wid = sync.worldEntityFor(ap.id);
-    if (wid === undefined) return;
-    const t = (bus.doc.entities[ap.id]?.components.Transform as Record<string, number> | undefined) ?? {};
-    const g = (k: string, d: number): number => { const v = ap.values[`Transform.${k}`]; return typeof v === 'number' ? v : num(t[k], d); };
-    const data: Record<string, number> = {
-      posX: g('x', 0), posY: g('y', 0), posZ: g('z', 0),
-      scaleX: g('scaleX', 1), scaleY: g('scaleY', 1), scaleZ: g('scaleZ', 1),
-    };
-    const rx = g('rotX', 0), ry = g('rotY', 0), rz = g('rotZ', 0);
-    if (rx || ry || rz) {
-      quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
-    } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
-    world.set(wid, Transform, data);
-  }
-
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
     const r = canvas.getBoundingClientRect();
     const [nx, ny] = ndcFromClient(clientX - r.left, clientY - r.top, r.width, r.height);
     return { origin: camPos, dir: rayDirection(fwd, rgt, upv, nx, ny, FOV, aspect()) };
   }
 
-  /** Nearest visible doc entity hit by the ray (or null). */
+  /** Nearest visible world entity hit by the ray (or null). */
   function pick(origin: Vec3, dir: Vec3): EntityId | null {
+    // M7-a (AC-15): enumerate entities from the world (entIds) instead of the
+    // deleted doc.order/doc.entities mirror. Hidden = EditorHidden marker present.
     const doc: EditSession = bus.doc;
     let best: EntityId | null = null, bestT = Infinity;
-    for (const id of doc.order) {
-      const node = doc.entities[id];
-      if (!node || node.hidden) continue;
-      const t = node.components.Transform as Record<string, number> | undefined;
+    for (const id of entIds(doc)) {
+      if (isEntHidden(doc, id)) continue;
+      const t = readEntTransform(doc, id);
       if (!t) continue; // organizational node — nothing to pick
       const { center, half } = entityBox(t);
       const hit = rayAABB(origin, dir, center, half);
@@ -632,13 +647,12 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   let livePatch: Record<string, number> = {};
   const qd = quat.create();
 
-  /** Live-preview a Transform patch via world.set (no doc churn). Position +
-   *  scale + rotation(quat from euler) are all applied; on release the patch is
-   *  committed as one setComponent. */
-  const applyLive = (patch: Record<string, number>): void => {
-    livePatch = patch;
-    if (dragWorld === undefined) return;
-    const m = { ...dragOrig, ...patch };
+  /** Convert an editor-shape Transform (x/y/z + rotX/rotY/rotZ + scale) into the
+   *  engine-native POD (posX/posY/posZ + quatX/Y/Z/W + scale). M7-a: the world is
+   *  the SSOT — both the live preview (world.set) and the commit (setComponent →
+   *  document.ts w.set) must write engine field names, not the editor euler shape.
+   *  euler→quat uses the XYZ-order convention (euler-quat.ts SSOT, AGENTS.md #6). */
+  const toEnginePatch = (m: Record<string, number>): Record<string, number> => {
     const data: Record<string, number> = {
       posX: num(m.x, 0), posY: num(m.y, 0), posZ: num(m.z, 0),
       scaleX: num(m.scaleX, 1), scaleY: num(m.scaleY, 1), scaleZ: num(m.scaleZ, 1),
@@ -646,9 +660,18 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
     if (rx || ry || rz) {
       quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+      data.quatX = qd[0]!; data.quatY = qd[1]!; data.quatZ = qd[2]!; data.quatW = qd[3]!;
     } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
-    world.set(dragWorld, Transform, data);
+    return data;
+  };
+
+  /** Live-preview a Transform patch via world.set (no doc churn). Position +
+   *  scale + rotation(quat from euler) are all applied; on release the patch is
+   *  committed as one setComponent. */
+  const applyLive = (patch: Record<string, number>): void => {
+    livePatch = patch;
+    if (dragWorld === undefined) return;
+    world.set(dragWorld, Transform, toEnginePatch({ ...dragOrig, ...patch }));
     // Mirror the changed fields into the Inspector live (no command) — the
     // "预览" loop: numbers track the drag, the single commit lands on release.
     if (dragId !== null) for (const k in patch) setFieldPreview(dragId, `Transform.${k}`, patch[k]!);
@@ -685,8 +708,10 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const h = sel !== null ? hitGizmo(origin, dir) : null;
     if (h !== null && sel !== null) {
       dragId = sel;
-      dragWorld = sync.worldEntityFor(sel);
-      dragOrig = { ...(bus.doc.entities[sel]!.components.Transform as Record<string, number>) };
+// M4: worldEntityFor removed — entity IDs are directly world entities.
+      dragWorld = sel;
+      // M7-a: read the grab-time Transform from the world (doc.entities gone).
+      dragOrig = { ...(readEntTransform(bus.doc, sel) ?? {}) };
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
       livePatch = {};
       if (h >= 3) {
@@ -708,8 +733,9 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     if (hit !== null) {
       setSelection(hit);
       dragId = hit;
-      dragWorld = sync.worldEntityFor(hit);
-      dragOrig = { ...(bus.doc.entities[hit]!.components.Transform as Record<string, number>) };
+      dragWorld = hit;
+      // M7-a: read the grab-time Transform from the world (doc.entities gone).
+      dragOrig = { ...(readEntTransform(bus.doc, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
@@ -802,8 +828,10 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   function onUp(): void {
     if ((mode === 'drag' || mode === 'axisDrag') && dragId !== null && Object.keys(livePatch).length > 0) {
       // commit the final pose as ONE undoable command, merged over the original
-      // Transform so untouched fields survive. resync then re-places it from the doc.
-      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: { ...dragOrig, ...livePatch } });
+      // Transform so untouched fields survive. M7-a: setComponent writes straight
+      // to the world (document.ts w.set), so the patch MUST be engine-native POD
+      // (posX/quatX...), not the editor euler shape — convert via toEnginePatch.
+      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: toEnginePatch({ ...dragOrig, ...livePatch }) });
     }
     mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
     setFieldPreview(null); // stop the Inspector preview; it now reads the committed doc
@@ -823,7 +851,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
 
   /** Re-aim to the default character framing: target chest-height, ~4.5m back,
-   *  slight downward tilt — matches the socket-editor preview which grounds the
+   *  slight downward tilt — matches the recenter view intent which grounds the
    *  character at the origin (~1.9m tall). */
   function resetCamera(): void {
     target = [0, 1, 0];
@@ -836,7 +864,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
-    const t = sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined;
+    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
     if (!t) return;
     const { center, half } = entityBox(t);
     target = center;
@@ -890,8 +918,10 @@ onDisplayModeChange(() => refreshGizmos());
   const selSig = (): string | null => {
     const sel = getSelection();
     if (sel === null) return null;
-    const node = bus.doc.entities[sel];
-    return node ? JSON.stringify(node.components) : '\u2205'; // '∅' = selected entity gone
+    // M7-a: signature the selected entity's components read from the world (SSOT)
+    // instead of the deleted doc.entities mirror. Empty dict = entity gone.
+    const comps = entComponents(bus.doc, sel);
+    return Object.keys(comps).length > 0 ? JSON.stringify(comps) : '\u2205'; // '∅' = selected entity gone
   };
   let lastSelSig = selSig();
   const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
@@ -902,8 +932,6 @@ onDisplayModeChange(() => refreshGizmos());
     lastSelSig = sig;
     refreshGizmos();
   });
-  const unsubAnim = onAnimPreview(applyAnimPreview);
-
   applyCamera(); // also paints the gizmo if something is already selected
 
   return {
@@ -918,7 +946,6 @@ onDisplayModeChange(() => refreshGizmos());
       unsubSel();
       unsubMode();
       unsubDoc();
-      unsubAnim();
       despawnHandles();
       despawnParam();
     },

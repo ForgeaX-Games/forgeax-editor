@@ -104,7 +104,7 @@ export function ContextMenu() {
           align="start"
           side="bottom"
           sideOffset={2}
-          className="min-w-[180px]"
+          className="min-w-[180px] forgeax-ctx-menu-panel"
           onContextMenu={(e) => e.preventDefault()}
         >
           {state.items.map((it, i) =>

@@ -14,7 +14,7 @@
 import { useState, type ReactNode } from 'react';
 import { getRegisteredComponents } from '@forgeax/engine-ecs';
 import { defaultComponentData } from '@forgeax/editor-core';
-import { dispatch, useSelection } from '@forgeax/editor-shared';
+import { dispatch, useSelection } from '@forgeax/editor-core';
 
 // ── AddComponentMenu ────────────────────────────────────────────────────────
 

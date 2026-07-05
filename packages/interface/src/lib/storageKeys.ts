@@ -53,4 +53,6 @@ export const APP_EVENTS = {
   animHandoff: 'forgeax:anim-handoff',
   /** Open (or focus, if already open) a dock panel by id. detail: { id: string } */
   openPanel: 'forgeax:shell:open-panel',
+  /** Focus a dock panel by id ONLY if it already exists (no reopen / no force-insert). detail: { id: string } */
+  focusPanel: 'forgeax:shell:focus-panel',
 } as const;

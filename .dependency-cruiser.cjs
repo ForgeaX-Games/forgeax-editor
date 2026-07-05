@@ -4,9 +4,9 @@ module.exports = {
     {
       name: 'no-circular',
       severity: 'error',
-      comment: '5-package acyclic DAG: engine ← core ← shared ← panels ← edit-runtime / play-runtime',
+      comment: 'acyclic DAG: engine ← core ← content-browser ← panels ← edit-runtime / play-runtime',
       from: {
-        path: '^packages/editor-',
+        path: '^packages/(core|content-browser|panels|edit-runtime|play-runtime)/',
       },
       to: {
         circular: true,
@@ -17,7 +17,7 @@ module.exports = {
     doNotFollow: {
       path: ['node_modules', 'dist', '.vite'],
     },
-    includeOnly: '^packages/editor-',
+    includeOnly: '^packages/(core|content-browser|panels|edit-runtime|play-runtime)/',
     tsPreCompilationDeps: false,
   },
 };

@@ -3,8 +3,9 @@ import { WorkspaceTabs } from './WorkspaceTabs';
 import { SessionSwitcher } from './SessionSwitcher';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { GameSwitcher } from './GameSwitcher';
+import { AndroidPackageDialog, type AndroidPackageConfig } from './AndroidPackageDialog';
 import { STORAGE_KEYS, APP_EVENTS } from '../../lib/storageKeys';
-import { CircleGauge, LayoutGrid, Rocket, Settings, ShieldAlert, Check, X, Globe, Monitor, Smartphone, Apple, ChevronDown, History, RefreshCw, Trash2, Loader2, Wrench } from 'lucide-react';
+import { CircleGauge, LayoutGrid, Rocket, Settings, ShieldAlert, Check, X, Globe, Monitor, Smartphone, Apple, ChevronDown, History, RefreshCw, Trash2, Loader2, Wrench, Eraser } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -21,7 +22,7 @@ import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { useAppStore } from '../../store';
 import { isTauri } from '../../lib/platform/runtime';
 import { dashApi } from '../../lib/dashboard-api';
-import { alertDialog } from '../../lib/dialog';
+import { alertDialog, confirmDialog } from '../../lib/dialog';
 import { listBusPlugins } from '../../lib/bus-api';
 import { useTranslation } from '@/i18n';
 import './TopBar.css';
@@ -318,7 +319,7 @@ export interface TopBarProps {
 export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
   const { t } = useTranslation();
   const { mode, setMode } = useAppStore();
-  const openSettings = useAppStore((s) => s.openSettings);
+  const openOverlay = useAppStore((s) => s.openOverlay);
   const pinnedSlug = useAppStore((s) => s.pinnedSlug);
   const [packaging, setPackaging] = useState(false);
   const [packagingPlatform, setPackagingPlatform] = useState('');
@@ -329,6 +330,8 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
   const [showProgress, setShowProgress] = useState(false);
   const [progressPhase, setProgressPhase] = useState('');
   const [progressLogs, setProgressLogs] = useState<string[]>([]);
+  const [cleaning, setCleaning] = useState(false);
+  const [androidDialog, setAndroidDialog] = useState<{ slug: string; defaultAppName: string } | null>(null);
   const { pendingConfirms, ack, deny } = useConfirmToast();
 
   type TargetPlatform = 'web' | 'windows' | 'android' | 'ios';
@@ -352,8 +355,8 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
     return () => { cancelled = true; };
   }, []);
 
-  const onPackageGame = async (platform: TargetPlatform) => {
-    if (packaging) return;
+  // Resolve the game slug to package: the pinned one, else the active game.
+  const resolvePackageSlug = async (): Promise<string | null> => {
     let slug = pinnedSlug;
     if (!slug) {
       try {
@@ -361,6 +364,24 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
         slug = ((await r.json()) as { activeSlug?: string | null }).activeSlug ?? null;
       } catch { /* fall through */ }
     }
+    return slug ?? null;
+  };
+
+  // Android needs user config (applicationId / name / icon / orientation) before
+  // packaging, so it opens a dialog first and calls onPackageGame from onConfirm.
+  const openAndroidDialog = async () => {
+    if (packaging) return;
+    const slug = await resolvePackageSlug();
+    if (!slug) {
+      await alertDialog({ title: t('topbar.package.title'), body: t('topbar.package.noGame') });
+      return;
+    }
+    setAndroidDialog({ slug, defaultAppName: slug });
+  };
+
+  const onPackageGame = async (platform: TargetPlatform, androidCfg?: AndroidPackageConfig) => {
+    if (packaging) return;
+    const slug = await resolvePackageSlug();
     if (!slug) {
       await alertDialog({ title: t('topbar.package.title'), body: t('topbar.package.noGame') });
       return;
@@ -371,7 +392,13 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
       const r = await fetch(`/api/workbench/games/${slug}/package`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetPlatform: platform, rebuildEngine, forceRebuild: false, engineRoot: selectedEngineRoot }),
+        body: JSON.stringify({
+          targetPlatform: platform,
+          rebuildEngine,
+          forceRebuild: false,
+          engineRoot: selectedEngineRoot,
+          ...(androidCfg ?? {}),
+        }),
       });
       const j = (await r.json()) as Record<string, unknown>;
 
@@ -488,6 +515,63 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
     } finally {
       setPackaging(false);
       setPackagingPlatform('');
+    }
+  };
+
+  const onCleanCache = async () => {
+    if (packaging) return;
+    if (!(await confirmDialog({
+      title: t('topbar.package.cleanTitle'),
+      body: (
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+          <div>{t('topbar.package.cleanBody')}</div>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, opacity: 0.85 }}>
+            <li>{t('topbar.package.cleanItemToolchain')}</li>
+            <li>{t('topbar.package.cleanItemShell')}</li>
+            <li>{t('topbar.package.cleanItemTmp')}</li>
+          </ul>
+          <div style={{ marginTop: 8, opacity: 0.7 }}>{t('topbar.package.cleanKeepHint')}</div>
+        </div>
+      ),
+      danger: true,
+      confirmText: t('topbar.package.cleanConfirm'),
+    }))) return;
+
+    setCleaning(true);
+    try {
+      const r = await fetch('/api/workbench/package/clean', { method: 'POST' });
+      const j = (await r.json()) as {
+        ok: boolean;
+        totalBytes: number;
+        targets: Array<{ path: string; existed: boolean; removed: boolean; bytes: number; error?: string }>;
+      };
+      const fmtSize = (b: number): string => {
+        if (b <= 0) return '0 B';
+        const u = ['B', 'KB', 'MB', 'GB']; let i = 0; let n = b;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+      };
+      setCleaning(false);
+      await alertDialog({
+        title: j.ok ? t('topbar.package.cleanDone') : t('topbar.package.cleanPartial'),
+        body: (
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+            <div>{t('topbar.package.cleanFreed', { size: fmtSize(j.totalBytes) })}</div>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+              {j.targets.map((tg) => (
+                <li key={tg.path} style={{ opacity: tg.existed ? 1 : 0.5 }}>
+                  {tg.error ? '✗' : tg.removed ? '✓' : '·'} {tg.path}
+                  {tg.removed && tg.bytes > 0 ? ` (${fmtSize(tg.bytes)})` : ''}
+                  {tg.error ? ` — ${tg.error}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ),
+      });
+    } catch (e) {
+      setCleaning(false);
+      await alertDialog({ title: t('topbar.package.cleanFailed'), body: String((e as Error)?.message ?? e) });
     }
   };
 
@@ -610,7 +694,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
         <button
           type="button"
           className="tb-icon-btn"
-          onClick={() => openSettings()}
+          onClick={() => openOverlay('settings')}
           title={t('topbar.settings.tooltip')}
         >
           <Settings size={16} />
@@ -640,7 +724,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
               {t('topbar.package.platformWindows')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem disabled={packaging} onClick={() => { void openAndroidDialog(); }}>
               <Smartphone size={14} />
               {t('topbar.package.platformAndroid')}
             </DropdownMenuItem>
@@ -689,13 +773,40 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
               <History size={14} />
               {t('topbar.package.history')}
             </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => { e.preventDefault(); void onCleanCache(); }}
+              style={{ gap: 6, color: 'var(--destructive, #e05260)' }}
+            >
+              <Eraser size={14} />
+              {t('topbar.package.clean')}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </div>
     <ConfirmToastList confirms={pendingConfirms} onAck={ack} onDeny={deny} />
+    {cleaning && (
+      <div className="tb-progress-overlay">
+        <div className="tb-progress-dialog">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Loader2 size={16} className="tb-spinner" />
+            <span style={{ fontWeight: 600 }}>{t('topbar.package.cleaning')}</span>
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>{t('topbar.package.cleaningHint')}</div>
+        </div>
+      </div>
+    )}
     {showProgress && <PackageProgressOverlay phase={progressPhase} logs={progressLogs} onClose={() => { setShowProgress(false); }} t={t} />}
     {showHistory && <PackageHistoryDialog onClose={() => setShowHistory(false)} onRetry={onRetryPackage} t={t} />}
+    {androidDialog && (
+      <AndroidPackageDialog
+        slug={androidDialog.slug}
+        defaultAppName={androidDialog.defaultAppName}
+        t={t}
+        onCancel={() => setAndroidDialog(null)}
+        onConfirm={(cfg) => { setAndroidDialog(null); void onPackageGame('android', cfg); }}
+      />
+    )}
     </>
   );
 }
@@ -820,12 +931,13 @@ function PackageHistoryDialog({ onClose, onRetry, t }: {
 }
 
 function DashboardToggle() {
-  const dashboardOpen = useAppStore((s) => s.dashboardOpen);
-  const setDashboardOpen = useAppStore((s) => s.setDashboardOpen);
+  const dashboardOpen = useAppStore((s) => s.activeOverlay === 'dashboard');
+  const openOverlay = useAppStore((s) => s.openOverlay);
+  const closeOverlay = useAppStore((s) => s.closeOverlay);
   return (
     <button
       className={`tb-icon-btn${dashboardOpen ? ' active' : ''}`}
-      onClick={() => setDashboardOpen(!dashboardOpen)}
+      onClick={() => (dashboardOpen ? closeOverlay() : openOverlay('dashboard'))}
       title="Dashboard — Run/Thread/Provider monitoring"
     >
       <CircleGauge size={16} />

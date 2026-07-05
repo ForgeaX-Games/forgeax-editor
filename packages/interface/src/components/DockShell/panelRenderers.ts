@@ -29,6 +29,55 @@ export interface PanelRenderers {
   /** Renders the play/preview surface. Omitted → placeholder. */
   renderPreview?: () => ReactNode;
   /**
+   * Renders a single editor panel (ep:*) by its id. Injected by the host
+   * (standalone / studio) so interface never statically imports editor
+   * panel components (DIP zero-cycle paradigm, same as renderEdit/renderChat).
+   * Omitted (interface-alone) -> the ep:* panel shows a neutral placeholder.
+   *
+   * plan-strategy section 2 D4 (M2 injection slot); interface holds NO editor/
+   * engine import -- the slot's id is a plain string, matching the existing
+   * `editorPanelIds: readonly string[]` convention.
+   */
+  renderEditorPanel?: (id: string) => ReactNode;
+  /**
+   * Renders the chat surface (the Forge conversation UI). Injected by studio
+   * from `@forgeax/chat` (R4 — chat is a 前L2 app composed into the shell, not
+   * an interface import). Omitted (interface-alone / standalone editor) → the
+   * chat panel renders a neutral placeholder. interface holds NO `@forgeax/chat`
+   * import; the body comes through this slot exactly like renderEdit/renderPreview.
+   */
+  renderChat?: () => ReactNode;
+  /**
+   * Renders the dashboard overlay (Overview / Sessions / Analytics). Injected
+   * by studio from `@forgeax/dashboard` (R4 — dashboard is a 前L2 app composed
+   * into the shell). Its DATA (sessions / telemetry) stays in interface's L1
+   * store; this slot only supplies the body. Omitted → no overlay (interface
+   * holds NO `@forgeax/dashboard` import).
+   */
+  renderDashboard?: () => ReactNode;
+  /**
+   * Renders the settings overlay (the unified settings panel + its sections
+   * register side-effect). Injected by studio from `@forgeax/settings` (R4).
+   * Its DATA (settingsOpen / settingsSection) stays in interface's L1 store;
+   * this slot supplies the body. Omitted → no overlay (interface holds NO
+   * `@forgeax/settings` import).
+   */
+  renderSettings?: () => ReactNode;
+  /**
+   * Renders the workbench main-area surface (R4 — injected by studio from
+   * `@forgeax/workbench`). The variant selects which entrypoint:
+   *  - 'full'   → the workbenchTab router (WorkbenchMode), used by MainArea.
+   *  - 'agents' → the agents browser (AgentsMainArea), detached 'agents' window.
+   *  - 'files'  → the file workbench with the empty-gallery suppressed
+   *               (WorkbenchModeDefault showGalleryWhenEmpty={false}), detached
+   *               'files' window.
+   * The workbench DATA + the plugin-HOSTING runtime (WorkbenchPluginHost,
+   * keep-alive iframes, CenterPluginLayer, wb:* dock panels, host-sdk RPC) stay
+   * in interface (L1 shell infrastructure); this slot supplies only the
+   * navigation/gallery UI body. Omitted (interface-alone) → placeholder.
+   */
+  renderWorkbench?: (variant: 'full' | 'agents' | 'files') => ReactNode;
+  /**
    * Inline workbench panels (non-iframe React panels), keyed by bus plugin id.
    * The host (studio) injects concrete panels like wb-plugin-author; interface
    * itself holds NO specific plugin id and renders whatever is registered.

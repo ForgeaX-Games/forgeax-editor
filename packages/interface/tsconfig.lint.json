@@ -22,7 +22,7 @@
       "@forgeax/design": ["../packages/design/index.ts"],
       "@forgeax/design/preset": ["../packages/design/preset.ts"],
       "@forgeax/design/theme": ["../packages/design/theme.ts"],
-      "@forgeax/types": ["../../types/src/index.ts"],
+      "@forgeax/types": ["../../contracts/types/src/index.ts"],
       "@forgeax/host-sdk": ["../../host-sdk/src/index.ts"]
     }
   }

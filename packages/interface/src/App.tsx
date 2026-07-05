@@ -3,21 +3,19 @@ import { TopBar } from './components/TopBar/TopBar';
 import { DockShell } from './components/DockShell/DockShell';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS, type PanelRenderers } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
-import { Dashboard } from './components/Dashboard/Dashboard';
 import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
 import { HealthIndicator } from './components/StatusBar/HealthIndicator';
 import { PulseFeeds } from './components/StatusBar/feeds/PulseFeeds';
 import { VersionBadge } from './components/StatusBar/VersionBadge';
-import { SettingsPanel } from './components/SettingsPanel/SettingsPanel';
-import { SettingsSectionsRegister } from './components/SettingsPanel/SectionsRegister';
 import { ContextMenu } from './components/ContextMenu/ContextMenu';
 import { FirstRunSetup } from './components/FirstRun/FirstRunSetup';
 import { DialogHost } from './lib/dialog';
 import { bootStageAppMounted } from './boot/driver';
 import { useGlobalShortcuts } from './lib/global-shortcuts';
 import { useAppStore } from './store';
-import { buildEntityPill, buildAssetPill, buildComponentPill } from './components/Composer/referenceRegistry';
+import { buildEntityPill, buildAssetPill, buildComponentPill, requestComposerInsert } from './lib/composer-bridge';
 import { isTrustedMessageOrigin } from './lib/trustedOrigins';
+import { APP_EVENTS } from './lib/storageKeys';
 import './App.css';
 
 export interface AppProps {
@@ -68,7 +66,7 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
       if (!data || data.type !== 'VAG_EDITOR_REF') return;
       const p = data.payload as Record<string, unknown> | null;
       if (!p || typeof p.kind !== 'string') return;
-      const insert = useAppStore.getState().requestComposerInsert;
+      const insert = requestComposerInsert;
       if (p.kind === 'component' && typeof p.entityName === 'string' && typeof p.comp === 'string') {
         insert(buildComponentPill({
           entityId: typeof p.entityId === 'number' ? p.entityId : undefined,
@@ -98,7 +96,7 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
       if (!isTrustedMessageOrigin(ev.origin)) return;
       const data = ev.data as { type?: unknown; refs?: unknown } | null;
       if (!data || data.type !== 'FORGEAX_ADD_ASSET_TO_CHAT' || !Array.isArray(data.refs)) return;
-      const insert = useAppStore.getState().requestComposerInsert;
+      const insert = requestComposerInsert;
       for (const ref of data.refs as Array<Record<string, unknown>>) {
         if (ref.type === 'asset' && typeof ref.guid === 'string') {
           insert(buildAssetPill({
@@ -121,6 +119,22 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
     };
     window.addEventListener('message', onBatchRef);
     return () => window.removeEventListener('message', onBatchRef);
+  }, []);
+
+  // ── ✎ Edit → focus a dock panel (e.g. double-click a mesh → Mesh tab) ───────
+  // The editor iframe posts FORGEAX_FOCUS_PANEL { panel } to bring a panel to
+  // front. Relayed as the focus-only APP_EVENTS.focusPanel CustomEvent so the
+  // DockShell activates the tab WITHOUT reopening a closed one (no force-insert).
+  // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
+  useEffect(() => {
+    const onFocusPanel = (ev: MessageEvent) => {
+      if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
+      const data = ev.data as { type?: unknown; panel?: unknown } | null;
+      if (!data || data.type !== 'FORGEAX_FOCUS_PANEL' || typeof data.panel !== 'string') return;
+      window.dispatchEvent(new CustomEvent(APP_EVENTS.focusPanel, { detail: { id: `ep:${data.panel}` } }));
+    };
+    window.addEventListener('message', onFocusPanel);
+    return () => window.removeEventListener('message', onFocusPanel);
   }, []);
 
   // WAL replay trigger lives in ChatPanel — it watches activeTab.agentId
@@ -170,17 +184,16 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
           surface wrappers (SurfacePanels → FatalBanner). */}
       <HealthIndicator />
       <GlobalStatusBar />
-      {/* Dashboard renders as a top-of-stack overlay when toggled open via
-          the TopBar gauge icon. It does NOT replace the studio shell — the
-          underlying chat/preview keeps state so closing the dashboard is
-          instant. */}
-      <Dashboard />
-      {/* SettingsPanel — the unified settings overlay that absorbed the old
-          right-slide SettingsDrawer + the TopBar Bus mode tab.  Sections are
-          registered via SettingsSectionsRegister; any other component can
-          drop its own section with useSettingsSection(). */}
-      <SettingsSectionsRegister />
-      <SettingsPanel />
+      {/* Dashboard overlay — injected by studio from `@forgeax/dashboard` (R4
+          前L2 app). Toggled open via the TopBar gauge icon; its open/sessions
+          state lives in interface's L1 store, only the body comes through the
+          renderDashboard slot. Omitted (interface-alone) → no overlay. */}
+      {(panelRenderers ?? DEFAULT_PANEL_RENDERERS).renderDashboard?.()}
+      {/* Settings overlay — injected by studio from `@forgeax/settings` (R4
+          前L2 app). The slot mounts BOTH the sections-register side-effect and
+          the unified settings panel; settingsOpen/section state lives in
+          interface's L1 store. Omitted (interface-alone) → no overlay. */}
+      {(panelRenderers ?? DEFAULT_PANEL_RENDERERS).renderSettings?.()}
       <ContextMenu />
       {/* Imperative async confirm()/alert() replacement (shadcn AlertDialog). */}
       <DialogHost />

@@ -641,7 +641,10 @@ fn setup_engine_work(
     projects_dir: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_dir as symlink;
 
     fs::create_dir_all(engine_work)?;
 
@@ -659,10 +662,16 @@ fn setup_engine_work(
         if src.exists() {
             let dst = engine_work.join(dir);
             let _ = fs::remove_dir_all(&dst);
+            #[cfg(unix)]
             let ok = std::process::Command::new("cp")
                 .arg("-R").arg(&src).arg(&dst).status()?.success();
+            #[cfg(windows)]
+            let ok = std::process::Command::new("xcopy")
+                .arg(&src).arg(&dst)
+                .args(["/E", "/I", "/Q", "/Y", "/H"])
+                .status()?.success();
             if !ok {
-                return Err(format!("cp -R {dir} failed").into());
+                return Err(format!("recursive copy {dir} failed").into());
             }
         }
     }
@@ -702,7 +711,10 @@ fn setup_engine_work(
 #[cfg(not(debug_assertions))]
 fn seed_shared_games(res_root: &std::path::Path, projects_dir: &std::path::Path) {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_dir as symlink;
 
     let games_src = res_root.join("games");
     let Ok(entries) = fs::read_dir(&games_src) else { return };
