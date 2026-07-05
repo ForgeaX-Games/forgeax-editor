@@ -26,8 +26,10 @@ import {
   quat,
   Materials,
   HANDLE_CUBE,
-  meshFromInterleaved,
 } from '@forgeax/engine-runtime';
+// engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
+// @forgeax/engine-geometry leaf package.
+import { meshFromInterleaved } from '@forgeax/engine-geometry';
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 import { ray, vec3 } from '@forgeax/engine-math';
 

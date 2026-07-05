@@ -35,8 +35,19 @@ export function showContextMenu(
   const usable = items.filter((it) => it.sep || it.label);
   if (usable.length === 0) return;
 
-  if (window.parent && window.parent !== window) {
-    // Embedded → render in the interface parent (top layer of the whole window).
+  // Prefer the interface's window-level context-menu host (interface/src/
+  // components/ContextMenu). It renders VAG_CONTEXT_MENU at the top layer of the
+  // WHOLE window — no panel-rect clipping, one renderer for iframe panels AND the
+  // single-realm in-process panels. That host maps the sender window's client
+  // coords via its iframe rect; when the sender IS the host window (single realm,
+  // window.parent === window) it finds no frame and uses the coords verbatim
+  // (already window-relative). So the ONLY case that must fall back to the local
+  // CtxMenu is a genuine pop-out window with no interface host — detected by the
+  // ContextMenuHost having registered a local renderer.
+  const host = window.parent && window.parent !== window ? window.parent : window;
+  const useInterfaceHost = window.parent !== window || renderLocal === null;
+  if (useInterfaceHost) {
+    // Embedded iframe OR single-realm in-process → render in the interface host.
     const menuId = `em-${++menuSeq}`;
     const handlers = new Map<string, () => void>();
     const wire = usable.map((it, idx) => {
@@ -54,9 +65,11 @@ export function showContextMenu(
     window.addEventListener('message', onAction);
     // Drop the listener if the menu is dismissed without a pick.
     setTimeout(() => window.removeEventListener('message', onAction), 30000);
-    window.parent.postMessage({ type: 'VAG_CONTEXT_MENU', menuId, x: e.clientX, y: e.clientY, items: wire }, '*');
+    host.postMessage({ type: 'VAG_CONTEXT_MENU', menuId, x: e.clientX, y: e.clientY, items: wire }, '*');
   } else {
-    // Pop-out window → render locally.
+    // Pop-out window with a locally-mounted ContextMenuHost → render locally.
+    // (useInterfaceHost is false only when renderLocal !== null, but narrow
+    // explicitly for the type checker.)
     renderLocal?.({ x: e.clientX, y: e.clientY, items: usable });
   }
 }

@@ -85,6 +85,7 @@
         "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-fbx": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
@@ -268,6 +269,14 @@
         "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-remote": "workspace:*",
         "@types/node": "^20.14.0",
+      },
+    },
+    "packages/engine/packages/geometry": {
+      "name": "@forgeax/engine-geometry",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
     },
     "packages/engine/packages/gltf": {
@@ -494,6 +503,7 @@
       "dependencies": {
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:^",
@@ -699,6 +709,7 @@
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
@@ -972,6 +983,8 @@
     "@forgeax/engine-fbx": ["@forgeax/engine-fbx@workspace:packages/engine/packages/fbx"],
 
     "@forgeax/engine-font": ["@forgeax/engine-font@workspace:packages/engine/packages/font"],
+
+    "@forgeax/engine-geometry": ["@forgeax/engine-geometry@workspace:packages/engine/packages/geometry"],
 
     "@forgeax/engine-gltf": ["@forgeax/engine-gltf@workspace:packages/engine/packages/gltf"],
 
