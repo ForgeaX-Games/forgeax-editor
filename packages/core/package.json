@@ -53,7 +53,6 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
-    "@forgeax/engine-fbx-wasm": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*"

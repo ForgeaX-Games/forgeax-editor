@@ -17,8 +17,8 @@
 //
 // Every OTHER engine package (runtime / ecs / types / gltf / app / pack /
 // vite-plugins / …) now resolves to its real dist/*.d.ts — do NOT add it here.
-// When engine-project / engine-fbx-wasm start shipping real .d.ts, delete the
-// matching block.
+// When engine-project / engine-fbx start shipping real .d.ts (through studio's
+// build), delete the matching block.
 
 // engine-project — value + type space. store.ts / open-project.ts import both
 // runtime values (loadGameProject / FORGE_JSON / GameProjectError) AND types
@@ -39,21 +39,19 @@ declare module '@forgeax/engine-project' {
   export type GameProjectErrorDetail = any;
 }
 
-// engine-fbx-wasm — the wasm importer shell ships only .mjs (no .d.ts).
-// fbx-cook.ts imports these three values.
-declare module '@forgeax/engine-fbx-wasm' {
+// engine-fbx — ufbx WASM runtime (initFbxWasm / parseFbx / isFbxWasmReady) PLUS
+// the parse-*.ts bridge helpers, since the engine collapsed the former
+// @forgeax/engine-fbx-wasm package INTO @forgeax/engine-fbx (feat-20260704-
+// collapse-fbx-to-ufbx). It DOES ship real .d.ts after a full `tsc -b` engine
+// build (so editor's own CI never needs this block), but the studio consumer
+// builds engine with tsup only (.mjs, no .d.ts), so editor-core/src/fbx-cook.ts's
+// imports must resolve via this shim there. value + type space — fbx-cook imports
+// the wasm runtime, the parse-*.ts functions, and the FbxRaw* types. All REAL
+// engine-fbx exports.
+declare module '@forgeax/engine-fbx' {
   export const initFbxWasm: any;
   export const parseFbx: any;
   export const isFbxWasmReady: any;
-}
-
-// engine-fbx — the native (fbxsdk) importer's parse-*.ts helpers. It DOES ship
-// real .d.ts after a full `tsc -b` engine build (so editor's own CI never needs
-// this block), but the studio consumer builds engine with tsup only (.mjs, no
-// .d.ts), so editor-core/src/fbx-cook.ts's imports must resolve via this shim
-// there. value + type space — fbx-cook imports both the parse-*.ts functions and
-// the FbxRaw* types. These are REAL engine-fbx exports.
-declare module '@forgeax/engine-fbx' {
   export const parseMesh: any;
   export const parseScene: any;
   export const parseMaterial: any;

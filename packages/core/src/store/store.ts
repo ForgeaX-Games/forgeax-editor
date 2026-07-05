@@ -1080,9 +1080,18 @@ export function flushPendingSaveBeacon(): void {
 // Guards: (1) skip the echo of our own save (content-compare, see below);
 // (2) skip while we have unsaved local edits pending (_isDirty) so an agent
 // write never clobbers what the user is mid-editing.
-export function initDiskWatch(): void {
+/**
+ * Watch the active game's scene file for external edits and hot-reload the live
+ * world. Returns a stopper that closes the socket, cancels the pending reload +
+ * reconnect timers, and halts the backoff loop — the single-realm studio host
+ * calls it on a cross-game teardown (resetEditRealm) so a stale watcher for the
+ * previous game can't fire against the new game's world. Idempotent.
+ */
+export function initDiskWatch(): () => void {
   let ws: WebSocket | null = null;
   let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
   let backoff = 1000;
 
   // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
@@ -1128,6 +1137,7 @@ export function initDiskWatch(): void {
   };
 
   const connect = (): void => {
+    if (stopped) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     try { ws = new WebSocket(`${proto}//${location.host}/ws`); }
     catch { return; }
@@ -1147,13 +1157,23 @@ export function initDiskWatch(): void {
     });
     const retry = (): void => {
       ws = null;
-      setTimeout(connect, backoff);
+      if (stopped) return;
+      retryTimer = setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 15000);
     };
     ws.addEventListener('close', retry);
     ws.addEventListener('error', () => { try { ws?.close(); } catch { /* */ } });
   };
   connect();
+
+  return () => {
+    stopped = true;
+    if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    const sock = ws;
+    ws = null;
+    if (sock) { try { sock.onclose = null; sock.close(); } catch { /* already gone */ } }
+  };
 }
 
 /** Replace the entire authored document (scene load/import). Resets selection

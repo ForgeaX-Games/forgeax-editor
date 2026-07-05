@@ -1,18 +1,20 @@
 // fbx-cook.ts — frontend FBX → meta.json cook via ufbx WASM.
 //
-// Browser-side equivalent of gltf-cook.ts but for FBX files. Uses the
-// ufbx WASM parser (@forgeax/engine-fbx-wasm) to parse the binary on the
-// client, then reuses the same parse-*.ts pipeline from @forgeax/engine-fbx
-// to produce a canonical `external-asset-package` sidecar with sub-asset
-// declarations and reimport-stable GUIDs.
+// Browser-side equivalent of gltf-cook.ts but for FBX files. Uses the ufbx WASM
+// parser + parse-*.ts pipeline — both now live in @forgeax/engine-fbx after the
+// engine collapsed the separate -wasm package into it (feat-20260704-collapse-
+// fbx-to-ufbx) — to produce a canonical `external-asset-package` sidecar with
+// sub-asset declarations and reimport-stable GUIDs.
 //
 // Architecture: FBX bytes → ufbx WASM → JSON POD → parse-*.ts → meta.json
 // This matches the native binding.cc → JSON POD → parse-*.ts path, but
 // runs entirely in the browser (no Node.js, no Autodesk FBX SDK).
 
-import { initFbxWasm, parseFbx, isFbxWasmReady } from '@forgeax/engine-fbx-wasm';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
+  initFbxWasm,
+  parseFbx,
+  isFbxWasmReady,
   parseMesh,
   parseScene,
   parseMaterial,

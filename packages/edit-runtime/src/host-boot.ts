@@ -211,6 +211,13 @@ export interface HostSession {
   playSimulation(): void;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
+  /**
+   * Tear down the session's global side effects (disk-watch socket, flush
+   * beacons, VAG flush handler), flushing any pending save first. A multi-game
+   * host calls this on a cross-game switch before disposing the engine; a
+   * single-game host (standalone) never calls it (teardown = page navigation).
+   */
+  dispose(): void;
 }
 
 /**
@@ -505,17 +512,32 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   void installPreviewSkinHook({ world, renderer, viewport });
 
   // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
-  initDiskWatch();
-  window.addEventListener('pagehide', () => flushPendingSaveBeacon());
-  window.addEventListener('visibilitychange', () => {
+  // Capture each teardown handle so a multi-game host (studio single-realm) can
+  // dispose this session on a cross-game switch — otherwise the previous game's
+  // disk-watch socket + flush beacons keep firing against the new game's world.
+  const stopDiskWatch = initDiskWatch();
+  const onPageHide = (): void => flushPendingSaveBeacon();
+  const onVisibilityChange = (): void => {
     if (document.visibilityState === 'hidden') flushPendingSaveBeacon();
-  });
-  onVagMessage(window, {
+  };
+  window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('visibilitychange', onVisibilityChange);
+  const disposeVagFlush = onVagMessage(window, {
     allowedOrigins: allowedParentOrigins(),
     handlers: { VAG_EDITOR_FLUSH: () => flushPendingSaveBeacon() },
   });
 
-  return { playSimulation, stopSimulation };
+  const dispose = (): void => {
+    // Flush any pending save one last time before tearing the session down so a
+    // cross-game switch never drops the previous game's unsaved edits.
+    try { flushPendingSaveBeacon(); } catch { /* best effort */ }
+    stopDiskWatch();
+    window.removeEventListener('pagehide', onPageHide);
+    window.removeEventListener('visibilitychange', onVisibilityChange);
+    if (typeof disposeVagFlush === 'function') disposeVagFlush();
+  };
+
+  return { playSimulation, stopSimulation, dispose };
 }
 
 // ── mesh-stats publisher (was bootEditor :1105) ───────────────────────────────

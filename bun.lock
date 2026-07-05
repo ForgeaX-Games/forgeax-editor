@@ -26,7 +26,7 @@
         "vite": "*",
       },
     },
-    "packages/editor-content-browser": {
+    "packages/content-browser": {
       "name": "@forgeax/editor-content-browser",
       "version": "0.1.0",
       "dependencies": {
@@ -44,14 +44,13 @@
         "typescript": "^5.6.3",
       },
     },
-    "packages/editor-core": {
+    "packages/core": {
       "name": "@forgeax/editor-core",
       "version": "0.1.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-fbx": "workspace:*",
-        "@forgeax/engine-fbx-wasm": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
@@ -75,7 +74,7 @@
         "typescript": "^5.6.3",
       },
     },
-    "packages/editor-edit-runtime": {
+    "packages/edit-runtime": {
       "name": "@forgeax/editor-edit-runtime",
       "version": "0.1.0",
       "dependencies": {
@@ -116,65 +115,6 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^4.3.4",
-        "typescript": "^5.6.3",
-        "vite": "^6.0.5",
-      },
-    },
-    "packages/editor-panels": {
-      "name": "@forgeax/editor-panels",
-      "version": "0.1.0",
-      "dependencies": {
-        "@forgeax/editor-content-browser": "workspace:*",
-        "@forgeax/editor-core": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-        "react": "^19.0.0",
-      },
-      "devDependencies": {
-        "@types/bun": "^1.3.13",
-        "@types/node": "^20.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "typescript": "^5.6.3",
-      },
-    },
-    "packages/editor-play-runtime": {
-      "name": "@forgeax/editor-play-runtime",
-      "version": "0.1.0",
-      "dependencies": {
-        "@forgeax/editor-core": "workspace:*",
-        "@forgeax/engine-app": "workspace:*",
-        "@forgeax/engine-audio": "workspace:*",
-        "@forgeax/engine-audio-webaudio": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-gltf": "workspace:*",
-        "@forgeax/engine-image": "workspace:*",
-        "@forgeax/engine-input": "workspace:*",
-        "@forgeax/engine-math": "workspace:*",
-        "@forgeax/engine-pack": "workspace:*",
-        "@forgeax/engine-physics": "workspace:*",
-        "@forgeax/engine-physics-rapier2d": "workspace:*",
-        "@forgeax/engine-physics-rapier3d": "workspace:*",
-        "@forgeax/engine-project": "workspace:*",
-        "@forgeax/engine-render-graph": "workspace:*",
-        "@forgeax/engine-rhi": "workspace:*",
-        "@forgeax/engine-rhi-webgpu": "workspace:*",
-        "@forgeax/engine-rhi-wgpu": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-        "@forgeax/engine-shader": "workspace:*",
-        "@forgeax/engine-types": "workspace:*",
-        "@forgeax/engine-vite-plugin-pack": "workspace:*",
-        "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "lucide-react": "^0.460.0",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-      },
-      "devDependencies": {
-        "@types/bun": "^1.3.13",
-        "@types/node": "^20.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "@webgpu/types": "^0.1.70",
         "typescript": "^5.6.3",
         "vite": "^6.0.5",
       },
@@ -307,15 +247,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
-        "node-addon-api": "^8.0.0",
       },
-      "devDependencies": {
-        "@types/node": "^20.14.0",
-      },
-    },
-    "packages/engine/packages/fbx-wasm": {
-      "name": "@forgeax/engine-fbx-wasm",
-      "version": "0.0.0",
       "devDependencies": {
         "@types/node": "^20.14.0",
       },
@@ -679,13 +611,6 @@
       "name": "@forgeax/engine-wgpu-wasm",
       "version": "0.0.0",
     },
-    "packages/fbx-cook": {
-      "name": "fbx-cook",
-      "version": "0.0.1",
-      "dependencies": {
-        "@forgeax/editor-core": "workspace:*",
-      },
-    },
     "packages/interface": {
       "name": "@forgeax/interface",
       "version": "0.3.7",
@@ -733,6 +658,24 @@
         "vite": "^6.0.5",
       },
     },
+    "packages/panels": {
+      "name": "@forgeax/editor-panels",
+      "version": "0.1.0",
+      "dependencies": {
+        "@forgeax/editor-content-browser": "workspace:*",
+        "@forgeax/editor-core": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "react": "^19.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "@types/node": "^20.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "typescript": "^5.6.3",
+      },
+    },
     "packages/platform-io": {
       "name": "@forgeax/platform-io",
       "version": "0.1.0",
@@ -744,6 +687,47 @@
         "@types/node": "^22.0.0",
         "dependency-cruiser": "^17.4.3",
         "typescript": "^5.6.3",
+      },
+    },
+    "packages/play-runtime": {
+      "name": "@forgeax/editor-play-runtime",
+      "version": "0.1.0",
+      "dependencies": {
+        "@forgeax/editor-core": "workspace:*",
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-physics": "workspace:*",
+        "@forgeax/engine-physics-rapier2d": "workspace:*",
+        "@forgeax/engine-physics-rapier3d": "workspace:*",
+        "@forgeax/engine-project": "workspace:*",
+        "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "lucide-react": "^0.460.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "@types/node": "^20.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "@webgpu/types": "^0.1.70",
+        "typescript": "^5.6.3",
+        "vite": "^6.0.5",
       },
     },
   },
@@ -962,15 +946,15 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
-    "@forgeax/editor-content-browser": ["@forgeax/editor-content-browser@workspace:packages/editor-content-browser"],
+    "@forgeax/editor-content-browser": ["@forgeax/editor-content-browser@workspace:packages/content-browser"],
 
-    "@forgeax/editor-core": ["@forgeax/editor-core@workspace:packages/editor-core"],
+    "@forgeax/editor-core": ["@forgeax/editor-core@workspace:packages/core"],
 
-    "@forgeax/editor-edit-runtime": ["@forgeax/editor-edit-runtime@workspace:packages/editor-edit-runtime"],
+    "@forgeax/editor-edit-runtime": ["@forgeax/editor-edit-runtime@workspace:packages/edit-runtime"],
 
-    "@forgeax/editor-panels": ["@forgeax/editor-panels@workspace:packages/editor-panels"],
+    "@forgeax/editor-panels": ["@forgeax/editor-panels@workspace:packages/panels"],
 
-    "@forgeax/editor-play-runtime": ["@forgeax/editor-play-runtime@workspace:packages/editor-play-runtime"],
+    "@forgeax/editor-play-runtime": ["@forgeax/editor-play-runtime@workspace:packages/play-runtime"],
 
     "@forgeax/engine": ["@forgeax/engine@workspace:packages/engine/packages/engine"],
 
@@ -985,8 +969,6 @@
     "@forgeax/engine-ecs": ["@forgeax/engine-ecs@workspace:packages/engine/packages/ecs"],
 
     "@forgeax/engine-fbx": ["@forgeax/engine-fbx@workspace:packages/engine/packages/fbx"],
-
-    "@forgeax/engine-fbx-wasm": ["@forgeax/engine-fbx-wasm@workspace:packages/engine/packages/fbx-wasm"],
 
     "@forgeax/engine-font": ["@forgeax/engine-font@workspace:packages/engine/packages/font"],
 
@@ -1622,8 +1604,6 @@
 
     "fastq": ["fastq@1.20.1", "", { "dependencies": { "reusify": "^1.0.4" } }, "sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw=="],
 
-    "fbx-cook": ["fbx-cook@workspace:packages/fbx-cook"],
-
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
 
     "fill-range": ["fill-range@7.1.1", "", { "dependencies": { "to-regex-range": "^5.0.1" } }, "sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg=="],
@@ -1941,8 +1921,6 @@
     "nanoid": ["nanoid@3.3.12", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-ZB9RH/39qpq5Vu6Y+NmUaFhQR6pp+M2Xt76XBnEwDaGcVAqhlvxrl3B2bKS5D3NH3QR76v3aSrKaF/Kiy7lEtQ=="],
 
     "neo-async": ["neo-async@2.6.2", "", {}, "sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw=="],
-
-    "node-addon-api": ["node-addon-api@8.8.0", "", {}, "sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA=="],
 
     "node-releases": ["node-releases@2.0.47", "", {}, "sha512-Uzmd6LXpouKo8EUK68IjH4+E01w/hXyV3R3g/geCJo+rXLNfh1xucB+LOzYEOQPSiUK3h/xZf0cQGcSsmyL2Og=="],
 

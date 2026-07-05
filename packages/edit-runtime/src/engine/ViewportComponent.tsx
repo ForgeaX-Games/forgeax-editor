@@ -79,6 +79,45 @@ import '../theme.css';
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
 let bootStarted = false;
 
+// ── per-boot teardown registry (single-realm multi-game host) ──────────────────
+// The standalone editor boots once and tears down only by page navigation, so it
+// never needs these. A MULTI-game host (studio single-realm) switches games at
+// runtime; because the physics backend + pack roots are bound once at createApp,
+// a cross-game switch must DESTROY this realm (GPU device + world + session +
+// window listeners) and re-boot fresh. bootViewport pushes each per-boot teardown
+// handle here; resetEditRealm() runs them LIFO, disposes the engine, and clears
+// the latch so the next mount re-boots. Everything a boot installs GLOBALLY and
+// engine-scoped must register here or it leaks/duplicates across a switch.
+const teardownFns: Array<() => void> = [];
+function registerTeardown(fn: () => void): void {
+  teardownFns.push(fn);
+}
+
+/**
+ * Tear down the current in-process editor realm for a deliberate cross-game
+ * switch (studio single-realm host). Runs every per-boot teardown handle (window
+ * listeners, quadrant subscriptions, host-session disk-watch/beacons), disposes
+ * the engine app (app.stop() → renderer.dispose() releases the WebGPU device),
+ * and resets the single-boot latch so the next <ViewportComponent> mount boots a
+ * fresh engine for the new game.
+ *
+ * MUST be called deliberately (on game switch) — NEVER on a StrictMode unmount,
+ * or dev double-mount would tear down the live realm. The single-game standalone
+ * host never calls this (its teardown is a full page navigation, AC-04).
+ */
+export function resetEditRealm(): void {
+  // Run per-boot teardown LIFO (reverse install order) so late-installed handles
+  // that depend on earlier ones unwind first. Swallow individual failures so one
+  // bad teardown can't strand the rest (a half-torn realm wedges the next boot).
+  for (let i = teardownFns.length - 1; i >= 0; i--) {
+    try { teardownFns[i]!(); } catch (e) { console.warn('[editor] resetEditRealm teardown step failed:', e); }
+  }
+  teardownFns.length = 0;
+  // Drop the global handle so nothing keeps the dead app/world/renderer alive.
+  try { delete (window as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* non-config */ }
+  bootStarted = false;
+}
+
 // ── boot breadcrumb + dead-boot watchdog (was main.tsx :56-108) ───────────────
 function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
   try {
@@ -257,6 +296,7 @@ async function bootViewport(
     canvas.height = (container.clientHeight || window.innerHeight) * d;
   };
   window.addEventListener('resize', onResize);
+  registerTeardown(() => window.removeEventListener('resize', onResize));
 
   // editor orbit camera (was :531). Not part of the authored doc.
   const aspect = canvas.width / canvas.height || 1;
@@ -271,7 +311,10 @@ async function bootViewport(
     canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity,
     getInputTarget,
   });
-  window.addEventListener('resize', () => viewport.refresh());
+  const onViewportResize = (): void => viewport.refresh();
+  window.addEventListener('resize', onViewportResize);
+  registerTeardown(() => window.removeEventListener('resize', onViewportResize));
+  registerTeardown(() => { try { viewport.dispose(); } catch { /* already disposed */ } });
 
   // possess-exit key (was :617). Esc / G un-possesses play·game -> play·scene.
   function onPossessKey(e: KeyboardEvent): void {
@@ -284,13 +327,14 @@ async function bootViewport(
     if (k === 'Escape' || k === 'g' || k === 'G') setViewportQuadrant({ display: 'scene' });
   }
   window.addEventListener('keydown', onPossessKey, { capture: true });
+  registerTeardown(() => window.removeEventListener('keydown', onPossessKey, { capture: true } as EventListenerOptions));
 
   // play·scene non-commit (was :638). transientMode true exactly in play·scene.
   function syncTransientMode(q: { run: string; display: string }): void {
     bus.transientMode = q.run === 'play' && q.display === 'scene';
   }
   syncTransientMode(getViewportQuadrant());
-  onViewportQuadrantChange(syncTransientMode);
+  registerTeardown(onViewportQuadrantChange(syncTransientMode));
 
   // active-camera derivation (was :658-710). Game-camera discovery walks the live
   // world archetype graph for the first non-editor Camera entity.
@@ -317,11 +361,11 @@ async function bootViewport(
     if (camEnt !== undefined) setActiveCamera(world as never, camEnt as unknown as number);
   };
   applyActiveCamera();
-  onViewportQuadrantChange(() => applyActiveCamera());
+  registerTeardown(onViewportQuadrantChange(() => applyActiveCamera()));
 
   // display bus <-> quadrant bridge (was :892).
   _syncDisplayMode(getViewportQuadrant().display);
-  onViewportQuadrantChange((q) => _syncDisplayMode(q.display));
+  registerTeardown(onViewportQuadrantChange((q) => _syncDisplayMode(q.display)));
 
   // ── run the application session tail on this world (host-boot, D8) ──────────
   let session: HostSession;
@@ -340,8 +384,11 @@ async function bootViewport(
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: () => {}, stopSimulation: () => {} };
+    session = { playSimulation: () => {}, stopSimulation: () => {}, dispose: () => {} };
   }
+  // Tear the host session down (disk-watch socket, flush beacons, VAG flush) on a
+  // cross-game realm reset, flushing any pending save first.
+  registerTeardown(() => session.dispose());
 
   // Wire the deferred ▶/■ chrome actions now that the lifecycle exists (was :505).
   actionsRef.current = {
@@ -363,10 +410,19 @@ async function bootViewport(
 
   // start the live render loop + reporters (was :895).
   editorApp.start();
+  // Cross-game teardown: stop the rAF loop + release the WebGPU device (app.stop()
+  // chains into renderer.dispose()'s GPU-lifecycle cascade, feat-20260612-rhi-
+  // destroy-renderer-dispose-gpu-lifecycle) and drop the canvas so the next boot
+  // starts from a clean container. Registered LAST so it runs FIRST on teardown
+  // (LIFO) — freeze the engine before unwinding the listeners it drove.
+  registerTeardown(() => {
+    try { editorApp.stop(); } catch (e) { console.warn('[editor] editorApp.stop() failed:', e); }
+    try { canvas.remove(); } catch { /* already detached */ }
+  });
   installFpsReport(editorApp, onFps);
-  installAssetSpawnBridge();
-  installPreviewControls(editorApp);
-  installErrorOverlay(container);
+  registerTeardown(installAssetSpawnBridge());
+  registerTeardown(installPreviewControls(editorApp));
+  registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');
 
   // game input-chain liveness breadcrumb (was :919). createApp already wired the
@@ -399,7 +455,18 @@ function installFpsReport(editorApp: { registerUpdate(fn: (dt: number) => void):
   });
 }
 
+// These two bridges monkeypatch process-global surfaces (console methods,
+// window.fetch / XHR.prototype / WebSocket) that hold NO engine references, so
+// they survive a cross-game realm reset untouched. Guard them install-once — a
+// second install after resetEditRealm would double-wrap console.error (duplicate
+// VAG frames) and re-wrap an already-wrapped fetch. They intentionally do NOT
+// register teardown; they are document-lifetime, not per-boot.
+let consoleBridgeInstalled = false;
+let networkBridgeInstalled = false;
+
 function installConsoleBridge(): void {
+  if (consoleBridgeInstalled) return;
+  consoleBridgeInstalled = true;
   (['log', 'warn', 'error', 'info', 'debug'] as const).forEach((level) => {
     const original = (console[level] as (...a: unknown[]) => void).bind(console);
     console[level] = (...args: unknown[]) => {
@@ -423,6 +490,8 @@ function installConsoleBridge(): void {
 }
 
 function installNetworkBridge(): void {
+  if (networkBridgeInstalled) return;
+  networkBridgeInstalled = true;
   const send = (kind: 'fetch' | 'xhr' | 'ws', method: string, url: string, status: number, ms: number, ok: boolean): void => {
     try {
       sendVagMessage(window.parent, VagNetworkSchema, { kind, method, url: String(url).slice(0, 2048), status, ms: Math.round(ms), ok, ts: Date.now() });
@@ -500,8 +569,8 @@ function isSpawnDoc(x: unknown): x is SpawnDoc {
     && typeof d.entities === 'object' && d.entities !== null;
 }
 
-function installPreviewControls(editorApp: { pause(): void; resume(): void }): void {
-  onVagMessage(window, {
+function installPreviewControls(editorApp: { pause(): void; resume(): void }): () => void {
+  return onVagMessage(window, {
     allowedOrigins: allowedParentOrigins(),
     handlers: {
       VAG_PREVIEW_PAUSE: () => editorApp.pause(),
@@ -530,7 +599,10 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): v
   });
 }
 
-function installErrorOverlay(container: HTMLElement): void {
+/** Returns a disposer that restores console.error, removes the window listeners,
+ *  and drops the overlay box — so a cross-game realm reset doesn't stack another
+ *  console.error wrapper (each stack layer duplicates output) or leak listeners. */
+function installErrorOverlay(container: HTMLElement): () => void {
   const box = document.createElement('div');
   box.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
     + 'background:rgba(140,10,10,0.94);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:10px 12px;'
@@ -553,16 +625,26 @@ function installErrorOverlay(container: HTMLElement): void {
     box.textContent = `⚠ editor render error (${++count}):\n` + [...seen].join('\n');
   };
   const origErr = console.error.bind(console);
-  console.error = (...a: unknown[]): void => { origErr(...a); try { show(a.map(stringifyArg).join(' ')); } catch { /* */ } };
-  window.addEventListener('error', (ev) => {
+  const wrappedErr = (...a: unknown[]): void => { origErr(...a); try { show(a.map(stringifyArg).join(' ')); } catch { /* */ } };
+  console.error = wrappedErr;
+  const onError = (ev: ErrorEvent): void => {
     const stack = (ev.error as Error | undefined)?.stack;
     show(`window error: ${ev.message} @ ${ev.filename}:${ev.lineno}\n${stack ?? ''}`);
-  });
-  window.addEventListener('unhandledrejection', (ev) => {
-    const reason = (ev as PromiseRejectionEvent).reason;
+  };
+  const onRejection = (ev: PromiseRejectionEvent): void => {
+    const reason = ev.reason;
     const stack = (reason as { stack?: string } | undefined)?.stack;
     show(`unhandled rejection: ${String(reason)}\n${stack ?? '(no stack)'}`);
-  });
+  };
+  window.addEventListener('error', onError);
+  window.addEventListener('unhandledrejection', onRejection);
+  return () => {
+    // Only restore if still ours — a later install may have re-wrapped it.
+    if (console.error === wrappedErr) console.error = origErr;
+    window.removeEventListener('error', onError);
+    window.removeEventListener('unhandledrejection', onRejection);
+    try { box.remove(); } catch { /* already gone */ }
+  };
 }
 
 function paintDiagnosticMessage(container: HTMLElement, err: unknown): void {
