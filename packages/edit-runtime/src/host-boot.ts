@@ -60,7 +60,7 @@ import {
   entIds,
   entComponent,
   resolveGamePath,
-  getApiClient,
+  apiFetch,
 } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import {
@@ -128,7 +128,7 @@ export async function resolveEditPhysics(): Promise<PhysicsBackend | undefined> 
   if (!slug || slug === 'default') return undefined;
   try {
     const gp = await loadGameProject(async () => {
-      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
+      const r = await apiFetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { content?: string };
       if (!j.content) throw new Error('Empty content');
@@ -287,7 +287,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   let cachedProjectRootAbs: string | undefined;
   const getProjectRootAbs = async (): Promise<string> => {
     if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
-    const r = await getApiClient().fetch('/api/health', { cache: 'no-store' });
+    const r = await apiFetch('/api/health', { cache: 'no-store' });
     if (!r.ok) throw new Error(`/api/health HTTP ${r.status}`);
     const j = (await r.json()) as { projectRootAbs?: string };
     if (!j.projectRootAbs) throw new Error('/api/health missing projectRootAbs');
@@ -315,7 +315,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     try {
       const gameForgePath = resolveGamePath(FORGE_JSON);
       const gp = await loadGameProject(async () => {
-        const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+        const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { content?: string };
         if (!j.content) throw new Error('Empty content');
@@ -628,7 +628,7 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
   try {
     const gameForgePath = resolveGamePath(FORGE_JSON);
     const fetchRead = async (): Promise<string> => {
-      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+      const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { content?: string };
       if (!j.content) throw new Error('Empty content');

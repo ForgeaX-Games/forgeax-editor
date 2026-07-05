@@ -10,11 +10,14 @@
  *
  * Charter F1 (single-entry indexability): the SSOT is one physical file in the
  * interface repo (packages/interface/src/app-kit.ts); editor forwards to it.
+ *
+ * AC-09 (M3): the standalone iframe-mount entry + its options interface were
+ * deep-removed in interface — the editor host mounts via React createRoot
+ * (single-realm collapse), so this shim no longer re-exports them.
  */
 
 export {
   defineApp,
-  mountStandalone,
   mountComposition,
   AppKitError,
 } from '@forgeax/interface/app-kit';
@@ -25,5 +28,4 @@ export type {
   AppManifestPanel,
   DefinedApp,
   MountOptions,
-  MountStandaloneOptions,
 } from '@forgeax/interface/app-kit';

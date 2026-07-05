@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { isScenePack, stableGuid } from '../scene/scene-pack';
+import { isScenePack, stableGuid, validatePackShell } from '../scene/scene-pack';
 // M5: import engine-native serialize APIs for worldToPack (replaces sessionToPack)
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 // M4: packToSession removed — scene-load now uses engine-native world.instantiateScene.
@@ -20,7 +20,9 @@ import {
 } from './entity-state';
 import type { AssetChatRef, MeshStatsWire } from '../io/cross-panel-types';
 import { Name, Transform, ChildOf, Children, SceneInstance } from '@forgeax/engine-runtime';
-import type { EntityHandle } from '../scene/scene-types';
+import type { EntityHandle, WorldType } from '../scene/scene-types';
+import type { AssetRegistry } from '@forgeax/engine-runtime';
+import type { SceneAsset } from '@forgeax/engine-types';
 
 // Engine wire constant for an unspawned SceneInstance.mapping slot (gap left by
 // a deleted entity). Kept as a local literal because engine-runtime does not
@@ -30,7 +32,7 @@ const ENTITY_NULL_RAW = 0xffffffff;
 import { EditorHidden } from '../components/EditorHidden';
 import { setClipControl, setClipControlForwarder, requestView, setViewRequestForwarder } from '../io/clip-control';
 import { loadGameProject, FORGE_JSON, GameProjectError, type GameProject } from '@forgeax/engine-project';
-import { getApiClient } from '../io/api-client';
+import { apiFetch } from '../io/api-client';
 import { findScenePackByGuid } from '../assets/assets';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
@@ -372,7 +374,7 @@ let currentSceneGuid: string | null = null;
 // The synthetic SceneInstance root handle of the currently loaded scene, kept so
 // a disk-watch reload can despawnScene it before re-instantiating (avoids a
 // double-spawn). null when no scene is loaded (seed / fresh workspace).
-let currentSceneRoot: number | null = null;
+let currentSceneRoot: EntityHandle | null = null;
 /** The synthetic SceneInstance root of the scene loaded into the LIVE editor
  *  world (bus.doc.world) by loadSceneByGuid. run-lifecycle reads this to snapshot
  *  the scene for ▶ Play / ■ Stop (getSceneInstanceState/despawnScene must use a
@@ -594,7 +596,7 @@ export async function readPlayConfig(): Promise<PlayConfig> {
     // optional=1: play-config.json is per-developer launcher state that may not
     // exist yet (default = campaign). The flag makes the server return 200
     // { exists:false } instead of 404, so an absent config logs no red error.
-    const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
+    const r = await apiFetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
     if (r.ok) {
       const j = (await r.json()) as { content?: string };
       if (j.content) {
@@ -609,7 +611,7 @@ export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
   const p = playConfigPath();
   if (!p) return false;
   try {
-    const r = await getApiClient().fetch('/api/files', {
+    const r = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: p, content: JSON.stringify(cfg, null, 2) + '\n' }),
@@ -638,7 +640,7 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   const newPack = { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [{ guid: newSceneGuid, kind: 'scene', payload: { entities: [] }, refs: [] }] };
   const packContent = JSON.stringify(newPack, null, 2) + '\n';
   try {
-    const w1 = await getApiClient().fetch('/api/files', {
+    const w1 = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: newPath, content: packContent }),
@@ -744,10 +746,8 @@ export function stripEditorHiddenMarker(asset: unknown): unknown {
 }
 
 function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w: any = doc.world;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reg: any = doc.registry;
+  const w: WorldType = doc.world;
+  const reg: AssetRegistry | undefined = doc.registry;
   if (!w || !reg) {
     console.warn('[editor-core] worldToPack: world or registry missing');
     return null;
@@ -762,7 +762,7 @@ function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
   // — see entRootHandles).
   const rootHandles: EntityHandle[] = entRootHandles(doc, w);
   // Use engine's rootsToSceneAsset + serializeSceneAssetToPack pipeline.
-  const assetR = (rootsToSceneAsset as any)(reg, w, rootHandles);
+  const assetR = rootsToSceneAsset(reg, w, rootHandles);
   if (!assetR.ok) {
     console.warn('[editor-core] worldToPack: rootsToSceneAsset failed:', assetR.error);
     return null;
@@ -771,8 +771,8 @@ function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
   // is a registered component so rootsToSceneAsset would otherwise emit it into
   // the pack (AC-04). The entity itself stays (AC-05). SceneAsset is readonly →
   // rebuild entities without the marker.
-  const strippedAsset = stripEditorHiddenMarker(assetR.value);
-  const packR = (serializeSceneAssetToPack as any)(strippedAsset, sceneGuid);
+  const strippedAsset = stripEditorHiddenMarker(assetR.value) as SceneAsset;
+  const packR = serializeSceneAssetToPack(strippedAsset, sceneGuid);
   if (!packR.ok) {
     console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
     return null;
@@ -869,8 +869,7 @@ export async function loadDocFromDisk(): Promise<boolean> {
  *  SceneInstance subtree via the engine primitive and clear the session's
  *  legacy-id↔handle map. No-op when nothing is loaded. */
 function teardownCurrentScene(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w: any = (bus.doc as any).world;
+  const w: WorldType = bus.doc.world;
   if (w && currentSceneRoot !== null) {
     try { w.despawnScene(currentSceneRoot); } catch { /* best-effort */ }
   }
@@ -888,12 +887,9 @@ function teardownCurrentScene(): void {
  * seed() fallback in main.tsx does NOT misfire). Returns true on success.
  */
 async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
-  // engine World / AssetRegistry are injected on bus.doc; the engine type shim
-  // degrades to namespace (TS2709) so access via any.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w: any = (bus.doc as any).world;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const reg: any = (bus.doc as any).registry;
+  // engine World / AssetRegistry are injected on bus.doc.
+  const w: WorldType = bus.doc.world;
+  const reg: AssetRegistry | undefined = bus.doc.registry;
   if (!w || !reg) return false;
   try {
     const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -915,7 +911,7 @@ async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const root = instRes.value;
     // Populate _e2h/_h2e (+ advance the id allocator) from the freshly
     // instantiated scene root. Shared with the ▶/■ Stop rebind path (SSOT).
-    return populateSessionMapFromSceneRoot(w, root as number);
+    return populateSessionMapFromSceneRoot(w, root);
   } catch {
     return false;
   }
@@ -990,8 +986,7 @@ export async function instantiateSceneRefUnderWorld(
  *
  * Returns true when the root carried a resolvable SceneInstance.mapping.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function populateSessionMapFromSceneRoot(w: any, root: number): boolean {
+function populateSessionMapFromSceneRoot(w: WorldType, root: EntityHandle): boolean {
   const instComp = w.get(root, SceneInstance);
   if (!instComp.ok) return false;
   const mappingArr: ArrayLike<number> = instComp.value.mapping;
@@ -1030,10 +1025,12 @@ function populateSessionMapFromSceneRoot(w: any, root: number): boolean {
  * null if the root had no resolvable SceneInstance (rebind skipped).
  */
 export function rebindLoadedScene(newRoot: number): number | null {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w: any = (bus.doc as any).world;
+  const w: WorldType = bus.doc.world;
   if (!w) return null;
-  if (!populateSessionMapFromSceneRoot(w, newRoot)) return null;
+  // AC-04: newRoot is a raw engine handle at the host boundary (run-lifecycle
+  // types it as number); it IS an EntityHandle from world.instantiate, so brand
+  // it here before the engine-typed populate call.
+  if (!populateSessionMapFromSceneRoot(w, newRoot as EntityHandle)) return null;
   docVersion++;
   for (const fn of docListeners) fn();
   return newRoot;
@@ -1052,8 +1049,22 @@ export async function saveDocToDisk(): Promise<boolean> {
     console.error('[editor-core] saveDocToDisk: serialize failed — aborting write to protect on-disk scene');
     return false;
   }
+  // M1: validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
+  // Producer-side validation: worldToPack already self-validates via the engine
+  // pipeline, but this guard ensures the serialized JSON satisfies the shell schema
+  // before touching disk — even if the engine pipeline produces a corrupted pack.
   try {
-    const r = await getApiClient().fetch('/api/files', {
+    const parsed = JSON.parse(content);
+    if (!validatePackShell(parsed).ok) {
+      console.error('[editor-core] saveDocToDisk: pack shell validation failed — aborting write');
+      return false;
+    }
+  } catch {
+    console.error('[editor-core] saveDocToDisk: failed to parse serialized content');
+    return false;
+  }
+  try {
+    const r = await apiFetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: p, content }),
@@ -1121,7 +1132,7 @@ export function flushPendingSaveBeacon(): void {
     const ok = navigator.sendBeacon('/api/files', blob);
     // sendBeacon can refuse (queue full / too large); fall back to a keepalive
     // fetch which also survives teardown for small bodies.
-    if (!ok) void getApiClient().fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
+    if (!ok) void apiFetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
   } catch {
     // last resort — best-effort async save (may be aborted on teardown)
     void saveDocToDisk();
@@ -1163,7 +1174,7 @@ export function initDiskWatch(): () => void {
     const p = scenePath();
     if (!p) return;
     try {
-      const r = await getApiClient().fetch(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await apiFetch(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) return;
       const j = (await r.json()) as { content?: string };
       if (!j.content) return;

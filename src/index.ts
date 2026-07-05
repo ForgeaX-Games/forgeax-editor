@@ -59,23 +59,23 @@ const editorApp = defineApp({
   routes: [],
 });
 
-// Named `app` export — preferred entry for AppKit consumers
-// (e.g. `mountStandalone(editorApp)` in standalone-editor-demo). Both
-// the named `manifest` re-export and the default export remain so that
+// Named `app` export — preferred entry for AppKit consumers. Both the
+// named `manifest` re-export and the default export remain so that
 // existing AC-03 / AC-04 / AC-16 assertions stay green.
 export const app = editorApp;
 export const manifest = editorApp.manifest;
 
 // Convenience re-exports of the AppKit mount entry points so downstream
 // SDK consumers who only `import` from `@forgeax/editor` can reach
-// `mountStandalone` / `mountComposition` without a second-hop import
-// from `@forgeax/interface/app-kit`. These are pure pass-throughs of
-// the same symbols already in scope above (no side-effect imports
-// added: zero-transitive root entry per plan-strategy section 2 D-5).
-// (verify R1 Pure-trial F-1 carry-over: single-hop discoverability.)
-export { mountStandalone, mountComposition, AppKitError } from './app-kit';
+// `mountComposition` without a second-hop import from
+// `@forgeax/interface/app-kit`. These are pure pass-throughs of the same
+// symbols already in scope above (no side-effect imports added:
+// zero-transitive root entry per plan-strategy section 2 D-5).
+// The standalone iframe-mount entry was deep-removed in M3 (AC-09) —
+// the editor host mounts via React createRoot, so it is no longer
+// re-exported here.
+export { mountComposition, AppKitError } from './app-kit';
 export type {
-  MountStandaloneOptions,
   MountOptions,
   AppManifest,
   AppManifestPanel,

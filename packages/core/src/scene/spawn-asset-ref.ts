@@ -3,7 +3,7 @@
  * Runs on the MAIN viewport bus — ep:* panel iframes forward via BroadcastChannel.
  */
 import { bus, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
-import { getApiClient } from '../io/api-client';
+import { apiFetch } from '../io/api-client';
 import { buildSpawnEntityFromDragRef, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
 import { entHandle } from '../store/entity-state';
@@ -36,10 +36,9 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
 
   if (kind === 'mesh') {
     try {
-      const api = getApiClient();
       const readRaw = async (p: string): Promise<Response | null> => {
         try {
-          const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+          const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
           return r.ok ? r : null;
         } catch {
           return null;
@@ -68,7 +67,7 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
 }
 
 async function readMetaSubAssets(metaPath: string): Promise<Array<{ guid: string; kind: string; name?: string }>> {
-  const r = await getApiClient().fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+  const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
   if (!r.ok) return [];
   const meta = JSON.parse(await r.text()) as { subAssets?: Array<{ guid: string; kind: string; name?: string }> };
   return (meta.subAssets ?? []).filter((s) => s?.guid && s?.kind);
