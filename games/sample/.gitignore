@@ -1,0 +1,10 @@
+# Imported binaries + their cooked meta are runtime-only test artifacts, never
+# tracked (zero-binary invariant; the 62MB city GLB stays out of git).
+assets/*.glb
+assets/*.gltf
+assets/*.bin
+assets/*.glb.meta.json
+assets/*.gltf.meta.json
+
+# platform-io writes UI prefs / workspace-layout here when the editor opens the game.
+.forgeax/

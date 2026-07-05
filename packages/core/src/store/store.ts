@@ -294,6 +294,13 @@ function subscribeDoc(fn: () => void): () => void {
   docListeners.add(fn);
   return () => docListeners.delete(fn);
 }
+/** Bump docVersion + fire listeners so panels re-read the doc after a direct
+ *  (non-bus) world mutation — e.g. a nested GLB SceneInstance added by
+ *  instantiateSceneRefUnderWorld, which the bus never sees. */
+export function notifyDocChanged(): void {
+  docVersion++;
+  for (const fn of docListeners) fn();
+}
 export function useDocVersion(): number {
   return useSyncExternalStore(subscribeDoc, () => docVersion, () => docVersion);
 }
@@ -911,6 +918,58 @@ async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     return populateSessionMapFromSceneRoot(w, root as number);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Instantiate a scene sub-asset (e.g. an imported GLB's whole-hierarchy scene)
+ * into the CURRENTLY-LOADED editor world as a NESTED SceneInstance under
+ * `parentHandle`, via the engine's canonical loadByGuid → allocSharedRef →
+ * instantiate spine (the SAME path loadSceneByGuid uses for the top scene).
+ *
+ * Unlike loadSceneByGuid this is ADDITIVE: it does NOT teardown the current
+ * scene and does NOT clear/rebuild `_e2h`/`_h2e` or `currentSceneRoot`. The
+ * caller owns the wrapper entity (a bus-spawned, `_e2h`-tracked node) that
+ * becomes the mount's ROOT so the nested SceneInstance is a NON-root anchor —
+ * which is exactly what `rootsToSceneAsset` folds into a single `mounts[]`
+ * entry keyed by this scene GUID (AGENTS.md #2: round-trips through save →
+ * reopen → Play via the engine's native mount mechanism, no new sidecar
+ * format, no HANDLE_CUBE placeholder).
+ *
+ * The nested instance's member entities are deliberately NOT entered into
+ * `_e2h` (MVP): they render + round-trip because `rootsToSceneAsset` walks the
+ * world's live SceneInstance state (getSceneInstanceState), not `_e2h`. The
+ * wrapper is the single selectable Hierarchy node. Per-node selection inside
+ * the mount is a follow-up.
+ *
+ * Returns the nested SceneInstance root handle, or null on failure. Callers
+ * MUST treat null as "add failed" and surface it — NEVER fall back to a cube.
+ */
+export async function instantiateSceneRefUnderWorld(
+  sceneGuid: string,
+  parentHandle: number,
+): Promise<number | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w: any = (bus.doc as any).world;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reg: any = (bus.doc as any).registry;
+  if (!w || !reg) return null;
+  try {
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    const parsed = AssetGuid.parse(sceneGuid);
+    if (!parsed.ok) return null;
+    // loadByGuid pulls the scene + recursively its mesh/material/texture refs
+    // into the registry catalog; instantiate mints GUID→handle onto MeshFilter/
+    // MeshRenderer and spawns every node under `parentHandle`.
+    const loadRes = await reg.loadByGuid(parsed.value);
+    if (!loadRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error); return null; }
+    const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
+    const instRes = reg.instantiate(sceneHandle, w, parentHandle);
+    if (!instRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
+    return instRes.value as number;
+  } catch (err) {
+    console.warn('[editor-core] instantiateSceneRefUnderWorld: threw', err);
+    return null;
   }
 }
 

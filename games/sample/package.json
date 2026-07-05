@@ -1,0 +1,27 @@
+{
+  "name": "@forgeax/game-sample",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Simple sample game for the forgeax editor — a builtin-mesh vignette (assets/scene.pack.json, GUID-discoverable via forge.json.defaultScene) + a movable Player. Mirrors packages/engine/templates/game-default, trimmed to the essentials.",
+  "scripts": {},
+  "forgeax": {
+    "assets": {
+      "roots": [
+        "assets"
+      ]
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.71"
+  }
+}

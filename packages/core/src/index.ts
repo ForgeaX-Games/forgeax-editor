@@ -205,6 +205,8 @@ export {
   readPlayConfig,
   writePlayConfig,
   broadcastAssetsChanged,
+  instantiateSceneRefUnderWorld,
+  notifyDocChanged,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
