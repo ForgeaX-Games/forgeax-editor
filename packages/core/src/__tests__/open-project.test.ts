@@ -26,25 +26,14 @@
 //   plan-strategy D-10: reader injected into loadGameProject
 
 import { describe, expect, it } from 'bun:test';
-import { defineComponent } from '@forgeax/engine-ecs';
-// Import SceneInstance to trigger its defineComponent registration (required
-// for world.instantiateScene to resolve the component token).
+// Importing the runtime barrel registers the canonical built-in components
+// (Name / Transform / ChildOf / SceneInstance / …) into the shared global
+// registry, which world.instantiateScene resolves by name. Do NOT re-define
+// these names here: a second defineComponent('Transform', …) with a different
+// schema overwrites the canonical token in the shared registry and corrupts
+// every other test in the same process (the tokens spawned entities were
+// created with stop resolving). Depend on the real registrations instead.
 import '@forgeax/engine-runtime';
-
-// Register the components needed by the scene fixture BEFORE instantiation.
-// world.instantiateScene resolves component tokens from the registry, so they
-// must be defined first (same call defines them in the shared global registry).
-defineComponent('Transform', {
-  posX: 'f32',
-  posY: 'f32',
-  posZ: 'f32',
-  scaleX: 'f32',
-  scaleY: 'f32',
-  scaleZ: 'f32',
-});
-defineComponent('Name', {
-  value: 'string',
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Fixture data

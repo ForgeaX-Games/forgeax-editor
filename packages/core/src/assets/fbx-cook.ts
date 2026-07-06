@@ -11,6 +11,7 @@
 // runs entirely in the browser (no Node.js, no Autodesk FBX SDK).
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { serializeMetaJson } from '@forgeax/engine-gltf';
 import {
   initFbxWasm,
   parseFbx,
@@ -35,21 +36,6 @@ export interface FbxCookResult {
   readonly metaJson?: string;
   readonly summary?: { readonly byKind: Record<string, number>; readonly total: number };
   readonly error?: string;
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) sorted[key] = sortKeysDeep(obj[key]);
-    return sorted;
-  }
-  return value;
-}
-
-function serializeFbxMeta(meta: unknown): string {
-  return `${JSON.stringify(sortKeysDeep(meta), null, 2)}\n`;
 }
 
 // Mint a fresh asset GUID via the engine's authoritative generator
@@ -183,7 +169,7 @@ export async function cookFbxMeta(
 
     return {
       ok: true,
-      metaJson: serializeFbxMeta(meta),
+      metaJson: serializeMetaJson(meta),
       summary: { byKind, total: subAssets.length },
     };
   } catch (e) {

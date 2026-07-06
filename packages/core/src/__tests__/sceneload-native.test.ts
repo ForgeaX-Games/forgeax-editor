@@ -15,27 +15,18 @@
 // Float assertions use toBeCloseTo(v, 4) — engine stores f32 which may round.
 
 import { describe, expect, it } from 'bun:test';
-import { World, defineComponent } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import { AssetRegistry, rootsToSceneAsset } from '@forgeax/engine-runtime';
+// Use the CANONICAL built-in components from the runtime barrel — never
+// re-define 'Name'/'Transform' with a local schema. A second
+// defineComponent('Transform', …) overwrites the canonical token in the shared
+// global registry, corrupting every other test in the same process (the tokens
+// their entities were spawned with stop resolving). The runtime Transform
+// carries extra fields (quat*, world) the assertions here ignore.
+import { AssetRegistry, Name as TestName, rootsToSceneAsset, Transform as TestTransform } from '@forgeax/engine-runtime';
 import type { LocalEntityId, SceneEntity } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
-
-// ── Inline component definitions (engine test pattern) ──────────────────
-
-const TestTransform = defineComponent('Transform', {
-  posX: { type: 'f32', default: 0 },
-  posY: { type: 'f32', default: 0 },
-  posZ: { type: 'f32', default: 0 },
-  scaleX: { type: 'f32', default: 1 },
-  scaleY: { type: 'f32', default: 1 },
-  scaleZ: { type: 'f32', default: 1 },
-});
-
-const TestName = defineComponent('Name', {
-  value: { type: 'string', default: '' },
-});
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 

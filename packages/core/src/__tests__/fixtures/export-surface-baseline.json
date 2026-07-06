@@ -1,0 +1,250 @@
+[
+  {
+    "name": "broadcastAssetsChanged",
+    "signature": "() => void"
+  },
+  {
+    "name": "bus",
+    "signature": "EditorBus"
+  },
+  {
+    "name": "cancelPendingDiskSave",
+    "signature": "() => void"
+  },
+  {
+    "name": "createSceneFile",
+    "signature": "(id: string, duplicateCurrent: boolean) => Promise<boolean>"
+  },
+  {
+    "name": "dispatch",
+    "signature": "(cmd: EditorCommand) => void"
+  },
+  {
+    "name": "flushPendingSaveBeacon",
+    "signature": "() => void"
+  },
+  {
+    "name": "getAssetSelection",
+    "signature": "() => SelectedAsset | null"
+  },
+  {
+    "name": "getGizmoMode",
+    "signature": "() => GizmoMode"
+  },
+  {
+    "name": "getLoadedSceneRoot",
+    "signature": "() => number | null"
+  },
+  {
+    "name": "getMeshStats",
+    "signature": "() => MeshStatsWire | null"
+  },
+  {
+    "name": "getSceneFile",
+    "signature": "() => string | null"
+  },
+  {
+    "name": "getSceneId",
+    "signature": "() => string"
+  },
+  {
+    "name": "getSceneList",
+    "signature": "() => SceneFileEntry[]"
+  },
+  {
+    "name": "getSelection",
+    "signature": "() => number | null"
+  },
+  {
+    "name": "getSelectionList",
+    "signature": "() => number[]"
+  },
+  {
+    "name": "hasPendingDiskSave",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "initDiskWatch",
+    "signature": "() => () => void"
+  },
+  {
+    "name": "initSceneList",
+    "signature": "() => Promise<void>"
+  },
+  {
+    "name": "instantiateSceneRefUnderWorld",
+    "signature": "(sceneGuid: string, parentHandle: number) => Promise<number | null>"
+  },
+  {
+    "name": "loadDocFromDisk",
+    "signature": "() => Promise<boolean>"
+  },
+  {
+    "name": "loadDocFromStorage",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "MeshStats",
+    "signature": "MeshStatsWire"
+  },
+  {
+    "name": "notifyDocChanged",
+    "signature": "() => void"
+  },
+  {
+    "name": "onAssetSelectionChange",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "onGizmoModeChange",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "onRenameRequest",
+    "signature": "(fn: (id: number) => void) => () => void"
+  },
+  {
+    "name": "onSceneListChange",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "onSelectionChange",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "PlayConfig",
+    "signature": "PlayConfig"
+  },
+  {
+    "name": "publishMeshStats",
+    "signature": "(stats: MeshStatsWire | null) => void"
+  },
+  {
+    "name": "readPlayConfig",
+    "signature": "() => Promise<PlayConfig>"
+  },
+  {
+    "name": "rebindLoadedScene",
+    "signature": "(newRoot: number) => number | null"
+  },
+  {
+    "name": "replaceDoc",
+    "signature": "(doc: EditSession) => void"
+  },
+  {
+    "name": "requestAddAssetsToChat",
+    "signature": "(refs: AssetChatRef[]) => void"
+  },
+  {
+    "name": "requestFrame",
+    "signature": "() => void"
+  },
+  {
+    "name": "requestRefAsset",
+    "signature": "(asset: { guid: string; kind: string; name: string; packPath?: string | undefined; }) => void"
+  },
+  {
+    "name": "requestRefComponent",
+    "signature": "(entityId: number, comp: string, value: unknown) => void"
+  },
+  {
+    "name": "requestRefEntity",
+    "signature": "(id: number) => void"
+  },
+  {
+    "name": "requestRename",
+    "signature": "(id: number) => void"
+  },
+  {
+    "name": "saveDocToDisk",
+    "signature": "() => Promise<boolean>"
+  },
+  {
+    "name": "SceneFileEntry",
+    "signature": "SceneFileEntry"
+  },
+  {
+    "name": "SelectedAsset",
+    "signature": "SelectedAsset"
+  },
+  {
+    "name": "setAssetSelection",
+    "signature": "(asset: SelectedAsset | null) => void"
+  },
+  {
+    "name": "setFieldPreview",
+    "signature": "(id: number | null, key?: string | undefined, value?: number | undefined) => void"
+  },
+  {
+    "name": "setGizmoMode",
+    "signature": "(m: GizmoMode) => void"
+  },
+  {
+    "name": "setHoverEntity",
+    "signature": "(id: number | null) => void"
+  },
+  {
+    "name": "setSceneId",
+    "signature": "(id: string | null | undefined) => void"
+  },
+  {
+    "name": "setSelection",
+    "signature": "(id: number | null) => void"
+  },
+  {
+    "name": "setSelectionMany",
+    "signature": "(ids: number[]) => void"
+  },
+  {
+    "name": "switchSceneFile",
+    "signature": "(id: string) => Promise<boolean>"
+  },
+  {
+    "name": "toggleSelection",
+    "signature": "(id: number) => void"
+  },
+  {
+    "name": "useAssetSelection",
+    "signature": "() => SelectedAsset | null"
+  },
+  {
+    "name": "useDocVersion",
+    "signature": "() => number"
+  },
+  {
+    "name": "useFieldPreview",
+    "signature": "() => { id: number; key: string; value: number; } | null"
+  },
+  {
+    "name": "useGizmoMode",
+    "signature": "() => GizmoMode"
+  },
+  {
+    "name": "useHoverEntity",
+    "signature": "() => number | null"
+  },
+  {
+    "name": "useMeshStats",
+    "signature": "() => MeshStatsWire | null"
+  },
+  {
+    "name": "useSceneFile",
+    "signature": "() => string | null"
+  },
+  {
+    "name": "useSceneList",
+    "signature": "() => SceneFileEntry[]"
+  },
+  {
+    "name": "useSelection",
+    "signature": "() => number | null"
+  },
+  {
+    "name": "useSelectionList",
+    "signature": "() => number[]"
+  },
+  {
+    "name": "writePlayConfig",
+    "signature": "(cfg: PlayConfig) => Promise<boolean>"
+  }
+]

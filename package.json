@@ -41,7 +41,7 @@
     "start": "node scripts/cli.mjs run",
     "stop": "node scripts/cli.mjs stop",
     "bootstrap-worktree": "node scripts/bootstrap-worktree.mjs",
-    "lint": "node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-direct-api-fetch.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-readme-bilingual.mjs",
+    "lint": "node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-direct-api-fetch.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-no-any-in-store.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-readme-bilingual.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:api-seam": "node scripts/lint-no-direct-api-fetch.mjs",
     "lint:engine-shim": "node scripts/lint-no-bare-engine-shim.mjs",
