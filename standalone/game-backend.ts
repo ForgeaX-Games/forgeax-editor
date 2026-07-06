@@ -1,6 +1,7 @@
 // game-backend.ts — the standalone editor's REUSED platform-io backend (R3).
 //
-// WHY A SEPARATE BUN PROCESS (ideal-clean-architecture.md §5 "复用,不另写后端"):
+// WHY A SEPARATE BUN PROCESS — BY DESIGN (not a workaround)
+//   [feat-20260705-editor-runtime-gates-and-backend-seams T7/q3; ideal-clean-architecture.md §5]
 //   editor-core reaches its backend via the injected ApiClient (R2). Standalone
 //   has no studio server, so this process IS the backend — and it must be the
 //   REAL @forgeax/platform-io 后L1 router, not a hand-written second backend.
@@ -34,6 +35,15 @@ if (!gameDir) {
 
 const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 
+// Read editor version from package.json at startup for /api/version endpoint.
+let editorVersion = '0.0.0';
+try {
+  const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json();
+  editorVersion = pkg.version || editorVersion;
+} catch {
+  // Keep fallback version.
+}
+
 // Two real @forgeax/platform-io routers, the exact ones cli/server mount:
 //   /api/files  — file IO, confined to the one --game dir (read + WRITE = B2).
 //   /api/prefs  — UI-pref server mirror (workspace-layout, browser-localStorage,
@@ -52,21 +62,45 @@ const server = Bun.serve({
   hostname: '127.0.0.1',
   fetch(req) {
     const url = new URL(req.url);
+
+    // AC-09: zero-dependency endpoints (before PREFIXES matching, before hemostasis fallback).
+    if (url.pathname === '/api/version') {
+      return new Response(JSON.stringify({ version: editorVersion }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.pathname === '/api/health') {
+      return new Response(JSON.stringify({ ok: true, uptime: process.uptime(), port }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     for (const { prefix, router } of PREFIXES) {
       if (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) {
-        // Re-root `<prefix>/…` → `/…` for the router's own route table.
+        // Re-root `<prefix>/...` -> `/...` for the router's own route table.
         url.pathname = url.pathname.slice(prefix.length) || '/';
         return router.fetch(new Request(url.href, req));
       }
     }
-    return new Response(JSON.stringify({ error: 'not found' }), {
-      status: 404,
+
+    // D-4 hemostasis: unmounted endpoints return HTTP 200 + unavailable envelope
+    // (any HTTP method, boundary #8). A non-2xx status would still flood the browser
+    // console with errors -- only 200 silences the noise.
+    // AC-08: structured envelope with property-access discrimination (charter P3).
+    return new Response(JSON.stringify({
+      unavailable: true,
+      reason: 'standalone',
+      hint: 'studio-only endpoint; standalone mounts /api/files /api/prefs /api/version /api/health',
+    }), {
+      status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   },
 });
 
 console.log(
-  `[game-backend] reusing @forgeax/platform-io for '${gameDir}' → http://127.0.0.1:${server.port}` +
+  `[game-backend] reusing @forgeax/platform-io for '${gameDir}' -> http://127.0.0.1:${server.port}` +
     ` (${PREFIXES.map((p) => p.prefix).join(', ')})`,
 );

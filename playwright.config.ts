@@ -53,8 +53,20 @@ export default defineConfig({
       // (root=standalone/, port=15290, engine-vite-preset serve) applies. This
       // is the ONLY document the e2e specs load. The :15280 edit-runtime server
       // is GONE — nothing on the page reaches it (D7 serves the engine here).
+      //
+      // M5 (plan-strategy D-2): inject FORGEAX_GAME_DIR=games/sample so the
+      // standalone host boots with a real game loaded — the GAME_DIR env activates
+      // vite's /api -> :15281 proxy and define __FORGEAX_GAME_SLUG__. Without this
+      // the standalone starts with GAME_DIR=null (no game, no Play path).
+      // FORGEAX_INTERFACE_PORT=15290 prevents edit-runtime HMR from hammering the
+      // non-existent studio port :18920 (AGENTS.md port map).
       command: 'bun run dev',
       cwd: '.',
+      env: {
+        FORGEAX_GAME_DIR: 'games/sample',
+        FORGEAX_INTERFACE_PORT: '15290',
+        ...process.env as Record<string, string>,
+      },
       url: 'http://127.0.0.1:15290',
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
@@ -69,6 +81,20 @@ export default defineConfig({
       cwd: './packages/play-runtime',
       env: { ...process.env, FORGEAX_ENGINE_PORT: '15173' },
       url: 'http://127.0.0.1:15173/preview/',
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+    },
+    {
+      // M5 (plan-strategy D-2): standalone game-backend bun process on :15281.
+      // Mounts the real @forgeax/platform-io createFilesRouter + createPrefsRouter
+      // confined to games/sample, plus /api/version + /api/health endpoints (M3).
+      // webServer #1 proxies /api -> here when FORGEAX_GAME_DIR is set.
+      // Readiness probe = /api/health (AC-09 endpoint, doubles as playwright
+      // health check — this is why M3 precedes M5 in the milestone graph).
+      command: 'bun standalone/game-backend.ts',
+      cwd: '.',
+      env: { FORGEAX_GAME_DIR: 'games/sample' },
+      url: 'http://127.0.0.1:15281/api/health',
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
     },
