@@ -14,7 +14,7 @@
 
 import type {
   ApplyResult,
-  EditorCommand,
+  EditorOp,
   EditSession,
   EntityId,
 } from '../types';
@@ -154,7 +154,7 @@ function toEntity(session: EditSession, id: number): EntityHandle {
 
 // ── applyCommand ───────────────────────────────────────────────────────────┐
 
-export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyResult {
+export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
   const w = session.world;
 
   switch (cmd.kind) {
@@ -212,7 +212,7 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
         if (!dr.ok) return { ok: false, error: { code: 'DESPAWN_FAILED', hint: String(dr.error) } };
         if (entry.legacyId !== undefined) entUnmap(session, entry.legacyId, entry.eId);
       }
-      const spawnCmds: EditorCommand[] = entries.map((e) => ({
+      const spawnCmds: EditorOp[] = entries.map((e) => ({
         kind: 'spawnEntity' as const,
         name: e.name, parent: null, components: e.comps,
         _id: e.legacyId ?? (e.eId as number),
@@ -323,7 +323,7 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
     // ── 9. transaction ──────────────────────────────────────────────────────
     case 'transaction': {
       if (cmd.commands.length === 0) return { ok: false, error: { code: 'EMPTY_TRANSACTION', hint: 'transaction has no commands' } };
-      const inverses: EditorCommand[] = [];
+      const inverses: EditorOp[] = [];
       for (const sub of cmd.commands) {
         const r = applyCommand(session, sub);
         if (!r.ok) { for (let i = inverses.length - 1; i >= 0; i--) applyCommand(session, inverses[i]!); return r; }
@@ -332,6 +332,13 @@ export function applyCommand(session: EditSession, cmd: EditorCommand): ApplyRes
       inverses.reverse();
       return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses } };
     }
+    // M2: the EditorOp union now also carries session/transient op kinds whose
+    // appliers live in the io/appliers session & transient tables — applyCommand
+    // only handles the 9 DOCUMENT primitives. A non-document kind reaching here
+    // means the gateway routed a session/transient op into the document applier,
+    // which is a wiring bug; fail fast (Fail Fast) rather than silently no-op.
+    default:
+      return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applyCommand handles document ops only; "${(cmd as { kind: string }).kind}" is a session/transient op` } };
   }
 }
 

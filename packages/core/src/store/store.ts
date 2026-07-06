@@ -2,7 +2,7 @@
 //
 // This file used to hold the whole store (1344 lines). It is now a PURE
 // re-export facade: the 14 concern clusters live in sibling store/ sub-modules
-// (bus / selection / gizmo-mode / frame-request / rename-request / hover /
+// (gateway / selection / gizmo-mode / frame-request / rename-request / hover /
 // field-preview / ref-request / doc-version / scene-persistence / disk-watch /
 // asset-selection / mesh-stats / assets-changed) and this facade forwards
 // exactly the 70 public symbols the barrel + intra-core consumers already
@@ -20,48 +20,51 @@
 //
 // Anchors:
 //   plan-strategy §2 D-2: 14-cluster split + store.ts pure facade
-//   plan-strategy §2 D-6: internal seams excluded; §2 D-7: 4 dead exports still
-//     forwarded verbatim (onFrameRequest / isSelected / buildHiddenKey /
-//     clearDocStorage)
-//   requirements AC-01: barrel export-surface snapshot unchanged
+//   plan-strategy §2 D-6: internal seams excluded; §2 D-7: 3 dead exports still
+//     forwarded verbatim (isSelected / buildHiddenKey / clearDocStorage).
+//     onFrameRequest was DELETED on collection (D-10, M2 m2-w7) — it was a
+//     zero-consumer dead export (research F2); requestFrame is now a session op.
+//   requirements AC-01: barrel export-surface snapshot unchanged (onFrameRequest
+//     was never in the barrel/baseline — only this facade re-exported it)
 //   requirements AC-09: facade is re-export only — no logic, no dispatch-op-ing
 
-// ── cluster 1: bus (init root) ──
-export { bus } from './bus';
+// ── cluster 1: gateway (init root) ──
+export { gateway } from './gateway';
 
 // ── cluster 2: selection ──
+// M3 (D-5, AC-08): the setters (setSelection/toggleSelection/setSelectionMany)
+// are SEALED — no longer on this facade nor the barrel. They stay `export`ed at
+// the submodule level for in-package tests + the 2 internal callers, but the
+// package `exports` map only publishes the barrel, so nothing outside core can
+// reach them: the single entry is structurally enforced. Getters/hooks/subscribe
+// stay public (consumers still READ state).
 export {
   getSelection,
   getSelectionList,
   isSelected,
-  setSelection,
-  toggleSelection,
-  setSelectionMany,
   onSelectionChange,
   useSelection,
   useSelectionList,
 } from './selection';
 
-// ── cluster 3: gizmo-mode ──
+// ── cluster 3: gizmo-mode (setGizmoMode sealed — M3) ──
 export {
   getGizmoMode,
-  setGizmoMode,
   onGizmoModeChange,
   useGizmoMode,
 } from './gizmo-mode';
 export type { GizmoMode } from './gizmo-mode';
 
-// ── cluster 4: frame-request ──
-export { requestFrame, onFrameRequest } from './frame-request';
+// ── cluster 4: frame-request (requestFrame sealed — M3; onFrameRequest deleted — D-10) ──
 
-// ── cluster 5: rename-request ──
-export { requestRename, onRenameRequest } from './rename-request';
+// ── cluster 5: rename-request (requestRename sealed — M3; onRenameRequest kept) ──
+export { onRenameRequest } from './rename-request';
 
-// ── cluster 6: hover ──
-export { setHoverEntity, getHoverEntity, useHoverEntity } from './hover';
+// ── cluster 6: hover (setHoverEntity sealed — M3) ──
+export { getHoverEntity, useHoverEntity } from './hover';
 
-// ── cluster 7: field-preview ──
-export { setFieldPreview, getFieldPreview, useFieldPreview } from './field-preview';
+// ── cluster 7: field-preview (setFieldPreview sealed — M3) ──
+export { getFieldPreview, useFieldPreview } from './field-preview';
 
 // ── cluster 8: ref-request ──
 export {
@@ -72,12 +75,16 @@ export {
 } from './ref-request';
 
 // ── cluster 9: doc-version ──
-export { notifyDocChanged, useDocVersion, dispatch } from './doc-version';
+// M3 (D-6): the origin-less `dispatch` wrapper was deleted (no compat layer,
+// AC-08) — consumers call gateway.dispatch(op) directly through the gateway.
+export { notifyDocChanged, useDocVersion } from './doc-version';
 
 // ── cluster 10: scene-persistence ──
+// M3 (AC-08): setSceneId + saveDocToDisk are SEALED (session ops now dispatched
+// via the gateway). switchSceneFile/createSceneFile/loadDocFromDisk stay public —
+// host-boot awaits their async result (they are not in the AC-03 sealed set).
 export {
   buildHiddenKey,
-  setSceneId,
   getSceneId,
   getLoadedSceneRoot,
   getSceneFile,
@@ -95,7 +102,6 @@ export {
   loadDocFromDisk,
   instantiateSceneRefUnderWorld,
   rebindLoadedScene,
-  saveDocToDisk,
   hasPendingDiskSave,
   cancelPendingDiskSave,
   flushPendingSaveBeacon,
@@ -108,9 +114,8 @@ export type { SceneFileEntry, PlayConfig } from './scene-persistence';
 // ── cluster 11: disk-watch ──
 export { initDiskWatch } from './disk-watch';
 
-// ── cluster 12: asset-selection ──
+// ── cluster 12: asset-selection (setAssetSelection sealed — M3) ──
 export {
-  setAssetSelection,
   getAssetSelection,
   useAssetSelection,
   onAssetSelectionChange,

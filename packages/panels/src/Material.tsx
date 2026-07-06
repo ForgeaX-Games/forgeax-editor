@@ -1,4 +1,4 @@
-import { bus, dispatch, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-core';
+import { gateway, useDocVersion, useSelection, useAssetSelection } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { floatToHex, hexToFloat } from '@forgeax/editor-core';
 import {
@@ -96,7 +96,7 @@ function PackMaterialPreview({ payload, name, guid }: { payload: Record<string, 
 // ── Entity MaterialAsset editor ───────────────────────────────────────────────
 
 function EntityMaterialEditor({ entity, matHandle, mr }: { entity: EntityHandle; matHandle: MaterialHandle; mr: { materials: readonly MaterialHandle[] } }) {
-  const world = bus.doc.world;
+  const world = gateway.doc.world;
   const res = world.sharedRefs.resolve(matHandle);
   if (!res.ok) {
     return (
@@ -189,7 +189,7 @@ export function MaterialPanel() {
   useDocVersion();
   const sel = useSelection();
   const assetSel = useAssetSelection();
-  const world = bus.doc.world;
+  const world = gateway.doc.world;
 
   // If a material asset is selected in Content Browser, show read-only preview.
   // (This path needs no live world — the payload rides the asset selection.)
@@ -201,7 +201,7 @@ export function MaterialPanel() {
     return <div className="panel ed-material" data-testid="panel-material"><h3>Material</h3><div className="muted mat-empty">{t('editor.material.selectEntityHint')}</div></div>;
   }
 
-  // Popout guard: in a popped-out window bus.doc.world is null (snapshot revive
+  // Popout guard: in a popped-out window gateway.doc.world is null (snapshot revive
   // keeps it inert) AND the MaterialAsset shared-ref payloads aren't in the popout
   // cache, so entity-material editing genuinely can't run here. Every path below
   // dereferences the live world (world.get / world.sharedRefs.resolve) — without

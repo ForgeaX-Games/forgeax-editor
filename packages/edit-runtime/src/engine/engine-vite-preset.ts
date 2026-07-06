@@ -55,7 +55,7 @@ const EDIT_RUNTIME_DIR = resolve(HELPER_DIR, '..', '..');
 //     workspace symlink graph (packages/*/node_modules/@forgeax/* -> ../../../*)
 //     where one file via combinatorially-many symlink paths becomes a distinct
 //     module -> esbuild blows up; also keeps the editor singletons (editor-shared
-//     EditorBus / active sceneId) a single instance.
+//     EditGateway / active sceneId) a single instance.
 //   - Stays resolvable: all are present here. We must NOT over-exclude with the
 //     full engine/packages tree — transitive-only packages absent from
 //     node_modules (engine-plugin / engine-debug-draw, imported by engine-app /
@@ -245,7 +245,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // Exclude the ENTIRE @forgeax workspace family (engine-* + editor-*) from
       // vite pre-bundling — served as native ESM. SSOT-derived so it can't drift
       // the way the old hand list did; also keeps the editor singletons
-      // (EditorBus / active sceneId in editor-shared) a single shared instance.
+      // (EditGateway / active sceneId in editor-shared) a single shared instance.
       exclude: wsPkgs,
     },
     resolve: {

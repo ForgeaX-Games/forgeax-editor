@@ -21,7 +21,7 @@ import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Name, Transform } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // M7 / AC-15: sessions built via createEditSession + injected world; legacy ID
 // → engine handle read via entHandle (doc.entities deleted).
@@ -32,7 +32,7 @@ function createSession(): EditSession {
 }
 
 function spawnCmd(session: EditSession, name: string, parentLegacyId?: number): { legacyId: number; engineHandle: EntityHandle } {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
   const engineHandle = entHandle(session, cmd._id!);
@@ -72,7 +72,7 @@ describe('inverse commands (GREEN)', () => {
     expect(r.ok).toBe(true);
     expect(session.world.get(root.engineHandle, Name).ok).toBe(false);
 
-    const inverse = (r as { ok: true; inverse: EditorCommand }).inverse;
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
     const undoR = applyCommand(session, inverse);
     expect(undoR.ok).toBe(true);
 
@@ -95,7 +95,7 @@ describe('inverse commands (GREEN)', () => {
   // ── (b) setComponent ────────────────────────────────────────────────────────
   it('(b) setComponent: inverse patch contains only changed keys', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
     const eH = entHandle(session, cmd._id!)!;
 
@@ -105,7 +105,7 @@ describe('inverse commands (GREEN)', () => {
     expect(t.ok).toBe(true);
     if (t.ok) expect(t.value.posY).toBe(99);
 
-    const inverse = (r as { ok: true; inverse: EditorCommand }).inverse;
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
     expect(inverse.kind).toBe('setComponent');
     const invPatch = (inverse as { patch: Record<string, unknown> }).patch;
     expect(Object.keys(invPatch)).toEqual(['posY']);

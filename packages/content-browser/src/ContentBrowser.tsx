@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiFetch, bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
+// M3 (AC-03): asset-selection is a transient op dispatched through the one
+// gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
+// setAssetSelection setter.
+import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory,
   ResizeHandle, useLocalSize } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
@@ -28,7 +31,7 @@ import './content-browser.css';
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
 // (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
 // The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
-// reads directly from it via bus.doc.registry.listCatalog().
+// reads directly from it via gateway.doc.registry.listCatalog().
 // registry entries carry {guid, kind, name?, relativeUrl, refs?} — no
 // payload/packPath, so import-mode filtering and payload-derived fields are
 // removed. `refs` (forward dependency GUID edges) is surfaced by the engine
@@ -119,7 +122,7 @@ export function ContentBrowser() {
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
+    const registry = gateway.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
     const entries = registry?.listCatalog?.();
     if (!entries || entries.length === 0) {
       setAllAssets([]);
@@ -258,14 +261,17 @@ export function ContentBrowser() {
     });
   }, [reload]);
 
+  // M3 (AC-03): asset-selection is a transient op — it goes through the one
+  // gateway door (gateway.dispatch), never the direct setAssetSelection setter
+  // (封门, M3), which is no longer exported from the barrel.
   const openAsset = useCallback((asset: CBAsset) => {
-    setAssetSelection({
+    gateway.dispatch({ kind: 'setAssetSelection', asset: {
       guid: asset.guid,
       kind: asset.kind,
       name: asset.name,
       payload: asset.payload,
       packPath: asset.packPath,
-    });
+    } });
     // Double-clicking a mesh asset surfaces its data: ask the studio shell to
     // bring the Mesh panel to front (focus-only — the shell never force-inserts a
     // closed tab). Harmless in standalone/pop-out where no shell listens.

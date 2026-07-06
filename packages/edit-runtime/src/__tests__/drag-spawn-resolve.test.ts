@@ -1,7 +1,7 @@
 // w9 (feat-20260705 M3 / plan-strategy §D-4/S-3): drag-spawn-resolve bridge
 // pure-logic test. RED before w11 creates the bridge module.
 //
-// The bridge (installDragSpawnMeshResolver) subscribes to the EditorBus and,
+// The bridge (installDragSpawnMeshResolver) subscribes to the EditGateway and,
 // for each spawnEntity command carrying an EditorPendingMeshAsset marker,
 // resolves the real asset guid to a mesh handle and patches
 // MeshFilter.assetHandle over the bus (plan-strategy §D-4 — the bus is the only
@@ -23,7 +23,7 @@
 //   research Finding 4(b)(d): loadByGuid -> allocSharedRef -> setComponent chain
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import type { EditorCommand } from '@forgeax/editor-core';
+import type { EditorOp } from '@forgeax/editor-core';
 import { installDragSpawnMeshResolver } from '../engine/drag-spawn-resolve';
 
 // A syntactically valid RFC 4122 dash-form UUID (AssetGuid.parse accepts it).
@@ -31,23 +31,23 @@ const GOOD_GUID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
-interface DispatchedCmd { cmd: EditorCommand; origin?: string }
+interface DispatchedCmd { cmd: EditorOp; origin?: string }
 
 /** Minimal bus stub: captures the subscribed listener + dispatched commands. */
 function makeBusStub() {
-  let listener: ((doc: unknown, lastCommand: EditorCommand | null) => void) | null = null;
+  let listener: ((doc: unknown, lastCommand: EditorOp | null) => void) | null = null;
   const dispatched: DispatchedCmd[] = [];
   return {
-    subscribe(fn: (doc: unknown, lastCommand: EditorCommand | null) => void) {
+    subscribe(fn: (doc: unknown, lastCommand: EditorOp | null) => void) {
       listener = fn;
       return () => { listener = null; };
     },
-    dispatch(cmd: EditorCommand, origin?: string) {
+    dispatch(cmd: EditorOp, origin?: string) {
       dispatched.push({ cmd, origin });
       return { ok: true as const };
     },
     /** Test-only: fire the captured listener with a synthetic lastCommand. */
-    fire(lastCommand: EditorCommand | null) {
+    fire(lastCommand: EditorOp | null) {
       listener?.({}, lastCommand);
     },
     dispatched,
@@ -64,7 +64,7 @@ function makeRendererStub(result: { ok: boolean; value?: unknown; error?: { code
   return { assets: { loadByGuid } };
 }
 
-function spawnCmd(opts: { withMarker?: boolean; guid?: string; id?: number } = {}): EditorCommand {
+function spawnCmd(opts: { withMarker?: boolean; guid?: string; id?: number } = {}): EditorOp {
   const components: Record<string, unknown> = { MeshFilter: { assetHandle: 0 } };
   if (opts.withMarker) components.EditorPendingMeshAsset = { guid: opts.guid ?? GOOD_GUID };
   return { kind: 'spawnEntity', name: 'Chair', components, _id: opts.id ?? 7 };
@@ -120,7 +120,7 @@ describe('w9 installDragSpawnMeshResolver bridge (RED before w11)', () => {
     const { cmd, origin } = bus.dispatched[0]!;
     expect(origin).toBe('ai');
     expect(cmd.kind).toBe('setComponent');
-    const sc = cmd as Extract<EditorCommand, { kind: 'setComponent' }>;
+    const sc = cmd as Extract<EditorOp, { kind: 'setComponent' }>;
     expect(sc.entity).toBe(7);
     expect(sc.component).toBe('MeshFilter');
     expect(sc.patch.assetHandle).toBe(99);

@@ -1,4 +1,4 @@
-// w27 — EditorBus.transientMode (requirements AC-11, plan R-D).
+// w27 — EditGateway.transientMode (requirements AC-11, plan R-D).
 //
 // play·scene (run=play ∧ display=scene) is UE Simulate: the user can select /
 // edit / drag while the game runs, but those edits MUST NOT persist — they don't
@@ -10,23 +10,23 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
-import { EditorBus } from '../io/bus';
+import { EditGateway } from '../io/gateway';
 import { entHandle } from '../store/entity-state';
-import type { EditorCommand } from '../types';
+import type { EditorOp } from '../types';
 
-function seedEntity(bus: EditorBus): void {
+function seedEntity(bus: EditGateway): void {
   // Spawn one entity so setComponent has a target. The spawn itself runs in
   // normal (non-transient) mode so the fixture is deterministic.
   bus.dispatch({ kind: 'spawnEntity', name: 'box', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } });
 }
 
 // M7 / AC-15: Transform is native engine POD (posX field), asserted via world.
-const move = (entity: number, posX: number): EditorCommand =>
+const move = (entity: number, posX: number): EditorOp =>
   ({ kind: 'setComponent', entity, component: 'Transform', patch: { posX } });
 
-describe('EditorBus.transientMode (w27, AC-11)', () => {
-  let bus: EditorBus;
-  beforeEach(() => { bus = new EditorBus(); });
+describe('EditGateway.transientMode (w27, AC-11)', () => {
+  let bus: EditGateway;
+  beforeEach(() => { bus = new EditGateway(); });
 
   it('defaults to false (normal committing mode)', () => {
     expect(bus.transientMode).toBe(false);

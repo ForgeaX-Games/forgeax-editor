@@ -14,7 +14,7 @@
 //   • Entity mode — an entity with a `Mesh` component is selected: shows the
 //     primitive `kind` + bound `meshAsset` GUID (read-only in v1).
 import { useCallback, useState } from 'react';
-import { bus, useDocVersion, useSelection, useAssetSelection, useMeshStats, entExists, entName, entComponent } from '@forgeax/editor-core';
+import { gateway, useDocVersion, useSelection, useAssetSelection, useMeshStats, entExists, entName, entComponent } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 
 const short = (g: string): string => (g.length > 12 ? `${g.slice(0, 8)}…${g.slice(-3)}` : g);
@@ -191,9 +191,9 @@ export function MeshPanel() {
   const meshStatsRaw = useMeshStats();
   // M7 / AC-15: entity name/components read from world (SSOT) via entity-state;
   // doc.entities/EntityNode deleted.
-  const hasEntity = sel !== null && entExists(bus.doc, sel);
-  const nodeName = hasEntity ? entName(bus.doc, sel) : '';
-  const mesh = hasEntity ? (entComponent(bus.doc, sel, 'Mesh') as Record<string, unknown> | undefined) : undefined;
+  const hasEntity = sel !== null && entExists(gateway.doc, sel);
+  const nodeName = hasEntity ? entName(gateway.doc, sel) : '';
+  const mesh = hasEntity ? (entComponent(gateway.doc, sel, 'Mesh') as Record<string, unknown> | undefined) : undefined;
 
   // No entity selected but a mesh asset is selected in the Content Browser.
   if (!hasEntity && assetSel?.kind === 'mesh') {
@@ -223,7 +223,7 @@ export function MeshPanel() {
   // Material Slots (v2): the editor models a single `Material` component (not the
   // engine's per-section MeshRenderer.materials[]), so we reflect it as one slot.
   // Per-submesh material binding lives on the instance — noted, not faked.
-  const material = sel !== null ? (entComponent(bus.doc, sel, 'Material') as Record<string, unknown> | undefined) : undefined;
+  const material = sel !== null ? (entComponent(gateway.doc, sel, 'Material') as Record<string, unknown> | undefined) : undefined;
   const matGuid = material && typeof material.materialAsset === 'string' ? (material.materialAsset as string) : '';
   // Geometry stats for the bound mesh asset (published by the main window keyed by
   // GUID). Inline primitives (no meshAsset GUID) have no loadable geometry, so we

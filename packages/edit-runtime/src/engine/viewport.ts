@@ -40,9 +40,15 @@ export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCam
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
 
-import type { EntityId, EditSession } from '@forgeax/editor-core';
+import type { EntityId, EditSession, OpHandle } from '@forgeax/editor-core';
 import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
-import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-core';
+// M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
+// through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
+// (a document continuous op) uses the gateway lifecycle begin/update*/commit so
+// the whole multi-frame drag lands as ONE undoable command. Direct store setters
+// (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
+// direct world.set (see the note at applyCamera).
+import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -347,7 +353,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
     // — otherwise the gizmo lags at the pre-drag position until release.
     const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
-    const t = live ?? (sel !== null ? readEntTransform(bus.doc, sel) : undefined);
+    const t = live ?? (sel !== null ? readEntTransform(gateway.doc, sel) : undefined);
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
@@ -432,9 +438,9 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     // M7-a (AC-15): read the selected entity's components from the world (SSOT),
     // not the deleted doc.entities mirror. entComponents returns component-name →
     // POD for every component the entity carries.
-    const comps = sel !== null ? entComponents(bus.doc, sel) : undefined;
+    const comps = sel !== null ? entComponents(gateway.doc, sel) : undefined;
     if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
-    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
+    const t = sel !== null ? readEntTransform(gateway.doc, sel) : undefined;
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
     const light = comps.Light as Record<string, unknown> | undefined;
     const cam = comps.Camera as Record<string, unknown> | undefined;
@@ -495,7 +501,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   function pick(origin: Vec3, dir: Vec3): EntityId | null {
     // M7-a (AC-15): enumerate entities from the world (entIds) instead of the
     // deleted doc.order/doc.entities mirror. Hidden = EditorHidden marker present.
-    const doc: EditSession = bus.doc;
+    const doc: EditSession = gateway.doc;
     let best: EntityId | null = null, bestT = Infinity;
     for (const id of entIds(doc)) {
       if (isEntHidden(doc, id)) continue;
@@ -514,6 +520,11 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
   let dragId: EntityId | null = null;
   let dragWorld: number | undefined;
+  // M3 (D-9): the gizmo drag is a DOCUMENT continuous op. The gateway lifecycle
+  // handle is opened lazily on the first live change (so a plain click that never
+  // drags opens nothing) and closed on pointerup via commit (one undoable command)
+  // or cancel (no net change). null = no lifecycle open.
+  let dragHandle: OpHandle | null = null;
   let dragOrig: Record<string, number> = {};
   let grabOffset: Vec3 = [0, 0, 0];
   let dragY = 0;
@@ -550,16 +561,31 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     return data;
   };
 
-  /** Live-preview a Transform patch via world.set (no doc churn). Position +
-   *  scale + rotation(quat from euler) are all applied; on release the patch is
-   *  committed as one setComponent. */
+  /** Live-preview a Transform patch through the gateway lifecycle (D-9). The
+   *  document-continuous op opens lazily on the first live change (begin snapshots
+   *  the pre-drag pose), then each drag frame is a gateway.update — no ledger/undo
+   *  growth per frame, exactly as the old world.set preview did, but now through
+   *  the single door so the whole drag commits as ONE undoable setComponent on
+   *  release (onUp). Position + scale + rotation(quat from euler) all applied. */
   const applyLive = (patch: Record<string, number>): void => {
     livePatch = patch;
-    if (dragWorld === undefined) return;
-    world.set(dragWorld, Transform, toEnginePatch({ ...dragOrig, ...patch }));
-    // Mirror the changed fields into the Inspector live (no command) — the
-    // "preview" loop: numbers track the drag, the single commit lands on release.
-    if (dragId !== null) for (const k in patch) setFieldPreview(dragId, `Transform.${k}`, patch[k]!);
+    if (dragWorld === undefined || dragId === null) return;
+    const enginePatch = toEnginePatch({ ...dragOrig, ...patch });
+    if (dragHandle === null) {
+      // Open the op: begin snapshots the pre-drag pose (dragOrig). If the entity
+      // vanished mid-interaction, fall back to a direct preview write.
+      const b = gateway.begin({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: toEnginePatch(dragOrig) });
+      if (b.ok) dragHandle = b.handle;
+    }
+    if (dragHandle !== null) {
+      // update writes the live pose (revert-to-begin + re-apply); no ledger/undo.
+      gateway.update(dragHandle, { patch: enginePatch });
+    } else {
+      world.set(dragWorld, Transform, enginePatch);
+    }
+    // Mirror the changed fields into the Inspector live via the transient
+    // field-preview op — numbers track the drag; the single commit lands on release.
+    for (const k in patch) gateway.dispatch({ kind: 'setFieldPreview', id: dragId, key: `Transform.${k}`, value: patch[k]! });
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
   const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
@@ -596,7 +622,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
 // M4: worldEntityFor removed — entity IDs are directly world entities.
       dragWorld = sel;
       // M7-a: read the grab-time Transform from the world (doc.entities gone).
-      dragOrig = { ...(readEntTransform(bus.doc, sel) ?? {}) };
+      dragOrig = { ...(readEntTransform(gateway.doc, sel) ?? {}) };
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
       livePatch = {};
       if (h >= 3) {
@@ -616,11 +642,11 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     }
     const hit = pick(origin, dir);
     if (hit !== null) {
-      setSelection(hit);
+      gateway.dispatch({ kind: 'setSelection', id: hit });
       dragId = hit;
       dragWorld = hit;
       // M7-a: read the grab-time Transform from the world (doc.entities gone).
-      dragOrig = { ...(readEntTransform(bus.doc, hit) ?? {}) };
+      dragOrig = { ...(readEntTransform(gateway.doc, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
@@ -628,7 +654,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     } else {
       // Left-click on empty space deselects (Blender-style). Orbiting moved to
       // the middle button so it works even when a big object fills the viewport.
-      setSelection(null);
+      gateway.dispatch({ kind: 'setSelection', id: null });
       mode = 'none';
     }
   }
@@ -712,15 +738,18 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   }
 
   function onUp(): void {
-    if ((mode === 'drag' || mode === 'axisDrag') && dragId !== null && Object.keys(livePatch).length > 0) {
-      // commit the final pose as ONE undoable command, merged over the original
-      // Transform so untouched fields survive. M7-a: setComponent writes straight
-      // to the world (document.ts w.set), so the patch MUST be engine-native POD
-      // (posX/quatX...), not the editor euler shape — convert via toEnginePatch.
-      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: toEnginePatch({ ...dragOrig, ...livePatch }) });
+    // Close the gizmo document-continuous op (D-9). If a lifecycle handle is open
+    // (drag produced live changes), commit lands the whole drag as ONE undoable
+    // setComponent whose recorded pose = the final accumulated update (gateway
+    // lastCmd). A pointerup with no live change (plain click) opened no handle, so
+    // there is nothing to commit — no empty command enters the ledger.
+    if (dragHandle !== null) {
+      gateway.commit(dragHandle);
+      dragHandle = null;
     }
     mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
-    setFieldPreview(null); // stop the Inspector preview; it now reads the committed doc
+    // Stop the Inspector preview (transient op); the panel now reads the committed doc.
+    gateway.dispatch({ kind: 'setFieldPreview', id: null });
     updateGizmo();
   }
 
@@ -750,7 +779,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
-    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
+    const t = sel !== null ? readEntTransform(gateway.doc, sel) : undefined;
     if (!t) return;
     const { center, half } = entityBox(t);
     target = center;
@@ -767,9 +796,9 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (inputToGame()) return; // play·game: W/E/R/F gizmo shortcuts yield to the game
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (k === 'w') setGizmoMode('translate');
-    else if (k === 'e') setGizmoMode('rotate');
-    else if (k === 'r') setGizmoMode('scale');
+    if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
+    else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
+    else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
     else if (k === 'f') frameSelection();
   }
 
@@ -779,7 +808,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (inputToGame()) return; // play·game: no editor double-click select/frame
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     const hit = pick(origin, dir);
-    if (hit !== null) { setSelection(hit); frameSelection(); }
+    if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); frameSelection(); }
   }
 
   window.addEventListener('pointerdown', onDown);
@@ -806,13 +835,13 @@ onDisplayModeChange(() => refreshGizmos());
     if (sel === null) return null;
     // M7-a: signature the selected entity's components read from the world (SSOT)
     // instead of the deleted doc.entities mirror. Empty dict = entity gone.
-    const comps = entComponents(bus.doc, sel);
+    const comps = entComponents(gateway.doc, sel);
     return Object.keys(comps).length > 0 ? JSON.stringify(comps) : '\u2205'; // '∅' = selected entity gone
   };
   let lastSelSig = selSig();
   const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
   const unsubMode = onGizmoModeChange(updateGizmo);
-  const unsubDoc = bus.subscribe(() => {
+  const unsubDoc = gateway.subscribe(() => {
     const sig = selSig();
     if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
     lastSelSig = sig;

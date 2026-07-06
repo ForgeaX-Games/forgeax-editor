@@ -7,28 +7,44 @@
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 7 (store.ts:196-221)
+//   plan-strategy §2 D-1: setFieldPreview is a TRANSIENT-domain op — the body is
+//     the applier, registered into transientAppliers; the setter dispatches (M2
+//     m2-w9). Transient: no undo, no ledger.
 //   research F-2: the useSyncExternalStore getter (getFieldPreview) and hook
 //     (useFieldPreview) MUST stay in one file — the subscribe closure captures
 //     fieldListeners directly.
-//   requirements AC-09: pure structural migration.
+//   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useSyncExternalStore } from 'react';
-import type { EntityId } from '../types';
+import type { EditorOp, EntityId } from '../types';
+import { gateway } from './gateway';
+import { transientAppliers } from '../io/appliers';
 
 // Transient field-preview signal: while a viewport gizmo is being dragged it
 // publishes the live scalar (keyed by a namespaced field id like
 // 'Transform.rot.y') so the Inspector tracks it without committing a command.
 let fieldPreview: { id: EntityId; key: string; value: number } | null = null;
 const fieldListeners = new Set<() => void>();
-export function setFieldPreview(id: EntityId | null, key?: string, value?: number): void {
-  if (id === null || key === undefined) {
-    if (fieldPreview === null) return;
+
+// Transient applier (M2 D-1): setFieldPreview body, registered into the transient
+// table. The op payload carries id/key/value; the early-return no-op guards are
+// preserved verbatim ("change the door, not the body").
+function applySetFieldPreview(op: EditorOp): { ok: true } {
+  const o = op as { id: EntityId | null; key?: string; value?: number };
+  if (o.id === null || o.key === undefined) {
+    if (fieldPreview === null) return { ok: true };
     fieldPreview = null;
   } else {
-    const v = value ?? 0;
-    if (fieldPreview && fieldPreview.id === id && fieldPreview.key === key && fieldPreview.value === v) return;
-    fieldPreview = { id, key, value: v };
+    const v = o.value ?? 0;
+    if (fieldPreview && fieldPreview.id === o.id && fieldPreview.key === o.key && fieldPreview.value === v) return { ok: true };
+    fieldPreview = { id: o.id, key: o.key, value: v };
   }
   for (const fn of fieldListeners) fn();
+  return { ok: true };
+}
+transientAppliers.set('setFieldPreview', applySetFieldPreview);
+
+export function setFieldPreview(id: EntityId | null, key?: string, value?: number): void {
+  gateway.dispatch({ kind: 'setFieldPreview', id, key, value });
 }
 export function getFieldPreview(): { id: EntityId; key: string; value: number } | null {
   return fieldPreview;

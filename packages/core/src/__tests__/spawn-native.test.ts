@@ -37,7 +37,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ function spawnNative(
   name: string,
   components: Record<string, unknown>,
 ): EntityHandle {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, components };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd ${name} failed: ${r.error.hint}`);
   if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');

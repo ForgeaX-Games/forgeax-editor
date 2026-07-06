@@ -3,7 +3,7 @@
 // Lists all registered components from engine's registry, grouped by
 // mountable (not yet on the selected entity) vs already-mounted (repeat).
 // Clicking a mountable item dispatches an addComponent command through
-// the shared bus (which reaches the main viewport via BroadcastChannel
+// the shared gateway (which reaches the main viewport via BroadcastChannel
 // sync in popout context, or applies directly in main).
 //
 // Anchors:
@@ -14,7 +14,9 @@
 import { useState, type ReactNode } from 'react';
 import { getRegisteredComponents } from '@forgeax/engine-ecs';
 import { defaultComponentData } from '@forgeax/editor-core';
-import { dispatch, useSelection } from '@forgeax/editor-core';
+// M3 (AC-03): addComponent goes through the one gateway door — gateway.dispatch —
+// replacing the origin-less `dispatch` wrapper.
+import { gateway, useSelection } from '@forgeax/editor-core';
 
 // ── AddComponentMenu ────────────────────────────────────────────────────────
 
@@ -44,7 +46,7 @@ export function AddComponentMenu({ mountedComponents }: AddComponentMenuProps): 
 
   const handleAdd = (comp: string) => {
     if (sel === null) return;
-    dispatch({
+    gateway.dispatch({
       kind: 'addComponent',
       entity: sel,
       component: comp,

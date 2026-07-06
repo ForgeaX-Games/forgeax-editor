@@ -6,8 +6,8 @@
 // Re-exports:
 //   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
 //   Scene pack (isScenePack, stableGuid, CUBE_GUID, SPHERE_GUID)
-//   EditorCommand & types
-//   EditorBus & bus types
+//   EditorOp & types
+//   EditGateway & gateway types
 //   Command session (createEditSession, applyCommand, etc.)
 //   Component schema (listComponentSchemas, getComponentSchema, etc.)
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
@@ -29,7 +29,8 @@ export type {
 // the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorCommand, CommandError, ApplyResult } from './types';
+export type { EditorOp, CommandError, ApplyResult } from './types';
+export type { EditorOpLifecycle } from './types';
 
 // ── Scene pack ──
 // M1: validatePackShell + PackShellValidationError exported for AI-user discovery
@@ -44,14 +45,26 @@ export {
 } from './scene/scene-pack';
 export type { ScenePack, PackFile, ValidatePackShellResult } from './scene/scene-pack';
 
-// ── Bus ──
-export { EditorBus } from './io/bus';
+// ── Gateway ──
+export { EditGateway } from './io/gateway';
 export type {
   BusListener,
   DispatchResult,
   CommandOrigin,
   HistoryStep,
-} from './io/bus';
+  OpHandle,
+} from './io/gateway';
+
+// ── Catalog (M4 listOps / argsSchema / OpDescriptor) ──
+export type { OpDescriptor, ArgsSchema } from './io/catalog';
+
+// ── D-11 downstream session-applier seam ──
+// edit-runtime registers the real play/stop applier at boot through this seam
+// (injection direction edit-runtime→core, same shape as the ApiClient backend
+// seam — does not violate the DAG). Exposed on the barrel so the DAG-downstream
+// package can reach it (it may only import the published surface).
+export { registerSessionApplier } from './io/appliers';
+export type { SessionApplier, SessionApplierMeta } from './io/appliers';
 
 // ── Edit session (authoring working state) ──
 // M7 / AC-15: makeEditSession/projectSessionAsset/cloneEditSession deleted
@@ -161,28 +174,25 @@ export {
 export { EDITOR_PANELS } from './manifest';
 export type { EditorPanelId } from './manifest';
 
-// ── Store (bus singleton — bus, selection, scene persistence) ──
+// ── Store (gateway singleton — gateway, selection, scene persistence) ──
+// M3 (AC-08, D-6): the 11 store OP SETTERS are SEALED — no longer on the barrel.
+// Every state mutation is a gateway op now (gateway.dispatch / begin…commit); the
+// sealed names (setSelection/setSelectionMany/toggleSelection/setGizmoMode/
+// setHoverEntity/setFieldPreview/setAssetSelection/saveDocToDisk/setSceneId/
+// requestFrame/requestRename) and the `dispatch` wrapper were removed from the
+// published surface. Getters/hooks/subscribe/async-scene ops stay public
+// (consumers READ state and await async loads). D-5 exemptions (ref-request /
+// mesh-stats / assets-changed / disk-watch) and doc-version/gateway infra are unchanged.
 export {
-  bus,
-  dispatch,
+  gateway,
   getSceneId,
   getSelection,
   getSelectionList,
   getGizmoMode,
   replaceDoc,
-  saveDocToDisk,
-  setGizmoMode,
-  setSceneId,
-  setSelection,
-  setSelectionMany,
-  setHoverEntity,
-  setFieldPreview,
-  toggleSelection,
   onSelectionChange,
   onRenameRequest,
-  requestRename,
   onGizmoModeChange,
-  requestFrame,
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
@@ -214,7 +224,6 @@ export {
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
-  setAssetSelection,
   getAssetSelection,
   useAssetSelection,
   onAssetSelectionChange,
@@ -288,6 +297,6 @@ export {
 } from './io/clip-control';
 export type { ClipControl, ViewCmd } from './io/clip-control';
 
-// UI 语义操作层(P1-12):面板 action 登记 → interface host 的 ActionRegistry。
+// UI action registration: panel action register -> interface host ActionRegistry.
 export { registerPanelAction } from './io/action-bridge';
 export type { PanelActionDef, PanelActionResult } from './io/action-bridge';

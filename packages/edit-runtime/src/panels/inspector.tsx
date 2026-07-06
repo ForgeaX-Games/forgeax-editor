@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react';
 import { InspectorPanel } from '@forgeax/editor-panels';
 import { useSelection } from '@forgeax/editor-core';
-import { bus } from '@forgeax/editor-core';
+import { gateway } from '@forgeax/editor-core';
 import { entComponents, entExists } from '@forgeax/editor-core';
 import { AddComponentMenu } from './add-component-menu';
 
@@ -24,8 +24,8 @@ export function InspectorWithAddComponent(): ReactNode {
   // M7-a (AC-15): doc.entities mirror deleted — read component set from the
   // world (SSOT) via entComponents. Keys are engine component names.
   const mountedComponents: string[] = [];
-  if (sel !== null && entExists(bus.doc, sel)) {
-    for (const key of Object.keys(entComponents(bus.doc, sel))) {
+  if (sel !== null && entExists(gateway.doc, sel)) {
+    for (const key of Object.keys(entComponents(gateway.doc, sel))) {
       mountedComponents.push(key);
     }
   }

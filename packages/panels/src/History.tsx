@@ -1,16 +1,16 @@
-import { bus, setSelection, useDocVersion } from '@forgeax/editor-core';
+import { gateway, useDocVersion } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
-// mutation (human UI OR AI tool-call) is one EditorCommand on the bus, so this is
-// a faithful "who did what" ledger. Click a step to time-travel (bus.jumpTo);
+// mutation (human UI OR AI tool-call) is one EditorOp on the gateway, so this is
+// a faithful "who did what" ledger. Click a step to time-travel (gateway.jumpTo);
 // click an entity-bearing step to also select its target. Origin badge marks
 // human vs AI — the editor's whole point is that both go through the same path.
 export function HistoryPanel() {
   const { t } = useTranslation();
-  useDocVersion(); // re-render on every bus change
-  const steps = bus.historySteps();
-  const head = bus.appliedCount();
+  useDocVersion(); // re-render on every gateway change
+  const steps = gateway.historySteps();
+  const head = gateway.appliedCount();
 
   return (
     <div className="panel" data-testid="panel-history">
@@ -26,8 +26,8 @@ export function HistoryPanel() {
               data-testid={`hist-row-${i}`}
               title={t('editor.history.jumpToStep', { step: i + 1 })}
               onClick={() => {
-                bus.jumpTo(i + 1);
-                if (typeof s.entity === 'number') setSelection(s.entity);
+                gateway.jumpTo(i + 1);
+                if (typeof s.entity === 'number') gateway.dispatch({ kind: 'setSelection', id: s.entity });
               }}
             >
               <span className={`hist-origin ${s.origin}`} title={s.origin === 'ai' ? t('editor.history.originAi') : t('editor.history.originHuman')}>{s.origin === 'ai' ? '✦' : '·'}</span>
