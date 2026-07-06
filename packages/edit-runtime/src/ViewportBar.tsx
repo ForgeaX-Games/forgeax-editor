@@ -13,7 +13,7 @@
 //   - ▶/■/G + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
 //     received as props from ViewportChrome.
 import { useEffect, useState } from 'react';
-import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-shared';
+import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-core';
 import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';

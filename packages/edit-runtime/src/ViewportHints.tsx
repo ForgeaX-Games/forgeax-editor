@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useTranslation } from '@forgeax/editor-shared/i18n';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 
 // Dismissible controls cheat-sheet pinned to the bottom of the viewport. Lists
 // the Blender-default camera + gizmo bindings. Closing it persists to

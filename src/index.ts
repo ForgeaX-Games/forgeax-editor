@@ -10,20 +10,20 @@
 // cleanly under bun's file: protocol without dragging in vite-only
 // sub-trees (research §F1 file: import semantics, plan §4 R2).
 //
-// Why a relative import instead of `from '@forgeax/editor-shared'`:
+// Why a relative import instead of `from '@forgeax/editor-core'`:
 //   editor-shared's barrel re-exports `./store` / `./ops` /
-//   `./contextMenuService` / `./dock-bridge` which transitively load
+//   `./context-menu-service` / `./dock-bridge` which transitively load
 //   `@forgeax/engine-runtime` (via editor-core/assets.ts). bun's module
 //   resolver eagerly walks `export … from` re-exports at module load,
 //   so the barrel pulls the entire engine chain into scope and AC-04
 //   (file: install) cannot resolve the engine workspaces under an
 //   external consumer's node_modules tree. Going relative to
-//   `../packages/editor-shared/src/manifest` reaches the SSOT file
+//   `../packages/core/src/manifest` reaches the SSOT file
 //   directly (its only export is the EDITOR_PANELS const tuple — no
 //   side-effect imports). C-08's "5-subpkg-freeze" is preserved: this
 //   relative path is read-only from the entry above the 5 subpkgs and
 //   touches no file inside them. (Plan blind-spot: w2b/§4 R2 asked
-//   for `from '@forgeax/editor-shared'` but the barrel makes that
+//   for `from '@forgeax/editor-core'` but the barrel makes that
 //   non-zero-transitive; scope-amendment rationale recorded in
 //   implement-progress.jsonl scope-amended event.)
 //
@@ -34,7 +34,7 @@
 //   plan-strategy §4 R2 (no side-effect imports of runtime sub-packages)
 
 import { defineApp } from './app-kit';
-import { EDITOR_PANELS } from '../packages/editor-shared/src/manifest';
+import { EDITOR_PANELS } from '../packages/core/src/manifest';
 
 // `viewportOnly=1` query param: runtime contract.
 //
@@ -59,23 +59,23 @@ const editorApp = defineApp({
   routes: [],
 });
 
-// Named `app` export — preferred entry for AppKit consumers
-// (e.g. `mountStandalone(editorApp)` in standalone-editor-demo). Both
-// the named `manifest` re-export and the default export remain so that
+// Named `app` export — preferred entry for AppKit consumers. Both the
+// named `manifest` re-export and the default export remain so that
 // existing AC-03 / AC-04 / AC-16 assertions stay green.
 export const app = editorApp;
 export const manifest = editorApp.manifest;
 
 // Convenience re-exports of the AppKit mount entry points so downstream
 // SDK consumers who only `import` from `@forgeax/editor` can reach
-// `mountStandalone` / `mountComposition` without a second-hop import
-// from `@forgeax/interface/app-kit`. These are pure pass-throughs of
-// the same symbols already in scope above (no side-effect imports
-// added: zero-transitive root entry per plan-strategy section 2 D-5).
-// (verify R1 Pure-trial F-1 carry-over: single-hop discoverability.)
-export { mountStandalone, mountComposition, AppKitError } from './app-kit';
+// `mountComposition` without a second-hop import from
+// `@forgeax/interface/app-kit`. These are pure pass-throughs of the same
+// symbols already in scope above (no side-effect imports added:
+// zero-transitive root entry per plan-strategy section 2 D-5).
+// The standalone iframe-mount entry was deep-removed in M3 (AC-09) —
+// the editor host mounts via React createRoot, so it is no longer
+// re-exported here.
+export { mountComposition, AppKitError } from './app-kit';
 export type {
-  MountStandaloneOptions,
   MountOptions,
   AppManifest,
   AppManifestPanel,

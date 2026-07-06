@@ -6,13 +6,18 @@
 // Props:
 //   slug           — the game slug to edit (required, drives iframe src)
 //   viewportOnly?  — if true, appends &viewportOnly=1 to the iframe src
-//   serverBase?    — optional base URL for API calls (default '' = relative)
+//
+// Backend calls go through the same-origin `apiFetch` helper (editor-core). The
+// former `serverBase` prop is retired (M4 / plan-strategy D-7): it never carried
+// a non-empty value in production — every call was already same-origin `/api`.
 //
 // Anchors:
-//   plan-strategy §2 D-2 (probe + EditorImportError + serverBase prop)
+//   plan-strategy §2 D-2 (probe + EditorImportError)
 //   plan-strategy §2 D-5 (side-effect-free leaf module, no import of main.tsx)
+//   plan-strategy §2 D-7 (serverBase retirement — same-origin apiFetch)
 //   requirements §5 AC-04 (IMPORT_FORMATS / importAsset / FloatingMenu / VAG_SPAWN_ENTITY)
 //   requirements §8 E-1 (standalone explicit failure)
+//   requirements AC-07 (createDefaultApiClient converged to apiFetch)
 //   charter P3 (structured errors)
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -26,7 +31,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { buildSpawnEntityFromDragRef, cookGltfMeta, createDefaultApiClient, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
+import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // The studio shell (cross-port parent) can't read this surface's console. Forward
@@ -61,7 +66,7 @@ export type EditorImportErrorCode = 'SERVER_UNAVAILABLE' | 'UNKNOWN';
 const ERROR_HINTS: Record<EditorImportErrorCode, { hint: string; expected: string }> = {
   SERVER_UNAVAILABLE: {
     hint: 'The forgeax server (:18900) is not reachable from this host. Asset import and workbench features will be disabled. Start the server with `bash start.sh` in the forgeax-studio root.',
-    expected: 'A running forgeax server at the configured serverBase endpoint.',
+    expected: 'A running forgeax server reachable at the same-origin /api endpoint.',
   },
   UNKNOWN: {
     hint: 'An unexpected error occurred during the server probe.',
@@ -92,10 +97,9 @@ export interface ProbeResult {
   error?: EditorImportError;
 }
 
-export async function probeServer(serverBase?: string): Promise<ProbeResult> {
-  const base = serverBase ?? '';
+export async function probeServer(): Promise<ProbeResult> {
   try {
-    const r = await createDefaultApiClient(base).fetch('/api/workbench/active-slug');
+    const r = await apiFetch('/api/workbench/active-slug');
     if (!r.ok) {
       return {
         available: false,
@@ -119,9 +123,9 @@ type ImportStep = 'uploading' | 'processing' | 'importing' | 'done' | 'error' | 
 const IMPORT_FORMATS = [
   {
     label: '3D Model',
-    desc: '.glb  .gltf',
-    hint: 'GLB / GLTF 2.0 · mesh + material + animation + skeleton',
-    accept: '.glb,.gltf',
+    desc: '.glb  .gltf  .fbx',
+    hint: 'GLB / GLTF 2.0 / FBX · mesh + material + animation + skeleton',
+    accept: '.glb,.gltf,.fbx',
   },
   {
     label: 'Image Texture',
@@ -156,7 +160,6 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 async function importAssetFile(
   file: File,
   gameRoot: string,
-  serverBase: string,
 ): Promise<{ ok: boolean; error?: string; dest?: string }> {
   // EditSurface runs in the HOST (interface) window — a separate JS realm from the
   // editor iframe where setPathResolver is installed, so the editor-core resolver
@@ -167,7 +170,7 @@ async function importAssetFile(
   try {
     const buf = await file.arrayBuffer();
     const data = arrayBufferToBase64(buf);
-    const r = await createDefaultApiClient(serverBase).fetch('/api/files/upload', {
+    const r = await apiFetch('/api/files/upload', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dest, data }),
@@ -204,14 +207,12 @@ function singleMeshGuidFromMeta(metaText: string): string | null {
   }
 }
 
-async function resolveSingleMeshSceneRef(ref: DragAssetRef, serverBase: string): Promise<DragAssetRef | null> {
+async function resolveSingleMeshSceneRef(ref: DragAssetRef): Promise<DragAssetRef | null> {
   const metaPath = ref.path;
-  // Only the canonical `*.glb.meta.json` sidecar carries the sub-asset table
-  // (same constraint as resolveMeshOriginalMaterials — .gltf w/ external
-  // resources is unsupported in-browser and falls back to the GltfRef path).
-  if (typeof metaPath !== 'string' || !/\.glb\.meta\.json$/i.test(metaPath)) return null;
+  // Only the canonical `*.meta.json` sidecar carries the sub-asset table.
+  if (typeof metaPath !== 'string' || !/\.meta\.json$/i.test(metaPath)) return null;
   try {
-    const r = await createDefaultApiClient(serverBase).fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+    const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
     if (!r.ok) return null;
     const guid = singleMeshGuidFromMeta(await r.text());
     if (!guid) return null; // 0 or many meshes → leave to the GltfRef path
@@ -232,12 +233,11 @@ export interface EditSurfaceProps {
    *  used to build upload dests. Standalone: `<slug>`. Studio: its own layout. */
   gameRoot?: string;
   viewportOnly?: boolean;
-  serverBase?: string;
 }
 
 // ── EditSurface Component ──────────────────────────────────────────────────────
 
-export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSurfaceProps) {
+export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) {
   const [fps, setFps] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -263,18 +263,16 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
 
-  const base = serverBase ?? '';
-
   // ── mount-time probe (D-2) ─────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const result = await probeServer(base);
+      const result = await probeServer();
       if (cancelled) return;
       setEditorAvailable(result.available);
     })();
     return () => { cancelled = true; };
-  }, [base]);
+  }, []);
 
   // ── Deferred game-load while hidden (keep-alive contention guard) ────────────
   // The shell's keep-alive layer keeps BOTH the Edit and Play surfaces mounted at
@@ -347,33 +345,20 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
     const kind = ref.kind ?? '';
     const entity = buildSpawnEntityFromDragRef(ref);
     if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
-    if (kind === 'mesh') {
-      try {
-        const api = createDefaultApiClient(base);
-        const readRaw = async (p: string): Promise<Response | null> => {
-          try { const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(p)}`); return r.ok ? r : null; }
-          catch { return null; }
-        };
-        const subs = await resolveMeshOriginalMaterials(
-          { guid: ref.guid, path: ref.path, payload: ref.payload },
-          {
-            fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
-            fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
-          },
-        );
-        if (subs && subs.length > 0) {
-          const mat = (entity.components.Material ?? (entity.components.Material = {})) as Record<string, unknown>;
-          mat.submeshMaterials = subs;
-        }
-      } catch (err) {
-        console.warn('[editor] original-material recovery failed:', (err as Error)?.message ?? err);
-      }
-    }
+    // F-1 review round 1: buildSpawnEntityFromDragRef now emits engine-native
+    // components only (Transform{quat} + MeshFilter{HANDLE_CUBE}); the editor
+    // auto-adds a default-material MeshRenderer. The former per-submesh original-
+    // material recovery wrote `Material.submeshMaterials` — a component the
+    // collapse deleted, so it was silently dropped by spawnComponentData. Real
+    // imported-mesh geometry + original-material association is engine-MVP-OOS
+    // (feat-future-asset-system, engine mesh-filter.ts:44). Follow-up: review F-4.
+    // TODO(imported-mesh-materials): rewire to MeshRenderer{materials} once the
+    // asset system can register imported MeshAsset/MaterialAsset handles.
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
       mode: 'reference', entity, name: entity.name,
     });
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
-  }, [slug, base]);
+  }, [slug]);
 
   // GLB import after the user picks a mode (D-8). 'whole' declares the sub-assets
   // AND auto-spawns the scene tree (uasset-like); 'split' only declares the
@@ -389,11 +374,10 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       // so loadMetaAssets rejected the sidecar and nothing showed). The
       // importMode (whole/split) is a pure-frontend spawn concern below — it is
       // deliberately NOT written into the engine meta.
-      const api = createDefaultApiClient(base);
       const metaPath = `${dest}.meta.json`;
       let existing: unknown;
       try {
-        const r = await api.fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
         if (r.ok) existing = JSON.parse(await r.text());
       } catch { /* first import — no existing meta to reuse */ }
       const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
@@ -403,7 +387,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
         setImportMsg(cooked.error ?? 'glTF processing failed');
         return;
       }
-      const wrote = await api.fetch('/api/files', {
+      const wrote = await apiFetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
@@ -443,7 +427,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       // single Material component can't carry a multi-submesh mesh's N materials,
       // tripping the engine's mesh-renderer-material-count-mismatch (materials=1 vs
       // submeshes=N). Mirrors spawnSceneFromGlb (the drag path).
-      const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
+      const sceneRes = await apiFetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: dest, mode: 'reference' }),
@@ -471,7 +455,46 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
     }
-  }, [slug, base, spawnMeshOrAssetRef]);
+  }, [slug, spawnMeshOrAssetRef]);
+
+  // FBX import: browser-side ufbx WASM cook → meta.json (no mode dialog; whole asset).
+  const runFbxImport = useCallback(async (dest: string, baseName: string, file: File) => {
+    if (!slug) return;
+    try {
+      setImportStep('processing');
+      setImportMsg(baseName);
+      const metaPath = `${dest}.meta.json`;
+      let existing: unknown;
+      try {
+        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        if (r.ok) existing = JSON.parse(await r.text());
+      } catch { /* first import */ }
+      const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
+      const cooked = await cookFbxMeta(await file.arrayBuffer(), sourceName, existing);
+      if (!cooked.ok || !cooked.metaJson) {
+        setImportStep('error');
+        setImportMsg(cooked.error ?? 'FBX processing failed');
+        return;
+      }
+      const wrote = await apiFetch('/api/files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
+      });
+      if (!wrote.ok) {
+        setImportStep('error');
+        setImportMsg('Failed to write .fbx.meta.json');
+        return;
+      }
+      sendVagMessage(iframeRef.current?.contentWindow ?? null, VagAssetsChangedSchema, { slug } as any);
+      setImportStep('done');
+      setImportMsg(`${baseName} (${cooked.summary?.total ?? 0} sub-assets)`);
+      setTimeout(() => setImportStep(null), 4000);
+    } catch (err) {
+      setImportStep('error');
+      setImportMsg((err as Error).message ?? String(err));
+    }
+  }, [slug]);
 
   const onFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.currentTarget.files?.[0];
@@ -484,16 +507,23 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       setImportMsg('no gameRoot injected — host must supply the game layout');
       return;
     }
-    const isModel = /\.(glb|gltf)$/i.test(file.name);
-    const baseName = file.name.replace(/\.(glb|gltf)$/i, '');
+    const isGlb = /\.(glb|gltf)$/i.test(file.name);
+    const isFbx = /\.fbx$/i.test(file.name);
+    const isModel = isGlb || isFbx;
+    const baseName = file.name.replace(/\.(glb|gltf|fbx)$/i, '');
 
     try {
       setImportStep('uploading');
       setImportMsg(file.name);
-      const res = await importAssetFile(file, gameRoot, base);
+      const res = await importAssetFile(file, gameRoot);
       if (!res.ok || !res.dest) {
         setImportStep('error');
         setImportMsg(res.error ?? 'Upload failed');
+        return;
+      }
+
+      if (isFbx) {
+        await runFbxImport(res.dest, baseName, file);
         return;
       }
 
@@ -513,7 +543,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       setImportStep('error');
       setImportMsg((err as Error).message ?? String(err));
     }
-  }, [slug, gameRoot, base]);
+  }, [slug, gameRoot, runFbxImport]);
 
   // ── Asset drag-to-scene (D-4/D-5) ───────────────────────────────────────────
   // Spawn a whole-GLB asset (mode A) as a single GltfRef instance. Forcing
@@ -525,7 +555,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
   // engine's mesh-renderer-material-count-mismatch (materials=1 vs submeshes=N).
   const spawnSceneFromGlb = useCallback(async (path: string, name: string): Promise<void> => {
     try {
-      const sceneRes = await createDefaultApiClient(base).fetch('/api/assets/import-scene', {
+      const sceneRes = await apiFetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path, mode: 'reference' }),
@@ -539,7 +569,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
     } catch (err) {
       console.warn('[editor] drag scene import error:', (err as Error)?.message ?? err);
     }
-  }, [base]);
+  }, []);
 
   const onAssetDragOver = useCallback((e: React.DragEvent) => {
     if (!pendingDragAsset.current) return; // not a Content Browser asset drag
@@ -564,7 +594,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
       // survives ✎ Edit reopen AND ▶ Play (the GltfRef whole-scene reference is
       // editor-only and scene-pack can't persist it → geometry vanishes on
       // reopen). Multi-mesh GLBs fall through to the GltfRef tree spawn below.
-      const meshRef = await resolveSingleMeshSceneRef(ref, base);
+      const meshRef = await resolveSingleMeshSceneRef(ref);
       if (meshRef) { await spawnMeshOrAssetRef(meshRef); return; }
 
       // import-scene needs the GLB's *game-relative* path (e.g.
@@ -578,12 +608,20 @@ export function EditSurface({ slug, gameRoot, viewportOnly, serverBase }: EditSu
         ? metaPath.replace(/\.meta\.json$/i, '')
         : ((ref.payload?.source as string | undefined) ?? metaPath);
       const name = ref.name ?? 'GLB';
-      if (typeof src === 'string' && /\.(glb|gltf)$/i.test(src)) void spawnSceneFromGlb(src, name);
-      else console.warn('[editor] scene asset has no resolvable GLB source — cannot spawn:', metaPath);
+      if (typeof src === 'string' && /\.(glb|gltf|fbx)$/i.test(src)) {
+        if (/\.fbx$/i.test(src)) {
+          const meshRef = await resolveSingleMeshSceneRef(ref);
+          if (meshRef) { await spawnMeshOrAssetRef(meshRef); return; }
+          console.warn('[editor] FBX scene spawn needs Phase 2.5 DDC — try Add to Scene on a mesh sub-asset:', metaPath);
+          return;
+        }
+        void spawnSceneFromGlb(src, name);
+      }
+      else console.warn('[editor] scene asset has no resolvable source — cannot spawn:', metaPath);
       return;
     }
     await spawnMeshOrAssetRef(ref);
-  }, [spawnSceneFromGlb, spawnMeshOrAssetRef, base]);
+  }, [spawnSceneFromGlb, spawnMeshOrAssetRef]);
 
   const onAssetDrop = useCallback((e: React.DragEvent) => {
     const ref = pendingDragAsset.current;

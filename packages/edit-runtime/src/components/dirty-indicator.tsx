@@ -17,7 +17,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { hasPendingDiskSave } from '@forgeax/editor-core';
-import { useDocVersion } from '@forgeax/editor-shared';
+import { useDocVersion } from '@forgeax/editor-core';
 
 export function DirtyIndicator(): ReactNode {
   // useDocVersion re-renders on every command — so the dirty state is live.

@@ -1,5 +1,5 @@
 // Viewport interaction — the "human directly manipulates the scene" half of Edit
-// mode (design EDITOR-MODE P1: 视口导航 / 点选 / gizmo). The forgeax port shipped
+// mode (design EDITOR-MODE P1: viewport navigation / picking / gizmo). The forgeax port shipped
 // only the data model + Hierarchy + Inspector + doc→world render, leaving the
 // canvas inert; this module adds:
 //   • orbit camera   — Blender DEFAULT: MMB = orbit · Shift+MMB = pan ·
@@ -26,136 +26,62 @@ import {
   quat,
   Materials,
   HANDLE_CUBE,
-  meshFromInterleaved,
 } from '@forgeax/engine-runtime';
+// engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
+// @forgeax/engine-geometry leaf package.
+import { meshFromInterleaved } from '@forgeax/engine-geometry';
+import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
+import { vec3 } from '@forgeax/engine-math';
+
+// M2 extraction: pure geometry lives in viewport-ray.ts; orbit math in viewport-camera.ts.
+// viewport.ts is now a DI factory (createViewport) + re-export barrel (plan-strategy D-5).
+export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
+export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
+import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
+import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
+
 import type { EntityId, EditSession } from '@forgeax/editor-core';
-import { bus, getAnimPreview, getGizmoMode, getSelection, onAnimPreview, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-shared';
-import type { EngineSync } from './sync';
+import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-core';
+// M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
+
+// ── M7-a (AC-15): doc.entities mirror deleted — gizmo/pick read the WORLD ──────
+// The dual-write mirror (EntityNode.components) is gone; the world is the SSOT.
+// entComponent(session, id, 'Transform') returns the engine-native POD
+// (posX/posY/posZ + quatX/Y/Z/W + scaleX/Y/Z). The viewport gizmo/drag math is
+// written against the editor euler-degree shape (x/y/z + rotX/rotY/rotZ), so read
+// once through this adapter and convert quat→euler HERE (euler-quat.ts is the SSOT
+// for that conversion — AGENTS.md #6). Returns undefined for organizational nodes
+// (no Transform) so callers keep their "nothing to gizmo/pick" fast-exit.
+type EditorTransform = {
+  x: number; y: number; z: number;
+  rotX: number; rotY: number; rotZ: number;
+  scaleX: number; scaleY: number; scaleZ: number;
+};
+function readEntTransform(session: EditSession, id: EntityId): EditorTransform | undefined {
+  const t = entComponent(session, id, 'Transform');
+  if (!t) return undefined;
+  const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+  const e = quatToEuler(n(t.quatX, 0), n(t.quatY, 0), n(t.quatZ, 0), n(t.quatW, 1));
+  return {
+    x: n(t.posX, 0), y: n(t.posY, 0), z: n(t.posZ, 0),
+    rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
+    scaleX: n(t.scaleX, 1), scaleY: n(t.scaleY, 1), scaleZ: n(t.scaleZ, 1),
+  };
+}
+// EditorHidden is an editor-only marker; the entComponents walk surfaces it on
+// both the main window (world) and popout windows (snapshot cache).
+function isEntHidden(session: EditSession, id: EntityId): boolean {
+  return 'EditorHidden' in entComponents(session, id);
+}
 
 const DEG2RAD = Math.PI / 180;
 
-export type Vec3 = [number, number, number];
-
-// ── input-target derivation (requirements C-4, §3) ───────────────────────────
-// The viewport spans two orthogonal axes: run (edit/play) × display (scene/game).
-// `inputTarget` is a DERIVED quantity over those two — never an independent state
-// field. The single rule (requirements §3): only `(run==='play' ∧ display==='game')`
-// routes input to the game; the other three quadrants route input to the editor.
-
-export type RunMode = 'edit' | 'play';
-export type DisplayMode = 'scene' | 'game';
-export type InputTarget = 'editor' | 'game';
-
-/** Pure selector: which surface owns viewport input for a given quadrant.
- *  Only play·game possesses the game; every other quadrant stays editor-owned. */
-export function deriveInputTarget(run: RunMode, display: DisplayMode): InputTarget {
-  return run === 'play' && display === 'game' ? 'game' : 'editor';
-}
-
-// ── pure geometry (exported for tests) ───────────────────────────────────────
-
-/** Pixel position → normalized device coords in [-1,1], Y up. */
-export function ndcFromClient(x: number, y: number, w: number, h: number): [number, number] {
-  return [(x / w) * 2 - 1, 1 - (y / h) * 2];
-}
-
-const norm = (v: Vec3): Vec3 => {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-};
-
-/** Ray direction through an NDC point given the camera basis + vertical FOV. */
-export function rayDirection(
-  forward: Vec3, right: Vec3, up: Vec3,
-  ndcX: number, ndcY: number, fovY: number, aspect: number,
-): Vec3 {
-  const t = Math.tan(fovY / 2);
-  return norm([
-    forward[0] + right[0] * ndcX * t * aspect + up[0] * ndcY * t,
-    forward[1] + right[1] * ndcX * t * aspect + up[1] * ndcY * t,
-    forward[2] + right[2] * ndcX * t * aspect + up[2] * ndcY * t,
-  ]);
-}
-
-/** Ray vs axis-aligned box (center + half-extents). Returns entry distance or null. */
-export function rayAABB(origin: Vec3, dir: Vec3, center: Vec3, half: Vec3): number | null {
-  let tmin = -Infinity, tmax = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const o = origin[i]!, d = dir[i]!, lo = center[i]! - half[i]!, hi = center[i]! + half[i]!;
-    if (Math.abs(d) < 1e-9) { if (o < lo || o > hi) return null; continue; }
-    let t1 = (lo - o) / d, t2 = (hi - o) / d;
-    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-    if (t1 > tmin) tmin = t1;
-    if (t2 < tmax) tmax = t2;
-    if (tmin > tmax) return null;
-  }
-  if (tmax < 0) return null;
-  return tmin >= 0 ? tmin : tmax;
-}
-
-/** Ray vs horizontal plane y = planeY. Returns the world hit point or null. */
-export function rayPlaneY(origin: Vec3, dir: Vec3, planeY: number): Vec3 | null {
-  if (Math.abs(dir[1]) < 1e-9) return null;
-  const t = (planeY - origin[1]) / dir[1];
-  if (t < 0) return null;
-  return [origin[0] + dir[0] * t, planeY, origin[2] + dir[2] * t];
-}
-
-/** Parameter `t` along an axis line (axisO + t·axisU) at the point closest to the
- *  cursor ray. Used by the move gizmo to constrain a drag to one axis. */
-export function closestAxisT(rayO: Vec3, rayD: Vec3, axisO: Vec3, axisU: Vec3): number {
-  const w0: Vec3 = [rayO[0] - axisO[0], rayO[1] - axisO[1], rayO[2] - axisO[2]];
-  const dot = (p: Vec3, q: Vec3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
-  const a = dot(rayD, rayD), b = dot(rayD, axisU), c = dot(axisU, axisU);
-  const d = dot(rayD, w0), e = dot(axisU, w0);
-  const denom = a * c - b * b;
-  if (Math.abs(denom) < 1e-9) return -e / (c || 1); // ray ∥ axis → project origin
-  return (a * e - b * d) / denom;
-}
-
-const dot3 = (p: Vec3, q: Vec3): number => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
-const cross3 = (p: Vec3, q: Vec3): Vec3 => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
-
-/** Ray vs an arbitrary plane (point + normal). Returns the hit point or null. */
-export function rayPlane(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3): Vec3 | null {
-  const denom = dot3(dir, normal);
-  if (Math.abs(denom) < 1e-9) return null;
-  const t = dot3([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]], normal) / denom;
-  if (t < 0) return null;
-  return [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
-}
-
-/** Two orthonormal vectors spanning the plane ⊥ `axis` (for measuring rotation). */
-export function orthoBasis(axis: Vec3): [Vec3, Vec3] {
-  const a = norm(axis);
-  const ref: Vec3 = Math.abs(a[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
-  const u = norm(cross3(ref, a));
-  return [u, cross3(a, u)];
-}
-
-/** Signed angle (radians) of the cursor ray's hit on the plane ⊥ `axis` through
- *  `center`, measured in that plane. null if the ray is parallel to the plane. */
-export function angleOnAxis(rayO: Vec3, rayD: Vec3, center: Vec3, axis: Vec3): number | null {
-  const hit = rayPlane(rayO, rayD, center, axis);
-  if (!hit) return null;
-  const [u, v] = orthoBasis(axis);
-  const d: Vec3 = [hit[0] - center[0], hit[1] - center[1], hit[2] - center[2]];
-  return Math.atan2(dot3(d, v), dot3(d, u));
-}
-
-const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-
-/** A doc entity's world AABB (center + half) from its Transform. */
-export function entityBox(t: { x?: number; y?: number; z?: number; scaleX?: number; scaleY?: number; scaleZ?: number }): { center: Vec3; half: Vec3 } {
-  const sx = Math.abs(num(t.scaleX, 1)), sy = Math.abs(num(t.scaleY, 1)), sz = Math.abs(num(t.scaleZ, 1));
-  // pad razor-thin slabs (neon strips, floor) so they stay clickable.
-  const pad = 0.05;
-  return {
-    center: [num(t.x, 0), num(t.y, 0), num(t.z, 0)],
-    half: [Math.max(sx / 2, pad), Math.max(sy / 2, pad), Math.max(sz / 2, pad)],
-  };
-}
+// ── factory-local buffer (used by updateParamGizmo) ────────────────────────
+// Single reusable Float32Array for engine vec3 operations within the factory.
+// All pure-geometry functions now use their own buffer in viewport-ray.ts.
+const _v3 = new Float32Array(3) as EngineVec3;
 
 // ── runtime wiring ────────────────────────────────────────────────────────────
 
@@ -172,12 +98,12 @@ interface AssetsLike {
   register?(desc: unknown): { unwrap(): unknown };
 }
 
+// M4: EngineSync dependency removed — world is SSOT, no doc→world mapping needed.
 export interface ViewportDeps {
   canvas: HTMLCanvasElement;
   world: WorldLike;
   assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via world.allocSharedRef
   camera: number;        // the editor camera entity
-  sync: EngineSync;      // doc→world handle lookup (live drag) + resync
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
    *  origin instead of the arena-scale default. */
   initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
@@ -194,13 +120,13 @@ export interface Viewport {
   dispose(): void;
   /** Re-aim the camera (e.g. on resize the aspect changes). */
   refresh(): void;
-  /** Re-aim the orbit camera to a default ~human-character framing (需求 §4.1). */
+  /** Re-aim the orbit camera to a default ~human-character framing (requirements §4.1). */
   resetCamera(): void;
 }
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, camera, sync, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+export function createViewport({ canvas, world, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
   // Input-routing gate (requirements C-4 / AC-10): in the play·game quadrant the
   // game owns input, so every editor handler bails before doing orbit/pick/gizmo
   // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
@@ -214,25 +140,15 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   let camPos: Vec3 = [0, 0, 0];
   let fwd: Vec3 = [0, 0, -1], rgt: Vec3 = [1, 0, 0], upv: Vec3 = [0, 1, 0];
 
-  const qCam = quat.create(), qY = quat.create(), qP = quat.create();
-  const tmp = new Float32Array(3);
-  const tv = (out: Vec3, src: Vec3): Vec3 => {
-    quat.transformVec3(tmp, qCam, src);
-    out[0] = tmp[0]!; out[1] = tmp[1]!; out[2] = tmp[2]!;
-    return out;
-  };
-
   const aspect = () => (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height) || 1;
 
   function applyCamera(): void {
-    quat.fromAxisAngle(qY, [0, 1, 0], yaw);
-    quat.fromAxisAngle(qP, [1, 0, 0], pitch);
-    quat.multiply(qCam, qY, qP);
-    tv(fwd, [0, 0, -1]); tv(rgt, [1, 0, 0]); tv(upv, [0, 1, 0]);
-    camPos = [target[0] - fwd[0] * dist, target[1] - fwd[1] * dist, target[2] - fwd[2] * dist];
+    const r = computeOrbitCamera(target, yaw, pitch, dist);
+    camPos = r.camPos;
+    fwd = r.fwd; rgt = r.rgt; upv = r.upv;
     world.set(camera, Transform, {
       posX: camPos[0], posY: camPos[1], posZ: camPos[2],
-      quatX: qCam[0], quatY: qCam[1], quatZ: qCam[2], quatW: qCam[3],
+      quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
       scaleX: 1, scaleY: 1, scaleZ: 1,
     });
     // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
@@ -431,7 +347,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
     // — otherwise the gizmo lags at the pre-drag position until release.
     const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
-    const t = live ?? (sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined);
+    const t = live ?? (sel !== null ? readEntTransform(bus.doc, sel) : undefined);
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
@@ -505,7 +421,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   function forwardOf(t?: Record<string, number>): Vec3 {
     const q = quat.create();
     quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
-    const o = new Float32Array(3); quat.transformVec3(o, q, [0, 0, -1]);
+    const o = new Float32Array(3) as EngineVec3; quat.transformVec3(o, q, [0, 0, -1] as unknown as EngineVec3);
     return [o[0]!, o[1]!, o[2]!];
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
@@ -513,17 +429,21 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     // Display gate (w23): display='game' → hide param gizmos (Light range/spot, Camera frustum).
     if (!isAuxVisible()) { despawnParam(); return; }
     const sel = getSelection();
-    const node = sel !== null ? bus.doc.entities[sel] : undefined;
-    if (!node) { despawnParam(); return; }
-    const t = node.components.Transform as Record<string, number> | undefined;
+    // M7-a (AC-15): read the selected entity's components from the world (SSOT),
+    // not the deleted doc.entities mirror. entComponents returns component-name →
+    // POD for every component the entity carries.
+    const comps = sel !== null ? entComponents(bus.doc, sel) : undefined;
+    if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
+    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
-    const light = node.components.Light as Record<string, unknown> | undefined;
-    const cam = node.components.Camera as Record<string, unknown> | undefined;
+    const light = comps.Light as Record<string, unknown> | undefined;
+    const cam = comps.Camera as Record<string, unknown> | undefined;
     const pts: Vec3[] = [];
     if (light) {
       const type = (light.type as string) ?? 'point';
       if (type === 'directional') {
-        const dir = norm([num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+        vec3.normalize(_v3, [num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+        const dir: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
         const len = Math.max(2, dist * 0.18);
         const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];
         addSeg(pts, center, tip, 16);
@@ -565,41 +485,21 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
 
   // ── animation scrub preview (Timeline) ──────────────────────────────────────
-  // Apply a sampled clip's Transform channels to the previewed entity's world
-  // transform live (no doc churn). Clearing it resyncs the world from the doc.
-  function applyAnimPreview(): void {
-    const ap = getAnimPreview();
-    if (!ap) { sync.resync(); return; }
-    const wid = sync.worldEntityFor(ap.id);
-    if (wid === undefined) return;
-    const t = (bus.doc.entities[ap.id]?.components.Transform as Record<string, number> | undefined) ?? {};
-    const g = (k: string, d: number): number => { const v = ap.values[`Transform.${k}`]; return typeof v === 'number' ? v : num(t[k], d); };
-    const data: Record<string, number> = {
-      posX: g('x', 0), posY: g('y', 0), posZ: g('z', 0),
-      scaleX: g('scaleX', 1), scaleY: g('scaleY', 1), scaleZ: g('scaleZ', 1),
-    };
-    const rx = g('rotX', 0), ry = g('rotY', 0), rz = g('rotZ', 0);
-    if (rx || ry || rz) {
-      quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
-    } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
-    world.set(wid, Transform, data);
-  }
-
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
     const r = canvas.getBoundingClientRect();
     const [nx, ny] = ndcFromClient(clientX - r.left, clientY - r.top, r.width, r.height);
     return { origin: camPos, dir: rayDirection(fwd, rgt, upv, nx, ny, FOV, aspect()) };
   }
 
-  /** Nearest visible doc entity hit by the ray (or null). */
+  /** Nearest visible world entity hit by the ray (or null). */
   function pick(origin: Vec3, dir: Vec3): EntityId | null {
+    // M7-a (AC-15): enumerate entities from the world (entIds) instead of the
+    // deleted doc.order/doc.entities mirror. Hidden = EditorHidden marker present.
     const doc: EditSession = bus.doc;
     let best: EntityId | null = null, bestT = Infinity;
-    for (const id of doc.order) {
-      const node = doc.entities[id];
-      if (!node || node.hidden) continue;
-      const t = node.components.Transform as Record<string, number> | undefined;
+    for (const id of entIds(doc)) {
+      if (isEntHidden(doc, id)) continue;
+      const t = readEntTransform(doc, id);
       if (!t) continue; // organizational node — nothing to pick
       const { center, half } = entityBox(t);
       const hit = rayAABB(origin, dir, center, half);
@@ -632,13 +532,12 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   let livePatch: Record<string, number> = {};
   const qd = quat.create();
 
-  /** Live-preview a Transform patch via world.set (no doc churn). Position +
-   *  scale + rotation(quat from euler) are all applied; on release the patch is
-   *  committed as one setComponent. */
-  const applyLive = (patch: Record<string, number>): void => {
-    livePatch = patch;
-    if (dragWorld === undefined) return;
-    const m = { ...dragOrig, ...patch };
+  /** Convert an editor-shape Transform (x/y/z + rotX/rotY/rotZ + scale) into the
+   *  engine-native POD (posX/posY/posZ + quatX/Y/Z/W + scale). M7-a: the world is
+   *  the SSOT — both the live preview (world.set) and the commit (setComponent →
+   *  document.ts w.set) must write engine field names, not the editor euler shape.
+   *  euler→quat uses the XYZ-order convention (euler-quat.ts SSOT, AGENTS.md #6). */
+  const toEnginePatch = (m: Record<string, number>): Record<string, number> => {
     const data: Record<string, number> = {
       posX: num(m.x, 0), posY: num(m.y, 0), posZ: num(m.z, 0),
       scaleX: num(m.scaleX, 1), scaleY: num(m.scaleY, 1), scaleZ: num(m.scaleZ, 1),
@@ -646,11 +545,20 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
     if (rx || ry || rz) {
       quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]; data.quatY = qd[1]; data.quatZ = qd[2]; data.quatW = qd[3];
+      data.quatX = qd[0]!; data.quatY = qd[1]!; data.quatZ = qd[2]!; data.quatW = qd[3]!;
     } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
-    world.set(dragWorld, Transform, data);
+    return data;
+  };
+
+  /** Live-preview a Transform patch via world.set (no doc churn). Position +
+   *  scale + rotation(quat from euler) are all applied; on release the patch is
+   *  committed as one setComponent. */
+  const applyLive = (patch: Record<string, number>): void => {
+    livePatch = patch;
+    if (dragWorld === undefined) return;
+    world.set(dragWorld, Transform, toEnginePatch({ ...dragOrig, ...patch }));
     // Mirror the changed fields into the Inspector live (no command) — the
-    // "预览" loop: numbers track the drag, the single commit lands on release.
+    // "preview" loop: numbers track the drag, the single commit lands on release.
     if (dragId !== null) for (const k in patch) setFieldPreview(dragId, `Transform.${k}`, patch[k]!);
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
@@ -685,8 +593,10 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const h = sel !== null ? hitGizmo(origin, dir) : null;
     if (h !== null && sel !== null) {
       dragId = sel;
-      dragWorld = sync.worldEntityFor(sel);
-      dragOrig = { ...(bus.doc.entities[sel]!.components.Transform as Record<string, number>) };
+// M4: worldEntityFor removed — entity IDs are directly world entities.
+      dragWorld = sel;
+      // M7-a: read the grab-time Transform from the world (doc.entities gone).
+      dragOrig = { ...(readEntTransform(bus.doc, sel) ?? {}) };
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
       livePatch = {};
       if (h >= 3) {
@@ -708,8 +618,9 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     if (hit !== null) {
       setSelection(hit);
       dragId = hit;
-      dragWorld = sync.worldEntityFor(hit);
-      dragOrig = { ...(bus.doc.entities[hit]!.components.Transform as Record<string, number>) };
+      dragWorld = hit;
+      // M7-a: read the grab-time Transform from the world (doc.entities gone).
+      dragOrig = { ...(readEntTransform(bus.doc, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
@@ -728,8 +639,8 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
     if (mode === 'orbit') {
-      yaw -= dx * 0.005;
-      pitch = Math.max(-1.5, Math.min(1.5, pitch - dy * 0.005));
+      const r = advanceOrbit(yaw, pitch, dist, -dx * 0.005, -dy * 0.005, 0);
+      yaw = r.yaw; pitch = r.pitch; dist = r.dist;
       applyCamera();
     } else if (mode === 'pan') {
       const k = dist * 0.0016;
@@ -739,7 +650,8 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
       applyCamera();
     } else if (mode === 'zoom') {
       // Ctrl+MMB drag-zoom (Blender): drag down = zoom out, up = zoom in.
-      dist = Math.max(2, Math.min(300, dist * (1 + dy * 0.005)));
+      const r = advanceOrbit(yaw, pitch, dist, 0, 0, -dy * 0.005 * dist);
+      yaw = r.yaw; pitch = r.pitch; dist = r.dist;
       applyCamera();
     } else if (mode === 'axisDrag') {
       const { origin, dir } = rayAt(e.clientX, e.clientY);
@@ -802,8 +714,10 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   function onUp(): void {
     if ((mode === 'drag' || mode === 'axisDrag') && dragId !== null && Object.keys(livePatch).length > 0) {
       // commit the final pose as ONE undoable command, merged over the original
-      // Transform so untouched fields survive. resync then re-places it from the doc.
-      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: { ...dragOrig, ...livePatch } });
+      // Transform so untouched fields survive. M7-a: setComponent writes straight
+      // to the world (document.ts w.set), so the patch MUST be engine-native POD
+      // (posX/quatX...), not the editor euler shape — convert via toEnginePatch.
+      bus.dispatch({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: toEnginePatch({ ...dragOrig, ...livePatch }) });
     }
     mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
     setFieldPreview(null); // stop the Inspector preview; it now reads the committed doc
@@ -814,7 +728,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
     if (overPanel(e.target)) return;
     if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
     e.preventDefault();
-    dist = Math.max(2, Math.min(300, dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+    dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
     applyCamera();
   }
 
@@ -823,7 +737,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   }
 
   /** Re-aim to the default character framing: target chest-height, ~4.5m back,
-   *  slight downward tilt — matches the socket-editor preview which grounds the
+   *  slight downward tilt — matches the recenter view intent which grounds the
    *  character at the origin (~1.9m tall). */
   function resetCamera(): void {
     target = [0, 1, 0];
@@ -836,7 +750,7 @@ export function createViewport({ canvas, world, camera, sync, initialOrbit, getI
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
-    const t = sel !== null ? (bus.doc.entities[sel]?.components.Transform as Record<string, number> | undefined) : undefined;
+    const t = sel !== null ? readEntTransform(bus.doc, sel) : undefined;
     if (!t) return;
     const { center, half } = entityBox(t);
     target = center;
@@ -890,8 +804,10 @@ onDisplayModeChange(() => refreshGizmos());
   const selSig = (): string | null => {
     const sel = getSelection();
     if (sel === null) return null;
-    const node = bus.doc.entities[sel];
-    return node ? JSON.stringify(node.components) : '\u2205'; // '∅' = selected entity gone
+    // M7-a: signature the selected entity's components read from the world (SSOT)
+    // instead of the deleted doc.entities mirror. Empty dict = entity gone.
+    const comps = entComponents(bus.doc, sel);
+    return Object.keys(comps).length > 0 ? JSON.stringify(comps) : '\u2205'; // '∅' = selected entity gone
   };
   let lastSelSig = selSig();
   const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
@@ -902,8 +818,6 @@ onDisplayModeChange(() => refreshGizmos());
     lastSelSig = sig;
     refreshGizmos();
   });
-  const unsubAnim = onAnimPreview(applyAnimPreview);
-
   applyCamera(); // also paints the gizmo if something is already selected
 
   return {
@@ -918,7 +832,6 @@ onDisplayModeChange(() => refreshGizmos());
       unsubSel();
       unsubMode();
       unsubDoc();
-      unsubAnim();
       despawnHandles();
       despawnParam();
     },

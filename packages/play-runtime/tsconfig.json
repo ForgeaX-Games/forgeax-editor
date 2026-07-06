@@ -16,5 +16,5 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts", "../../types/forgeax-engine-shims.d.ts"]
 }

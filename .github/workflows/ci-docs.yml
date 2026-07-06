@@ -1,0 +1,40 @@
+# Doc-only companion to ci.yml.
+#
+# `main`'s ruleset requires the `b2-self-boot` + `typecheck` status checks to pass
+# before a PR can merge. The real ci.yml skips itself on doc-only changes (its
+# `paths-ignore`), which would otherwise leave those two required checks pending
+# forever and deadlock a doc-only PR.
+#
+# This workflow runs on the INVERSE path filter (ONLY *.md / docs/ / LICENSE) and
+# defines jobs with the SAME names, each an instant no-op pass. Net effect: a
+# doc-only PR gets its two required checks satisfied in seconds — no engine boot,
+# no Rust/wasm build — while a code change runs the real gates in ci.yml.
+#
+# INVARIANT: the two `paths` here must be the exact complement of ci.yml's
+# `paths-ignore`. If you change one, change the other.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+
+jobs:
+  b2-self-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Doc-only change — B2 self-boot gate not applicable, passing."
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Doc-only change — typecheck gate not applicable, passing."

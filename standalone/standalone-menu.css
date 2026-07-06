@@ -1,0 +1,58 @@
+/* Standalone (:15290) — ContextMenu uses Radix DropdownMenu with Tailwind
+   utilities (bg-popover) that are not compiled here. The panel is portalled
+   to document.body; target .forgeax-ctx-menu-panel (set in ContextMenu.tsx). */
+
+.forgeax-ctx-menu-panel,
+[data-radix-popper-content-wrapper] .forgeax-ctx-menu-panel,
+[data-radix-popper-content-wrapper] [role="menu"] {
+  z-index: var(--z-menu, 10100) !important;
+  box-sizing: border-box;
+  min-width: 180px;
+  padding: 4px;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid var(--fx-border, #404040) !important;
+  background-color: var(--fx-bg-elev1, #242424) !important;
+  color: var(--fx-fg, #ffffff) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55) !important;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.forgeax-ctx-menu-panel [role="menuitem"],
+[data-radix-popper-content-wrapper] [role="menu"] [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: default;
+  outline: none;
+  user-select: none;
+  color: inherit;
+  background: transparent;
+}
+
+.forgeax-ctx-menu-panel [role="menuitem"][data-highlighted],
+[data-radix-popper-content-wrapper] [role="menu"] [role="menuitem"][data-highlighted] {
+  background-color: var(--fx-accent, #d4ff48) !important;
+  color: var(--fx-bg, #0d0d0d) !important;
+}
+
+.forgeax-ctx-menu-panel [role="menuitem"][data-disabled],
+[data-radix-popper-content-wrapper] [role="menu"] [role="menuitem"][data-disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.forgeax-ctx-menu-panel [role="separator"],
+[data-radix-popper-content-wrapper] [role="menu"] [role="separator"] {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--fx-border, #404040);
+}
+
+.forgeax-ctx-menu-panel .text-destructive[data-highlighted] {
+  background-color: color-mix(in srgb, #be3636 18%, transparent) !important;
+  color: #be3636 !important;
+}

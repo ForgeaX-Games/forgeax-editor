@@ -8,18 +8,50 @@ name: CI
 # permanent gate on that promise — every push / PR re-proves a fresh checkout
 # installs and reaches B2.
 #
-# Deliberately LIGHTWEIGHT (no engine pnpm / Rust-wasm build): the B2 selfcheck
-# only drives the /api/files wire (tree/read/write/confinement) through the host
-# vite proxy and the game-backend bun process — it never loads a page that
-# imports the engine. So B2 needs only `bun install` + the platform-io submodule, and
-# runs in ~1-2 min. Heavier gates (typecheck / api-seam lint / e2e / engine
-# build) live in the studio superrepo CI, which assembles this editor by pin.
+# The B2 self-boot job boots the standalone host (`bun run dev`, :15290) and
+# drives the /api/files wire (tree/read/write/confinement) through the host vite
+# proxy + game-backend bun process — NO studio server, NO page render. Since the
+# single-realm collapse (feat-20260703), the :15290 host bundler is no longer a
+# thin react()+proxy shell: its vite config consumes engineVitePreset (the shared
+# engine dev-serve fragment), which statically imports the engine's vite plugins
+# (@forgeax/engine-vite-plugin-shader/-pack, engine-gltf, engine-image). Vite
+# bundles its config through rolldown, so those plugins' dist/*.mjs must exist for
+# `bun run dev` to even load its config — hence B2 now needs the engine LIBRARY
+# dist (the same .mjs + wgpu-wasm pkg the typecheck job builds), reused via the
+# SAME engine-SHA cache below. B2 still never renders a frame, so no runtime wasm
+# execution is exercised — only config-load resolution needs dist to be present.
+#
+# The `typecheck` job (below) is the second gate: it builds the engine's .d.ts
+# (cached by submodule SHA — no Rust/cargo, the wasm is committed) and typechecks
+# every editor package against the engine's REAL types. This is the permanent
+# guard on the `Socket`-class regression — an editor import of a symbol the
+# engine does not export fails here, not at the user's runtime in studio.
+# Remaining heavier gates (e2e) still live in the studio superrepo CI.
 
+# Doc-only changes are exempt: the B2 self-boot + typecheck gates below can only
+# be affected by code / config / submodule pins, never by prose. `paths-ignore`
+# skips this heavy workflow for pushes/PRs that touch ONLY these paths (a mixed
+# commit that also touches code still runs the full gate).
+#
+# `main`'s ruleset makes `b2-self-boot` + `typecheck` REQUIRED status checks, so a
+# plain skip would leave them "Expected — Waiting for status" forever and deadlock
+# the PR. The companion workflow `ci-docs.yml` runs on the INVERSE path filter and
+# reports the SAME two check names as an instant pass — so a doc-only PR satisfies
+# the ruleset in seconds without booting the engine. The two workflows' path
+# filters must stay mutually exclusive; keep them in sync.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
 
 # A newer push to the same ref cancels the in-flight run.
 concurrency:
@@ -41,6 +73,62 @@ jobs:
           submodules: recursive
           fetch-depth: 1
           token: ${{ secrets.GHA }}
+
+      # ── engine LIBRARY dist (needed since single-realm: the :15290 host vite
+      # config consumes engineVitePreset → imports the engine vite plugins, whose
+      # dist/*.mjs must exist for `bun run dev` to load its config). Shares the
+      # engine-SHA cache with the typecheck job: once either job warms it for a
+      # given engine pin, the other hits it instantly (no Rust/tsup rebuild). ──
+      - name: Resolve engine submodule SHA
+        id: engine
+        run: echo "sha=$(git -C packages/engine rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache engine dist (.d.ts + .mjs) + wgpu-wasm pkg
+        id: engine-dist-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/engine/packages/*/dist
+            packages/engine/packages/wgpu-wasm/pkg
+          key: engine-dist-${{ steps.engine.outputs.sha }}
+
+      # ── cache-miss only: build the engine library (mirrors the typecheck job) ──
+      - name: Setup Rust toolchain (for wgpu-wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup wasm-pack
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+
+      - name: Setup pnpm
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node (for engine pnpm build)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Build wgpu-wasm (Rust → wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: cd packages/engine && bash packages/wgpu-wasm/build.sh
+
+      - name: Build engine library types (.mjs + .d.ts, no demos)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/engine
+          pnpm install --frozen-lockfile
+          pnpm -r --filter "./packages/*" build
+          pnpm exec tsc -b --clean
+          pnpm exec tsc -b
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
@@ -70,3 +158,117 @@ jobs:
       # / persistence / out-of-game rejection). 9/9 or the run is red.
       - name: Self-boot B2 (read + write, no studio server)
         run: bun scripts/selfcheck-standalone-b2.mjs
+
+  # ── typecheck + lint gate ──────────────────────────────────────────────────
+  # Independent of the lightweight B2 job above. Proves the editor authors
+  # against the engine's REAL types — the permanent guard on the `Socket`-class
+  # regression (AGENTS.md anti-pattern #5): an editor import of a symbol the
+  # engine does not export must fail HERE (typecheck), not at the user's runtime
+  # in studio. tsc can only catch it once the engine's .d.ts exists, so this job
+  # builds the engine first (cached by the engine submodule SHA — a cache HIT
+  # skips the whole build incl. the Rust step, so steady-state runs are fast; the
+  # heavy path runs only when the engine pin actually moves).
+  #
+  # Only the engine's LIBRARY packages are built (tsup .mjs + tsc -b .d.ts) — not
+  # the vite demo apps/* (which would need the forgeax-engine-assets submodule).
+  # The wgpu-wasm binary is gitignored, so a cache MISS builds it via Rust +
+  # wasm-pack (its committed pkg/*.d.ts shims are in git; the .wasm is not), which
+  # tsc -b needs to resolve WebGPU/wgpu types.
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.GHA }}
+
+      # The engine submodule's exact commit is the cache key: any pin bump busts
+      # the cache and rebuilds dist; an unchanged pin reuses the prior .d.ts.
+      - name: Resolve engine submodule SHA
+        id: engine
+        run: echo "sha=$(git -C packages/engine rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache engine dist (.d.ts + .mjs) + wgpu-wasm pkg
+        id: engine-dist-cache
+        uses: actions/cache@v4
+        with:
+          # Every engine package's dist/ (the type surface the editor checks
+          # against) + the built wgpu-wasm pkg/ (so a cache hit needs no Rust).
+          path: |
+            packages/engine/packages/*/dist
+            packages/engine/packages/wgpu-wasm/pkg
+          key: engine-dist-${{ steps.engine.outputs.sha }}
+
+      # ── cache-miss only: build the engine (mirrors engine CI build-artifacts) ──
+      - name: Setup Rust toolchain (for wgpu-wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup wasm-pack
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+
+      - name: Setup pnpm
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node (for engine pnpm build)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Build wgpu-wasm (Rust → wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: cd packages/engine && bash packages/wgpu-wasm/build.sh
+
+      # Build ONLY the engine's LIBRARY packages' type surface — the editor
+      # imports libraries, never the vite demo apps/*. Building apps would pull
+      # the forgeax-engine-assets submodule (fbx/gltf fixtures) + importers at
+      # bundle time; scoping to packages/* avoids that entirely.
+      #   1. tsup each library  -> dist/*.mjs
+      #   2. tsc -b (--clean then build) -> dist/*.d.ts via project references
+      #      (references list is library packages only, not apps). Needs the
+      #      wgpu-wasm build above so WebGPU/wgpu types resolve. Use `pnpm exec`
+      #      (not npx) so the workspace-pinned tsc + node_modules resolve right.
+      - name: Build engine library types (.mjs + .d.ts, no demos)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/engine
+          pnpm install --frozen-lockfile
+          pnpm -r --filter "./packages/*" build
+          pnpm exec tsc -b --clean
+          pnpm exec tsc -b
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install (bun, no scripts)
+        run: bun install --ignore-scripts
+
+      # Structural gates: sync-channel drift, DIP api-seam, and the engine-shim
+      # guard (no bodyless `declare module '@forgeax/engine-*'` that would blind
+      # tsc to bad engine imports).
+      - name: Lint (sync-channel + api-seam + engine-shim)
+        run: bun run lint
+
+      # DAG boundary gate (dependency-cruiser): core ← shared ← panels ← runtime.
+      - name: Dependency-cycle lint
+        run: bun run lint:dep
+
+      # The core gate — every editor package typechecked against the engine's
+      # real .d.ts. A `import { Socket }` of a non-existent engine symbol fails
+      # here with TS2305.
+      - name: Typecheck (all editor packages)
+        run: bun run typecheck

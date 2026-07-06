@@ -160,13 +160,18 @@ describe('w9 — bootstrap ▶/■ roundtrip', () => {
     expect(ctx.game.lastCtx?.world).toBe(ctx.world);
   });
 
-  it('(2) stopSimulation closes the gate, removes the system, restores the doc', async () => {
+  it('(2) stopSimulation closes the gate + removes the system', async () => {
     await ctx.lifecycle.playSimulation();
     ctx.lifecycle.stopSimulation();
     expect(editModeActive(ctx.world)).toBe(true);
     const names = ctx.world.inspect().systems.map((s: { name: string }) => s.name);
     expect(names).not.toContain('fake-game-system-1');
-    expect(ctx.bus.replaceDocCalls.length).toBe(1);
+    // M4 / AC-10: doc restore is NOT replaceDoc(cloneEditSession) anymore — Stop
+    // despawns + re-instantiates the SceneAsset (engine-native). With no default
+    // scene root (getDefaultSceneRoot → undefined here), that branch is skipped,
+    // so no re-instantiate and no rebind fire; the scene-restore + rebind
+    // contract is covered by the dedicated test below.
+    expect(ctx.bus.replaceDocCalls.length).toBe(0);
   });
 
   it('(3) repeated ▶/■ does not accumulate systems (idempotent)', async () => {
@@ -331,5 +336,90 @@ describe('B/A — controlled UI root + cleanup hook', () => {
     t.lifecycle.stopSimulation();
     expect(t.unmountCount).toBe(2);
     expect(t.mounted[1]!.removed).toBe(true);
+  });
+});
+
+// ── AC-06 — ■ Stop scene restore: despawn-runtime BEFORE re-instantiate + rebind ─
+//
+// Regression: Stop despawns the played scene and re-instantiates the SceneAsset,
+// which mints FRESH handles under a NEW synthetic root. Two bugs this locks down:
+//   (a) despawnRuntimeSpawns() must run BEFORE the re-instantiate — otherwise the
+//       freshly restored scene's new handles (absent from the pre▶ baseline) get
+//       swept away as "runtime spawns" and the scene vanishes.
+//   (b) rebindSceneInstance(newRoot) must fire with the NEW root so the host can
+//       re-sync the editor session map + defaultSceneRoot (else "scene not
+//       restored" — hierarchy/selection point at despawned handles).
+
+/** A fake world recording the ORDER of despawn / despawnScene / instantiateScene
+ *  so we can assert runtime-spawn cleanup precedes scene re-instantiate. */
+function makeOrderRecordingWorld() {
+  const calls: string[] = [];
+  let nextRoot = 1000;
+  const world = {
+    addSystem: (_s: unknown) => ({ ok: true }),
+    insertResource: (_k: string, _v: unknown) => {},
+    inspect: () => ({ systems: [] as ReadonlyArray<{ name: string }> }),
+    removeSystem: () => ({ ok: true }),
+    despawn: (_h: never) => {
+      calls.push('despawn');
+      return { ok: true };
+    },
+    getSceneInstanceState: (root: number) => ({
+      ok: true,
+      value: { source: { srcFor: root }, entityToLocalId: new Map<number, number>() },
+    }),
+    despawnScene: (_root: number) => {
+      calls.push('despawnScene');
+      return { ok: true, value: 1 };
+    },
+    instantiateScene: (_handle: unknown) => {
+      calls.push('instantiateScene');
+      nextRoot += 1;
+      return { ok: true, value: { root: nextRoot } };
+    },
+    allocSharedRef: () => 0,
+  };
+  return { world, calls, get lastRoot() { return nextRoot; } };
+}
+
+describe('AC-06 — ■ Stop scene restore ordering + rebind', () => {
+  function buildRestore(prePlay: Set<number>, postPlay: Set<number>) {
+    const fw = makeOrderRecordingWorld();
+    const bus = makeFakeBus();
+    const game = makeFakeGame();
+    const rebinds: number[] = [];
+    // collectEntityHandles returns prePlay at ▶ capture, postPlay afterwards, so
+    // the pre▶→now diff (postPlay \ prePlay) is the "runtime spawns" to despawn.
+    let phase = 0;
+    const lifecycle = createRunLifecycle({
+      world: fw.world as never,
+      app: { registerUpdate: () => {} },
+      renderer: { assets: {} },
+      bus: bus as never,
+      collectEntityHandles: () => (phase++ === 0 ? prePlay : postPlay),
+      resolveGameModule: async () => game.module,
+      getSlug: () => 'restore-fake',
+      getDefaultSceneRoot: () => 42,
+      getDefaultScene: () => undefined,
+      rebindSceneInstance: (r: number) => rebinds.push(r),
+    });
+    return { fw, lifecycle, rebinds };
+  }
+
+  it('despawns runtime spawns BEFORE despawnScene + re-instantiate', async () => {
+    // One runtime spawn (handle 7) appeared during the run.
+    const t = buildRestore(new Set([1, 2]), new Set([1, 2, 7]));
+    await t.lifecycle.playSimulation();
+    t.lifecycle.stopSimulation();
+    // The single runtime-spawn despawn must precede despawnScene/instantiateScene.
+    expect(t.fw.calls).toEqual(['despawn', 'despawnScene', 'instantiateScene']);
+  });
+
+  it('rebinds the session onto the NEW re-instantiated root', async () => {
+    const t = buildRestore(new Set([1, 2]), new Set([1, 2]));
+    await t.lifecycle.playSimulation();
+    t.lifecycle.stopSimulation();
+    expect(t.rebinds.length).toBe(1);
+    expect(t.rebinds[0]).toBe(t.fw.lastRoot); // the root instantiateScene returned
   });
 });

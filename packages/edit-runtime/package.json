@@ -14,6 +14,14 @@
       "types": "./src/EditSurface.tsx",
       "import": "./src/EditSurface.tsx"
     },
+    "./host-boot": {
+      "types": "./src/host-boot.ts",
+      "import": "./src/host-boot.ts"
+    },
+    "./engine/viewport-component": {
+      "types": "./src/engine/ViewportComponent.tsx",
+      "import": "./src/engine/ViewportComponent.tsx"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -34,11 +42,12 @@
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
-    "@forgeax/editor-shared": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-audio": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-fbx": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
@@ -61,7 +70,8 @@
     "@tanstack/virtual-core": "^3.17.1",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "scheduler": "^0.27.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

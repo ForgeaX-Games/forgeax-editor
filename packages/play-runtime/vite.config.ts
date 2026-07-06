@@ -233,7 +233,7 @@ export function forgeaxPerGamePackIndex() {
         const roots = perGamePackRoots(slug);
         if (roots.length === 0) { next(); return; }
         try {
-          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
+          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(catalog));
@@ -252,7 +252,7 @@ export function forgeaxPerGamePackIndex() {
         const roots = perGamePackRoots(slug);
         if (roots.length === 0) continue;
         try {
-          const catalog = await buildPerGameCatalog(roots[0], '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
+          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
           const fileName = `pack-index/${slug}.json`;
           this.emitFile({
             type: 'asset',
