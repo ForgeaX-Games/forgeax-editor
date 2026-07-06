@@ -1,11 +1,9 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset, CBFolder } from './types';
+import type { CBViewItem } from './types';
 import type { MultiSelectAPI } from './hooks';
 import { CBAssetItem } from './CBAssetItem';
 import { CBFolderItem } from './CBFolderItem';
-
-type CBViewItem = CBAsset | CBFolder;
 
 interface Props {
   items: CBViewItem[];

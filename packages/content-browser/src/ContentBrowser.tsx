@@ -7,6 +7,9 @@ import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
 import { useFavorites } from './hooks/useFavorites';
+import { useAssetGraph } from './hooks/useAssetGraph';
+import { computeDeleteImpact } from './delete-guard';
+import { DeleteGuardDialog } from './DeleteGuardDialog';
 import { buildAssetContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
 import { CBFilterBar } from './CBFilterBar';
@@ -19,20 +22,21 @@ import { CBToolbar } from './CBToolbar';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { deriveContentView } from './folder-view';
-import type { CBAsset, CBFolder, CBViewMode } from './types';
+import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
 import './content-browser.css';
-
-type CBViewItem = CBAsset | CBFolder;
 
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
 // (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
 // The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
 // reads directly from it via bus.doc.registry.listCatalog().
-// registry entries carry {guid, kind, name?, relativeUrl} — no payload/packPath,
-// so import-mode filtering and payload-derived fields are removed.
+// registry entries carry {guid, kind, name?, relativeUrl, refs?} — no
+// payload/packPath, so import-mode filtering and payload-derived fields are
+// removed. `refs` (forward dependency GUID edges) is surfaced by the engine
+// AssetRegistry.listCatalog() (engine refs-through-listCatalog); it powers the
+// Content Browser's "Add with Dependencies" and dependency-graph features.
 
 function registryEntryToCBAsset(
-  e: { guid: string; kind: string; name?: string; relativeUrl: string },
+  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] },
   index: number,
 ): CBAsset {
   // Use relativeUrl as a proxy for packPath for folder-tree navigation.
@@ -45,7 +49,7 @@ function registryEntryToCBAsset(
     payload: {},
     packPath: e.relativeUrl,
     packIndex: index,
-    refs: [],
+    refs: e.refs ? [...e.refs] : [],
     estimatedSize: 0,
   };
 }
@@ -115,7 +119,7 @@ export function ContentBrowser() {
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] } | undefined;
+    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
     const entries = registry?.listCatalog?.();
     if (!entries || entries.length === 0) {
       setAllAssets([]);
@@ -227,6 +231,33 @@ export function ContentBrowser() {
 
   const multiSelect = useMultiSelect(viewItems);
 
+  // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
+  // an asset can be referenced from another root (scenes/, other packs), and the
+  // delete guard (C3) must see those cross-root referencers to warn correctly.
+  const assetGraph = useAssetGraph(allAssets);
+  const nameByGuid = useCallback(
+    (guid: string) => allAssets.find(a => a.guid === guid)?.name ?? `${guid.slice(0, 8)}…`,
+    [allAssets],
+  );
+
+  const [deleteTargets, setDeleteTargets] = useState<CBAsset[] | null>(null);
+  const requestDelete = useCallback((targets: CBAsset[]) => {
+    if (targets.length === 0) return;
+    setDeleteTargets(targets);
+  }, []);
+  const performDelete = useCallback(() => {
+    setDeleteTargets(current => {
+      if (current) {
+        for (const a of current) {
+          void deleteAsset(a.packPath, a.guid).then(ok => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
+        }
+      }
+      return null;
+    });
+  }, [reload]);
+
   const openAsset = useCallback((asset: CBAsset) => {
     setAssetSelection({
       guid: asset.guid,
@@ -252,6 +283,7 @@ export function ContentBrowser() {
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
+    onDelete: requestDelete,
     onRename: (asset: CBAsset) => {
       const newName = window.prompt('Rename asset:', asset.name);
       if (newName && newName !== asset.name) {
@@ -268,37 +300,36 @@ export function ContentBrowser() {
         if (ok) reload();
       });
     },
-  }), [reload]);
+  }), [reload, requestDelete]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
     e.preventDefault();
     e.stopPropagation();
+    const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     if (item.type === 'folder') {
       const folder = item;
-      // Recursive assets under the folder (for the "Add Folder to AI Chat" summary).
       const assetsInFolder = scopedAssets
         .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
         .map(s => s.asset);
       const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
-      const items = resolveFolderMenuItems(menuItems, {
+      const resolved = resolveFolderMenuItems(menuItems, {
         onOpen: () => nav.navigate(folder.path),
         onToggleFavorite: () => favorites.toggleFavorite(folder.path),
-        // Folder rename/delete need a server move/remove API that doesn't exist yet.
         unsupportedIds: ['rename', 'delete'],
       });
-      if (items.length === 0) return;
-      showContextMenu(e, items);
+      if (resolved.length === 0) return;
+      setTimeout(() => showContextMenu(pos, resolved), 0);
       return;
     }
     const asset = item;
     const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
-    const items = menuItems.filter(m => !m.separator).map(m => ({
+    const resolved = menuItems.filter(m => !m.separator).map(m => ({
       label: m.label,
       onClick: m.action,
       disabled: m.disabled,
     }));
-    if (items.length === 0) return;
-    showContextMenu(e, items);
+    if (resolved.length === 0) return;
+    setTimeout(() => showContextMenu(pos, resolved), 0);
   }, [multiSelect.selection, allAssets, crudCallbacks, scopedAssets, nav, favorites]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
@@ -325,13 +356,7 @@ export function ContentBrowser() {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
         const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
-        const names = targets.map(a => a.name).join(', ');
-        if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
-        for (const a of targets) {
-          void deleteAsset(a.packPath, a.guid).then(ok => {
-            if (ok) { broadcastAssetsChanged(); reload(); }
-          });
-        }
+        requestDelete(targets);
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
@@ -345,7 +370,7 @@ export function ContentBrowser() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [multiSelect, crudCallbacks, reload]);
+  }, [multiSelect, crudCallbacks, reload, requestDelete]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;
@@ -499,6 +524,16 @@ export function ContentBrowser() {
         <div className="cb-drag-overlay">
           <div className="cb-drag-overlay-label">Drop files to import</div>
         </div>
+      )}
+
+      {deleteTargets && (
+        <DeleteGuardDialog
+          targets={deleteTargets}
+          impact={computeDeleteImpact(deleteTargets.map(t => t.guid), assetGraph)}
+          nameByGuid={nameByGuid}
+          onConfirm={performDelete}
+          onCancel={() => setDeleteTargets(null)}
+        />
       )}
     </div>
   );

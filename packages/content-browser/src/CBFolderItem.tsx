@@ -1,12 +1,13 @@
+import type { MouseEvent } from 'react';
 import type { CBFolder } from './types';
 
 interface Props {
   folder: CBFolder;
   selected: boolean;
   thumbnailSize?: number;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (e: MouseEvent) => void;
   onDoubleClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  onContextMenu: (e: MouseEvent) => void;
 }
 
 export function CBFolderItem({ folder, selected, thumbnailSize = 80, onClick, onDoubleClick, onContextMenu }: Props) {

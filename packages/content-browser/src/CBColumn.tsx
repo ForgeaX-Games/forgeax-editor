@@ -1,9 +1,7 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset, CBFolder, CBSortKey } from './types';
+import type { CBAsset, CBFolder, CBSortKey, CBViewItem } from './types';
 import type { MultiSelectAPI, SortAPI } from './hooks';
-
-type CBViewItem = CBAsset | CBFolder;
 
 interface Props {
   items: CBViewItem[];
@@ -32,7 +30,6 @@ function folderCellValue(folder: CBFolder, key: ColumnDef['key']): string {
   switch (key) {
     case 'name': return `📁 ${folder.name}`;
     case 'kind': return 'folder';
-    case 'estimatedSize': return `${folder.childCount} item(s)`;
     default: return '—';
   }
 }

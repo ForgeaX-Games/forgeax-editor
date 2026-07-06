@@ -95,6 +95,9 @@ export interface CBSortState {
 
 // ── View ─────────────────────────────────────────────────────────────────────
 
+/** Union of renderable items in the right-side content view (folders + assets). */
+export type CBViewItem = CBAsset | CBFolder;
+
 export type CBViewMode = 'grid' | 'list' | 'column';
 
 export interface CBViewState {

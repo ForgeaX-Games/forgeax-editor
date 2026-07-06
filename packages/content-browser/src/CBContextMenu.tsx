@@ -31,6 +31,12 @@ export interface CRUDCallbacks {
   onRename?: (asset: CBAsset) => void;
   onNewFolder?: (parentPath: string) => void;
   onReload?: () => void;
+  /**
+   * Route deletion through the host's reference-aware delete guard (C3).
+   * When provided, the context menu delegates instead of running its own
+   * `window.confirm`, so keyboard and menu deletes share one guard dialog.
+   */
+  onDelete?: (targets: CBAsset[]) => void;
 }
 
 export function buildAssetContextMenu(
@@ -64,6 +70,8 @@ export function buildAssetContextMenu(
       }
     }},
     { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+      if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
+      // Fallback for hosts without a delete guard wired in.
       const names = targets.map(a => a.name).join(', ');
       if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
       for (const a of targets) {
