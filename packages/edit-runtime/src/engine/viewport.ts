@@ -31,17 +31,15 @@ import {
 // @forgeax/engine-geometry leaf package.
 import { meshFromInterleaved } from '@forgeax/engine-geometry';
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
-import { ray, vec3 } from '@forgeax/engine-math';
+import { vec3 } from '@forgeax/engine-math';
 
-// feat-20260705 M3 typecheck-sweep fix: `Box3Like` is NOT a top-level export of
-// `@forgeax/engine-math` (only re-exported via its `box3` namespace module, which
-// a value import cannot surface as a type). Derive it from the engine's own
-// `ray.rayAabbIntersects` signature so this stays SSOT-tied to the engine (no
-// divergent local copy) — the prior top-level type import (of Box3Like + RayLike)
-// was a latent M2/w6 error the M2 CI sweep did not run typecheck to catch. RayLike
-// is no longer aliased: the ray buffer stays a mutable Float32Array (RayLike is
-// read-only) and is structurally accepted by the engine call.
-type Box3Like = Parameters<typeof ray.rayAabbIntersects>[1];
+// M2 extraction: pure geometry lives in viewport-ray.ts; orbit math in viewport-camera.ts.
+// viewport.ts is now a DI factory (createViewport) + re-export barrel (plan-strategy D-5).
+export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
+export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
+import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
+import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
+
 import type { EntityId, EditSession } from '@forgeax/editor-core';
 import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 import { bus, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, setFieldPreview, setGizmoMode, setSelection } from '@forgeax/editor-core';
@@ -80,136 +78,10 @@ function isEntHidden(session: EditSession, id: EntityId): boolean {
 
 const DEG2RAD = Math.PI / 180;
 
-export type Vec3 = [number, number, number];
-
-// ── input-target derivation (requirements C-4, §3) ───────────────────────────
-// The viewport spans two orthogonal axes: run (edit/play) × display (scene/game).
-// `inputTarget` is a DERIVED quantity over those two — never an independent state
-// field. The single rule (requirements §3): only `(run==='play' ∧ display==='game')`
-// routes input to the game; the other three quadrants route input to the editor.
-
-export type RunMode = 'edit' | 'play';
-export type DisplayMode = 'scene' | 'game';
-export type InputTarget = 'editor' | 'game';
-
-/** Pure selector: which surface owns viewport input for a given quadrant.
- *  Only play·game possesses the game; every other quadrant stays editor-owned. */
-export function deriveInputTarget(run: RunMode, display: DisplayMode): InputTarget {
-  return run === 'play' && display === 'game' ? 'game' : 'editor';
-}
-
-// ── pure geometry (exported for tests) ───────────────────────────────────────
-
-/** Pixel position → normalized device coords in [-1,1], Y up. */
-export function ndcFromClient(x: number, y: number, w: number, h: number): [number, number] {
-  return [(x / w) * 2 - 1, 1 - (y / h) * 2];
-}
-
-// Reusable Float32Array buffer for engine vec3 operations (tuple↔typed-array bridge).
-// Single buffer is safe here: normalize/cross are called sequentially in the pure
-// geometry section, never concurrently. vec3.dot needs no buffer (returns scalar).
+// ── factory-local buffer (used by updateParamGizmo) ────────────────────────
+// Single reusable Float32Array for engine vec3 operations within the factory.
+// All pure-geometry functions now use their own buffer in viewport-ray.ts.
 const _v3 = new Float32Array(3) as EngineVec3;
-
-/** Ray direction through an NDC point given the camera basis + vertical FOV. */
-export function rayDirection(
-  forward: Vec3, right: Vec3, up: Vec3,
-  ndcX: number, ndcY: number, fovY: number, aspect: number,
-): Vec3 {
-  const t = Math.tan(fovY / 2);
-  vec3.normalize(_v3, [
-    forward[0] + right[0] * ndcX * t * aspect + up[0] * ndcY * t,
-    forward[1] + right[1] * ndcX * t * aspect + up[1] * ndcY * t,
-    forward[2] + right[2] * ndcX * t * aspect + up[2] * ndcY * t,
-  ]);
-  return [_v3[0]!, _v3[1]!, _v3[2]!];
-}
-
-/** Ray vs axis-aligned box (center + half-extents). Returns entry distance or null.
- *  @plan D-1: thin adapter over engine rayAabbIntersects — center+half → Box3Like
- *  @plan S-1: inside-origin returns 0 (engine clamp), not old tmax exit */
-export function rayAABB(origin: Vec3, dir: Vec3, center: Vec3, half: Vec3): number | null {
-  // center+half → Box3Like [minX,minY,minZ, maxX,maxY,maxZ]
-  const boxMin = new Float32Array(3) as EngineVec3;
-  const boxMax = new Float32Array(3) as EngineVec3;
-  vec3.sub(boxMin, center, half);
-  vec3.add(boxMax, center, half);
-  const box3Like: Box3Like = [
-    boxMin[0]!, boxMin[1]!, boxMin[2]!,
-    boxMax[0]!, boxMax[1]!, boxMax[2]!,
-  ];
-
-  // origin+dir → RayLike Float32Array[6] {ox,oy,oz,dx,dy,dz}. Keep the local as a
-  // mutable Float32Array (RayLike = ArrayLike<number> is read-only); it is
-  // structurally a RayLike when handed to the engine call below.
-  const rayLike = new Float32Array(6);
-  rayLike[0] = origin[0]; rayLike[1] = origin[1]; rayLike[2] = origin[2];
-  rayLike[3] = dir[0];    rayLike[4] = dir[1];    rayLike[5] = dir[2];
-
-  const r = ray.rayAabbIntersects(rayLike, box3Like);
-  return r.hit ? r.tmin : null;
-}
-
-/** Ray vs horizontal plane y = planeY. Returns the world hit point or null. */
-export function rayPlaneY(origin: Vec3, dir: Vec3, planeY: number): Vec3 | null {
-  if (Math.abs(dir[1]) < 1e-9) return null;
-  const t = (planeY - origin[1]) / dir[1];
-  if (t < 0) return null;
-  return [origin[0] + dir[0] * t, planeY, origin[2] + dir[2] * t];
-}
-
-/** Parameter `t` along an axis line (axisO + t·axisU) at the point closest to the
- *  cursor ray. Used by the move gizmo to constrain a drag to one axis. */
-export function closestAxisT(rayO: Vec3, rayD: Vec3, axisO: Vec3, axisU: Vec3): number {
-  const w0: Vec3 = [rayO[0] - axisO[0], rayO[1] - axisO[1], rayO[2] - axisO[2]];
-  const a = vec3.dot(rayD, rayD), b = vec3.dot(rayD, axisU), c = vec3.dot(axisU, axisU);
-  const d = vec3.dot(rayD, w0), e = vec3.dot(axisU, w0);
-  const denom = a * c - b * b;
-  if (Math.abs(denom) < 1e-9) return -e / (c || 1); // ray ∥ axis → project origin
-  return (a * e - b * d) / denom;
-}
-
-/** Ray vs an arbitrary plane (point + normal). Returns the hit point or null. */
-export function rayPlane(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3): Vec3 | null {
-  const denom = vec3.dot(dir, normal);
-  if (Math.abs(denom) < 1e-9) return null;
-  const t = vec3.dot([point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]], normal) / denom;
-  if (t < 0) return null;
-  return [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
-}
-
-/** Two orthonormal vectors spanning the plane ⊥ `axis` (for measuring rotation). */
-export function orthoBasis(axis: Vec3): [Vec3, Vec3] {
-  vec3.normalize(_v3, axis);
-  const a: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
-  const ref: Vec3 = Math.abs(a[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
-  vec3.cross(_v3, ref, a); vec3.normalize(_v3, _v3);
-  const u: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
-  vec3.cross(_v3, a, u);
-  return [u, [_v3[0]!, _v3[1]!, _v3[2]!]];
-}
-
-/** Signed angle (radians) of the cursor ray's hit on the plane ⊥ `axis` through
- *  `center`, measured in that plane. null if the ray is parallel to the plane. */
-export function angleOnAxis(rayO: Vec3, rayD: Vec3, center: Vec3, axis: Vec3): number | null {
-  const hit = rayPlane(rayO, rayD, center, axis);
-  if (!hit) return null;
-  const [u, v] = orthoBasis(axis);
-  const d: Vec3 = [hit[0] - center[0], hit[1] - center[1], hit[2] - center[2]];
-  return Math.atan2(vec3.dot(d, v), vec3.dot(d, u));
-}
-
-const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-
-/** A doc entity's world AABB (center + half) from its Transform. */
-export function entityBox(t: { x?: number; y?: number; z?: number; scaleX?: number; scaleY?: number; scaleZ?: number }): { center: Vec3; half: Vec3 } {
-  const sx = Math.abs(num(t.scaleX, 1)), sy = Math.abs(num(t.scaleY, 1)), sz = Math.abs(num(t.scaleZ, 1));
-  // pad razor-thin slabs (neon strips, floor) so they stay clickable.
-  const pad = 0.05;
-  return {
-    center: [num(t.x, 0), num(t.y, 0), num(t.z, 0)],
-    half: [Math.max(sx / 2, pad), Math.max(sy / 2, pad), Math.max(sz / 2, pad)],
-  };
-}
 
 // ── runtime wiring ────────────────────────────────────────────────────────────
 
@@ -268,25 +140,15 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   let camPos: Vec3 = [0, 0, 0];
   let fwd: Vec3 = [0, 0, -1], rgt: Vec3 = [1, 0, 0], upv: Vec3 = [0, 1, 0];
 
-  const qCam = quat.create(), qY = quat.create(), qP = quat.create();
-  const tmp = new Float32Array(3) as EngineVec3;
-  const tv = (out: Vec3, src: Vec3): Vec3 => {
-    quat.transformVec3(tmp, qCam, src as unknown as EngineVec3);
-    out[0] = tmp[0]!; out[1] = tmp[1]!; out[2] = tmp[2]!;
-    return out;
-  };
-
   const aspect = () => (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height) || 1;
 
   function applyCamera(): void {
-    quat.fromAxisAngle(qY, [0, 1, 0], yaw);
-    quat.fromAxisAngle(qP, [1, 0, 0], pitch);
-    quat.multiply(qCam, qY, qP);
-    tv(fwd, [0, 0, -1]); tv(rgt, [1, 0, 0]); tv(upv, [0, 1, 0]);
-    camPos = [target[0] - fwd[0] * dist, target[1] - fwd[1] * dist, target[2] - fwd[2] * dist];
+    const r = computeOrbitCamera(target, yaw, pitch, dist);
+    camPos = r.camPos;
+    fwd = r.fwd; rgt = r.rgt; upv = r.upv;
     world.set(camera, Transform, {
       posX: camPos[0], posY: camPos[1], posZ: camPos[2],
-      quatX: qCam[0], quatY: qCam[1], quatZ: qCam[2], quatW: qCam[3],
+      quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
       scaleX: 1, scaleY: 1, scaleZ: 1,
     });
     // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
@@ -777,8 +639,8 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
     if (mode === 'orbit') {
-      yaw -= dx * 0.005;
-      pitch = Math.max(-1.5, Math.min(1.5, pitch - dy * 0.005));
+      const r = advanceOrbit(yaw, pitch, dist, -dx * 0.005, -dy * 0.005, 0);
+      yaw = r.yaw; pitch = r.pitch; dist = r.dist;
       applyCamera();
     } else if (mode === 'pan') {
       const k = dist * 0.0016;
@@ -788,7 +650,8 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       applyCamera();
     } else if (mode === 'zoom') {
       // Ctrl+MMB drag-zoom (Blender): drag down = zoom out, up = zoom in.
-      dist = Math.max(2, Math.min(300, dist * (1 + dy * 0.005)));
+      const r = advanceOrbit(yaw, pitch, dist, 0, 0, -dy * 0.005 * dist);
+      yaw = r.yaw; pitch = r.pitch; dist = r.dist;
       applyCamera();
     } else if (mode === 'axisDrag') {
       const { origin, dir } = rayAt(e.clientX, e.clientY);
@@ -865,7 +728,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (overPanel(e.target)) return;
     if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
     e.preventDefault();
-    dist = Math.max(2, Math.min(300, dist * (e.deltaY > 0 ? 1.1 : 0.9)));
+    dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
     applyCamera();
   }
 
