@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
+import { apiFetch, bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -45,6 +45,23 @@ function registryEntryToCBAsset(
   };
 }
 
+// Convert a catalog packPath — which is workspace-rooted (relative to the vite
+// process cwd, e.g. "forgeax-games/hellforge/assets/characters/x.pack.json";
+// see vite-plugin-pack build-catalog.ts `relative(process.cwd(), …)`) — to a
+// GAME-relative path ("assets/characters/x.pack.json") by locating the game's
+// `<slug>` path segment (the game dir basename === slug in the standalone
+// backend). Entries that don't sit under the loaded game (shared template roots,
+// ddk, other games) carry no `<slug>` segment → null, so they're excluded from
+// the Asset panel scope.
+function toGameRelative(packPath: string, slug: string): string | null {
+  if (!slug) return null;
+  const parts = packPath.replace(/^\/+/, '').split('/');
+  const i = parts.indexOf(slug);
+  if (i < 0) return null;
+  const rel = parts.slice(i + 1).join('/');
+  return rel || null;
+}
+
 export function ContentBrowser() {
   useDocVersion();
   const gameSlug = getSceneId();
@@ -58,6 +75,12 @@ export function ContentBrowser() {
   const filter = useFilter();
   const sort = useSort();
   const favorites = useFavorites();
+  // The Asset panel's folder tree is scoped to the game's DECLARED asset roots
+  // (game package.json `forgeax.assets.roots`, e.g. ["assets"]) — NOT the whole
+  // engine catalog, which also folds in scenes/ + shared template roots (needed
+  // by runtime loadByGuid, but not browsable game assets). Default to ["assets"]
+  // until the game's package.json is read.
+  const [assetRoots, setAssetRoots] = useState<string[]>(['assets']);
 
   const reload = useCallback(() => {
     const slug = getSceneId();
@@ -79,6 +102,32 @@ export function ContentBrowser() {
 
   useEffect(() => { reload(); }, [reload]);
 
+  // Read the game's declared asset roots from its package.json
+  // (`forgeax.assets.roots`). Falls back to the ["assets"] default on any
+  // miss so the tree still scopes sanely.
+  useEffect(() => {
+    const slug = getSceneId();
+    if (!slug || slug === 'default') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await apiFetch(
+          `/api/files?path=${encodeURIComponent(resolveGamePath('package.json'))}`,
+          { cache: 'no-store' },
+        );
+        if (!r.ok) return;
+        const j = (await r.json()) as { content?: string };
+        if (!j.content) return;
+        const pkg = JSON.parse(j.content) as { forgeax?: { assets?: { roots?: unknown } } };
+        const roots = pkg.forgeax?.assets?.roots;
+        if (!cancelled && Array.isArray(roots) && roots.length > 0 && roots.every((x) => typeof x === 'string')) {
+          setAssetRoots(roots as string[]);
+        }
+      } catch { /* keep default ['assets'] */ }
+    })();
+    return () => { cancelled = true; };
+  }, [gameSlug]);
+
   useEffect(() => {
     const accept = buildAcceptString();
     logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
@@ -92,19 +141,28 @@ export function ContentBrowser() {
     return () => window.removeEventListener('message', handler);
   }, [reload]);
 
-  // Host-resolved game root (with trailing slash) — used to strip the absolute
-  // packPath prefix back to a game-relative path for the folder tree.
-  const gameRoot = resolveGamePath('');
-  const gamePrefix = gameRoot.endsWith('/') ? gameRoot : `${gameRoot}/`;
+  // Scope the catalog to THIS game's declared asset roots. Each kept entry
+  // carries its game-relative path (`assets/characters/x.pack.json`), which
+  // drives both the folder tree and path navigation. Foreign entries (no
+  // `<slug>` segment) and out-of-root entries (e.g. scenes/) are dropped, so the
+  // Asset panel never exposes folders outside `forgeax-games/<slug>/<root>`.
+  const scopedAssets = useMemo(() => {
+    const out: { asset: CBAsset; rel: string }[] = [];
+    for (const a of allAssets) {
+      const rel = toGameRelative(a.packPath, gameSlug);
+      if (!rel) continue;
+      const top = rel.split('/')[0] ?? '';
+      if (!assetRoots.includes(top)) continue;
+      out.push({ asset: a, rel });
+    }
+    return out;
+  }, [allAssets, gameSlug, assetRoots]);
 
   const packDirs = useMemo(() => {
     const dirs = new Set<string>();
-    for (const a of allAssets) {
-      const rel = a.packPath.startsWith(gamePrefix)
-        ? a.packPath.slice(gamePrefix.length)
-        : a.packPath;
+    for (const { rel } of scopedAssets) {
       const dir = rel.replace(/\/[^/]+$/, '');
-      if (!dir) continue;
+      if (!dir || dir === rel) continue;
       let cur = dir;
       while (cur) {
         dirs.add(cur);
@@ -113,13 +171,15 @@ export function ContentBrowser() {
       }
     }
     return [...dirs].sort();
-  }, [allAssets, gamePrefix]);
+  }, [scopedAssets]);
 
   const assetsInPath = useMemo(() => {
-    if (!nav.currentPath) return allAssets;
-    const fullPrefix = gamePrefix + nav.currentPath;
-    return allAssets.filter(a => a.packPath.startsWith(fullPrefix + '/') || a.packPath.startsWith(fullPrefix));
-  }, [allAssets, nav.currentPath, gamePrefix]);
+    if (!nav.currentPath) return scopedAssets.map((s) => s.asset);
+    const p = nav.currentPath;
+    return scopedAssets
+      .filter((s) => s.rel === p || s.rel.startsWith(`${p}/`))
+      .map((s) => s.asset);
+  }, [scopedAssets, nav.currentPath]);
 
   const filteredAssets = useMemo(() => filter.applyFilters(assetsInPath), [filter, assetsInPath]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
