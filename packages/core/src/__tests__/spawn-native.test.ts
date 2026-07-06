@@ -80,20 +80,24 @@ describe('spawn entity — cube', () => {
     }
   });
 
-  it('spawnMeshFilter cube: world RED — MeshRenderer auto-added with materials', () => {
-    // RED: current spawnComponentData only resolves MeshFilter token;
-    // it does NOT auto-add MeshRenderer with default PBR material.
+  it('spawnMeshFilter cube: auto-adds an EMPTY MeshRenderer (engine default-material fallback)', () => {
+    // A MeshFilter-only entity is archetype-absent in the engine's render walk
+    // (`with: [MeshRenderer]`) and never drawn, so spawnComponentData must attach
+    // a MeshRenderer. But it attaches an EMPTY `materials: []` — NOT a synthetic
+    // MaterialAsset handle: an uncataloged handle makes save's `_guidForAsset`
+    // return undefined -> SceneCollectAssetGuidUnresolvedError -> the whole write
+    // aborts. Empty materials route through the engine's own default-material
+    // fallback (defaultMaterialSnapshot mid-grey) and serialize with zero handles
+    // to resolve, so save succeeds.
     const s = createSession();
     const eH = spawnNative(s, 'Cube', {
       MeshFilter: { assetHandle: HANDLE_CUBE },
     });
     const mr = s.world.get(eH, MeshRenderer);
-    // This should be RED (ok=false) — no MeshRenderer was added.
-    // After m2-impl-spawn rewrites the spawn logic, this turns GREEN.
     expect(mr.ok).toBe(true);
     if (mr.ok) {
       const mats = mr.value.materials as ReadonlyArray<unknown>;
-      expect(mats.length).toBeGreaterThan(0);
+      expect(mats.length).toBe(0);
     }
   });
 });
