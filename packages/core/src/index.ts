@@ -238,6 +238,9 @@ export {
 export { ContextMenuHost, showContextMenu } from './ui/context-menu-service';
 export type { MenuItemDef } from './ui/context-menu-service';
 
+// ── Resize primitive (shared splitter: drag handle + persisted size hook) ──
+export { ResizeHandle, useLocalSize } from './ui/resize-handle';
+
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './io/dock-bridge';
 

@@ -18,12 +18,49 @@
   overflow: hidden;
 }
 .cb-source-panel {
-  width: 180px;
-  min-width: 120px;
-  max-width: 260px;
-  border-right: 1px solid var(--border, #333);
-  overflow-y: auto;
+  /* Width reads the --cb-src-w variable on the .cb-split parent (React sets it on
+     commit; the .resize-handle mutates it imperatively during a drag). Driving
+     it off the parent variable — never a React-controlled style on this element
+     — keeps the imperative drag from being reverted on re-render. flex-basis
+     (not just width) is set because this is a flex item — an explicit basis is
+     what actually determines a flex item's main size. */
+  flex: 0 0 var(--cb-src-w, 200px);
+  width: var(--cb-src-w, 200px);
+  min-width: 140px;
+  max-width: 640px;
+  overflow: auto;
+}
+
+/* Draggable divider between the source panel and the asset view (SSOT component
+   @forgeax/editor-core ResizeHandle). Mirrors the interface shell's house style:
+   a hit-area with a 1px centre line that brightens on hover/active. */
+.resize-handle {
   flex-shrink: 0;
+  position: relative;
+  background: transparent;
+  z-index: 5;
+}
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  background: var(--border, #333);
+  transition: background 150ms;
+  pointer-events: none;
+}
+.resize-handle-col {
+  width: 6px;
+  cursor: col-resize;
+  margin: 0 -3px;
+}
+.resize-handle-col::after {
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: var(--sel-bg, #264f78);
 }
 .cb-asset-view {
   flex: 1;
@@ -359,6 +396,12 @@
   overflow: hidden;
 }
 .cb-grid-icon { font-size: 24px; }
+.cb-folder-thumb {
+  background: color-mix(in srgb, var(--accent, #4c9eff) 22%, var(--input-bg, #252525));
+}
+.cb-folder-icon { font-size: 34px; }
+.cb-list-folder .cb-list-name,
+.cb-column-folder .cb-column-td:first-child { font-weight: 600; }
 .cb-thumb-sphere {
   width: 70%;
   height: 70%;

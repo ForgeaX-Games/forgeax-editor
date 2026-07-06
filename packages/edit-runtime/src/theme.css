@@ -184,7 +184,10 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .cb-layout { display: flex; flex: 1 1 auto; min-height: 0; }
 
 /* Left: Source Panel */
-.cb-source-panel { flex: 0 0 170px; min-width: 120px; max-width: 240px; border-right: 1px solid var(--line); display: flex; flex-direction: column; overflow: hidden; }
+/* NOTE: `.cb-source-panel` is now owned solely by @forgeax/editor-content-browser
+   (content-browser.css); the legacy `flex: 0 0 170px` rule that used to live here
+   pinned flex-basis and silently overrode the package's resizable width, so it
+   was removed. No live component renders the legacy source panel. */
 .cb-source-tree { flex: 1 1 auto; overflow-y: auto; padding: 4px 0; }
 .cb-source-scenes { flex: 0 0 auto; border-top: 1px solid var(--line); overflow-y: auto; max-height: 40%; }
 

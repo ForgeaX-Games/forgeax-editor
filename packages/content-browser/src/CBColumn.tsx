@@ -1,14 +1,16 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset, CBSortKey } from './types';
+import type { CBAsset, CBFolder, CBSortKey } from './types';
 import type { MultiSelectAPI, SortAPI } from './hooks';
 
+type CBViewItem = CBAsset | CBFolder;
+
 interface Props {
-  items: CBAsset[];
+  items: CBViewItem[];
   multiSelect: MultiSelectAPI;
   sort: SortAPI;
-  onDoubleClick?: (asset: CBAsset) => void;
-  onContextMenu?: (e: React.MouseEvent, asset: CBAsset) => void;
+  onDoubleClick?: (item: CBViewItem) => void;
+  onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
 }
 
 interface ColumnDef {
@@ -25,6 +27,15 @@ const COLUMNS: ColumnDef[] = [
   { key: 'estimatedSize', label: 'Size', width: '10%', getValue: a => a.estimatedSize ? `${(a.estimatedSize / 1024).toFixed(1)}K` : '—' },
   { key: 'packModifiedAt', label: 'Modified', width: '15%', getValue: a => a.packModifiedAt ? new Date(a.packModifiedAt).toLocaleDateString() : '—' },
 ];
+
+function folderCellValue(folder: CBFolder, key: ColumnDef['key']): string {
+  switch (key) {
+    case 'name': return `📁 ${folder.name}`;
+    case 'kind': return 'folder';
+    case 'estimatedSize': return `${folder.childCount} item(s)`;
+    default: return '—';
+  }
+}
 
 const ROW_HEIGHT = 26;
 
@@ -58,12 +69,13 @@ export function CBColumn({ items, multiSelect, sort, onDoubleClick, onContextMen
       <div ref={bodyRef} className="cb-column-body" style={{ overflow: 'auto', flex: 1 }}>
         <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
           {rowVirtualizer.getVirtualItems().map(virtualRow => {
-            const asset = items[virtualRow.index]!;
-            const selected = multiSelect.isSelected(asset);
+            const item = items[virtualRow.index]!;
+            const selected = multiSelect.isSelected(item);
+            const isFolder = item.type === 'folder';
             return (
               <div
                 key={virtualRow.key}
-                className={`cb-column-row${selected ? ' sel' : ''}`}
+                className={`cb-column-row${selected ? ' sel' : ''}${isFolder ? ' cb-column-folder' : ''}`}
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -73,12 +85,12 @@ export function CBColumn({ items, multiSelect, sort, onDoubleClick, onContextMen
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
                 onClick={e => multiSelect.handleClick(virtualRow.index, e)}
-                onDoubleClick={() => onDoubleClick?.(asset)}
-                onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, asset); }}
+                onDoubleClick={() => onDoubleClick?.(item)}
+                onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, item); }}
               >
                 {COLUMNS.map(col => (
                   <div key={col.key} className="cb-column-td" style={{ width: col.width }}>
-                    {col.getValue(asset)}
+                    {isFolder ? folderCellValue(item, col.key) : col.getValue(item)}
                   </div>
                 ))}
               </div>
