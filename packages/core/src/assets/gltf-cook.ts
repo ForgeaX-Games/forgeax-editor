@@ -16,7 +16,7 @@
 // `node:` imports), so the cook belongs here.
 // Design: docs/design/gltf-import-meta-ssot-via-toassetpack.md.
 
-import { parseGlb, parseGltf, toAssetPack } from '@forgeax/engine-gltf';
+import { parseGlb, parseGltf, serializeMetaJson, toAssetPack } from '@forgeax/engine-gltf';
 
 export interface GltfCookResult {
   readonly ok: boolean;
@@ -25,26 +25,6 @@ export interface GltfCookResult {
   /** Sub-asset counts by kind + total, for import-progress UI. */
   readonly summary?: { readonly byKind: Record<string, number>; readonly total: number };
   readonly error?: string;
-}
-
-// Byte-stable serialization mirroring engine cli-gltf.ts `serializeMetaJson`
-// (deep-sorted keys + 2-space indent + trailing LF) so a clean reimport produces
-// no diff.
-// TODO(harness): replace with an engine-exported `serializeGltfMeta` once
-// @forgeax/engine-gltf surfaces it (design doc §4.4) to drop this duplicate.
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) sorted[key] = sortKeysDeep(obj[key]);
-    return sorted;
-  }
-  return value;
-}
-
-function serializeGltfMeta(meta: unknown): string {
-  return `${JSON.stringify(sortKeysDeep(meta), null, 2)}\n`;
 }
 
 /**
@@ -94,7 +74,7 @@ export async function cookGltfMeta(
 
   return {
     ok: true,
-    metaJson: serializeGltfMeta(meta),
+    metaJson: serializeMetaJson(meta),
     summary: { byKind, total: meta.subAssets.length },
   };
 }

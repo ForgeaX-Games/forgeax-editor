@@ -272,3 +272,10 @@ jobs:
       # here with TS2305.
       - name: Typecheck (all editor packages)
         run: bun run typecheck
+
+      # Core unit tests (snapshot, golden, existing tests) — the editor CI
+      # previously did not run any core single-test suite; this step closes
+      # that gap so AC-01/AC-05 gates are exercised on every push/PR.
+      # plan-strategy D-4 · requirements AC-01/AC-05
+      - name: Core unit tests
+        run: bun -F @forgeax/editor-core test
