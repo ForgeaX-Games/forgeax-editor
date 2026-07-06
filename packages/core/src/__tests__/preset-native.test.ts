@@ -82,15 +82,19 @@ describe('preset — Object', () => {
     }
   });
 
-  it('Object preset: RED — MeshRenderer{materials} exists on world entity', () => {
-    // RED: old Object preset uses 'Material' not 'MeshRenderer'
+  it('Object preset: MeshRenderer exists with EMPTY materials (engine default-material fallback)', () => {
+    // The Object preset carries a MeshFilter; spawnComponentData auto-adds a
+    // MeshRenderer so the entity is renderable. That MeshRenderer has EMPTY
+    // materials (NOT a synthetic uncataloged MaterialAsset handle, which would
+    // abort save via SceneCollectAssetGuidUnresolvedError) — the engine's own
+    // default-material fallback paints it mid-grey and it serializes cleanly.
     const s = createSession();
     const eH = presetSpawn(s, 'Object');
     const mr = s.world.get(eH, MeshRenderer);
     expect(mr.ok).toBe(true);
     if (mr.ok) {
       const mats = mr.value.materials as ReadonlyArray<unknown>;
-      expect(mats.length).toBeGreaterThan(0);
+      expect(mats.length).toBe(0);
     }
   });
 });

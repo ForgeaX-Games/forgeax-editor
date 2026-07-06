@@ -22,7 +22,6 @@ import type {
 import {
   ChildOf,
   Children,
-  Materials,
   MeshFilter,
   MeshRenderer,
   Name,
@@ -119,14 +118,23 @@ function spawnComponentData(
       }
     }
     if (hasMeshFilter && !(extraComponents as Record<string, unknown>).MeshRenderer) {
-      // MaterialAsset is a branded shape that does not structurally overlap
-      // Record<string, unknown> (TS2352) — route through unknown. The payload is
-      // handed straight to allocSharedRef as an opaque blob.
-      const defaultMat = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] }) as unknown as Record<string, unknown>;
-      const matHandle = world.allocSharedRef('MaterialAsset', defaultMat);
+      // Attach an EMPTY MeshRenderer so the entity is renderable WITHOUT minting a
+      // synthetic material. The engine's render walk is gated on MeshRenderer
+      // presence (render-system-extract `with: [MeshRenderer]`), so a
+      // MeshFilter-only entity is archetype-absent and never drawn — the
+      // MeshRenderer must exist. But we must NOT allocSharedRef a default
+      // MaterialAsset here: that handle is never cataloged, so on save
+      // collect-scene-asset's `_guidForAsset` returns undefined and throws
+      // SceneCollectAssetGuidUnresolvedError, aborting the whole write (the scene
+      // silently fails to save). An empty `materials: []` routes through the
+      // engine's OWN default-material fallback (defaultMaterialSnapshot → mid-grey
+      // unlit) — identical in Edit and Play — and serializes with zero material
+      // handles to resolve, so save never sees an unresolved handle. (SSOT: the
+      // engine already owns the default-material concept; the editor must not
+      // hand-roll a parallel one.)
       out.push({
         component: MeshRenderer as unknown as CToken,
-        data: { materials: [matHandle] },
+        data: { materials: [] },
       });
     }
   }
