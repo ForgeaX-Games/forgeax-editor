@@ -777,7 +777,77 @@ function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
     console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
     return null;
   }
+  // Round-trip inline assets (materials etc.) that live IN this scene.pack.
+  // serializeSceneAssetToPack emits only the `scene` asset; every shared ref
+  // (material / mesh GUID) is collected into the scene entry's refs[] as a
+  // GUID string, but the engine serializer never writes the referenced asset
+  // BODIES back. That is correct for CATALOG assets (their own .pack.json /
+  // .glb file, resolved via pack-index) and BUILTIN meshes (auto-registered,
+  // packageOf === null), but for INLINE materials — whose payload physically
+  // lives inside THIS scene.pack.json — dropping the body is data loss: on
+  // reload pack-index points their GUID back at scene.pack.json, finds no
+  // matching asset entry, and the MeshRenderer falls back to default grey.
+  // (This is the "add-to-scene → whole scene turned grey" regression.)
+  //
+  // Discriminator (verified against the live registry): a ref is inline to
+  // this scene iff its package path equals the scene asset's package path.
+  //   inline material  -> packageOf(ref).path === packageOf(sceneGuid).path
+  //   catalog asset     -> packageOf(ref).path is a DIFFERENT file (skip)
+  //   builtin mesh      -> packageOf(ref) === null (skip; auto-registers)
+  //   editor-authored   -> packageOf(ref) === null but kind !== scene/mesh
+  //                        (no owning file yet -> inline it here so it persists)
+  appendInlineAssets(packR.value as Record<string, unknown>, reg, sceneGuid);
   return JSON.stringify(packR.value, null, 2) + '\n';
+}
+
+/** Count the inline (non-scene) asset entries in a serialized pack object —
+ *  the material/texture/etc. bodies that must survive a save round-trip. Used
+ *  by the saveDocToDisk safety net to refuse a write that would drop them. */
+export function inlineAssetCount(pack: unknown): number {
+  const assets = (pack as { assets?: ReadonlyArray<{ kind?: string }> })?.assets;
+  if (!Array.isArray(assets)) return 0;
+  return assets.filter((a) => a?.kind !== 'scene').length;
+}
+
+/** Re-append inline asset bodies (materials etc. whose payload lives in THIS
+ *  scene.pack) to a freshly serialized pack, so saving round-trips them instead
+ *  of silently dropping the payload. Mutates `pack.assets` in place. */
+function appendInlineAssets(
+  pack: Record<string, unknown>,
+  reg: AssetRegistry,
+  sceneGuid: string | undefined,
+): void {
+  const assets = pack.assets as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(assets)) return;
+  const sceneEntry = assets.find((a) => a.kind === 'scene');
+  const refs = (sceneEntry?.refs as ReadonlyArray<string> | undefined) ?? [];
+  if (refs.length === 0) return;
+
+  // The package path that identifies "inline to this scene". Prefer the scene
+  // GUID's own package path; fall back to the scene entry's guid.
+  const scenePkgGuid = sceneGuid ?? (sceneEntry?.guid as string | undefined);
+  const scenePath = scenePkgGuid ? reg.packageOf(scenePkgGuid)?.path : undefined;
+
+  const already = new Set(assets.map((a) => (a.guid as string | undefined)?.toLowerCase()));
+
+  for (const refGuid of refs) {
+    const key = refGuid.toLowerCase();
+    if (already.has(key)) continue;
+    const pkg = reg.packageOf(refGuid);
+    const payload = reg.lookup(refGuid) as { kind?: string } | undefined;
+    if (!payload) continue; // unresolvable — leave as a bare ref (catalog/builtin)
+    // Builtin meshes (packageOf === null, kind mesh) auto-register on load; a
+    // catalog asset has its own file (path !== scenePath). Only inline when the
+    // asset's body genuinely belongs in this scene.pack:
+    //   - same package path as the scene, OR
+    //   - no owning package (null) AND not a builtin mesh (editor-authored).
+    const isInline =
+      (pkg != null && pkg.path === scenePath) ||
+      (pkg === null && payload.kind !== 'mesh' && payload.kind !== 'scene');
+    if (!isInline) continue;
+    assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [] });
+    already.add(key);
+  }
 }
 
 /** The exact byte content saveDocToDisk would write for the current doc (used by
@@ -909,9 +979,15 @@ async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const instRes = reg.instantiate(sceneHandle, w);
     if (!instRes.ok) return false;
     const root = instRes.value;
+    // Owned-localId SSOT: the scene asset's `entities[]` are the authored,
+    // selectable entities; `mounts[]` (anchor localId + member window) are
+    // engine-internal nested-instance slots that must NOT enter _e2h (else a
+    // nameless mount anchor shows as "#N" and re-serializes into a growing
+    // wrapper chain — see populateSessionMapFromSceneRoot).
+    const ownedLocalIds = ownedLocalIdSet(loadRes.value as SceneAsset);
     // Populate _e2h/_h2e (+ advance the id allocator) from the freshly
     // instantiated scene root. Shared with the ▶/■ Stop rebind path (SSOT).
-    return populateSessionMapFromSceneRoot(w, root);
+    return populateSessionMapFromSceneRoot(w, root, ownedLocalIds);
   } catch {
     return false;
   }
@@ -987,7 +1063,25 @@ export async function instantiateSceneRefUnderWorld(
  *
  * Returns true when the root carried a resolvable SceneInstance.mapping.
  */
-function populateSessionMapFromSceneRoot(w: WorldType, root: EntityHandle): boolean {
+/** The set of OWNED (authored) localIds in a resolved SceneAsset — i.e. its
+ *  `entities[]`, excluding nested-mount slots (`mounts[]` anchor localIds +
+ *  their member windows). This is the SSOT for which entities the editor
+ *  session should track in `_e2h`; mount internals are engine-managed and never
+ *  belong in the Hierarchy. Returns undefined when the payload has no entities
+ *  array (caller then tracks every mapped slot — legacy/degenerate). */
+function ownedLocalIdSet(scene: SceneAsset): ReadonlySet<number> | undefined {
+  const ents = scene?.entities;
+  if (!Array.isArray(ents)) return undefined;
+  const set = new Set<number>();
+  for (const e of ents) set.add(e.localId as unknown as number);
+  return set;
+}
+
+function populateSessionMapFromSceneRoot(
+  w: WorldType,
+  root: EntityHandle,
+  ownedLocalIds?: ReadonlySet<number>,
+): boolean {
   const instComp = w.get(root, SceneInstance);
   if (!instComp.ok) return false;
   const mappingArr: ArrayLike<number> = instComp.value.mapping;
@@ -997,13 +1091,36 @@ function populateSessionMapFromSceneRoot(w: WorldType, root: EntityHandle): bool
   internals._e2h.clear();
   internals._h2e.clear();
   currentSceneRoot = root;
+
+  // Restrict the editor session map to OWNED entities (the scene asset's
+  // `entities[]`), excluding NESTED-MOUNT internals.
+  //
+  // A whole-GLB "Add to Scene" spawns a bus-tracked wrapper entity and mounts
+  // the GLB's scene under it as a nested SceneInstance (spawnGlbSceneAsMount +
+  // instantiateSceneRefUnderWorld). Only the wrapper is an owned, selectable
+  // Hierarchy node; the mount's anchor + member entities are engine-internal
+  // and are deliberately NOT tracked at initial-add time. On reload the whole
+  // scene comes back through instantiateScene, whose `mapping[]` covers EVERY
+  // localId — owned entities AND mount anchor localIds AND member-window slots.
+  // Blindly registering all of them broke round-trip parity two ways:
+  //   1. the mount anchor has no Name → Hierarchy showed a nameless "#N" ghost;
+  //   2. once in _e2h, the next worldToPack/rootsToSceneAsset re-collected that
+  //      anchor as an OWNED root → serialized it as a fresh wrapper + mount, so
+  //      one extra ghost node accreted per save→reload cycle (#8, #9, #10, …).
+  // The scene asset's `entities[]` localIds are the SSOT for "owned"; passing
+  // that set here makes reload match initial-add exactly. Rendering is
+  // unaffected (mount members render from live SceneInstance state, not _e2h);
+  // save still round-trips because rootsToSceneAsset walks the wrapper's live
+  // ChildOf subtree and re-folds the mount into mounts[] (AGENTS.md #2: Edit ==
+  // Play, authoring data must round-trip without accretion).
   let maxId = -1;
   // mapping[localId] is the engine handle; ENTITY_NULL_RAW (0xffffffff) marks an
-  // unspawned slot. Handle 0 IS valid (first spawn: gen=0+idx=0). Skip only the
-  // null sentinel + absent slots.
+  // unspawned slot. Handle 0 IS valid (first spawn: gen=0+idx=0). Skip the null
+  // sentinel + absent slots + any localId not in the owned set (mount internals).
   for (let localId = 0; localId < mappingArr.length; localId += 1) {
     const h = mappingArr[localId];
     if (h === undefined || h === ENTITY_NULL_RAW) continue;
+    if (ownedLocalIds !== undefined && !ownedLocalIds.has(localId)) continue;
     entMap(bus.doc, localId, h as EntityHandle);
     if (localId > maxId) maxId = localId;
   }
@@ -1054,14 +1171,30 @@ export async function saveDocToDisk(): Promise<boolean> {
   // Producer-side validation: worldToPack already self-validates via the engine
   // pipeline, but this guard ensures the serialized JSON satisfies the shell schema
   // before touching disk — even if the engine pipeline produces a corrupted pack.
+  let parsedNew: unknown;
   try {
-    const parsed = JSON.parse(content);
-    if (!validatePackShell(parsed).ok) {
+    parsedNew = JSON.parse(content);
+    if (!validatePackShell(parsedNew).ok) {
       console.error('[editor-core] saveDocToDisk: pack shell validation failed — aborting write');
       return false;
     }
   } catch {
     console.error('[editor-core] saveDocToDisk: failed to parse serialized content');
+    return false;
+  }
+  // Safety net (charter §9 graceful degradation): refuse a write that would
+  // DROP inline asset bodies (materials etc.) already on disk. The engine
+  // serializer only emits the scene entry; worldToPack re-appends inline
+  // assets, but if that ever regresses (or a ref becomes unresolvable) the
+  // pack shell is still "valid" — just truncated — so validatePackShell above
+  // can't catch it. This compares inline-asset counts and aborts on a net
+  // loss, so a bug degrades to "save refused, data preserved" rather than
+  // "scene silently turns grey on reload" (AGENTS.md #2: authoring data must
+  // round-trip or it's a data-loss bug).
+  if (!(await inlineAssetsPreserved(p, parsedNew))) {
+    console.error(
+      '[editor-core] saveDocToDisk: serialized pack would drop inline assets vs on-disk — aborting write to protect materials',
+    );
     return false;
   }
   try {
@@ -1074,6 +1207,26 @@ export async function saveDocToDisk(): Promise<boolean> {
     return r.ok;
   } catch {
     return false;
+  }
+}
+
+/** Safety-net guard for saveDocToDisk: returns false when writing `newPack`
+ *  over the on-disk pack at `path` would reduce the inline (non-scene) asset
+ *  count — i.e. drop material/texture bodies that live inside the scene.pack.
+ *  Reads the current disk pack; a missing/unreadable/unparseable file is
+ *  treated as "nothing to lose" (returns true) so first-time saves proceed. */
+async function inlineAssetsPreserved(path: string, newPack: unknown): Promise<boolean> {
+  const newCount = inlineAssetCount(newPack);
+  try {
+    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(path)}`);
+    if (!r.ok) return true; // no existing file → nothing to preserve
+    const j = (await r.json()) as { content?: string };
+    if (!j.content) return true;
+    const oldCount = inlineAssetCount(JSON.parse(j.content));
+    return newCount >= oldCount;
+  } catch {
+    // Can't read/parse the old pack → don't block the save on a transient error.
+    return true;
   }
 }
 

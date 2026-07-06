@@ -1,0 +1,67 @@
+// save-inline-materials.test.ts — regression guard for the editor save bug that
+// dropped inline material bodies from scene.pack.json.
+//
+// Root cause: serializeSceneAssetToPack (engine) emits ONLY the `scene` asset;
+// every shared ref (material GUID) becomes a refs[] string but the referenced
+// asset BODY is never written back. For inline materials — whose payload lives
+// inside THIS scene.pack — that silently drops the payload, so on reload the
+// pack-index points the GUID back at scene.pack.json, finds no matching entry,
+// and MeshRenderer falls back to default grey ("add-to-scene → scene turned
+// grey" data loss). worldToPack now re-appends inline asset bodies via
+// registry.lookup()/packageOf(); inlineAssetCount powers the saveDocToDisk
+// safety net that refuses a write which would reduce them.
+//
+// This file covers the pure exported helper (inlineAssetCount) directly and
+// documents the round-trip invariant. The full live round-trip (real editor
+// world → saveDocToDisk → disk pack has 7 materials → fresh reload resolves all
+// 7) is proven by the playwright verify-serialize / verify-render-after-save
+// probes; a headless bun test cannot host the WebGPU editor world.
+
+import { describe, expect, it } from 'bun:test';
+import { inlineAssetCount } from '../store/store';
+
+describe('inlineAssetCount — safety-net counter for save round-trip', () => {
+  it('counts non-scene asset entries (inline material bodies)', () => {
+    const pack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        { guid: 's', kind: 'scene', payload: { kind: 'scene', entities: [] }, refs: ['m1', 'm2'] },
+        { guid: 'm1', kind: 'material', payload: { kind: 'material' }, refs: [] },
+        { guid: 'm2', kind: 'material', payload: { kind: 'material' }, refs: [] },
+      ],
+    };
+    expect(inlineAssetCount(pack)).toBe(2);
+  });
+
+  it('returns 0 for a scene-only pack (the truncated/buggy shape)', () => {
+    const truncated = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [{ guid: 's', kind: 'scene', payload: { kind: 'scene', entities: [] }, refs: ['m1'] }],
+    };
+    expect(inlineAssetCount(truncated)).toBe(0);
+  });
+
+  it('detects the drop: a scene-only pack loses inline assets vs a full one', () => {
+    const full = {
+      assets: [
+        { kind: 'scene' },
+        { kind: 'material' },
+        { kind: 'material' },
+        { kind: 'texture' },
+      ],
+    };
+    const truncated = { assets: [{ kind: 'scene' }] };
+    // The saveDocToDisk safety net aborts when newCount < oldCount.
+    expect(inlineAssetCount(truncated)).toBeLessThan(inlineAssetCount(full));
+    expect(inlineAssetCount(full)).toBe(3);
+  });
+
+  it('is defensive against malformed input (no assets array)', () => {
+    expect(inlineAssetCount(null)).toBe(0);
+    expect(inlineAssetCount({})).toBe(0);
+    expect(inlineAssetCount({ assets: 'nope' })).toBe(0);
+    expect(inlineAssetCount(undefined)).toBe(0);
+  });
+});
