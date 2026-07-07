@@ -152,6 +152,10 @@ function toEntity(session: EditSession, id: number): EntityHandle {
   return (entHandle(session, id) ?? id) as EntityHandle;
 }
 
+function entityMapped(session: EditSession, id: number): boolean {
+  return entHandle(session, id) !== undefined;
+}
+
 // ── applyCommand ───────────────────────────────────────────────────────────┐
 
 export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
@@ -180,10 +184,10 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 
     // ── 2. destroyEntity ────────────────────────────────────────────────────
     case 'destroyEntity': {
-      const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) {
+      if (!entityMapped(session, cmd.entity)) {
         return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       }
+      const eH = toEntity(session, cmd.entity);
       // Collect subtree via engine handles
       // Handles walked here are live engine entity handles (eH + Children members).
       const idStack: EntityHandle[] = [eH];
@@ -223,9 +227,10 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 
     // ── 3. rename ───────────────────────────────────────────────────────────
     case 'rename': {
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
       const nameR = w.get(eH, Name);
-      if (!nameR.ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+      if (!nameR.ok) return { ok: false, error: { code: 'NO_NAME_COMPONENT', hint: `entity ${cmd.entity} has no Name component` } };
       const before = nameR.value.value;
       const r = w.set(eH, Name, { value: cmd.name });
       if (!r.ok) return { ok: false, error: { code: 'RENAME_FAILED', hint: String(r.error) } };
@@ -234,10 +239,10 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 
     // ── 4. reparent ─────────────────────────────────────────────────────────
     case 'reparent': {
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const parentEng = cmd.parent !== null ? toEntity(session, cmd.parent) : null;
-      if (cmd.parent !== null && !w.get(parentEng!, Name).ok) {
+      if (cmd.parent !== null && !entityMapped(session, cmd.parent)) {
         return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` } };
       }
       if (cmd.parent === cmd.entity) {
@@ -260,8 +265,8 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
     case 'setComponent': {
       const tok = resolveToken(cmd.component);
       if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const cur = w.get(eH, tok);
       if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
       const before = clone(cur.value) as Record<string, unknown>;
@@ -280,8 +285,8 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
     case 'addComponent': {
       const tok = resolveToken(cmd.component);
       if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       if (w.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
       // Dynamic component token (see the set() note above) — the data Record is
       // validated by the engine against the resolved schema at runtime.
@@ -292,10 +297,11 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 
     // ── 7. removeComponent ──────────────────────────────────────────────────
     case 'removeComponent': {
+      if (cmd.component === 'Name') return { ok: false, error: { code: 'PROTECTED_COMPONENT', hint: 'Name is intrinsic and cannot be removed' } };
       const tok = resolveToken(cmd.component);
       if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const cur = w.get(eH, tok);
       if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
       const value = clone(cur.value);
@@ -306,8 +312,8 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 
     // ── 8. setHidden ────────────────────────────────────────────────────────
     case 'setHidden': {
+      if (!entityMapped(session, cmd.entity)) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const eH = toEntity(session, cmd.entity);
-      if (!w.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
       const isHidden = w.get(eH, EditorHidden).ok;
       if (cmd.hidden && !isHidden) {
         const r = w.addComponent(eH, { component: EditorHidden, data: {} });

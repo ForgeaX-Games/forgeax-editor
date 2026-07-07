@@ -90,6 +90,8 @@ export interface CommandError {
     | 'REMOVE_FAILED'
     | 'HIDE_FAILED'
     | 'UNHIDE_FAILED'
+    | 'NO_NAME_COMPONENT'
+    | 'PROTECTED_COMPONENT'
     // ── New gateway-layer codes (plan-strategy §2 D-7) ──
     | 'UNKNOWN_OP'
     | 'INVALID_ARGS'
