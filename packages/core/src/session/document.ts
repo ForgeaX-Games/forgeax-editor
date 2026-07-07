@@ -244,11 +244,10 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
         return { ok: false, error: { code: 'INVALID_PARENT', hint: 'cannot parent an entity to itself' } };
       }
       const coR = w.get(eH, ChildOf);
-      const before = coR.ok ? coR.value.parent : null;
+      const beforeHandle = coR.ok ? (coR.value as { parent: number }).parent as EntityHandle : null;
+      const before = beforeHandle !== null ? entLegacyId(session, beforeHandle) ?? null : null;
       if (parentEng !== null) {
-        const r = coR.ok
-          ? w.set(eH, ChildOf, { parent: parentEng })
-          : w.addComponent(eH, { component: ChildOf, data: { parent: parentEng } });
+        const r = w.addComponent(eH, { component: ChildOf, data: { parent: parentEng } });
         if (!r.ok) return { ok: false, error: { code: 'REPARENT_FAILED', hint: String(r.error) } };
       } else if (coR.ok) {
         const r = w.removeComponent(eH, ChildOf);

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entComponents, entComponent, entIds } from '@forgeax/editor-core';
+import { entExists, entName, entComponents, entIds } from '@forgeax/editor-core';
 import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
@@ -84,7 +84,7 @@ function Row({
   if (!entExists(gateway.doc, id)) return null;
   const nodeName = entName(gateway.doc, id);
   const nodeComponents = entComponents(gateway.doc, id);
-  const nodeHidden = entComponent(gateway.doc, id, 'EditorHidden') !== undefined;
+  const nodeHidden = 'EditorHidden' in nodeComponents;
   const kids = flat ? [] : childrenOf(gateway.doc, id);
   const isCollapsed = collapsed?.has(id) ?? false;
   function commitRename(next: string) {
