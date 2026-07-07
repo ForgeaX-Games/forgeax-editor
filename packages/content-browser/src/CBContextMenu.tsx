@@ -192,3 +192,17 @@ export function buildFolderContextMenu(
     }},
   ];
 }
+
+/** Build context menu for blank area right-click (UE5 Content Browser parity). */
+export function buildBlankAreaContextMenu(
+  currentPath: string,
+  onCreateDirectory: (parentPath: string) => void,
+): ContextMenuItem[] {
+  return [
+    {
+      id: 'new-folder',
+      label: 'New Folder',
+      action: () => onCreateDirectory(currentPath),
+    },
+  ];
+}
