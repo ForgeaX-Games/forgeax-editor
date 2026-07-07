@@ -12,6 +12,9 @@
 // behavior; the GUID-collision silent-degrade is a charter-P3 gap tracked
 // as OOS-5 and not addressed here).
 
+/** Dedupe scan-failure logs per root-set for this process (HTTP hot path). */
+const loggedScanFailureKeys = new Set<string>();
+
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
@@ -353,7 +356,11 @@ export async function buildPerGameCatalog(
   const cwd = process.cwd();
   const result = await scan(roots);
   if (!result.ok) {
-    console.warn('[forgeax-pack] scan error:', result.error.message);
+    const failureKey = roots.join('\0');
+    if (!loggedScanFailureKeys.has(failureKey)) {
+      loggedScanFailureKeys.add(failureKey);
+      console.warn('[forgeax-pack] scan error:', result.error.message);
+    }
     return [];
   }
 
