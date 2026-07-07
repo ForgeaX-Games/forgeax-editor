@@ -371,17 +371,26 @@ export default defineConfig({
     forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
-    pluginPack({ roots: gameAssetRoots(), base: '/preview/', importers: [imageImporter, gltfImporter] }) as never,
-    // Second pluginPack instance scoped to shared template assets — needs
-    // imageImporter wired so the .hdr cube-texture sidecar produces a valid
-    // PackEntry (without it, /preview/__import on cold loadByGuid would
-    // mislabel the bare .hdr as rgba8unorm and uploadCubemapFromEquirect
-    // rejects with `invalid-source-format`). Co-existing with the per-game
-    // pluginPack is fine: GUIDs are disjoint by construction.
+    // SINGLE pluginPack instance over game roots + shared template assets.
+    // It was TWO instances (game roots, then shared) — but both register a
+    // vite plugin named 'forgeax:pack', each mounting its OWN `/__import/:guid`
+    // dev middleware. Middlewares run in registration order, and the handler
+    // 404s (`meta-not-found`) + RETURNS on a GUID absent from its own catalog
+    // instead of `next()`-ing. So the first (game-roots) instance swallowed
+    // every request for a shared-asset GUID (the template sky.hdr equirect) →
+    // the shared instance never saw it → `/__import/<sky>` 404 → solid-color
+    // skylight fallback. Merging into ONE instance with the UNION of roots puts
+    // every GUID in a single catalog + single middleware, so the cold-import
+    // cook path resolves shared + per-game GUIDs alike. imageImporter is needed
+    // for the .hdr equirect sidecar (else the bare .hdr is mislabeled rgba8unorm
+    // and uploadCubemapFromEquirect rejects with `invalid-source-format`);
+    // gltfImporter for per-game .glb cooks. A cross-root duplicate GUID no longer
+    // collapses the catalog to []: buildCatalog (build-catalog.ts) degrades to a
+    // per-root scan + first-wins de-dup, dropping only the offending root.
     pluginPack({
-      roots: sharedAssetRoots(),
+      roots: [...gameAssetRoots(), ...sharedAssetRoots()],
       base: '/preview/',
-      importers: [imageImporter],
+      importers: [imageImporter, gltfImporter],
     }) as never,
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,
