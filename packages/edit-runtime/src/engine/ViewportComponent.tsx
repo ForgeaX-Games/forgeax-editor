@@ -176,21 +176,14 @@ export function ViewportComponent(): React.ReactElement {
     bootStarted = true;
     const container = containerRef.current;
     if (!container) return;
-    let viewport: Viewport | null = null;
-    let disposed = false;
 
-    void bootViewport(container, actionsRef, setFpsState).then((vp) => {
-      if (disposed) { vp?.dispose(); return; }
-      viewport = vp;
-    });
-
-    return () => {
-      disposed = true;
-      viewport?.dispose();
-      // NOTE: we do NOT reset bootStarted — a single document boots the engine
-      // once (AC-04). StrictMode's dev double-mount is exactly what the latch
-      // guards; the real teardown is a full page navigation.
-    };
+    void bootViewport(container, actionsRef, setFpsState);
+    // No cleanup returned: the viewport lifecycle is NOT managed by React.
+    // Standalone teardown = page navigation. Multi-game host teardown =
+    // resetEditRealm() which runs registerTeardown() handles (viewport.dispose
+    // is registered inside bootViewport). Returning a cleanup here would let
+    // StrictMode's dev double-mount dispose the viewport immediately after
+    // boot resolves (the disposed-flag race condition).
   }, []);
 
   return (

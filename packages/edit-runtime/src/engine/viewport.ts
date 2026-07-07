@@ -18,6 +18,7 @@
 // + unit-tested; only the wiring depends on the (untyped) engine.
 import {
   Transform,
+  ChildOf,
   MeshFilter,
   MeshRenderer,
   Camera,
@@ -26,7 +27,10 @@ import {
   quat,
   Materials,
   HANDLE_CUBE,
+  pick as enginePick,
+  PickError,
 } from '@forgeax/engine-runtime';
+import type { World, EntityHandle } from '@forgeax/engine-ecs';
 // engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
 // @forgeax/engine-geometry leaf package.
 import { meshFromInterleaved } from '@forgeax/engine-geometry';
@@ -41,7 +45,7 @@ import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closes
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
 
 import type { EntityId, EditSession, OpHandle } from '@forgeax/editor-core';
-import { entIds, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import { entIds, entLegacyId, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
@@ -497,16 +501,53 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     return { origin: camPos, dir: rayDirection(fwd, rgt, upv, nx, ny, FOV, aspect()) };
   }
 
-  /** Nearest visible world entity hit by the ray (or null). */
-  function pick(origin: Vec3, dir: Vec3): EntityId | null {
-    // M7-a (AC-15): enumerate entities from the world (entIds) instead of the
-    // deleted doc.order/doc.entities mirror. Hidden = EditorHidden marker present.
-    const doc: EditSession = gateway.doc;
+  /**
+   * Walk up the ChildOf hierarchy from `handle` until we find an entity that
+   * is mapped in the editor session (_h2e). This resolves internal mesh
+   * entities (e.g. inside a GLB mount) to their editor-level ancestor.
+   */
+  function resolveEditorEntity(doc: EditSession, handle: EntityHandle): EntityId | null {
+    let cur: EntityHandle | undefined = handle;
+    const seen = new Set<number>();
+    while (cur !== undefined) {
+      if (seen.has(cur as number)) break;
+      seen.add(cur as number);
+      const id = entLegacyId(doc, cur);
+      if (id !== undefined) return isEntHidden(doc, id) ? null : id;
+      const co = (world as unknown as World).get(cur, ChildOf);
+      if (!co.ok) break;
+      cur = (co.value as { parent: number }).parent as EntityHandle;
+    }
+    return null;
+  }
+
+  /** Nearest visible world entity hit by the ray (or null).
+   *  Tries engine pick first (mesh-aware, uses MeshAsset.aabb); if that misses
+   *  (e.g. because the engine hasn't populated .aabb yet — see engine feedback
+   *  2026-07-06), falls back to the editor's Transform-scale AABB sweep. */
+  function pick(clientX: number, clientY: number): EntityId | null {
+    const r = canvas.getBoundingClientRect();
+    const sx = clientX - r.left, sy = clientY - r.top;
+    const w = world as unknown as World;
+
+    // 1) Engine pick (precise, mesh-level AABB + world matrix)
+    try {
+      const hit = enginePick(w, camera as unknown as EntityHandle, sx, sy, r.width, r.height);
+      if (hit) {
+        const resolved = resolveEditorEntity(gateway.doc, hit.entity as EntityHandle);
+        if (resolved) return resolved;
+      }
+    } catch (e) {
+      if (!(e instanceof PickError)) throw e;
+    }
+
+    // 2) Fallback: editor-level Transform-scale AABB sweep
+    const { origin, dir } = rayAt(clientX, clientY);
     let best: EntityId | null = null, bestT = Infinity;
-    for (const id of entIds(doc)) {
-      if (isEntHidden(doc, id)) continue;
-      const t = readEntTransform(doc, id);
-      if (!t) continue; // organizational node — nothing to pick
+    for (const id of entIds(gateway.doc)) {
+      if (isEntHidden(gateway.doc, id)) continue;
+      const t = readEntTransform(gateway.doc, id);
+      if (!t) continue;
       const { center, half } = entityBox(t);
       const hit = rayAABB(origin, dir, center, half);
       if (hit !== null && hit < bestT) { bestT = hit; best = id; }
@@ -591,11 +632,12 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
   const SCALE_KEYS = ['scaleX', 'scaleY', 'scaleZ'];
 
-  // A click is "in the viewport" unless it landed on one of the docked panels.
-  // (The #ui overlay sits over the canvas, so e.target is usually the overlay
-  // div, not the canvas — filtering panels is more robust than matching canvas.)
+  // A click is "in the viewport" unless it landed on one of the docked panels or
+  // toolbar. The canvas is behind the #ui overlay, so e.target is usually a DOM
+  // element from the overlay — filtering panels is more robust than matching canvas.
+  // Selectors updated to match current DockShell (dockview-based) + keep-alive layer.
   const overPanel = (t: EventTarget | null): boolean =>
-    !!(t as HTMLElement | null)?.closest?.('.dockleaf, .floatwin, .ed-toolbar');
+    !!(t as HTMLElement | null)?.closest?.('.fx-dockshell, .fx-dockwrap, .fx-dock-popout, .ed-toolbar');
 
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
@@ -640,20 +682,17 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       mode = 'axisDrag';
       return;
     }
-    const hit = pick(origin, dir);
+    const hit = pick(e.clientX, e.clientY);
     if (hit !== null) {
       gateway.dispatch({ kind: 'setSelection', id: hit });
       dragId = hit;
       dragWorld = hit;
-      // M7-a: read the grab-time Transform from the world (doc.entities gone).
       dragOrig = { ...(readEntTransform(gateway.doc, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
       mode = 'pendDrag';
     } else {
-      // Left-click on empty space deselects (Blender-style). Orbiting moved to
-      // the middle button so it works even when a big object fills the viewport.
       gateway.dispatch({ kind: 'setSelection', id: null });
       mode = 'none';
     }
@@ -806,8 +845,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   function onDblClick(e: MouseEvent): void {
     if (overPanel(e.target)) return;
     if (inputToGame()) return; // play·game: no editor double-click select/frame
-    const { origin, dir } = rayAt(e.clientX, e.clientY);
-    const hit = pick(origin, dir);
+    const hit = pick(e.clientX, e.clientY);
     if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); frameSelection(); }
   }
 
