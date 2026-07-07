@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
 import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
-  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory,
+  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
   ResizeHandle, useLocalSize } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -13,7 +13,7 @@ import { useFavorites } from './hooks/useFavorites';
 import { useAssetGraph } from './hooks/useAssetGraph';
 import { computeDeleteImpact } from './delete-guard';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
-import { buildAssetContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
 import { CBFilterBar } from './CBFilterBar';
 import { CBNavigationBar } from './CBNavigationBar';
@@ -167,13 +167,47 @@ export function ContentBrowser() {
     logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
   }, [gameSlug]);
 
+  // Disk directories: fetch real directory tree from server so empty dirs
+  // (created via New Folder) are visible even without pack files inside.
+  const [diskDirs, setDiskDirs] = useState<string[]>([]);
+  const fetchDiskDirs = useCallback(async () => {
+    if (!gameSlug || gameSlug === 'default') return;
+    try {
+      const dirs: string[] = [];
+      for (const root of assetRoots) {
+        const treePath = resolveGamePath(root);
+        const r = await apiFetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const j = (await r.json()) as { tree?: { children?: { name: string; path: string; type: string; children?: unknown[] }[] } | null };
+        if (!j.tree?.children) continue;
+        const walk = (nodes: { name: string; path: string; type: string; children?: unknown[] }[], prefix: string) => {
+          for (const node of nodes) {
+            if (node.type !== 'dir') continue;
+            const rel = prefix ? `${prefix}/${node.name}` : node.name;
+            dirs.push(rel);
+            if (Array.isArray(node.children)) {
+              walk(node.children as typeof nodes, rel);
+            }
+          }
+        };
+        walk(j.tree.children as { name: string; path: string; type: string; children?: unknown[] }[], root);
+      }
+      setDiskDirs(dirs);
+    } catch { /* silent */ }
+  }, [gameSlug, assetRoots]);
+
+  useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
+
   useEffect(() => {
     const handler = (e: MessageEvent) => {
-      if (e.data?.type === 'VAG_ASSETS_CHANGED') reload();
+      if (e.data?.type === 'VAG_ASSETS_CHANGED') {
+        reload();
+        void fetchDiskDirs();
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [reload]);
+  }, [reload, fetchDiskDirs]);
 
   // Scope the catalog to THIS game's declared asset roots. Each kept entry
   // carries its game-relative path (`assets/characters/x.pack.json`), which
@@ -204,8 +238,9 @@ export function ContentBrowser() {
         cur = slash > 0 ? cur.slice(0, slash) : '';
       }
     }
+    for (const d of diskDirs) dirs.add(d);
     return [...dirs].sort();
-  }, [scopedAssets]);
+  }, [scopedAssets, diskDirs]);
 
   // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
   // directly in it (non-recursive). Folders are derived from the same rels the
@@ -301,10 +336,7 @@ export function ContentBrowser() {
     onNewFolder: (parentPath: string) => {
       const name = window.prompt('New folder name:');
       if (!name) return;
-      const fullPath = resolveGamePath(`${parentPath ? parentPath + '/' : ''}${name}`);
-      void createDirectory(fullPath).then(ok => {
-        if (ok) reload();
-      });
+      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
     },
   }), [reload, requestDelete]);
 
@@ -343,6 +375,22 @@ export function ContentBrowser() {
       multiSelect.clearSelection();
     }
   }, [multiSelect]);
+
+  const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
+    const menuItems = buildBlankAreaContextMenu(nav.currentPath, (parentPath) => {
+      const name = window.prompt('New folder name:');
+      if (!name) return;
+      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+    });
+    const resolved = menuItems.map(m => ({
+      label: m.label,
+      onClick: m.action,
+      disabled: m.disabled,
+    }));
+    setTimeout(() => showContextMenu(pos, resolved), 0);
+  }, [nav.currentPath]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -471,7 +519,7 @@ export function ContentBrowser() {
             title="拖动调整文件夹栏宽度" />
 
           {/* Right: Asset view */}
-          <div className="cb-asset-view" onClick={handleContainerClick}>
+          <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
             <CBNavigationBar nav={nav} gameSlug={gameSlug} />
             <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
               thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />

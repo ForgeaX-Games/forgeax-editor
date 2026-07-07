@@ -16,6 +16,7 @@ import type { EditorOp, EntityId } from '@forgeax/editor-core';
 function NameField({ value, onCommit }: { value: string; onCommit: (name: string) => void }) {
   const [draft, setDraft] = useState(value);
   const abort = useRef(false);
+  useEffect(() => { setDraft(value); }, [value]);
   return (
     <input
       data-testid="insp-name"
@@ -395,14 +396,16 @@ export function InspectorPanel() {
                   ↺
                 </span>
               )}
-              <span
-                className="x"
-                style={{ cursor: 'pointer', color: 'var(--fg3)' }}
-                data-testid={`insp-remove-${comp}`}
-                onClick={() => gateway.dispatch({ kind: 'removeComponent', entity: sel, component: comp })}
-              >
-                ×
-              </span>
+              {comp !== 'Name' && (
+                <span
+                  className="x"
+                  style={{ cursor: 'pointer', color: 'var(--fg3)' }}
+                  data-testid={`insp-remove-${comp}`}
+                  onClick={() => gateway.dispatch({ kind: 'removeComponent', entity: sel, component: comp })}
+                >
+                  ×
+                </span>
+              )}
             </span>
           </div>
           {!collapsed.has(comp) && getComponentSchema(comp)?.bespoke ? (

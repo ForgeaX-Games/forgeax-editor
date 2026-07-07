@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-core';
-import { generateAssetGuid, addAssetToPack, createPack, createDirectory } from '@forgeax/editor-core';
+import { generateAssetGuid, addAssetToPack, createPack, gateway } from '@forgeax/editor-core';
 import { ASSET_KINDS, type AssetKind } from './types';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { buildAcceptString, logImport } from './import-registry';
@@ -62,13 +62,12 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
     onReload();
   }, [basePath, onReload]);
 
-  const handleNewFolder = useCallback(async () => {
+  const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
     const name = window.prompt('New folder name:');
     if (!name) return;
-    await createDirectory(`${basePath}/${name}`);
-    onReload();
-  }, [basePath, onReload]);
+    gateway.dispatch({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
+  }, [currentPath]);
 
   const handleImport = useCallback(() => {
     const input = fileInputRef.current;
