@@ -44,7 +44,9 @@ function spawn(session: EditSession, name: string, parent?: number): { legacyId:
 function getChildEntities(session: EditSession, parentHandle: EntityHandle): EntityHandle[] {
   const r = session.world.get(parentHandle, Children);
   if (!r.ok) return [];
-  return (r.value.entities ?? []) as EntityHandle[];
+  const raw = r.value.entities;
+  if (raw == null) return [];
+  return Array.from(raw) as unknown as EntityHandle[];
 }
 
 describe('reparent Children/ChildOf bidirectional consistency', () => {
