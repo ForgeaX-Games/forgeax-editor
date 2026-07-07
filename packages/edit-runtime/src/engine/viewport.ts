@@ -541,11 +541,17 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       if (!(e instanceof PickError)) throw e;
     }
 
-    // 2) Fallback: editor-level Transform-scale AABB sweep
+    // 2) Fallback: editor-level Transform-scale AABB sweep.
+    //    Only test entities that carry MeshFilter + MeshRenderer — lights,
+    //    cameras, and empty group nodes have no visual representation and
+    //    must not be selectable via the fallback (matches engine pick's
+    //    candidate set). See feedback 2026-07-07.
     const { origin, dir } = rayAt(clientX, clientY);
     let best: EntityId | null = null, bestT = Infinity;
     for (const id of entIds(gateway.doc)) {
       if (isEntHidden(gateway.doc, id)) continue;
+      const comps = entComponents(gateway.doc, id);
+      if (!('MeshFilter' in comps) || !('MeshRenderer' in comps)) continue;
       const t = readEntTransform(gateway.doc, id);
       if (!t) continue;
       const { center, half } = entityBox(t);
