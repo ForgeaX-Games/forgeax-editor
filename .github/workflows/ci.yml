@@ -279,3 +279,9 @@ jobs:
       # plan-strategy D-4 · requirements AC-01/AC-05
       - name: Core unit tests
         run: bun -F @forgeax/editor-core test
+
+      # Edit-runtime unit tests — viewport ray-math, orbit camera, lifecycle,
+      # display-switch, input-target, and other edit-runtime pure functions.
+      # These tests are DOM/GPU-free and run in bun's test runner.
+      - name: Edit-runtime unit tests
+        run: bun -F @forgeax/editor-edit-runtime test

@@ -315,14 +315,30 @@ async function bootViewport(
     if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
   });
 
-  // resize (was :521). Track the container, not the window.
-  const onResize = (): void => {
+  // resize — ResizeObserver on the container so dock-panel drags (which do NOT
+  // fire `window resize`) still update the canvas backing store + camera aspect.
+  // The observer is already batched by the browser (once per frame), so no rAF
+  // throttle is needed; the skip-when-unchanged guard prevents redundant GPU
+  // swapchain rebuilds (canvas.width assignment invalidates the current texture
+  // even when the value is the same on WebKit). Math.round is required because
+  // non-integer DPR produces fractional px that canvas truncates — without
+  // rounding the comparison would fail every frame, triggering a full
+  // render-graph recompile. `onContainerResize` is late-bound so
+  // viewport.refresh() can be wired after createViewport below.
+  let onContainerResize: (() => void) | null = null;
+  const syncCanvasSize = (): void => {
     const d = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = (container.clientWidth || window.innerWidth) * d;
-    canvas.height = (container.clientHeight || window.innerHeight) * d;
+    const w = Math.round((container.clientWidth || 1) * d);
+    const h = Math.round((container.clientHeight || 1) * d);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    onContainerResize?.();
   };
-  window.addEventListener('resize', onResize);
-  registerTeardown(() => window.removeEventListener('resize', onResize));
+  const resizeObserver = new ResizeObserver(syncCanvasSize);
+  resizeObserver.observe(container);
+  registerTeardown(() => resizeObserver.disconnect());
 
   // editor orbit camera (was :531). Not part of the authored doc.
   const aspect = canvas.width / canvas.height || 1;
@@ -337,9 +353,10 @@ async function bootViewport(
     canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity,
     getInputTarget,
   });
-  const onViewportResize = (): void => viewport.refresh();
-  window.addEventListener('resize', onViewportResize);
-  registerTeardown(() => window.removeEventListener('resize', onViewportResize));
+  // Wire viewport.refresh() into the container ResizeObserver created above so
+  // the editor camera projection + gizmo track the new aspect ratio on every
+  // container resize (dock-panel drags + window resizes).
+  onContainerResize = () => viewport.refresh();
   registerTeardown(() => { try { viewport.dispose(); } catch { /* already disposed */ } });
 
   // possess-exit key (was :617). Esc / G un-possesses play·game -> play·scene.
