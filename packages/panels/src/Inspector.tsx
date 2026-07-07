@@ -3,9 +3,12 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
-import { bus, dispatch, requestFrame, requestRefComponent, setSelectionMany, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+// M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
+// one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
+// (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
+import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-core';
-import type { EditorCommand, EntityId } from '@forgeax/editor-core';
+import type { EditorOp, EntityId } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -98,7 +101,7 @@ function descendantsAndSelf(id: EntityId): Set<EntityId> {
   const stack = [id];
   while (stack.length) {
     const cur = stack.pop()!;
-    for (const c of childrenOf(bus.doc, cur)) {
+    for (const c of childrenOf(gateway.doc, cur)) {
       out.add(c);
       stack.push(c);
     }
@@ -110,7 +113,7 @@ function descendantsAndSelf(id: EntityId): Set<EntityId> {
 function commonComponents(ids: EntityId[]): string[] {
   if (ids.length === 0) return [];
   // M7 / AC-15: component keys read from world (SSOT) via entity-state.
-  const sets = ids.map((id) => new Set(Object.keys(entComponents(bus.doc, id))));
+  const sets = ids.map((id) => new Set(Object.keys(entComponents(gateway.doc, id))));
   return [...sets[0]!].filter((c) => sets.every((s) => s.has(c)));
 }
 
@@ -122,14 +125,14 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
   const common = commonComponents(ids);
 
   function setAll(component: string, key: string, value: unknown) {
-    const commands: EditorCommand[] = ids.map((id) => ({ kind: 'setComponent', entity: id, component, patch: { [key]: value } }));
-    dispatch({ kind: 'transaction', label: `batch ${component}.${key} ×${ids.length}`, commands });
+    const commands: EditorOp[] = ids.map((id) => ({ kind: 'setComponent', entity: id, component, patch: { [key]: value } }));
+    gateway.dispatch({ kind: 'transaction', label: `batch ${component}.${key} ×${ids.length}`, commands });
   }
 
   // Align all selected to the primary's value on one axis (one undo step).
   function alignAxis(axis: 'x' | 'y' | 'z') {
     const posKey = `pos${axis.toUpperCase()}` as string;
-    const t = entComponent(bus.doc, primary, 'Transform');
+    const t = entComponent(gateway.doc, primary, 'Transform');
     if (!t) return;
     setAll('Transform', posKey, Number(t[posKey] ?? 0));
   }
@@ -147,7 +150,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
           title="copy all selected entities as a JSON array (for AI / cross-scene paste)"
           onClick={() => {
             const arr = ids.map((id) => {
-              return { id, name: entName(bus.doc, id), components: entComponents(bus.doc, id) };
+              return { id, name: entName(gateway.doc, id), components: entComponents(gateway.doc, id) };
             });
             void navigator.clipboard?.writeText(JSON.stringify(arr, null, 2));
           }}
@@ -168,10 +171,10 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
             title={id === primary ? 'primary (field layout source)' : 'click to make primary'}
             onClick={() => {
               if (id === primary) return;
-              setSelectionMany([...ids.filter((x) => x !== id), id]);
+              gateway.dispatch({ kind: 'setSelectionMany', ids: [...ids.filter((x) => x !== id), id] });
             }}
           >
-            {entName(bus.doc, id) || id}
+            {entName(gateway.doc, id) || id}
             {id === primary ? ' ★' : ''}
           </button>
         ))}
@@ -188,7 +191,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
       )}
       {common.length === 0 && <div className="field muted">{t('editor.inspector.noCommonComponents')}</div>}
       {common.map((comp) => {
-        const value = entComponent(bus.doc, primary, comp);
+        const value = entComponent(gateway.doc, primary, comp);
         if (typeof value !== 'object' || value === null) return null;
         return (
           <div key={comp}>
@@ -270,11 +273,11 @@ export function InspectorPanel() {
   useEffect(() => {
     if (sel === null) return;
     // M7 / AC-15: read Transform through entComponent (the dead-world-aware SSOT
-    // reader). In a popout window bus.doc.world is null (snapshot revive keeps it
-    // inert), so a raw bus.doc.world.get(...) NPE'd on selection — entComponent
+    // reader). In a popout window gateway.doc.world is null (snapshot revive keeps it
+    // inert), so a raw gateway.doc.world.get(...) NPE'd on selection — entComponent
     // resolves from the popout cache instead. On the main window it reads the live
     // world. Mirrors the childrenOf popout fix.
-    const tv = entComponent(bus.doc, sel, 'Transform');
+    const tv = entComponent(gateway.doc, sel, 'Transform');
     if (!tv) return;
     const q = tv as { quatX: number; quatY: number; quatZ: number; quatW: number };
     setEuler(quatToEuler(q.quatX, q.quatY, q.quatZ, q.quatW));
@@ -289,7 +292,7 @@ export function InspectorPanel() {
   if (selList.length > 1) {
     return <BatchPanel ids={selList} />;
   }
-  if (sel === null || !entExists(bus.doc, sel)) {
+  if (sel === null || !entExists(gateway.doc, sel)) {
     return (
       <div className="panel" data-testid="panel-inspector">
         <h3>Inspector</h3>
@@ -299,11 +302,11 @@ export function InspectorPanel() {
   }
   // M7 / AC-15: entity name/parent/components read from world (SSOT) via
   // entity-state; doc.entities/doc.order/EntityNode.source deleted.
-  const nodeName = entName(bus.doc, sel);
-  const nodeParent = entParent(bus.doc, sel);
-  const nodeComponents = entComponents(bus.doc, sel);
+  const nodeName = entName(gateway.doc, sel);
+  const nodeParent = entParent(gateway.doc, sel);
+  const nodeComponents = entComponents(gateway.doc, sel);
   const blocked = descendantsAndSelf(sel);
-  const parentOptions = entIds(bus.doc).filter((id) => !blocked.has(id));
+  const parentOptions = entIds(gateway.doc).filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
   return (
     <div className="panel" data-testid="panel-inspector">
@@ -317,7 +320,7 @@ export function InspectorPanel() {
             className="tbtn"
             data-testid="insp-focus"
             title="frame this entity in the viewport (F)"
-            onClick={() => requestFrame()}
+            onClick={() => gateway.dispatch({ kind: 'requestFrame' })}
           >
             ⌖ Focus
           </button>
@@ -341,19 +344,19 @@ export function InspectorPanel() {
           dropped (entity provenance is no longer tracked in the authoring layer). */}
       <div className="field">
         <label>Name</label>
-        <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) dispatch({ kind: 'rename', entity: sel, name }); }} />
+        <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) gateway.dispatch({ kind: 'rename', entity: sel, name }); }} />
       </div>
       <div className="field">
         <label>Parent</label>
         <select
           data-testid="insp-parent"
           value={nodeParent ?? ''}
-          onChange={(e) => dispatch({ kind: 'reparent', entity: sel, parent: e.target.value === '' ? null : Number(e.target.value) })}
+          onChange={(e) => gateway.dispatch({ kind: 'reparent', entity: sel, parent: e.target.value === '' ? null : Number(e.target.value) })}
         >
           <option value="">(root)</option>
           {parentOptions.map((id) => (
             <option key={id} value={id}>
-              {entName(bus.doc, id)} #{id}
+              {entName(gateway.doc, id)} #{id}
             </option>
           ))}
         </select>
@@ -387,7 +390,7 @@ export function InspectorPanel() {
                   style={{ cursor: 'pointer', color: 'var(--fg3)' }}
                   title="reset to default values"
                   data-testid={`insp-reset-${comp}`}
-                  onClick={() => dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: defaultComponentData(comp) })}
+                  onClick={() => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: defaultComponentData(comp) })}
                 >
                   ↺
                 </span>
@@ -396,7 +399,7 @@ export function InspectorPanel() {
                 className="x"
                 style={{ cursor: 'pointer', color: 'var(--fg3)' }}
                 data-testid={`insp-remove-${comp}`}
-                onClick={() => dispatch({ kind: 'removeComponent', entity: sel, component: comp })}
+                onClick={() => gateway.dispatch({ kind: 'removeComponent', entity: sel, component: comp })}
               >
                 ×
               </span>
@@ -418,7 +421,7 @@ export function InspectorPanel() {
                   out.push(
                     <div className="vec3-row" data-testid={`insp-${comp}-vec3`} key="__vec3">
                       {grp.map((g) => (
-                        <NumberScrubField key={g} label={g} value={data[g] as number} fs={fieldSchema(comp, g)} testid={`insp-${comp}-${g}`} compact onCommit={(val) => dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [g]: val } })} />
+                        <NumberScrubField key={g} label={g} value={data[g] as number} fs={fieldSchema(comp, g)} testid={`insp-${comp}-${g}`} compact onCommit={(val) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [g]: val } })} />
                       ))}
                     </div>,
                   );
@@ -430,7 +433,7 @@ export function InspectorPanel() {
                     const next = { ...euler, [key]: deg };
                     setEuler(next);
                     const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
-                    dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quatX: qx, quatY: qy, quatZ: qz, quatW: qw } });
+                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quatX: qx, quatY: qy, quatZ: qz, quatW: qw } });
                   };
                   const ROTATIONS = [
                     { key: 'rotX', label: 'rotX', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
@@ -452,7 +455,7 @@ export function InspectorPanel() {
                   if (v !== null && typeof v === 'object') continue;
                   const fs = fieldSchema(comp, k);
                   const setField = (val: unknown) =>
-                    dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [k]: val } });
+                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [k]: val } });
                   const type = fs?.type ?? (typeof v === 'number' ? 'number' : 'string');
                   if (type === 'number') {
                     // live-follow any viewport gizmo bound to this `<comp>.<key>` scalar (e.g. Light.spotAngle, Light.range)
@@ -545,7 +548,7 @@ export function InspectorPanel() {
               const select = document.getElementById('insp-add-comp-select') as HTMLSelectElement | null;
               const comp = select?.value ?? missingComponents[0];
               if (!comp) return;
-              dispatch({ kind: 'addComponent', entity: sel, component: comp, value: defaultComponentData(comp) });
+              gateway.dispatch({ kind: 'addComponent', entity: sel, component: comp, value: defaultComponentData(comp) });
             }}
           >
             add

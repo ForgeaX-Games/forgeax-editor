@@ -2,7 +2,7 @@
  * Content Browser → scene spawn (Add to Scene / drag-drop).
  * Runs on the MAIN viewport bus — ep:* panel iframes forward via BroadcastChannel.
  */
-import { bus, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
+import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
 import { apiFetch } from '../io/api-client';
 import { buildSpawnEntityFromDragRef, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
@@ -55,7 +55,7 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
     }
   }
 
-  bus.dispatch({ kind: 'spawnEntity', name: entity.name, components: entity.components });
+  gateway.dispatch({ kind: 'spawnEntity', name: entity.name, components: entity.components });
   broadcastAssetsChanged();
   console.info('[CB:import] spawn.reference', { kind, guid: ref.guid, name: entity.name });
   return true;
@@ -106,7 +106,7 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
 }
 
 /** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
- *  spawn an `_e2h`-tracked wrapper entity via the bus (so it is the mount ROOT →
+ *  spawn an `_e2h`-tracked wrapper entity via the gateway (so it is the mount ROOT →
  *  round-trips as one `mounts[]` entry), then instantiate the scene sub-asset
  *  under it via the engine's canonical loadByGuid → instantiate spine
  *  (instantiateSceneRefUnderWorld). This renders the REAL GLB geometry (not a
@@ -115,16 +115,16 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
  *  wrapper is left in place (harmless empty node) and we return false — callers
  *  MUST NOT fall back to cubes. */
 async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<boolean> {
-  // Identity-Transform wrapper via the bus (undoable, marks the doc dirty, and
+  // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty, and
   // gives us a real _e2h handle to parent the nested instance under).
   const cmd = {
     kind: 'spawnEntity' as const,
     name,
     components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
   } as { kind: 'spawnEntity'; name: string; components: Record<string, unknown>; _id?: number };
-  bus.dispatch(cmd);
+  gateway.dispatch(cmd);
   const wrapperId = cmd._id;
-  const wrapperHandle = wrapperId !== undefined ? entHandle(bus.doc, wrapperId) : undefined;
+  const wrapperHandle = wrapperId !== undefined ? entHandle(gateway.doc, wrapperId) : undefined;
   if (wrapperHandle === undefined) {
     console.warn('[spawn-asset] could not resolve wrapper handle for GLB mount');
     return false;
@@ -179,7 +179,7 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
         return { kind: 'spawnEntity' as const, name: entity.name, components: entity.components };
       }).filter((c): c is NonNullable<typeof c> => c !== null);
       if (commands.length > 0) {
-        bus.dispatch({ kind: 'transaction', label: `Import: ${drag.name ?? 'FBX'}`, commands });
+        gateway.dispatch({ kind: 'transaction', label: `Import: ${drag.name ?? 'FBX'}`, commands });
         broadcastAssetsChanged();
         console.info('[CB:import] spawn.scene-meshes', { count: commands.length });
         return;

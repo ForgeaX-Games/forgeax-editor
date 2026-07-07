@@ -19,7 +19,7 @@
 //   plan-strategy §2 D-6: reads scene-persistence internal seams.
 //   requirements AC-09: pure structural migration; the only body edits are the
 //     ESM-forced seam routings, each behaviorally identical to the originals.
-import { bus } from './bus';
+import { gateway } from './gateway';
 import { notifyDocChanged } from './doc-version';
 import {
   worldToPack,
@@ -38,7 +38,7 @@ import { apiFetch } from '../io/api-client';
 // The server already broadcasts chokidar file-events over ws://<host>/ws (the
 // same channel ▶ Play's PreviewMode uses to hot-reload). The editor never
 // subscribed, so agent edits required a manual refresh. We subscribe here and,
-// on an external scene.json change, re-fetch + replaceDoc() (which fires the bus
+// on an external scene.json change, re-fetch + replaceDoc() (which fires the gateway
 // → engine resync + React, so the 3D viewport rebuilds live).
 //
 // Guards: (1) skip the echo of our own save (content-compare, see below);
@@ -78,7 +78,7 @@ export function initDiskWatch(): () => void {
         // world's serialization. If identical, this is our own save echo — skip
         // (no teardown/reload). Comparing before the reload also avoids a
         // needless despawn+reinstantiate on every self-save.
-        const currentPack = worldToPack(bus.doc, currentSceneGuid ?? undefined);
+        const currentPack = worldToPack(gateway.doc, currentSceneGuid ?? undefined);
         if (currentPack && JSON.stringify(parsed) === currentPack) return;
         // Genuine external edit → reload via the engine-native loadByGuid path
         // (loadSceneByGuid tears down the current scene + repopulates _e2h).

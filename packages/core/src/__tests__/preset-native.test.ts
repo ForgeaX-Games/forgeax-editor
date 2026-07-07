@@ -38,7 +38,7 @@ import {
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../scene/presets';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -57,7 +57,7 @@ function presetSpawn(
   const preset = getPreset(presetLabel);
   if (!preset) throw new Error(`preset ${presetLabel} not found`);
   const components = buildPresetComponents(preset);
-  const cmd: EditorCommand = { kind: 'spawnEntity', name: preset.label, components };
+  const cmd: EditorOp = { kind: 'spawnEntity', name: preset.label, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`preset spawn ${presetLabel} failed: ${r.error.hint}`);
   if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
@@ -142,7 +142,7 @@ describe('preset — Point Light', () => {
     expect(p).toBeDefined();
     if (!p) return; // RED short-circuit — no preset yet
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -168,7 +168,7 @@ describe('preset — Spot Light', () => {
     expect(p).toBeDefined();
     if (!p) return;
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -194,7 +194,7 @@ describe('preset — Directional Light', () => {
     expect(p).toBeDefined();
     if (!p) return;
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;

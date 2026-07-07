@@ -9,11 +9,17 @@
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 2 (store.ts:53-145)
+//   plan-strategy §2 D-1: setSelection/toggleSelection/setSelectionMany are
+//     SESSION-domain ops — the setter bodies are the appliers, registered into
+//     sessionAppliers; the public setters now dispatch through the gateway (M2
+//     m2-w6). Setters stay exported (UI still calls them directly); M3 seals them
+//     private. "Change the door, not the body" (spec §11.3).
 //   research F-2: useSyncExternalStore getter+hook kept in one file
-//   requirements AC-09: pure structural migration; isSelected is a dead export
-//     (D-7 †) kept verbatim, `export` included.
+//   requirements AC-02/AC-09: session op → ledger only, AI-dispatchable.
 import { useSyncExternalStore } from 'react';
-import type { EntityId } from '../types';
+import type { EditorOp, EntityId } from '../types';
+import { gateway } from './gateway';
+import { sessionAppliers } from '../io/appliers';
 
 // Selection is a list
 // Selection is a list; the LAST element is the "primary" (drives single-target
@@ -57,26 +63,46 @@ export function isSelected(id: EntityId): boolean {
   return selectionList.includes(id);
 }
 
-export function setSelection(id: EntityId | null): void {
+// ── Session appliers (M2 D-1): the mutation bodies, registered into the session
+// table. These are the ONLY code that touches selectionList; the public setters
+// below dispatch ops that route here. Bodies are the original setter bodies
+// verbatim ("change the door, not the body").
+function applySetSelection(op: EditorOp): { ok: true } {
+  const id = (op as { id: EntityId | null }).id;
   if (id === null) {
-    if (selectionList.length === 0) return;
-    selectionList = [];
-  } else {
-    if (selectionList.length === 1 && selectionList[0] === id) return;
+    if (selectionList.length !== 0) { selectionList = []; emitSelection(); }
+  } else if (!(selectionList.length === 1 && selectionList[0] === id)) {
     selectionList = [id];
+    emitSelection();
   }
+  return { ok: true };
+}
+function applyToggleSelection(op: EditorOp): { ok: true } {
+  const id = (op as { id: EntityId }).id;
+  selectionList = selectionList.includes(id) ? selectionList.filter((x) => x !== id) : [...selectionList, id];
   emitSelection();
+  return { ok: true };
+}
+function applySetSelectionMany(op: EditorOp): { ok: true } {
+  selectionList = [...(op as { ids: EntityId[] }).ids];
+  emitSelection();
+  return { ok: true };
+}
+sessionAppliers.set('setSelection', applySetSelection);
+sessionAppliers.set('toggleSelection', applyToggleSelection);
+sessionAppliers.set('setSelectionMany', applySetSelectionMany);
+
+export function setSelection(id: EntityId | null): void {
+  gateway.dispatch({ kind: 'setSelection', id });
 }
 
 /** Shift/Ctrl-click semantics: toggle membership, keep last-clicked as primary. */
 export function toggleSelection(id: EntityId): void {
-  selectionList = selectionList.includes(id) ? selectionList.filter((x) => x !== id) : [...selectionList, id];
-  emitSelection();
+  gateway.dispatch({ kind: 'toggleSelection', id });
 }
 
 export function setSelectionMany(ids: EntityId[]): void {
-  selectionList = [...ids];
-  emitSelection();
+  gateway.dispatch({ kind: 'setSelectionMany', ids });
 }
 
 function subscribeSelection(fn: () => void): () => void {

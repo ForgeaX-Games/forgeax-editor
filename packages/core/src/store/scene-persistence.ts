@@ -6,7 +6,7 @@
 // currentSceneRoot / _isDirty (module-level). Consumers: the whole editor via
 // the barrel; disk-watch reads the internal seams below.
 //
-// R3 (plan-strategy §4 / research F-4): the top-level `bus.subscribe(...)` that
+// R3 (plan-strategy §4 / research F-4): the top-level `gateway.subscribe(...)` that
 // sets `_isDirty = true` is an EVAL-TIME side effect and MUST stay a top-level
 // statement — NOT lazified — or dirty tracking breaks.
 //
@@ -24,13 +24,14 @@
 //     clearDocStorage at 1250-1269, physically interleaved after disk-watch).
 //   plan-strategy §2 D-6: internal seams; §2 D-7: buildHiddenKey / clearDocStorage
 //     are dead exports (†) kept verbatim; stripEditorHiddenMarker is test-consumed.
-//   research F-4 / R3: bus.subscribe kept top-level.
+//   research F-4 / R3: gateway.subscribe kept top-level.
 //   requirements AC-09: pure structural migration; the only body edits are the
 //     ESM-forced seam routings (docVersion++/for -> notifyDocChanged();
 //     selectionList=[]/emitSelection -> setSelectionMany([]); disk-watch's writes
 //     -> setters), each behaviorally identical.
 import { useSyncExternalStore } from 'react';
-import { bus } from './bus';
+import { gateway } from './gateway';
+import { sessionAppliers } from '../io/appliers';
 import { setSelectionMany } from './selection';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
@@ -48,7 +49,7 @@ import { apiFetch } from '../io/api-client';
 import { findScenePackByGuid } from '../assets/assets';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
-import type { EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle, WorldType } from '../scene/scene-types';
 import type { AssetRegistry } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
@@ -86,9 +87,16 @@ export function buildHiddenKey(sceneId?: string, sceneFile?: string | null): str
     : `${HIDDEN_SIDECAR_KEY_PREFIX}:${sid}`;
 }
 
-export function setSceneId(id: string | null | undefined): void {
-  const v = (id ?? '').trim();
+// Session applier (M2 D-1): setSceneId body, registered into the session table.
+function applySetSceneId(op: EditorOp): { ok: true } {
+  const v = ((op as { id: string | null | undefined }).id ?? '').trim();
   currentSceneId = v || 'default';
+  return { ok: true };
+}
+sessionAppliers.set('setSceneId', applySetSceneId);
+
+export function setSceneId(id: string | null | undefined): void {
+  gateway.dispatch({ kind: 'setSceneId', id });
 }
 export function getSceneId(): string { return currentSceneId; }
 
@@ -126,7 +134,7 @@ export let currentSceneGuid: string | null = null;
 // double-spawn). null when no scene is loaded (seed / fresh workspace).
 let currentSceneRoot: EntityHandle | null = null;
 /** The synthetic SceneInstance root of the scene loaded into the LIVE editor
- *  world (bus.doc.world) by loadSceneByGuid. run-lifecycle reads this to snapshot
+ *  world (gateway.doc.world) by loadSceneByGuid. run-lifecycle reads this to snapshot
  *  the scene for ▶ Play / ■ Stop (getSceneInstanceState/despawnScene must use a
  *  root in the SAME world the game runs in — NOT openProject's throwaway world).
  *  null when no scene is loaded (seed / fresh workspace). */
@@ -295,7 +303,7 @@ export async function initSceneList(): Promise<void> {
  *  navigation reload also re-enters the proven cold-boot path (the engine-sync
  *  structural-rebuild path currently leaves the renderer black — pre-existing
  *  fullRebuild issue; value-only doc changes still live-patch as before). */
-export async function switchSceneFile(id: string): Promise<boolean> {
+async function doSwitchSceneFile(id: string): Promise<boolean> {
   if (id === currentSceneFile) return true;
   if (!sceneList.some((s) => s.id === id)) return false;
   flushPendingSaveBeacon();
@@ -311,14 +319,15 @@ export async function switchSceneFile(id: string): Promise<boolean> {
     const u = new URL(location.href);
     u.searchParams.set('sceneFile', id);
     try { history.replaceState(history.state, '', u.toString()); } catch { /* SSR/old */ }
-    const ok = await loadDocFromDisk();
+    // Internal call → the impl, not the dispatching wrapper (no nested dispatch).
+    const ok = await doLoadDocFromDisk();
     if (!ok) loadDocFromStorage();
-    // loadDocFromDisk/Storage set bus.doc DIRECTLY and notify React doc listeners,
-    // but NOT the bus.subscribe listeners the viewport uses to (re)build the
+    // loadDocFromDisk/Storage set gateway.doc DIRECTLY and notify React doc listeners,
+    // but NOT the gateway.subscribe listeners the viewport uses to (re)build the
     // RENDERED scene — so without this the viewport keeps showing the OLD scene
     // (verified: doc updates 64→136 but world stays 67). Fire them via replaceDoc,
     // which also clears the previous scene's undo history (correct for a swap).
-    replaceDoc(bus.doc);
+    replaceDoc(gateway.doc);
     return true;
   } catch (e) {
     console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
@@ -327,6 +336,16 @@ export async function switchSceneFile(id: string): Promise<boolean> {
     location.assign(u.toString());
     return true;
   }
+}
+
+// Session op (M2 D-1): switchSceneFile carries an id payload, so its applier
+// reads the id off the op before running the async impl (capture-promise seam).
+sessionAppliers.set('switchSceneFile', (op) => {
+  runAsyncOp(() => doSwitchSceneFile((op as { id: string }).id));
+  return { ok: true };
+});
+export function switchSceneFile(id: string): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'switchSceneFile', id });
 }
 
 // ── Launcher config (UE-style "play this level") ─────────────────────────────
@@ -375,11 +394,11 @@ export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
  *  (see initSceneList) — NOTHING is written to forge.json, whose strict
  *  engine-project schema rejects an editor `scenes[]` field. The display name
  *  is the file stem (`slug`), so the game's LEVELS[].id can match it 1:1. */
-export async function createSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
+async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
   if (currentSceneId === 'default') return false;
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
-  const sourceDoc = duplicateCurrent ? bus.doc : createEditSession();
+  const sourceDoc = duplicateCurrent ? gateway.doc : createEditSession();
   const newPath = resolveGamePath(`scenes/${slug}.pack.json`);
   // A NEW level gets its own stable, path-derived GUID — never the source
   // scene's GUID (duplicate must be a distinct asset) and never an order-derived
@@ -403,6 +422,16 @@ export async function createSceneFile(id: string, duplicateCurrent: boolean): Pr
   u.searchParams.set('sceneFile', slug);
   location.assign(u.toString());
   return true;
+}
+
+// Session op (M2 D-1): createSceneFile carries id + duplicateCurrent payload.
+sessionAppliers.set('createSceneFile', (op) => {
+  const o = op as { id: string; duplicateCurrent: boolean };
+  runAsyncOp(() => doCreateSceneFile(o.id, o.duplicateCurrent));
+  return { ok: true };
+});
+export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'createSceneFile', id, duplicateCurrent });
 }
 
 /** Rebuild an EditSession's SessionInternals bag around an incoming {world,
@@ -616,7 +645,7 @@ function appendInlineAssets(
  *  loss). A failed save must abort, never overwrite good data (AGENTS.md #2:
  *  authoring data must round-trip or it's a data-loss bug). */
 function serializedPack(): string | null {
-  return worldToPack(bus.doc, sceneGuidForSave());
+  return worldToPack(gateway.doc, sceneGuidForSave());
 }
 
 /** Load the active game's scene from disk (native pack preferred, legacy
@@ -627,7 +656,7 @@ function serializedPack(): string | null {
  *  into a SceneAsset POD, refs indices resolved to GUID strings, then
  *  allocSharedRef('SceneAsset', ...) + world.instantiateScene materialises
  *  entities directly into the world — no doc.entities intermediate. */
-export async function loadDocFromDisk(): Promise<boolean> {
+async function doLoadDocFromDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
   // Forget the previous scene's identity before loading a new one, so a failed
@@ -674,6 +703,14 @@ export async function loadDocFromDisk(): Promise<boolean> {
   return false;
 }
 
+registerAsyncSessionOp('loadDocFromDisk', doLoadDocFromDisk);
+/** Load the game's authored scene from disk (session op — ledger only, no undo).
+ *  Internal callers (switchSceneFile) use doLoadDocFromDisk directly to avoid a
+ *  nested dispatch; this exported wrapper is the human/AI entry point (m2-w8). */
+export function loadDocFromDisk(): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'loadDocFromDisk' });
+}
+
 // ── Scene-load: canonical engine loadByGuid → instantiate (engine SSOT) ─────
 //
 // The editor loads a scene the SAME way the game's main.ts does — the engine's
@@ -692,12 +729,12 @@ export async function loadDocFromDisk(): Promise<boolean> {
  *  SceneInstance subtree via the engine primitive and clear the session's
  *  legacy-id↔handle map. No-op when nothing is loaded. */
 function teardownCurrentScene(): void {
-  const w: WorldType = bus.doc.world;
+  const w: WorldType = gateway.doc.world;
   if (w && currentSceneRoot !== null) {
     try { w.despawnScene(currentSceneRoot); } catch { /* best-effort */ }
   }
   currentSceneRoot = null;
-  const internals = getInternals(bus.doc);
+  const internals = getInternals(gateway.doc);
   internals._e2h.clear();
   internals._h2e.clear();
 }
@@ -713,9 +750,9 @@ function teardownCurrentScene(): void {
  * (D-6 seam). Not in facade/barrel.
  */
 export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
-  // engine World / AssetRegistry are injected on bus.doc.
-  const w: WorldType = bus.doc.world;
-  const reg: AssetRegistry | undefined = bus.doc.registry;
+  // engine World / AssetRegistry are injected on gateway.doc.
+  const w: WorldType = gateway.doc.world;
+  const reg: AssetRegistry | undefined = gateway.doc.registry;
   if (!w || !reg) return false;
   try {
     const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -757,7 +794,7 @@ export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
  *
  * Unlike loadSceneByGuid this is ADDITIVE: it does NOT teardown the current
  * scene and does NOT clear/rebuild `_e2h`/`_h2e` or `currentSceneRoot`. The
- * caller owns the wrapper entity (a bus-spawned, `_e2h`-tracked node) that
+ * caller owns the wrapper entity (a gateway-spawned, `_e2h`-tracked node) that
  * becomes the mount's ROOT so the nested SceneInstance is a NON-root anchor —
  * which is exactly what `rootsToSceneAsset` folds into a single `mounts[]`
  * entry keyed by this scene GUID (AGENTS.md #2: round-trips through save →
@@ -777,8 +814,8 @@ export async function instantiateSceneRefUnderWorld(
   sceneGuid: string,
   parentHandle: number,
 ): Promise<number | null> {
-  const w: WorldType = bus.doc.world;
-  const reg: AssetRegistry | undefined = bus.doc.registry;
+  const w: WorldType = gateway.doc.world;
+  const reg: AssetRegistry | undefined = gateway.doc.registry;
   if (!w || !reg) return null;
   try {
     const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -843,7 +880,7 @@ function populateSessionMapFromSceneRoot(
   const mappingArr: ArrayLike<number> = instComp.value.mapping;
   // Clear stale entries first so a rebind onto a new root doesn't leave the
   // pre-Play handles (now despawned) in the map.
-  const internals = getInternals(bus.doc);
+  const internals = getInternals(gateway.doc);
   internals._e2h.clear();
   internals._h2e.clear();
   currentSceneRoot = root;
@@ -851,7 +888,7 @@ function populateSessionMapFromSceneRoot(
   // Restrict the editor session map to OWNED entities (the scene asset's
   // `entities[]`), excluding NESTED-MOUNT internals.
   //
-  // A whole-GLB "Add to Scene" spawns a bus-tracked wrapper entity and mounts
+  // A whole-GLB "Add to Scene" spawns a gateway-tracked wrapper entity and mounts
   // the GLB's scene under it as a nested SceneInstance (spawnGlbSceneAsMount +
   // instantiateSceneRefUnderWorld). Only the wrapper is an owned, selectable
   // Hierarchy node; the mount's anchor + member entities are engine-internal
@@ -877,13 +914,13 @@ function populateSessionMapFromSceneRoot(
     const h = mappingArr[localId];
     if (h === undefined || h === ENTITY_NULL_RAW) continue;
     if (ownedLocalIds !== undefined && !ownedLocalIds.has(localId)) continue;
-    entMap(bus.doc, localId, h as EntityHandle);
+    entMap(gateway.doc, localId, h as EntityHandle);
     if (localId > maxId) maxId = localId;
   }
   // Advance the id allocator past every loaded localId so new spawns don't
   // collide with authored ids (never regress below the current allocator).
-  const nextFloor = entGetNextId(bus.doc) - 1;
-  entSetNextId(bus.doc, Math.max(maxId, nextFloor) + 1);
+  const nextFloor = entGetNextId(gateway.doc) - 1;
+  entSetNextId(gateway.doc, Math.max(maxId, nextFloor) + 1);
   return true;
 }
 
@@ -899,7 +936,7 @@ function populateSessionMapFromSceneRoot(
  * null if the root had no resolvable SceneInstance (rebind skipped).
  */
 export function rebindLoadedScene(newRoot: number): number | null {
-  const w: WorldType = bus.doc.world;
+  const w: WorldType = gateway.doc.world;
   if (!w) return null;
   // AC-04: newRoot is a raw engine handle at the host boundary (run-lifecycle
   // types it as number); it IS an EntityHandle from world.instantiate, so brand
@@ -911,8 +948,17 @@ export function rebindLoadedScene(newRoot: number): number | null {
 
 /** Write the active game's scene to disk as a native engine scene pack. This is
  *  the MANUAL save (D-7): the user clicks Save in the toolbar → this runs and,
- *  on success, clears the dirty flag so the dirty indicator turns off. */
-export async function saveDocToDisk(): Promise<boolean> {
+ *  on success, clears the dirty flag so the dirty indicator turns off.
+ *
+ *  M2 (D-1, m2-w8): save/load/switch/create are SESSION-domain ops. dispatch is
+ *  synchronous but these bodies are async — so the collection uses a
+ *  capture-promise seam: the registered applier runs the impl ONCE and captures
+ *  the in-flight promise; the public async setter dispatches (records the ledger
+ *  entry, and for an AI dispatch actually triggers the impl) then returns the
+ *  captured promise so UI callers still await the real boolean. Single
+ *  execution, one ledger entry, engine pack contract (rootsToSceneAsset) and
+ *  the getApiClient seam unchanged — "change the door, not the body". */
+async function doSaveDocToDisk(): Promise<boolean> {
   const p = scenePath();
   if (!p) return false;
   // Serialize FIRST and bail if it failed — never POST an empty body over a good
@@ -965,6 +1011,38 @@ export async function saveDocToDisk(): Promise<boolean> {
   }
 }
 
+// ── Async session-op collection seam (M2 D-1, m2-w8) ──────────────────────────
+// dispatch() is sync but save/load/switch/create are async. The applier runs the
+// impl and stashes the in-flight promise; the public setter dispatches (ledger +
+// AI trigger) then returns the stashed promise. A module-scoped slot carries the
+// promise from applier back to the setter within one synchronous dispatch call —
+// there is no reentrancy risk because dispatch runs the applier synchronously
+// before returning, so the setter reads the slot immediately after.
+let _asyncOpResult: Promise<boolean> | null = null;
+/** Run an async op impl and stash its promise for the setter to return. Attaches
+ *  a no-op rejection handler so a RAW dispatch (AI fire-and-forget, or a headless
+ *  environment with no path resolver) does not surface an unhandled rejection;
+ *  the setter's caller still awaits the same promise and sees the real result. */
+function runAsyncOp(impl: () => Promise<boolean>): void {
+  const pr = impl();
+  pr.catch(() => {});
+  _asyncOpResult = pr;
+}
+function registerAsyncSessionOp(kind: string, impl: () => Promise<boolean>): void {
+  sessionAppliers.set(kind, () => { runAsyncOp(impl); return { ok: true }; });
+}
+function dispatchAsyncSessionOp(op: EditorOp): Promise<boolean> {
+  _asyncOpResult = Promise.resolve(false);
+  const r = gateway.dispatch(op);
+  if (!r.ok) return Promise.resolve(false);
+  return _asyncOpResult ?? Promise.resolve(false);
+}
+
+registerAsyncSessionOp('saveDocToDisk', doSaveDocToDisk);
+export function saveDocToDisk(): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'saveDocToDisk' });
+}
+
 /** Safety-net guard for saveDocToDisk: returns false when writing `newPack`
  *  over the on-disk pack at `path` would reduce the inline (non-scene) asset
  *  count — i.e. drop material/texture bodies that live inside the scene.pack.
@@ -996,7 +1074,7 @@ async function inlineAssetsPreserved(path: string, newPack: unknown): Promise<bo
 /** @internal-store — disk-watch READS this to skip clobbering unsaved edits
  *  (D-6 seam); writes route through _setDirty. Not in facade/barrel. */
 export let _isDirty = false;
-bus.subscribe(() => { _isDirty = true; });
+gateway.subscribe(() => { _isDirty = true; });
 
 /** True while the in-memory scene has unsaved edits (drives the dirty
  *  indicator + the disk-watch "don't clobber my edits" guard). Manual-save
@@ -1054,9 +1132,9 @@ export function flushPendingSaveBeacon(): void {
  * and undo history since old inverses no longer apply to the new doc. */
 export function replaceDoc(doc: EditSession): void {
   // reviveSession rebuilds the SessionInternals bag around the incoming
-  // {world, registry} so downstream `bus.doc.asset` reads stay live (w34); it's
+  // {world, registry} so downstream `gateway.doc.asset` reads stay live (w34); it's
   // idempotent on an already-live locally-built session.
-  bus.replaceDoc(reviveSession(doc));
+  gateway.replaceDoc(reviveSession(doc));
   setSelectionMany([]);
   notifyDocChanged();
 }

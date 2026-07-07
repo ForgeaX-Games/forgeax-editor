@@ -35,12 +35,11 @@ import {
 } from '@forgeax/engine-runtime';
 import { Entity } from '@forgeax/engine-ecs';
 import {
-  bus,
+  gateway,
   loadDocFromStorage,
   loadDocFromDisk,
   getLoadedSceneRoot,
   rebindLoadedScene,
-  setSceneId,
   getSceneId,
   initSceneList,
   initDiskWatch,
@@ -99,7 +98,8 @@ export type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
  */
 export async function configureHostSession(): Promise<void> {
   const qp = new URLSearchParams(location.search);
-  setSceneId(qp.get('scene'));
+  // M3 (AC-03): setSceneId is a session op — dispatch through the one gateway door.
+  gateway.dispatch({ kind: 'setSceneId', id: qp.get('scene') });
   const slug = (qp.get('scene') ?? '').trim();
   const injectedRoot = qp.get('gameRoot');
   if (slug && slug !== 'default' && injectedRoot === null) {
@@ -152,13 +152,13 @@ export async function resolveEditPhysics(): Promise<PhysicsBackend | undefined> 
 // A small demo scene so the editor opens with something to edit + render. These
 // are ordinary commands -> they land in the ledger and are undoable.
 function seedDemoScene(): void {
-  if (entIds(bus.doc).length > 0) return;
+  if (entIds(gateway.doc).length > 0) return;
   // Mirrors the new-game template's scene.json: a lowpoly vignette + a movable
   // Player. A scene-less game (or fresh workspace) opens on this same starter.
-  bus.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
-  const level = (bus.ledger.at(-1) as { _id: number })._id;
+  gateway.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
+  const level = (gateway.ledger.at(-1) as { _id: number })._id;
   const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
-    bus.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
+    gateway.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
 
   add('Ground', { Transform: { posX: 0, posY: -0.1, posZ: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, MeshFilter: { assetHandle: HANDLE_CUBE } });
   add('Sun', { Transform: { posX: 0, posY: 6, posZ: 0 }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
@@ -239,7 +239,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   setBootStage('loadDoc');
   await renderer.ready.catch(() => null);
   await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-  if (entIds(bus.doc).length === 0) {
+  if (entIds(gateway.doc).length === 0) {
     seedDemoScene();
     // The bare seed is a viewport convenience for a scene-less game — do NOT
     // auto-persist it to the game dir. The user's first real edit re-schedules a save.
@@ -249,7 +249,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     const loadedRoot = getLoadedSceneRoot();
     if (loadedRoot !== null) defaultSceneRoot = loadedRoot;
   }
-  emitBoot(`scene ▸ loaded entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+  emitBoot(`scene ▸ loaded entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
 
   // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
   // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
@@ -355,7 +355,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     world: world as never,
     app: app as never,
     renderer: renderer as never,
-    bus: bus as never,
+    bus: gateway as never,
     collectEntityHandles: () => collectWorldEntityHandles(),
     resolveGameModule: resolveGameModuleForPlay,
     getSlug: () => getSceneId() ?? '',
@@ -365,7 +365,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     rebindSceneInstance: (newRoot: number) => {
       const bound = rebindLoadedScene(newRoot);
       if (bound !== null) defaultSceneRoot = bound;
-      emitBoot(`scene ▸ restored entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+      emitBoot(`scene ▸ restored entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
     },
     mountUiRoot: () => {
       // Controlled UI root scoped to the viewport panel, NOT document.body. It is
@@ -396,12 +396,12 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // ── Drag-spawn mesh GUID bridge (feat-20260705 M3, plan-strategy §D-3/D-4/D-9) ─
   // Content Browser mesh drops spawn with MeshFilter.assetHandle=0 + a command-
   // level EditorPendingMeshAsset{guid} marker (core/assets/drag-asset-spawn.ts).
-  // This resolver subscribes to the bus, parses the guid, loadByGuid ->
-  // allocSharedRef('MeshAsset') and patches the real handle back over the bus
+  // This resolver subscribes to the gateway, parses the guid, loadByGuid ->
+  // allocSharedRef('MeshAsset') and patches the real handle back over the gateway
   // (AC-10/AC-11). The former post-collapse preload seams (the mesh/material
   // pre-resolve loops + their sync resolvers) are deleted (AC-13) — this is
   // their live successor.
-  installDragSpawnMeshResolver(bus, world as never, renderer);
+  installDragSpawnMeshResolver(gateway, world as never, renderer);
 
   // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
   installMeshStatsPublisher(renderer);
@@ -459,7 +459,7 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
   const activeMeshGuid = (): string | null => {
     const selId = getSelection();
     if (selId !== null) {
-      const mesh = entComponent(bus.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
+      const mesh = entComponent(gateway.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
       if (mesh) {
         const g = typeof mesh.meshAsset === 'string' ? mesh.meshAsset : '';
         return g.length > 0 ? g : null;
@@ -516,7 +516,7 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
   };
   onAssetSelectionChange(() => { void publishForActiveMesh(); });
   onSelectionChange(() => { void publishForActiveMesh(); });
-  bus.subscribe(() => { void publishForActiveMesh(); });
+  gateway.subscribe(() => { void publishForActiveMesh(); });
   void publishForActiveMesh();
 }
 

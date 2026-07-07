@@ -7,9 +7,16 @@
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 12 (store.ts:1276-1306)
+//   plan-strategy §2 D-1: setAssetSelection is a TRANSIENT-domain op — the body
+//     is the applier, registered into transientAppliers; the setter dispatches
+//     (M2 m2-w9). asset-selection belongs to transient (requirements §2 NOTE, q2
+//     human answer). No undo, no ledger.
 //   research F-2: useSyncExternalStore getter+hook kept in one file
-//   requirements AC-09: pure structural migration.
+//   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useSyncExternalStore } from 'react';
+import type { EditorOp } from '../types';
+import { gateway } from './gateway';
+import { transientAppliers } from '../io/appliers';
 
 // ── Asset selection (cross-panel: Content Browser → Material panel) ──────────
 // Lightweight pub/sub for the currently-selected pack asset. When a user clicks
@@ -28,11 +35,20 @@ let selectedAsset: SelectedAsset | null = null;
 const assetSelListeners = new Set<() => void>();
 function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
 
-export function setAssetSelection(asset: SelectedAsset | null): void {
-  if (selectedAsset?.guid === asset?.guid) return;
-  selectedAsset = asset;
-  emitAssetSel();
+// Transient applier (M2 D-1): setAssetSelection body, registered into the
+// transient table. The op payload carries the asset (or null).
+function applySetAssetSelection(op: EditorOp): { ok: true } {
+  const asset = (op as { asset: SelectedAsset | null }).asset;
+  if (selectedAsset?.guid !== asset?.guid) {
+    selectedAsset = asset;
+    emitAssetSel();
+  }
+  return { ok: true };
+}
+transientAppliers.set('setAssetSelection', applySetAssetSelection);
 
+export function setAssetSelection(asset: SelectedAsset | null): void {
+  gateway.dispatch({ kind: 'setAssetSelection', asset });
 }
 export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
 function subscribeAssetSel(fn: () => void): () => void {

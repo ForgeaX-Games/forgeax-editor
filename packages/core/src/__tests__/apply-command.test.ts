@@ -35,7 +35,7 @@ import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
 import { EditorHidden } from '../components/EditorHidden';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ function createSession(): EditSession {
  *  applyCommand sets cmd._id = legacy ID; entHandle(session, legacyId) resolves
  *  the real engine handle from the session's internal map. */
 function spawnEngineHandle(session: EditSession, name: string, parent?: number): { legacyId: number; engineHandle: EntityHandle } {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd failed: ${r.error.hint}`);
   if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
@@ -69,7 +69,7 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 1. spawnEntity ──────────────────────────────────────────────────────────
   it('spawnEntity: world.spawn creates entity with Name', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'MyCube' };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'MyCube' };
     const r = applyCommand(session, cmd);
     expect(r.ok).toBe(true);
     const legacyId = cmd._id!;
@@ -118,7 +118,7 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 5. setComponent ─────────────────────────────────────────────────────────
   it('setComponent: world.set(e, C, patch) partial update', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
     const eH = entHandle(session, cmd._id!)!;
     const r = applyCommand(session, { kind: 'setComponent', entity: cmd._id!, component: 'Transform', patch: { posY: 99 } });
@@ -142,7 +142,7 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 7. removeComponent ──────────────────────────────────────────────────────
   it('removeComponent: world.removeComponent detaches', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
     applyCommand(session, cmd);
     const eH = entHandle(session, cmd._id!)!;
     const r = applyCommand(session, { kind: 'removeComponent', entity: cmd._id!, component: 'MeshFilter' });
@@ -171,7 +171,7 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 9. transaction ──────────────────────────────────────────────────────────
   it('transaction: sub-commands execute atomically', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Temp' };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Temp' };
     applyCommand(session, cmd);
     const eH = entHandle(session, cmd._id!)!;
     const r = applyCommand(session, { kind: 'transaction', label: 'rename twice', commands: [{ kind: 'rename', entity: cmd._id!, name: 'Renamed' }, { kind: 'rename', entity: cmd._id!, name: 'Final' }] });

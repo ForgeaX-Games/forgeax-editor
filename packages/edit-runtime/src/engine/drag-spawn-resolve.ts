@@ -8,13 +8,13 @@
 // reaches the world (spawnComponentData drops unregistered component names,
 // plan-strategy §D-2) — it lives only inside the spawnEntity command.
 //
-// This module subscribes to the EditorBus and, for each spawnEntity command that
+// This module subscribes to the EditGateway and, for each spawnEntity command that
 // carries the marker, resolves the real asset GUID to a mesh handle and patches
 // MeshFilter.assetHandle over the bus:
 //   AssetGuid.parse(guid) -> renderer.assets.loadByGuid -> world.allocSharedRef(
 //   'MeshAsset', payload) -> bus.dispatch(setComponent MeshFilter{assetHandle}, 'ai')
 //
-// WHY over the bus and not world.set directly (plan-strategy §D-4): the EditorBus
+// WHY over the bus and not world.set directly (plan-strategy §D-4): the EditGateway
 // is the single authoritative mutable path — the setComponent goes through the
 // ledger (AI-origin audit) and fires subscribers (viewport repaint). A raw
 // world.set would mutate behind the ledger's back and skip the repaint.
@@ -33,7 +33,7 @@
 // mesh) re-patches from cache without a second loadByGuid.
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { EditorBus, type EditorCommand } from '@forgeax/editor-core';
+import { EditGateway, type EditorOp } from '@forgeax/editor-core';
 
 /** Loose engine handles — the ECS/renderer types evolve independently, so we
  *  mirror host-boot's `as never` discipline with narrow structural shapes. */
@@ -47,7 +47,7 @@ type RendererLike = {
 };
 
 /** Pull the pending-mesh marker guid from a spawnEntity command, or null. */
-function pendingMeshGuid(cmd: EditorCommand | null): string | null {
+function pendingMeshGuid(cmd: EditorOp | null): string | null {
   if (cmd === null || cmd.kind !== 'spawnEntity') return null;
   const marker = cmd.components?.EditorPendingMeshAsset as { guid?: unknown } | undefined;
   const guid = marker?.guid;
@@ -55,10 +55,10 @@ function pendingMeshGuid(cmd: EditorCommand | null): string | null {
 }
 
 /**
- * Subscribe the drag-spawn mesh resolver to the EditorBus. Idempotent per GUID:
+ * Subscribe the drag-spawn mesh resolver to the EditGateway. Idempotent per GUID:
  * failed GUIDs are never retried, resolved GUIDs are re-patched from cache.
  */
-export function installDragSpawnMeshResolver(bus: EditorBus, world: WorldLike, renderer: RendererLike): void {
+export function installDragSpawnMeshResolver(bus: EditGateway, world: WorldLike, renderer: RendererLike): void {
   const failed = new Set<string>();
   const resolved = new Map<string, number>();
 
@@ -70,7 +70,7 @@ export function installDragSpawnMeshResolver(bus: EditorBus, world: WorldLike, r
     const guid = pendingMeshGuid(lastCommand);
     if (guid === null) return;
     // lastCommand is a spawnEntity here; applyCommand fills _id (document.ts).
-    const entity = (lastCommand as Extract<EditorCommand, { kind: 'spawnEntity' }>)._id;
+    const entity = (lastCommand as Extract<EditorOp, { kind: 'spawnEntity' }>)._id;
     if (typeof entity !== 'number') return;
 
     // Retry-storm guard: a GUID that already failed is never re-attempted.

@@ -1,16 +1,16 @@
 // store/ref-request — "pin this entity/component/asset into the ForgeaX chat".
 //
-// State: none — a stateless function cluster that reads bus.doc and posts deixis
+// State: none — a stateless function cluster that reads gateway.doc and posts deixis
 // handles up the VAG postMessage channel (the chat panel lives in the parent
 // interface shell; we are an iframe, so ref state is not owned locally). This is
 // exactly the "human points → AI gets a concrete handle" path.
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 8 (store.ts:227-281)
-//   plan-strategy §2 D-1: cross-module deps are explicit imports (bus,
+//   plan-strategy §2 D-1: cross-module deps are explicit imports (gateway,
 //     entity-state helpers).
 //   requirements AC-09: pure structural migration.
-import { bus } from './bus';
+import { gateway } from './gateway';
 import { entExists, entName, entComponents } from './entity-state';
 import type { EntityId } from '../types';
 import type { AssetChatRef } from '../io/cross-panel-types';
@@ -22,12 +22,12 @@ import type { AssetChatRef } from '../io/cross-panel-types';
 export function requestRefEntity(id: EntityId): void {
   // M7 / AC-15: entity name + component keys read from world (SSOT) via
   // entity-state helpers; doc.entities dual-write mirror deleted.
-  if (!entExists(bus.doc, id)) return;
+  if (!entExists(gateway.doc, id)) return;
   const handle = {
     kind: 'entity' as const,
     id,
-    name: entName(bus.doc, id),
-    components: Object.keys(entComponents(bus.doc, id)),
+    name: entName(gateway.doc, id),
+    components: Object.keys(entComponents(gateway.doc, id)),
   };
   try {
     window.parent?.postMessage({ type: 'VAG_EDITOR_REF', payload: handle }, '*');
@@ -39,10 +39,10 @@ export function requestRefEntity(id: EntityId): void {
 /** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
 export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
   // M7 / AC-15: entity name read from world (SSOT); doc.entities mirror deleted.
-  if (!entExists(bus.doc, entityId)) return;
+  if (!entExists(gateway.doc, entityId)) return;
   try {
     window.parent?.postMessage(
-      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: entName(bus.doc, entityId), comp, value } },
+      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: entName(gateway.doc, entityId), comp, value } },
       '*',
     );
   } catch { /* cross-origin — non-fatal */ }

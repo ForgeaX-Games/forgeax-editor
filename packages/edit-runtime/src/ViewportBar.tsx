@@ -6,14 +6,17 @@
 // in this mode, so Undo/Redo and other controls are surfaced here instead.
 //
 // State:
-//   - Reads the authoritative bus directly (this is the MAIN iframe, not a popout).
+//   - Reads the authoritative gateway directly (this is the MAIN iframe, not a popout).
 //   - canUndo/canRedo toggle button enable/disable in real-time via useDocVersion.
 //   - Gizmo mode reads/writes the store's gizmoMode (same as EditorApp does).
 //   - Save calls saveDocToDisk; keyboard shortcuts are registered here too.
 //   - ▶/■/G + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
 //     received as props from ViewportChrome.
 import { useEffect, useState } from 'react';
-import { bus, saveDocToDisk, useDocVersion, setGizmoMode, useGizmoMode } from '@forgeax/editor-core';
+// M3 (AC-03): gizmo-mode (session op) and save (session op) go through the one
+// gateway door — gateway.dispatch({ kind, … }) — not the direct setGizmoMode /
+// saveDocToDisk setters. (onPlay/onStop are wired to the gateway in m3-w9.)
+import { gateway, useDocVersion, useGizmoMode } from '@forgeax/editor-core';
 import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
@@ -49,18 +52,18 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) {
         const k = e.key.toLowerCase();
-        if (k === 'w') setGizmoMode('translate');
-        else if (k === 'e') setGizmoMode('rotate');
-        else if (k === 'r') setGizmoMode('scale');
+        if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
+        else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
+        else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
         return;
       }
       if (e.key.toLowerCase() === 'z') {
         e.preventDefault();
-        if (e.shiftKey) bus.redo(); else bus.undo();
+        if (e.shiftKey) gateway.redo(); else gateway.undo();
         return;
       }
-      if (e.key.toLowerCase() === 'y') { e.preventDefault(); bus.redo(); }
-      if (e.key.toLowerCase() === 's') { e.preventDefault(); void saveDocToDisk(); }
+      if (e.key.toLowerCase() === 'y') { e.preventDefault(); gateway.redo(); }
+      if (e.key.toLowerCase() === 's') { e.preventDefault(); gateway.dispatch({ kind: 'saveDocToDisk' }); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -86,25 +89,25 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
       <span className="vp-fps" data-testid="vp-fps">{fps} FPS</span>
       <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-undo"
-        disabled={!bus.canUndo()} onClick={() => bus.undo()} title="Undo (⌘Z)">
+        disabled={!gateway.canUndo()} onClick={() => gateway.undo()} title="Undo (⌘Z)">
         ↶
       </button>
       <button type="button" className="vp-btn" data-testid="vp-redo"
-        disabled={!bus.canRedo()} onClick={() => bus.redo()} title="Redo (⌘⇧Z)">
+        disabled={!gateway.canRedo()} onClick={() => gateway.redo()} title="Redo (⌘⇧Z)">
         ↷
       </button>
       <span className="vp-sep" />
       <button type="button" className={`vp-btn${gizmoMode === 'translate' ? ' on' : ''}`}
-        onClick={() => setGizmoMode('translate')} title="Move (W)">⤧</button>
+        onClick={() => gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' })} title="Move (W)">⤧</button>
       <button type="button" className={`vp-btn${gizmoMode === 'rotate' ? ' on' : ''}`}
-        onClick={() => setGizmoMode('rotate')} title="Rotate (E)">⟳</button>
+        onClick={() => gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' })} title="Rotate (E)">⟳</button>
       <button type="button" className={`vp-btn${gizmoMode === 'scale' ? ' on' : ''}`}
-        onClick={() => setGizmoMode('scale')} title="Scale (R)">⤢</button>
+        onClick={() => gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' })} title="Scale (R)">⤢</button>
       <span className="vp-sep" />
       <DirtyIndicator />
       <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-save"
-        onClick={() => void saveDocToDisk()} title="Save scene (⌘S)">
+        onClick={() => gateway.dispatch({ kind: 'saveDocToDisk' })} title="Save scene (⌘S)">
         ⤓
       </button>
       <span className="vp-sep" />

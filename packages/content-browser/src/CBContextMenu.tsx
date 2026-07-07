@@ -1,8 +1,11 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
+// M3 (AC-03): asset assignment (setComponent) and asset-selection (a transient
+// op) go through the one gateway door — gateway.dispatch({ kind, … }) — replacing the
+// direct setAssetSelection setter and the origin-less `dispatch` wrapper.
 import {
-  setAssetSelection, requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
+  requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
-  dispatch, getSelection,
+  gateway, getSelection,
 } from '@forgeax/editor-core';
 
 /** Map an asset kind to the component patch that assigns it onto an entity. */
@@ -104,9 +107,9 @@ export function buildAssetContextMenu(
       // component. Otherwise fall back to publishing the asset selection (so the
       // Inspector / Material panel can pick it up).
       if (sel !== null && mapping) {
-        dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
+        gateway.dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
       } else {
-        setAssetSelection({ guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath });
+        gateway.dispatch({ kind: 'setAssetSelection', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
       }
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },

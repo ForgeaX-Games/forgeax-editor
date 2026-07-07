@@ -212,11 +212,13 @@ describe('AC-01 export-surface snapshot', () => {
     const entries = extractBarrelReExports(program, checker);
 
     // ── Sanity checks ──────────────────────────────────────────────────
-    // Research F-1 established 62 + 2 type + 0 = 62 barrel re-exports.
-    // The plan says use the mechanical count, not a hardcoded number.
-    // But 62 is well-established by research — assert it to guard against
-    // drift.
-    expect(entries.length).toBe(62);
+    // Research F-1 established 62 barrel re-exports pre-M3. M3 (AC-08) SEALED the
+    // 12 op setters (dispatch wrapper + setSelection/setSelectionMany/
+    // toggleSelection/setGizmoMode/setHoverEntity/setFieldPreview/setAssetSelection/
+    // saveDocToDisk/setSceneId/requestFrame/requestRename) off the barrel, so the
+    // published store surface is now 62 − 12 = 50. This count is the machine
+    // witness that the setters left the single-entry surface.
+    expect(entries.length).toBe(50);
 
     // Every entry must be non-empty.
     for (const e of entries) {
