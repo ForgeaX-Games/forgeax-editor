@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
-import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
 import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
-import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-core';
+import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 import type { EditorOp, EntityId } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
@@ -88,6 +87,17 @@ const VEC3_GROUPS: Record<string, [string, string, string]> = {
 // panel and AI bridge) via defaultComponentData().
 const ADDABLE_COMPONENTS: string[] = listComponentSchemas().map((cs) => cs.name);
 
+// Structural/internal components excluded from generic field rendering.
+// These either have dedicated ops (ChildOf→reparent, Name→rename) or are
+// system-internal (Entity). Rendering them as editable inputs is a bypass
+// that breaks ECS invariants (hierarchy-broken error on stale ChildOf).
+const INTERNAL_COMPONENTS: ReadonlySet<string> = new Set([
+  'Entity',
+  'ChildOf',
+  'Children',
+  'Name',
+]);
+
 // Union of a component's schema-declared fields with whatever keys the instance
 // actually carries (schema order first) → the inspector surfaces the FULL
 // component shape (e.g. empty asset slots) even when the data omits them.
@@ -96,18 +106,6 @@ function mergedFieldKeys(comp: string, value: Record<string, unknown>): string[]
   return [...new Set([...schemaKeys, ...Object.keys(value)])];
 }
 
-function descendantsAndSelf(id: EntityId): Set<EntityId> {
-  const out = new Set<EntityId>([id]);
-  const stack = [id];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    for (const c of childrenOf(gateway.doc, cur)) {
-      out.add(c);
-      stack.push(c);
-    }
-  }
-  return out;
-}
 
 // Components present on EVERY selected entity (batch edit operates on these).
 function commonComponents(ids: EntityId[]): string[] {
@@ -190,7 +188,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
         </div>
       )}
       {common.length === 0 && <div className="field muted">{t('editor.inspector.noCommonComponents')}</div>}
-      {common.map((comp) => {
+      {common.filter((comp) => !INTERNAL_COMPONENTS.has(comp)).map((comp) => {
         const value = entComponent(gateway.doc, primary, comp);
         if (typeof value !== 'object' || value === null) return null;
         return (
@@ -300,13 +298,9 @@ export function InspectorPanel() {
       </div>
     );
   }
-  // M7 / AC-15: entity name/parent/components read from world (SSOT) via
-  // entity-state; doc.entities/doc.order/EntityNode.source deleted.
+  // M7 / AC-15: entity name/components read from world (SSOT) via entity-state.
   const nodeName = entName(gateway.doc, sel);
-  const nodeParent = entParent(gateway.doc, sel);
   const nodeComponents = entComponents(gateway.doc, sel);
-  const blocked = descendantsAndSelf(sel);
-  const parentOptions = entIds(gateway.doc).filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
   return (
     <div className="panel" data-testid="panel-inspector">
@@ -346,22 +340,7 @@ export function InspectorPanel() {
         <label>Name</label>
         <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) gateway.dispatch({ kind: 'rename', entity: sel, name }); }} />
       </div>
-      <div className="field">
-        <label>Parent</label>
-        <select
-          data-testid="insp-parent"
-          value={nodeParent ?? ''}
-          onChange={(e) => gateway.dispatch({ kind: 'reparent', entity: sel, parent: e.target.value === '' ? null : Number(e.target.value) })}
-        >
-          <option value="">(root)</option>
-          {parentOptions.map((id) => (
-            <option key={id} value={id}>
-              {entName(gateway.doc, id)} #{id}
-            </option>
-          ))}
-        </select>
-      </div>
-      {Object.entries(nodeComponents).map(([comp, value]) => (
+      {Object.entries(nodeComponents).filter(([comp]) => !INTERNAL_COMPONENTS.has(comp)).map(([comp, value]) => (
         <div key={comp}>
           <div
             className="compname"
