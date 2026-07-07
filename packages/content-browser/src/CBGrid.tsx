@@ -1,15 +1,16 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset } from './types';
+import type { CBViewItem } from './types';
 import type { MultiSelectAPI } from './hooks';
 import { CBAssetItem } from './CBAssetItem';
+import { CBFolderItem } from './CBFolderItem';
 
 interface Props {
-  items: CBAsset[];
+  items: CBViewItem[];
   thumbnailSize: number;
   multiSelect: MultiSelectAPI;
-  onDoubleClick?: (asset: CBAsset) => void;
-  onContextMenu?: (e: React.MouseEvent, asset: CBAsset) => void;
+  onDoubleClick?: (item: CBViewItem) => void;
+  onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
 }
 
 const GAP = 8;
@@ -70,17 +71,30 @@ export function CBGrid({ items, thumbnailSize, multiSelect, onDoubleClick, onCon
                 padding: `0 ${GAP}px`,
               }}
             >
-              {rowItems.map((asset, colIdx) => {
+              {rowItems.map((item, colIdx) => {
                 const flatIndex = baseIndex + colIdx;
+                if (item.type === 'folder') {
+                  return (
+                    <CBFolderItem
+                      key={item.path}
+                      folder={item}
+                      selected={multiSelect.isSelected(item)}
+                      thumbnailSize={thumbnailSize}
+                      onClick={e => multiSelect.handleClick(flatIndex, e)}
+                      onDoubleClick={() => onDoubleClick?.(item)}
+                      onContextMenu={e => onContextMenu?.(e, item)}
+                    />
+                  );
+                }
                 return (
                   <CBAssetItem
-                    key={asset.guid}
-                    asset={asset}
-                    selected={multiSelect.isSelected(asset)}
+                    key={item.guid}
+                    asset={item}
+                    selected={multiSelect.isSelected(item)}
                     thumbnailSize={thumbnailSize}
                     onClick={e => multiSelect.handleClick(flatIndex, e)}
-                    onDoubleClick={() => onDoubleClick?.(asset)}
-                    onContextMenu={e => onContextMenu?.(e, asset)}
+                    onDoubleClick={() => onDoubleClick?.(item)}
+                    onContextMenu={e => onContextMenu?.(e, item)}
                   />
                 );
               })}

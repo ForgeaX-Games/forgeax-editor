@@ -1,13 +1,13 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset } from './types';
+import type { CBAsset, CBViewItem } from './types';
 import type { MultiSelectAPI } from './hooks';
 
 interface Props {
-  items: CBAsset[];
+  items: CBViewItem[];
   multiSelect: MultiSelectAPI;
-  onDoubleClick?: (asset: CBAsset) => void;
-  onContextMenu?: (e: React.MouseEvent, asset: CBAsset) => void;
+  onDoubleClick?: (item: CBViewItem) => void;
+  onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
 }
 
 const KIND_ICONS: Record<string, string> = {
@@ -33,12 +33,13 @@ export function CBList({ items, multiSelect, onDoubleClick, onContextMenu }: Pro
     <div ref={parentRef} className="cb-list-view" style={{ overflow: 'auto', flex: 1 }}>
       <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
         {rowVirtualizer.getVirtualItems().map(virtualRow => {
-          const asset = items[virtualRow.index]!;
-          const selected = multiSelect.isSelected(asset);
+          const item = items[virtualRow.index]!;
+          const selected = multiSelect.isSelected(item);
+          const isFolder = item.type === 'folder';
           return (
             <div
               key={virtualRow.key}
-              className={`cb-list-row${selected ? ' sel' : ''}`}
+              className={`cb-list-row${selected ? ' sel' : ''}${isFolder ? ' cb-list-folder' : ''}`}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -48,13 +49,13 @@ export function CBList({ items, multiSelect, onDoubleClick, onContextMenu }: Pro
                 transform: `translateY(${virtualRow.start}px)`,
               }}
               onClick={e => multiSelect.handleClick(virtualRow.index, e)}
-              onDoubleClick={() => onDoubleClick?.(asset)}
-              onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, asset); }}
+              onDoubleClick={() => onDoubleClick?.(item)}
+              onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, item); }}
             >
-              <span className="cb-list-icon">{KIND_ICONS[asset.kind] ?? '📦'}</span>
-              <span className="cb-list-name">{asset.name}</span>
-              <span className="cb-list-kind">{asset.kind}</span>
-              <span className="cb-list-path">{asset.packPath.replace(/^.*\//, '')}</span>
+              <span className="cb-list-icon">{isFolder ? '📁' : (KIND_ICONS[item.kind] ?? '📦')}</span>
+              <span className="cb-list-name">{item.name}</span>
+              <span className="cb-list-kind">{isFolder ? 'folder' : item.kind}</span>
+              <span className="cb-list-path">{isFolder ? `${item.childCount} item(s)` : item.packPath.replace(/^.*\//, '')}</span>
             </div>
           );
         })}

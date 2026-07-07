@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
-  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-core';
+  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory,
+  ResizeHandle, useLocalSize } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
 import { useFavorites } from './hooks/useFavorites';
-import { buildAssetContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { useAssetGraph } from './hooks/useAssetGraph';
+import { computeDeleteImpact } from './delete-guard';
+import { DeleteGuardDialog } from './DeleteGuardDialog';
+import { buildAssetContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { resolveFolderMenuItems } from './folder-menu';
 import { CBFilterBar } from './CBFilterBar';
 import { CBNavigationBar } from './CBNavigationBar';
 import { CBGrid } from './CBGrid';
@@ -16,18 +21,22 @@ import { CBStatusBar } from './CBStatusBar';
 import { CBToolbar } from './CBToolbar';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
-import type { CBAsset, CBViewMode } from './types';
+import { deriveContentView } from './folder-view';
+import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
 import './content-browser.css';
 
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
 // (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
 // The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
 // reads directly from it via bus.doc.registry.listCatalog().
-// registry entries carry {guid, kind, name?, relativeUrl} — no payload/packPath,
-// so import-mode filtering and payload-derived fields are removed.
+// registry entries carry {guid, kind, name?, relativeUrl, refs?} — no
+// payload/packPath, so import-mode filtering and payload-derived fields are
+// removed. `refs` (forward dependency GUID edges) is surfaced by the engine
+// AssetRegistry.listCatalog() (engine refs-through-listCatalog); it powers the
+// Content Browser's "Add with Dependencies" and dependency-graph features.
 
 function registryEntryToCBAsset(
-  e: { guid: string; kind: string; name?: string; relativeUrl: string },
+  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] },
   index: number,
 ): CBAsset {
   // Use relativeUrl as a proxy for packPath for folder-tree navigation.
@@ -40,7 +49,7 @@ function registryEntryToCBAsset(
     payload: {},
     packPath: e.relativeUrl,
     packIndex: index,
-    refs: [],
+    refs: e.refs ? [...e.refs] : [],
     estimatedSize: 0,
   };
 }
@@ -82,13 +91,35 @@ export function ContentBrowser() {
   // until the game's package.json is read.
   const [assetRoots, setAssetRoots] = useState<string[]>(['assets']);
 
+  // Source-panel width: draggable splitter (UE-parity — widen the tree to read
+  // long folder paths). Persisted per-editor via localStorage.
+  //
+  // Isolation of the two write paths (fixes "drag doesn't resize"): the panel
+  // width is driven by a CSS variable `--cb-src-w` set on the .cb-split PARENT,
+  // NOT by a React-controlled `style={{width}}` on the panel itself. React only
+  // writes the variable on commit (drag end); during a drag we imperatively
+  // update the SAME parent variable via splitRef, so React never controls the
+  // panel's width and can't revert the imperative value when ContentBrowser
+  // re-renders (e.g. from the pack-watcher reload churn). Zero re-render during
+  // drag; CBGrid reflows on its own ResizeObserver. onDragEnd persists once.
+  const [srcWidth, setSrcWidth] = useLocalSize('cb.sourceWidth', 200, 140, 640);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const srcWidthRef = useRef(srcWidth);
+  useEffect(() => { srcWidthRef.current = srcWidth; }, [srcWidth]);
+  const onSplitDrag = useCallback((dx: number) => {
+    const next = Math.min(640, Math.max(140, srcWidthRef.current + dx));
+    srcWidthRef.current = next;
+    splitRef.current?.style.setProperty('--cb-src-w', `${next}px`);
+  }, []);
+  const onSplitDragEnd = useCallback(() => { setSrcWidth(srcWidthRef.current); }, [setSrcWidth]);
+
   const reload = useCallback(() => {
     const slug = getSceneId();
     if (!slug || slug === 'default') return;
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] } | undefined;
+    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
     const entries = registry?.listCatalog?.();
     if (!entries || entries.length === 0) {
       setAllAssets([]);
@@ -173,20 +204,61 @@ export function ContentBrowser() {
     return [...dirs].sort();
   }, [scopedAssets]);
 
-  const assetsInPath = useMemo(() => {
-    if (!nav.currentPath) return scopedAssets.map((s) => s.asset);
-    const p = nav.currentPath;
-    return scopedAssets
-      .filter((s) => s.rel === p || s.rel.startsWith(`${p}/`))
-      .map((s) => s.asset);
-  }, [scopedAssets, nav.currentPath]);
+  // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
+  // directly in it (non-recursive). Folders are derived from the same rels the
+  // source panel uses — no new persisted data format.
+  const { folders: foldersInPath, assets: assetsInPath } = useMemo(
+    () => deriveContentView({
+      scopedAssets,
+      packDirs,
+      currentPath: nav.currentPath,
+      favorites: favorites.favorites,
+    }),
+    [scopedAssets, packDirs, nav.currentPath, favorites.favorites],
+  );
 
+  // Filter + sort apply to assets only; folders always render first (UE-style),
+  // sorted by name (deriveContentView already sorts them).
   const filteredAssets = useMemo(() => filter.applyFilters(assetsInPath), [filter, assetsInPath]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
 
-  const multiSelect = useMultiSelect(sortedAssets);
+  // Single ordered array shared by the view AND multi-select — handleClick
+  // resolves items by flat index, so both must see the same order.
+  const viewItems = useMemo<CBViewItem[]>(
+    () => [...foldersInPath, ...sortedAssets],
+    [foldersInPath, sortedAssets],
+  );
 
-  const handleDoubleClick = useCallback((asset: CBAsset) => {
+  const multiSelect = useMultiSelect(viewItems);
+
+  // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
+  // an asset can be referenced from another root (scenes/, other packs), and the
+  // delete guard (C3) must see those cross-root referencers to warn correctly.
+  const assetGraph = useAssetGraph(allAssets);
+  const nameByGuid = useCallback(
+    (guid: string) => allAssets.find(a => a.guid === guid)?.name ?? `${guid.slice(0, 8)}…`,
+    [allAssets],
+  );
+
+  const [deleteTargets, setDeleteTargets] = useState<CBAsset[] | null>(null);
+  const requestDelete = useCallback((targets: CBAsset[]) => {
+    if (targets.length === 0) return;
+    setDeleteTargets(targets);
+  }, []);
+  const performDelete = useCallback(() => {
+    setDeleteTargets(current => {
+      if (current) {
+        for (const a of current) {
+          void deleteAsset(a.packPath, a.guid).then(ok => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
+        }
+      }
+      return null;
+    });
+  }, [reload]);
+
+  const openAsset = useCallback((asset: CBAsset) => {
     setAssetSelection({
       guid: asset.guid,
       kind: asset.kind,
@@ -203,8 +275,15 @@ export function ContentBrowser() {
     }
   }, []);
 
+  // Double-click: drill into a folder, or open an asset.
+  const handleActivate = useCallback((item: CBViewItem) => {
+    if (item.type === 'folder') { nav.navigate(item.path); return; }
+    openAsset(item);
+  }, [nav, openAsset]);
+
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
+    onDelete: requestDelete,
     onRename: (asset: CBAsset) => {
       const newName = window.prompt('Rename asset:', asset.name);
       if (newName && newName !== asset.name) {
@@ -221,20 +300,37 @@ export function ContentBrowser() {
         if (ok) reload();
       });
     },
-  }), [reload]);
+  }), [reload, requestDelete]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, asset: CBAsset) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
     e.preventDefault();
     e.stopPropagation();
+    const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
+    if (item.type === 'folder') {
+      const folder = item;
+      const assetsInFolder = scopedAssets
+        .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
+        .map(s => s.asset);
+      const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
+      const resolved = resolveFolderMenuItems(menuItems, {
+        onOpen: () => nav.navigate(folder.path),
+        onToggleFavorite: () => favorites.toggleFavorite(folder.path),
+        unsupportedIds: ['rename', 'delete'],
+      });
+      if (resolved.length === 0) return;
+      setTimeout(() => showContextMenu(pos, resolved), 0);
+      return;
+    }
+    const asset = item;
     const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
-    const items = menuItems.filter(m => !m.separator).map(m => ({
+    const resolved = menuItems.filter(m => !m.separator).map(m => ({
       label: m.label,
       onClick: m.action,
       disabled: m.disabled,
     }));
-    if (items.length === 0) return;
-    showContextMenu(e, items);
-  }, [multiSelect.selection, allAssets, crudCallbacks]);
+    if (resolved.length === 0) return;
+    setTimeout(() => showContextMenu(pos, resolved), 0);
+  }, [multiSelect.selection, allAssets, crudCallbacks, scopedAssets, nav, favorites]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
@@ -260,13 +356,7 @@ export function ContentBrowser() {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
         const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
-        const names = targets.map(a => a.name).join(', ');
-        if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
-        for (const a of targets) {
-          void deleteAsset(a.packPath, a.guid).then(ok => {
-            if (ok) { broadcastAssetsChanged(); reload(); }
-          });
-        }
+        requestDelete(targets);
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
@@ -280,7 +370,7 @@ export function ContentBrowser() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [multiSelect, crudCallbacks, reload]);
+  }, [multiSelect, crudCallbacks, reload, requestDelete]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;
@@ -338,15 +428,16 @@ export function ContentBrowser() {
           Open a game to browse assets
         </div>
       ) : (
-        <div className="cb-split">
-          {/* Left: Source panel */}
+        <div className="cb-split" ref={splitRef} style={{ ['--cb-src-w' as string]: `${srcWidth}px` }}>
+          {/* Left: Source panel — width reads the --cb-src-w CSS variable on the
+              parent (set by React on commit, by the drag handle imperatively). */}
           <div className="cb-source-panel">
             {favorites.favorites.length > 0 && (
               <div className="cb-source-section">
                 <div className="cb-source-title">★ Favorites</div>
                 {favorites.favorites.map(path => (
                   <button key={path} className={`cb-source-item${nav.currentPath === path ? ' sel' : ''}`}
-                    onClick={() => nav.navigate(path)}>
+                    onClick={() => nav.navigate(path)} title={path}>
                     {path.split('/').pop() || path}
                   </button>
                 ))}
@@ -361,12 +452,17 @@ export function ContentBrowser() {
               {packDirs.map(dir => (
                 <button key={dir} className={`cb-source-item${nav.currentPath === dir ? ' sel' : ''}`}
                   onClick={() => nav.navigate(dir)}
+                  title={dir}
                   style={{ paddingLeft: `${8 + dir.split('/').length * 8}px` }}>
                   📁 {dir.split('/').pop()}
                 </button>
               ))}
             </div>
           </div>
+
+          {/* Draggable divider (UE-parity): widen the tree to read long paths. */}
+          <ResizeHandle orientation="col" onDrag={onSplitDrag} onDragEnd={onSplitDragEnd}
+            title="拖动调整文件夹栏宽度" />
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick}>
@@ -375,35 +471,35 @@ export function ContentBrowser() {
               thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
             {loading ? (
               <div style={{ padding: 16, opacity: 0.5 }}>Loading assets…</div>
-            ) : sortedAssets.length === 0 ? (
+            ) : viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>
                 {filter.activeFilterCount > 0 || filter.searchQuery ? 'No matching assets' : 'No assets found'}
               </div>
             ) : viewMode === 'grid' ? (
               <CBGrid
-                items={sortedAssets}
+                items={viewItems}
                 thumbnailSize={thumbnailSize}
                 multiSelect={multiSelect}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             ) : viewMode === 'list' ? (
               <CBList
-                items={sortedAssets}
+                items={viewItems}
                 multiSelect={multiSelect}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             ) : (
               <CBColumn
-                items={sortedAssets}
+                items={viewItems}
                 multiSelect={multiSelect}
                 sort={sort}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             )}
-            <CBStatusBar totalItems={sortedAssets.length} selection={multiSelect.selection} />
+            <CBStatusBar totalItems={viewItems.length} selection={multiSelect.selection} />
           </div>
         </div>
       )}
@@ -428,6 +524,16 @@ export function ContentBrowser() {
         <div className="cb-drag-overlay">
           <div className="cb-drag-overlay-label">Drop files to import</div>
         </div>
+      )}
+
+      {deleteTargets && (
+        <DeleteGuardDialog
+          targets={deleteTargets}
+          impact={computeDeleteImpact(deleteTargets.map(t => t.guid), assetGraph)}
+          nameByGuid={nameByGuid}
+          onConfirm={performDelete}
+          onCancel={() => setDeleteTargets(null)}
+        />
       )}
     </div>
   );
