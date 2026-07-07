@@ -35,7 +35,10 @@ import type { EditorOp, EditSession, CommandError } from '../types';
 // Session-op appliers register as a side effect when their store module is
 // evaluated (the barrel loads all of them in the app). A unit test that
 // dispatches a session kind must import the owning module so registration runs.
-import { setSelectionMany } from '../store/selection';
+// M3 t22: the write-side setter sugar was deleted (S10) — dispatch through the
+// singleton gateway door directly; the side-effect import keeps registration.
+import '../store/selection';
+import { gateway } from '../store/gateway';
 
 function createSession(): EditSession {
   const s = createEditSession();
@@ -101,7 +104,7 @@ describe('AC-01 dual-path isomorphism — document domain (m3-w1)', () => {
 });
 
 describe('AC-01 dual-path isomorphism — session domain (m3-w1)', () => {
-  beforeEach(() => { setSelectionMany([]); });
+  beforeEach(() => { gateway.dispatch({ kind: 'setSelectionMany', ids: [] } as EditorOp); });
 
   it('(a)+(b) same session op dispatched human vs ai → ledger entry isomorphic modulo origin, undo unchanged', () => {
     const gwHuman = new EditGateway(createSession());

@@ -59,9 +59,9 @@ function spawnNative(
   const cmd: EditorOp = { kind: 'spawnEntity', name, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd ${name} failed: ${r.error.hint}`);
-  if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, cmd._id);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${cmd._id}`);
+  if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
+  const engineHandle = entHandle(session, (cmd as any)._id);
+  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${(cmd as any)._id}`);
   return engineHandle;
 }
 

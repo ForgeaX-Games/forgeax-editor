@@ -35,9 +35,9 @@ function spawnCmd(session: EditSession, name: string, parentLegacyId?: number): 
   const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
-  const engineHandle = entHandle(session, cmd._id!);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for ${cmd._id}`);
-  return { legacyId: cmd._id!, engineHandle };
+  const engineHandle = entHandle(session, (cmd as any)._id!);
+  if (engineHandle === undefined) throw new Error(`no engineHandle for ${(cmd as any)._id}`);
+  return { legacyId: (cmd as any)._id!, engineHandle };
 }
 
 describe('inverse commands (GREEN)', () => {
@@ -78,9 +78,9 @@ describe('inverse commands (GREEN)', () => {
 
     // Verify the inverse spawns entities with the right names
     if (inverse.kind === 'transaction') {
-      for (const sub of inverse.commands) {
+      for (const sub of (inverse as any).commands) {
         if (sub.kind === 'spawnEntity') {
-          const spawnedId = sub._id!;
+          const spawnedId = (sub as any)._id! as number;
           const handle = entHandle(session, spawnedId);
           expect(handle).toBeDefined();
           if (handle !== undefined) {
@@ -97,9 +97,9 @@ describe('inverse commands (GREEN)', () => {
     const session = createSession();
     const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, cmd._id!)!;
+    const eH = entHandle(session, (cmd as any)._id!)!;
 
-    const r = applyCommand(session, { kind: 'setComponent', entity: cmd._id!, component: 'Transform', patch: { posY: 99 } });
+    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
     expect(t.ok).toBe(true);

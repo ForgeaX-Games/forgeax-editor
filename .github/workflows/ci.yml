@@ -257,10 +257,12 @@ jobs:
       - name: Install (bun, no scripts)
         run: bun install --ignore-scripts
 
-      # Structural gates: sync-channel drift, DIP api-seam, and the engine-shim
+      # Structural gates: sync-channel drift, DIP api-seam, the engine-shim
       # guard (no bodyless `declare module '@forgeax/engine-*'` that would blind
-      # tsc to bad engine imports).
-      - name: Lint (sync-channel + api-seam + engine-shim)
+      # tsc to bad engine imports), the op-via-gateway seam (Gate B), and the
+      # editor-trace-ioc Gate A (lint-unique-mutator: raw world writes only in
+      # the EngineFacade) + setter-sugar recurrence gate (lint-no-store-setter-sugar).
+      - name: Lint (sync-channel + api-seam + engine-shim + gateway seams)
         run: bun run lint
 
       # DAG boundary gate (dependency-cruiser): core ← shared ← panels ← runtime.

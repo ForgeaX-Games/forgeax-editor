@@ -32,7 +32,6 @@
 import { useSyncExternalStore } from 'react';
 import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
-import { setSelectionMany } from './selection';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import { getInternals } from '../session/edit-session';
@@ -95,9 +94,9 @@ function applySetSceneId(op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('setSceneId', applySetSceneId);
 
-export function setSceneId(id: string | null | undefined): void {
-  gateway.dispatch({ kind: 'setSceneId', id });
-}
+// M3 t22 (S10 / AC-21/22): setSceneId write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'setSceneId', id }) directly. Read-side
+// (getSceneId) stays.
 export function getSceneId(): string { return currentSceneId; }
 
 // ── Multi-scene (level) files per game ────────────────────────────────────────
@@ -1135,7 +1134,9 @@ export function replaceDoc(doc: EditSession): void {
   // {world, registry} so downstream `gateway.doc.asset` reads stay live (w34); it's
   // idempotent on an already-live locally-built session.
   gateway.replaceDoc(reviveSession(doc));
-  setSelectionMany([]);
+  // M3 t22: clear selection through the one gateway door (setSelectionMany sugar
+  // was deleted — S10 / AC-21/22).
+  gateway.dispatch({ kind: 'setSelectionMany', ids: [] });
   notifyDocChanged();
 }
 

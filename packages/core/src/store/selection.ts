@@ -4,21 +4,19 @@
 // plus its listener set and the DEV runaway-propagation net. Consumers: panels
 // (via useSelection/useSelectionList), the viewport gizmo (onSelectionChange),
 // and scene-persistence's replaceDoc (which clears selection on a doc swap via
-// the public setSelectionMany([]) — so `selectionList`/`emitSelection` stay
-// private to this module, NOT exported as internal seams).
+// gateway.dispatch({ kind: 'setSelectionMany', ids: [] }) — so
+// `selectionList`/`emitSelection` stay private to this module).
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 2 (store.ts:53-145)
 //   plan-strategy §2 D-1: setSelection/toggleSelection/setSelectionMany are
 //     SESSION-domain ops — the setter bodies are the appliers, registered into
-//     sessionAppliers; the public setters now dispatch through the gateway (M2
-//     m2-w6). Setters stay exported (UI still calls them directly); M3 seals them
-//     private. "Change the door, not the body" (spec §11.3).
+//     sessionAppliers. M3 t22 (S10 / AC-21/22) DELETED the write-side sugar
+//     exports; callers dispatch through the one gateway door directly.
 //   research F-2: useSyncExternalStore getter+hook kept in one file
 //   requirements AC-02/AC-09: session op → ledger only, AI-dispatchable.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp, EntityId } from '../types';
-import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 
 // Selection is a list
@@ -92,18 +90,13 @@ sessionAppliers.set('setSelection', applySetSelection);
 sessionAppliers.set('toggleSelection', applyToggleSelection);
 sessionAppliers.set('setSelectionMany', applySetSelectionMany);
 
-export function setSelection(id: EntityId | null): void {
-  gateway.dispatch({ kind: 'setSelection', id });
-}
-
-/** Shift/Ctrl-click semantics: toggle membership, keep last-clicked as primary. */
-export function toggleSelection(id: EntityId): void {
-  gateway.dispatch({ kind: 'toggleSelection', id });
-}
-
-export function setSelectionMany(ids: EntityId[]): void {
-  gateway.dispatch({ kind: 'setSelectionMany', ids });
-}
+// M3 t22 (S10 / AC-21/22): the write-side sugar setters
+// setSelection/toggleSelection/setSelectionMany were dispatch-only zombie
+// exports (research F-7). Deleted — callers dispatch through the one gateway
+// door directly: gateway.dispatch({ kind: 'setSelection', id }). Read-side
+// pub/sub (getSelection / getSelectionList / onSelectionChange / useSelection)
+// is orthogonal and stays. The session appliers above remain the mutation
+// bodies (registered into sessionAppliers).
 
 function subscribeSelection(fn: () => void): () => void {
   selectionListeners.add(fn);

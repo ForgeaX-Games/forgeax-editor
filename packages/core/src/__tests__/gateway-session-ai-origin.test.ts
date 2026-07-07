@@ -21,10 +21,11 @@ import { World } from '@forgeax/engine-ecs';
 import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
-import { setSelectionMany } from '../store/selection';
 // Session-op appliers register as a side effect when their store module is
 // evaluated (in the app the barrel loads all of them). A unit test that
 // dispatches these kinds must import the owning modules so registration runs.
+// M3 t22: write-side setter sugar deleted (S10) — reset via gw.dispatch.
+import '../store/selection';
 import '../store/gizmo-mode';
 import '../store/frame-request';
 import '../store/rename-request';
@@ -51,7 +52,7 @@ const SESSION_OPS: EditorOp[] = [
 
 describe('session ops origin=ai — full matrix (m2-w5)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setSelectionMany([]); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setSelectionMany', ids: [] } as EditorOp); });
 
   for (const op of SESSION_OPS) {
     it(`${op.kind}: origin=ai → effect + ledger(origin=ai) + undo unchanged`, () => {

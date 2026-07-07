@@ -21,5 +21,13 @@
   // the discoverer test (discoverer.test.ts) to prove error handling — it must
   // never be typechecked (it would trip TS1005). Everything else under
   // __tests__/ is typechecked normally.
-  "exclude": ["src/__tests__/fixtures/discoverer/broken-syntax.ts"]
+  //
+  // ctx-world-negative.ts is an INTENTIONALLY type-erroneous fixture (AC-01
+  // tsc-negative guard, F-3): it reaches `ctx.world` to prove DocApplierCtx has
+  // no world field. It must NOT trip the normal gate — ctx-world-negative.test.ts
+  // compiles it on demand via tsconfig.ctx-negative.json and asserts the error.
+  "exclude": [
+    "src/__tests__/fixtures/discoverer/broken-syntax.ts",
+    "src/__tests__/fixtures/ctx-world-negative.ts"
+  ]
 }

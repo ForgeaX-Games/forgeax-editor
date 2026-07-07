@@ -35,8 +35,10 @@ import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { entHandle } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
-import { getSelection, setSelectionMany } from '../store/selection';
-import { getHoverEntity, setHoverEntity } from '../store/hover';
+// M3 t22: write-side setter sugar deleted (S10) — reset via gw.dispatch; the
+// imports keep the session/transient appliers registered.
+import { getSelection } from '../store/selection';
+import { getHoverEntity } from '../store/hover';
 import { createEditSession } from '../session/document';
 
 function createSession(): EditSession {
@@ -49,7 +51,7 @@ function spawn(gw: EditGateway, name: string): number {
   const cmd: EditorOp = { kind: 'spawnEntity', name, components: { Transform: { posX: 0, posY: 0, posZ: 0 } } };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error('spawn failed');
-  return cmd._id!;
+  return (cmd as any)._id!;
 }
 
 function readPosX(gw: EditGateway, entity: number): number {
@@ -93,7 +95,7 @@ describe('transientMode matrix — document domain (m2-w4)', () => {
 
 describe('transientMode matrix — session domain (m2-w4)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setSelectionMany([]); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setSelectionMany', ids: [] } as EditorOp); });
 
   it('off: session op -> ledger only', () => {
     const undoBefore = gw.appliedCount();
@@ -117,7 +119,7 @@ describe('transientMode matrix — session domain (m2-w4)', () => {
 
 describe('transientMode matrix — transient domain (m2-w4)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setHoverEntity(null); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setHoverEntity', id: null } as EditorOp); });
 
   it('off: transient op -> neither undo nor ledger', () => {
     const undoBefore = gw.appliedCount();

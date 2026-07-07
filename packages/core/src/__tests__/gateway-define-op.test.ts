@@ -35,7 +35,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
   };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error('spawn failed');
-  return cmd._id!;
+  return (cmd as any)._id!;
 }
 
 function readPosY(gw: EditGateway, entity: number): number {
@@ -228,5 +228,116 @@ describe('defineOp AI-origin (m4-w2, RED)', () => {
     // Verify ledger recorded with origin='ai'
     expect(gw.origins.length).toBeGreaterThan(0);
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
+  });
+});
+
+// ── t29a RED: defineOp session domain (AC-17) ──
+// RED phase: defineOp currently hard-rejects domain !== 'document'.
+// These tests assert the GREEN behavior: session defineOp succeeds and
+// dispatching it runs the plan, pushes to ledger, not to undo.
+// They WILL FAIL until t28 implements session domain support.
+
+describe('defineOp session domain (t29a RED, AC-17)', () => {
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+    spawnEntity(gw, 'light-A');
+    spawnEntity(gw, 'light-B');
+  });
+
+  it('session defineOp succeeds and dispatch runs plan (RED)', () => {
+    const defR = gw.defineOp({
+      id: 'selectLightsSession',
+      domain: 'session' as any,
+      argsSchema: null,
+      plan: (_query: any, _args: any) => {
+        return [{ kind: 'setSelectionMany', ids: [] }];
+      },
+    });
+    // RED: currently returns {ok:false, error:{code:'INVALID_ARGS'}}
+    // GREEN: returns {ok:true} — t28 makes this pass
+    expect(defR.ok).toBe(true);
+    if (!defR.ok) return;
+
+    // Dispatch the session op
+    const ledgerBefore = gw.ledger.length;
+    const undoBefore = gw.appliedCount();
+    const dispR = gw.dispatch({ kind: 'selectLightsSession' } as any, 'ai');
+    // RED: dispatch fails (the applier didn't get registered because defineOp failed)
+    expect(dispR.ok).toBe(true);
+    // GREEN: ledger +1, undo unchanged
+    if (dispR.ok) {
+      expect(gw.ledger.length).toBe(ledgerBefore + 1);
+      expect(gw.appliedCount()).toBe(undoBefore);
+    }
+  });
+
+  it('defineOp with domain=transient still returns INVALID_ARGS (OOS-6)', () => {
+    const r = gw.defineOp({
+      id: 'testTransient',
+      domain: 'transient' as any,
+      argsSchema: null,
+      plan: (_query: any, _args: any) => [],
+    });
+    // Transient domain must STAY rejected (OOS-6) — this test stays GREEN
+    expect(r.ok).toBe(false);
+  });
+});
+
+// ── t29b: session defineOp edge cases (mid-failure, empty plan) ──
+
+describe('session defineOp edge cases (t29b, AC-18)', () => {
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+    spawnEntity(gw, 'entity-A');
+    spawnEntity(gw, 'entity-B');
+  });
+
+  it('empty plan returns ok with no ledger entries', () => {
+    const defR = gw.defineOp({
+      id: 'emptyPlanOp',
+      domain: 'session' as any,
+      argsSchema: null,
+      plan: (_query: any, _args: any) => [],
+    });
+    expect(defR.ok).toBe(true);
+    if (!defR.ok) return;
+
+    const ledgerBefore = gw.ledger.length;
+    const dispR = gw.dispatch({ kind: 'emptyPlanOp' } as any, 'ai');
+    expect(dispR.ok).toBe(true);
+    expect(gw.ledger.length).toBe(ledgerBefore);
+  });
+
+  it('partial failure: first op succeeds, second fails, ledger has first only', () => {
+    const defR = gw.defineOp({
+      id: 'partialFailOp',
+      domain: 'session' as any,
+      argsSchema: null,
+      plan: (_query: any, _args: any) => {
+        return [
+          { kind: 'setSelectionMany', ids: [] }, // valid session op
+          { kind: 'nonExistentKindXyz', ids: [] }, // will fail
+        ];
+      },
+    });
+    expect(defR.ok).toBe(true);
+    if (!defR.ok) return;
+
+    const ledgerBefore = gw.ledger.length;
+    const dispR = gw.dispatch({ kind: 'partialFailOp' } as any, 'ai');
+    // Should fail with PLAN_STEP_FAILED
+    expect(dispR.ok).toBe(false);
+    if (!dispR.ok) {
+      expect(dispR.error.code).toBe('PLAN_STEP_FAILED');
+      expect(dispR.error.hint).toContain('nonExistentKindXyz');
+      expect(dispR.error.hint).toContain('#2');
+    }
+    // First sub-op should be in ledger
+    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.ledger[gw.ledger.length - 1]!.kind).toBe('setSelectionMany');
   });
 });

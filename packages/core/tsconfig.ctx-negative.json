@@ -1,0 +1,13 @@
+{
+  // Dedicated config for the AC-01 tsc-negative guard (F-3). Compiles ONLY the
+  // intentionally-erroneous fixture (ctx-world-negative.ts) so the test can prove
+  // `ctx.world` is a real tsc error. NOT part of `bun run typecheck` — the normal
+  // core tsconfig excludes the fixture; this config is invoked on demand by
+  // ctx-world-negative.test.ts via `tsc -p`.
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/__tests__/fixtures/ctx-world-negative.ts",
+    "../../types/forgeax-engine-shims.d.ts"
+  ],
+  "exclude": []
+}

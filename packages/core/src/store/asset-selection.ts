@@ -15,7 +15,6 @@
 //   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { gateway } from './gateway';
 import { transientAppliers } from '../io/appliers';
 
 // ── Asset selection (cross-panel: Content Browser → Material panel) ──────────
@@ -47,9 +46,9 @@ function applySetAssetSelection(op: EditorOp): { ok: true } {
 }
 transientAppliers.set('setAssetSelection', applySetAssetSelection);
 
-export function setAssetSelection(asset: SelectedAsset | null): void {
-  gateway.dispatch({ kind: 'setAssetSelection', asset });
-}
+// M3 t22 (S10 / AC-21/22): setAssetSelection write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'setAssetSelection', asset }) directly.
+// Read-side (getAssetSelection / useAssetSelection / onAssetSelectionChange) stays.
 export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
 function subscribeAssetSel(fn: () => void): () => void {
   assetSelListeners.add(fn);

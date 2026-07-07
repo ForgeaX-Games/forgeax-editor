@@ -60,8 +60,9 @@ function presetSpawn(
   const cmd: EditorOp = { kind: 'spawnEntity', name: preset.label, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`preset spawn ${presetLabel} failed: ${r.error.hint}`);
-  if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, cmd._id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
+  const engineHandle = entHandle(session, (cmd as any)._id);
   if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${cmd._id}`);
   return engineHandle;
 }
@@ -146,8 +147,8 @@ describe('preset — Point Light', () => {
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const pl = s.world.get(eH, PointLight);
     expect(pl.ok).toBe(true);
@@ -172,8 +173,8 @@ describe('preset — Spot Light', () => {
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const sl = s.world.get(eH, SpotLight);
     expect(sl.ok).toBe(true);
@@ -198,8 +199,8 @@ describe('preset — Directional Light', () => {
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const dl = s.world.get(eH, DirectionalLight);
     expect(dl.ok).toBe(true);

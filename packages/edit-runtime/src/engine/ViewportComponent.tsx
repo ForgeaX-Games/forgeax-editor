@@ -58,6 +58,7 @@ import {
   switchSceneFile,
   broadcastAssetsChanged,
   registerSessionApplier,
+  createEvalChannel,
 } from '@forgeax/editor-core';
 import { injectEditMode } from '@forgeax/editor-core';
 import { createViewport, type Viewport } from './viewport';
@@ -340,17 +341,23 @@ async function bootViewport(
   resizeObserver.observe(container);
   registerTeardown(() => resizeObserver.disconnect());
 
-  // editor orbit camera (was :531). Not part of the authored doc.
+  // editor orbit camera (was :531). Not part of the authored doc. M3 t21 (S4 /
+  // AC-04): the boot camera spawn is view scaffolding — it goes through the
+  // core-minted EngineFacade (the write gate), not the raw world. gateway.doc.world
+  // was injected just above, so engineFacade() binds to the live world.
   const aspect = canvas.width / canvas.height || 1;
-  const cameraEntity = world.spawn(
+  const cameraEntity = gateway.engineFacade().spawn(
     { component: Transform, data: { posY: 1.5, posZ: 9 } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
 
   // viewport interaction: orbit/pan/zoom, click-to-select, drag-to-move (was :591).
+  // M3 t16 (S4 / AC-05): the viewport receives the core-minted EngineFacade (the
+  // sole controlled write proxy), NOT the raw world. gateway.doc.world was
+  // injected just above, so engineFacade() binds to the live world.
   const viewport = createViewport({
-    canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity,
+    canvas, engine: gateway.engineFacade(), assets: renderer.assets as never, camera: cameraEntity,
     getInputTarget,
   });
   // Wire viewport.refresh() into the container ResizeObserver created above so
@@ -358,6 +365,21 @@ async function bootViewport(
   // container resize (dock-panel drags + window resizes).
   onContainerResize = () => viewport.refresh();
   registerTeardown(() => { try { viewport.dispose(); } catch { /* already disposed */ } });
+
+  // M5 t32 (plan-strategy §2 D-4 Q-5): mount eval channel on globalThis in DEV
+  // builds only. AI CLI accesses it via playwright page.evaluate — zero new
+  // network surface (OOS-9). Production builds do NOT get this hook — the AI
+  // eval channel is dev-only (AC-02 scope② production lock).
+  // D-4: the host (edit-runtime) injects rawScope ONLY in DEV so unlockRawScope()
+  // can grant scope② raw engine access here; production omits rawScope entirely
+  // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
+  // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
+  if (import.meta.env.DEV) {
+    const channel = createEvalChannel(gateway, {
+      rawScope: { world, renderer, assets: renderer.assets },
+    });
+    (globalThis as Record<string, unknown>).__forgeaxEval = channel;
+  }
 
   // possess-exit key (was :617). Esc / G un-possesses play·game -> play·scene.
   function onPossessKey(e: KeyboardEvent): void {

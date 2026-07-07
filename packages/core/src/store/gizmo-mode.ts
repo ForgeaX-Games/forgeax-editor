@@ -11,7 +11,6 @@
 //   requirements AC-02/AC-09: session op → ledger only, AI-dispatchable.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 
 // ── gizmo mode (translate / rotate / scale) — shared by the toolbar + viewport ─
@@ -31,9 +30,9 @@ function applySetGizmoMode(op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('setGizmoMode', applySetGizmoMode);
 
-export function setGizmoMode(m: GizmoMode): void {
-  gateway.dispatch({ kind: 'setGizmoMode', mode: m });
-}
+// M3 t22 (S10 / AC-21/22): setGizmoMode write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'setGizmoMode', mode }) directly. Read-side
+// (getGizmoMode / onGizmoModeChange / useGizmoMode) stays.
 export function onGizmoModeChange(fn: () => void): () => void {
   gizmoListeners.add(fn);
   return () => gizmoListeners.delete(fn);

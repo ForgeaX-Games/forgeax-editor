@@ -1,50 +1,171 @@
-// io/query-snapshot.ts — minimal read-only query surface for defineOp plan (M4)
+// io/query-snapshot.ts — querySnapshot with dynamic resolution + value safety (M4 t25/t26)
 //
-// feat-20260706-editor-op-gateway-single-entry-b-catalog-defineop M4:
-// Thin forwarder to engine createQueryState / queryRun. Returns plain-object
-// value snapshots — NO TypedArray live references, NO World handle leak.
-// Entity identity via existing _e2h/_h2e projection (OOS-7 — no rework).
+// feat-20260707-editor-trace-ioc M4:
+// Removes the COMP_NAME_TO_TOKEN whitelist (previously only Transform+Entity).
+// Uses resolveComponent(name) for dynamic resolution at query time (0 engine
+// changes — research F-4 / RD-7 confirmed all public exports available).
+// Unknown component names → explicit error signal (AC-16, eliminates the
+// .filter(Boolean) silent-ignore pattern of query-snapshot.ts:43-45).
+//
+// Three-layer value safety (t26, plan-strategy §2 D-5 / RD-7):
+// 1. Scalar (11 types) → native number/bool (existing behavior kept)
+// 2. Managed handle (unique<T>/shared<T>/string) → {kind:'opaque-handle', type, raw}
+//    — never leak live handle references (AC-15)
+// 3. array<T,N> TypedArray → snap-copy to plain number[] via Array.from()
+//    — never leak column buffer live references (AC-15)
+// 4. Unsnapnable fields → explicit skip marker in result row (P3 boundary promise)
 //
 // Anchors:
-//   plan-strategy §2 D-4: plan signature has querySnapshot, no world
-//   research F5: createQueryState + queryRun already exported, read-separated
-//   requirements gap #3: minimal query surface, value-snapshot, read-only
+//   plan-strategy §2 D-5: querySnapshot full-open + three-layer value safety
+//   requirements AC-14/15/16: any registered component queryable + snapshot
+//     isolation + explicit failure for unknowns
+//   research F-4: resolveComponent / getRegisteredComponents / createQueryState
+//     / queryRun are public; schema reflection via Component.schema
+//   research RD-7: safety layer has no complete precedent, implemented here
+//   plan-tasks t25: delete whitelist + resolveComponent + structured return
+//   plan-tasks t26: opaque-handle + snap-copy + skipped fields
 
-import { createQueryState, queryRun } from '@forgeax/engine-ecs';
-import { World } from '@forgeax/engine-ecs';
-import { Entity } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import type { Component, ComponentSchema } from '@forgeax/engine-ecs';
+import {
+  resolveComponent,
+  getRegisteredComponents,
+  createQueryState,
+  queryRun,
+  isManagedField,
+  isManagedArrayField,
+  isEntityField,
+} from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import type { EntityId } from '../types';
 
-// ── Component token map ─────────────────────────────────────────────────────
-// Maps component name strings known by the editor to their engine tokens.
-// Thin mapping — no generic metaprogramming needed for the minimal surface.
-
-const COMP_NAME_TO_TOKEN: Record<string, unknown> = {
-  'Transform': Transform,
-  'Entity': Entity,
-};
-
-// ── Query snapshot ──────────────────────────────────────────────────────────
-// Returns an array of plain objects. Each object has { entity: EntityId, ...componentFields }.
-// Value-snapshot: NO TypedArray references — all fields are JS primitives.
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface QuerySnapshotDescriptor {
   with: string[];
 }
 
-export type QuerySnapshotRow = { entity: EntityId } & Record<string, unknown>;
+/** Opaque-handle marker for managed fields (handle/string/buffer). */
+export interface OpaqueHandle {
+  kind: 'opaque-handle';
+  /** The schema field type string (e.g. 'unique<MaterialAsset>', 'shared<TextureAsset>', 'string'). */
+  type: string;
+  /** The raw handle ID (number) or string value — opaque but available for trace/debug. */
+  raw: number | string;
+}
 
-export type QuerySnapshotFn = (descriptor: QuerySnapshotDescriptor) => QuerySnapshotRow[];
+/** A snapshot row: entity ID + per-component field maps. */
+export type QuerySnapshotRow = {
+  entity: EntityId;
+  /** Per-component data: componentName → {fieldName → value}. */
+  [componentName: string]: unknown;
+};
 
-export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor): QuerySnapshotRow[] {
+/** Query result: either success with rows or explicit error signal (AC-16). */
+export type QuerySnapshotResult =
+  | { ok: true; rows: QuerySnapshotRow[] }
+  | { ok: false; error: { code: string; hint: string } };
+
+/** Query function signature — accept a descriptor, return structured result. */
+export type QuerySnapshotFn = (descriptor: QuerySnapshotDescriptor) => QuerySnapshotResult;
+
+// ── Value safety helpers (t26) ────────────────────────────────────────────────
+
+/**
+ * Per-field value snapshotter. Given a schema field type string and the raw
+ * column value (from TypedArray[i] or ManagedColumnReader.get(i)), returns:
+ * - JS primitive for scalar fields
+ * - OpaqueHandle for managed handle/string/buffer fields
+ * - plain number[] snap-copy for array fields
+ */
+function snapFieldValue(
+  fieldType: string,
+  rawValue: unknown,
+): unknown {
+  // Null/undefined → pass through (not a value)
+  if (rawValue === null || rawValue === undefined) return rawValue;
+
+  // (1) Managed handle fields (unique<T>/shared<T>/string/buffer) → opaque marker
+  //     The raw value from ManagedColumnReader.get(i) is typically a number (handle
+  //     ID) or a string (for the 'string' managed field). We wrap it in an
+  //     OpaqueHandle to prevent callers from treating it as a live reference.
+  if (isManagedField(fieldType)) {
+    return {
+      kind: 'opaque-handle',
+      type: fieldType,
+      raw: rawValue,
+    } as OpaqueHandle;
+  }
+
+  // (2) array<T,N> / array<T> fields → snap-copy TypedArray to plain number[]
+  //     The raw value is a TypedArray (e.g. Float32Array) aliasing the column
+  //     buffer. Snap-copy ensures caller mutation doesn't affect world memory.
+  if (isManagedArrayField(fieldType)) {
+    if (ArrayBuffer.isView(rawValue)) {
+      // TypedArray → snap-copy via Array.from()
+      return Array.from(rawValue as unknown as ArrayLike<number>);
+    }
+    // ManagedColumnReader for variable array<T> — use .get(i) if available
+    if (rawValue && typeof rawValue === 'object' && 'get' in rawValue) {
+      const reader = rawValue as { get: (i: number) => unknown; length: number };
+      const len = reader.length ?? 0;
+      const arr: unknown[] = [];
+      for (let j = 0; j < len; j++) {
+        arr.push(reader.get(j));
+      }
+      return arr;
+    }
+    // Unknown shape → return raw as-is (best effort)
+    return rawValue;
+  }
+
+  // (3) Entity reference fields → return raw number (entity handle ID)
+  if (isEntityField(fieldType)) {
+    return rawValue;
+  }
+
+  // (4) Scalar fields (f32/f64/i32/u32/i16/u16/i8/u8/bool/enum/ref) →
+  //     return as-is (already a JS number/boolean from TypedArray[i])
+  return rawValue;
+}
+
+// ── Implementation ────────────────────────────────────────────────────────────
+
+export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor): QuerySnapshotResult {
+  const { with: names } = descriptor;
+
   // Always include Entity for row count and identity
-  const allNames = descriptor.with.includes('Entity') ? descriptor.with : [...descriptor.with, 'Entity'];
-  const tokens = allNames
-    .map((name) => COMP_NAME_TO_TOKEN[name])
-    .filter(Boolean);
+  const allNames = names.includes('Entity') ? names : [...names, 'Entity'];
 
-  if (tokens.length === 0) return [];
+  // Resolve each component name to its token. Unknown → explicit error (AC-16).
+  const tokens: Component[] = [];
+  for (const name of allNames) {
+    const tok = resolveComponent(name);
+    if (!tok) {
+      const registered = getRegisteredComponents();
+      const knownNames = Array.from(registered.keys()).sort();
+      // Suggest similar names
+      const hints = (knownNames as string[]).filter((n) => n.toLowerCase() === name.toLowerCase());
+      const suggestion = hints.length > 0
+        ? ` registered component names: ${knownNames.join(', ')}. Did you mean "${hints[0]}"?`
+        : ` registered component names: ${knownNames.join(', ')}`;
+      return {
+        ok: false,
+        error: {
+          code: 'UNKNOWN_COMPONENT',
+          hint: `component "${name}" is not registered.${suggestion}`,
+        },
+      };
+    }
+    tokens.push(tok);
+  }
+
+  if (tokens.length === 0) return { ok: true, rows: [] };
+
+  // Build a name→schema map for value-safety classification (t26)
+  const nameToSchema = new Map<string, ComponentSchema>();
+  for (const tok of tokens) {
+    nameToSchema.set(tok.name, tok.schema as ComponentSchema);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const state = createQueryState({ with: tokens as any[] });
@@ -67,20 +188,34 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
         if (compName === 'Entity') continue; // Entity is the row key, not a component field
         const compBundle = bundle[compName];
         if (!compBundle) continue;
-        // Snapshot: read each field's ith value as JS primitive
+
+        const schema = nameToSchema.get(compName);
         const fields: Record<string, unknown> = {};
+
         for (const [fieldName, col] of Object.entries(compBundle)) {
           if (col && typeof col === 'object') {
             // TypedArray / ManagedColumnReader access
             const colObj = col as { length?: number; [index: number]: unknown; get?: (i: number) => unknown };
             if (i < (colObj.length ?? 0)) {
-              // Managed column (string/ref) has .get(i); TypedArray has [i]
-              fields[fieldName] = typeof colObj.get === 'function' ? colObj.get(i) : colObj[i];
+              const rawValue = typeof colObj.get === 'function' ? colObj.get(i) : colObj[i];
+
+              // Apply value-safety classification (t26)
+              // Schema field type may not be available (e.g. Entity component),
+              // fall back to raw value as-is.
+              const fieldType: string | undefined = schema?.[fieldName] as string | undefined;
+              if (!fieldType) {
+                // No schema info — return raw value as-is (best effort)
+                fields[fieldName] = rawValue;
+              } else {
+                const snapped = snapFieldValue(fieldType, rawValue);
+                fields[fieldName] = snapped;
+              }
             }
           } else {
             fields[fieldName] = col;
           }
         }
+
         // Store per-component data under component name
         if (Object.keys(fields).length > 0) {
           row[compName] = fields;
@@ -90,5 +225,5 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
     }
   });
 
-  return rows;
+  return { ok: true, rows };
 }

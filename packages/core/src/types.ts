@@ -21,7 +21,10 @@ import type { EntityId, EntitySource } from './scene/scene-types';
 // (plan-strategy §2 D-6). Every op carries enough information for the applier
 // to compute an inverse for free Undo.
 
-export type EditorOp =
+/** Builtin editor ops — the closed discriminated union of all 24 editor primitives.
+ *  Narrowable on `kind` for strong type inference at call sites. Custom ops
+ *  registered via registerApplier/defineOp don't need to be added here (AC-27). */
+export type BuiltinEditorOp =
   // ── document domain (engine World, SSOT) — produce inverse → undo + ledger ──
   | { kind: 'spawnEntity'; name?: string; parent?: EntityId | null; components?: Record<string, unknown>; source?: EntitySource; /** filled by applier */ _id?: EntityId }
   | { kind: 'destroyEntity'; entity: EntityId }
@@ -33,11 +36,6 @@ export type EditorOp =
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
-  // Collected store operations that mutate session state: selection / gizmo-mode
-  // / frame-request / rename-request / scene-persistence. The DOMAIN is decided
-  // structurally by which applier table registers the kind (plan-strategy §2
-  // D-1), not by this union — the union just gives each op a typed JSON payload
-  // so human UI and AI produce identical tool-call shapes (requirements AC-02).
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }
   | { kind: 'setSelectionMany'; ids: EntityId[] }
@@ -58,10 +56,22 @@ export type EditorOp =
   | { kind: 'play' }
   | { kind: 'stop' }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
-  // Goes through the same single gateway door but leaves no trace (AC-03).
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
   | { kind: 'setAssetSelection'; asset: unknown };
+
+/** EditorOp — the open union type for all editor operations.
+ *  BuiltinEditorOp preserves discriminated union narrowing for the 24 builtin
+ *  kinds. Additional kinds registered via registerApplier/defineOp dispatch through
+ *  the `{kind: string}`-shaped open tail without requiring `as EditorOp` casts
+ *  (AC-27 — type-layer inversion matching runtime dispatch which has always been
+ *  keyed on `kind: string`). */
+export type EditorOp = BuiltinEditorOp | { kind: string; [key: string]: unknown };
+
+/** Narrow an EditorOp to its entity-id-bearing shape (spawn ops carry _id).
+ *  Used in test helpers to recover the typed `_id` field after the EditorOp
+ *  union was opened to accommodate custom ops. */
+export type WithEntityId = { _id?: number; [key: string]: unknown };
 
 
 /**
@@ -97,7 +107,13 @@ export interface CommandError {
     | 'INVALID_ARGS'
     | 'OP_ID_CONFLICT'
     | 'PLAN_FAILED'
-    | 'OP_INTERRUPTED';
+    | 'PLAN_STEP_FAILED'
+    | 'UNKNOWN_COMPONENT'
+    | 'OP_INTERRUPTED'
+    // ── M5 eval channel codes (plan-strategy §2 D-4) ──
+    | 'SCOPE_LOCKED'
+    | 'SCRIPT_SYNTAX_ERROR'
+    | 'SCRIPT_RUNTIME_ERROR';
   hint: string;
 }
 
