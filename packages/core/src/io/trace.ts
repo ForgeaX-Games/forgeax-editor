@@ -43,6 +43,28 @@ export type EngineInterfaceName =
   | 'world.addComponent'
   | 'world.removeComponent';
 
+/**
+ * feat-20260708-editor-io-layer-enrich M2 (w6): a declarative side-effect hint
+ * attached to a span leaf. It describes what an engine interface call, BY
+ * CONTRACT, is declared to trigger downstream — it is an editor-side contract
+ * description (a "seam declaration"), NOT engine real runtime causality.
+ *
+ * SSOT for the interface -> hint text mapping lives in engine-facade.ts
+ * (ENGINE_SIDE_EFFECT_HINTS, D-4); _recordLeaf derives and fills this from that
+ * single table. OOS-1 stays excluded: no real engine chain-reaction reporting.
+ *
+ * Anchors:
+ *   requirements AC-06: attributes-layer slot, shape defined by a type
+ *   plan-strategy §2 D-3: new field, engineCalls untouched
+ *   plan-strategy §2 D-5: contract-description layer, not real causality
+ */
+export interface SideEffectHint {
+  /** The engine interface name whose contract declares this side effect. */
+  readonly engineInterface: EngineInterfaceName;
+  /** Declarative hint text ("by contract this triggers ..."), from the SSOT table. */
+  readonly hint: string;
+}
+
 /** A single span node in the trace tree. */
 export interface SpanNode {
   /** OTel traceId (32 hex chars). Shared by all spans in one root tree. */
@@ -57,8 +79,17 @@ export interface SpanNode {
   start: number;
   /** End timestamp, set on popSpan. 0 = still open. */
   end: number;
-  /** Leaf engine interface names recorded during this span. */
-  attributes: { engineCalls: EngineInterfaceName[] };
+  /**
+   * Leaf attributes recorded during this span:
+   * - engineCalls: every engine interface name invoked, in call order (D-3, unchanged).
+   * - sideEffects: deduped declarative hints derived from the SSOT table (w6/w7,
+   *   AC-06). May be shorter than engineCalls (missing table entry -> skipped;
+   *   repeat interface -> one hint, dedup key = engineInterface, D-8).
+   */
+  attributes: {
+    engineCalls: EngineInterfaceName[];
+    sideEffects: SideEffectHint[];
+  };
   /** OK on normal exit, ERROR if applier returns !ok. */
   status: 'OK' | 'ERROR';
   /** Child spans produced by nested dispatchSub (recursive). */
@@ -98,7 +129,7 @@ export function pushSpan(name: string): SpanNode {
     name,
     start: performance.now(),
     end: 0,
-    attributes: { engineCalls: [] },
+    attributes: { engineCalls: [], sideEffects: [] },
     status: 'OK',
     children: [],
   };

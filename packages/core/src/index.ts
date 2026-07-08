@@ -323,7 +323,3 @@ export {
   setViewRequestForwarder,
 } from './io/clip-control';
 export type { ClipControl, ViewCmd } from './io/clip-control';
-
-// UI action registration: panel action register -> interface host ActionRegistry.
-export { registerPanelAction } from './io/action-bridge';
-export type { PanelActionDef, PanelActionResult } from './io/action-bridge';
