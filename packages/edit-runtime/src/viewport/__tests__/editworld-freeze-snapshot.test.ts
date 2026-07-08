@@ -64,7 +64,14 @@ function makeFakeRenderer() {
   let disposeCalls = 0;
   const renderer = {
     ready: Promise.resolve({ ok: true }),
-    assets: {},
+    // assets is the AssetRegistry seam play-assemble routes defaultScene
+    // instantiate through (GUID→handle resolve). Recording spy: these freeze
+    // tests don't assert on spawned play entities, only editWorld invariants.
+    assets: {
+      instantiate() {
+        return { ok: true as const, value: 1 };
+      },
+    },
     draw() {
       return { ok: true } as const;
     },

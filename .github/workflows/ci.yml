@@ -117,6 +117,10 @@ jobs:
         with:
           node-version: 22.13.0
 
+      # wgpu-wasm MUST build before the engine dist step below: the engine `app`
+      # package inlines wgpu-wasm/dist → ../pkg/wgpu_wasm.js at bundle time. Same
+      # invariant is statically gated in scripts/cli.mjs by
+      # scripts/lint-wasm-before-dist.mjs (bun run lint). Keep the two in sync.
       - name: Build wgpu-wasm (Rust → wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: cd packages/engine && bash packages/wgpu-wasm/build.sh
@@ -227,6 +231,10 @@ jobs:
         with:
           node-version: 22.13.0
 
+      # wgpu-wasm MUST build before the engine dist step below: the engine `app`
+      # package inlines wgpu-wasm/dist → ../pkg/wgpu_wasm.js at bundle time. Same
+      # invariant is statically gated in scripts/cli.mjs by
+      # scripts/lint-wasm-before-dist.mjs (bun run lint). Keep the two in sync.
       - name: Build wgpu-wasm (Rust → wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: cd packages/engine && bash packages/wgpu-wasm/build.sh
@@ -292,3 +300,106 @@ jobs:
       # those gates permanent on every push/PR.
       - name: Edit-runtime unit tests
         run: bun -F @forgeax/editor-edit-runtime test
+
+  # ── boot + ▶ Play smoke gate (headless, WebGPU-tolerant) ────────────────────
+  # Boots the games/sample standalone stack in headless chromium and asserts:
+  #   (1) the stack boots, (2) opening :15290 has no console/page errors,
+  #   (3) clicking ▶ Play has no console/page errors.
+  # This is the real-browser guard on the SharedRefReleasedError-on-Play class
+  # (a plain JS error thrown during scene instantiate → lands in the console
+  # stream the spec asserts is empty). The GPU-free unit-test gate is the
+  # edit-runtime `Edit-runtime unit tests` step above; this job proves it end to
+  # end in a browser.
+  #
+  # Unlike b2/typecheck this job RENDERS a frame, so it needs the runtime
+  # wgpu-wasm binary (built via Rust on a cache miss, same as the other jobs) and
+  # a chromium with SwiftShader software WebGPU (playwright.config.ts launch
+  # flags). WebGPU/SwiftShader console noise is allowlisted in the spec, so the
+  # gate stays green on GPU-less runners while still catching every non-GPU error.
+  #
+  # NOT a required status check (main's ruleset requires only b2-self-boot +
+  # typecheck). A flaky SwiftShader run surfaces red without blocking merges, and
+  # — being non-required — needs NO ci-docs.yml mirror (doc-only PRs skip ci.yml
+  # via paths-ignore and don't deadlock). Promote to required once proven stable.
+  smoke-play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.GHA }}
+
+      # Same engine-SHA cache + build path as b2-self-boot / typecheck. On a hit,
+      # engine dist + wgpu-wasm/pkg (the runtime .wasm the render loop loads) are
+      # present with no Rust rebuild; on a miss, build them the same way.
+      - name: Resolve engine submodule SHA
+        id: engine
+        run: echo "sha=$(git -C packages/engine rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache engine dist (.d.ts + .mjs) + wgpu-wasm pkg
+        id: engine-dist-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/engine/packages/*/dist
+            packages/engine/packages/wgpu-wasm/pkg
+          key: engine-dist-${{ steps.engine.outputs.sha }}
+
+      - name: Setup Rust toolchain (for wgpu-wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup wasm-pack
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+
+      - name: Setup pnpm
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node (for engine pnpm build)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      # wgpu-wasm before engine dist (see the b2/typecheck jobs + cli.mjs gate).
+      - name: Build wgpu-wasm (Rust → wasm)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: cd packages/engine && bash packages/wgpu-wasm/build.sh
+
+      - name: Build engine library types (.mjs + .d.ts, no demos)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+        run: |
+          cd packages/engine
+          pnpm install --frozen-lockfile
+          pnpm -r --filter "./packages/*" build
+          pnpm exec tsc -b --clean
+          pnpm exec tsc -b
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install (bun, no scripts)
+        run: bun install --ignore-scripts
+
+      # Chromium + its OS deps for headless (SwiftShader) WebGPU.
+      - name: Install Playwright chromium
+        run: bunx playwright install --with-deps chromium
+
+      # Playwright's webServer array boots the games/sample stack (host :15290 +
+      # play-runtime :15173 + game-backend :15281); reuseExistingServer is false
+      # in CI so it starts fresh. Run only the smoke spec.
+      - name: Boot + Play smoke (games/sample)
+        run: bun run test:e2e e2e/smoke-boot-play.spec.ts
