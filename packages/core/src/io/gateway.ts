@@ -1,6 +1,8 @@
-import { applyCommand, createEditSession, docIdMapForSession } from '../session/document';
-import type { DocApplierCtx, EngineWriteProxy } from '../session/document';
+import { applyCommand, createEditSession } from '../session/document';
+import type { DocApplierCtx, DocAliasMap, EngineWriteProxy } from '../session/document';
 import type { CommandError, EditorOp, EditSession } from '../types';
+import type { World } from '@forgeax/engine-ecs';
+import { clearSelection } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
 import type { OpDescriptor, PlanFn, ArgsSchema } from './catalog';
@@ -157,6 +159,42 @@ export class EditGateway {
    */
   transientMode = false;
 
+  // ── activeWorld / play-bookmark (plan-strategy D-3, M1) ──────────────────
+  //
+  // Single pointer model: _playWorld is null in edit mode, set to a play
+  // World during play. activeWorld + mode are derived from it (Derive,
+  // architecture-principles section 2 — no second state field).
+  // enterPlay/exitPlay are the ONLY mutation paths; both clear selection
+  // and emit a notification so panels know to re-read the hierarchy.
+
+  private _playWorld: World | null = null;
+
+  /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
+  get activeWorld(): World {
+    return (this._playWorld ?? this.doc.world) as unknown as World;
+  }
+
+  /** Derived read surface for current mode (Derive from _playWorld, no second state field). */
+  get mode(): 'edit' | 'play' {
+    return this._playWorld !== null ? 'play' : 'edit';
+  }
+
+  /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11). */
+  enterPlay(playWorld: World): void {
+    this._playWorld = playWorld;
+    clearSelection();
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Return the pointer to the edit world. Clears selection + emits notification. */
+  exitPlay(): void {
+    this._playWorld = null;
+    clearSelection();
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────
   private _activeOp: ActiveOp | null = null;
 
@@ -223,16 +261,20 @@ export class EditGateway {
    *  AC-09); ids = the session id<->handle map (no world); dispatchSub =
    *  span-pushing recursion through the executor (nested transaction spans).
    *  Type-level this ctx has NO `world` field (AC-01). */
-  private _buildDocCtx(): DocApplierCtx {
+  private _buildDocCtx(alias: DocAliasMap): DocApplierCtx {
     const engine = this._getEngineFacade() as unknown as EngineWriteProxy;
-    const ids = docIdMapForSession(this.doc);
     const ctx: DocApplierCtx = {
       engine,
-      ids,
+      // M3 (I1): the transaction-scoped placeholder alias (replaces the deleted
+      // legacy id-to-handle map). One map threads through a whole top-level
+      // dispatch so a transaction's forward-references (spawn then reparent under
+      // it) resolve.
+      alias,
       // Span-pushing sub-dispatch: a transaction sub-op recurses back through
       // the executor so each sub-op gets its own child span AND records its own
-      // engine leaves via the same cached facade (AC-07 + AC-09).
-      dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub),
+      // engine leaves via the same cached facade (AC-07 + AC-09). The SAME alias
+      // map is reused so placeholders stay resolvable across the transaction.
+      dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub, alias),
       // Read side: same query-snapshot the session/eval ctx exposes (D-2 ctx
       // contract, t12a). Document appliers don't read it, but it is part of the
       // ctx shape and available for defined document ops that might.
@@ -249,13 +291,13 @@ export class EditGateway {
    *  controlled `engine` proxy — no raw world, no EditSession (AC-01 / D-2).
    *  Every write it performs records its engine interface leaf onto the span
    *  pushed here (AC-09). */
-  private _execDocumentApplier(cmd: EditorOp): ReturnType<ApplierFn> {
+  private _execDocumentApplier(cmd: EditorOp, alias: DocAliasMap = new Map()): ReturnType<ApplierFn> {
     const kind = cmd.kind;
     const applier = documentAppliers.get(kind);
     if (!applier) {
       return { ok: false, error: { code: 'UNKNOWN_OP' as const, hint: `applier not found for "${kind}"` } };
     }
-    const ctx = this._buildDocCtx();
+    const ctx = this._buildDocCtx(alias);
     pushSpan(kind);
     // Document appliers are (ctx, cmd) => ApplyResult. The registered ApplierFn
     // type is intentionally loose (session: unknown) so a single table can hold
@@ -290,6 +332,26 @@ export class EditGateway {
     }
 
     if (domain === 'document') {
+      // ── Play-mode write gate (plan-strategy D-5, M2) ──────────────────────
+      // While in play mode the active data is a read-only simulation view. A
+      // document-domain op WRITES the world; applying it would either mutate the
+      // frozen edit world (breaking the AC-07 snapshot) or the play world
+      // (creating an "edited in play, gone on stop" Edit != Play illusion). Reject
+      // at the single gateway door — a UI-disable would not stop an AI caller who
+      // reaches dispatch directly (research Finding 13). session-domain ops
+      // (play/stop/selection/camera) are how the user LEAVES play, so they fall
+      // through this branch untouched. transientMode is NOT reused for this: its
+      // semantics are "apply + emit, skip undo/ledger" — it still writes, which is
+      // orthogonal to the play freeze (D-5 explicit).
+      if (this.mode === 'play') {
+        return {
+          ok: false,
+          error: {
+            code: 'edit-rejected-in-play',
+            hint: 'stop play mode before editing; play data is a read-only simulation view',
+          },
+        };
+      }
       // Document ops: executor wraps applier → ctx created → span pushed.
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;

@@ -1,415 +1,202 @@
-// run-lifecycle.ts — bootstrap-entry ▶ Play / ■ Stop for the edit world.
+// run-lifecycle.ts — ▶ Play / ■ Stop for the editor: play=level-load, stop=drop,
+// no restore concept.
 //
-// feat-20260630-viewport-2x2-run-x-display-redesign M2 (w8/w9/w11/w12).
-// plan-strategy D-1 / D-1a / D-1b / D-1c.
+// feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M2.
 //
-// WHY a separate module: main.tsx is a side-effectful entry (createApp, DOM,
-// top-level await). It cannot be imported under `bun:test`. The run lifecycle —
-// the epoch guard (D-1c) and playSimulation / stopSimulation (D-1 / D-1c) — is
-// the part that needs deterministic unit + integration coverage (w8 / w9), so it
-// lives here as a dependency-injected factory. main.tsx wires the real world /
-// app / bus / engineSync into `createRunLifecycle` and exposes the returned
-// play / stop to the ViewportBar. No engine code is touched — loadGame /
-// BootstrapContext / world.removeSystem are all pre-existing engine surface.
+// Proposition (P1 progressive disclosure): ▶ Play forks a FRESH play world and
+// drives it on its own frame loop while the edit world sits frozen; ■ Stop drops
+// that world whole and thaws the edit world. There is no snapshot, no restore, no
+// undo — the edit world was never touched, so there is nothing to put back.
 //
-// The ▶ Play model (D-1): on the EDIT world, call the game's bootstrap(world,ctx)
-// — the same entry play-runtime drives (play-runtime/main.ts:357/413). The
-// game's `world.addSystem` / `ctx.registerUpdate` inside bootstrap ARE the real
-// system-registration points (research Finding 2). The old discoverModules path
-// found zero systems for real games and never started them.
+// ── The whole model in one paragraph ──
+// play = editorApp.pause() (edit world zero tick, AC-07) → assemblePlayWorld
+// (fresh new World() + shared renderer via dispose-shield + disk defaultScene →
+// instantiateScene → bootstrap, see play-assemble.ts) → playApp.start() (the one
+// live rAF) → gateway.enterPlay(playWorld) (switch the single active-world pointer
+// + clear selection + emit). stop = playApp.stop() (dispose-shield keeps the shared
+// renderer alive; rAF cancel + renderer.onError unsubscribe → playWorld fully
+// unreferenced and GC-able, AC-05) → detach play-side backends → gateway.exitPlay()
+// (pointer back to edit world + clear selection + emit) → editorApp.resume().
 //
-// The ■ Stop model (D-1c) — four undo layers, idempotent under repeated ▶/■:
-//   1. named systems  — removeSystem the pre▶→post▶ diff (schedule.ts:342)  [w12]
-//   2. registerUpdate — epoch guard: ■ bumps the epoch so last-gen callbacks
-//                       short-circuit to no-op (frame-loop has no remove API)  [w12]
-//   3. runtime spawns — despawn the pre▶→post-restore entity-handle diff       [w11]
-//   4. doc pollution  — replaceDoc(snapshot) re-projects the pre▶ document     [w11]
+// ── Why this shape (design anchors) ──
+// D-2 dual-App mutually-exclusive single driver: at any instant exactly one App
+// drives one world (editorApp XOR playApp). The engine App already has the
+// start/stop/pause/resume state machine — reuse it, do not hand-roll a frame loop.
+// D-2 alt (c): ■ uses playApp.stop(), NOT pause() — pause() would leave the
+// renderer.onError subscription live, pinning every play world through
+// listener→cleanupFunnel→loop→world and breaking the AC-05 GC promise.
+// The dispose-shield (play-assemble.ts) is what makes stop() safe for a SHARED
+// renderer (R-N2).
 //
-// charter awareness: F1 (single lifecycle module, one epoch concept) +
-// P3 (loadGame returns structured Result on every failure arm) + OOS-4 (zero
-// editor semantics reach the engine — the engine sees world / entity ids only).
+// ── What is deliberately GONE vs the old original-in-place ▶ Play ──
+// The old four-layer stop-time undo (a system-name diff, a run-generation frame
+// guard, a live-handle diff despawn, and a document-snapshot re-projection) is
+// deleted (AC-05): a fresh-world-per-play model has nothing to undo. The scene
+// re-bind callback is gone too (M3 removes its only remaining consumer). The dead
+// vocabulary is scrubbed from this source so a grep for those concepts over
+// edit-runtime returns nothing (AC-05 discoverability sweep).
+//
+// Dependency-injected (Pipeline Isolation): host-boot wires the real editorApp /
+// gateway / assemble; the headless test wires fakes and drives the whole
+// play→stop→play cycle deterministically (bun has no rAF).
+//
+// Anchors:
+//   plan-strategy D-2 (dual-App pause<->start/stop; alt (c) stop()+shield rationale)
+//   plan-strategy D-1 (single renderer, draw(world) per-call)
+//   requirements AC-04 (level-load play path) / AC-05 (idempotent + GC, dead
+//     undo concepts removed) / AC-06 / AC-07 (edit world frozen during play)
+//   requirements section 8 (progressive-disclosure header — proposition first)
 
-// M4: cloneEditSession removed — Play snapshot now uses engine-native
-// world.getSceneInstanceState / world.despawnScene (AC-10).
-import { injectEditMode } from '@forgeax/editor-core';
-import type { EditSession } from '@forgeax/editor-core';
-import { loadGame, isLoadGameError } from '@forgeax/engine-app';
+import type { PlayAssembly } from './play-assemble';
 
-// Structural mirror of @forgeax/engine-app's BootstrapContext. The engine `.d.ts`
-// module-shim degrades the exported interface to a namespace in this consumer's
-// tsc program (TS2709 "Cannot use namespace as a type" — same shim gap as
-// edit-mode.ts / open-project.ts), so ctx is built against this local shape and
-// passed to the entry (whose param is `ctx?: BootstrapContext`) structurally.
-//
-// `world` is intentionally on the ctx even though bootstrap(world, ctx?) already
-// takes world as its first param: play-runtime (the authoritative game-facing
-// host at :15173) builds a GameContext that carries `world`, and games type
-// their internal `Ctx = Parameters<GameEntry>[0]` (= GameContext) and read
-// `ctx.world` (e.g. cow-survivor's EnemyManager → world.allocSharedRef). Dropping
-// it here diverged edit-runtime's contract from play-runtime's and crashed those
-// games with "Cannot read properties of undefined (reading 'allocSharedRef')".
-interface RunBootstrapContext {
-  readonly world: unknown;
-  readonly renderer?: unknown;
-  readonly assets: unknown;
-  readonly app: unknown;
-  readonly registerUpdate: (fn: (dt: number) => void) => void;
-  readonly defaultSceneRoot?: number;
-  readonly defaultScene?: unknown;
-  // B (controlled UI root) + A (cleanup hook): the two channels that make Stop
-  // reach beyond the ECS world. uiRoot is the disposable DOM boundary games
-  // mount into; registerCleanup collects non-DOM teardown (listeners/audio/
-  // timers). Mirror of the same-named optional fields on engine-app's
-  // BootstrapContext (see the shim note above).
-  readonly uiRoot?: HTMLElement;
-  readonly registerCleanup?: (fn: () => void) => void;
+// ── loose engine handles (the ECS/App/renderer types evolve independently; keep
+// the `as never`/structural discipline used across this package) ──────────────
+
+/** The editor App handle — pause() on ▶, resume() on ■ (D-2). Structural. */
+export interface EditorAppHandle {
+  pause(): { ok: boolean; error?: unknown };
+  resume(): { ok: boolean; error?: unknown };
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// D-1c layer 2 — run-generation epoch guard (pure)
-// ────────────────────────────────────────────────────────────────────────────
+/** The gateway single-pointer surface (M1 D-3). Structural mirror of EditGateway. */
+export interface RunGateway {
+  enterPlay(playWorld: unknown): void;
+  exitPlay(): void;
+}
+
+/** The assembly result the lifecycle drives (from play-assemble.ts). */
+type AssembleResult = { ok: true; value: PlayAssembly } | { ok: false; error: unknown };
 
 /**
- * A run-generation guard. `wrap(fn)` captures the CURRENT epoch and returns a
- * callback that only forwards to `fn` while the epoch is unchanged; `bump()`
- * advances the epoch so every callback wrapped in a prior generation becomes a
- * silent no-op.
- *
- * This is the D-1c layer-2 undo channel for `ctx.registerUpdate`: the engine
- * frame loop has `addUpdateCallback` but no remove counterpart
- * (frame-loop.ts). Rather than grow the engine surface with a remove API for an
- * editor lifecycle need (OOS-4), ■ Stop bumps the epoch and the accumulated
- * callbacks from the stopped run go dormant in place.
- *
- * Pure: depends only on its own closed-over counter — no world, no frame loop.
- */
-export interface EpochGuard {
-  /** Wrap a per-frame callback so it only runs while its capture-time epoch is current. */
-  wrap(fn: (dt: number) => void): (dt: number) => void;
-  /** Advance the generation; all previously wrapped callbacks go no-op. */
-  bump(): void;
-  /** Current generation counter (for assertions / diagnostics). */
-  current(): number;
-}
-
-/** Construct an {@link EpochGuard}. Starts at generation 0. */
-export function makeEpochGuard(): EpochGuard {
-  let epoch = 0;
-  return {
-    wrap(fn: (dt: number) => void): (dt: number) => void {
-      const my = epoch;
-      return (dt: number) => {
-        if (my === epoch) fn(dt);
-      };
-    },
-    bump(): void {
-      epoch += 1;
-    },
-    current(): number {
-      return epoch;
-    },
-  };
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Dependency-injected run lifecycle
-// ────────────────────────────────────────────────────────────────────────────
-
-// M4: added getSceneInstanceState + despawnScene + instantiateScene for
-// engine-native Play snapshot (AC-10).
-/** Minimal world surface the lifecycle needs (engine ECS World, structurally). */
-export interface RunWorld {
-  inspect(): { readonly systems: ReadonlyArray<{ readonly name: string }> };
-  removeSystem(name: string): { ok: boolean; error?: unknown };
-  despawn(handle: never): unknown;
-  getSceneInstanceState(root: number): { ok: boolean; error?: unknown; value?: { source: unknown; entityToLocalId: Map<number, number> } };
-  despawnScene(root: number): { ok: boolean; error?: unknown; value?: number };
-  instantiateScene(handle: unknown, parent?: number): { ok: boolean; error?: unknown; value?: { root: number } };
-  allocSharedRef(kind: string, payload: unknown): unknown;
-}
-
-/** Minimal bus surface (EditGateway, structurally). */
-export interface RunBus {
-  readonly doc: EditSession;
-  replaceDoc(doc: EditSession): void;
-}
-
-/**
- * Everything `createRunLifecycle` needs, declared explicitly (Pipeline
- * Isolation): no implicit globals, so the integration test (w9) can supply a
- * headless createApp world + a fake bus and drive the whole ▶/■ roundtrip.
+ * Everything createRunLifecycle needs, declared explicitly (Pipeline Isolation).
+ * No implicit globals — the headless test supplies a real editorApp + fake gateway
+ * + an assemble that runs the real engine assemble path against a fake renderer.
  */
 export interface RunLifecycleDeps {
-  /** The edit world (shared by editor + game — single-world model, C-1). */
-  readonly world: RunWorld;
-  /** The App handle; `registerUpdate` feeds the live edit frame loop (D-1b). */
-  readonly app: { registerUpdate(fn: (dt: number) => void): void };
-  /** The renderer (BootstrapContext.renderer + .assets source). */
-  readonly renderer: { readonly assets: unknown };
-  /** The editor bus carrying the authored document (snapshot / restore). */
-  readonly bus: RunBus;
-  /** Collect every live entity handle in the world (pre▶ / post-restore diff). */
-  readonly collectEntityHandles: () => Set<number>;
-  /** Resolve + validate the active game's bootstrap entry (loadGame resolver). */
-  readonly resolveGameModule: () => Promise<unknown>;
-  /** Active game slug (for loadGame error detail / logging). */
-  readonly getSlug: () => string;
-  /** Doc-projected default-scene root carrying SceneInstance (D-1a). */
-  readonly getDefaultSceneRoot: () => number | undefined;
-  /** SceneAsset payload derived from the doc projection (D-1a). */
-  readonly getDefaultScene: () => unknown;
+  /** The editor App — paused on ▶ (edit world zero tick, AC-07), resumed on ■. */
+  readonly editorApp: EditorAppHandle;
+  /** The gateway — enterPlay/exitPlay switch the single active-world pointer (D-3). */
+  readonly gateway: RunGateway;
   /**
-   * Called after a successful bootstrap so the host can pick up any camera the
-   * game spawned directly on the world (not through the doc) and re-derive the
-   * active camera (AC-12 hard cut). Optional — omitted in headless tests.
+   * Assemble a fresh play world + App for one ▶ Play (play-assemble.ts). Called
+   * on every ▶ (level-load — a new world each time, never restored). Returns a
+   * Result so a failed assemble (bad scene / createApp error) degrades gracefully
+   * instead of leaving the editor wedged in a half-play state.
    */
-  readonly onAfterBootstrap?: () => void;
+  readonly assemble: () => Promise<AssembleResult>;
   /**
-   * Called on ■ Stop AFTER the scene is despawned + re-instantiated, with the
-   * NEW SceneInstance root. ■ mints fresh handles under a new synthetic root, so
-   * the editor session's localId↔handle map (`_e2h`/`_h2e`) and the host's
-   * defaultSceneRoot both point at despawned handles ("scene not restored").
-   * The host rebinds them here (store.rebindLoadedScene + defaultSceneRoot).
-   * Optional — headless tests omit it.
+   * Optional: called after a successful play assembly so the host can pick up a
+   * camera the game spawned + re-derive the active camera. Omitted in headless.
    */
-  readonly rebindSceneInstance?: (newRoot: number) => void;
+  readonly onAfterPlay?: (playWorld: unknown) => void;
   /**
-   * Create the controlled UI container for a run and return it. Called at the
-   * START of ▶ Play (before bootstrap, so the game mounts its UI into it). The
-   * host builds a `<div>` inside the `#ui` overlay layer; the returned element
-   * is handed to the game as `ctx.uiRoot`. Optional — headless tests omit it,
-   * and games then fall back to `document.body`.
+   * Optional: called on ▶ Play when the gateway has unsaved edits, so the host can
+   * surface the D-10 `play-uses-last-saved-scene` hint (play re-instantiates from
+   * disk, so unsaved in-memory edits are not reflected). Omitted in headless.
    */
-  readonly mountUiRoot?: () => HTMLElement;
-  /**
-   * Tear down the UI container returned by {@link mountUiRoot}. Called on ■ Stop
-   * — removing this one element discards ALL game DOM in a single cut (B). No-op
-   * if mountUiRoot was never called.
-   */
-  readonly unmountUiRoot?: (el: HTMLElement) => void;
+  readonly onDirtyPlayHint?: () => void;
 }
 
-/** The ▶/■ pair plus the epoch guard so callers can assert on it (tests). */
+/** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
 export interface RunLifecycle {
   playSimulation(): Promise<void>;
   stopSimulation(): void;
-  readonly epoch: EpochGuard;
+  /** The live play world while playing, else null. Tests read this to assert the
+   *  lifecycle drops its reference on ■ Stop (AC-05 GC reachability proxy). */
+  currentPlayWorld(): unknown;
 }
 
 /**
- * Build the ▶ Play / ■ Stop pair for one edit world.
+ * Build the ▶ Play / ■ Stop pair. See file header for the full model.
  *
- * playSimulation (D-1 / D-1a / D-1b / D-1c):
- *   snapshot the doc, record the pre▶ system-name + entity-handle baselines,
- *   loadGame(slug, resolver) to validate `module.bootstrap`, assemble the
- *   BootstrapContext (renderer / assets / app / epoch-gated registerUpdate /
- *   doc-projected defaultSceneRoot + defaultScene), `await entry(world, ctx)`
- *   so the game registers its systems/callbacks, then injectEditMode(false) to
- *   open the notEditing gate and let them tick on the already-running edit frame
- *   loop.
- *
- * stopSimulation (D-1c): see the per-line notes — w11 lands layers 3+4
- * (doc restore + runtime entity despawn); w12 lands layers 1+2 (removeSystem
- * diff + epoch bump). Idempotent under repeated ▶/■.
+ * State: a single `active` slot holds the current play assembly (or null in edit
+ * mode). playSimulation is a no-op if already playing; stopSimulation is a no-op
+ * (idempotent) if not playing — so a stray second ■ does nothing (AC-05).
  */
 export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
-  const epoch = makeEpochGuard();
-  // M4: snapshot is the SceneAsset source handle + scene root —
-  // captured via getSceneInstanceState before Play mutations.
-  let snapshotSource: unknown = null;
-  let snapshotRoot: number | null = null;
-  let prePlaySystems: Set<string> | null = null;
-  let prePlayEntities: Set<number> | null = null;
-  // B (controlled UI root) + A (cleanup hook) run-scoped state. uiRoot is the
-  // disposable DOM boundary the host mounts for this run; cleanups collects the
-  // game's non-DOM teardown callbacks. Both are reset at ▶ and drained at ■.
-  let uiRoot: HTMLElement | null = null;
-  let cleanups: Array<() => void> = [];
+  // The single play slot. Non-null exactly while a play run is active. Dropping
+  // it on ■ (active = null) releases the lifecycle's only reference to the play
+  // world/app so they become GC-able (AC-05).
+  let active: PlayAssembly | null = null;
 
   async function playSimulation(): Promise<void> {
-    // M4 / AC-10: snapshot the scene via engine-native getSceneInstanceState
-    // instead of cloneEditSession(bus.doc). Captures the SceneAsset source
-    // handle so ■ can despawn + re-instantiate the same asset.
-    const defaultSceneRoot = deps.getDefaultSceneRoot();
-    if (defaultSceneRoot !== undefined) {
-      const stateRes = deps.world.getSceneInstanceState(defaultSceneRoot);
-      if (stateRes.ok && stateRes.value) {
-        snapshotSource = stateRes.value.source;
-        snapshotRoot = defaultSceneRoot;
-      }
-    }
-    // D-1c layer-1 / layer-3 baselines: system names + entity handles at ▶.
-    prePlaySystems = new Set(deps.world.inspect().systems.map((s) => s.name));
-    prePlayEntities = deps.collectEntityHandles();
-    // B/A: build the controlled UI container BEFORE bootstrap (the game mounts
-    // its UI inside bootstrap) and start with an empty cleanup list for this run.
-    uiRoot = deps.mountUiRoot?.() ?? null;
-    cleanups = [];
+    if (active !== null) return; // already playing — ▶ is a no-op (idempotent)
 
-    // D-1: resolve + validate the game entry (same contract as play-runtime).
-    const slug = deps.getSlug();
-    // resolveGameModule stays `Promise<unknown>` (the editor keeps the game
-    // module opaque); loadGame validates the entry shape at runtime, so the
-    // resolver cast to its GameEntryResolver type is safe.
-    const result = await loadGame(slug, (async () => deps.resolveGameModule()) as Parameters<typeof loadGame>[1]);
-    if (!result.ok) {
-      if (isLoadGameError(result.error)) {
-        console.warn(
-          `[editor] ▶ Play loadGame: ${result.error.code} — ${result.error.expected} (${result.error.hint})`,
-        );
-      } else {
-        console.warn('[editor] ▶ Play loadGame failed:', result.error);
-      }
-      // Graceful degradation (charter P3 / §9): the scene stays rendered in the
-      // edit world; the run just has no game logic. Open the gate anyway so any
-      // doc-projected systems tick, staying consistent with a started run.
-      injectEditMode(deps.world as never, false);
+    // D-10: if the doc has unsaved edits, hint that play uses the last-saved
+    // scene (disk re-instantiate does not see in-memory edits).
+    deps.onDirtyPlayHint?.();
+
+    // D-2 / AC-07: freeze the edit world FIRST (pause its frame loop → zero tick).
+    // Do this before assembling so the edit world is already still while the play
+    // world spins up.
+    deps.editorApp.pause();
+
+    // Assemble the fresh play world + App (level-load, AC-04). On failure, thaw
+    // the edit world and stay in edit mode (graceful degradation — never leave the
+    // editor wedged mid-play).
+    const res = await deps.assemble();
+    if (!res.ok) {
+      console.warn('[editor] ▶ Play assemble failed:', res.error);
+      deps.editorApp.resume();
       return;
     }
-    const entry = result.value;
+    active = res.value;
 
-    // D-1a: assemble the BootstrapContext from edit-world originals. The
-    // registerUpdate is epoch-gated (D-1c layer-2). defaultSceneRoot /
-    // defaultScene come from the doc projection, NOT a forge.json GUID re-
-    // instantiate (would duplicate the entities EngineSync already projected).
-    // F-3 review round 1: `defaultSceneRoot` is already bound above (the ▶
-    // snapshot capture); re-`const`-ing it here was a duplicate block-scoped
-    // declaration (runtime SyntaxError on module load — edit-runtime tests RED).
-    // Reuse the existing binding; only fetch the companion defaultScene.
-    const defaultScene = deps.getDefaultScene();
-    const ctx: RunBootstrapContext = {
-      world: deps.world,
-      renderer: deps.renderer,
-      assets: deps.renderer.assets,
-      app: deps.app,
-      registerUpdate: (fn: (dt: number) => void) => {
-        deps.app.registerUpdate(epoch.wrap(fn));
-      },
-      // B: hand the game the controlled UI container (falls back to body inside
-      // the game when absent). A: collect the game's non-DOM teardown callbacks.
-      registerCleanup: (fn: () => void) => {
-        cleanups.push(fn);
-      },
-      ...(uiRoot !== null ? { uiRoot } : {}),
-      ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
-      ...(defaultScene !== undefined ? { defaultScene } : {}),
-    };
-
-    // D-1: bootstrap registers systems/callbacks on the live edit world.
-    await entry(deps.world as never, ctx as never);
-
-    // D-1b: release the notEditing gate so the freshly registered game systems
-    // tick on the edit frame loop that is already running (no new loop).
-    injectEditMode(deps.world as never, false);
-
-    // AC-12: pick up any camera the game spawned + hard-cut the active camera.
-    deps.onAfterBootstrap?.();
-  }
-
-  // D-1c layer-3: despawn entities the run spawned outside the doc projection —
-  // the pre▶ → now handle diff. Extracted to keep stopSimulation flat (guard
-  // clauses over nested if/for/try). Idempotent: a second ■ finds an empty diff.
-  function despawnRuntimeSpawns(): void {
-    if (!prePlayEntities) return;
-    for (const h of deps.collectEntityHandles()) {
-      if (prePlayEntities.has(h)) continue;
-      try {
-        deps.world.despawn(h as never);
-      } catch {
-        /* entity already gone — idempotent */
-      }
+    // Start the play App's frame loop — now the single live rAF driving the
+    // play world (D-2). The shared renderer draws the play world per-frame (D-1).
+    const startR = active.playApp.start();
+    if (!startR.ok) {
+      console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
     }
-  }
 
-  // D-1c layer-1: removeSystem the systems bootstrap added — the pre▶ → now
-  // system-name diff. A second ■ with no ▶ finds an empty diff (prePlaySystems
-  // already covers the surviving names) — idempotent.
-  function removeBootstrapSystems(): void {
-    if (!prePlaySystems) return;
-    for (const s of deps.world.inspect().systems) {
-      if (prePlaySystems.has(s.name)) continue;
-      const r = deps.world.removeSystem(s.name);
-      if (!r.ok) console.warn(`[editor] ■ Stop removeSystem("${s.name}") failed:`, r.error);
-    }
-  }
+    // D-3: switch the single active-world pointer to the play world (clears
+    // selection + emits so panels re-read the play world's hierarchy).
+    deps.gateway.enterPlay(active.playWorld);
 
-  // A (cleanup hook): flush the game's non-DOM teardown callbacks in reverse
-  // registration order (unwind semantics — last effect set up is torn down
-  // first). Each is guarded so one throwing callback can't strand the rest
-  // (charter §9 graceful degradation). Idempotent: a second ■ finds [].
-  function flushCleanups(): void {
-    for (let i = cleanups.length - 1; i >= 0; i--) {
-      try {
-        cleanups[i]!();
-      } catch (err) {
-        console.warn('[editor] ■ Stop cleanup callback failed:', err);
-      }
-    }
-    cleanups = [];
-  }
-
-  // B (controlled UI root): discard the whole run UI container in one cut — no
-  // per-element bookkeeping. Idempotent: a second ■ finds uiRoot === null.
-  function teardownUiRoot(): void {
-    if (!uiRoot) return;
-    try {
-      (deps.unmountUiRoot ?? ((el: HTMLElement) => el.remove()))(uiRoot);
-    } catch (err) {
-      console.warn('[editor] ■ Stop unmountUiRoot failed:', err);
-    }
-    uiRoot = null;
+    // Host camera pickup (AC-12 hard cut). Omitted in headless.
+    deps.onAfterPlay?.(active.playWorld);
   }
 
   function stopSimulation(): void {
-    // Layer A + B (non-ECS side effects) run FIRST, before the four ECS-surgical
-    // undo layers: drain the game's cleanup callbacks, then drop its DOM whole.
-    // These reach what the ECS undo structurally cannot (DOM / listeners / audio
-    // / timers) — the root cause of UI-remnant-after-stop.
-    flushCleanups();
-    teardownUiRoot();
+    if (active === null) return; // not playing — ■ is a no-op (idempotent, AC-05)
+    const assembly = active;
+    // Drop the slot reference FIRST so even if a teardown step throws, the
+    // lifecycle is already back in edit state (no wedged half-play).
+    active = null;
 
-    // D-1c layer-0: freeze game systems (notEditing gate closes).
-    injectEditMode(deps.world as never, true);
-
-    // D-1c layer-2: bump the run epoch so every registerUpdate callback from
-    // this run short-circuits to no-op on its next frame (no accumulation over
-    // repeated ▶/■ — the frame loop has no removeUpdateCallback).
-    epoch.bump();
-
-    // D-1c layer-1: drop the systems bootstrap registered.
-    removeBootstrapSystems();
-
-    // D-1c layer-3: despawn the entities the run spawned OUTSIDE the doc scene
-    // (bullets/enemies/etc.) — the pre▶ → now handle diff. This MUST run BEFORE
-    // the scene re-instantiate below: re-instantiate mints FRESH handles for the
-    // restored scene that are (correctly) absent from prePlayEntities, so a
-    // post-instantiate diff would sweep the freshly restored scene away
-    // ("scene not restored"). Ordering it here keeps the diff measured against
-    // the played scene's handles only.
-    despawnRuntimeSpawns();
-
-    // M4 / AC-10: restore the scene by despawnScene + re-instantiate
-    // from the captured snapshot source (engine-native, no cloneEditSession).
-    // This replaces the old doc projection path (bus.replaceDoc(cloneEditSession)).
-    // AC-06: re-instantiate mints fresh handles under a NEW synthetic root, so
-    // rebindSceneInstance re-syncs the editor session map + host defaultSceneRoot
-    // onto the new root (else hierarchy/selection/save go dead on despawned ids).
-    if (snapshotRoot !== null && snapshotSource !== null) {
-      deps.world.despawnScene(snapshotRoot);
-      // Re-instantiate from the same SceneAsset source to restore pre-Play state.
-      const r = deps.world.instantiateScene(snapshotSource);
-      if (!r.ok) {
-        console.warn('[editor] ■ Stop re-instantiateScene failed:', (r as { error?: unknown }).error);
-      } else {
-        const newRoot = r.value?.root;
-        if (typeof newRoot === 'number') deps.rebindSceneInstance?.(newRoot);
-      }
+    // D-2 alt (c): stop() (NOT pause()) — cancels the rAF AND unsubscribes
+    // renderer.onError, so nothing pins the play world (AC-05 GC). The
+    // dispose-shield (play-assemble.ts) keeps the SHARED renderer alive through
+    // stop()'s unconditional renderer.dispose() (R-N2).
+    try {
+      const stopR = assembly.playApp.stop();
+      if (!stopR.ok) console.warn('[editor] ■ Stop playApp.stop() failed:', stopR.error);
+    } catch (err) {
+      console.warn('[editor] ■ Stop playApp.stop() threw:', err);
     }
-    snapshotSource = null;
-    snapshotRoot = null;
-    prePlaySystems = null;
-    prePlayEntities = null;
+
+    // Detach play-side backends (input listeners attached to the shared canvas),
+    // releasing the canvas back to the edit session.
+    try {
+      assembly.detach();
+    } catch (err) {
+      console.warn('[editor] ■ Stop detach() threw:', err);
+    }
+
+    // D-3: pointer back to the edit world (clears selection + emits so panels
+    // re-read the edit world's hierarchy).
+    deps.gateway.exitPlay();
+
+    // D-2 / AC-07: thaw the edit world — resume its frame loop.
+    deps.editorApp.resume();
+
+    // assembly (and thus playWorld/playApp) is now unreferenced by the lifecycle
+    // → GC-able (AC-05). No restore, no rebind, no despawn.
   }
 
-  return { playSimulation, stopSimulation, epoch };
+  function currentPlayWorld(): unknown {
+    return active === null ? null : active.playWorld;
+  }
+
+  return { playSimulation, stopSimulation, currentPlayWorld };
 }

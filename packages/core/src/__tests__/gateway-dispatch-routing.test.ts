@@ -23,7 +23,6 @@ import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { registerApplier } from '../io/appliers';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 
@@ -50,7 +49,7 @@ function spawnEntity(bus: EditGateway, name: string): number {
 }
 
 function readPosX(bus: EditGateway, entity: number): number {
-  const h = entHandle(bus.doc, entity) as EntityHandle;
+  const h = (entity as EntityHandle) as EntityHandle;
   const tr = bus.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('Transform not on entity');
   return (tr.value as unknown as { posX: number }).posX;
@@ -257,7 +256,9 @@ describe('AC-26: custom op via registerApplier (no core switch)', () => {
     const spawnCmd: EditorOp = { kind: 'spawnEntity', name: 'target' };
     gw.dispatch(spawnCmd);
     const entityId = (spawnCmd as any)._id!;
-    expect(entityId).toBeGreaterThan(0);
+    // M3 (I1): _id is the real engine handle; the first spawn in a fresh world is
+    // handle 0 (slot 0 / gen 0), which is valid — assert it is a real number.
+    expect(typeof entityId).toBe('number');
 
     // Step 2: register a custom document applier for 'alignToGrid'
     // This applier does NOT need to be in the applyCommand switch — the unified

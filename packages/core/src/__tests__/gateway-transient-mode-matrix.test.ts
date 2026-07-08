@@ -33,7 +33,6 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { entHandle } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 // M3 t22: write-side setter sugar deleted (S10) — reset via gw.dispatch; the
 // imports keep the session/transient appliers registered.
@@ -55,7 +54,7 @@ function spawn(gw: EditGateway, name: string): number {
 }
 
 function readPosX(gw: EditGateway, entity: number): number {
-  const h = entHandle(gw.doc, entity) as EntityHandle;
+  const h = entity as EntityHandle;
   const tr = gw.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('no Transform');
   return (tr.value as unknown as { posX: number }).posX;
@@ -111,7 +110,7 @@ describe('transientMode matrix — session domain (m2-w4)', () => {
     gw.transientMode = true;
     const r = gw.dispatch({ kind: 'setSelection', id: 8 } as EditorOp);
     expect(r.ok).toBe(true);
-    expect(getSelection()).toBe(8);             // applied
+    expect(getSelection()).toBe(8 as never);             // applied
     expect(gw.appliedCount()).toBe(undoBefore); // no undo
     expect(gw.ledger.length).toBe(ledgerBefore); // no ledger under transientMode
   });

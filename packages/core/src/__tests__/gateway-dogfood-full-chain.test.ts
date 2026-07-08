@@ -16,7 +16,6 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
 // F-3 (round-1 fixup): session-domain appliers (setSelection/…) register as an
@@ -48,7 +47,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
 }
 
 function readPosY(gw: EditGateway, entity: number): number {
-  const h = entHandle(gw.doc, entity as EntityId) as EntityHandle;
+  const h = (entity as EntityId as EntityHandle) as EntityHandle;
   const tr = gw.doc.world!.get(h, Transform);
   if (!tr.ok) return 0;
   return (tr.value as unknown as { posY: number }).posY;
@@ -183,10 +182,11 @@ describe('dogfood: full chain ledger trace (m4-w4, RED)', () => {
   });
 
   it('ledger contains session op + cast op in order', () => {
-    spawnEntity(gw, 'ball');
+    // M3 (I1): the spawn applier writes the real engine handle back onto _id.
+    const ball = spawnEntity(gw, 'ball');
 
     // Session op
-    gw.dispatch({ kind: 'setSelection', id: 1 }, 'ai');
+    gw.dispatch({ kind: 'setSelection', id: ball }, 'ai');
     const ledgerAfterSession = gw.ledger.length;
 
     // defineOp (stub in RED)
@@ -194,7 +194,7 @@ describe('dogfood: full chain ledger trace (m4-w4, RED)', () => {
       id: 'moveUpDf4', domain: 'document',
       argsSchema: { type: 'object', properties: { dy: { type: 'number' } }, required: ['dy'] },
       plan: (_query, _args) => {
-        return [{ kind: 'setComponent', entity: 1, component: 'Transform', patch: { posY: 5 } }];
+        return [{ kind: 'setComponent', entity: ball, component: 'Transform', patch: { posY: 5 } }];
       },
     });
     if (!rDef.ok) throw new Error('defineOp failed');

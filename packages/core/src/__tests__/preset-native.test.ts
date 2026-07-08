@@ -36,7 +36,6 @@ import {
   HANDLE_CYLINDER,
 } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { entHandle } from '../store/entity-state';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../scene/presets';
 import type { EditorOp, EditSession } from '../types';
 
@@ -62,9 +61,8 @@ function presetSpawn(
   if (!r.ok) throw new Error(`preset spawn ${presetLabel} failed: ${r.error.hint}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, (cmd as any)._id);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${cmd._id}`);
-  return engineHandle;
+  // M3 (I1): handle IS identity — cmd._id is the real engine handle.
+  return (cmd as any)._id as EntityHandle;
 }
 
 // ── Object preset ─────────────────────────────────────────────────────────────
@@ -148,7 +146,7 @@ describe('preset — Point Light', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     if ((cmd as any)._id === undefined) return;
-    const eH = entHandle(s, (cmd as any)._id);
+    const eH = ((cmd as any)._id as EntityHandle);
     if (eH === undefined) return;
     const pl = s.world.get(eH, PointLight);
     expect(pl.ok).toBe(true);
@@ -174,7 +172,7 @@ describe('preset — Spot Light', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     if ((cmd as any)._id === undefined) return;
-    const eH = entHandle(s, (cmd as any)._id);
+    const eH = ((cmd as any)._id as EntityHandle);
     if (eH === undefined) return;
     const sl = s.world.get(eH, SpotLight);
     expect(sl.ok).toBe(true);
@@ -200,7 +198,7 @@ describe('preset — Directional Light', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     if ((cmd as any)._id === undefined) return;
-    const eH = entHandle(s, (cmd as any)._id);
+    const eH = ((cmd as any)._id as EntityHandle);
     if (eH === undefined) return;
     const dl = s.world.get(eH, DirectionalLight);
     expect(dl.ok).toBe(true);

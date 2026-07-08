@@ -1,0 +1,129 @@
+// w14 — TDD red-phase: entity-state rewritten to handle + activeWorld read face
+//
+// feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M3 (I1):
+// After deleting SessionInternals (_e2h/_h2e/_nextId), entity-state stops
+// translating a legacy EntityId into an engine handle. The read helpers take an
+// engine EntityHandle directly and read a World (the caller passes
+// gateway.activeWorld). This test pins the new API:
+//   (a) entName/entComponent/entComponents/entExists/entParent take (world, handle);
+//   (b) entComponent returns a StaleHandleResult — { ok:true, value } for a live
+//       handle, { ok:false, error:{ code:'stale-entity-handle', hint, entity } }
+//       for a stale/despawned handle (AC-14, research Finding 13 P3 fix — no more
+//       silent undefined conflating "absent" with "stale");
+//   (c) the handle<->id mapping ops are DELETED (entHandle/entLegacyId/entMap/
+//       entUnmap/entNextId/entSetNextId/entGetNextId/entIds/entHandles/
+//       entRootHandles) — the module must not export them.
+//
+// This test is RED until w17 (delete SessionInternals) + w18 (rewrite
+// entity-state) land.
+//
+// Constraints from upstream:
+//   requirements AC-01: entity-state full handle<->id mapping ops deleted
+//   requirements AC-14: stale-entity-handle explicit structured error
+//   plan-strategy D-4: read helper normalized to Result on stale handle
+//   plan-strategy R-N3: M3 atomic migration — core signatures first
+//
+// Anchors:
+//   plan-tasks.json w14
+
+import { describe, expect, it } from 'bun:test';
+import { World } from '@forgeax/engine-ecs';
+import { Name, Transform, ChildOf } from '@forgeax/engine-runtime';
+import type { EntityHandle } from '../scene/scene-types';
+import * as entityState from '../store/entity-state';
+import { entName, entComponent, entComponents, entExists, entParent } from '../store/entity-state';
+
+function spawn(world: World, name: string, parent?: EntityHandle): EntityHandle {
+  const comps: Array<{ component: unknown; data: Record<string, unknown> }> = [
+    { component: Name, data: { value: name } },
+    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  ];
+  if (parent !== undefined) comps.push({ component: ChildOf, data: { parent } });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = world.spawn(...(comps as any));
+  if (!r.ok) throw new Error(`spawn failed: ${String(r.error)}`);
+  return r.value as EntityHandle;
+}
+
+function staleHandle(): EntityHandle {
+  return 0xdeadbeef as EntityHandle;
+}
+
+describe('w14 — entity-state handle + activeWorld read face', () => {
+  // ── (a) signatures take (world, handle) ──────────────────────────────────
+  it('(a) entName(world, handle) reads Name from the world', () => {
+    const world = new World();
+    const h = spawn(world, 'Alpha');
+    expect(entName(world, h)).toBe('Alpha');
+  });
+
+  it('(a) entExists(world, handle) is true for a live handle, false for stale', () => {
+    const world = new World();
+    const h = spawn(world, 'Beta');
+    expect(entExists(world, h)).toBe(true);
+    expect(entExists(world, staleHandle())).toBe(false);
+  });
+
+  it('(a) entComponents(world, handle) returns a component dict keyed by name', () => {
+    const world = new World();
+    const h = spawn(world, 'Gamma');
+    const comps = entComponents(world, h);
+    expect(Object.keys(comps)).toContain('Name');
+    expect(Object.keys(comps)).toContain('Transform');
+  });
+
+  it('(a) entParent(world, handle) returns the parent handle, or null for a root', () => {
+    const world = new World();
+    const root = spawn(world, 'Root');
+    const child = spawn(world, 'Child', root);
+    expect(entParent(world, root)).toBeNull();
+    expect(entParent(world, child)).toBe(root);
+  });
+
+  // ── (b) entComponent returns a StaleHandleResult (AC-14 / Finding 13) ─────
+  it('(b) entComponent returns { ok:true, value } for a live handle', () => {
+    const world = new World();
+    const h = spawn(world, 'Delta');
+    const r = entComponent(world, h, 'Transform');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.posX).toBe(0);
+      expect(r.value.scaleX).toBe(1);
+    }
+  });
+
+  it('(b) entComponent returns stale-entity-handle for a stale handle (no silent undefined)', () => {
+    const world = new World();
+    const stale = staleHandle();
+    const r = entComponent(world, stale, 'Transform');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('stale-entity-handle');
+      expect(typeof r.error.hint).toBe('string');
+      expect(r.error.hint.length).toBeGreaterThan(0);
+      expect(r.error.entity).toBe(stale);
+    }
+  });
+
+  it('(b) entComponent distinguishes stale handle from an absent (but live) component', () => {
+    const world = new World();
+    const h = spawn(world, 'Epsilon'); // no ChildOf
+    const r = entComponent(world, h, 'ChildOf');
+    // Live handle, component simply not present: ok:false but NOT stale-entity-handle.
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).not.toBe('stale-entity-handle');
+    }
+  });
+
+  // ── (c) mapping ops deleted (AC-01) ──────────────────────────────────────
+  it('(c) handle<->id mapping ops are deleted from the module', () => {
+    const deleted = [
+      'entHandle', 'entLegacyId', 'entMap', 'entUnmap', 'entNextId',
+      'entSetNextId', 'entGetNextId', 'entIds', 'entHandles', 'entRootHandles',
+    ];
+    for (const name of deleted) {
+      expect((entityState as Record<string, unknown>)[name]).toBeUndefined();
+    }
+  });
+});

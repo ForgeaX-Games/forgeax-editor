@@ -15,6 +15,12 @@ description: >-
 > Editor state mutation has exactly one door. Human UI handlers and AI code use the same gateway,
 > same op payload, same applier, same ledger — human-machine isomorphism. "When you've seen one op
 > walk through, you know how all warehouse state mutation walks."
+>
+> [!CAUTION]
+> **Reading/writing entities across a play/stop (`▶`/`■`) boundary?** First read
+> [`docs/skills/forgeax-editor-gateway.md`](../../docs/skills/forgeax-editor-gateway.md) —
+> `gateway.activeWorld` / `mode` and the world-fork rule that an `EntityHandle` is
+> **stale** the moment you cross a play/stop boundary. Re-query after every `▶`/`■`.
 
 ## Mental Model
 

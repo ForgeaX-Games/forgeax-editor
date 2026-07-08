@@ -41,8 +41,8 @@ export interface EntitySource {
  * The editor's authoring working state (M7: stripped to world + registry).
  *
  * All entity state (name, components, hierarchy, hidden) lives in the engine
- * World. Legacy ID → engine handle mapping is internal to document.ts
- * (SessionInternals), not exposed on the interface.
+ * World. M3 (I1): handle IS identity — the session holds no id-to-handle mapping
+ * or internal identity state; every read/write face takes an EntityHandle.
  */
 export interface EditSession {
   /** feat-20260701-editor-world-container-doc-ecs-collapse M1-M7 / AC-01:

@@ -446,6 +446,11 @@ async function bootViewport(
       setBootStage: (s: string) => emitBoot(`boot ▸ ${s}`),
       discoverGameCameraFromWorld,
       applyActiveCamera,
+      // M2: the shared canvas + resolved physics backend feed ▶ Play's fresh-world
+      // assembly (play-assemble). play attaches its own input backend to this
+      // canvas and mirrors the edit assembly's physics plugin (D-1/D-7).
+      canvas,
+      physics: editPhysics,
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);

@@ -1,37 +1,39 @@
-// store/selection — the transient entity-selection list (deixis handle source).
+// store/selection — the transient entity-selection set (deixis handle source).
 //
-// State: `selectionList` (LAST element = primary, drives single-target panels)
-// plus its listener set and the DEV runaway-propagation net. Consumers: panels
-// (via useSelection/useSelectionList), the viewport gizmo (onSelectionChange),
-// and scene-persistence's replaceDoc (which clears selection on a doc swap via
-// gateway.dispatch({ kind: 'setSelectionMany', ids: [] }) — so
-// `selectionList`/`emitSelection` stay private to this module).
+// feat-20260707-editor-world-fork M3 (I1 / AC-10): selection is now
+// Set<EntityHandle>. The runtime editor identity IS the engine handle, so the
+// selection store holds live engine handles (not legacy ids). Insertion order is
+// preserved by Set semantics; the LAST inserted handle is the "primary" (drives
+// single-target panels like Inspector). Consumers: panels (via useSelection /
+// useSelectionList), the viewport gizmo (onSelectionChange), and the
+// enterPlay/exitPlay lifecycle seam (clearSelection — D-11).
 //
 // Anchors:
-//   plan-strategy §2 D-2: cluster 2 (store.ts:53-145)
+//   requirements AC-10: selection is Set<EntityHandle>, all consumers migrated,
+//     play/stop each clear selection
 //   plan-strategy §2 D-1: setSelection/toggleSelection/setSelectionMany are
 //     SESSION-domain ops — the setter bodies are the appliers, registered into
-//     sessionAppliers. M3 t22 (S10 / AC-21/22) DELETED the write-side sugar
-//     exports; callers dispatch through the one gateway door directly.
-//   research F-2: useSyncExternalStore getter+hook kept in one file
-//   requirements AC-02/AC-09: session op → ledger only, AI-dispatchable.
+//     sessionAppliers.
+//   plan-strategy D-11: enterPlay/exitPlay clear the selection store directly
+//     (not via dispatch — lifecycle semantics, not an edit op)
+//   research Finding 6: post trace-ioc t22 selection.ts is applier + read side only
 import { useSyncExternalStore } from 'react';
-import type { EditorOp, EntityId } from '../types';
+import type { EditorOp } from '../types';
+import type { EntityHandle } from '../scene/scene-types';
 import { sessionAppliers } from '../io/appliers';
 
-// Selection is a list
-// Selection is a list; the LAST element is the "primary" (drives single-target
-// panels like Inspector). Multi-select feeds deixis (reference many).
-let selectionList: EntityId[] = [];
+// Selection is a Set of engine handles; the LAST inserted handle is the
+// "primary" (drives single-target panels like Inspector). Multi-select feeds
+// deixis (reference many). Set preserves insertion order, so the primary is the
+// last element of the iteration.
+let selectionSet: Set<EntityHandle> = new Set();
 const selectionListeners = new Set<() => void>();
 
 // Cross-window selection sync via localStorage (works across Tauri WebviewWindow
-// processes, where BroadcastChannel can't reach). Persisted per scene; other
-// windows pick it up via a `storage` event (see initSync). Guarded so applying a
-// remote selection doesn't echo back.
-// Dev-only runaway-propagation// Dev-only runaway-propagation net: if selection emits storm within a short
-// window it almost always means a cross-window echo loop regressed. Warns once
-// per window so it's visible without re-instrumenting. No-op in production.
+// processes, where BroadcastChannel can't reach). Dev-only runaway-propagation
+// net: if selection emits a storm within a short window it almost always means a
+// cross-window echo loop regressed. Warns once per window so it's visible without
+// re-instrumenting. No-op in production.
 let _emitWindowStart = 0;
 let _emitCount = 0;
 let _emitWarned = false;
@@ -51,38 +53,48 @@ function emitSelection(): void {
   for (const fn of selectionListeners) fn();
 }
 
-export function getSelection(): EntityId | null {
-  return selectionList.length ? selectionList[selectionList.length - 1]! : null;
+/** The primary selection = the LAST inserted handle (Set preserves order). */
+export function getSelection(): EntityHandle | null {
+  let last: EntityHandle | null = null;
+  for (const h of selectionSet) last = h;
+  return last;
 }
-export function getSelectionList(): EntityId[] {
-  return selectionList;
+/** The full selection Set (live reference — do not mutate; treat as read-only). */
+export function getSelectionList(): Set<EntityHandle> {
+  return selectionSet;
 }
-export function isSelected(id: EntityId): boolean {
-  return selectionList.includes(id);
+export function isSelected(handle: EntityHandle): boolean {
+  return selectionSet.has(handle);
 }
 
-// ── Session appliers (M2 D-1): the mutation bodies, registered into the session
-// table. These are the ONLY code that touches selectionList; the public setters
-// below dispatch ops that route here. Bodies are the original setter bodies
-// verbatim ("change the door, not the body").
+// ── Session appliers (D-1): the mutation bodies, registered into the session
+// table. These are the ONLY code that touches selectionSet; UI/AI dispatch ops
+// that route here.
 function applySetSelection(op: EditorOp): { ok: true } {
-  const id = (op as { id: EntityId | null }).id;
+  const id = (op as { id: EntityHandle | null }).id;
   if (id === null) {
-    if (selectionList.length !== 0) { selectionList = []; emitSelection(); }
-  } else if (!(selectionList.length === 1 && selectionList[0] === id)) {
-    selectionList = [id];
+    if (selectionSet.size !== 0) { selectionSet = new Set(); emitSelection(); }
+  } else if (!(selectionSet.size === 1 && selectionSet.has(id))) {
+    selectionSet = new Set([id]);
     emitSelection();
   }
   return { ok: true };
 }
 function applyToggleSelection(op: EditorOp): { ok: true } {
-  const id = (op as { id: EntityId }).id;
-  selectionList = selectionList.includes(id) ? selectionList.filter((x) => x !== id) : [...selectionList, id];
+  const id = (op as unknown as { id: EntityHandle }).id;
+  const next = new Set(selectionSet);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    // Re-insert so a toggled-on handle becomes the LAST element (primary).
+    next.add(id);
+  }
+  selectionSet = next;
   emitSelection();
   return { ok: true };
 }
 function applySetSelectionMany(op: EditorOp): { ok: true } {
-  selectionList = [...(op as { ids: EntityId[] }).ids];
+  selectionSet = new Set((op as unknown as { ids: EntityHandle[] }).ids);
   emitSelection();
   return { ok: true };
 }
@@ -90,13 +102,11 @@ sessionAppliers.set('setSelection', applySetSelection);
 sessionAppliers.set('toggleSelection', applyToggleSelection);
 sessionAppliers.set('setSelectionMany', applySetSelectionMany);
 
-// M3 t22 (S10 / AC-21/22): the write-side sugar setters
-// setSelection/toggleSelection/setSelectionMany were dispatch-only zombie
-// exports (research F-7). Deleted — callers dispatch through the one gateway
-// door directly: gateway.dispatch({ kind: 'setSelection', id }). Read-side
-// pub/sub (getSelection / getSelectionList / onSelectionChange / useSelection)
-// is orthogonal and stays. The session appliers above remain the mutation
-// bodies (registered into sessionAppliers).
+// M3 t22 (trace-ioc): the write-side sugar setters were dispatch-only zombie
+// exports — deleted; callers dispatch through the one gateway door directly.
+// Read-side pub/sub (getSelection / getSelectionList / onSelectionChange /
+// useSelection) is orthogonal and stays. The session appliers above remain the
+// mutation bodies (registered into sessionAppliers).
 
 function subscribeSelection(fn: () => void): () => void {
   selectionListeners.add(fn);
@@ -106,9 +116,24 @@ function subscribeSelection(fn: () => void): () => void {
 /** Non-React selection subscription (the viewport gizmo follows the selection). */
 export const onSelectionChange = subscribeSelection;
 
-export function useSelection(): EntityId | null {
+export function useSelection(): EntityHandle | null {
   return useSyncExternalStore(subscribeSelection, getSelection, getSelection);
 }
-export function useSelectionList(): EntityId[] {
+export function useSelectionList(): Set<EntityHandle> {
   return useSyncExternalStore(subscribeSelection, getSelectionList, getSelectionList);
+}
+
+/**
+ * Directly clear selection — lifecycle seam for enterPlay/exitPlay (D-11).
+ *
+ * Not an edit op, not dispatched, not recorded in ledger/undo. enterPlay/exitPlay
+ * call this directly because selection clearing is lifecycle semantics, not an
+ * edit action — the selection store is transient view state and handles from a
+ * previous world are invalid after a world switch.
+ */
+export function clearSelection(): void {
+  if (selectionSet.size !== 0) {
+    selectionSet = new Set();
+    emitSelection();
+  }
 }

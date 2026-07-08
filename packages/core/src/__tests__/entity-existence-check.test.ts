@@ -21,21 +21,21 @@ describe('Entity existence check uses _e2h mapping, not Name component', () => {
 
   it('removeComponent rejects removing Name (PROTECTED_COMPONENT)', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'Ent', parent: null, components: {} } as EditorOp);
-    const id = childrenOf(gateway.doc, null)[0]!;
+    const id = childrenOf(gateway.activeWorld, null)[0]!;
 
     const r = gateway.dispatch({ kind: 'removeComponent', entity: id, component: 'Name' } as EditorOp);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('PROTECTED_COMPONENT');
-    expect(entName(gateway.doc, id)).toBe('Ent');
+    expect(entName(gateway.activeWorld, id)).toBe('Ent');
   });
 
   it('ops on valid entity succeed regardless of Name presence (entityMapped)', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'Box', parent: null, components: {} } as EditorOp);
-    const id = childrenOf(gateway.doc, null)[0]!;
+    const id = childrenOf(gateway.activeWorld, null)[0]!;
 
     const r1 = gateway.dispatch({ kind: 'rename', entity: id, name: 'Cube' } as EditorOp);
     expect(r1.ok).toBe(true);
-    expect(entName(gateway.doc, id)).toBe('Cube');
+    expect(entName(gateway.activeWorld, id)).toBe('Cube');
 
     const r2 = gateway.dispatch({ kind: 'setHidden', entity: id, hidden: true } as EditorOp);
     expect(r2.ok).toBe(true);
@@ -60,7 +60,7 @@ describe('Entity existence check uses _e2h mapping, not Name component', () => {
 
   it('removeComponent on Transform still works after entityMapped fix', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'Ent', parent: null, components: {} } as EditorOp);
-    const id = childrenOf(gateway.doc, null)[0]!;
+    const id = childrenOf(gateway.activeWorld, null)[0]!;
 
     const r = gateway.dispatch({ kind: 'removeComponent', entity: id, component: 'Transform' } as EditorOp);
     expect(r.ok).toBe(true);

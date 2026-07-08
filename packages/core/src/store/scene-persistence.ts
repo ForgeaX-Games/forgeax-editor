@@ -34,13 +34,7 @@ import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
-import { getInternals } from '../session/edit-session';
-import {
-  entRootHandles,
-  entMap,
-  entSetNextId,
-  entGetNextId,
-} from './entity-state';
+import { worldRootHandles } from './entity-state';
 import { isScenePack, stableGuid, validatePackShell } from '../scene/scene-pack';
 import { rootsToSceneAsset, serializeSceneAssetToPack, SceneInstance } from '@forgeax/engine-runtime';
 import { loadGameProject, FORGE_JSON, type GameProject } from '@forgeax/engine-project';
@@ -416,13 +410,14 @@ export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<
   return dispatchAsyncSessionOp({ kind: 'createSceneFile', id, duplicateCurrent });
 }
 
-/** Rebuild an EditSession's SessionInternals bag around an incoming {world,
- *  registry} so its `asset` getter and internals stay live after a scene swap.
+/** Rebuild a fresh EditSession around an incoming {world, registry} so its
+ *  `asset` getter stays live after a scene swap.
  *
  *  feat-20260701 M7 / AC-15: EditSession is just {world, registry} with the
  *  engine World as the entity SSOT. feat-20260703 (single realm): the cross-
  *  window snapshot/BroadcastChannel revive path is gone — callers always pass a
- *  locally-built doc with a live world. */
+ *  locally-built doc with a live world. M3 (I1): the session carries no internal
+ *  identity state — handle IS identity. */
 function reviveSession(doc: EditSession): EditSession {
   const fresh = createEditSession();
   // Single realm (feat-20260703): every doc reaching here is locally built and
@@ -523,9 +518,11 @@ export function worldToPack(doc: EditSession, sceneGuid?: string): string | null
   // carries no hidden field, AC-04: "pack 序列化不含 hidden 字段"). Filtering the
   // whole hidden entity out (the earlier impl) reproduced exactly the
   // scene-pack.ts:178 data-loss bug AC-05 exists to fix (verify F6 / AGENTS.md #2).
-  // Derive roots from the SSOT handle map (World exposes no `rootEntities` field
-  // — see entRootHandles).
-  const rootHandles: EntityHandle[] = entRootHandles(doc, w);
+  // Derive roots from the live world (World exposes no `rootEntities` field —
+  // see worldRootHandles). M3 (I1): entities are enumerated via a Name query, so
+  // the editor camera/gizmo (no Name) and nameless mount anchors are naturally
+  // excluded — matching the old authored-only root set.
+  const rootHandles: EntityHandle[] = worldRootHandles(w);
   // Use engine's rootsToSceneAsset + serializeSceneAssetToPack pipeline.
   const assetR = rootsToSceneAsset(reg, w, rootHandles);
   if (!assetR.ok) {
@@ -661,9 +658,9 @@ async function doLoadDocFromDisk(): Promise<boolean> {
           // shared refs are live before spawn retains them — the earlier
           // hand-rolled loadWorldFromPack fed GUID STRINGS straight to
           // instantiateScene, which coerced them to 0 and tripped
-          // SharedRefReleasedError. It also populates _e2h from the
-          // SceneInstance.mapping so entIds() reflects the loaded scene (else the
-          // seed() fallback misfires and drops the old vocab).
+          // SharedRefReleasedError. The instantiated handles ARE the identity
+          // (handle IS identity), so the loaded scene is reflected directly by the
+          // live world walk (else the seed() fallback misfires and drops the old vocab).
           if (sceneAssetEntry?.guid) {
             const ok = await loadSceneByGuid(sceneAssetEntry.guid);
             if (ok) {
@@ -708,25 +705,25 @@ export function loadDocFromDisk(): Promise<boolean> {
 // re-hand-roll GUID resolution.
 
 /** Tear down the currently loaded scene before a fresh (re)load: despawn the
- *  SceneInstance subtree via the engine primitive and clear the session's
- *  legacy-id↔handle map. No-op when nothing is loaded. */
+ *  SceneInstance subtree via the engine primitive. No-op when nothing is loaded.
+ *  M3 (I1): there is no legacy-id map to clear — handle IS identity, so despawn
+ *  is the whole teardown (the hierarchy re-walks the live world after). */
 function teardownCurrentScene(): void {
   const w: WorldType = gateway.doc.world;
   if (w && currentSceneRoot !== null) {
     try { w.despawnScene(currentSceneRoot); } catch { /* best-effort */ }
   }
   currentSceneRoot = null;
-  const internals = getInternals(gateway.doc);
-  internals._e2h.clear();
-  internals._h2e.clear();
 }
 
 /**
  * Load the game's scene by GUID via the engine's canonical loadByGuid →
- * instantiate pipeline, then populate the session's legacy-id↔handle map
- * (`_e2h`/`_h2e`) from the resulting SceneInstance.mapping so the editor's
- * hierarchy/selection see the loaded entities (and entIds() is non-empty, so the
- * seed() fallback in main.tsx does NOT misfire). Returns true on success.
+ * instantiate pipeline. M3 (I1 / AC-02): the editor no longer rebuilds a
+ * legacy-id<->handle map from SceneInstance.mapping — the instantiate return
+ * value's handles ARE the runtime identity, and hierarchy/selection read them
+ * straight off the live world (childrenOf walks activeWorld). localId stays
+ * inside the engine's on-disk serialization (rootsToSceneAsset) and is not read
+ * back into editor runtime state (AC-03). Returns true on success.
  *
  * @internal-store — disk-watch CALLS this to reload on a genuine external edit
  * (D-6 seam). Not in facade/barrel.
@@ -741,8 +738,7 @@ export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const parsed = AssetGuid.parse(sceneGuid);
     if (!parsed.ok) return false;
 
-    // Clear any previously loaded scene first so a reload doesn't double-spawn
-    // and _e2h has no stale entries.
+    // Clear any previously loaded scene first so a reload doesn't double-spawn.
     teardownCurrentScene();
 
     // loadByGuid pulls the scene + recursively its refs[] into the registry
@@ -753,16 +749,10 @@ export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
     const instRes = reg.instantiate(sceneHandle, w);
     if (!instRes.ok) return false;
-    const root = instRes.value;
-    // Owned-localId SSOT: the scene asset's `entities[]` are the authored,
-    // selectable entities; `mounts[]` (anchor localId + member window) are
-    // engine-internal nested-instance slots that must NOT enter _e2h (else a
-    // nameless mount anchor shows as "#N" and re-serializes into a growing
-    // wrapper chain — see populateSessionMapFromSceneRoot).
-    const ownedLocalIds = ownedLocalIdSet(loadRes.value as SceneAsset);
-    // Populate _e2h/_h2e (+ advance the id allocator) from the freshly
-    // instantiated scene root. Shared with the ▶/■ Stop rebind path (SSOT).
-    return populateSessionMapFromSceneRoot(w, root, ownedLocalIds);
+    // Record the SceneInstance root so a later reload can despawn it. No map to
+    // fill: the world is the single source of truth for entity identity now.
+    currentSceneRoot = instRes.value;
+    return true;
   } catch {
     return false;
   }
@@ -775,19 +765,18 @@ export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
  * instantiate spine (the SAME path loadSceneByGuid uses for the top scene).
  *
  * Unlike loadSceneByGuid this is ADDITIVE: it does NOT teardown the current
- * scene and does NOT clear/rebuild `_e2h`/`_h2e` or `currentSceneRoot`. The
- * caller owns the wrapper entity (a gateway-spawned, `_e2h`-tracked node) that
- * becomes the mount's ROOT so the nested SceneInstance is a NON-root anchor —
- * which is exactly what `rootsToSceneAsset` folds into a single `mounts[]`
- * entry keyed by this scene GUID (AGENTS.md #2: round-trips through save →
- * reopen → Play via the engine's native mount mechanism, no new sidecar
- * format, no HANDLE_CUBE placeholder).
+ * scene and does NOT touch `currentSceneRoot`. The caller owns the wrapper
+ * entity (a gateway-spawned node) that becomes the mount's ROOT so the nested
+ * SceneInstance is a NON-root anchor — which is exactly what `rootsToSceneAsset`
+ * folds into a single `mounts[]` entry keyed by this scene GUID (AGENTS.md #2:
+ * round-trips through save → reopen → Play via the engine's native mount
+ * mechanism, no new sidecar format, no HANDLE_CUBE placeholder).
  *
- * The nested instance's member entities are deliberately NOT entered into
- * `_e2h` (MVP): they render + round-trip because `rootsToSceneAsset` walks the
- * world's live SceneInstance state (getSceneInstanceState), not `_e2h`. The
- * wrapper is the single selectable Hierarchy node. Per-node selection inside
- * the mount is a follow-up.
+ * The nested instance's member entities have no Name, so the hierarchy walk
+ * (worldRootHandles / childrenOf) never surfaces them: they render + round-trip
+ * because `rootsToSceneAsset` walks the world's live SceneInstance state
+ * (getSceneInstanceState). The wrapper is the single selectable Hierarchy node.
+ * Per-node selection inside the mount is a follow-up.
  *
  * Returns the nested SceneInstance root handle, or null on failure. Callers
  * MUST treat null as "add failed" and surface it — NEVER fall back to a cube.
@@ -821,112 +810,13 @@ export async function instantiateSceneRefUnderWorld(
   }
 }
 
-/**
- * Recover the authored-localId ↔ engine-handle mapping (`_e2h`/`_h2e`) from a
- * freshly instantiated SceneInstance root and register it into the editor
- * session, then advance the id allocator past every loaded localId. Also binds
- * `currentSceneRoot` to `root`.
- *
- * The source of truth is the SceneInstance's `mapping` (Uint32Array indexed by
- * localId → engine-handle raw u32). The synthetic scene root itself is NOT an
- * authored entity, so it is not entered into the map.
- *
- * Shared by two callers (SSOT, AGENTS.md #1 — one resolution path):
- *  - loadSceneByGuid (initial disk load)
- *  - rebindLoadedScene (▶/■ Stop re-instantiate — the scene root changes so the
- *    prior _e2h points at despawned handles and must be rebuilt).
- *
- * Returns true when the root carried a resolvable SceneInstance.mapping.
- */
-/** The set of OWNED (authored) localIds in a resolved SceneAsset — i.e. its
- *  `entities[]`, excluding nested-mount slots (`mounts[]` anchor localIds +
- *  their member windows). This is the SSOT for which entities the editor
- *  session should track in `_e2h`; mount internals are engine-managed and never
- *  belong in the Hierarchy. Returns undefined when the payload has no entities
- *  array (caller then tracks every mapped slot — legacy/degenerate). */
-function ownedLocalIdSet(scene: SceneAsset): ReadonlySet<number> | undefined {
-  const ents = scene?.entities;
-  if (!Array.isArray(ents)) return undefined;
-  const set = new Set<number>();
-  for (const e of ents) set.add(e.localId as unknown as number);
-  return set;
-}
-
-function populateSessionMapFromSceneRoot(
-  w: WorldType,
-  root: EntityHandle,
-  ownedLocalIds?: ReadonlySet<number>,
-): boolean {
-  const instComp = w.get(root, SceneInstance);
-  if (!instComp.ok) return false;
-  const mappingArr: ArrayLike<number> = instComp.value.mapping;
-  // Clear stale entries first so a rebind onto a new root doesn't leave the
-  // pre-Play handles (now despawned) in the map.
-  const internals = getInternals(gateway.doc);
-  internals._e2h.clear();
-  internals._h2e.clear();
-  currentSceneRoot = root;
-
-  // Restrict the editor session map to OWNED entities (the scene asset's
-  // `entities[]`), excluding NESTED-MOUNT internals.
-  //
-  // A whole-GLB "Add to Scene" spawns a gateway-tracked wrapper entity and mounts
-  // the GLB's scene under it as a nested SceneInstance (spawnGlbSceneAsMount +
-  // instantiateSceneRefUnderWorld). Only the wrapper is an owned, selectable
-  // Hierarchy node; the mount's anchor + member entities are engine-internal
-  // and are deliberately NOT tracked at initial-add time. On reload the whole
-  // scene comes back through instantiateScene, whose `mapping[]` covers EVERY
-  // localId — owned entities AND mount anchor localIds AND member-window slots.
-  // Blindly registering all of them broke round-trip parity two ways:
-  //   1. the mount anchor has no Name → Hierarchy showed a nameless "#N" ghost;
-  //   2. once in _e2h, the next worldToPack/rootsToSceneAsset re-collected that
-  //      anchor as an OWNED root → serialized it as a fresh wrapper + mount, so
-  //      one extra ghost node accreted per save→reload cycle (#8, #9, #10, …).
-  // The scene asset's `entities[]` localIds are the SSOT for "owned"; passing
-  // that set here makes reload match initial-add exactly. Rendering is
-  // unaffected (mount members render from live SceneInstance state, not _e2h);
-  // save still round-trips because rootsToSceneAsset walks the wrapper's live
-  // ChildOf subtree and re-folds the mount into mounts[] (AGENTS.md #2: Edit ==
-  // Play, authoring data must round-trip without accretion).
-  let maxId = -1;
-  // mapping[localId] is the engine handle; ENTITY_NULL_RAW (0xffffffff) marks an
-  // unspawned slot. Handle 0 IS valid (first spawn: gen=0+idx=0). Skip the null
-  // sentinel + absent slots + any localId not in the owned set (mount internals).
-  for (let localId = 0; localId < mappingArr.length; localId += 1) {
-    const h = mappingArr[localId];
-    if (h === undefined || h === ENTITY_NULL_RAW) continue;
-    if (ownedLocalIds !== undefined && !ownedLocalIds.has(localId)) continue;
-    entMap(gateway.doc, localId, h as EntityHandle);
-    if (localId > maxId) maxId = localId;
-  }
-  // Advance the id allocator past every loaded localId so new spawns don't
-  // collide with authored ids (never regress below the current allocator).
-  const nextFloor = entGetNextId(gateway.doc) - 1;
-  entSetNextId(gateway.doc, Math.max(maxId, nextFloor) + 1);
-  return true;
-}
-
-/**
- * Rebind the editor session onto a scene root the ▶/■ Stop path just
- * re-instantiated. Stop despawns the played scene and re-instantiates the same
- * SceneAsset, which mints FRESH handles under a NEW synthetic root — the prior
- * `_e2h` now points at despawned handles, so hierarchy/selection/save go dead
- * ("scene not restored"). This rebuilds `_e2h`/`_h2e` + `currentSceneRoot` from
- * the new root and fires the doc listeners so panels re-read.
- *
- * Returns the bound root (so the host can also rebind its defaultSceneRoot), or
- * null if the root had no resolvable SceneInstance (rebind skipped).
- */
-export function rebindLoadedScene(newRoot: number): number | null {
-  const w: WorldType = gateway.doc.world;
-  if (!w) return null;
-  // AC-04: newRoot is a raw engine handle at the host boundary (run-lifecycle
-  // types it as number); it IS an EntityHandle from world.instantiate, so brand
-  // it here before the engine-typed populate call.
-  if (!populateSessionMapFromSceneRoot(w, newRoot as EntityHandle)) return null;
-  notifyDocChanged();
-  return newRoot;
-}
+// M3 (I1 / AC-02): the session-map populate + rebind helpers + the owned-localId
+// helper are DELETED. They existed only to rebuild the legacy id-to-handle map
+// from SceneInstance.mapping after a load or a ▶/■ Stop re-instantiate. With
+// handle IS identity, the instantiate return value's handles ARE the runtime
+// identity and the hierarchy re-walks the live world (childrenOf(activeWorld)) —
+// there is no map to fill or rebind. M2 already removed the rebind helper's only
+// lifecycle consumer (old run-lifecycle L4), so its deletion leaves zero residue.
 
 /** Write the active game's scene to disk as a native engine scene pack. This is
  *  the MANUAL save (D-7): the user clicks Save in the toolbar → this runs and,
@@ -1113,7 +1003,7 @@ export function flushPendingSaveBeacon(): void {
 /** Replace the entire authored document (scene load/import). Resets selection
  * and undo history since old inverses no longer apply to the new doc. */
 export function replaceDoc(doc: EditSession): void {
-  // reviveSession rebuilds the SessionInternals bag around the incoming
+  // reviveSession rebuilds a fresh EditSession around the incoming
   // {world, registry} so downstream `gateway.doc.asset` reads stay live (w34); it's
   // idempotent on an already-live locally-built session.
   gateway.replaceDoc(reviveSession(doc));

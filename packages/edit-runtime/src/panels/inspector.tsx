@@ -21,11 +21,11 @@ export function InspectorWithAddComponent(): ReactNode {
   const sel = useSelection();
 
   // Derive currently-mounted component names from the selected entity.
-  // M7-a (AC-15): doc.entities mirror deleted — read component set from the
-  // world (SSOT) via entComponents. Keys are engine component names.
+  // M3 (I1/AC-08): read the component set from the active world (SSOT) via
+  // entComponents keyed by EntityHandle. Keys are engine component names.
   const mountedComponents: string[] = [];
-  if (sel !== null && entExists(gateway.doc, sel)) {
-    for (const key of Object.keys(entComponents(gateway.doc, sel))) {
+  if (sel !== null && entExists(gateway.activeWorld, sel)) {
+    for (const key of Object.keys(entComponents(gateway.activeWorld, sel))) {
       mountedComponents.push(key);
     }
   }

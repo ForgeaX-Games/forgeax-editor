@@ -4,36 +4,25 @@
 // makeEditSession, projectSessionAsset, cloneEditSession deleted — all served
 // the EntityNode/doc.entities dual-write mirror. createEditSession now only
 // creates a new World instance (the SSOT).
+//
+// ── feat-20260707-editor-world-fork M3 (I1 / AC-01): legacy id maps deleted ──
+//
+// The runtime editor identity IS the engine EntityHandle — there is no second
+// id namespace. The former per-session legacy id-to-handle maps + id allocator
+// are gone; every read/write face takes an EntityHandle directly and reads
+// gateway.activeWorld. createEditSession now only mints a World; there is no
+// symbol-keyed internal state and no internals accessor.
+//
+// Anchors:
+//   requirements AC-01: legacy id maps deleted, symbol grep zero hits in
+//     core/panels/edit-runtime source
+//   plan-strategy §2.5: edit-session.ts net-reduction (legacy maps deleted)
+//   plan-strategy R-N3: M3 atomic migration — core signatures first
 
 import { World } from '@forgeax/engine-ecs';
 import type { EditSession } from '../scene/scene-types';
-import type { EntityId, EntityHandle } from '../scene/scene-types';
 
 type WorldType = World;
-
-/** Internal session state (not on EditSession interface — document.ts internal).
- *  Carries the legacy ID allocator + legacy ID → engine handle mapping that
- *  the command system needs for entity tracking and undo/redo. */
-export interface SessionInternals {
-  _nextId: EntityId;
-  /** Legacy EntityId → engine handle (world.spawn return value). */
-  _e2h: Map<EntityId, EntityHandle>;
-  /** Engine handle → legacy EntityId (reverse lookup). */
-  _h2e: Map<EntityHandle, EntityId>;
-}
-
-/** Mutable internal state stored as a non-enumerable symbol-keyed property
- *  on the EditSession object. External consumers only see the public
- *  EditSession interface ({world, registry}). */
-const INTERNALS = Symbol('sessionInternals');
-
-export function getInternals(session: EditSession): SessionInternals {
-  const internals = (session as unknown as Record<symbol, SessionInternals | undefined>)[INTERNALS];
-  if (internals === undefined) {
-    throw new Error('EditSession missing internals — not created via createEditSession');
-  }
-  return internals;
-}
 
 /** A fresh, empty edit session with a new World.
  *  The edit-runtime replaces this default world with the real app world at
@@ -42,11 +31,6 @@ export function createEditSession(): EditSession {
   const world = new World();
   const session = {
     world: world as unknown as WorldType,
-    [INTERNALS]: {
-      _nextId: 1 as EntityId,
-      _e2h: new Map<EntityId, EntityHandle>(),
-      _h2e: new Map<EntityHandle, EntityId>(),
-    } satisfies SessionInternals,
   };
   return session as unknown as EditSession;
 }
