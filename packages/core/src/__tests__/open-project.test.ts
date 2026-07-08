@@ -115,7 +115,7 @@ describe('w13 — openProject projection', () => {
   it('(a) fixture with defaultScene -> world has entityCount > 0', async () => {
     const reader = mapReader({
       'forge.json': FORGE_WITH_SCENE,
-      'scenes/main.pack.json': SCENE_PACK,
+      'assets/scenes/main.pack.json': SCENE_PACK,
     });
 
     const result = await openProject('test-game', reader);
