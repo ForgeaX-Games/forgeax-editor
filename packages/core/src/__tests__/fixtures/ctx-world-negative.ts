@@ -27,6 +27,6 @@ export function badApplierReachesWorld(ctx: DocApplierCtx): unknown {
  *  case above would stop erroring — the test's negative assertion guards that. */
 export function goodApplierUsesEngine(ctx: DocApplierCtx): unknown {
   const _e = ctx.engine;
-  const _i = ctx.ids;
-  return [_e, _i];
+  const _a = ctx.alias;
+  return [_e, _a];
 }

@@ -212,13 +212,15 @@ describe('AC-01 export-surface snapshot', () => {
     const entries = extractBarrelReExports(program, checker);
 
     // ── Sanity checks ──────────────────────────────────────────────────
-    // Research F-1 established 62 barrel re-exports pre-M3. M3 (AC-08) SEALED the
-    // 12 op setters (dispatch wrapper + setSelection/setSelectionMany/
+    // Research F-1 established 62 barrel re-exports pre-M3. The trace-ioc M3 (AC-08)
+    // SEALED 12 op setters (dispatch wrapper + setSelection/setSelectionMany/
     // toggleSelection/setGizmoMode/setHoverEntity/setFieldPreview/setAssetSelection/
-    // saveDocToDisk/setSceneId/requestFrame/requestRename) off the barrel, so the
-    // published store surface is now 62 − 12 = 50. This count is the machine
-    // witness that the setters left the single-entry surface.
-    expect(entries.length).toBe(50);
+    // saveDocToDisk/setSceneId/requestFrame/requestRename) off the barrel → 50.
+    // feat-20260707-editor-world-fork M3 (AC-02) then DELETED rebindLoadedScene
+    // (the ▶/■ Stop legacy-map rebind — no map to rebind under handle identity),
+    // dropping the published store surface to 50 − 1 = 49. This count is the
+    // machine witness that the sealed setters + the deleted rebind left the surface.
+    expect(entries.length).toBe(49);
 
     // Every entry must be non-empty.
     for (const e of entries) {

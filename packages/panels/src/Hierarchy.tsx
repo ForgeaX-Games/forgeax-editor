@@ -2,37 +2,39 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entComponent, entComponents, entIds } from '@forgeax/editor-core';
+import { entExists, entName, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
 import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
 // setters (setSelection/setHoverEntity/toggleSelection) or the origin-less
 // `dispatch` wrapper. Default origin is 'human' (D-6); the payload is the same
 // plain-JSON op the AI would build. "Change the door, not the body."
+// M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
+// play->playWorld) + EntityHandle; node key IS the engine handle.
 import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
-import type { EntityId } from '@forgeax/editor-core';
+import type { EntityHandle } from '@forgeax/editor-core';
 
 interface Menu {
-  id: EntityId;
+  id: EntityHandle;
   x: number;
   y: number;
 }
 
 // in-app drag source — more reliable than DataTransfer.getData, which is in
 // "protected" mode (and empty) outside a real user drag.
-let draggingId: EntityId | null = null;
+let draggingId: EntityHandle | null = null;
 
 // Shift+range selection anchor — the last explicitly clicked node (plain click
 // or Ctrl+click). Purely a Hierarchy UI concept; not stored in the selection
 // store (different panels could have different anchor semantics).
-let anchorId: EntityId | null = null;
+let anchorId: EntityHandle | null = null;
 
 /** Walk the tree in display order, skipping collapsed subtrees. */
-function flatVisibleOrder(collapsed: Set<EntityId>): EntityId[] {
-  const result: EntityId[] = [];
-  function walk(parentId: EntityId | null): void {
-    for (const id of childrenOf(gateway.doc, parentId)) {
+function flatVisibleOrder(collapsed: Set<EntityHandle>): EntityHandle[] {
+  const result: EntityHandle[] = [];
+  function walk(parentId: EntityHandle | null): void {
+    for (const id of childrenOf(gateway.activeWorld, parentId)) {
       result.push(id);
       if (!collapsed.has(id)) walk(id);
     }
@@ -41,7 +43,7 @@ function flatVisibleOrder(collapsed: Set<EntityId>): EntityId[] {
   return result;
 }
 
-function handleShiftClick(id: EntityId, collapsed: Set<EntityId>): void {
+function handleShiftClick(id: EntityHandle, collapsed: Set<EntityHandle>): void {
   const anchor = anchorId ?? getSelection();
   if (anchor === null) {
     gateway.dispatch({ kind: 'setSelection', id });
@@ -63,16 +65,16 @@ function handleShiftClick(id: EntityId, collapsed: Set<EntityId>): void {
 }
 
 const COLLAPSE_KEY = 'forgeax:editor:hier-collapsed';
-function loadCollapsed(): Set<EntityId> {
+function loadCollapsed(): Set<EntityHandle> {
   try {
     const raw = localStorage.getItem(COLLAPSE_KEY);
-    if (raw) return new Set(JSON.parse(raw) as EntityId[]);
+    if (raw) return new Set(JSON.parse(raw) as EntityHandle[]);
   } catch {
     /* ignore corrupt persisted state */
   }
   return new Set();
 }
-function saveCollapsed(set: Set<EntityId>): void {
+function saveCollapsed(set: Set<EntityHandle>): void {
   try {
     localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set]));
   } catch {
@@ -102,12 +104,12 @@ function Row({
   toggleCollapse,
   highlight,
 }: {
-  id: EntityId;
+  id: EntityHandle;
   depth: number;
   onMenu: (m: Menu) => void;
   flat?: boolean | undefined;
-  collapsed?: Set<EntityId> | undefined;
-  toggleCollapse?: ((id: EntityId) => void) | undefined;
+  collapsed?: Set<EntityHandle> | undefined;
+  toggleCollapse?: ((id: EntityHandle) => void) | undefined;
   highlight?: string | undefined;
 }) {
   const selList = useSelectionList();
@@ -116,15 +118,14 @@ function Row({
   const [editing, setEditing] = useState(false);
   // F2 (or any panel) can request this row to enter inline-rename mode.
   useEffect(() => onRenameRequest((rid) => rid === id && setEditing(true)), [id]);
-  // M7 / AC-15: entity view read from world (SSOT) via entity-state helpers;
-  // doc.entities/EntityNode deleted. `hidden` derives from the EditorHidden
-  // component; `components` from the world component walk. EntitySource (the old
-  // EntityNode.source) is gone — edit-source affordances are dropped with it.
-  if (!entExists(gateway.doc, id)) return null;
-  const nodeName = entName(gateway.doc, id);
-  const nodeComponents = entComponents(gateway.doc, id);
+  // M3 (I1/AC-08): entity view read from the active world (SSOT) via entity-state
+  // helpers keyed by EntityHandle. `hidden` derives from the EditorHidden
+  // component; `components` from the world component walk.
+  if (!entExists(gateway.activeWorld, id)) return null;
+  const nodeName = entName(gateway.activeWorld, id);
+  const nodeComponents = entComponents(gateway.activeWorld, id);
   const nodeHidden = 'EditorHidden' in nodeComponents;
-  const kids = flat ? [] : childrenOf(gateway.doc, id);
+  const kids = flat ? [] : childrenOf(gateway.activeWorld, id);
   const isCollapsed = collapsed?.has(id) ?? false;
   function commitRename(next: string) {
     setEditing(false);
@@ -134,7 +135,7 @@ function Row({
   return (
     <>
       <div
-        className={`tn${selList.includes(id) ? ' sel' : ''}${over ? ' drop' : ''}${hoverId === id ? ' hov' : ''}`}
+        className={`tn${selList.has(id) ? ' sel' : ''}${over ? ' drop' : ''}${hoverId === id ? ' hov' : ''}`}
         style={{ paddingLeft: 10 + depth * 14 }}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}`}
@@ -154,7 +155,7 @@ function Row({
         onContextMenu={(e) => {
           e.preventDefault();
           // keep an existing multi-selection if right-clicking inside it
-          if (!getSelectionList().includes(id)) gateway.dispatch({ kind: 'setSelection', id });
+          if (!getSelectionList().has(id)) gateway.dispatch({ kind: 'setSelection', id });
           onMenu({ id, x: e.clientX, y: e.clientY });
         }}
         draggable
@@ -239,10 +240,10 @@ function Row({
             e.stopPropagation();
             const newHidden = !nodeHidden;
             gateway.dispatch({ kind: 'setHidden', entity: id, hidden: newHidden });
-            if (selList.includes(id)) {
+            if (selList.has(id)) {
               for (const sid of selList) {
                 if (sid === id) continue;
-                const sameState = entComponent(gateway.doc, sid, 'EditorHidden') !== undefined === nodeHidden;
+                const sameState = entComponent(gateway.activeWorld, sid, 'EditorHidden').ok === nodeHidden;
                 if (sameState) gateway.dispatch({ kind: 'setHidden', entity: sid, hidden: newHidden });
               }
             }
@@ -264,10 +265,10 @@ export function HierarchyPanel() {
   useDocVersion();
   const sel = useSelection();
   const selList = useSelectionList();
-  const roots = childrenOf(gateway.doc, null);
+  const roots = childrenOf(gateway.activeWorld, null);
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<EntityId>>(loadCollapsed);
-  const toggleCollapse = (id: EntityId) =>
+  const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
+  const toggleCollapse = (id: EntityHandle) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -290,9 +291,9 @@ export function HierarchyPanel() {
       items.push({ sep: true });
     }
     items.push({ label: t('editor.hierarchy.menu.duplicate'), onClick: () => duplicateEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { if (entExists(gateway.doc, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.doc, m.id), components: entComponents(gateway.doc, m.id) }, null, 2)); } });
+    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { if (entExists(gateway.activeWorld, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }, null, 2)); } });
     items.push({ label: t('editor.hierarchy.menu.refToChat'), onClick: () => requestRefEntity(m.id) });
-    if (childrenOf(gateway.doc, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), onClick: () => ungroupEntity(m.id) });
+    if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), onClick: () => ungroupEntity(m.id) });
     items.push({ label: t('editor.hierarchy.menu.delete'), danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
     showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
   };
@@ -303,8 +304,8 @@ export function HierarchyPanel() {
   // M7 / AC-15: entity list + name/components come from world (SSOT) via
   // entity-state; doc.order/doc.entities deleted.
   const matches = q
-    ? entIds(gateway.doc).filter((id) => {
-        return entName(gateway.doc, id).toLowerCase().includes(q) || Object.keys(entComponents(gateway.doc, id)).some((c) => c.toLowerCase().includes(q));
+    ? worldEntityHandles(gateway.activeWorld).filter((id) => {
+        return entName(gateway.activeWorld, id).toLowerCase().includes(q) || Object.keys(entComponents(gateway.activeWorld, id)).some((c) => c.toLowerCase().includes(q));
       })
     : [];
   return (
@@ -340,7 +341,7 @@ export function HierarchyPanel() {
         <button type="button" className="tbtn" data-testid="btn-duplicate" disabled={sel === null} onClick={() => sel !== null && duplicateEntity(sel)}>
           Duplicate
         </button>
-        <button type="button" className="tbtn" data-testid="btn-group" disabled={selList.length < 2} onClick={() => groupSelected(getSelectionList())} title="Group selected under a new parent (Ctrl+G)">
+        <button type="button" className="tbtn" data-testid="btn-group" disabled={selList.size < 2} onClick={() => groupSelected([...getSelectionList()])} title="Group selected under a new parent (Ctrl+G)">
           Group
         </button>
         <button
@@ -349,9 +350,9 @@ export function HierarchyPanel() {
           data-testid="btn-collapse-all"
           title="collapse / expand all parent nodes"
           onClick={() => {
-            const parents = entIds(gateway.doc).filter((id) => childrenOf(gateway.doc, id).length > 0);
+            const parents = worldEntityHandles(gateway.activeWorld).filter((id) => childrenOf(gateway.activeWorld, id).length > 0);
             const allCollapsed = parents.length > 0 && parents.every((id) => collapsed.has(id));
-            const next = allCollapsed ? new Set<EntityId>() : new Set(parents);
+            const next = allCollapsed ? new Set<EntityHandle>() : new Set(parents);
             setCollapsed(next);
             saveCollapsed(next);
           }}
@@ -364,7 +365,7 @@ export function HierarchyPanel() {
           data-testid="btn-delete"
           disabled={sel === null}
           onClick={() => {
-            const cur = getSelectionList();
+            const cur = [...getSelectionList()];
             if (cur.length > 1) deleteManyCascade(cur);
             else if (sel !== null) deleteEntity(sel);
           }}

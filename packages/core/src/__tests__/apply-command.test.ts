@@ -33,7 +33,6 @@ import {
 } from '@forgeax/engine-runtime';
 import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { entHandle } from '../store/entity-state';
 import { EditorHidden } from '../components/EditorHidden';
 import type { EditorOp, EditSession } from '../types';
 
@@ -61,12 +60,10 @@ function spawnEngineHandle(session: EditSession, name: string, parent?: number):
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const id = (cmd as any)._id;
   if (id === undefined) throw new Error('spawnCmd did not set ._id');
-  const legacyId = id as number;
-  const engineHandle = entHandle(session, legacyId);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${legacyId}`);
-  // entHandle stores raw numbers; this one is a live engine handle, so brand it
-  // as EntityHandle for the world.get(...) calls the assertions run against it.
-  return { legacyId, engineHandle: engineHandle as EntityHandle };
+  // M3 (I1): the applier rewrote cmd._id to the real engine handle — handle IS
+  // identity, so legacyId and engineHandle are the same value.
+  const engineHandle = id as EntityHandle;
+  return { legacyId: id as number, engineHandle };
 }
 
 describe('applyCommand world assertions (GREEN)', () => {
@@ -77,7 +74,7 @@ describe('applyCommand world assertions (GREEN)', () => {
     const r = applyCommand(session, cmd);
     expect(r.ok).toBe(true);
     const legacyId = (cmd as any)._id!;
-    const eH = entHandle(session, legacyId)!;
+    const eH = (legacyId as EntityHandle);
     const nameResult = session.world.get(eH, Name);
     expect(nameResult.ok).toBe(true);
     if (nameResult.ok) {
@@ -124,7 +121,7 @@ describe('applyCommand world assertions (GREEN)', () => {
     const session = createSession();
     const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, (cmd as any)._id!)!;
+    const eH = ((cmd as any)._id! as EntityHandle);
     const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
@@ -148,7 +145,7 @@ describe('applyCommand world assertions (GREEN)', () => {
     const session = createSession();
     const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, (cmd as any)._id!)!;
+    const eH = ((cmd as any)._id! as EntityHandle);
     const r = applyCommand(session, { kind: 'removeComponent', entity: (cmd as any)._id!, component: 'MeshFilter' });
     expect(r.ok).toBe(true);
     expect(session.world.get(eH, MeshFilter).ok).toBe(false);
@@ -177,7 +174,7 @@ describe('applyCommand world assertions (GREEN)', () => {
     const session = createSession();
     const cmd: EditorOp = { kind: 'spawnEntity', name: 'Temp' };
     applyCommand(session, cmd);
-    const eH = entHandle(session, (cmd as any)._id!)!;
+    const eH = ((cmd as any)._id! as EntityHandle);
     const r = applyCommand(session, { kind: 'transaction', label: 'rename twice', commands: [{ kind: 'rename', entity: (cmd as any)._id!, name: 'Renamed' }, { kind: 'rename', entity: (cmd as any)._id!, name: 'Final' }] });
     expect(r.ok).toBe(true);
     const nameResult = session.world.get(eH, Name);

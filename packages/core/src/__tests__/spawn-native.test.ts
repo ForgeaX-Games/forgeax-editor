@@ -36,7 +36,6 @@ import {
   Materials,
 } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { entHandle } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -60,9 +59,8 @@ function spawnNative(
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd ${name} failed: ${r.error.hint}`);
   if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, (cmd as any)._id);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${(cmd as any)._id}`);
-  return engineHandle;
+  // M3 (I1): handle IS identity — cmd._id is the real engine handle.
+  return (cmd as any)._id as EntityHandle;
 }
 
 // ── Cube spawn ────────────────────────────────────────────────────────────────

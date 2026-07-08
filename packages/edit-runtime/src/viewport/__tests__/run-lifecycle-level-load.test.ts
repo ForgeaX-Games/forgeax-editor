@@ -1,0 +1,328 @@
+// run-lifecycle-level-load.test.ts (w6) — headless full-chain play->stop->play.
+//
+// feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M2.
+//
+// This is the R-N1 falsification test + the AC-04/05/06/07 headless regression.
+// It drives the REAL engine assemble path (createApp assemble form + real
+// `new World()` + real instantiateScene) with a FAKE renderer, so the one thing
+// it proves that a compile-only check cannot: the engine frame loop calls
+// `renderer.draw(playWorld)` with the FRESH play world (R-N1 — no hidden
+// single-world binding in the renderer contract). The renderer contract is
+// `draw(world)` per-call (D-1), so a shared host-owned renderer legitimately
+// draws two mutually exclusive worlds.
+//
+// It also proves:
+//   - AC-04: play = fresh new World() + assemble + defaultScene loadByGuid path +
+//     instantiateScene + bootstrap (level-load, single path).
+//   - AC-05: play->stop->play is idempotent; after stop the lifecycle holds NO
+//     reference to the discarded play world (GC-reachability proxy = currentPlayWorld()
+//     returns null); the shared renderer is NOT disposed on stop (dispose-shield).
+//   - AC-06/07: editorApp.pause() on play (editWorld zero tick) + resume() on stop.
+//   - AC-05 dead-concept sweep: `epoch` and the 4-layer undo vocabulary are gone
+//     from run-lifecycle.ts source (grep zero hits).
+//
+// bun has no requestAnimationFrame, so the engine frame loop never self-schedules;
+// the test installs a capturing fake rAF to step exactly one frame deterministically.
+//
+// Anchors:
+//   plan-strategy §5.5 (M2 sweep must include a real full-chain command)
+//   plan-strategy D-1 (renderer.draw(world) per-call) / D-2 (pause<->start/stop) /
+//     D-7 (assemble plugin set) / R-N1 (draw(playWorld) production check)
+//   requirements AC-04/AC-05/AC-06/AC-07
+
+import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { World } from '@forgeax/engine-ecs';
+import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
+import { createRunLifecycle } from '../run-lifecycle';
+
+type EcsWorld = InstanceType<typeof World>;
+
+// ── Fake rAF harness — capture the scheduled callback so tests step frames. ──
+function installFakeRaf() {
+  const g = globalThis as unknown as {
+    requestAnimationFrame?: (cb: (t: number) => void) => number;
+    cancelAnimationFrame?: (id: number) => void;
+  };
+  const prevRaf = g.requestAnimationFrame;
+  const prevCaf = g.cancelAnimationFrame;
+  let captured: ((t: number) => void) | null = null;
+  g.requestAnimationFrame = (cb: (t: number) => void) => {
+    captured = cb;
+    return 1;
+  };
+  g.cancelAnimationFrame = () => {
+    captured = null;
+  };
+  return {
+    step(t = 16): void {
+      const cb = captured;
+      captured = null; // one-shot: the loop re-arms by calling rAF again
+      cb?.(t);
+    },
+    restore(): void {
+      g.requestAnimationFrame = prevRaf;
+      g.cancelAnimationFrame = prevCaf;
+    },
+  };
+}
+
+// ── Fake renderer — records draw(world) targets; dispose is observable. ──
+function makeFakeRenderer() {
+  const drawWorlds: unknown[] = [];
+  let disposeCalls = 0;
+  const renderer = {
+    ready: Promise.resolve({ ok: true }),
+    assets: {},
+    draw(world: unknown) {
+      drawWorlds.push(world);
+      return { ok: true } as const;
+    },
+    dispose() {
+      disposeCalls += 1;
+    },
+    onError(_cb: (e: unknown) => void) {
+      return () => {};
+    },
+  };
+  return {
+    renderer,
+    drawWorlds,
+    get disposeCalls() {
+      return disposeCalls;
+    },
+  };
+}
+
+// A minimal SceneAsset instantiable headlessly (same shape as snapshot-native).
+function makeSceneAsset() {
+  return {
+    kind: 'scene' as const,
+    entities: [
+      { localId: 0, components: { Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Root' } } },
+      { localId: 1, components: { Transform: { posX: 1, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Child' } } },
+    ],
+  };
+}
+
+// A fake game module bootstrap that records the world it received.
+function makeFakeBootstrap() {
+  let bootstrapWorld: unknown = null;
+  let bootstrapCount = 0;
+  const entry = (world: unknown, _ctx?: unknown) => {
+    bootstrapWorld = world;
+    bootstrapCount += 1;
+  };
+  return {
+    entry,
+    get bootstrapWorld() {
+      return bootstrapWorld;
+    },
+    get bootstrapCount() {
+      return bootstrapCount;
+    },
+  };
+}
+
+// A fake editorApp that records pause/resume so AC-07 (editWorld freeze) is asserted.
+function makeFakeEditorApp() {
+  const calls: string[] = [];
+  return {
+    calls,
+    pause() {
+      calls.push('pause');
+      return { ok: true } as const;
+    },
+    resume() {
+      calls.push('resume');
+      return { ok: true } as const;
+    },
+  };
+}
+
+// A fake gateway recording enterPlay/exitPlay + the world it was handed.
+function makeFakeGateway() {
+  const events: Array<{ kind: string; world?: unknown }> = [];
+  return {
+    events,
+    enterPlay(world: unknown) {
+      events.push({ kind: 'enterPlay', world });
+    },
+    exitPlay() {
+      events.push({ kind: 'exitPlay' });
+    },
+  };
+}
+
+/** Build a lifecycle whose `assemble` runs the REAL engine assemble path against a
+ *  fake renderer + fresh new World() + real instantiateScene of a minimal asset. */
+function buildRealAssembleLifecycle() {
+  const fr = makeFakeRenderer();
+  const editorApp = makeFakeEditorApp();
+  const gateway = makeFakeGateway();
+  const boot = makeFakeBootstrap();
+  const assembledWorlds: EcsWorld[] = [];
+
+  const assemble = async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
+    assemblePlayWorld({
+      renderer: fr.renderer as never,
+      loadDefaultScene: async () => makeSceneAsset(),
+      resolveBootstrap: async () => boot.entry as never,
+      // headless: no canvas → skip real DOM input attach (returns no detach).
+      attachInput: (world: unknown) => {
+        assembledWorlds.push(world as EcsWorld);
+        return undefined;
+      },
+      newWorld: () => new World() as never,
+    });
+
+  const lifecycle = createRunLifecycle({
+    editorApp: editorApp as never,
+    gateway: gateway as never,
+    assemble: assemble as never,
+  });
+
+  return { lifecycle, fr, editorApp, gateway, boot, assembledWorlds };
+}
+
+describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () => {
+  it('(R-N1) engine frame loop calls renderer.draw(playWorld) with the fresh play world', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      const playWorld = t.lifecycle.currentPlayWorld();
+      expect(playWorld).not.toBeNull();
+      // Step one frame: the started playApp draws the play world.
+      fakeRaf.step();
+      expect(t.fr.drawWorlds.length).toBeGreaterThanOrEqual(1);
+      expect(t.fr.drawWorlds[t.fr.drawWorlds.length - 1]).toBe(playWorld);
+      t.lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(AC-04) play assembles a FRESH world + runs bootstrap on it', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      const playWorld = t.lifecycle.currentPlayWorld();
+      expect(t.boot.bootstrapCount).toBe(1);
+      expect(t.boot.bootstrapWorld).toBe(playWorld);
+      // enterPlay handed the gateway the SAME fresh world (single pointer, D-3).
+      const enter = t.gateway.events.find((e) => e.kind === 'enterPlay');
+      expect(enter?.world).toBe(playWorld);
+      t.lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(AC-07) play pauses editorApp; stop resumes it', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      expect(t.editorApp.calls).toContain('pause');
+      expect(t.editorApp.calls).not.toContain('resume');
+      t.lifecycle.stopSimulation();
+      expect(t.editorApp.calls).toEqual(['pause', 'resume']);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(AC-05) stop does NOT dispose the shared renderer (dispose-shield)', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      t.lifecycle.stopSimulation();
+      expect(t.fr.disposeCalls).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(AC-05) after stop the lifecycle drops the play world reference (GC reachability)', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      expect(t.lifecycle.currentPlayWorld()).not.toBeNull();
+      t.lifecycle.stopSimulation();
+      expect(t.lifecycle.currentPlayWorld()).toBeNull();
+      t.gateway.events.some((e) => e.kind === 'exitPlay');
+      expect(t.gateway.events.some((e) => e.kind === 'exitPlay')).toBe(true);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(AC-05) play->stop->play is idempotent — a fresh world each play, exit each stop', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      const w1 = t.lifecycle.currentPlayWorld();
+      t.lifecycle.stopSimulation();
+
+      await t.lifecycle.playSimulation();
+      const w2 = t.lifecycle.currentPlayWorld();
+      t.lifecycle.stopSimulation();
+
+      expect(w1).not.toBeNull();
+      expect(w2).not.toBeNull();
+      expect(w2).not.toBe(w1); // fresh world each play (level-load, not restore)
+      expect(t.boot.bootstrapCount).toBe(2);
+      // two enterPlay + two exitPlay, balanced.
+      expect(t.gateway.events.filter((e) => e.kind === 'enterPlay').length).toBe(2);
+      expect(t.gateway.events.filter((e) => e.kind === 'exitPlay').length).toBe(2);
+      // renderer survived both cycles.
+      expect(t.fr.disposeCalls).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('(idempotent) a stray second stop with no play is a no-op', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      t.lifecycle.stopSimulation();
+      const resumeCount1 = t.editorApp.calls.filter((c) => c === 'resume').length;
+      t.lifecycle.stopSimulation(); // stray
+      const resumeCount2 = t.editorApp.calls.filter((c) => c === 'resume').length;
+      expect(resumeCount2).toBe(resumeCount1); // no extra resume
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
+// ── AC-05 dead-concept sweep: run-lifecycle.ts must not carry epoch / 4-layer ──
+// undo vocabulary anymore (grep -i epoch zero hits, plan-strategy AC-05).
+describe('w6 — AC-05 dead-concept grep on run-lifecycle.ts source', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const runLifecycleSrc = readFileSync(resolve(here, '..', 'run-lifecycle.ts'), 'utf8');
+
+  it('has zero "epoch" occurrences (case-insensitive)', () => {
+    expect(/epoch/i.test(runLifecycleSrc)).toBe(false);
+  });
+
+  it('has no makeEpochGuard / EpochGuard export', () => {
+    expect(runLifecycleSrc).not.toContain('EpochGuard');
+    expect(runLifecycleSrc).not.toContain('makeEpochGuard');
+  });
+
+  it('has no 4-layer-undo machinery (rebindSceneInstance / despawnRuntimeSpawns / removeBootstrapSystems)', () => {
+    expect(runLifecycleSrc).not.toContain('rebindSceneInstance');
+    expect(runLifecycleSrc).not.toContain('despawnRuntimeSpawns');
+    expect(runLifecycleSrc).not.toContain('removeBootstrapSystems');
+  });
+});

@@ -6,7 +6,7 @@ import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyD
 import { apiFetch } from '../io/api-client';
 import { buildSpawnEntityFromDragRef, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { resolveMeshOriginalMaterials } from './mesh-original-materials';
-import { entHandle } from '../store/entity-state';
+import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 
 function toDragRef(ref: AssetChatRef): DragAssetRef {
@@ -106,7 +106,7 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
 }
 
 /** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
- *  spawn an `_e2h`-tracked wrapper entity via the gateway (so it is the mount ROOT →
+ *  spawn a wrapper entity via the gateway (so it is the mount ROOT →
  *  round-trips as one `mounts[]` entry), then instantiate the scene sub-asset
  *  under it via the engine's canonical loadByGuid → instantiate spine
  *  (instantiateSceneRefUnderWorld). This renders the REAL GLB geometry (not a
@@ -115,16 +115,18 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
  *  wrapper is left in place (harmless empty node) and we return false — callers
  *  MUST NOT fall back to cubes. */
 async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<boolean> {
-  // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty, and
-  // gives us a real _e2h handle to parent the nested instance under).
+  // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty).
+  // M3 (I1): the spawn applier rewrites cmd._id in place to the real engine
+  // handle — that handle IS the wrapper identity we parent the nested instance
+  // under (no id-to-handle lookup).
   const cmd = {
     kind: 'spawnEntity' as const,
     name,
     components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
   } as { kind: 'spawnEntity'; name: string; components: Record<string, unknown>; _id?: number };
   gateway.dispatch(cmd);
-  const wrapperId = cmd._id;
-  const wrapperHandle = wrapperId !== undefined ? entHandle(gateway.doc, wrapperId) : undefined;
+  const wrapperHandle: EntityHandle | undefined =
+    typeof cmd._id === 'number' && cmd._id >= 0 ? (cmd._id as EntityHandle) : undefined;
   if (wrapperHandle === undefined) {
     console.warn('[spawn-asset] could not resolve wrapper handle for GLB mount');
     return false;
@@ -136,7 +138,7 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<bo
   }
   notifyDocChanged();
   broadcastAssetsChanged();
-  console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapperId, root });
+  console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapper: wrapperHandle, root });
   return true;
 }
 

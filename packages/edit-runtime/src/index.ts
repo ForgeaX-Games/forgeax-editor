@@ -1,7 +1,7 @@
 // @forgeax/editor-edit-runtime — Edit mode main entry
 //
 // This package bundles the editor Edit-mode vite app:
-//   - Engine boot + camera + skylight + viewport
+//   - Engine boot + camera + viewport
 //   - React editor chrome (DockManager, panels, context menu)
 //
 // Shared runtime services (zustand store, entity ops, context menu,
@@ -17,7 +17,9 @@ export { ViewportHints } from './ViewportHints';
 
 // M4: createEngineSync removed — sync.ts deleted (projection layer collapse).
 // ── Engine ──
-export { setupEditorSkylight } from './viewport/skylight';
+// setupEditorSkylight removed — skylight is now authored scene data loaded from
+// the pack; the editor no longer creates its own. See feedback
+// 2026-07-08-skylight-equirect-blocks-scene-switch-serialize.
 export { createViewport } from './viewport/viewport';
 
 // ── Hot reload (two-tier, D-8) ──

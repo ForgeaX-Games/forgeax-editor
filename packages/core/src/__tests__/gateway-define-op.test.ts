@@ -16,7 +16,6 @@ import { Transform } from '@forgeax/engine-runtime';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
-import { entHandle } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
@@ -39,7 +38,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
 }
 
 function readPosY(gw: EditGateway, entity: number): number {
-  const h = entHandle(gw.doc, entity as EntityId) as EntityHandle;
+  const h = (entity as EntityId as EntityHandle) as EntityHandle;
   const tr = gw.doc.world!.get(h, Transform);
   if (!tr.ok) return 0;
   return (tr.value as unknown as { posY: number }).posY;

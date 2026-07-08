@@ -101,6 +101,7 @@
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
@@ -204,6 +205,17 @@
         "@forgeax/engine-import": "workspace:*",
       },
     },
+    "packages/engine/packages/codec": {
+      "name": "@forgeax/engine-codec",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bokuweb/zstd-wasm": "0.0.27",
+        "fzstd": "^0.1.1",
+      },
+      "devDependencies": {
+        "@types/node": "^20.19.40",
+      },
+    },
     "packages/engine/packages/debug-draw": {
       "name": "@forgeax/engine-debug-draw",
       "version": "0.0.0",
@@ -248,9 +260,12 @@
       "name": "@forgeax/engine-fbx",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
         "@types/node": "^20.14.0",
       },
     },
@@ -276,6 +291,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
     },
@@ -301,6 +317,7 @@
       "name": "@forgeax/engine-image",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
@@ -501,6 +518,7 @@
       "name": "@forgeax/engine-runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
@@ -572,6 +590,7 @@
       "name": "@forgeax/engine-vite-plugin-pack",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
       },
@@ -846,6 +865,8 @@
 
     "@blazediff/core": ["@blazediff/core@1.9.1", "", {}, "sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA=="],
 
+    "@bokuweb/zstd-wasm": ["@bokuweb/zstd-wasm@0.0.27", "", {}, "sha512-GDm2uOTK3ESjnYmSeLQifJnBsRCWajKLvN32D2ZcQaaCIJI/Hse9s74f7APXjHit95S10UImsRGkTsbwHmrtmg=="],
+
     "@changesets/apply-release-plan": ["@changesets/apply-release-plan@7.1.1", "", { "dependencies": { "@changesets/config": "^3.1.4", "@changesets/get-version-range-type": "^0.4.0", "@changesets/git": "^3.0.4", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "detect-indent": "^6.0.0", "fs-extra": "^7.0.1", "lodash.startcase": "^4.4.0", "outdent": "^0.5.0", "prettier": "^2.7.1", "resolve-from": "^5.0.0", "semver": "^7.5.3" } }, "sha512-9qPCm/rLx/xoOFXIHGB229+4GOL76S4MC+7tyOuTsR6+1jYlfFDQORdvwR5hDA6y4FL2BPt3qpbcQIS+dW85LA=="],
 
     "@changesets/assemble-release-plan": ["@changesets/assemble-release-plan@6.0.10", "", { "dependencies": { "@changesets/errors": "^0.2.0", "@changesets/get-dependents-graph": "^2.1.4", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "semver": "^7.5.3" } }, "sha512-rSDcqdJ9KbVyjpBIuCidhvZNIiVt1XaIYp73ycVQRIA5n/j6wQaEk0ChRLMUQ1vkxZe51PTQ9OIhbg6HQMW45A=="],
@@ -975,6 +996,8 @@
     "@forgeax/engine-audio": ["@forgeax/engine-audio@workspace:packages/engine/packages/audio"],
 
     "@forgeax/engine-audio-webaudio": ["@forgeax/engine-audio-webaudio@workspace:packages/engine/packages/audio-webaudio"],
+
+    "@forgeax/engine-codec": ["@forgeax/engine-codec@workspace:packages/engine/packages/codec"],
 
     "@forgeax/engine-debug-draw": ["@forgeax/engine-debug-draw@workspace:packages/engine/packages/debug-draw"],
 
@@ -1643,6 +1666,8 @@
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
     "function-bind": ["function-bind@1.1.2", "", {}, "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA=="],
+
+    "fzstd": ["fzstd@0.1.1", "", {}, "sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA=="],
 
     "gensync": ["gensync@1.0.0-beta.2", "", {}, "sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg=="],
 

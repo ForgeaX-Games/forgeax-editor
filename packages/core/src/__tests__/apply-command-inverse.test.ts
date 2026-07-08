@@ -20,7 +20,6 @@ import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Name, Transform } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { entHandle } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 
 // M7 / AC-15: sessions built via createEditSession + injected world; legacy ID
@@ -35,8 +34,8 @@ function spawnCmd(session: EditSession, name: string, parentLegacyId?: number): 
   const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
-  const engineHandle = entHandle(session, (cmd as any)._id!);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for ${(cmd as any)._id}`);
+  // M3 (I1): handle IS identity — cmd._id is the real engine handle.
+  const engineHandle = (cmd as any)._id! as EntityHandle;
   return { legacyId: (cmd as any)._id!, engineHandle };
 }
 
@@ -81,7 +80,7 @@ describe('inverse commands (GREEN)', () => {
       for (const sub of (inverse as any).commands) {
         if (sub.kind === 'spawnEntity') {
           const spawnedId = (sub as any)._id! as number;
-          const handle = entHandle(session, spawnedId);
+          const handle = (spawnedId as EntityHandle);
           expect(handle).toBeDefined();
           if (handle !== undefined) {
             const nc = session.world.get(handle, Name);
@@ -97,7 +96,7 @@ describe('inverse commands (GREEN)', () => {
     const session = createSession();
     const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, (cmd as any)._id!)!;
+    const eH = ((cmd as any)._id! as EntityHandle);
 
     const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
     expect(r.ok).toBe(true);

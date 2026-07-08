@@ -89,21 +89,22 @@ export type { SessionApplier, SessionApplierMeta } from './io/appliers';
 // (they served the EntityNode/doc.entities dual-write mirror).
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './session/document';
 
-// ── Entity state (M7 / AC-15: world-SSOT reads replacing doc.entities) ──
-// Panels/consumers read entity name/parent/components/handle/existence through
-// these helpers (world.get on main, popout cache on popout windows).
+// ── Entity state (M3 / I1: activeWorld read face, handle IS identity) ──
+// Panels/consumers read entity name/parent/components/existence through these
+// helpers, each taking a World (the caller passes gateway.activeWorld) + an
+// EntityHandle. The legacy-id<->handle mapping ops (entHandle/entLegacyId/entMap/
+// entUnmap/entNextId/entIds/entHandles/entRootHandles) are deleted (AC-01);
+// enumeration is worldEntityHandles/worldRootHandles (Name query walk).
 export {
-  entHandle,
-  entLegacyId,
   entExists,
-  entIds,
-  entHandles,
   entName,
   entParent,
-  entAlive,
   entComponent,
   entComponents,
+  worldEntityHandles,
+  worldRootHandles,
 } from './store/entity-state';
+export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError } from './store/entity-state';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
 export { schemaFingerprint, decideReloadTier } from './util/hot-reload';
@@ -233,7 +234,6 @@ export {
   loadDocFromStorage,
   loadDocFromDisk,
   getLoadedSceneRoot,
-  rebindLoadedScene,
   initDiskWatch,
   initSceneList,
   getSceneFile,

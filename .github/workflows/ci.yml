@@ -285,5 +285,10 @@ jobs:
       # Edit-runtime unit tests — viewport ray-math, orbit camera, lifecycle,
       # display-switch, input-target, and other edit-runtime pure functions.
       # These tests are DOM/GPU-free and run in bun's test runner.
+      #
+      # plan-strategy D-12: the level-load run-lifecycle rewrite (M2) moved the
+      # AC-04/05/06/07 regression tests (play→stop→play cycle, editWorld freeze
+      # snapshots, GC reachability) into the edit-runtime package. This step makes
+      # those gates permanent on every push/PR.
       - name: Edit-runtime unit tests
         run: bun -F @forgeax/editor-edit-runtime test

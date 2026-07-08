@@ -1,23 +1,17 @@
-// EditSession applyCommand equivalence tests (M7 world-SSOT rewrite).
+// EditSession applyCommand equivalence tests (M3: handle IS identity rewrite).
 //
-// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-// The prior document working model (doc.entities/order/nextLocalId + the
-// SceneAsset `asset` projection) is deleted — the engine World is the sole
-// entity SSOT and EditSession is {world, registry}. These tests pin that
-// applyCommand still reproduces the observable ID-management + hierarchy
-// semantics, now asserted through the entity-state helpers (legacy ID → engine
-// handle map + world.get) instead of doc.entities.
-//
-// The prior "asset projection" and doc-shape tests are removed: the projection
-// layer no longer exists (M4/M5 collapse), and the raw command→world component
-// state is already covered exhaustively by apply-command.test.ts. This file
-// keeps the ID-allocator + rollback + hierarchy contract, which is the piece
-// that lives in the editor-local layer rather than the engine.
+// feat-20260707-editor-world-fork M3 (I1): the editor-local legacy-id allocator
+// + id-to-handle map are deleted. The runtime entity identity IS the engine
+// EntityHandle: a spawnEntity applier writes the world and rewrites cmd._id in
+// place to the real handle. These tests pin that applyCommand still reproduces
+// the observable spawn / destroy / hierarchy / transaction-rollback semantics,
+// now asserted through the handle read face (entName/entExists take (world,
+// handle)) and childrenOf(world, handle) — not a legacy-id allocator.
 //
 // Anchors:
-//   requirements AC-13: prior document model removed → applyCommand equivalent
-//   requirements AC-15: EntityNode/doc.entities zero hits; world is SSOT
-//   plan-strategy S2 D-6: editor-local ID layer, engine World pure
+//   requirements AC-01: prior document identity model removed → applyCommand equivalent
+//   requirements AC-11: childrenOf walks the world (no dedup / no _e2h)
+//   plan-strategy R-N3: M3 atomic migration — handle identity
 
 import { describe, expect, it } from 'bun:test';
 
@@ -27,74 +21,75 @@ import {
   childrenOf,
   isSelfOrDescendant,
 } from '../session/document';
-import { entExists, entIds, entName, entGetNextId } from '../store/entity-state';
-import type { EditSession } from '../types';
+import { entExists, entName, worldEntityHandles } from '../store/entity-state';
+import type { EntityHandle } from '../scene/scene-types';
+import type { EditSession, EditorOp } from '../types';
+
+/** Spawn via applyCommand and return the real engine handle the applier wrote
+ *  back onto cmd._id (handle IS identity — no legacy id). */
+function spawn(s: EditSession, name: string, parent?: EntityHandle): EntityHandle {
+  const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
+  const r = applyCommand(s, cmd);
+  if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
+  const h = (cmd as { _id?: number })._id;
+  if (h === undefined) throw new Error('spawn did not set _id');
+  return h as EntityHandle;
+}
 
 describe('EditSession — fresh session shape', () => {
-  it('starts empty with nextLocalId=1, no mapped entities, and a live world', () => {
+  it('starts empty with no entities and a live world', () => {
     const s = createEditSession();
-    expect(entGetNextId(s)).toBe(1);
-    expect(entIds(s)).toEqual([]);
-    // The engine World is the entity container (SSOT); no editor-side entities.
+    expect(worldEntityHandles(s.world).length).toBe(0);
     expect(s.world).toBeDefined();
   });
 });
 
-describe('EditSession — spawnEntity ID allocation (equivalent to prior-model nextId)', () => {
-  it('allocates self-incrementing ids 1,2,3', () => {
+describe('EditSession — spawnEntity (handle identity)', () => {
+  it('spawns entities that exist and carry their name, keyed by handle', () => {
     const s = createEditSession();
-    const r1 = applyCommand(s, { kind: 'spawnEntity', name: 'A' });
-    const r2 = applyCommand(s, { kind: 'spawnEntity', name: 'B' });
-    const r3 = applyCommand(s, { kind: 'spawnEntity', name: 'C' });
-    expect(r1.ok && r2.ok && r3.ok).toBe(true);
-    expect(entIds(s)).toEqual([1, 2, 3]);
-    expect(entGetNextId(s)).toBe(4);
-    expect(entName(s, 1)).toBe('A');
-    expect(entName(s, 3)).toBe('C');
-  });
-
-  it('honors a provided _id so destroy-inverse / undo→redo restore the SAME id', () => {
-    const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'keep' }); // id 1
-    // Re-spawn with an explicit _id beyond the allocator → allocator advances past it.
-    const r = applyCommand(s, { kind: 'spawnEntity', name: 'reuse', _id: 7 });
-    expect(r.ok).toBe(true);
-    expect(entExists(s, 7)).toBe(true);
-    expect(entGetNextId(s)).toBe(8);
+    const a = spawn(s, 'A');
+    const b = spawn(s, 'B');
+    const c = spawn(s, 'C');
+    expect(worldEntityHandles(s.world).length).toBe(3);
+    expect(entName(s.world, a)).toBe('A');
+    expect(entName(s.world, c)).toBe('C');
+    expect(a).not.toBe(b);
+    expect(b).not.toBe(c);
   });
 });
 
-describe('EditSession — spawnEntity INVALID_PARENT rollback (equivalent to nextId--)', () => {
-  it('rolls back the id reservation when parent does not exist', () => {
+describe('EditSession — spawnEntity INVALID_PARENT (no id consumed)', () => {
+  it('fails with INVALID_PARENT when parent does not exist; no entity created', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'root' }); // id 1
-    expect(entGetNextId(s)).toBe(2);
+    spawn(s, 'root');
+    expect(worldEntityHandles(s.world).length).toBe(1);
     const r = applyCommand(s, { kind: 'spawnEntity', name: 'orphan', parent: 999 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVALID_PARENT');
-    // The failed allocation must NOT consume an id (the prior code did nextId--).
-    expect(entGetNextId(s)).toBe(2);
-    expect(entIds(s)).toEqual([1]);
+    // The failed spawn must NOT create an entity.
+    expect(worldEntityHandles(s.world).length).toBe(1);
   });
 });
 
-describe('EditSession — destroyEntity (equivalent to order.filter)', () => {
-  it('removes the entity; inverse re-spawns the same id + name', () => {
+describe('EditSession — destroyEntity', () => {
+  it('removes the entity; inverse re-spawns an entity with the same name', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'A' }); // 1
-    applyCommand(s, { kind: 'spawnEntity', name: 'B' }); // 2
-    applyCommand(s, { kind: 'spawnEntity', name: 'C' }); // 3
-    const r = applyCommand(s, { kind: 'destroyEntity', entity: 2 });
+    spawn(s, 'A');
+    const b = spawn(s, 'B');
+    spawn(s, 'C');
+    const r = applyCommand(s, { kind: 'destroyEntity', entity: b });
     expect(r.ok).toBe(true);
-    expect(entIds(s)).toEqual([1, 3]);
-    expect(entExists(s, 2)).toBe(false);
-    // inverse is a spawn that restores the same id 2.
+    expect(worldEntityHandles(s.world).length).toBe(2);
+    expect(entExists(s.world, b)).toBe(false);
+    // inverse is a spawn that restores an entity named 'B' (fresh handle —
+    // handle identity is not reconstructed across a despawn/respawn cycle).
     if (r.ok) {
       expect(r.inverse.kind).toBe('spawnEntity');
       const inv = applyCommand(s, r.inverse);
       expect(inv.ok).toBe(true);
-      expect(entExists(s, 2)).toBe(true);
-      expect(entName(s, 2)).toBe('B');
+      const revived = (r.inverse as { _id?: number })._id as EntityHandle;
+      expect(entExists(s.world, revived)).toBe(true);
+      expect(entName(s.world, revived)).toBe('B');
     }
   });
 
@@ -109,14 +104,9 @@ describe('EditSession — destroyEntity (equivalent to order.filter)', () => {
 describe('EditSession — modifyComponent paths (setComponent / add / remove)', () => {
   it('setComponent merges patch and inverse restores only touched keys', () => {
     const s = createEditSession();
-    applyCommand(s, {
-      kind: 'spawnEntity',
-      name: 'lit',
-      components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
-    }); // 1
-    const r = applyCommand(s, { kind: 'setComponent', entity: 1, component: 'Transform', patch: { posX: 5 } });
+    const e = spawn(s, 'lit');
+    const r = applyCommand(s, { kind: 'setComponent', entity: e, component: 'Transform', patch: { posX: 5 } });
     expect(r.ok).toBe(true);
-    // Inverse restores the pre-edit value (world SSOT — asserted via inverse patch).
     if (r.ok) {
       expect(r.inverse.kind).toBe('setComponent');
       const invPatch = (r.inverse as { patch: Record<string, unknown> }).patch;
@@ -127,74 +117,65 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
 
   it('addComponent then removeComponent are mutual inverses', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'e' }); // 1
-    // EditorHidden is a real editor-registered engine component (M1); use it as
-    // the add/remove target now that the editor-only 'Mesh' authoring component
-    // is gone (M7 — component names must resolve against the engine registry).
-    const add = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
+    const e = spawn(s, 'e');
+    const add = applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
     expect(add.ok).toBe(true);
-    const rm = applyCommand(s, { kind: 'removeComponent', entity: 1, component: 'EditorHidden' });
+    const rm = applyCommand(s, { kind: 'removeComponent', entity: e, component: 'EditorHidden' });
     expect(rm.ok).toBe(true);
-    // add's inverse is removeComponent, rm's inverse is addComponent — mutual.
     if (add.ok) expect(add.inverse.kind).toBe('removeComponent');
     if (rm.ok) expect(rm.inverse.kind).toBe('addComponent');
   });
 
   it('addComponent on an existing component → COMPONENT_EXISTS', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'e' });
-    applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
-    const r = applyCommand(s, { kind: 'addComponent', entity: 1, component: 'EditorHidden', value: {} });
+    const e = spawn(s, 'e');
+    applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
+    const r = applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('COMPONENT_EXISTS');
   });
 });
 
 describe('EditSession — childrenOf / isSelfOrDescendant (world-derived hierarchy)', () => {
-  function tree(): EditSession {
+  function tree(): { s: EditSession; root: EntityHandle; a: EntityHandle; b: EntityHandle; a1: EntityHandle } {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'root' });          // 1
-    applyCommand(s, { kind: 'spawnEntity', name: 'a', parent: 1 });  // 2
-    applyCommand(s, { kind: 'spawnEntity', name: 'b', parent: 1 });  // 3
-    applyCommand(s, { kind: 'spawnEntity', name: 'a1', parent: 2 }); // 4
-    return s;
+    const root = spawn(s, 'root');
+    const a = spawn(s, 'a', root);
+    const b = spawn(s, 'b', root);
+    const a1 = spawn(s, 'a1', a);
+    return { s, root, a, b, a1 };
   }
 
-  it('childrenOf returns children in stable order, roots via parent===null', () => {
-    const s = tree();
-    expect(childrenOf(s, null)).toEqual([1]);
-    expect(childrenOf(s, 1)).toEqual([2, 3]);
-    expect(childrenOf(s, 2)).toEqual([4]);
+  it('childrenOf returns children, roots via parent===null', () => {
+    const { s, root, a, b, a1 } = tree();
+    expect(childrenOf(s.world, null)).toEqual([root]);
+    expect(childrenOf(s.world, root).sort()).toEqual([a, b].sort());
+    expect(childrenOf(s.world, a)).toEqual([a1]);
   });
 
   it('isSelfOrDescendant detects the subtree (cycle guard)', () => {
-    const s = tree();
-    expect(isSelfOrDescendant(s, 1, 4)).toBe(true); // 4 is under 1
-    expect(isSelfOrDescendant(s, 2, 2)).toBe(true); // self
-    expect(isSelfOrDescendant(s, 3, 4)).toBe(false); // 4 not under 3
+    const { s, root, a, b, a1 } = tree();
+    expect(isSelfOrDescendant(s.world, root, a1)).toBe(true); // a1 under root
+    expect(isSelfOrDescendant(s.world, a, a)).toBe(true); // self
+    expect(isSelfOrDescendant(s.world, b, a1)).toBe(false); // a1 not under b
   });
 });
 
-describe('EditSession — transaction rollback (equivalent to prior-model transaction)', () => {
+describe('EditSession — transaction rollback', () => {
   it('rolls back already-applied sub-commands when a later one fails', () => {
     const s = createEditSession();
-    applyCommand(s, { kind: 'spawnEntity', name: 'root' }); // 1
+    const root = spawn(s, 'root');
     const r = applyCommand(s, {
       kind: 'transaction',
       label: 'spawn two then fail',
       commands: [
-        { kind: 'spawnEntity', name: 'ok', parent: 1 },
+        { kind: 'spawnEntity', name: 'ok', parent: root },
         { kind: 'spawnEntity', name: 'bad', parent: 999 }, // INVALID_PARENT
       ],
     });
     expect(r.ok).toBe(false);
-    // Atomicity (entity set): the first spawn must be rolled back too — the
-    // transaction replays each applied sub-command's inverse in reverse.
-    expect(entIds(s)).toEqual([1]);
-    expect(entExists(s, 2)).toBe(false);
-    // Equivalence note: rollback replays inverses (a destroyEntity for the first
-    // spawn), which does NOT decrement the id allocator — so nextLocalId stays
-    // advanced past the consumed id, exactly as the prior nextId allocator did.
-    expect(entGetNextId(s)).toBe(3);
+    // Atomicity: the first spawn is rolled back too — only 'root' remains.
+    expect(worldEntityHandles(s.world).length).toBe(1);
+    expect(entName(s.world, root)).toBe('root');
   });
 });

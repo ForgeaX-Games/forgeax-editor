@@ -26,7 +26,6 @@ import { Transform, Skylight, SkyboxBackground, MeshFilter } from '@forgeax/engi
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { registerApplier, sessionAppliers } from '../io/appliers';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { ApplyResult, EditorOp, EditSession } from '../types';
 
@@ -385,39 +384,26 @@ describe('t12d — undo/redo span + ring buffer overflow (GREEN)', () => {
 });
 
 // ===========================================================================
-// t20a — skylight AC-28 op sequence (RED before t20b, GREEN after t20b)
+// t20a — skylight AC-28: editor no longer creates skylight (deleted)
 // ===========================================================================
-// D-11: setupEditorSkylight's 4 raw world writes become a two-phase dispatch
-// sequence over EXISTING builtin document ops (spawnEntity Skylight solid +
-// spawnEntity SkyboxBackground synchronously; setComponent Skylight {cubemap}
-// once the async IBL is ready). AC-28: the sequence enters the ledger, is
-// undoable, produces trace spans, and skylight.ts holds no applier/ctx-external
-// raw world write afterward.
+// skylight.ts was removed — skylight is now authored scene data loaded from
+// the scene pack. The editor no longer creates its own Skylight entity.
+// See: forgeax-engine-harness/feedbacks/2026-07-08-skylight-equirect-blocks-scene-switch-serialize.md
 //
-// This block is the forced red-green module (plan-strategy §5.1). Two facets:
-//   (1) BEHAVIORAL — driving the exact op sequence through the gateway lands 3
-//       ledger records + 3 root spans (this passes at the gateway level already,
-//       proving the sequence CAN be expressed with builtin ops — the F-10 claim).
-//   (2) SOURCE (the RED lever) — skylight.ts must have zero applier/ctx-external
-//       raw world writes. BEFORE t20b it still calls world.spawn/set/allocSharedRef
-//       (4 sites) → this assertion FAILS. AFTER t20b rewrites the body to
-//       gateway.dispatch + engine.allocSharedRef → it PASSES.
-describe('t20a — skylight AC-28 op sequence (RED before t20b, GREEN after t20b)', () => {
-  const REPO_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..');
-
+// The behavioral test (spawnEntity Skylight through gateway) is retained as a
+// gateway regression test for Skylight component ops.
+describe('t20a — skylight gateway ops (behavioral regression)', () => {
   function createSkySession(): EditSession {
     const session = createEditSession();
     session.world = new World();
     return session;
   }
 
-  it('skylight op sequence (spawnEntity Skylight + spawnEntity SkyboxBackground + setComponent Skylight) lands 3 ledger records + spans (AC-28 behavioral)', () => {
-    // Ensure the components are registered (import side-effect).
+  it('spawnEntity Skylight + SkyboxBackground + setComponent Skylight lands 3 ledger records + spans', () => {
     void Skylight; void SkyboxBackground; void MeshFilter; void Transform;
     const gw = new EditGateway(createSkySession());
     const ledgerBefore = gw.ledger.length;
 
-    // Phase 1 (synchronous): spawn the solid Skylight, then the SkyboxBackground.
     const r1 = gw.dispatch({
       kind: 'spawnEntity', name: 'Skylight',
       components: { Skylight: { colorR: 0.85, colorG: 0.9, colorB: 1.0, intensity: 0.35 } },
@@ -432,57 +418,28 @@ describe('t20a — skylight AC-28 op sequence (RED before t20b, GREEN after t20b
     } as EditorOp);
     expect(r2.ok).toBe(true);
 
-    // Phase 2 (async IBL ready): upgrade the Skylight to image-based lighting via
-    // setComponent (cubemap handle omitted here — the sequence shape is what AC-28
-    // asserts; a real handle is minted by the boot facade in t20b).
     const r3 = gw.dispatch({
       kind: 'setComponent', entity: skyId as number, component: 'Skylight',
       patch: { colorR: 1, colorG: 1, colorB: 1, intensity: 0.2 },
     } as EditorOp);
     expect(r3.ok).toBe(true);
 
-    // Ledger grew by exactly the 3 skylight ops.
     expect(gw.ledger.length).toBe(ledgerBefore + 3);
     const kinds = gw.ledger.slice(-3).map((c) => c.kind);
     expect(kinds).toEqual(['spawnEntity', 'spawnEntity', 'setComponent']);
 
-    // Each op produced a root trace span (executor pushes a span per dispatch).
     const roots = gw.trace.recent(3);
     expect(roots.length).toBe(3);
     expect(roots.map((r) => r.name)).toEqual(['spawnEntity', 'spawnEntity', 'setComponent']);
 
-    // The skylight ops are undoable (document domain → undo stack).
     expect(gw.canUndo()).toBe(true);
   });
 
-  it('skylight.ts has no applier/ctx-external raw world write (AC-28 grep; RED before t20b)', () => {
-    // git grep the skylight landing file for raw world.set/spawn/despawn/
-    // allocSharedRef on code lines (comments excluded). BEFORE t20b this finds the
-    // 4 legacy raw writes → non-empty → FAIL (red). AFTER t20b (body rewritten to
-    // gateway.dispatch + engine.allocSharedRef) → empty → PASS.
-    let out = '';
-    try {
-      out = execFileSync(
-        'git',
-        ['grep', '-nP', String.raw`world\.(set|spawn|despawn|allocSharedRef)\(`,
-          '--', 'packages/edit-runtime/src/viewport/skylight.ts'],
-        { cwd: REPO_ROOT, encoding: 'utf8' },
-      );
-    } catch (e) {
-      // git grep exits 1 with empty stdout when there are no matches (success).
-      const err = e as { status?: number; stdout?: string };
-      if (err.status === 1 && !(err.stdout && err.stdout.trim())) out = '';
-      else if (err.stdout) out = err.stdout;
-      else throw e;
-    }
-    // Filter out comment lines (lines whose match sits after `//` or in a doc `*`).
-    const codeHits = out.split('\n').filter((l) => {
-      if (!l.trim()) return false;
-      const body = l.replace(/^[^:]*:\d+:/, '');
-      const t = body.trimStart();
-      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
-    });
-    expect(codeHits).toEqual([]);
+  it('skylight.ts is deleted — editor no longer creates skylight', () => {
+    const REPO_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..');
+    const skylightPath = path.resolve(REPO_ROOT, 'packages/edit-runtime/src/viewport/skylight.ts');
+    const { existsSync } = require('fs') as typeof import('fs');
+    expect(existsSync(skylightPath)).toBe(false);
   });
 });
 
@@ -517,9 +474,8 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
       components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
     } as EditorOp);
     if (!r.ok) throw new Error('camera spawn failed');
-    const legacyId = (gw.ledger.at(-1) as { _id: number })._id;
-    const h = entHandle(gw.doc, legacyId);
-    if (h === undefined) throw new Error('no engine handle for camera');
+    // M3 (I1): the spawn applier wrote the real handle back onto _id.
+    const h = (gw.ledger.at(-1) as { _id: number })._id;
     return h as unknown as number;
   }
 

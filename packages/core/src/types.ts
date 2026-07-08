@@ -115,7 +115,13 @@ export interface CommandError {
     // ── M5 eval channel codes (plan-strategy §2 D-4) ──
     | 'SCOPE_LOCKED'
     | 'SCRIPT_SYNTAX_ERROR'
-    | 'SCRIPT_RUNTIME_ERROR';
+    | 'SCRIPT_RUNTIME_ERROR'
+    // ── feat-20260707-editor-world-fork M2 (plan-strategy D-5) ──
+    // Play-mode write gate: a document-domain dispatch was attempted while
+    // gateway.mode === 'play'. play data is a read-only simulation view; editing
+    // must not write the (frozen) edit world nor the play world (Edit != Play).
+    // kebab-case to match the M1 error-shape convention (stale-entity-handle).
+    | 'edit-rejected-in-play';
   hint: string;
 }
 

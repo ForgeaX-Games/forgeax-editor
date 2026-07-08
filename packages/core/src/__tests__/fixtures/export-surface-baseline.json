@@ -65,11 +65,11 @@
   },
   {
     "name": "getSelection",
-    "signature": "() => number | null"
+    "signature": "() => EntityHandle | null"
   },
   {
     "name": "getSelectionList",
-    "signature": "() => number[]"
+    "signature": "() => Set<EntityHandle>"
   },
   {
     "name": "hasPendingDiskSave",
@@ -128,10 +128,6 @@
     "signature": "() => Promise<PlayConfig>"
   },
   {
-    "name": "rebindLoadedScene",
-    "signature": "(newRoot: number) => number | null"
-  },
-  {
     "name": "replaceDoc",
     "signature": "(doc: EditSession) => void"
   },
@@ -145,11 +141,11 @@
   },
   {
     "name": "requestRefComponent",
-    "signature": "(entityId: number, comp: string, value: unknown) => void"
+    "signature": "(entity: EntityHandle, comp: string, value: unknown) => void"
   },
   {
     "name": "requestRefEntity",
-    "signature": "(id: number) => void"
+    "signature": "(handle: EntityHandle) => void"
   },
   {
     "name": "switchSceneFile",
@@ -189,11 +185,11 @@
   },
   {
     "name": "useSelection",
-    "signature": "() => number | null"
+    "signature": "() => EntityHandle | null"
   },
   {
     "name": "useSelectionList",
-    "signature": "() => number[]"
+    "signature": "() => Set<EntityHandle>"
   },
   {
     "name": "writePlayConfig",

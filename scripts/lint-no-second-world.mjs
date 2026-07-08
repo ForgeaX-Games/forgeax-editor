@@ -7,11 +7,19 @@
 // and game systems (requirements C-1). This gate asserts the feature DIFF adds
 // no net-new `new World()` / `createWorld()` in production engine source.
 //
+// SCANNING DOMAIN — engine submodule only (research Finding 10).
+//   This gate runs `git -C packages/engine diff` against the nested engine
+//   submodule. Editor-side source (packages/core, packages/edit-runtime, etc.)
+//   is NOT in its scan domain — the gate's purpose is to prevent a second engine
+//   World from being introduced inside the engine library itself. Editor-side
+//   `new World()` calls (e.g. the play-assemble.ts level-load world, plan-strategy
+//   D-1/D-2) are legitimate and out of scope by design.
+//
 // WHY DIFF-SCOPED, NOT ABSOLUTE
-//   editor-core/open-project.ts already constructs a `new World()` on origin/main
-//   (an M3 proof-of-life sidecar). An absolute `count == 0` would be a stale
-//   literal that trips on pre-existing code. We count only lines ADDED by this
-//   feature, so pre-existing worlds don't false-positive and a newly introduced
+//   The engine submodule already contains legitimate `new World()` calls in test
+//   fixtures and demo apps. An absolute `count == 0` would be a stale literal
+//   that trips on pre-existing code. We count only lines ADDED by this feature's
+//   diff range, so pre-existing worlds don't false-positive and a newly introduced
 //   one does.
 //
 // SHALLOW-CLONE RESILIENCE
