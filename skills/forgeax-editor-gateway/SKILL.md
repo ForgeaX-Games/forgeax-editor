@@ -30,7 +30,7 @@ applier (structural, not a hand-pasted label):
 | Domain | Applier table | Ledger behavior | Representative ops |
 |:--|:--|:--|:--|
 | `document` | `documentAppliers` | undo + ledger (reversible) | spawnEntity / setComponent / transaction |
-| `session` | `sessionAppliers` | ledger only (irreversible, auditable) | setSelection / saveDocToDisk / play / stop / cameraOrbit |
+| `session` | `sessionAppliers` | ledger only (irreversible, auditable) | setSelection / saveDocToDisk / requestFrame / play / stop / cameraOrbit |
 | `transient` | `transientAppliers` | neither (ephemeral, no trace) | setHoverEntity / setFieldPreview |
 
 **Immediate op** = `dispatch` with implicit begin=commit collapse.
@@ -63,7 +63,7 @@ readable `droppedTraces` counter.
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
-| `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit appliers |
+| `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame appliers |
 | `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | (M5) Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
 | `channel.eval(code)` | `(string) => EvaluateResult` | (M5) Evaluate JS code with scope①={gateway, query, _import} |
 | `channel.unlockRawScope()` | `() => RawScopeResult` | (M5) Attempt scope② unlock; returns SCOPE_LOCKED in production |
@@ -140,7 +140,7 @@ const docOps = ops.filter(o => o.domain === 'document');
 ```
 
 > [!NOTE]
-> **`play` / `stop` / `cameraOrbit`** are only available after edit-runtime boots and registers
+> **`play` / `stop` / `cameraOrbit` / `requestFrame`** are only available after edit-runtime boots and registers
 > the seam (`registerSessionApplier`). In headless (no edit-runtime, e.g. pure core scripts / tests / CI),
 > they are **unregistered** — `dispatch({ kind: 'play' })` returns `UNKNOWN_OP`. Probe with `listOps()`
 > before sending: if `play`/`stop` are absent, the environment does not support them. Do not blindly fire.
@@ -320,7 +320,7 @@ the host. Before running a loop, first `query` to bound iteration count; keep ba
 Host browser refresh is the only recovery.
 
 **Session ops are irreversible**: session-domain ops write to the ledger but NEVER to the undo
-stack (`setSelection`, `cameraOrbit`, `saveDocToDisk`, etc.). There is no Ctrl+Z for them.
+stack (`setSelection`, `cameraOrbit`, `requestFrame`, `saveDocToDisk`, etc.). There is no Ctrl+Z for them.
 Plan accordingly.
 
 **Async disk continuations are outside span intervals**: the 4 async session ops

@@ -25,9 +25,10 @@ import { createEditSession } from '../session/document';
 // evaluated (in the app the barrel loads all of them). A unit test that
 // dispatches these kinds must import the owning modules so registration runs.
 // M3 t22: write-side setter sugar deleted (S10) — reset via gw.dispatch.
+// NOTE: frame-request applier migrated to edit-runtime (registerSessionApplier,
+// D-11 pattern) — not imported here; requestFrame returns UNKNOWN_OP headless.
 import '../store/selection';
 import '../store/gizmo-mode';
-import '../store/frame-request';
 import '../store/rename-request';
 import '../store/scene-persistence';
 
@@ -40,12 +41,12 @@ function createSession(): EditSession {
 // Every builtin session op with a small, IO-free (or ledger-observable) body.
 // (save/load/switch/create are also session ops but their real effect needs
 // engine IO — their dispatch path + ledger is covered in m2-w2 (d).)
+// requestFrame excluded: applier in edit-runtime (D-11 pattern), UNKNOWN_OP headless.
 const SESSION_OPS: EditorOp[] = [
   { kind: 'setSelection', id: 5 } as EditorOp,
   { kind: 'setSelectionMany', ids: [1, 2] } as EditorOp,
   { kind: 'toggleSelection', id: 3 } as EditorOp,
   { kind: 'setGizmoMode', mode: 'rotate' } as EditorOp,
-  { kind: 'requestFrame' } as EditorOp,
   { kind: 'requestRename', entity: 7 } as EditorOp,
   { kind: 'setSceneId', id: 'ai-level' } as EditorOp,
 ];
