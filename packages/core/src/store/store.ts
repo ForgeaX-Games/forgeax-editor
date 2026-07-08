@@ -22,9 +22,10 @@
 //   plan-strategy §2 D-2: 14-cluster split + store.ts pure facade
 //   plan-strategy §2 D-6: internal seams excluded; §2 D-7: 3 dead exports still
 //     forwarded verbatim (isSelected / buildHiddenKey / clearDocStorage).
-//     requestFrame applier migrated to edit-runtime (registerSessionApplier,
-//     D-11 pattern) — headless core returns UNKNOWN_OP (same as play/stop).
-//   requirements AC-01: barrel export-surface snapshot unchanged
+//     onFrameRequest was DELETED on collection (D-10, M2 m2-w7) — it was a
+//     zero-consumer dead export (research F2); requestFrame is now a session op.
+//   requirements AC-01: barrel export-surface snapshot unchanged (onFrameRequest
+//     was never in the barrel/baseline — only this facade re-exported it)
 //   requirements AC-09: facade is re-export only — no logic, no dispatch-op-ing
 
 // ── cluster 1: gateway (init root) ──
@@ -54,7 +55,7 @@ export {
 } from './gizmo-mode';
 export type { GizmoMode } from './gizmo-mode';
 
-// ── cluster 4: frame-request (applier migrated to edit-runtime via registerSessionApplier — D-11 pattern) ──
+// ── cluster 4: frame-request (requestFrame sealed — M3; onFrameRequest deleted — D-10) ──
 
 // ── cluster 5: rename-request (requestRename sealed — M3; onRenameRequest kept) ──
 export { onRenameRequest } from './rename-request';
