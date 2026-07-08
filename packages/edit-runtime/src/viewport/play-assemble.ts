@@ -196,6 +196,10 @@ export async function assemblePlayWorld(
     registerUpdate(fn: (dt: number) => void): void;
     readonly renderer: unknown;
     readonly world: unknown;
+    // M5 w23 / D-3: the assemble form exposes the host pre-injected input backend
+    // (INPUT_BACKEND_KEY) verbatim as App.input, so the game-facing ctx setter
+    // below can delegate the pointer-lock game gate to it.
+    readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
 
   // ── defaultScene: pure-read GUID path (research Finding 2) ──
@@ -230,6 +234,14 @@ export async function assemblePlayWorld(
       assets: rendererAssets,
       app: playApp,
       registerUpdate: (fn: (dt: number) => void) => playApp.registerUpdate(fn),
+      // M5 w23 / D-3: command-set pointer-lock game gate, wired the same way as
+      // the play-runtime host. Delegates to the assemble-form App.input backend
+      // (host pre-injected via INPUT_BACKEND_KEY). This is the game gate half of
+      // the dual gate; the host gate (getInputTarget() === 'game', evaluated per
+      // click in ViewportComponent's createApp pointerLockAllowed predicate) is
+      // an independent fact and stays in place (D-3: AND-composition, not
+      // double-write).
+      setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
