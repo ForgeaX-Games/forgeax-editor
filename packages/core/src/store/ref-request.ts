@@ -1,8 +1,8 @@
 // store/ref-request — "pin this entity/component/asset into the ForgeaX chat".
 //
-// State: none — a stateless function cluster that reads gateway.doc and emits
-// deixis handles over the typed editor bus. The chat panel (in the same host
-// window since single-realm M2/M4) subscribes via panelBridge.on('editorRef').
+// State: none — a stateless function cluster that reads gateway.activeWorld and
+// emits deixis handles over the typed editor bus. The chat panel (in the same
+// host window since single-realm M2/M4) subscribes via panelBridge.on('editorRef').
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 8 (store.ts:227-281)
@@ -11,27 +11,33 @@
 //   requirements AC-09: pure structural migration.
 import { gateway } from './gateway';
 import { entExists, entName, entComponents } from './entity-state';
-import type { EntityId } from '../types';
+import type { EntityHandle } from '../scene/scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 import { panelBridge } from '../io/panel-bridge';
 
-export function requestRefEntity(id: EntityId): void {
-  if (!entExists(gateway.doc, id)) return;
+// M3 (I1): the deixis handle IS the engine EntityHandle read off activeWorld;
+// transport is the typed editor bus (panelBridge.emit('editorRef'), #74) which
+// the chat panel subscribes to via panelBridge.on('editorRef') in the same host
+// window (single-realm M2/M4).
+export function requestRefEntity(handle: EntityHandle): void {
+  const world = gateway.activeWorld;
+  if (!entExists(world, handle)) return;
   panelBridge.emit('editorRef', {
     kind: 'entity',
-    id,
-    name: entName(gateway.doc, id),
-    components: Object.keys(entComponents(gateway.doc, id)),
+    id: handle,
+    name: entName(world, handle),
+    components: Object.keys(entComponents(world, handle)),
   });
 }
 
 /** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
-export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
-  if (!entExists(gateway.doc, entityId)) return;
+export function requestRefComponent(entity: EntityHandle, comp: string, value: unknown): void {
+  const world = gateway.activeWorld;
+  if (!entExists(world, entity)) return;
   panelBridge.emit('editorRef', {
     kind: 'component',
-    entityId,
-    entityName: entName(gateway.doc, entityId),
+    entityId: entity,
+    entityName: entName(world, entity),
     comp,
     value,
   });

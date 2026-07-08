@@ -81,7 +81,8 @@ export function initDiskWatch(): () => void {
         const currentPack = worldToPack(gateway.doc, currentSceneGuid ?? undefined);
         if (currentPack && JSON.stringify(parsed) === currentPack) return;
         // Genuine external edit → reload via the engine-native loadByGuid path
-        // (loadSceneByGuid tears down the current scene + repopulates _e2h).
+        // (loadSceneByGuid despawns the current scene and re-instantiates it; the
+        // instantiate return handles are the identity — no map to repopulate).
         const sceneEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
         if (!sceneEntry?.guid) return;
         if (sceneEntry.guid) _setCurrentSceneGuid(sceneEntry.guid);

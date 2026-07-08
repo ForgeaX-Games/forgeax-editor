@@ -189,11 +189,13 @@ export function MeshPanel() {
   // selected entity's bound meshAsset guid. The MAIN window publishes stats for the
   // active mesh (entity-bound or asset-selected) — see edit-runtime main.tsx.
   const meshStatsRaw = useMeshStats();
-  // M7 / AC-15: entity name/components read from world (SSOT) via entity-state;
-  // doc.entities/EntityNode deleted.
-  const hasEntity = sel !== null && entExists(gateway.doc, sel);
-  const nodeName = hasEntity ? entName(gateway.doc, sel) : '';
-  const mesh = hasEntity ? (entComponent(gateway.doc, sel, 'Mesh') as Record<string, unknown> | undefined) : undefined;
+  // M3 (I1/AC-08): entity name/components read from the active world (SSOT) via
+  // entity-state, keyed by EntityHandle. entComponent returns a Result — a stale
+  // handle or absent component both yield ok:false (treated as "no mesh").
+  const hasEntity = sel !== null && entExists(gateway.activeWorld, sel);
+  const nodeName = hasEntity ? entName(gateway.activeWorld, sel) : '';
+  const meshR = hasEntity ? entComponent(gateway.activeWorld, sel!, 'Mesh') : null;
+  const mesh = meshR?.ok ? (meshR.value as Record<string, unknown>) : undefined;
 
   // No entity selected but a mesh asset is selected in the Content Browser.
   if (!hasEntity && assetSel?.kind === 'mesh') {
@@ -223,7 +225,8 @@ export function MeshPanel() {
   // Material Slots (v2): the editor models a single `Material` component (not the
   // engine's per-section MeshRenderer.materials[]), so we reflect it as one slot.
   // Per-submesh material binding lives on the instance — noted, not faked.
-  const material = sel !== null ? (entComponent(gateway.doc, sel, 'Material') as Record<string, unknown> | undefined) : undefined;
+  const materialR = sel !== null ? entComponent(gateway.activeWorld, sel, 'Material') : null;
+  const material = materialR?.ok ? (materialR.value as Record<string, unknown>) : undefined;
   const matGuid = material && typeof material.materialAsset === 'string' ? (material.materialAsset as string) : '';
   // Geometry stats for the bound mesh asset (published by the main window keyed by
   // GUID). Inline primitives (no meshAsset GUID) have no loadable geometry, so we

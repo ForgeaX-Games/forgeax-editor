@@ -56,21 +56,21 @@ describe('session routing — selection (m2-w1)', () => {
   it('(a) setSelection op takes effect via gateway dispatch', () => {
     const r = gw.dispatch({ kind: 'setSelection', id: 7 } as EditorOp);
     expect(r.ok).toBe(true);
-    expect(getSelection()).toBe(7);
+    expect(getSelection()).toBe(7 as never);
   });
 
   it('(a) setSelectionMany op sets the whole list', () => {
     const r = gw.dispatch({ kind: 'setSelectionMany', ids: [3, 4, 5] } as EditorOp);
     expect(r.ok).toBe(true);
-    expect(getSelectionList()).toEqual([3, 4, 5]);
+    expect([...getSelectionList()]).toEqual([3, 4, 5] as never);
   });
 
   it('(a) toggleSelection op toggles membership (last-clicked = primary)', () => {
     gw.dispatch({ kind: 'setSelectionMany', ids: [1, 2] } as EditorOp);
     gw.dispatch({ kind: 'toggleSelection', id: 3 } as EditorOp); // add
-    expect(getSelectionList()).toEqual([1, 2, 3]);
+    expect([...getSelectionList()]).toEqual([1, 2, 3] as never);
     gw.dispatch({ kind: 'toggleSelection', id: 2 } as EditorOp); // remove
-    expect(getSelectionList()).toEqual([1, 3]);
+    expect([...getSelectionList()]).toEqual([1, 3] as never);
   });
 
   it('(b) session op grows the ledger but NOT the undo stack', () => {
@@ -86,7 +86,7 @@ describe('session routing — selection (m2-w1)', () => {
     const originsBefore = gw.origins.length;
     const r = gw.dispatch({ kind: 'setSelection', id: 11 } as EditorOp, 'ai');
     expect(r.ok).toBe(true);
-    expect(getSelection()).toBe(11);
+    expect(getSelection()).toBe(11 as never);
     expect(gw.origins.length).toBe(originsBefore + 1);
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
   });
@@ -105,11 +105,11 @@ describe('session routing — selection (m2-w1)', () => {
 
   it('selection ops dispatched through the singleton gateway change state', () => {
     gateway.dispatch({ kind: 'setSelection', id: 42 } as EditorOp);
-    expect(getSelection()).toBe(42);
+    expect(getSelection()).toBe(42 as never);
     gateway.dispatch({ kind: 'setSelection', id: null } as EditorOp);
     expect(getSelection()).toBe(null);
     gateway.dispatch({ kind: 'toggleSelection', id: 8 } as EditorOp);
-    expect(getSelectionList()).toEqual([8]);
+    expect([...getSelectionList()]).toEqual([8] as never);
   });
 });
 

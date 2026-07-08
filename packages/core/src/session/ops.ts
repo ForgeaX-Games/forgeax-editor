@@ -1,91 +1,65 @@
 // Shared entity operations used by panels and keyboard shortcuts. They go
 // through the gateway (undoable) and live above core so they may touch selection.
 //
-// feat-20260701-editor-world-container-doc-ecs-collapse M3:
-// Entity existence checks and parent reads switch to world.get.
-// nextLocalId replaced by editor-side counter (no doc dep).
+// feat-20260707-editor-world-fork M3 (I1): handle IS identity. Entity reads route
+// through the activeWorld read face (entity-state helpers take (world, handle));
+// entity op payloads carry EntityHandles. Within-transaction forward-references
+// (group: spawn a parent, then reparent children under it) use a NEGATIVE
+// placeholder handle resolved by the document applier's transaction-scoped alias
+// map — there is no legacy-id namespace.
 import { childrenOf, isSelfOrDescendant } from './document';
-// M3 (D-6): mutations + selection go through the one gateway door — gateway.dispatch —
-// replacing the deleted origin-less `dispatch` wrapper and the (now applier-private)
-// setSelection/setSelectionMany setters. These are the same session/document ops
-// the UI dispatches; ops.ts is a core-internal helper layer above the store.
 import { gateway } from '../store/store';
-import type { EditorOp, EntityId } from '../types';
-import { Name, ChildOf } from '@forgeax/engine-runtime';
+import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import {
-  entHandle,
-  entLegacyId,
   entExists,
   entParent,
   entName,
   entComponents,
 } from '../store/entity-state';
 
-// ── Editor-side ID counter (replaces gateway.doc.nextLocalId for groupSelected) ───
-let _nextLocalId = 100;
-function nextLocalId(): number { return _nextLocalId++; }
+// ── Transaction forward-reference placeholder allocator ─────────────────────
+// A negative counter mints unique placeholder handles for entities a transaction
+// spawns and then references before they exist (groupSelected). The document
+// applier's DocAliasMap maps each negative placeholder to the real engine handle
+// once the spawn runs. Real engine handles are always non-negative, so the sign
+// disambiguates. Module-level and monotonic — never collides with a live handle.
+let _placeholderSeq = -1;
+function nextPlaceholder(): number { return _placeholderSeq--; }
 
-// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-// doc.entities dual-write mirror deleted — entity handle/existence/parent reads
-// route through entity-state helpers (world SSOT on main, popout cache on
-// popout windows).
-
-/** Resolve legacy EntityId → engine handle (M7 entity-state, no doc.entities). */
-function toEngine(eId: EntityId): EntityHandle | undefined {
-  return entHandle(gateway.doc, eId);
-}
-
-/** Check entity existence via world.get(id,Name).ok (no world.hasEntity). */
-function entityExists(eId: EntityId): boolean {
-  return entExists(gateway.doc, eId);
-}
-
-export function reparentEntity(child: EntityId, parent: EntityId | null): void {
-  if (parent !== null && isSelfOrDescendant(gateway.doc, child, parent)) return;
-  // Check current parent via world ChildOf
-  const eH = toEngine(child);
-  if (eH !== undefined) {
-    const co = gateway.doc.world.get(eH, ChildOf);
-    if (co.ok) {
-      const curParentEh = (co.value as { parent: number }).parent as EntityHandle;
-      // Find legacy ID for current parent
-      const curParentId = eHToLegacy(curParentEh);
-      if (curParentId === parent) return;
-    } else if (parent === null) return;
-  }
+export function reparentEntity(child: EntityHandle, parent: EntityHandle | null): void {
+  const world = gateway.activeWorld;
+  if (parent !== null && isSelfOrDescendant(world, child, parent)) return;
+  const curParent = entParent(world, child);
+  if (curParent === parent) return;
   gateway.dispatch({ kind: 'reparent', entity: child, parent });
-}
-
-function eHToLegacy(engineHandle: EntityHandle): number | undefined {
-  return entLegacyId(gateway.doc, engineHandle);
 }
 
 // post-order (children before parent) so the transaction's reversed inverse
 // respawns parents before children on undo (avoids INVALID_PARENT).
-function postOrder(id: EntityId, out: EntityId[]): void {
-  for (const c of childrenOf(gateway.doc, id)) postOrder(c, out);
-  out.push(id);
+function postOrder(handle: EntityHandle, out: EntityHandle[]): void {
+  for (const c of childrenOf(gateway.activeWorld, handle)) postOrder(c, out);
+  out.push(handle);
 }
 
-export function deleteEntityCascade(id: EntityId): void {
-  if (!entityExists(id)) return;
-  const order: EntityId[] = [];
-  postOrder(id, order);
+export function deleteEntityCascade(handle: EntityHandle): void {
+  if (!entExists(gateway.activeWorld, handle)) return;
+  const order: EntityHandle[] = [];
+  postOrder(handle, order);
   const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  gateway.dispatch({ kind: 'transaction', label: `delete ${id}`, commands });
+  gateway.dispatch({ kind: 'transaction', label: `delete ${handle}`, commands });
   gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
 // Cascade-delete several entities (+ their subtrees) in one undo step. De-dupes
 // overlapping subtrees so an entity is never destroyed twice.
-export function deleteManyCascade(ids: EntityId[]): void {
-  const seen = new Set<EntityId>();
-  const order: EntityId[] = [];
-  for (const id of ids) {
-    if (!entityExists(id)) continue;
-    const sub: EntityId[] = [];
-    postOrder(id, sub);
+export function deleteManyCascade(handles: EntityHandle[]): void {
+  const seen = new Set<EntityHandle>();
+  const order: EntityHandle[] = [];
+  for (const handle of handles) {
+    if (!entExists(gateway.activeWorld, handle)) continue;
+    const sub: EntityHandle[] = [];
+    postOrder(handle, sub);
     for (const e of sub) {
       if (!seen.has(e)) {
         seen.add(e);
@@ -95,38 +69,43 @@ export function deleteManyCascade(ids: EntityId[]): void {
   }
   if (order.length === 0) return;
   const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  gateway.dispatch({ kind: 'transaction', label: `delete ×${ids.length}`, commands });
+  gateway.dispatch({ kind: 'transaction', label: `delete x${handles.length}`, commands });
   gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
 // Group selected entities under a fresh empty parent (single undo step). The
-// group node reuses a pre-allocated id so later reparents in the same
-// transaction can target it.
-export function groupSelected(ids: EntityId[]): void {
-  if (ids.length < 1) return;
-  const newId = nextLocalId();
-  const primary = ids[ids.length - 1]!;
-  const parent = entParent(gateway.doc, primary);
+// group node uses a negative placeholder handle so the reparents in the same
+// transaction can target it before it is spawned (resolved by the applier's
+// transaction alias map).
+export function groupSelected(handles: EntityHandle[]): void {
+  if (handles.length < 1) return;
+  const groupRef = nextPlaceholder();
+  const primary = handles[handles.length - 1]!;
+  const parent = entParent(gateway.activeWorld, primary);
   const commands: EditorOp[] = [
-    { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } }, _id: newId },
-    ...ids.map((e): EditorOp => ({ kind: 'reparent', entity: e, parent: newId })),
+    { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } }, _id: groupRef },
+    ...handles.map((e): EditorOp => ({ kind: 'reparent', entity: e, parent: groupRef })),
   ];
-  gateway.dispatch({ kind: 'transaction', label: `group ×${ids.length}`, commands });
-  gateway.dispatch({ kind: 'setSelection', id: newId });
+  gateway.dispatch({ kind: 'transaction', label: `group x${handles.length}`, commands });
+  // The spawn applier rewrote _id in place to the real handle; select it.
+  const groupCmd = commands[0] as { _id?: number };
+  if (typeof groupCmd._id === 'number' && groupCmd._id >= 0) {
+    gateway.dispatch({ kind: 'setSelection', id: groupCmd._id as EntityHandle });
+  }
 }
 
 // Inverse of group: lift a node's children up to its own parent, then remove the
 // (now-empty) node — all in one transaction (single undo).
-export function ungroupEntity(id: EntityId): void {
-  if (!entityExists(id)) return;
-  const kids = childrenOf(gateway.doc, id);
+export function ungroupEntity(handle: EntityHandle): void {
+  if (!entExists(gateway.activeWorld, handle)) return;
+  const kids = childrenOf(gateway.activeWorld, handle);
   if (kids.length === 0) return;
-  const grandParent = entParent(gateway.doc, id);
+  const grandParent = entParent(gateway.activeWorld, handle);
   const commands: EditorOp[] = [
     ...kids.map((c): EditorOp => ({ kind: 'reparent', entity: c, parent: grandParent })),
-    { kind: 'destroyEntity', entity: id },
+    { kind: 'destroyEntity', entity: handle },
   ];
-  gateway.dispatch({ kind: 'transaction', label: `ungroup ${id}`, commands });
+  gateway.dispatch({ kind: 'transaction', label: `ungroup ${handle}`, commands });
   gateway.dispatch({ kind: 'setSelectionMany', ids: kids });
 }
 
@@ -138,19 +117,16 @@ interface ClipEntry {
 }
 let clipboard: ClipEntry[] = [];
 
-export function copySelected(ids: EntityId[]): number {
-  clipboard = ids
-    .map((id) => {
-      if (!entityExists(id)) return null;
-      // M7 / AC-15: name + components read from world (SSOT) via entity-state;
-      // doc.entities compat layer deleted. spawnComponentData skips Name /
-      // Transform / ChildOf baseline keys, so carrying them here is harmless.
-      const eH = toEngine(id);
-      if (eH === undefined) return null;
-      const nameResult = gateway.doc.world.get(eH, Name);
-      if (!nameResult.ok) return null;
-      const name = (nameResult.value as { value: string }).value;
-      return { name, components: structuredClone(entComponents(gateway.doc, id)) };
+export function copySelected(handles: EntityHandle[]): number {
+  clipboard = handles
+    .map((handle) => {
+      const world = gateway.activeWorld;
+      if (!entExists(world, handle)) return null;
+      // name + components read from the active world (SSOT) via entity-state.
+      // spawnComponentData skips Name/Transform/ChildOf baseline keys, so carrying
+      // them here is harmless.
+      const name = entName(world, handle);
+      return { name, components: structuredClone(entComponents(world, handle)) };
     })
     .filter((c): c is ClipEntry => c !== null);
   return clipboard.length;
@@ -164,7 +140,7 @@ export function hasClipboard(): boolean {
 // Transform (x,z) → the desired spawn position.
 function spawnClipboard(label: string, translate: (t: { x: number; z: number }) => { x: number; z: number }): void {
   const commands: EditorOp[] = [];
-  const ids: EntityId[] = [];
+  const refs: number[] = [];
   for (const c of clipboard) {
     const comps = structuredClone(c.components);
     const t = comps.Transform as { posX?: number; posY?: number; posZ?: number } | undefined;
@@ -173,17 +149,23 @@ function spawnClipboard(label: string, translate: (t: { x: number; z: number }) 
       t.posX = moved.x;
       t.posZ = moved.z;
     }
-    const id = nextLocalId();
-    ids.push(id);
-    commands.push({ kind: 'spawnEntity', name: c.name, parent: null, components: comps, _id: id });
+    const ref = nextPlaceholder();
+    refs.push(ref);
+    commands.push({ kind: 'spawnEntity', name: c.name, parent: null, components: comps, _id: ref });
   }
   gateway.dispatch({ kind: 'transaction', label, commands });
-  gateway.dispatch({ kind: 'setSelectionMany', ids: ids });
+  // Each spawn applier rewrote its _id to the real handle; collect them.
+  const handles: EntityHandle[] = [];
+  for (let i = 0; i < commands.length; i++) {
+    const c = commands[i] as { _id?: number };
+    if (typeof c._id === 'number' && c._id >= 0) handles.push(c._id as EntityHandle);
+  }
+  gateway.dispatch({ kind: 'setSelectionMany', ids: handles });
 }
 
 export function pasteClipboard(): void {
   if (clipboard.length === 0) return;
-  spawnClipboard(`paste ×${clipboard.length}`, (t) => ({ x: t.x + 0.5, z: t.z + 0.5 }));
+  spawnClipboard(`paste x${clipboard.length}`, (t) => ({ x: t.x + 0.5, z: t.z + 0.5 }));
 }
 
 // Paste so the clipboard's centroid lands at (wx,wz), preserving relative layout.
@@ -192,16 +174,17 @@ export function pasteClipboardAt(wx: number, wz: number): void {
   const pts = clipboard.map((c) => (c.components.Transform as { posX?: number; posZ?: number } | undefined) ?? { posX: 0, posZ: 0 });
   const cx = pts.reduce((s, t) => s + (t.posX ?? 0), 0) / pts.length;
   const cz = pts.reduce((s, t) => s + (t.posZ ?? 0), 0) / pts.length;
-  spawnClipboard(`paste@ ×${clipboard.length}`, (t) => ({ x: wx + (t.x - cx), z: wz + (t.z - cz) }));
+  spawnClipboard(`paste@ x${clipboard.length}`, (t) => ({ x: wx + (t.x - cx), z: wz + (t.z - cz) }));
 }
 
-export function duplicateEntity(id: EntityId): void {
-  if (!entityExists(id)) return;
-  // M7 / AC-15: name/parent/components read from world (SSOT) via entity-state.
+export function duplicateEntity(handle: EntityHandle): void {
+  const world = gateway.activeWorld;
+  if (!entExists(world, handle)) return;
+  // name/parent/components read from the active world (SSOT) via entity-state.
   gateway.dispatch({
     kind: 'spawnEntity',
-    name: `${entName(gateway.doc, id)} copy`,
-    parent: entParent(gateway.doc, id),
-    components: structuredClone(entComponents(gateway.doc, id)),
+    name: `${entName(world, handle)} copy`,
+    parent: entParent(world, handle),
+    components: structuredClone(entComponents(world, handle)),
   });
 }

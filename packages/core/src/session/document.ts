@@ -1,22 +1,35 @@
 // applyCommand — world-based imperative mutation (M7: EntityNode deleted).
 //
-// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-// Dual-write mirror helpers (legacy*) + doc.entities/order/nextLocalId removed.
-// Legacy ID → engine handle mapping via SessionInternals (_e2h/_h2e).
-// childrenOf root case reads from internal _e2h keys + world ChildOf.
+// feat-20260707-editor-world-fork-ssot-level-load-play M3 (I1): handle IS identity.
+// The legacy id-to-handle map is deleted. Document appliers write the engine
+// world directly; the runtime entity identity is the engine EntityHandle. The op
+// payloads carry handles; a spawnEntity may carry a NEGATIVE placeholder _id used
+// only to forward-reference the not-yet-spawned entity WITHIN a single transaction
+// (e.g. groupSelected: spawn a group, then reparent children under it). That
+// forward-reference is resolved by a transaction-scoped alias map (DocAliasMap) —
+// an ephemeral map created per top-level dispatch and discarded after; it is NOT a
+// persistent second identity namespace (AC-01: legacy-map symbol grep zero hits).
+// After a spawn applier runs it rewrites cmd._id in place to the real engine
+// handle so the committed ledger op and any post-dispatch reader (spawnClipboard
+// selection) see the concrete handle.
+//
+// childrenOf walks a World via the engine Children component (activeWorld read
+// face) — no legacy-map iteration. Root entities are derived from the world walk
+// (worldRootHandles) — entities with no live ChildOf parent.
 //
 // Anchors:
-//   requirements AC-01: applyCommand 9 case → session.world
-//   requirements AC-06: spawn no resolver seam
-//   requirements AC-15: EntityNode/doc.entities zero hits
+//   requirements AC-01: applyCommand off the double-identity map
+//   requirements AC-09: childrenOf walks activeWorld (play->playWorld/edit->editWorld)
+//   requirements AC-11: childrenOf dedup guard removed (Half A gone; Half B kept)
 //   requirements AC-17: three independent lights (scheme A)
-//   plan-strategy S2 D-1/D-3/D-7: applyCommand→world, Light A, EditorHidden
+//   plan-strategy §3.1: document.childrenOf is the single tree-walk primitive
+//   plan-strategy R-N3: M3 atomic migration — core signatures first
+//   research Finding 9: Half A dedup naturally gone after engine transient fix
 
 import type {
   ApplyResult,
   EditorOp,
   EditSession,
-  EntityId,
 } from '../types';
 
 import {
@@ -31,44 +44,34 @@ import { getRegisteredComponents } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditorHidden } from '../components/EditorHidden';
-import { getInternals } from './edit-session';
 import { EngineFacade } from '../io/engine-facade';
-import { entHandle, entLegacyId, entMap, entUnmap, entNextId, entSetNextId, entGetNextId, entIds, entParent } from '../store/entity-state';
+import { worldRootHandles } from '../store/entity-state';
 
 export { createEditSession } from './edit-session';
 
 // ── IoC context for document appliers (plan-strategy §2 D-2, AC-01) ─────────
-// F-1 (implement-review round 1): the 9 document appliers previously took an
-// `EditSession` and wrote through `session.world` directly — bypassing the
-// EngineFacade, so (a) `.world` was type-visible inside applier bodies (AC-01
-// unmet for the document domain) and (b) their span leaves were never recorded
-// (AC-09 empty for every document op). The fix inverts the dependency: an
-// applier now receives a `DocApplierCtx` whose ONLY world access is the
-// controlled `engine` proxy (routes through EngineFacade._recordLeaf → span
-// attributes) plus an opaque id map. `ctx.world` does not exist — writing it is
-// a tsc error (the ctx-world-negative guard test proves this).
+// The 9 document appliers receive a `DocApplierCtx` whose ONLY world access is
+// the controlled `engine` proxy (routes through EngineFacade._recordLeaf → span
+// attributes). `ctx.world` does not exist — writing it is a tsc error (the
+// ctx-world-negative guard test proves this).
 
 /** Typed engine-write proxy handed to document appliers via `ctx.engine`.
  *  Structurally it IS the EngineFacade instance (cast at the executor / applyCommand
  *  boundary), but typed as the World read/write surface so appliers keep full type
- *  safety on reads (`.value.value`, `.value.entities`, …) WITHOUT ever holding a raw
- *  `world` handle (AC-01). Every write routes through EngineFacade and records its
- *  engine interface leaf onto the active span (AC-09). Reads (`get`) record nothing. */
+ *  safety on reads WITHOUT ever holding a raw `world` handle (AC-01). Every write
+ *  routes through EngineFacade and records its engine interface leaf onto the
+ *  active span (AC-09). Reads (`get`) record nothing. */
 export type EngineWriteProxy = Pick<World, 'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent'>;
 
-/** Legacy EntityId <-> engine handle mapping exposed to document appliers.
- *  Replaces the `EditSession` argument (D-2: EditSession no longer enters the
- *  applier signature). Backed by the same SessionInternals maps via entity-state
- *  helpers — behavior-identical, only the access shape changed. */
-export interface DocIdMap {
-  handle(id: EntityId): EntityHandle | undefined;
-  legacyId(handle: EntityHandle): EntityId | undefined;
-  map(id: EntityId, handle: EntityHandle): void;
-  unmap(id: EntityId, handle: EntityHandle): void;
-  nextId(): EntityId;
-  getNextId(): EntityId;
-  setNextId(id: EntityId): void;
-}
+/** Transaction-scoped spawn-placeholder alias (replaces the deleted legacy
+ *  id-to-handle map). A spawnEntity op may carry a NEGATIVE placeholder `_id` so a
+ *  later sub-op in the SAME transaction can reference the not-yet-spawned entity
+ *  (groupSelected forward-reference). The spawn applier records
+ *  placeholder -> real handle here; toEntity resolves a negative reference
+ *  through it. Positive references ARE handles and pass through unchanged. The
+ *  map is created per top-level dispatch (gateway) or per applyCommand call and
+ *  discarded after — no session-lifetime identity state (AC-01). */
+export type DocAliasMap = Map<number, EntityHandle>;
 
 /** Read-side query snapshot function shape (mirrors io/query-snapshot's
  *  QuerySnapshotFn). Kept structural here to avoid a session→io type import;
@@ -77,30 +80,15 @@ export interface DocIdMap {
 export type DocQueryFn = (descriptor: unknown) => unknown;
 
 /** The IoC context every DOCUMENT applier receives (plan-strategy §2 D-2).
- *  engine (controlled write proxy) + ids (mapping) + dispatchSub (recursive
- *  transaction dispatch) + query (read side, carried for the M2 ctx contract).
- *  Deliberately NO `world` field — `ctx.world` in an applier body is a tsc error
- *  (AC-01 negative; ctx-world-negative guard). */
+ *  engine (controlled write proxy) + alias (transaction placeholder resolution)
+ *  + dispatchSub (recursive transaction dispatch) + query (read side, carried for
+ *  the M2 ctx contract). Deliberately NO `world` field — `ctx.world` in an
+ *  applier body is a tsc error (AC-01 negative; ctx-world-negative guard). */
 export interface DocApplierCtx {
   engine: EngineWriteProxy;
-  ids: DocIdMap;
+  alias: DocAliasMap;
   dispatchSub(ctx: DocApplierCtx, sub: EditorOp): ApplyResult;
   query: DocQueryFn;
-}
-
-/** Build a DocIdMap over a session's internal id<->handle maps. Used by the
- *  executor (gateway) and by the public `applyCommand` wrapper to construct a
- *  ctx from a session without leaking the session (or its world) into appliers. */
-export function docIdMapForSession(session: EditSession): DocIdMap {
-  return {
-    handle: (id) => entHandle(session, id),
-    legacyId: (h) => entLegacyId(session, h),
-    map: (id, h) => entMap(session, id, h),
-    unmap: (id, h) => entUnmap(session, id, h),
-    nextId: () => entNextId(session),
-    getNextId: () => entGetNextId(session),
-    setNextId: (id) => entSetNextId(session, id),
-  };
 }
 
 // ── Component token resolution ─────────────────────────────────────────────
@@ -150,32 +138,34 @@ function spawnComponentData(
   if (parent !== null) {
     out.push({ component: ChildOf, data: { parent } });
   }
+  // Half B (AC-11 / Finding 9): 'Children' stays OUT of the editor's spawn-time
+  // vocabulary. The engine's ChildOf mirror hook is the SOLE writer of Children,
+  // so a rebuilt node (duplicateEntity: entComponents -> spawnComponentData)
+  // must NOT re-author Children or it would double-write. On the dedup-absent
+  // baseline (main HEAD) BASELINE_NAMES already omits 'Children'; keeping it out
+  // of this skip-set-plus-author path is the verify-absence guarantee.
   const BASELINE_NAMES = new Set(['Name', 'Transform', 'ChildOf', 'MeshRenderer']);
   // verify F-1 (round 1): `Editor*`-prefixed keys are intentional transient
   // editor-side markers (e.g. `EditorPendingMeshAsset`, carrying a real GUID for
   // the edit-runtime drag-spawn resolver to consume via `lastCommand.components`
   // BEFORE this drop happens). They are DESIGNED never to reach the world — so
-  // dropping them here is expected, not the data-loss case below. Skipping them
-  // keeps the migration warning a true signal (real orphaned vocabulary only),
-  // instead of firing on every mesh drag and drowning out genuine divergence.
+  // dropping them here is expected, not the data-loss case below.
   const isIntentionalEditorMarker = (n: string): boolean => n.startsWith('Editor');
   if (extraComponents) {
     let hasMeshFilter = false;
     for (const [compName, value] of Object.entries(extraComponents)) {
       if (BASELINE_NAMES.has(compName)) continue;
+      if (compName === 'Children') continue; // Half B: engine owns Children mirror
       if (isIntentionalEditorMarker(compName)) continue;
       const tok = resolveToken(compName);
       if (tok) {
         out.push({ component: tok, data: (value ?? {}) as Record<string, unknown> });
         if (compName === 'MeshFilter') hasMeshFilter = true;
       } else {
-        // F-1 review round 1 (charter P3 — fail loud, never silently drop):
-        // an unregistered component name means an UPSTREAM producer is still
-        // emitting a vocabulary this collapse deleted (e.g. legacy `Mesh` /
-        // `Material` / `GltfRef` from a not-yet-migrated glTF import path). The
-        // component was previously dropped with no signal → geometry vanished
-        // (AGENTS.md #2 data-loss). Warn so the divergence surfaces at author
-        // time instead of as a mysteriously empty entity on reopen.
+        // charter P3 — fail loud, never silently drop: an unregistered component
+        // name means an UPSTREAM producer still emits a vocabulary this collapse
+        // deleted. Warn so the divergence surfaces at author time instead of as a
+        // mysteriously empty entity on reopen (AGENTS.md #2 data-loss).
         console.warn(
           `[editor] spawnComponentData: unknown component '${compName}' dropped — ` +
           `upstream producer still emits a component this editor does not register. ` +
@@ -186,18 +176,10 @@ function spawnComponentData(
     if (hasMeshFilter && !(extraComponents as Record<string, unknown>).MeshRenderer) {
       // Attach an EMPTY MeshRenderer so the entity is renderable WITHOUT minting a
       // synthetic material. The engine's render walk is gated on MeshRenderer
-      // presence (render-system-extract `with: [MeshRenderer]`), so a
-      // MeshFilter-only entity is archetype-absent and never drawn — the
-      // MeshRenderer must exist. But we must NOT allocSharedRef a default
-      // MaterialAsset here: that handle is never cataloged, so on save
-      // collect-scene-asset's `_guidForAsset` returns undefined and throws
-      // SceneCollectAssetGuidUnresolvedError, aborting the whole write (the scene
-      // silently fails to save). An empty `materials: []` routes through the
-      // engine's OWN default-material fallback (defaultMaterialSnapshot → mid-grey
-      // unlit) — identical in Edit and Play — and serializes with zero material
-      // handles to resolve, so save never sees an unresolved handle. (SSOT: the
-      // engine already owns the default-material concept; the editor must not
-      // hand-roll a parallel one.)
+      // presence, so a MeshFilter-only entity is archetype-absent and never drawn.
+      // An empty `materials: []` routes through the engine's OWN default-material
+      // fallback (identical in Edit and Play) and serializes with zero material
+      // handles to resolve, so save never sees an unresolved handle.
       out.push({
         component: MeshRenderer as unknown as CToken,
         data: { materials: [] },
@@ -207,63 +189,63 @@ function spawnComponentData(
   return out;
 }
 
-// ── ID mapping (legacy ID ↔ engine handle) ─────────────────────────────────
+// ── Handle resolution (transaction placeholder alias) ───────────────────────
 
-// The editor's legacy IDs and the engine's entity handles are both raw numbers
-// at runtime; toEntity resolves a legacy ID to its live handle. Brand the result
-// as EntityHandle so every engine.get/set/addComponent/removeComponent below is
-// type-correct without per-call casts (the fallback `id` is only hit for
-// unmapped ids, which the immediately-following existence check rejects).
-function toEntity(ids: DocIdMap, id: number): EntityHandle {
-  return (ids.handle(id) ?? id) as EntityHandle;
+// A reference in an op payload is either a real engine handle (>= 0) or a
+// negative transaction placeholder that resolves through the alias map. Real
+// engine handles are always non-negative (packed slot+generation), so the sign
+// unambiguously discriminates the two.
+function toEntity(alias: DocAliasMap, ref: number): EntityHandle {
+  if (ref < 0) {
+    const h = alias.get(ref);
+    return (h ?? ref) as EntityHandle;
+  }
+  return ref as EntityHandle;
 }
 
-// ── Per-op document appliers (plan-strategy §2 D-1, requirements S11 / AC-25) ─
-// Each of the 9 document primitives extracted from applyCommand's switch as
-// standalone applier functions (bodies byte-identical, no logic change).
-// M1 t2: spawnEntity / destroyEntity / rename / reparent
-// M1 t3: setComponent / addComponent / removeComponent / setHidden
-// M1 t4: transaction (delegated through dispatchSub module-level dispatch)
+// ── Per-op document appliers (plan-strategy §2 D-1) ─────────────────────────
 
-// ── t2.1 spawnEntity applier ────────────────────────────────────────────────
+// ── spawnEntity applier ─────────────────────────────────────────────────────
 
 export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
-  const { engine, ids } = ctx;
+  const { engine, alias } = ctx;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const reuse = cmd._id !== undefined && !ids.handle(cmd._id);
-  const id: number = reuse ? (cmd._id as number) : ids.nextId();
-  if (reuse && id >= ids.getNextId()) ids.setNextId(id + 1);
+  // A negative _id is a transaction placeholder (forward-reference); a
+  // non-negative _id is a concrete handle from a prior apply (redo / inverse).
+  const placeholder: number | undefined =
+    typeof cmd._id === 'number' && cmd._id < 0 ? (cmd._id as number) : undefined;
   const parent = cmd.parent ?? null;
-  const parentEng = parent !== null ? toEntity(ids, parent) : parent;
+  const parentEng = parent !== null ? toEntity(alias, parent) : null;
   if (parentEng !== null && !engine.get(parentEng, Name).ok) {
-    if (!reuse) ids.setNextId(id);
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
   }
-  const compData = spawnComponentData(cmd.name ?? `Entity ${id}`, parentEng, cmd.components);
-  const r = engine.spawn(...compData as any);
-  if (!r.ok) { if (!reuse) ids.setNextId(id); return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } }; }
+  const compData = spawnComponentData(cmd.name ?? 'Entity', parentEng, cmd.components);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = engine.spawn(...(compData as any));
+  if (!r.ok) return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } };
   const eH = r.value as EntityHandle;
-  cmd._id = id;
-  ids.map(id, eH);
-  return { ok: true, inverse: { kind: 'destroyEntity', entity: id } };
+  // Rewrite _id in place to the real handle so the committed ledger op + any
+  // post-dispatch reader (spawnClipboard selection) sees the concrete handle.
+  cmd._id = eH;
+  if (placeholder !== undefined) alias.set(placeholder, eH);
+  return { ok: true, inverse: { kind: 'destroyEntity', entity: eH } };
 }
 
-// ── t2.2 destroyEntity applier ───────────────────────────────────────────────
+// ── destroyEntity applier ────────────────────────────────────────────────────
 
 export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
-  const eH = toEntity(ids, cmd.entity);
+  const { engine, alias } = ctx;
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) {
     return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   }
-  // Collect subtree via engine handles
-  // Handles walked here are live engine entity handles (eH + Children members).
+  // Collect subtree via engine handles (eH + Children members).
   const idStack: EntityHandle[] = [eH];
   const visitedEng = new Set<EntityHandle>();
-  const entries: Array<{ eId: EntityHandle; legacyId: EntityId | undefined; name: string; comps: Record<string, unknown> }> = [];
+  const entries: Array<{ eId: EntityHandle; name: string; comps: Record<string, unknown> }> = [];
   while (idStack.length > 0) {
     const ce = idStack.pop()!;
     if (visitedEng.has(ce)) continue;
@@ -274,35 +256,37 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
       const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
     }
     const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
-    entries.push({ eId: ce, legacyId: ids.legacyId(ce), name: nm, comps });
+    entries.push({ eId: ce, name: nm, comps });
     const chR = engine.get(ce, Children);
     if (chR.ok && chR.value.entities != null) {
       const arr = chR.value.entities as { readonly length: number; [index: number]: number };
       for (let ci = 0; ci < arr.length; ci++) if (!visitedEng.has(arr[ci]! as EntityHandle)) idStack.push(arr[ci]! as EntityHandle);
     }
   }
-  // Despawn bottom-up
+  // Despawn bottom-up.
   for (const entry of [...entries].reverse()) {
     const dr = engine.despawn(entry.eId);
     if (!dr.ok) return { ok: false, error: { code: 'DESPAWN_FAILED', hint: String(dr.error) } };
-    if (entry.legacyId !== undefined) ids.unmap(entry.legacyId, entry.eId);
   }
+  // Inverse respawns the collected entities (names + components survive undo).
+  // parent:null + comps carrying ChildOf preserves the prior mount shape as far
+  // as the collected component data allows (I1: cross-respawn handle identity is
+  // not reconstructed — the respawned entities carry fresh handles).
   const spawnCmds: EditorOp[] = entries.map((e) => ({
     kind: 'spawnEntity' as const,
     name: e.name, parent: null, components: e.comps,
-    _id: e.legacyId ?? (e.eId as number),
   }));
   const rootName = entries[0]?.name ?? `Entity ${cmd.entity}`;
   return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds } };
 }
 
-// ── t2.3 rename applier ──────────────────────────────────────────────────────
+// ── rename applier ────────────────────────────────────────────────────────────
 
 export function applyRename(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
-  const eH = toEntity(ids, cmd.entity);
+  const { engine, alias } = ctx;
+  const eH = toEntity(alias, cmd.entity);
   const nameR = engine.get(eH, Name);
   if (!nameR.ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const before = nameR.value.value;
@@ -311,37 +295,33 @@ export function applyRename(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   return { ok: true, inverse: { kind: 'rename', entity: cmd.entity, name: before } };
 }
 
-// ── t2.4 reparent applier ────────────────────────────────────────────────────
+// ── reparent applier ──────────────────────────────────────────────────────────
 
 export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
-  const eH = toEntity(ids, cmd.entity);
+  const { engine, alias } = ctx;
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
-  const parentEng = cmd.parent !== null ? toEntity(ids, cmd.parent) : null;
+  const parentEng = cmd.parent !== null ? toEntity(alias, cmd.parent) : null;
   if (cmd.parent !== null && !engine.get(parentEng!, Name).ok) {
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` } };
   }
-  if (cmd.parent === cmd.entity) {
+  if (parentEng !== null && parentEng === eH) {
     return { ok: false, error: { code: 'INVALID_PARENT', hint: 'cannot parent an entity to itself' } };
   }
   const coR = engine.get(eH, ChildOf);
-  // Inverse must carry the LEGACY EntityId of the prior parent, not the raw
-  // engine handle — undo re-dispatches through toEntity(legacyId) (merge
-  // origin/main: reparent-desync test asserts inverse.parent === legacyId).
-  const beforeHandle = coR.ok ? (coR.value.parent as EntityHandle) : null;
-  const before = beforeHandle !== null ? ids.legacyId(beforeHandle) ?? null : null;
+  // Inverse carries the prior parent HANDLE (handle IS identity now — no legacy
+  // id translation). null when the entity was previously a root.
+  const before: EntityHandle | null = coR.ok ? (coR.value.parent as EntityHandle) : null;
   if (parentEng !== null) {
     // ChildOf is a relationship (exclusive arm): reparent MUST go through
     // addComponent so the engine's relationship hook fires and keeps the
     // bidirectional Children mirror in sync (remove-from-old + add-to-new). A
-    // bare engine.set — even when ChildOf is already present — skips the
-    // exclusive-arm handling and desyncs Children (the exact node-hidden bug the
-    // harness recorded: feedbacks/2026-07-07-hierarchy-reparent-children-desync
-    // -node-hidden.md §6/§8). The engine treats addComponent on an existing
-    // exclusive relationship as an in-place re-target. Routes through ctx.engine
-    // so the write records its leaf on the active span (AC-09).
+    // bare engine.set skips the exclusive-arm handling and desyncs Children (the
+    // node-hidden bug: feedbacks/2026-07-07-hierarchy-reparent-children-desync-
+    // node-hidden.md §6/§8). Routes through ctx.engine so the write records its
+    // leaf on the active span (AC-09).
     const r = engine.addComponent(eH, { component: ChildOf, data: { parent: parentEng } });
     if (!r.ok) return { ok: false, error: { code: 'REPARENT_FAILED', hint: String(r.error) } };
   } else if (coR.ok) {
@@ -351,15 +331,15 @@ export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   return { ok: true, inverse: { kind: 'reparent', entity: cmd.entity, parent: before } };
 }
 
-// ── t3.1 setComponent applier ────────────────────────────────────────────────
+// ── setComponent applier ──────────────────────────────────────────────────────
 
 export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
+  const { engine, alias } = ctx;
   const tok = resolveToken(cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
-  const eH = toEntity(ids, cmd.entity);
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const cur = engine.get(eH, tok);
   if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
@@ -371,15 +351,15 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore } };
 }
 
-// ── t3.2 addComponent applier ────────────────────────────────────────────────
+// ── addComponent applier ──────────────────────────────────────────────────────
 
 export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
+  const { engine, alias } = ctx;
   const tok = resolveToken(cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
-  const eH = toEntity(ids, cmd.entity);
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   if (engine.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
   const r = engine.addComponent(eH, { component: tok, data: (cmd.value ?? {}) as never });
@@ -387,18 +367,18 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component } };
 }
 
-// ── t3.3 removeComponent applier ─────────────────────────────────────────────
+// ── removeComponent applier ───────────────────────────────────────────────────
 
 export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
-  // Name is intrinsic (merge origin/main: entity-existence-check test asserts
-  // removeComponent Name → PROTECTED_COMPONENT). Guard before token resolution.
+  const { engine, alias } = ctx;
+  // Name is intrinsic: removeComponent Name → PROTECTED_COMPONENT. Guard before
+  // token resolution.
   if (cmd.component === 'Name') return { ok: false, error: { code: 'PROTECTED_COMPONENT', hint: 'Name is intrinsic and cannot be removed' } };
   const tok = resolveToken(cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
-  const eH = toEntity(ids, cmd.entity);
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const cur = engine.get(eH, tok);
   if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
@@ -408,13 +388,13 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
   return { ok: true, inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value } };
 }
 
-// ── t3.4 setHidden applier ───────────────────────────────────────────────────
+// ── setHidden applier ─────────────────────────────────────────────────────────
 
 export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  const { engine, ids } = ctx;
-  const eH = toEntity(ids, cmd.entity);
+  const { engine, alias } = ctx;
+  const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const isHidden = engine.get(eH, EditorHidden).ok;
   if (cmd.hidden && !isHidden) {
@@ -427,11 +407,7 @@ export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult 
   return { ok: true, inverse: { kind: 'setHidden', entity: cmd.entity, hidden: isHidden } };
 }
 
-// ── t4 transaction applier ──────────────────────────────────────────────────
-// M1 t4: transaction dispatches sub-ops through the module-level dispatchSub
-// in appliers.ts (not through EditGateway, which may not be in scope). Keeps
-// the same inverse rollback logic. M2 executor will take over this dispatch
-// responsibility (RD-6 hard constraint).
+// ── transaction applier ───────────────────────────────────────────────────────
 
 export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -450,154 +426,94 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses } };
 }
 
-function entityMapped(session: EditSession, id: number): boolean {
-  return entHandle(session, id) !== undefined;
-}
+// ── applyCommand dispatch ───────────────────────────────────────────────────
 
-// ── applyCommand ───────────────────────────────────────────────────────────┐
-
-/** Dispatch a single document op through the ctx-based appliers.
- *  Shared by both the public `applyCommand` wrapper and (via ctx.dispatchSub)
- *  transaction sub-op recursion. NO span push/pop here — the caller decides span
- *  policy (the gateway executor pushes spans; the applyCommand path preserves the
- *  M1 behavior of NOT pushing per-sub-op spans, AC-25). */
+/** Dispatch a single document op through the ctx-based appliers. Shared by both
+ *  the public `applyCommand` wrapper and (via ctx.dispatchSub) transaction sub-op
+ *  recursion. NO span push/pop here — the caller decides span policy. */
 function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   switch (cmd.kind) {
-    // ── 1. spawnEntity ──────────────────────────────────────────────────────
     case 'spawnEntity':
       return applySpawnEntity(ctx, cmd);
-
-    // ── 2. destroyEntity ────────────────────────────────────────────────────
-    // NOTE(merge origin/main): the reparent-children-desync fix from main lives
-    // inside these extracted IoC appliers (applyReparent uses the exclusive-arm
-    // addComponent path — see its body, anchored to
-    // feedbacks/2026-07-07-hierarchy-reparent-children-desync-node-hidden.md).
-    // main's inline switch bodies collapsed into this dispatch; both semantics
-    // (IoC ctx.engine writes + bidirectional Children mirror upkeep) are retained.
     case 'destroyEntity':
       return applyDestroyEntity(ctx, cmd);
-
-    // ── 3. rename ───────────────────────────────────────────────────────────
     case 'rename':
       return applyRename(ctx, cmd);
-
-    // ── 4. reparent ─────────────────────────────────────────────────────────
     case 'reparent':
       return applyReparent(ctx, cmd);
-
-    // ── 5. setComponent ─────────────────────────────────────────────────────
     case 'setComponent':
       return applySetComponent(ctx, cmd);
-
-    // ── 6. addComponent ─────────────────────────────────────────────────────
     case 'addComponent':
       return applyAddComponent(ctx, cmd);
-
-    // ── 7. removeComponent ──────────────────────────────────────────────────
     case 'removeComponent':
       return applyRemoveComponent(ctx, cmd);
-
-    // ── 8. setHidden ────────────────────────────────────────────────────────
     case 'setHidden':
       return applySetHidden(ctx, cmd);
-
-    // ── 9. transaction ──────────────────────────────────────────────────────
     case 'transaction':
       return applyTransaction(ctx, cmd);
-    // M2: the EditorOp union now also carries session/transient op kinds whose
-    // appliers live in the io/appliers session & transient tables — applyCommand
-    // only handles the 9 DOCUMENT primitives. A non-document kind reaching here
-    // means the gateway routed a session/transient op into the document applier,
-    // which is a wiring bug; fail fast (Fail Fast) rather than silently no-op.
+    // A non-document kind reaching here means the gateway routed a session/
+    // transient op into the document applier — a wiring bug; fail fast.
     default:
       return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applyCommand handles document ops only; "${(cmd as { kind: string }).kind}" is a session/transient op` } };
   }
 }
 
-/** Build a DocApplierCtx from a session (engine facade over session.world + id
- *  map + non-span-pushing dispatchSub). This is the compat path used by the
- *  public `applyCommand(session, cmd)` entry (begin/update/commit/undo/redo and
- *  the index.ts export). The gateway's executor builds its OWN ctx (cached facade
- *  + span-pushing dispatchSub) — both produce the same DocApplierCtx shape. */
+/** Build a DocApplierCtx from a session (engine facade over session.world +
+ *  fresh transaction alias + non-span-pushing dispatchSub). Compat path used by
+ *  the public `applyCommand(session, cmd)` entry (begin/update/commit/undo/redo
+ *  and the index.ts export). The gateway's executor builds its OWN ctx (cached
+ *  facade + span-pushing dispatchSub) — both produce the same DocApplierCtx shape.
+ *  The alias map is created fresh here so a transaction's forward-references
+ *  resolve; it is discarded when this ctx goes out of scope. */
 export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
-  // EngineFacade wraps the live session world. Cast to the typed write-proxy view
-  // (its runtime methods forward the engine World's, so reads stay type-correct)
-  // — the applier never sees the raw world, only this proxy (AC-01).
   const engine = new EngineFacade(session.world as World) as unknown as EngineWriteProxy;
-  const ids = docIdMapForSession(session);
+  const alias: DocAliasMap = new Map();
   const ctx: DocApplierCtx = {
     engine,
-    ids,
-    // Non-span-pushing recursion: matches M1's applyCommand transaction behavior
-    // (the gateway executor supplies a span-pushing dispatchSub instead).
+    alias,
+    // Non-span-pushing recursion reusing the SAME ctx (so the transaction alias
+    // threads through every sub-op — forward-references resolve).
     dispatchSub: (c, sub) => applyCommandCtx(c, sub),
-    // Read side is carried for the ctx contract; the compat applyCommand path has
-    // no query-snapshot wiring of its own, so a no-op stub keeps the shape.
     query: () => ({ ok: false, error: { code: 'QUERY_UNAVAILABLE', hint: 'query snapshot is only wired on the gateway executor ctx' } }),
   };
   return ctx;
 }
 
 /**
- * Apply a document op against a session (public/compat entry, AC-25 behavior-
- * preserving). Builds a DocApplierCtx internally and dispatches through the
- * ctx-based appliers — so the 9 appliers never receive an EditSession or a raw
- * world (D-2), while every existing caller (gateway begin/undo/redo, defineOp
- * document path, index.ts export, apply-command tests) keeps its
- * `applyCommand(session, cmd)` shape.
+ * Apply a document op against a session (public/compat entry). Builds a
+ * DocApplierCtx internally (with a fresh transaction alias) and dispatches
+ * through the ctx-based appliers — so the 9 appliers never receive an EditSession
+ * or a raw world (D-2).
  */
 export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
   return applyCommandCtx(buildDocCtxForSession(session), cmd);
 }
 
-// ── Hierarchy helpers (M7 world reads, no EntityNode) ─────────────────────
-// feat-20260701-editor-world-container-doc-ecs-collapse M7:
-// childrenOf reads from world Children (SSOT). Root entities = all mapped
-// entities that have no ChildOf component.
+// ── Hierarchy helpers (activeWorld walk, handle identity) ───────────────────
+// childrenOf reads a World's Children (SSOT). Root entities = live entities with
+// no live ChildOf parent (worldRootHandles). No legacy-map iteration, no dedup guard —
+// the engine Children mirror after the transient fix writes each entry once
+// (AC-11 Half A gone; Half B 'Children' kept out of spawnComponentData).
 
-export function childrenOf(doc: EditSession, parent: EntityId | null): EntityId[] {
-  // M3: single-realm — world is always live, dead-world branch deleted.
+export function childrenOf(world: World, parent: EntityHandle | null): EntityHandle[] {
   if (parent !== null) {
-    // childrenOf is a session-level READ helper (not an applier), so it resolves
-    // the handle straight off the session id map and reads the live world — it is
-    // not subject to the applier no-world constraint (AC-01 is about mutation
-    // appliers). toEntity now takes a DocIdMap, so use entHandle directly here.
-    const pE = (entHandle(doc, parent) ?? parent) as EntityHandle;
-    const ch = doc.world.get(pE, Children);
+    const ch = world.get(parent, Children);
     if (ch.ok) {
       const val = ch.value as { entities: number[] | Uint32Array };
       const raw = val.entities;
       const arr: number[] = Array.isArray(raw) ? raw : Array.from(raw as Uint32Array);
-      return arr
-        .map((eH: number) => entLegacyId(doc, eH as EntityHandle))
-        .filter((id): id is number => id !== undefined);
+      return arr.map((eH: number) => eH as EntityHandle);
     }
     return [];
   }
-  // Root entities: mapped entities with no ChildOf, OR whose ChildOf.parent is
-  // not an editor-tracked handle. The second clause is essential after a scene
-  // load: populateSessionMapFromSceneRoot maps every authored entity but NOT the
-  // synthetic SceneInstance root, so the scene's top-level entities carry a
-  // ChildOf pointing at that untracked root — a bare `!co.ok` check drops them
-  // all and the hierarchy renders empty. This predicate reads the live world's
-  // ChildOf.parent relation (single-realm SSOT) and is kept byte-identical to
-  // entRootHandles (entity-state.ts) — the two must not drift.
-  const internals = getInternals(doc);
-  const rootIds: EntityId[] = [];
-  for (const [id, h] of internals._e2h) {
-    const co = doc.world.get(h as EntityHandle, ChildOf);
-    if (!co.ok || !internals._h2e.has((co.value as { parent: number }).parent as EntityHandle)) {
-      rootIds.push(id);
-    }
-  }
-  rootIds.sort((a, b) => a - b);
-  return rootIds;
+  // Root entities: live entities with no live ChildOf parent.
+  return worldRootHandles(world);
 }
 
-export function isSelfOrDescendant(doc: EditSession, node: EntityId, candidate: EntityId): boolean {
+export function isSelfOrDescendant(world: World, node: EntityHandle, candidate: EntityHandle): boolean {
   if (node === candidate) return true;
-  for (const c of childrenOf(doc, node)) {
-    if (isSelfOrDescendant(doc, c, candidate)) return true;
+  for (const c of childrenOf(world, node)) {
+    if (isSelfOrDescendant(world, c, candidate)) return true;
   }
   return false;
 }

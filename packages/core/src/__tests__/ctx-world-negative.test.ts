@@ -55,7 +55,7 @@ describe('AC-01 tsc-negative — DocApplierCtx has no world field (F-3)', () => 
     expect(worldError!).toContain('DocApplierCtx');
   });
 
-  it('the legal ctx.engine / ctx.ids access does NOT produce an error (positive control)', () => {
+  it('the legal ctx.engine / ctx.alias access does NOT produce an error (positive control)', () => {
     const out = runNegativeTsc();
     const fixtureErrors = out
       .split('\n')

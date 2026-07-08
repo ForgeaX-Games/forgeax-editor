@@ -18,7 +18,6 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform, MeshFilter, PointLight, Skylight, Camera, Name } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
 import { querySnapshot } from '../io/query-snapshot';
@@ -99,7 +98,7 @@ describe('querySnapshot dynamic resolution (t25, AC-14)', () => {
 
   it('snapshot posY matches world.get Transform.posY', () => {
     const e = spawnEntity(gw, 'ball', 10, 25);
-    const h = entHandle(gw.doc, e as EntityId) as EntityHandle;
+    const h = (e as EntityId as EntityHandle) as EntityHandle;
 
     const rows = snap(gw, ['Transform']);
     if (rows.length === 0) return;

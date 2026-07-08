@@ -44,8 +44,8 @@ export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCam
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
 
-import type { EntityId, EditSession, OpHandle, EngineFacade } from '@forgeax/editor-core';
-import { entIds, entLegacyId, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import type { OpHandle, EngineFacade } from '@forgeax/editor-core';
+import { worldEntityHandles, entExists, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
@@ -69,9 +69,10 @@ type EditorTransform = {
   rotX: number; rotY: number; rotZ: number;
   scaleX: number; scaleY: number; scaleZ: number;
 };
-function readEntTransform(session: EditSession, id: EntityId): EditorTransform | undefined {
-  const t = entComponent(session, id, 'Transform');
-  if (!t) return undefined;
+function readEntTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
+  const r = entComponent(world, handle, 'Transform');
+  if (!r.ok) return undefined;
+  const t = r.value;
   const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
   const e = quatToEuler(n(t.quatX, 0), n(t.quatY, 0), n(t.quatZ, 0), n(t.quatW, 1));
   return {
@@ -80,10 +81,10 @@ function readEntTransform(session: EditSession, id: EntityId): EditorTransform |
     scaleX: n(t.scaleX, 1), scaleY: n(t.scaleY, 1), scaleZ: n(t.scaleZ, 1),
   };
 }
-// EditorHidden is an editor-only marker; the entComponents walk surfaces it on
-// both the main window (world) and popout windows (snapshot cache).
-function isEntHidden(session: EditSession, id: EntityId): boolean {
-  return 'EditorHidden' in entComponents(session, id);
+// EditorHidden is an editor-only marker; the entComponents walk surfaces it from
+// the active world.
+function isEntHidden(world: World, handle: EntityHandle): boolean {
+  return 'EditorHidden' in entComponents(world, handle);
 }
 
 const DEG2RAD = Math.PI / 180;
@@ -408,7 +409,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
     // — otherwise the gizmo lags at the pre-drag position until release.
     const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
-    const t = live ?? (sel !== null ? readEntTransform(gateway.doc, sel) : undefined);
+    const t = live ?? (sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined);
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
@@ -493,9 +494,9 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     // M7-a (AC-15): read the selected entity's components from the world (SSOT),
     // not the deleted doc.entities mirror. entComponents returns component-name →
     // POD for every component the entity carries.
-    const comps = sel !== null ? entComponents(gateway.doc, sel) : undefined;
+    const comps = sel !== null ? entComponents(gateway.activeWorld, sel) : undefined;
     if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
-    const t = sel !== null ? readEntTransform(gateway.doc, sel) : undefined;
+    const t = sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined;
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
     const light = comps.Light as Record<string, unknown> | undefined;
     const cam = comps.Camera as Record<string, unknown> | undefined;
@@ -553,18 +554,19 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   }
 
   /**
-   * Walk up the ChildOf hierarchy from `handle` until we find an entity that
-   * is mapped in the editor session (_h2e). This resolves internal mesh
-   * entities (e.g. inside a GLB mount) to their editor-level ancestor.
+   * Walk up the ChildOf hierarchy from `handle` until we find an editor-level
+   * entity. M3 (I1): handle IS identity, so an "editor-level" entity is one the
+   * editor authors — it carries a Name (entExists). This resolves internal mesh
+   * entities (e.g. inside a GLB mount, which have no Name) to their named
+   * editor-level ancestor. Returns the handle, or null if hidden / none found.
    */
-  function resolveEditorEntity(doc: EditSession, handle: EntityHandle): EntityId | null {
+  function resolveEditorEntity(world: World, handle: EntityHandle): EntityHandle | null {
     let cur: EntityHandle | undefined = handle;
     const seen = new Set<number>();
     while (cur !== undefined) {
       if (seen.has(cur as number)) break;
       seen.add(cur as number);
-      const id = entLegacyId(doc, cur);
-      if (id !== undefined) return isEntHidden(doc, id) ? null : id;
+      if (entExists(world, cur)) return isEntHidden(world, cur) ? null : cur;
       // merge origin/main: main's ChildOf-walk read the raw `world`; the IoC
       // refactor removed that binding — reads go through the injected facade.
       const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
@@ -578,20 +580,21 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
    *  Tries engine pick first (mesh-aware, uses MeshAsset.aabb); if that misses
    *  (e.g. because the engine hasn't populated .aabb yet — see engine feedback
    *  2026-07-06), falls back to the editor's Transform-scale AABB sweep. */
-  function pick(clientX: number, clientY: number): EntityId | null {
+  function pick(clientX: number, clientY: number): EntityHandle | null {
     const r = canvas.getBoundingClientRect();
     const sx = clientX - r.left, sy = clientY - r.top;
     // merge origin/main: enginePick needs the raw engine World (read-only,
     // mesh-aware). The IoC refactor removed the direct `world` binding, so reach
     // it through the facade's read-only escape hatch (no write → gate-A clean).
     const w = engine._rawWorld();
+    const activeWorld = gateway.activeWorld;
 
     // 1) Engine pick (precise, mesh-level AABB + world matrix)
     try {
       const hit = enginePick(w, camera as unknown as EntityHandle, sx, sy, r.width, r.height);
       if (hit) {
-        const resolved = resolveEditorEntity(gateway.doc, hit.entity as EntityHandle);
-        if (resolved) return resolved;
+        const resolved = resolveEditorEntity(activeWorld, hit.entity as EntityHandle);
+        if (resolved !== null) return resolved;
       }
     } catch (e) {
       if (!(e instanceof PickError)) throw e;
@@ -603,12 +606,12 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     //    must not be selectable via the fallback (matches engine pick's
     //    candidate set). See feedback 2026-07-07.
     const { origin, dir } = rayAt(clientX, clientY);
-    let best: EntityId | null = null, bestT = Infinity;
-    for (const id of entIds(gateway.doc)) {
-      if (isEntHidden(gateway.doc, id)) continue;
-      const comps = entComponents(gateway.doc, id);
+    let best: EntityHandle | null = null, bestT = Infinity;
+    for (const id of worldEntityHandles(activeWorld)) {
+      if (isEntHidden(activeWorld, id)) continue;
+      const comps = entComponents(activeWorld, id);
       if (!('MeshFilter' in comps) || !('MeshRenderer' in comps)) continue;
-      const t = readEntTransform(gateway.doc, id);
+      const t = readEntTransform(activeWorld, id);
       if (!t) continue;
       const { center, half } = entityBox(t);
       const hit = rayAABB(origin, dir, center, half);
@@ -621,7 +624,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   type Mode = 'none' | 'orbit' | 'pan' | 'zoom' | 'pendDrag' | 'drag' | 'axisDrag';
   let mode: Mode = 'none';
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
-  let dragId: EntityId | null = null;
+  let dragId: EntityHandle | null = null;
   // M4: entity IDs are directly world entities, so the drag target legacy id IS
   // the engine handle at runtime — brand it at the assignment seam (mirrors core's
   // toEntity) so the strict-typed engine.set fallback write below accepts it.
@@ -729,7 +732,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
 // M4: worldEntityFor removed — entity IDs are directly world entities.
       dragWorld = sel as unknown as EntityHandle;
       // M7-a: read the grab-time Transform from the world (doc.entities gone).
-      dragOrig = { ...(readEntTransform(gateway.doc, sel) ?? {}) };
+      dragOrig = { ...(readEntTransform(gateway.activeWorld, sel) ?? {}) };
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
       livePatch = {};
       if (h >= 3) {
@@ -752,7 +755,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
       gateway.dispatch({ kind: 'setSelection', id: hit });
       dragId = hit;
       dragWorld = hit as unknown as EntityHandle;
-      dragOrig = { ...(readEntTransform(gateway.doc, hit) ?? {}) };
+      dragOrig = { ...(readEntTransform(gateway.activeWorld, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
       grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
@@ -900,7 +903,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
-    const t = sel !== null ? readEntTransform(gateway.doc, sel) : undefined;
+    const t = sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined;
     if (!t) return;
     const { center, half } = entityBox(t);
     target = center;
@@ -955,7 +958,7 @@ onDisplayModeChange(() => refreshGizmos());
     if (sel === null) return null;
     // M7-a: signature the selected entity's components read from the world (SSOT)
     // instead of the deleted doc.entities mirror. Empty dict = entity gone.
-    const comps = entComponents(gateway.doc, sel);
+    const comps = entComponents(gateway.activeWorld, sel);
     return Object.keys(comps).length > 0 ? JSON.stringify(comps) : '\u2205'; // '∅' = selected entity gone
   };
   let lastSelSig = selSig();

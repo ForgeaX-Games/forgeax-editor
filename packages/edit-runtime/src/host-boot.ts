@@ -33,18 +33,18 @@ import {
   HANDLE_SPHERE,
   HANDLE_CYLINDER,
 } from '@forgeax/engine-runtime';
-import { Entity, toShared } from '@forgeax/engine-ecs';
+import { toShared } from '@forgeax/engine-ecs';
 import {
   gateway,
   loadDocFromStorage,
   loadDocFromDisk,
   getLoadedSceneRoot,
-  rebindLoadedScene,
   getSceneId,
   initSceneList,
   initDiskWatch,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
+  hasPendingDiskSave,
   setPathResolver,
   getAssetSelection,
   onAssetSelectionChange,
@@ -53,8 +53,9 @@ import {
   publishMeshStats,
   broadcastAssetsChanged,
 } from '@forgeax/editor-core';
+import { attachBrowserInputBackend, INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import {
-  entIds,
+  worldEntityHandles,
   entComponent,
   resolveGamePath,
   apiFetch,
@@ -66,6 +67,7 @@ import {
   allowedParentOrigins,
 } from '@forgeax/editor-core/protocol';
 import { createRunLifecycle, type RunLifecycle } from './viewport/run-lifecycle';
+import { assemblePlayWorld, type PlayAssembly } from './viewport/play-assemble';
 import { setupEditorSkylight } from './viewport/skylight';
 import { installDragSpawnMeshResolver } from './viewport/drag-spawn-resolve';
 
@@ -80,7 +82,15 @@ type RendererLike = {
   assets: { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> };
   store: unknown;
 };
-type EditorAppLike = { registerUpdate(fn: (dt: number) => void): void; start(): void };
+// The editor App: registerUpdate/start (edit boot) + pause/resume (▶/■ drive the
+// editWorld freeze/thaw, D-2). dispose-shielded play uses stop() on the PLAY app,
+// never on this one.
+type EditorAppLike = {
+  registerUpdate(fn: (dt: number) => void): void;
+  start(): void;
+  pause(): { ok: boolean; error?: unknown };
+  resume(): { ok: boolean; error?: unknown };
+};
 type ViewportLike = { resetCamera(): void };
 
 export type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
@@ -153,7 +163,7 @@ export async function resolveEditPhysics(): Promise<PhysicsBackend | undefined> 
 // A small demo scene so the editor opens with something to edit + render. These
 // are ordinary commands -> they land in the ledger and are undoable.
 function seedDemoScene(): void {
-  if (entIds(gateway.doc).length > 0) return;
+  if (worldEntityHandles(gateway.activeWorld).length > 0) return;
   // Mirrors the new-game template's scene.json: a lowpoly vignette + a movable
   // Player. A scene-less game (or fresh workspace) opens on this same starter.
   gateway.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
@@ -204,6 +214,18 @@ export interface HostSessionContext {
   readonly discoverGameCameraFromWorld: () => void;
   /** Re-apply the derived active camera to the engine. */
   readonly applyActiveCamera: () => void;
+  /**
+   * The shared canvas (M2 play-assemble). ▶ Play attaches a fresh input backend
+   * to THIS canvas for the play world, and detaches it on ■ Stop — the single
+   * host-owned renderer already targets this canvas (D-1), so play draws here too.
+   */
+  readonly canvas: HTMLCanvasElement;
+  /**
+   * Physics backend resolved from the game's forge.json (ViewportComponent's
+   * resolveEditPhysics), or undefined for a non-physics game. Threaded through so
+   * the play assembly's plugin set mirrors the edit assembly (D-7).
+   */
+  readonly physics: PhysicsBackend | undefined;
 }
 
 export interface HostSession {
@@ -228,7 +250,7 @@ export interface HostSession {
  * Returns the ▶/■ pair so ViewportComponent can wire the ViewportChrome actions.
  */
 export async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
-  const { app, world, renderer, cameraEntity, viewport, emitBoot, setBootStage, discoverGameCameraFromWorld, applyActiveCamera } = ctx;
+  const { app, world, renderer, viewport, emitBoot, setBootStage, discoverGameCameraFromWorld, applyActiveCamera } = ctx;
 
   // M3 t16 (plan-strategy §2 D-2 / D-11, research F-3): obtain the single
   // core-minted EngineFacade AFTER ViewportComponent injected the world
@@ -249,7 +271,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   setBootStage('loadDoc');
   await renderer.ready.catch(() => null);
   await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-  if (entIds(gateway.doc).length === 0) {
+  if (worldEntityHandles(gateway.activeWorld).length === 0) {
     seedDemoScene();
     // The bare seed is a viewport convenience for a scene-less game — do NOT
     // auto-persist it to the game dir. The user's first real edit re-schedules a save.
@@ -259,7 +281,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     const loadedRoot = getLoadedSceneRoot();
     if (loadedRoot !== null) defaultSceneRoot = loadedRoot;
   }
-  emitBoot(`scene ▸ loaded entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+  emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} root=${defaultSceneRoot ?? 'none'}`);
 
   // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
   // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
@@ -272,27 +294,16 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // single realm boots them concurrently, exposing this ordering.
   broadcastAssetsChanged();
 
-  // ── ▶ Play run-lifecycle (was bootEditor :712) ──────────────────────────────
+  // ── ▶ Play / ■ Stop run-lifecycle (M2 rewrite — play=level-load, stop=drop) ──
+  // play forks a FRESH world assembled from the disk defaultScene; the edit world
+  // is frozen (editorApp.pause) and never touched (AC-04/06/07). host-boot's job
+  // here is to build the play-assemble dependency closures (defaultScene load /
+  // bootstrap resolve / input attach) and wire them into createRunLifecycle.
   let runLifecycle: RunLifecycle | null = null;
   const playSimulation = (): void => { void runLifecycle?.playSimulation(); };
   const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
 
-  const collectWorldEntityHandles = (): Set<number> => {
-    const handles = new Set<number>();
-    const graph = world._getGraph();
-    for (const arch of graph.archetypes) {
-      const selfCol = arch.columns.get(Entity.id)?.get('self');
-      if (!selfCol) continue;
-      for (let row = 0; row < arch.size; row++) {
-        const packed = selfCol.view[row]!;
-        if (packed !== 0) handles.add(packed as unknown as number);
-      }
-    }
-    return handles;
-  };
-
-  // ── ▶ Play game-module resolver (was bootEditor :723-842) ────────────────────
-  let cachedDefaultScene: unknown;
+  // ── forge.json → game fs base (bootstrap module URL resolution) ──────────────
   let cachedProjectRootAbs: string | undefined;
   const getProjectRootAbs = async (): Promise<string> => {
     if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
@@ -317,10 +328,10 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     const fsBase = toFsUrl(rootAbs);
     return gameRoot ? `${fsBase}/${gameRoot}` : fsBase;
   };
-  const resolveGameModuleForPlay = async (): Promise<unknown> => {
-    const gameFsBase = await resolveGameFsBase();
-    const candidates: string[] = [];
-    cachedDefaultScene = undefined;
+
+  // Read forge.json once per ▶ Play so defaultScene + entry are consistent (both
+  // come from the same GameProject read). Returns { entry?, defaultSceneGuid? }.
+  const readForgeForPlay = async (): Promise<{ entry?: string; defaultSceneGuid?: string }> => {
     try {
       const gameForgePath = resolveGamePath(FORGE_JSON);
       const gp = await loadGameProject(async () => {
@@ -330,24 +341,45 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
         if (!j.content) throw new Error('Empty content');
         return j.content;
       });
-      if (gp.ok) {
-        const entry = gp.value.entry;
-        if (typeof entry === 'string' && entry) candidates.push(entry.replace(/^\.?\//, ''));
-        const dsGuid = gp.value.defaultScene;
-        if (typeof dsGuid === 'string' && dsGuid.length > 0) {
-          const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-          const parsed = AssetGuid.parse(dsGuid);
-          if (parsed.ok) {
-            await renderer.ready.catch(() => null);
-            const assetRes = await renderer.assets.loadByGuid(parsed.value);
-            if (assetRes.ok) cachedDefaultScene = assetRes.value;
-            else console.info('[editor] ▶ Play defaultScene preload skipped (best-effort):', (assetRes.error as { code?: string })?.code);
-          }
-        }
-      }
+      if (!gp.ok) return {};
+      const out: { entry?: string; defaultSceneGuid?: string } = {};
+      const entry = gp.value.entry;
+      if (typeof entry === 'string' && entry) out.entry = entry.replace(/^\.?\//, '');
+      const ds = gp.value.defaultScene;
+      if (typeof ds === 'string' && ds.length > 0) out.defaultSceneGuid = ds;
+      return out;
     } catch (e) {
-      console.warn('[editor] ▶ Play forge.json read failed (using entry defaults):', e);
+      console.warn('[editor] ▶ Play forge.json read failed:', e);
+      return {};
     }
+  };
+
+  // play-assemble dep: load the SceneAsset for the forge.json defaultScene GUID.
+  // Pure read path (loadByGuid) — sidesteps the collect-side fidelity hazards
+  // (research Finding 2). Null when the game declares no defaultScene.
+  const loadDefaultScene = async (): Promise<unknown> => {
+    const forge = await readForgeForPlay();
+    if (!forge.defaultSceneGuid) return null;
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    const parsed = AssetGuid.parse(forge.defaultSceneGuid);
+    if (!parsed.ok) return null;
+    await renderer.ready.catch(() => null);
+    const assetRes = await renderer.assets.loadByGuid(parsed.value);
+    if (!assetRes.ok) {
+      console.info('[editor] ▶ Play defaultScene load skipped:', (assetRes.error as { code?: string })?.code);
+      return null;
+    }
+    return assetRes.value;
+  };
+
+  // play-assemble dep: resolve + validate the game bootstrap module. Same entry
+  // candidates as the old original-in-place path; returns null when no module has
+  // a bootstrap export (graceful — play renders the scene with no game logic).
+  const resolveBootstrap = async (): Promise<((w: unknown, c?: unknown) => void | Promise<void>) | null> => {
+    const forge = await readForgeForPlay();
+    const gameFsBase = await resolveGameFsBase();
+    const candidates: string[] = [];
+    if (forge.entry) candidates.push(forge.entry);
     for (const fallback of ['main.ts', 'src/main.ts']) {
       if (!candidates.includes(fallback)) candidates.push(fallback);
     }
@@ -355,42 +387,45 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
       const url = `${gameFsBase}/${rel}`;
       try {
         const mod = await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
-        if (mod && typeof (mod as { bootstrap?: unknown }).bootstrap === 'function') return mod;
+        const bootstrap = (mod as { bootstrap?: unknown }).bootstrap;
+        if (typeof bootstrap === 'function') {
+          return bootstrap as (w: unknown, c?: unknown) => void | Promise<void>;
+        }
       } catch { /* try next candidate */ }
     }
-    throw new Error(`module not found: ${getSceneId()}`);
+    console.warn(`[editor] ▶ Play bootstrap module not found for ${getSceneId()}`);
+    return null;
+  };
+
+  // play-assemble dep: attach a fresh input backend to the SHARED canvas for the
+  // play world + pre-inject the INPUT_BACKEND_KEY resource BEFORE createApp runs
+  // plugins (engine D-3). Returns the detach callback the lifecycle calls on ■ Stop.
+  const attachPlayInput = (playWorld: unknown): (() => void) | undefined => {
+    const handle = attachBrowserInputBackend(ctx.canvas);
+    (playWorld as { insertResource(k: string, v: unknown): void }).insertResource(INPUT_BACKEND_KEY, handle.backend);
+    return () => { try { handle(); } catch { /* already detached */ } };
   };
 
   runLifecycle = createRunLifecycle({
-    world: world as never,
-    app: app as never,
-    renderer: renderer as never,
-    bus: gateway as never,
-    collectEntityHandles: () => collectWorldEntityHandles(),
-    resolveGameModule: resolveGameModuleForPlay,
-    getSlug: () => getSceneId() ?? '',
-    getDefaultSceneRoot: () => defaultSceneRoot,
-    getDefaultScene: () => cachedDefaultScene,
-    onAfterBootstrap: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
-    rebindSceneInstance: (newRoot: number) => {
-      const bound = rebindLoadedScene(newRoot);
-      if (bound !== null) defaultSceneRoot = bound;
-      emitBoot(`scene ▸ restored entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+    editorApp: app,
+    gateway,
+    assemble: (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
+      assemblePlayWorld({
+        renderer: renderer as never,
+        loadDefaultScene,
+        resolveBootstrap,
+        attachInput: attachPlayInput,
+        ...(ctx.physics ? { physics: ctx.physics } : {}),
+      }),
+    onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
+    onDirtyPlayHint: () => {
+      // D-10: play re-instantiates the last-SAVED scene from disk; unsaved
+      // in-memory edits are not reflected. Surface a structured hint (no auto-save
+      // — keep "save" an explicit user action).
+      if (hasPendingDiskSave()) {
+        emitBoot('play ▸ play-uses-last-saved-scene (unsaved edits not reflected)', 'warn');
+      }
     },
-    mountUiRoot: () => {
-      // Controlled UI root scoped to the viewport panel, NOT document.body. It is
-      // absolutely positioned inside `.ep-viewport-root` (position:relative +
-      // overflow:hidden) so the game HUD both shares the canvas-local coordinate
-      // space (floatScore uses canvas-local CSS px) and is clipped to the viewport
-      // rect. On ■ Stop unmountUiRoot removes this one element, discarding ALL game
-      // DOM in a single cut (B) — the HUD can no longer be stranded as a remnant.
-      const el = document.createElement('div');
-      el.id = 'game-ui-root';
-      el.style.cssText = 'position:absolute;inset:0;z-index:5;pointer-events:none;overflow:hidden';
-      ctx.viewportContainer.appendChild(el);
-      return el;
-    },
-    unmountUiRoot: (el: HTMLElement) => el.remove(),
   });
 
   // ── Environment skylight (was bootEditor :959) ──────────────────────────────
@@ -469,8 +504,9 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
   const activeMeshGuid = (): string | null => {
     const selId = getSelection();
     if (selId !== null) {
-      const mesh = entComponent(gateway.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
-      if (mesh) {
+      const meshR = entComponent(gateway.activeWorld, selId, 'Mesh');
+      if (meshR.ok) {
+        const mesh = meshR.value;
         const g = typeof mesh.meshAsset === 'string' ? mesh.meshAsset : '';
         return g.length > 0 ? g : null;
       }

@@ -29,7 +29,6 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, CommandError } from '../types';
 // Session-op appliers register as a side effect when their store module is
@@ -58,7 +57,7 @@ function spawnBox(gw: EditGateway, posX = 0): number {
 }
 
 function readPosX(gw: EditGateway, entity: number): number {
-  const h = entHandle(gw.doc, entity) as EntityHandle;
+  const h = (entity as EntityHandle) as EntityHandle;
   const tr = gw.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('Transform not on entity');
   return (tr.value as unknown as { posX: number }).posX;

@@ -15,7 +15,7 @@ import {
   deleteManyCascade,
   gateway,
 } from '@forgeax/editor-core';
-import type { EditorOp, EditSession, EntityId } from '@forgeax/editor-core';
+import type { EditorOp, EditSession, EntityHandle } from '@forgeax/editor-core';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -23,15 +23,18 @@ function createSession(): EditSession {
   return session;
 }
 
+const asHandle = (n: number): EntityHandle => n as EntityHandle;
+
 // Mirror of the Hierarchy panel's flatVisibleOrder — walks the tree in
-// display order, skipping collapsed subtrees.
+// display order, skipping collapsed subtrees. M3 (I1): keyed by EntityHandle,
+// walks a World (gateway.activeWorld in the panel).
 function flatVisibleOrder(
-  doc: unknown,
-  collapsed: Set<EntityId>,
-): EntityId[] {
-  const result: EntityId[] = [];
-  function walk(parentId: EntityId | null): void {
-    for (const id of childrenOf(doc as any, parentId)) {
+  world: World,
+  collapsed: Set<EntityHandle>,
+): EntityHandle[] {
+  const result: EntityHandle[] = [];
+  function walk(parentId: EntityHandle | null): void {
+    for (const id of childrenOf(world, parentId)) {
       result.push(id);
       if (!collapsed.has(id)) walk(id);
     }
@@ -43,17 +46,17 @@ function flatVisibleOrder(
 // Simulates the Shift+click range selection logic from Hierarchy.tsx
 function simulateShiftClick(
   gw: EditGateway,
-  doc: unknown,
-  clickedId: EntityId,
-  anchorId: EntityId | null,
-  collapsed: Set<EntityId>,
-): { newAnchor: EntityId | null } {
+  world: World,
+  clickedId: EntityHandle,
+  anchorId: EntityHandle | null,
+  collapsed: Set<EntityHandle>,
+): { newAnchor: EntityHandle | null } {
   const anchor = anchorId ?? getSelection();
   if (anchor === null) {
     gw.dispatch({ kind: 'setSelection', id: clickedId } as EditorOp);
     return { newAnchor: clickedId };
   }
-  const order = flatVisibleOrder(doc, collapsed);
+  const order = flatVisibleOrder(world, collapsed);
   const ai = order.indexOf(anchor);
   const ci = order.indexOf(clickedId);
   if (ai < 0 || ci < 0) {
@@ -76,27 +79,27 @@ describe('Hierarchy Shift+range selection', () => {
   });
 
   it('Ctrl+click toggles individual nodes', () => {
-    gw.dispatch({ kind: 'setSelection', id: 1 } as EditorOp);
-    expect(getSelectionList()).toEqual([1]);
+    gw.dispatch({ kind: 'setSelection', id: asHandle(1) } as EditorOp);
+    expect([...getSelectionList()]).toEqual([asHandle(1)]);
 
-    gw.dispatch({ kind: 'toggleSelection', id: 3 } as EditorOp);
-    expect(getSelectionList()).toEqual([1, 3]);
+    gw.dispatch({ kind: 'toggleSelection', id: asHandle(3) } as EditorOp);
+    expect([...getSelectionList()]).toEqual([asHandle(1), asHandle(3)]);
 
-    gw.dispatch({ kind: 'toggleSelection', id: 1 } as EditorOp);
-    expect(getSelectionList()).toEqual([3]);
+    gw.dispatch({ kind: 'toggleSelection', id: asHandle(1) } as EditorOp);
+    expect([...getSelectionList()]).toEqual([asHandle(3)]);
   });
 
   it('setSelectionMany replaces the entire selection', () => {
-    gw.dispatch({ kind: 'setSelection', id: 1 } as EditorOp);
-    gw.dispatch({ kind: 'setSelectionMany', ids: [2, 3, 4] } as EditorOp);
-    expect(getSelectionList()).toEqual([2, 3, 4]);
-    expect(getSelection()).toBe(4);
+    gw.dispatch({ kind: 'setSelection', id: asHandle(1) } as EditorOp);
+    gw.dispatch({ kind: 'setSelectionMany', ids: [2, 3, 4].map(asHandle) } as EditorOp);
+    expect([...getSelectionList()]).toEqual([2, 3, 4].map(asHandle));
+    expect(getSelection()).toBe(asHandle(4));
   });
 
   it('Shift+click with no anchor falls back to single select', () => {
-    const result = simulateShiftClick(gw, gw.doc, 5, null, new Set());
-    expect(result.newAnchor).toBe(5);
-    expect(getSelectionList()).toEqual([5]);
+    const result = simulateShiftClick(gw, gw.activeWorld, asHandle(5), null, new Set());
+    expect(result.newAnchor).toBe(asHandle(5));
+    expect([...getSelectionList()]).toEqual([asHandle(5)]);
   });
 
   it('Shift+click always produces continuous range', () => {
@@ -109,14 +112,14 @@ describe('Hierarchy Shift+range selection', () => {
       } as EditorOp);
     }
 
-    const ids = childrenOf(gw.doc, null);
+    const ids = childrenOf(gw.activeWorld, null);
     expect(ids.length).toBe(5);
 
     const anchor = ids[1]!;
     gw.dispatch({ kind: 'setSelection', id: anchor } as EditorOp);
 
-    simulateShiftClick(gw, gw.doc, ids[3]!, anchor, new Set());
-    expect(getSelectionList()).toEqual([ids[1]!, ids[2]!, ids[3]!]);
+    simulateShiftClick(gw, gw.activeWorld, ids[3]!, anchor, new Set());
+    expect([...getSelectionList()]).toEqual([ids[1]!, ids[2]!, ids[3]!]);
   });
 
   it('Shift+click upward selects range in reverse direction', () => {
@@ -129,32 +132,49 @@ describe('Hierarchy Shift+range selection', () => {
       } as EditorOp);
     }
 
-    const ids = childrenOf(gw.doc, null);
+    const ids = childrenOf(gw.activeWorld, null);
     const anchor = ids[3]!;
     gw.dispatch({ kind: 'setSelection', id: anchor } as EditorOp);
 
-    simulateShiftClick(gw, gw.doc, ids[0]!, anchor, new Set());
-    expect(getSelectionList()).toEqual([ids[0]!, ids[1]!, ids[2]!, ids[3]!]);
+    simulateShiftClick(gw, gw.activeWorld, ids[0]!, anchor, new Set());
+    expect([...getSelectionList()]).toEqual([ids[0]!, ids[1]!, ids[2]!, ids[3]!]);
   });
 
   it('collapsed subtrees are skipped in flat order', () => {
     gw.dispatch({ kind: 'spawnEntity', name: 'Root', parent: null, components: {} } as EditorOp);
-    const rootId = childrenOf(gw.doc, null)[0]!;
+    const rootId = childrenOf(gw.activeWorld, null)[0]!;
 
     gw.dispatch({ kind: 'spawnEntity', name: 'Child1', parent: rootId, components: {} } as EditorOp);
     gw.dispatch({ kind: 'spawnEntity', name: 'Child2', parent: rootId, components: {} } as EditorOp);
     gw.dispatch({ kind: 'spawnEntity', name: 'Root2', parent: null, components: {} } as EditorOp);
 
-    const roots = childrenOf(gw.doc, null);
-    const kids = childrenOf(gw.doc, rootId);
+    const roots = childrenOf(gw.activeWorld, null);
+    const kids = childrenOf(gw.activeWorld, rootId);
     expect(roots.length).toBe(2);
     expect(kids.length).toBe(2);
+    // M3 (I1): root order is the world-walk order (not spawn order); the OTHER
+    // root is whichever isn't rootId.
+    const otherRoot = roots.find((r) => r !== rootId)!;
 
-    const orderOpen = flatVisibleOrder(gw.doc, new Set());
-    expect(orderOpen).toEqual([rootId, kids[0]!, kids[1]!, roots[1]!]);
+    // Expected flat order derives from the actual root-walk order: each root
+    // followed by its (open) children.
+    const expectedOpen: EntityHandle[] = [];
+    for (const r of roots) {
+      expectedOpen.push(r);
+      for (const c of childrenOf(gw.activeWorld, r)) expectedOpen.push(c);
+    }
+    const orderOpen = flatVisibleOrder(gw.activeWorld, new Set());
+    expect(orderOpen).toEqual(expectedOpen);
+    // The rootId subtree (2 kids) must appear expanded; both kids present.
+    expect(orderOpen).toContain(kids[0]!);
+    expect(orderOpen).toContain(kids[1]!);
 
-    const orderCollapsed = flatVisibleOrder(gw.doc, new Set([rootId]));
-    expect(orderCollapsed).toEqual([rootId, roots[1]!]);
+    // Collapsing rootId hides its children — only the two roots remain, in
+    // world-walk order.
+    const orderCollapsed = flatVisibleOrder(gw.activeWorld, new Set([rootId]));
+    expect(orderCollapsed).toEqual(roots);
+    expect(orderCollapsed).not.toContain(kids[0]!);
+    void otherRoot;
   });
 });
 
@@ -168,14 +188,14 @@ describe('Hierarchy multi-select batch operations', () => {
     for (let i = 0; i < 4; i++) {
       gateway.dispatch({ kind: 'spawnEntity', name: `E${i}`, parent: null, components: {} } as EditorOp);
     }
-    const ids = childrenOf(gateway.doc, null);
+    const ids = childrenOf(gateway.activeWorld, null);
     expect(ids.length).toBe(4);
 
     const toDelete = [ids[1]!, ids[2]!];
     gateway.dispatch({ kind: 'setSelectionMany', ids: toDelete } as EditorOp);
     deleteManyCascade(toDelete);
 
-    const remaining = childrenOf(gateway.doc, null);
+    const remaining = childrenOf(gateway.activeWorld, null);
     expect(remaining.length).toBe(2);
     expect(remaining).toEqual([ids[0]!, ids[3]!]);
     expect(getSelection()).toBeNull();
@@ -185,20 +205,20 @@ describe('Hierarchy multi-select batch operations', () => {
     for (let i = 0; i < 3; i++) {
       gateway.dispatch({ kind: 'spawnEntity', name: `E${i}`, parent: null, components: {} } as EditorOp);
     }
-    const ids = childrenOf(gateway.doc, null);
+    const ids = childrenOf(gateway.activeWorld, null);
     const snapshot = [...ids];
 
     gateway.dispatch({ kind: 'setSelectionMany', ids: [] } as EditorOp);
     deleteManyCascade(snapshot);
 
-    expect(childrenOf(gateway.doc, null).length).toBe(0);
+    expect(childrenOf(gateway.activeWorld, null).length).toBe(0);
   });
 
   it('visibility sync: setHidden dispatches successfully on multiple entities', () => {
     for (let i = 0; i < 3; i++) {
       gateway.dispatch({ kind: 'spawnEntity', name: `E${i}`, parent: null, components: {} } as EditorOp);
     }
-    const ids = childrenOf(gateway.doc, null);
+    const ids = childrenOf(gateway.activeWorld, null);
     expect(ids.length).toBe(3);
 
     const r1 = gateway.dispatch({ kind: 'setHidden', entity: ids[0]!, hidden: true } as EditorOp);

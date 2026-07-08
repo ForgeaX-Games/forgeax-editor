@@ -22,36 +22,36 @@ describe('Inspector name sync after Hierarchy rename', () => {
 
   it('entName reflects new name immediately after rename dispatch', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'OldName', parent: null, components: {} } as EditorOp);
-    const ids = childrenOf(gateway.doc, null);
+    const ids = childrenOf(gateway.activeWorld, null);
     expect(ids.length).toBe(1);
     const id = ids[0]!;
 
-    expect(entName(gateway.doc, id)).toBe('OldName');
+    expect(entName(gateway.activeWorld, id)).toBe('OldName');
 
     const r = gateway.dispatch({ kind: 'rename', entity: id, name: 'NewName' } as EditorOp);
     expect(r.ok).toBe(true);
-    expect(entName(gateway.doc, id)).toBe('NewName');
+    expect(entName(gateway.activeWorld, id)).toBe('NewName');
   });
 
   it('rename is undoable and entName reverts', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'Alpha', parent: null, components: {} } as EditorOp);
-    const id = childrenOf(gateway.doc, null)[0]!;
+    const id = childrenOf(gateway.activeWorld, null)[0]!;
 
     gateway.dispatch({ kind: 'rename', entity: id, name: 'Beta' } as EditorOp);
-    expect(entName(gateway.doc, id)).toBe('Beta');
+    expect(entName(gateway.activeWorld, id)).toBe('Beta');
 
     gateway.undo();
-    expect(entName(gateway.doc, id)).toBe('Alpha');
+    expect(entName(gateway.activeWorld, id)).toBe('Alpha');
   });
 
   it('rename does not change selection', () => {
     gateway.dispatch({ kind: 'spawnEntity', name: 'Ent', parent: null, components: {} } as EditorOp);
-    const id = childrenOf(gateway.doc, null)[0]!;
+    const id = childrenOf(gateway.activeWorld, null)[0]!;
     gateway.dispatch({ kind: 'setSelection', id } as EditorOp);
     expect(getSelection()).toBe(id);
 
     gateway.dispatch({ kind: 'rename', entity: id, name: 'Renamed' } as EditorOp);
     expect(getSelection()).toBe(id);
-    expect(entName(gateway.doc, id)).toBe('Renamed');
+    expect(entName(gateway.activeWorld, id)).toBe('Renamed');
   });
 });

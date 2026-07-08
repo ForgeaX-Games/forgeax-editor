@@ -26,7 +26,6 @@ import { Transform, Skylight, SkyboxBackground, MeshFilter } from '@forgeax/engi
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { registerApplier, sessionAppliers } from '../io/appliers';
-import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { ApplyResult, EditorOp, EditSession } from '../types';
 
@@ -517,9 +516,8 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
       components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
     } as EditorOp);
     if (!r.ok) throw new Error('camera spawn failed');
-    const legacyId = (gw.ledger.at(-1) as { _id: number })._id;
-    const h = entHandle(gw.doc, legacyId);
-    if (h === undefined) throw new Error('no engine handle for camera');
+    // M3 (I1): the spawn applier wrote the real handle back onto _id.
+    const h = (gw.ledger.at(-1) as { _id: number })._id;
     return h as unknown as number;
   }
 

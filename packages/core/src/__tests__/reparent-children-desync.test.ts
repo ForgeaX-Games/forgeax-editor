@@ -19,10 +19,9 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import type { EntityHandle, EntityId } from '../scene/scene-types';
+import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Children, Name } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { entHandle, entLegacyId } from '../store/entity-state';
 import { EditorHidden } from '../components/EditorHidden';
 import type { EditorOp, EditSession, WithEntityId } from '../types';
 
@@ -32,16 +31,15 @@ function createSession(): EditSession {
   return session;
 }
 
-function spawn(session: EditSession, name: string, parent?: number): { legacyId: number; engineHandle: EntityHandle } {
+// M3 (I1): handle IS identity — cmd._id is rewritten to the real engine handle,
+// so legacyId and engineHandle are the same value (kept as two names to minimize
+// churn against the existing assertions).
+function spawn(session: EditSession, name: string, parent?: EntityHandle): { legacyId: EntityHandle; engineHandle: EntityHandle } {
   const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
-  // EditorOp's open tail types `_id` as unknown; recover the applier-filled legacy
-  // id via the sanctioned WithEntityId narrow (types.ts) instead of `as any`.
-  const legacyId = (cmd as WithEntityId)._id!;
-  const engineHandle = entHandle(session, legacyId);
-  if (engineHandle === undefined) throw new Error(`no handle for ${legacyId}`);
-  return { legacyId, engineHandle: engineHandle as EntityHandle };
+  const h = (cmd as WithEntityId)._id! as EntityHandle;
+  return { legacyId: h, engineHandle: h };
 }
 
 function getChildEntities(session: EditSession, parentHandle: EntityHandle): EntityHandle[] {
@@ -124,8 +122,8 @@ describe('reparent Children/ChildOf bidirectional consistency', () => {
   });
 });
 
-describe('reparent inverse stores legacy EntityId', () => {
-  it('inverse.parent is a legacy EntityId, not an engine handle', () => {
+describe('reparent inverse stores the prior parent handle', () => {
+  it('inverse.parent is the prior parent EntityHandle (handle IS identity)', () => {
     const session = createSession();
     const parentA = spawn(session, 'ParentA');
     const parentB = spawn(session, 'ParentB');
@@ -135,16 +133,12 @@ describe('reparent inverse stores legacy EntityId', () => {
     expect(r.ok).toBe(true);
 
     // EditorOp's open tail keeps `kind === 'reparent'` from discriminating the
-    // builtin variant, so recover the typed reparent shape explicitly to read
-    // its `parent: EntityId | null` field without `as any`.
-    const inverse = (r as { ok: true; inverse: EditorOp }).inverse as { kind: 'reparent'; parent: EntityId | null };
+    // builtin variant, so recover the typed reparent shape explicitly.
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse as { kind: 'reparent'; parent: EntityHandle | null };
     expect(inverse.kind).toBe('reparent');
     if (inverse.kind === 'reparent') {
-      // inverse.parent should be the legacy ID of parentA, not the engine handle
-      expect(inverse.parent).toBe(parentA.legacyId);
-      // Verify it's indeed convertible back to the engine handle
-      const resolvedHandle = entHandle(session, inverse.parent!);
-      expect(resolvedHandle).toBe(parentA.engineHandle);
+      // M3 (I1): inverse.parent is the prior parent HANDLE directly — no legacy id.
+      expect(inverse.parent).toBe(parentA.engineHandle);
     }
   });
 

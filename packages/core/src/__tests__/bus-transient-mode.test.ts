@@ -11,17 +11,19 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { entHandle } from '../store/entity-state';
 import type { EditorOp } from '../types';
 
-function seedEntity(bus: EditGateway): void {
+// M3 (I1): the spawn applier writes cmd._id back as the real engine handle.
+function seedEntity(bus: EditGateway): EntityHandle {
   // Spawn one entity so setComponent has a target. The spawn itself runs in
   // normal (non-transient) mode so the fixture is deterministic.
-  bus.dispatch({ kind: 'spawnEntity', name: 'box', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } });
+  const cmd: EditorOp = { kind: 'spawnEntity', name: 'box', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } };
+  bus.dispatch(cmd);
+  return (cmd as { _id?: number })._id as EntityHandle;
 }
 
 // M7 / AC-15: Transform is native engine POD (posX field), asserted via world.
-const move = (entity: number, posX: number): EditorOp =>
+const move = (entity: EntityHandle, posX: number): EditorOp =>
   ({ kind: 'setComponent', entity, component: 'Transform', patch: { posX } });
 
 describe('EditGateway.transientMode (w27, AC-11)', () => {
@@ -33,13 +35,13 @@ describe('EditGateway.transientMode (w27, AC-11)', () => {
   });
 
   it('transient dispatch does NOT grow undoStack / ledger / origins', () => {
-    seedEntity(bus);
+    const e = seedEntity(bus);
     const undoBefore = bus.appliedCount();
     const ledgerBefore = bus.ledger.length;
     const originsBefore = bus.origins.length;
 
     bus.transientMode = true;
-    const r = bus.dispatch(move(1, 5));
+    const r = bus.dispatch(move(e, 5));
     expect(r.ok).toBe(true);
 
     expect(bus.appliedCount()).toBe(undoBefore); // undo stack frozen — the transient edit added nothing
@@ -48,37 +50,36 @@ describe('EditGateway.transientMode (w27, AC-11)', () => {
   });
 
   it('transient dispatch STILL applies the command (world changes for observation)', () => {
-    seedEntity(bus);
+    const e = seedEntity(bus);
     bus.transientMode = true;
-    bus.dispatch(move(1, 42));
+    bus.dispatch(move(e, 42));
     // applyCommand ran: the world reflects the edit even though it is
     // non-committed. M7 / AC-15: read via world SSOT (doc.entities deleted).
-    const handle = entHandle(bus.doc, 1)! as EntityHandle;
-    const t = bus.doc.world.get(handle, Transform);
+    const t = bus.doc.world.get(e, Transform);
     expect(t.ok).toBe(true);
     if (t.ok) expect((t.value as unknown as Record<string, number>).posX).toBe(42);
   });
 
   it('transient dispatch STILL emits (rev bumps so engine sync repaints)', () => {
-    seedEntity(bus);
+    const e = seedEntity(bus);
     const revBefore = bus.rev;
     let notified = false;
     const unsub = bus.subscribe(() => { notified = true; });
     bus.transientMode = true;
-    bus.dispatch(move(1, 7));
+    bus.dispatch(move(e, 7));
     unsub();
     expect(bus.rev).toBeGreaterThan(revBefore); // rev advanced
     expect(notified).toBe(true); // subscribers fired (immediate feedback)
   });
 
   it('toggling back to false restores normal committing dispatch', () => {
-    seedEntity(bus);
+    const e = seedEntity(bus);
     bus.transientMode = true;
-    bus.dispatch(move(1, 1)); // not committed
+    bus.dispatch(move(e, 1)); // not committed
     bus.transientMode = false;
     const undoBefore = bus.appliedCount();
     const ledgerBefore = bus.ledger.length;
-    bus.dispatch(move(1, 2)); // committed
+    bus.dispatch(move(e, 2)); // committed
     expect(bus.appliedCount()).toBe(undoBefore + 1);
     expect(bus.ledger.length).toBe(ledgerBefore + 1);
     expect(bus.canUndo()).toBe(true);

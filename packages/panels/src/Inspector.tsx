@@ -7,8 +7,8 @@ import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisi
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
 import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
-import { entExists, entName, entParent, entComponent, entComponents, entIds } from '@forgeax/editor-core';
-import type { EditorOp, EntityId } from '@forgeax/editor-core';
+import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
+import type { EditorOp, EntityHandle } from '@forgeax/editor-core';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -97,12 +97,12 @@ function mergedFieldKeys(comp: string, value: Record<string, unknown>): string[]
   return [...new Set([...schemaKeys, ...Object.keys(value)])];
 }
 
-function descendantsAndSelf(id: EntityId): Set<EntityId> {
-  const out = new Set<EntityId>([id]);
+function descendantsAndSelf(id: EntityHandle): Set<EntityHandle> {
+  const out = new Set<EntityHandle>([id]);
   const stack = [id];
   while (stack.length) {
     const cur = stack.pop()!;
-    for (const c of childrenOf(gateway.doc, cur)) {
+    for (const c of childrenOf(gateway.activeWorld, cur)) {
       out.add(c);
       stack.push(c);
     }
@@ -111,16 +111,16 @@ function descendantsAndSelf(id: EntityId): Set<EntityId> {
 }
 
 // Components present on EVERY selected entity (batch edit operates on these).
-function commonComponents(ids: EntityId[]): string[] {
+function commonComponents(ids: EntityHandle[]): string[] {
   if (ids.length === 0) return [];
-  // M7 / AC-15: component keys read from world (SSOT) via entity-state.
-  const sets = ids.map((id) => new Set(Object.keys(entComponents(gateway.doc, id))));
+  // M3 (I1/AC-08): component keys read from the active world (SSOT) via entity-state.
+  const sets = ids.map((id) => new Set(Object.keys(entComponents(gateway.activeWorld, id))));
   return [...sets[0]!].filter((c) => sets.every((s) => s.has(c)));
 }
 
 // Multi-select batch editor: one edit fans out to all selected as a single
 // transaction → one undo. The primary entity supplies the field layout.
-function BatchPanel({ ids }: { ids: EntityId[] }) {
+function BatchPanel({ ids }: { ids: EntityHandle[] }) {
   const { t } = useTranslation();
   const primary = ids[ids.length - 1]!;
   const common = commonComponents(ids);
@@ -133,9 +133,9 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
   // Align all selected to the primary's value on one axis (one undo step).
   function alignAxis(axis: 'x' | 'y' | 'z') {
     const posKey = `pos${axis.toUpperCase()}` as string;
-    const t = entComponent(gateway.doc, primary, 'Transform');
-    if (!t) return;
-    setAll('Transform', posKey, Number(t[posKey] ?? 0));
+    const tr = entComponent(gateway.activeWorld, primary, 'Transform');
+    if (!tr.ok) return;
+    setAll('Transform', posKey, Number(tr.value[posKey] ?? 0));
   }
 
   const hasTransform = common.includes('Transform');
@@ -151,7 +151,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
           title="copy all selected entities as a JSON array (for AI / cross-scene paste)"
           onClick={() => {
             const arr = ids.map((id) => {
-              return { id, name: entName(gateway.doc, id), components: entComponents(gateway.doc, id) };
+              return { id, name: entName(gateway.activeWorld, id), components: entComponents(gateway.activeWorld, id) };
             });
             void navigator.clipboard?.writeText(JSON.stringify(arr, null, 2));
           }}
@@ -175,7 +175,7 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
               gateway.dispatch({ kind: 'setSelectionMany', ids: [...ids.filter((x) => x !== id), id] });
             }}
           >
-            {entName(gateway.doc, id) || id}
+            {entName(gateway.activeWorld, id) || id}
             {id === primary ? ' ★' : ''}
           </button>
         ))}
@@ -192,13 +192,13 @@ function BatchPanel({ ids }: { ids: EntityId[] }) {
       )}
       {common.length === 0 && <div className="field muted">{t('editor.inspector.noCommonComponents')}</div>}
       {common.map((comp) => {
-        const value = entComponent(gateway.doc, primary, comp);
-        if (typeof value !== 'object' || value === null) return null;
+        const valueR = entComponent(gateway.activeWorld, primary, comp);
+        if (!valueR.ok || typeof valueR.value !== 'object' || valueR.value === null) return null;
         return (
           <div key={comp}>
             <div className="compname">{comp}</div>
             {(() => {
-              const data = value as Record<string, unknown>;
+              const data = valueR.value as Record<string, unknown>;
               const grp = VEC3_GROUPS[comp];
               const vec3 = grp && grp.every((g) => typeof data[g] === 'number');
               const rows: ReactNode[] = [];
@@ -273,14 +273,12 @@ export function InspectorPanel() {
   // On entity switch: read world quat → euler to reset React state (scheme B)
   useEffect(() => {
     if (sel === null) return;
-    // M7 / AC-15: read Transform through entComponent (the dead-world-aware SSOT
-    // reader). In a popout window gateway.doc.world is null (snapshot revive keeps it
-    // inert), so a raw gateway.doc.world.get(...) NPE'd on selection — entComponent
-    // resolves from the popout cache instead. On the main window it reads the live
-    // world. Mirrors the childrenOf popout fix.
-    const tv = entComponent(gateway.doc, sel, 'Transform');
-    if (!tv) return;
-    const q = tv as { quatX: number; quatY: number; quatZ: number; quatW: number };
+    // M3 (I1/AC-08): read Transform through entComponent against the active world
+    // (edit->editWorld, play->playWorld). A stale handle returns a structured
+    // error (ok:false) — treat it as "nothing to show" and bail.
+    const tv = entComponent(gateway.activeWorld, sel, 'Transform');
+    if (!tv.ok) return;
+    const q = tv.value as { quatX: number; quatY: number; quatZ: number; quatW: number };
     setEuler(quatToEuler(q.quatX, q.quatY, q.quatZ, q.quatW));
   }, [sel]);
   const toggleComp = (comp: string) =>
@@ -290,10 +288,10 @@ export function InspectorPanel() {
       else next.add(comp);
       return next;
     });
-  if (selList.length > 1) {
-    return <BatchPanel ids={selList} />;
+  if (selList.size > 1) {
+    return <BatchPanel ids={[...selList]} />;
   }
-  if (sel === null || !entExists(gateway.doc, sel)) {
+  if (sel === null || !entExists(gateway.activeWorld, sel)) {
     return (
       <div className="panel" data-testid="panel-inspector">
         <h3>Inspector</h3>
@@ -303,11 +301,11 @@ export function InspectorPanel() {
   }
   // M7 / AC-15: entity name/parent/components read from world (SSOT) via
   // entity-state; doc.entities/doc.order/EntityNode.source deleted.
-  const nodeName = entName(gateway.doc, sel);
-  const nodeParent = entParent(gateway.doc, sel);
-  const nodeComponents = entComponents(gateway.doc, sel);
+  const nodeName = entName(gateway.activeWorld, sel);
+  const nodeParent = entParent(gateway.activeWorld, sel);
+  const nodeComponents = entComponents(gateway.activeWorld, sel);
   const blocked = descendantsAndSelf(sel);
-  const parentOptions = entIds(gateway.doc).filter((id) => !blocked.has(id));
+  const parentOptions = worldEntityHandles(gateway.activeWorld).filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
   return (
     <div className="panel" data-testid="panel-inspector">
@@ -357,7 +355,7 @@ export function InspectorPanel() {
           <option value="">(root)</option>
           {parentOptions.map((id) => (
             <option key={id} value={id}>
-              {entName(gateway.doc, id)} #{id}
+              {entName(gateway.activeWorld, id)} #{id}
             </option>
           ))}
         </select>
