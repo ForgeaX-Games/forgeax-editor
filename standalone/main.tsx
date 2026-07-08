@@ -33,7 +33,7 @@ import { AppKitError } from '@forgeax/editor/app-kit';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
-import { ViewportComponent } from '@forgeax/editor-edit-runtime/engine/viewport-component';
+import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same

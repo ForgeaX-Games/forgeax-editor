@@ -10,7 +10,7 @@ import {
   closestAxisT,
   entityBox,
   type Vec3,
-} from '../engine/viewport';
+} from '../viewport/viewport';
 
 test('ndcFromClient maps pixels to [-1,1] with Y up', () => {
   expect(ndcFromClient(50, 50, 100, 100)).toEqual([0, 0]);

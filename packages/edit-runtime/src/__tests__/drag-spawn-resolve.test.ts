@@ -24,7 +24,7 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import type { EditorOp } from '@forgeax/editor-core';
-import { installDragSpawnMeshResolver } from '../engine/drag-spawn-resolve';
+import { installDragSpawnMeshResolver } from '../viewport/drag-spawn-resolve';
 
 // A syntactically valid RFC 4122 dash-form UUID (AssetGuid.parse accepts it).
 const GOOD_GUID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';

@@ -31,7 +31,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, editorBus, type DragAssetRef } from '@forgeax/editor-core';
+import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // Forward structured health signals from this surface to the studio shell's
@@ -637,16 +637,16 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // since single-realm M2/M4). FORGEAX_ADD_ASSET_TO_SCENE is the context-menu
   // "Add to Scene" path (D-6) — no drag, spawn immediately.
   useEffect(() => {
-    const offStart = editorBus.on('dragAssetStart', (ref) => {
+    const offStart = panelBridge.on('dragAssetStart', (ref) => {
       pendingDragAsset.current = ref;
       setAssetDragPending(true);
     });
-    const offEnd = editorBus.on('dragAssetEnd', () => {
+    const offEnd = panelBridge.on('dragAssetEnd', () => {
       pendingDragAsset.current = null;
       setAssetDragPending(false);
       setAssetDragActive(false);
     });
-    const offScene = editorBus.on('addAssetToScene', (ref) => {
+    const offScene = panelBridge.on('addAssetToScene', (ref) => {
       void spawnAssetRef(ref);
     });
     return () => { offStart(); offEnd(); offScene(); };

@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { editorBus } from '@forgeax/editor-core';
+import { panelBridge } from '@forgeax/editor-core';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -37,11 +37,11 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
     };
     e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
     e.dataTransfer.effectAllowed = 'copy';
-    editorBus.emit('dragAssetStart', ref);
+    panelBridge.emit('dragAssetStart', ref);
   }, [asset]);
 
   const handleDragEnd = useCallback(() => {
-    editorBus.emit('dragAssetEnd');
+    panelBridge.emit('dragAssetEnd');
   }, []);
 
   return (

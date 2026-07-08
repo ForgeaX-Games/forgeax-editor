@@ -20,7 +20,7 @@ import { gateway, useDocVersion, useGizmoMode } from '@forgeax/editor-core';
 import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
-import { getViewportQuadrant, onViewportQuadrantChange } from './engine/viewport-quadrant';
+import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
 
 interface ViewportBarProps {
   onPlay: () => void;

@@ -465,7 +465,7 @@ describe('t20a — skylight AC-28 op sequence (RED before t20b, GREEN after t20b
       out = execFileSync(
         'git',
         ['grep', '-nP', String.raw`world\.(set|spawn|despawn|allocSharedRef)\(`,
-          '--', 'packages/edit-runtime/src/engine/skylight.ts'],
+          '--', 'packages/edit-runtime/src/viewport/skylight.ts'],
         { cwd: REPO_ROOT, encoding: 'utf8' },
       );
     } catch (e) {

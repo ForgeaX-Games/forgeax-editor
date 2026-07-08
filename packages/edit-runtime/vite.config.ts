@@ -4,7 +4,7 @@
 // REPLAN D7 (SSOT regression): the engine-serve mechanism (forgeaxShader emit,
 // pluginPack pack-index / __import middleware, base-strip, preserveSymlinks,
 // optimizeDeps.exclude @forgeax family, build.target esnext) used to live inline
-// HERE. M2 hoisted it into engine-vite-preset (src/engine/engine-vite-preset.ts)
+// HERE. M2 hoisted it into engine-vite-preset (src/viewport/engine-vite-preset.ts)
 // so the :15290 host config can serve the engine in-process too. This config now
 // CONSUMES that preset and keeps only its edit-runtime-specific parts: root,
 // base '/editor/', hmr.clientPort, the --game /api + /preview proxies, and the
@@ -14,7 +14,7 @@ import { defineConfig } from 'vite';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { engineVitePreset } from './src/engine/engine-vite-preset';
+import { engineVitePreset } from './src/viewport/engine-vite-preset';
 
 const here = dirname(fileURLToPath(import.meta.url));
 

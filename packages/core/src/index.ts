@@ -140,10 +140,14 @@ export { hexToFloat, floatToHex } from './util/color-utils';
 // ── Cross-panel types ──
 export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
 
-// ── Typed event bus (replaces legacy postMessage self-posting) ──
-export { editorBus } from './io/editor-bus';
-export type { EditorBusEvents, EditorRefPayload } from './io/editor-bus';
+// ── Panel bridge (typed event bus, replaces legacy postMessage self-posting) ──
+export { panelBridge, editorBus } from './io/panel-bridge';
+export type { PanelBridgeEvents, EditorBusEvents, EditorRefPayload } from './io/panel-bridge';
 export { installEditorBusCompat } from './io/editor-bus-compat';
+
+// ── Panel ops (session domain: focusPanel, openSource) ──
+// Side-effect import: registers appliers into sessionAppliers at module eval.
+import './store/panel-ops';
 
 // ── Assets ──
 export {

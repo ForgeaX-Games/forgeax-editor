@@ -2,7 +2,7 @@
 //
 // State: none — a stateless function cluster that reads gateway.doc and emits
 // deixis handles over the typed editor bus. The chat panel (in the same host
-// window since single-realm M2/M4) subscribes via editorBus.on('editorRef').
+// window since single-realm M2/M4) subscribes via panelBridge.on('editorRef').
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 8 (store.ts:227-281)
@@ -13,11 +13,11 @@ import { gateway } from './gateway';
 import { entExists, entName, entComponents } from './entity-state';
 import type { EntityId } from '../types';
 import type { AssetChatRef } from '../io/cross-panel-types';
-import { editorBus } from '../io/editor-bus';
+import { panelBridge } from '../io/panel-bridge';
 
 export function requestRefEntity(id: EntityId): void {
   if (!entExists(gateway.doc, id)) return;
-  editorBus.emit('editorRef', {
+  panelBridge.emit('editorRef', {
     kind: 'entity',
     id,
     name: entName(gateway.doc, id),
@@ -28,7 +28,7 @@ export function requestRefEntity(id: EntityId): void {
 /** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
 export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
   if (!entExists(gateway.doc, entityId)) return;
-  editorBus.emit('editorRef', {
+  panelBridge.emit('editorRef', {
     kind: 'component',
     entityId,
     entityName: entName(gateway.doc, entityId),
@@ -40,7 +40,7 @@ export function requestRefComponent(entityId: EntityId, comp: string, value: unk
 /** Pin an ASSET (material/texture/mesh) into the ForgeaX chat as a deixis handle
  * — same channel as requestRefEntity, payload.kind === 'asset'. */
 export function requestRefAsset(asset: { guid: string; kind: string; name: string; packPath?: string }): void {
-  editorBus.emit('editorRef', {
+  panelBridge.emit('editorRef', {
     kind: 'asset',
     guid: asset.guid,
     assetKind: asset.kind,
@@ -53,7 +53,7 @@ export function requestRefAsset(asset: { guid: string; kind: string; name: strin
  *  Carries full payload so the AI can reason about asset contents. */
 export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
   if (refs.length === 0) return;
-  editorBus.emit('addAssetToChat', refs);
+  panelBridge.emit('addAssetToChat', refs);
 }
 
 // requestAddAssetToScene lives in ./spawn-asset-ref (co-located with

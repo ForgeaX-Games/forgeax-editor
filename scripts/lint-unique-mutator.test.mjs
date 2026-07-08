@@ -74,14 +74,14 @@ const write = (name, hunks) => {
 // (a) VIOLATION: new raw world.set in editor source
 console.log('Scenario (a): VIOLATION -- raw world.set in edit-runtime source → exit 1');
 assertEqual('(a) exit 1', runLint(write('viol.diff', [{
-  file: 'packages/edit-runtime/src/engine/viewport.ts',
+  file: 'packages/edit-runtime/src/viewport/viewport.ts',
   lines: ['  world.set(camera, Transform, { posX: 0 });'],
 }])).status, 1);
 
 // (b) COMPLIANT: write through ctx.engine + gateway.dispatch
 console.log('Scenario (b): COMPLIANT -- engine.set / gateway.dispatch → exit 0');
 assertEqual('(b) exit 0', runLint(write('comp.diff', [{
-  file: 'packages/edit-runtime/src/engine/viewport.ts',
+  file: 'packages/edit-runtime/src/viewport/viewport.ts',
   lines: [
     '  engine.set(camera, Transform, { posX: 0 });',
     "  gateway.dispatch({ kind: 'spawnEntity', components: {} });",
@@ -126,7 +126,7 @@ assertEqual('(g) exit 0', runLint(write('clean.diff', [{
 // (h) COMMENT-only raw write reference → exit 0
 console.log('Scenario (h): COMMENT -- world.allocSharedRef in a doc comment → exit 0');
 assertEqual('(h) exit 0', runLint(write('comment.diff', [{
-  file: 'packages/edit-runtime/src/engine/skylight.ts',
+  file: 'packages/edit-runtime/src/viewport/skylight.ts',
   lines: ['  // column handle via world.allocSharedRef(brand, pod).'],
 }])).status, 0);
 

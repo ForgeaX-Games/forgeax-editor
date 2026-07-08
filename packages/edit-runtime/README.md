@@ -19,7 +19,7 @@ import {
 } from '@forgeax/editor-edit-runtime';
 
 // 单 realm 装配：host 经子入口 import viewport 组件 + host-boot 会话
-import { ViewportComponent } from '@forgeax/editor-edit-runtime/engine/viewport-component';
+import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 import { initHostSession, configureHostSession } from '@forgeax/editor-edit-runtime/host-boot';
 
 // Runtime 服务（从 shared）

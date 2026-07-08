@@ -65,9 +65,9 @@ import {
   onVagMessage,
   allowedParentOrigins,
 } from '@forgeax/editor-core/protocol';
-import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
-import { setupEditorSkylight } from './engine/skylight';
-import { installDragSpawnMeshResolver } from './engine/drag-spawn-resolve';
+import { createRunLifecycle, type RunLifecycle } from './viewport/run-lifecycle';
+import { setupEditorSkylight } from './viewport/skylight';
+import { installDragSpawnMeshResolver } from './viewport/drag-spawn-resolve';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -630,7 +630,7 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; engine: EngineFac
 
     try {
       const { onViewRequest } = await import('@forgeax/editor-core');
-      const { normalizeSkinTransform } = await import('./engine/preview-skin');
+      const { normalizeSkinTransform } = await import('./viewport/preview-skin');
       onViewRequest((cmd) => {
         try {
           if (cmd === 'resetCamera') { viewport.resetCamera(); return; }

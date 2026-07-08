@@ -42,7 +42,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 
-// This helper's own directory: packages/edit-runtime/src/engine/. Used to locate
+// This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
 // family is derived from ONE fixed location regardless of which config (root or
 // edit-runtime) consumes the preset — both get the identical SSOT list.
