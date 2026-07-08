@@ -25,14 +25,16 @@ import { World } from '@forgeax/engine-ecs';
 import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
-import { setHoverEntity, getHoverEntity } from '../store/hover';
-import { setFieldPreview, getFieldPreview } from '../store/field-preview';
+// M3 t22: write-side setter sugar deleted (S10) — dispatch through the gateway
+// door directly; the imports keep read-side accessors + applier registration.
+import { getHoverEntity } from '../store/hover';
+import { getFieldPreview } from '../store/field-preview';
 import {
-  setAssetSelection,
   getAssetSelection,
   onAssetSelectionChange,
   type SelectedAsset,
 } from '../store/asset-selection';
+import { gateway } from '../store/gateway';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -46,7 +48,7 @@ const asset = (guid: string): SelectedAsset => ({
 
 describe('transient routing — hover (m2-w3)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setHoverEntity(null); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setHoverEntity', id: null } as EditorOp); });
 
   it('(a) setHoverEntity op takes effect via gateway dispatch', () => {
     const r = gw.dispatch({ kind: 'setHoverEntity', id: 12 } as EditorOp);
@@ -70,15 +72,15 @@ describe('transient routing — hover (m2-w3)', () => {
     expect(gw.origins.length).toBe(0);
   });
 
-  it('the setHoverEntity setter delegates through the gateway', () => {
-    setHoverEntity(21);
+  it('setHoverEntity dispatched through the singleton gateway takes effect', () => {
+    gateway.dispatch({ kind: 'setHoverEntity', id: 21 } as EditorOp);
     expect(getHoverEntity()).toBe(21);
   });
 });
 
 describe('transient routing — field-preview (m2-w3)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setFieldPreview(null); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setFieldPreview', id: null } as EditorOp); });
 
   it('(a) setFieldPreview op takes effect via gateway dispatch', () => {
     const r = gw.dispatch({ kind: 'setFieldPreview', id: 3, key: 'Transform.rot.y', value: 1.5 } as EditorOp);
@@ -94,15 +96,15 @@ describe('transient routing — field-preview (m2-w3)', () => {
     expect(gw.ledger.length).toBe(ledgerBefore);
   });
 
-  it('the setFieldPreview setter delegates through the gateway', () => {
-    setFieldPreview(5, 'Transform.scale.x', 3);
+  it('setFieldPreview dispatched through the singleton gateway takes effect', () => {
+    gateway.dispatch({ kind: 'setFieldPreview', id: 5, key: 'Transform.scale.x', value: 3 } as EditorOp);
     expect(getFieldPreview()).toEqual({ id: 5, key: 'Transform.scale.x', value: 3 });
   });
 });
 
 describe('transient routing — asset-selection (m2-w3)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setAssetSelection(null); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setAssetSelection', asset: null } as EditorOp); });
 
   it('(a) setAssetSelection op takes effect via gateway dispatch', () => {
     const a = asset('mat-1');
@@ -128,8 +130,8 @@ describe('transient routing — asset-selection (m2-w3)', () => {
     expect(getAssetSelection()?.guid).toBe('mat-3');
   });
 
-  it('the setAssetSelection setter delegates through the gateway', () => {
-    setAssetSelection(asset('mat-4'));
+  it('setAssetSelection dispatched through the singleton gateway takes effect', () => {
+    gateway.dispatch({ kind: 'setAssetSelection', asset: asset('mat-4') } as EditorOp);
     expect(getAssetSelection()?.guid).toBe('mat-4');
   });
 });

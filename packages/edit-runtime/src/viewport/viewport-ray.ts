@@ -4,7 +4,7 @@
 // These are pure functions: no DOM, no engine-runtime types, no side effects.
 // They were extracted from viewport.ts (was 976 lines) to keep the DI factory
 // (createViewport) focused on wiring while testable geometry lives here.
-// The original 17 exports from ../engine/viewport stay reachable through the
+// The original 17 exports from ./viewport stay reachable through the
 // re-export barrel in viewport.ts — viewport.test.ts needs zero changes.
 
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';

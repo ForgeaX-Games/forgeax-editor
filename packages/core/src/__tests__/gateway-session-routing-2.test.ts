@@ -34,9 +34,12 @@ import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
 import { gateway } from '../store/gateway';
-import { requestFrame } from '../store/frame-request';
-import { requestRename, onRenameRequest } from '../store/rename-request';
-import { setSceneId, getSceneId } from '../store/scene-persistence';
+// M3 t22: write-side setter sugar deleted (S10) — dispatch through the gateway
+// door directly; side-effect imports keep the session appliers registered and
+// expose the read-side accessors.
+import '../store/frame-request';
+import { onRenameRequest } from '../store/rename-request';
+import { getSceneId } from '../store/scene-persistence';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -72,10 +75,10 @@ describe('session routing — frame-request (m2-w2)', () => {
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
   });
 
-  it('the requestFrame setter delegates through the singleton gateway (ledger grows)', () => {
-    // The store setter targets the app-level singleton gateway, not a throwaway gw.
+  it('requestFrame dispatched through the singleton gateway grows the ledger', () => {
+    // The app-level singleton gateway is the one door — a bare dispatch records it.
     const ledgerBefore = gateway.ledger.length;
-    requestFrame();
+    gateway.dispatch({ kind: 'requestFrame' } as EditorOp);
     expect(gateway.ledger.length).toBe(ledgerBefore + 1);
   });
 });
@@ -106,10 +109,10 @@ describe('session routing — rename-request (m2-w2)', () => {
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
   });
 
-  it('the requestRename setter delegates through the gateway', () => {
+  it('requestRename dispatched through the singleton gateway delivers the id', () => {
     let got = -1;
     const unsub = onRenameRequest((id) => { got = id; });
-    requestRename(99);
+    gateway.dispatch({ kind: 'requestRename', entity: 99 } as EditorOp);
     unsub();
     expect(got).toBe(99);
   });
@@ -139,9 +142,9 @@ describe('session routing — scene-persistence setSceneId (m2-w2)', () => {
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
   });
 
-  it('the setSceneId setter delegates through the gateway', () => {
-    setSceneId('via-setter');
-    expect(getSceneId()).toBe('via-setter');
+  it('setSceneId dispatched through the singleton gateway takes effect', () => {
+    gateway.dispatch({ kind: 'setSceneId', id: 'via-dispatch' } as EditorOp);
+    expect(getSceneId()).toBe('via-dispatch');
   });
 });
 

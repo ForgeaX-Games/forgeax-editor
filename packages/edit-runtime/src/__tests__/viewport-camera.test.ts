@@ -9,8 +9,8 @@ import {
   computeOrbitCamera,
   type OrbitState,
   type OrbitCameraResult,
-} from '../engine/viewport-camera';
-import type { Vec3 } from '../engine/viewport-ray';
+} from '../viewport/viewport-camera';
+import type { Vec3 } from '../viewport/viewport-ray';
 
 // ── deriveInputTarget (AC-03, plan-strategy D-5) ────────────────────────────
 

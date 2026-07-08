@@ -37,11 +37,12 @@ import { readdirSync, existsSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 
-// This helper's own directory: packages/edit-runtime/src/engine/. Used to locate
+// This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
 // family is derived from ONE fixed location regardless of which config (root or
 // edit-runtime) consumes the preset — both get the identical SSOT list.
@@ -83,9 +84,8 @@ function sharedTemplateRoots(): string[] {
   return existsSync(dir) ? [dir] : [];
 }
 function gamePackRoots(gameDirAbs: string): string[] {
-  const perGame = ['assets', 'scenes']
-    .map((d) => join(gameDirAbs, d))
-    .filter((p) => existsSync(p));
+  const config = loadAssetConfig(gameDirAbs);
+  const perGame = (config.roots as string[]).filter((p) => existsSync(p));
   return [...perGame, ...sharedTemplateRoots()];
 }
 
@@ -187,10 +187,11 @@ export interface EngineVitePresetOptions {
   preserveSymlinks?: boolean;
   /**
    * Absolute game dir (from `--game DIR`), or null. When set, register a
-   * pluginPack self-hosting the game's assets/ + scenes/ + shared template roots
-   * so Play's loadByGuid + Edit sub-asset previews resolve WITHOUT proxying to
-   * play-runtime (:15173). null (no --game / demo seed) -> no pluginPack; the
-   * shader plugin alone still serves /shaders/manifest.json for the demo scene.
+   * pluginPack self-hosting the game's asset roots (from package.json
+   * forgeax.assets.roots) + shared template roots so Play's loadByGuid + Edit
+   * sub-asset previews resolve WITHOUT proxying to play-runtime (:15173).
+   * null (no --game / demo seed) -> no pluginPack; the shader plugin alone
+   * still serves /shaders/manifest.json for the demo scene.
    */
   gameDirAbs: string | null;
 }

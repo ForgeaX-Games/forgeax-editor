@@ -26,14 +26,15 @@ import { World } from '@forgeax/engine-ecs';
 import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
+// M3 t22: the write-side setter sugar was deleted (S10 / AC-21/22). Tests
+// dispatch through the gateway door directly; the imports keep read-side
+// accessors and trigger applier registration (module-eval side effect).
 import {
-  setSelection,
-  toggleSelection,
-  setSelectionMany,
   getSelection,
   getSelectionList,
 } from '../store/selection';
-import { setGizmoMode, getGizmoMode } from '../store/gizmo-mode';
+import { getGizmoMode } from '../store/gizmo-mode';
+import { gateway } from '../store/gateway';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -50,7 +51,7 @@ function resetState(gw: EditGateway): void {
 
 describe('session routing — selection (m2-w1)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); setSelectionMany([]); });
+  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setSelectionMany', ids: [] } as EditorOp); });
 
   it('(a) setSelection op takes effect via gateway dispatch', () => {
     const r = gw.dispatch({ kind: 'setSelection', id: 7 } as EditorOp);
@@ -102,12 +103,12 @@ describe('session routing — selection (m2-w1)', () => {
     expect(gw.ledger.length).toBe(ledgerBefore + 2);
   });
 
-  it('the setSelection setter delegates through the gateway (state changes)', () => {
-    setSelection(42);
+  it('selection ops dispatched through the singleton gateway change state', () => {
+    gateway.dispatch({ kind: 'setSelection', id: 42 } as EditorOp);
     expect(getSelection()).toBe(42);
-    setSelection(null);
+    gateway.dispatch({ kind: 'setSelection', id: null } as EditorOp);
     expect(getSelection()).toBe(null);
-    toggleSelection(8);
+    gateway.dispatch({ kind: 'toggleSelection', id: 8 } as EditorOp);
     expect(getSelectionList()).toEqual([8]);
   });
 });
@@ -136,8 +137,8 @@ describe('session routing — gizmo-mode (m2-w1)', () => {
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
   });
 
-  it('the setGizmoMode setter delegates through the gateway', () => {
-    setGizmoMode('scale');
+  it('setGizmoMode dispatched through the singleton gateway changes mode', () => {
+    gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' } as EditorOp);
     expect(getGizmoMode()).toBe('scale');
   });
 });

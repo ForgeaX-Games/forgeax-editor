@@ -53,7 +53,25 @@ export type {
   CommandOrigin,
   HistoryStep,
   OpHandle,
+  ApplierCtx,
 } from './io/gateway';
+// M3 t16 (plan-strategy §2 D-2 / research F-3): the EngineFacade TYPE is the
+// controlled-write-proxy contract edit-runtime types its view-scaffold signatures
+// against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only export — no
+// runtime symbol added to the barrel (index.ts fan-in budget unaffected, D-8).
+export type { EngineFacade } from './io/engine-facade';
+
+// ── M5 eval channel (plan-strategy §2 D-4, D-8) ──
+// createEvalChannel is the single runtime export for the dev-accessible AI eval
+// channel. Consumed by edit-runtime to mount on globalThis.__forgeaxEval (Q-5).
+// EvalChannel type is type-only: edit-runtime types its globalThis hook against it.
+export { createEvalChannel } from './io/channel';
+export type { EvalChannel, EvaluateResult } from './io/channel';
+
+// SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last()
+// (D-3 / AC-09). Type-only export so an AI consumer writing typed code against the
+// trace read API can name the return shape. verify F-V1.
+export type { SpanNode } from './io/trace';
 
 // ── Catalog (M4 listOps / argsSchema / OpDescriptor) ──
 export type { OpDescriptor, ArgsSchema } from './io/catalog';
@@ -121,6 +139,15 @@ export { hexToFloat, floatToHex } from './util/color-utils';
 
 // ── Cross-panel types ──
 export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
+
+// ── Panel bridge (typed event bus, replaces legacy postMessage self-posting) ──
+export { panelBridge, editorBus } from './io/panel-bridge';
+export type { PanelBridgeEvents, EditorBusEvents, EditorRefPayload } from './io/panel-bridge';
+export { installEditorBusCompat } from './io/editor-bus-compat';
+
+// ── Panel ops (session domain: focusPanel, openSource) ──
+// Side-effect import: registers appliers into sessionAppliers at module eval.
+import './store/panel-ops';
 
 // ── Assets ──
 export {

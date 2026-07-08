@@ -6,13 +6,13 @@
  * Sources captured here:
  *   1. The shell itself: window 'error' / 'unhandledrejection' + a console.error
  *      wrapper → source 'shell'.
- *   2. iframe-forwarded health: `postMessage({type:'forgeax:health', level,
- *      source, code, message})` from play / edit / plugin runtimes (cross-origin,
- *      so this is how their console errors reach the shell at all).
+ *   2. Engine iframe health: `postMessage({type:'forgeax:health', level,
+ *      source, code, message})` from play / edit / plugin runtimes. In single-
+ *      realm (M2/M4) these reach the host window directly from the engine iframe.
  *   3. The pre-existing VAG wire: VAG_CONSOLE (error/warn lines) + VAG_DEVICE_LOST.
- *      These already reach the host window from the runtimes; we map them onto the
- *      health store too so nothing is missed even before a runtime ships the new
- *      `forgeax:health` envelope. Source is inferred from the iframe URL.
+ *      These also reach the host window directly from the engine iframe; we map
+ *      them onto the health store so nothing is missed even before a runtime ships
+ *      the new `forgeax:health` envelope. Source is inferred from the iframe URL.
  *
  * We deliberately do NOT import @forgeax/editor here (that would re-create the
  * interface→editor cycle the panel-renderer split removed). The wire contract is
@@ -171,9 +171,9 @@ export function installHealthBridge(): void {
       const payload = data?.payload as { level?: unknown; text?: unknown; ts?: unknown } | undefined;
       const text = typeof payload?.text === 'string' ? payload.text : '';
       if (!text) return;
-      // Console panel: the FULL stream (all levels, all sources). Play/Edit
-      // surfaces re-forward their nested engine iframe's VAG_CONSOLE up to here,
-      // so this is the single point that feeds store.consoleLog.
+      // Console panel: the FULL stream (all levels, all sources). Engine iframes
+      // post VAG_CONSOLE directly to this host window (single-realm) — this is
+      // the single point that feeds store.consoleLog.
       useAppStore.getState().pushConsole({
         level: asConsoleLevel(payload?.level),
         text,
@@ -189,8 +189,8 @@ export function installHealthBridge(): void {
       return;
     }
 
-    // Network panel feed — Play/Edit surfaces re-forward their engine iframe's
-    // VAG_NETWORK up to here (the single point that feeds store.networkLog).
+    // Network panel feed — engine iframes post VAG_NETWORK directly to this
+    // host window (single-realm; the single point that feeds store.networkLog).
     if (type === 'VAG_NETWORK') {
       const p = data?.payload as Partial<NetworkEntry> | undefined;
       if (!p || typeof p.url !== 'string') return;

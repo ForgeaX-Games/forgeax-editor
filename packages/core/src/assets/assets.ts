@@ -20,8 +20,9 @@ export interface PackAsset {
 
 interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
 
-/** Every `*.pack.json` under the WHOLE game dir (not just assets/) — needed to
- *  find scene packs that live in `scenes/` or at the game root. */
+/** Every `*.pack.json` under the WHOLE game dir — needed to find scene packs
+ *  regardless of where they live (A2: scenes are ordinary assets, discovered
+ *  by `kind` field, not by directory name). */
 async function allGamePackPaths(_slug: string): Promise<string[]> {
   const root = resolveGamePath('');
   try {
@@ -74,6 +75,39 @@ export async function findScenePackByGuid(
     } catch { /* unparseable pack — skip */ }
   }
   return null;
+}
+
+/**
+ * Discover ALL scene packs in the game by scanning every `*.pack.json` and
+ * filtering by `kind === 'scene'` (A2: scenes are ordinary assets, found by
+ * kind field, not by directory convention). Returns game-relative pack paths
+ * with their scene GUIDs. Used by `initSceneList` at boot (before the engine
+ * AssetRegistry is available).
+ */
+export async function findAllScenePacks(
+  slug: string | null | undefined,
+): Promise<{ pack: string; guid: string }[]> {
+  if (!slug || slug === 'default') return [];
+  const root = resolveGamePath('');
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  const results: { pack: string; guid: string }[] = [];
+  for (const p of await allGamePackPaths(slug)) {
+    try {
+      const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
+      if (!r.ok) continue;
+      const j = (await r.json()) as { content?: string };
+      if (!j.content) continue;
+      const parsed = JSON.parse(j.content) as { assets?: Array<{ guid?: string; kind?: string }> };
+      const sceneAsset = Array.isArray(parsed.assets)
+        ? parsed.assets.find((a) => a?.kind === 'scene')
+        : undefined;
+      if (sceneAsset?.guid) {
+        const rel = p.startsWith(prefix) ? p.slice(prefix.length) : p;
+        results.push({ pack: rel, guid: sceneAsset.guid });
+      }
+    } catch { /* unparseable pack — skip */ }
+  }
+  return results;
 }
 
 /** A raw imported file (GLB/PNG/audio) that lives in assets/ but hasn't been

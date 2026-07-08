@@ -19,12 +19,12 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import type { EntityHandle } from '../scene/scene-types';
+import type { EntityHandle, EntityId } from '../scene/scene-types';
 import { ChildOf, Children, Name } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle, entLegacyId } from '../store/entity-state';
 import { EditorHidden } from '../components/EditorHidden';
-import type { EditorOp, EditSession } from '../types';
+import type { EditorOp, EditSession, WithEntityId } from '../types';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -36,9 +36,12 @@ function spawn(session: EditSession, name: string, parent?: number): { legacyId:
   const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
-  const engineHandle = entHandle(session, cmd._id!);
-  if (engineHandle === undefined) throw new Error(`no handle for ${cmd._id}`);
-  return { legacyId: cmd._id!, engineHandle: engineHandle as EntityHandle };
+  // EditorOp's open tail types `_id` as unknown; recover the applier-filled legacy
+  // id via the sanctioned WithEntityId narrow (types.ts) instead of `as any`.
+  const legacyId = (cmd as WithEntityId)._id!;
+  const engineHandle = entHandle(session, legacyId);
+  if (engineHandle === undefined) throw new Error(`no handle for ${legacyId}`);
+  return { legacyId, engineHandle: engineHandle as EntityHandle };
 }
 
 function getChildEntities(session: EditSession, parentHandle: EntityHandle): EntityHandle[] {
@@ -131,7 +134,10 @@ describe('reparent inverse stores legacy EntityId', () => {
     const r = applyCommand(session, { kind: 'reparent', entity: child.legacyId, parent: parentB.legacyId });
     expect(r.ok).toBe(true);
 
-    const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
+    // EditorOp's open tail keeps `kind === 'reparent'` from discriminating the
+    // builtin variant, so recover the typed reparent shape explicitly to read
+    // its `parent: EntityId | null` field without `as any`.
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse as { kind: 'reparent'; parent: EntityId | null };
     expect(inverse.kind).toBe('reparent');
     if (inverse.kind === 'reparent') {
       // inverse.parent should be the legacy ID of parentA, not the engine handle

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { panelBridge } from '@forgeax/editor-core';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -36,15 +37,11 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
     };
     e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
     e.dataTransfer.effectAllowed = 'copy';
-    try {
-      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_START', ref }, '*');
-    } catch { /* cross-origin */ }
+    panelBridge.emit('dragAssetStart', ref);
   }, [asset]);
 
   const handleDragEnd = useCallback(() => {
-    try {
-      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_END' }, '*');
-    } catch { /* cross-origin */ }
+    panelBridge.emit('dragAssetEnd');
   }, []);
 
   return (

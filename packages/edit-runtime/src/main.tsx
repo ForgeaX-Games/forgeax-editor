@@ -18,7 +18,7 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ViewportComponent } from './engine/ViewportComponent';
+import { ViewportComponent } from './viewport/ViewportComponent';
 import './theme.css';
 
 // M3: single-realm — sync engine deleted (plan-strategy S7 M3).

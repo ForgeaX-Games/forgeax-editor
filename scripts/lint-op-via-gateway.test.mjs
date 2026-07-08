@@ -256,7 +256,7 @@ const testHunks = [
   },
   // New setter in a *.test.ts file -- should be exempt
   {
-    file: 'packages/edit-runtime/src/engine/test-helper.test.ts',
+    file: 'packages/edit-runtime/src/viewport/test-helper.test.ts',
     lines: [
       "export function setTestConfig(): void {",
       "  testConfig = { foo: 'bar' };",

@@ -30,7 +30,7 @@ import {
   pick as enginePick,
   PickError,
 } from '@forgeax/engine-runtime';
-import type { World, EntityHandle } from '@forgeax/engine-ecs';
+import type { World, EntityHandle, Handle } from '@forgeax/engine-ecs';
 // engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
 // @forgeax/engine-geometry leaf package.
 import { meshFromInterleaved } from '@forgeax/engine-geometry';
@@ -44,7 +44,7 @@ export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCam
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
 
-import type { EntityId, EditSession, OpHandle } from '@forgeax/editor-core';
+import type { EntityId, EditSession, OpHandle, EngineFacade } from '@forgeax/editor-core';
 import { entIds, entLegacyId, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
@@ -52,7 +52,7 @@ import { entIds, entLegacyId, entComponent, entComponents, quatToEuler } from '@
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, registerSessionApplier } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -95,15 +95,6 @@ const _v3 = new Float32Array(3) as EngineVec3;
 
 // ── runtime wiring ────────────────────────────────────────────────────────────
 
-interface WorldLike {
-  set(entity: number, component: unknown, data: unknown): unknown;
-  spawn(...componentDatas: unknown[]): { unwrap(): number };
-  despawn(entity: number): unknown;
-  /** Engine removed AssetRegistry.register; shared assets are now minted via
-   *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
-   *  directly (no Result / no .unwrap()). */
-  allocSharedRef(target: string, payload: unknown): unknown;
-}
 interface AssetsLike {
   register?(desc: unknown): { unwrap(): unknown };
 }
@@ -111,9 +102,16 @@ interface AssetsLike {
 // M4: EngineSync dependency removed — world is SSOT, no doc→world mapping needed.
 export interface ViewportDeps {
   canvas: HTMLCanvasElement;
-  world: WorldLike;
-  assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via world.allocSharedRef
-  camera: number;        // the editor camera entity
+  /** M3 t16 (S4 / AC-05, plan-strategy §2 D-2, research F-3): the view scaffolding
+   *  no longer receives the raw engine World. It receives the core-minted
+   *  EngineFacade — the sole controlled write proxy (ctx.engine). Every
+   *  camera/gizmo/preview write goes through it, so the write is trace-visible and
+   *  the raw World is out of view-layer reach (AC-04 grep goes to zero). Same-name
+   *  same-shape methods (set/spawn/despawn/allocSharedRef) mean call sites change
+   *  only their receiver, not their shape (AC-06 no-regression). */
+  engine: EngineFacade;
+  assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via engine.allocSharedRef
+  camera: EntityHandle;  // the editor camera entity (engine.spawn().unwrap() handle)
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
    *  origin instead of the arena-scale default. */
   initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
@@ -136,7 +134,11 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, world, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+export function createViewport({ canvas, engine, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+  // M3 t19: all view-scaffold writes (camera t17 / gizmo per-frame t18 / gizmo
+  // pool + param gizmo + drag fallback t19) now call the injected `engine`
+  // (EngineFacade) directly — the migration bridge alias is gone, so no raw
+  // `world` identifier survives in this factory (AC-04).
   // Input-routing gate (requirements C-4 / AC-10): in the play·game quadrant the
   // game owns input, so every editor handler bails before doing orbit/pick/gizmo
   // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
@@ -156,7 +158,12 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     const r = computeOrbitCamera(target, yaw, pitch, dist);
     camPos = r.camPos;
     fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-    world.set(camera, Transform, {
+    // M3 t17 (S4 / AC-05): the orbit camera's per-frame Transform write goes
+    // through the injected EngineFacade (ctx.engine proxy), not the raw world.
+    // This is the ONE surgery point that touches the render path — same-name shape
+    // method so the pose write is byte-identical, only now trace-visible (AC-06
+    // no visual regression; facade is a pure forwarding layer).
+    engine.set(camera, Transform, {
       posX: camPos[0], posY: camPos[1], posZ: camPos[2],
       quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
       scaleX: 1, scaleY: 1, scaleZ: 1,
@@ -168,10 +175,47 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     // a neutral studio blue reads as sky. perspective() carries clearR/G/B=0, so
     // it MUST be re-applied here (this set replaces the whole Camera each frame),
     // not just at spawn. On Chromium the cubemap skybox draws over it.
-    world.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 });
+    engine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 });
     updateGizmo();
     updateParamGizmo();
   }
+
+  // ── cameraOrbit session op (D-12 path A, S13 / AC-30) ───────────────────────
+  // The orbit gesture END (onUp) single-dispatches ONE cameraOrbit session op
+  // carrying the gesture-end pose. Its applier recomputes the orbit camera pose
+  // and writes it through ctx.engine — the SAME move applyCamera does per frame,
+  // but now as a ledger-recorded session op so collaborators (human/AI) see "the
+  // camera turned to X". Critically, when an AI issues cameraOrbit over eval there
+  // is NO per-frame facade write, so this applier is the ONLY path that actually
+  // moves the camera — hence it must write via ctx.engine, not read viewport state.
+  //
+  // Session domain (registerSessionApplier): ledger +1, NO undo entry, does not
+  // occupy the _activeOp lifecycle slot (so orbit-while-dragging-a-gizmo cannot
+  // implicitly cancel a document begin — D-12 slot-safety). Mid-frame orbit stays
+  // on the facade direct write (applyCamera), out of the ledger (OOS-4).
+  const unregCameraOrbit = registerSessionApplier(
+    'cameraOrbit',
+    (op, ctx): { ok: true } | { ok: false; error: { code: 'SET_FAILED'; hint: string } } => {
+      const o = op as unknown as {
+        target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
+      };
+      const eng = ctx?.engine;
+      if (!eng) {
+        // No ctx.engine means the executor did not hand us the proxy — fail loud
+        // rather than silently no-op (charter P3). Should never happen post-t20d.
+        return { ok: false, error: { code: 'SET_FAILED', hint: 'cameraOrbit applier received no ctx.engine' } };
+      }
+      const tgt: Vec3 = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
+      const r = computeOrbitCamera(tgt, o.yaw ?? yaw, o.pitch ?? pitch, o.dist ?? dist);
+      eng.set(camera, Transform, {
+        posX: r.camPos[0], posY: r.camPos[1], posZ: r.camPos[2],
+        quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
+        scaleX: 1, scaleY: 1, scaleZ: 1,
+      });
+      return { ok: true };
+    },
+    { title: 'Orbit camera' },
+  );
 
   // ── gizmo (3 axis handles on the selection) ────────────────────────────────
   // Shape follows the mode (design §3): translate/scale → axis BARS; rotate →
@@ -191,26 +235,29 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     { ax: 0, ay: 2, normal: [0, 1, 0], mat: 1 }, // XZ plane (Y-normal, green tint)
   ];
   const RING_SEG = 24; // cube segments per ring
-  let gizmoMats: unknown[] | null = null;
+  let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
   type Shape = 'translate' | 'scale' | 'rings';
   let shape: Shape | null = null;
   // bars: per-axis entity + world AABB (hit-test). planes: per-plane quad entity +
   // AABB (translate only). rings: pooled segment entities (3·RING_SEG) + the ring
   // center/radius for analytic plane hit-test.
-  let barEnts: number[] = [];
+  // Gizmo entities are minted by engine.spawn().unwrap() → genuine branded
+  // EntityHandle values; type them as such so engine.set/despawn (now strict
+  // after the facade tightening) accept them without a per-call brand cast.
+  let barEnts: EntityHandle[] = [];
   let bars: { center: Vec3; half: Vec3 }[] = [];
-  let tipEnts: number[] = [];   // cone arrowheads on the translate bars
-  let planeEnts: number[] = [];
+  let tipEnts: EntityHandle[] = [];   // cone arrowheads on the translate bars
+  let planeEnts: EntityHandle[] = [];
   let planes: { center: Vec3; half: Vec3 }[] = [];
-  let ringEnts: number[] = [];
+  let ringEnts: EntityHandle[] = [];
   let ringCenter: Vec3 = [0, 0, 0];
   let ringRadius = 0;
 
   // A small cone mesh (apex at +Y, base ring at Y=0, closed) for the translate
   // arrowheads. Unlit material ignores normals/uv, so those are dummy. Built
   // once and reused for all three axes (oriented via per-axis quaternion).
-  let coneMesh: unknown = null;
-  function ensureCone(): unknown {
+  let coneMesh: Handle<'MeshAsset', 'shared'> | null = null;
+  function ensureCone(): Handle<'MeshAsset', 'shared'> {
     if (coneMesh) return coneMesh;
     const SEG = 16;
     const v: number[] = [];
@@ -224,7 +271,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       idx.push(0, a, b);  // side face
       idx.push(1, b, a);  // base cap
     }
-    coneMesh = world.allocSharedRef('MeshAsset', meshFromInterleaved(new Float32Array(v), new Uint16Array(idx)));
+    coneMesh = engine.allocSharedRef('MeshAsset', meshFromInterleaved(new Float32Array(v), new Uint16Array(idx)));
     return coneMesh;
   }
   // Quaternion that rotates the cone's local +Y to point down each world axis.
@@ -234,7 +281,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     [0.70710678, 0, 0, 0.70710678],   // Z: +Y → +Z
   ];
 
-  function ensureMats(): unknown[] {
+  function ensureMats(): Handle<'MaterialAsset', 'shared'>[] {
     if (!gizmoMats) gizmoMats = AXES.map((a) => {
       // Always-on-top gizmo: draw in the Overlay queue (4000, drawn last) with
       // depthCompare:'always' + no depth write, so the handles are never hidden
@@ -250,12 +297,15 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
           renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
         })),
       };
-      return world.allocSharedRef('MaterialAsset', mat);
+      return engine.allocSharedRef('MaterialAsset', mat);
     });
     return gizmoMats;
   }
-  function spawnHandleMesh(mesh: unknown, material: unknown): number {
-    return world.spawn(
+  function spawnHandleMesh(
+    mesh: Handle<'MeshAsset', 'shared'>,
+    material: Handle<'MaterialAsset', 'shared'>,
+  ): EntityHandle {
+    return engine.spawn(
       { component: Transform, data: {} },
       { component: MeshFilter, data: { assetHandle: mesh } },
       // engine #317: MeshRenderer.material (single) -> materials[]. Passing the
@@ -263,27 +313,28 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       { component: MeshRenderer, data: { materials: [material] } },
     ).unwrap();
   }
-  const spawnHandleCube = (material: unknown): number => spawnHandleMesh(HANDLE_CUBE, material);
+  const spawnHandleCube = (material: Handle<'MaterialAsset', 'shared'>): EntityHandle =>
+    spawnHandleMesh(HANDLE_CUBE, material);
   function despawnHandles(): void {
-    for (const e of barEnts) { try { world.despawn(e); } catch { /* gone */ } }
-    for (const e of tipEnts) { try { world.despawn(e); } catch { /* gone */ } }
-    for (const e of planeEnts) { try { world.despawn(e); } catch { /* gone */ } }
-    for (const e of ringEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    for (const e of barEnts) { try { engine.despawn(e); } catch { /* gone */ } }
+    for (const e of tipEnts) { try { engine.despawn(e); } catch { /* gone */ } }
+    for (const e of planeEnts) { try { engine.despawn(e); } catch { /* gone */ } }
+    for (const e of ringEnts) { try { engine.despawn(e); } catch { /* gone */ } }
     barEnts = []; bars = []; tipEnts = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
   }
   function buildShape(want: Shape): void {
     const mats = ensureMats();
     if (want === 'rings') {
       ringEnts = [];
-      for (let i = 0; i < AXES.length; i++) for (let j = 0; j < RING_SEG; j++) ringEnts.push(spawnHandleCube(mats[i]));
+      for (let i = 0; i < AXES.length; i++) for (let j = 0; j < RING_SEG; j++) ringEnts.push(spawnHandleCube(mats[i]!));
     } else {
-      barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]));
+      barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]!));
       bars = AXES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
       if (want === 'translate') {
         // Cone arrowheads at each axis tip (move gizmo only).
         const cone = ensureCone();
-        tipEnts = AXES.map((_, i) => spawnHandleMesh(cone, mats[i]));
-        planeEnts = PLANES.map((p) => spawnHandleCube(mats[p.mat]));
+        tipEnts = AXES.map((_, i) => spawnHandleMesh(cone, mats[i]!));
+        planeEnts = PLANES.map((p) => spawnHandleCube(mats[p.mat]!));
         planes = PLANES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
       }
     }
@@ -295,14 +346,14 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     AXES.forEach((a, i) => {
       const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
       const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      world.set(barEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
+      engine.set(barEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
       if (hasTips) {
         // Cone base sits at the bar's outer end, apex pointing further out along
         // the axis. scaleY is the cone's local height (→ length after the +Y→axis
         // rotation); scaleX/Z are the base radius.
         const base: Vec3 = [center[0] + a.axis[0] * len, center[1] + a.axis[1] * len, center[2] + a.axis[2] * len];
         const q = TIP_QUAT[i]!;
-        world.set(tipEnts[i]!, Transform, {
+        engine.set(tipEnts[i]!, Transform, {
           posX: base[0], posY: base[1], posZ: base[2],
           scaleX: tipRad, scaleY: tipLen, scaleZ: tipRad,
           quatX: q[0], quatY: q[1], quatZ: q[2], quatW: q[3],
@@ -329,7 +380,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       const s: Vec3 = [
         p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
       ];
-      world.set(planeEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: s[0], scaleY: s[1], scaleZ: s[2] });
+      engine.set(planeEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: s[0], scaleY: s[1], scaleZ: s[2] });
       planes[i]!.center = hc;
       planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
     });
@@ -343,7 +394,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
         const th = (j / RING_SEG) * Math.PI * 2;
         const c = Math.cos(th) * len, s = Math.sin(th) * len;
         const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
-        world.set(ringEnts[i * RING_SEG + j]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: seg, scaleY: seg, scaleZ: seg });
+        engine.set(ringEnts[i * RING_SEG + j]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: seg, scaleY: seg, scaleZ: seg });
       }
     }
   }
@@ -403,22 +454,22 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   // and a Camera's frustum as dotted world-space wireframes (non-interactive).
   // Built from a reused cube-dot pool; rebuilt cheaply via placeDots (only spawns
   // when the dot count changes), so orbiting just re-sets transforms. ──
-  let paramEnts: number[] = [];
-  let paramMat: unknown | null = null;
-  function ensureParamMat(): unknown {
-    if (!paramMat) paramMat = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
+  let paramEnts: EntityHandle[] = [];
+  let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
+  function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
+    if (!paramMat) paramMat = engine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
     return paramMat;
   }
   function despawnParam(): void {
-    for (const e of paramEnts) { try { world.despawn(e); } catch { /* gone */ } }
+    for (const e of paramEnts) { try { engine.despawn(e); } catch { /* gone */ } }
     paramEnts = [];
   }
   function placeDots(points: Vec3[], size: number): void {
     if (points.length === 0) { despawnParam(); return; }
     const mat = ensureParamMat();
     while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
-    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { world.despawn(e); } catch { /* gone */ } }
-    points.forEach((p, i) => world.set(paramEnts[i]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: size, scaleY: size, scaleZ: size }));
+    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { engine.despawn(e); } catch { /* gone */ } }
+    points.forEach((p, i) => engine.set(paramEnts[i]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: size, scaleY: size, scaleZ: size }));
   }
   const addSeg = (out: Vec3[], a: Vec3, b: Vec3, n = 10): void => {
     for (let i = 0; i <= n; i++) { const k = i / n; out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]); }
@@ -514,7 +565,9 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       seen.add(cur as number);
       const id = entLegacyId(doc, cur);
       if (id !== undefined) return isEntHidden(doc, id) ? null : id;
-      const co = (world as unknown as World).get(cur, ChildOf);
+      // merge origin/main: main's ChildOf-walk read the raw `world`; the IoC
+      // refactor removed that binding — reads go through the injected facade.
+      const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
       if (!co.ok) break;
       cur = (co.value as { parent: number }).parent as EntityHandle;
     }
@@ -528,7 +581,10 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   function pick(clientX: number, clientY: number): EntityId | null {
     const r = canvas.getBoundingClientRect();
     const sx = clientX - r.left, sy = clientY - r.top;
-    const w = world as unknown as World;
+    // merge origin/main: enginePick needs the raw engine World (read-only,
+    // mesh-aware). The IoC refactor removed the direct `world` binding, so reach
+    // it through the facade's read-only escape hatch (no write → gate-A clean).
+    const w = engine._rawWorld();
 
     // 1) Engine pick (precise, mesh-level AABB + world matrix)
     try {
@@ -566,7 +622,10 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   let mode: Mode = 'none';
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
   let dragId: EntityId | null = null;
-  let dragWorld: number | undefined;
+  // M4: entity IDs are directly world entities, so the drag target legacy id IS
+  // the engine handle at runtime — brand it at the assignment seam (mirrors core's
+  // toEntity) so the strict-typed engine.set fallback write below accepts it.
+  let dragWorld: EntityHandle | undefined;
   // M3 (D-9): the gizmo drag is a DOCUMENT continuous op. The gateway lifecycle
   // handle is opened lazily on the first live change (so a plain click that never
   // drags opens nothing) and closed on pointerup via commit (one undoable command)
@@ -628,7 +687,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       // update writes the live pose (revert-to-begin + re-apply); no ledger/undo.
       gateway.update(dragHandle, { patch: enginePatch });
     } else {
-      world.set(dragWorld, Transform, enginePatch);
+      engine.set(dragWorld, Transform, enginePatch);
     }
     // Mirror the changed fields into the Inspector live via the transient
     // field-preview op — numbers track the drag; the single commit lands on release.
@@ -668,7 +727,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (h !== null && sel !== null) {
       dragId = sel;
 // M4: worldEntityFor removed — entity IDs are directly world entities.
-      dragWorld = sel;
+      dragWorld = sel as unknown as EntityHandle;
       // M7-a: read the grab-time Transform from the world (doc.entities gone).
       dragOrig = { ...(readEntTransform(gateway.doc, sel) ?? {}) };
       axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
@@ -692,7 +751,7 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
     if (hit !== null) {
       gateway.dispatch({ kind: 'setSelection', id: hit });
       dragId = hit;
-      dragWorld = hit;
+      dragWorld = hit as unknown as EntityHandle;
       dragOrig = { ...(readEntTransform(gateway.doc, hit) ?? {}) };
       dragY = num(dragOrig.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
@@ -783,6 +842,10 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
   }
 
   function onUp(): void {
+    // Capture the ending gesture mode BEFORE reset so we can record a camera-nav
+    // gesture as one session op (D-12 path A). Only orbit/pan/zoom are camera
+    // navigation; drag/axisDrag are entity edits (already document ops).
+    const endedMode = mode;
     // Close the gizmo document-continuous op (D-9). If a lifecycle handle is open
     // (drag produced live changes), commit lands the whole drag as ONE undoable
     // setComponent whose recorded pose = the final accumulated update (gateway
@@ -793,6 +856,19 @@ export function createViewport({ canvas, world, camera, initialOrbit, getInputTa
       dragHandle = null;
     }
     mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
+    // D-12 path A (S13 / AC-30): a completed camera-nav gesture records ONE
+    // cameraOrbit session op carrying the gesture-end pose. Mid-frame poses stayed
+    // on the facade direct write (applyCamera) — out of the ledger (OOS-4). A
+    // cancelled/aborted gesture never reaches onUp so emits nothing (0 records —
+    // no "half record" in the structure). AC-30 gates orbit; pan/zoom ride the
+    // same op as best-effort (same pose payload, not an AC assertion).
+    if (endedMode === 'orbit' || endedMode === 'pan' || endedMode === 'zoom') {
+      gateway.dispatch({
+        kind: 'cameraOrbit',
+        target: [target[0], target[1], target[2]],
+        yaw, pitch, dist,
+      }, 'human');
+    }
     // Stop the Inspector preview (transient op); the panel now reads the committed doc.
     gateway.dispatch({ kind: 'setFieldPreview', id: null });
     updateGizmo();
@@ -905,6 +981,7 @@ onDisplayModeChange(() => refreshGizmos());
       unsubSel();
       unsubMode();
       unsubDoc();
+      unregCameraOrbit();
       despawnHandles();
       despawnParam();
     },

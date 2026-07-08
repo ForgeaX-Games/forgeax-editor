@@ -17,8 +17,8 @@ export { ViewportHints } from './ViewportHints';
 
 // M4: createEngineSync removed — sync.ts deleted (projection layer collapse).
 // ── Engine ──
-export { setupEditorSkylight } from './engine/skylight';
-export { createViewport } from './engine/viewport';
+export { setupEditorSkylight } from './viewport/skylight';
+export { createViewport } from './viewport/viewport';
 
 // ── Hot reload (two-tier, D-8) ──
 export { applyScriptChange, initHotReload } from './hot-reload';

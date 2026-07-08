@@ -53,12 +53,10 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
     bootStageAppMounted();
   }, []);
   // ── ✎ Edit → chat reference pills ──────────────────────────────────────────
-  // The editor iframe posts VAG_EDITOR_REF when the user "references to chat" a
-  // scene entity / component / asset. Turn it into a composer pill via the shared
-  // referenceRegistry builders. Restored after the EditMode→EditSurface slim
-  // (0dccba7) dropped this listener; payload is validated inline so the interface
-  // keeps ZERO dependency on @forgeax/editor (the cycle the panel-renderer
-  // refactor 52b6f61 removed — re-importing the editor schema would re-create it).
+  // The editor posts VAG_EDITOR_REF (via editorBus compat bridge) when the user
+  // "references to chat" a scene entity / component / asset. Turn it into a
+  // composer pill via the shared referenceRegistry builders. Payload is validated
+  // inline so the interface keeps ZERO dependency on @forgeax/editor.
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
       if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
@@ -122,8 +120,8 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
   }, []);
 
   // ── ✎ Edit → focus a dock panel (e.g. double-click a mesh → Mesh tab) ───────
-  // The editor iframe posts FORGEAX_FOCUS_PANEL { panel } to bring a panel to
-  // front. Relayed as the focus-only APP_EVENTS.focusPanel CustomEvent so the
+  // The editor posts FORGEAX_FOCUS_PANEL { panel } (via editorBus compat bridge)
+  // to bring a panel to front. Relayed as APP_EVENTS.focusPanel CustomEvent so
   // DockShell activates the tab WITHOUT reopening a closed one (no force-insert).
   // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
   useEffect(() => {

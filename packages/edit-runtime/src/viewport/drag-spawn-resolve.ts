@@ -33,13 +33,10 @@
 // mesh) re-patches from cache without a second loadByGuid.
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { EditGateway, type EditorOp } from '@forgeax/editor-core';
+import { EditGateway, type EditorOp, type EngineFacade } from '@forgeax/editor-core';
 
-/** Loose engine handles — the ECS/renderer types evolve independently, so we
- *  mirror host-boot's `as never` discipline with narrow structural shapes. */
-type WorldLike = {
-  allocSharedRef(brand: string, payload: unknown): number;
-};
+/** Loose renderer handle — the renderer type evolves independently, so we
+ *  mirror host-boot's `as never` discipline with a narrow structural shape. */
 type RendererLike = {
   assets: {
     loadByGuid(guid: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }>;
@@ -49,7 +46,10 @@ type RendererLike = {
 /** Pull the pending-mesh marker guid from a spawnEntity command, or null. */
 function pendingMeshGuid(cmd: EditorOp | null): string | null {
   if (cmd === null || cmd.kind !== 'spawnEntity') return null;
-  const marker = cmd.components?.EditorPendingMeshAsset as { guid?: unknown } | undefined;
+  // EditorOp's open `{ kind: string }` tail keeps `kind === 'spawnEntity'` from
+  // discriminating the builtin variant, so recover its `components` bag explicitly.
+  const components = (cmd as { components?: Record<string, unknown> }).components;
+  const marker = components?.EditorPendingMeshAsset as { guid?: unknown } | undefined;
   const guid = marker?.guid;
   return typeof guid === 'string' && guid.length > 0 ? guid : null;
 }
@@ -58,7 +58,14 @@ function pendingMeshGuid(cmd: EditorOp | null): string | null {
  * Subscribe the drag-spawn mesh resolver to the EditGateway. Idempotent per GUID:
  * failed GUIDs are never retried, resolved GUIDs are re-patched from cache.
  */
-export function installDragSpawnMeshResolver(bus: EditGateway, world: WorldLike, renderer: RendererLike): void {
+export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFacade, renderer: RendererLike): void {
+  // M3 migration bridge (t16→t20): the injected proxy is `engine` (EngineFacade).
+  // t16 swaps the signature; t20 rewrites the body to call engine.allocSharedRef
+  // t20 (S4 / AC-05): the mesh handle is minted through the injected EngineFacade
+  // (ctx.engine proxy). allocSharedRef is chrome handle-casting, not a document op
+  // — the resulting handle rides the setComponent bus dispatch below (which DOES
+  // go through the ledger). The facade returns an opaque handle; narrow to the u32
+  // the MeshFilter.assetHandle patch expects.
   const failed = new Set<string>();
   const resolved = new Map<string, number>();
 
@@ -93,7 +100,7 @@ export function installDragSpawnMeshResolver(bus: EditGateway, world: WorldLike,
         console.error('[drag-spawn-resolve]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
         return;
       }
-      const handle = world.allocSharedRef('MeshAsset', res.value);
+      const handle = engine.allocSharedRef('MeshAsset', res.value) as number;
       resolved.set(guid, handle);
       patch(entity, handle);
     })();

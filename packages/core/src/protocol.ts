@@ -397,7 +397,7 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
 
 // ── Receive side — validated dispatch (SSOT mirror of sendVagMessage) ─────────
 //
-// Every cross-iframe receiver previously hand-rolled its own
+// Every iframe-boundary receiver previously hand-rolled its own
 // `addEventListener('message')` + `switch` + ad-hoc `safeParse` (or a raw
 // `e.data as T` cast with NO validation, and usually NO origin check). That
 // scattering is the robustness/security hole: foreign-origin pages could drive

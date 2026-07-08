@@ -18,9 +18,9 @@
       "types": "./src/host-boot.ts",
       "import": "./src/host-boot.ts"
     },
-    "./engine/viewport-component": {
-      "types": "./src/engine/ViewportComponent.tsx",
-      "import": "./src/engine/ViewportComponent.tsx"
+    "./viewport/viewport-component": {
+      "types": "./src/viewport/ViewportComponent.tsx",
+      "import": "./src/viewport/ViewportComponent.tsx"
     },
     "./package.json": "./package.json"
   },

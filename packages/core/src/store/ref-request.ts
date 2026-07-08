@@ -1,9 +1,8 @@
 // store/ref-request — "pin this entity/component/asset into the ForgeaX chat".
 //
-// State: none — a stateless function cluster that reads gateway.doc and posts deixis
-// handles up the VAG postMessage channel (the chat panel lives in the parent
-// interface shell; we are an iframe, so ref state is not owned locally). This is
-// exactly the "human points → AI gets a concrete handle" path.
+// State: none — a stateless function cluster that reads gateway.doc and emits
+// deixis handles over the typed editor bus. The chat panel (in the same host
+// window since single-realm M2/M4) subscribes via panelBridge.on('editorRef').
 //
 // Anchors:
 //   plan-strategy §2 D-2: cluster 8 (store.ts:227-281)
@@ -14,65 +13,47 @@ import { gateway } from './gateway';
 import { entExists, entName, entComponents } from './entity-state';
 import type { EntityId } from '../types';
 import type { AssetChatRef } from '../io/cross-panel-types';
+import { panelBridge } from '../io/panel-bridge';
 
-// Reference-request signal: "pin entity N into the ForgeaX chat context". The
-// chat panel lives in the parent interface shell (we are an iframe), so we post
-// a deixis handle up via the VAG postMessage channel rather than owning ref
-// state locally — exactly the "human points → AI gets a concrete handle" path.
 export function requestRefEntity(id: EntityId): void {
-  // M7 / AC-15: entity name + component keys read from world (SSOT) via
-  // entity-state helpers; doc.entities dual-write mirror deleted.
   if (!entExists(gateway.doc, id)) return;
-  const handle = {
-    kind: 'entity' as const,
+  panelBridge.emit('editorRef', {
+    kind: 'entity',
     id,
     name: entName(gateway.doc, id),
     components: Object.keys(entComponents(gateway.doc, id)),
-  };
-  try {
-    window.parent?.postMessage({ type: 'VAG_EDITOR_REF', payload: handle }, '*');
-  } catch {
-    /* cross-origin — non-fatal */
-  }
+  });
 }
 
 /** Pin a COMPONENT from the inspector into the ForgeaX chat — kind='component'. */
 export function requestRefComponent(entityId: EntityId, comp: string, value: unknown): void {
-  // M7 / AC-15: entity name read from world (SSOT); doc.entities mirror deleted.
   if (!entExists(gateway.doc, entityId)) return;
-  try {
-    window.parent?.postMessage(
-      { type: 'VAG_EDITOR_REF', payload: { kind: 'component', entityId, entityName: entName(gateway.doc, entityId), comp, value } },
-      '*',
-    );
-  } catch { /* cross-origin — non-fatal */ }
+  panelBridge.emit('editorRef', {
+    kind: 'component',
+    entityId,
+    entityName: entName(gateway.doc, entityId),
+    comp,
+    value,
+  });
 }
 
 /** Pin an ASSET (material/texture/mesh) into the ForgeaX chat as a deixis handle
  * — same channel as requestRefEntity, payload.kind === 'asset'. */
 export function requestRefAsset(asset: { guid: string; kind: string; name: string; packPath?: string }): void {
-  try {
-    window.parent?.postMessage(
-      { type: 'VAG_EDITOR_REF', payload: { kind: 'asset', guid: asset.guid, assetKind: asset.kind, name: asset.name, packPath: asset.packPath } },
-      '*',
-    );
-  } catch {
-    /* cross-origin — non-fatal */
-  }
+  panelBridge.emit('editorRef', {
+    kind: 'asset',
+    guid: asset.guid,
+    assetKind: asset.kind,
+    name: asset.name,
+    packPath: asset.packPath,
+  });
 }
 
 /** Batch-add asset/folder refs into the ForgeaX AI Chat context (M5).
  *  Carries full payload so the AI can reason about asset contents. */
 export function requestAddAssetsToChat(refs: AssetChatRef[]): void {
   if (refs.length === 0) return;
-  try {
-    window.parent?.postMessage(
-      { type: 'FORGEAX_ADD_ASSET_TO_CHAT', refs },
-      '*',
-    );
-  } catch {
-    /* cross-origin — non-fatal */
-  }
+  panelBridge.emit('addAssetToChat', refs);
 }
 
 // requestAddAssetToScene lives in ./spawn-asset-ref (co-located with

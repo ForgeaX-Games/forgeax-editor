@@ -11,7 +11,6 @@
 //     onRenameRequest has a real consumer (Hierarchy row) and is kept.
 //   requirements AC-02: session op, AI-dispatchable, ledger only.
 import type { EditorOp, EntityId } from '../types';
-import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 
 // Rename-request signal: F2 (or any panel) asks the Hierarchy row for `id` to
@@ -26,9 +25,9 @@ function applyRequestRename(op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('requestRename', applyRequestRename);
 
-export function requestRename(id: EntityId): void {
-  gateway.dispatch({ kind: 'requestRename', entity: id });
-}
+// M3 t22 (S10 / AC-21/22): requestRename write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'requestRename', entity: id }) directly.
+// Read-side (onRenameRequest) stays — the Hierarchy row consumes it.
 export function onRenameRequest(fn: (id: EntityId) => void): () => void {
   renameListeners.add(fn);
   return () => renameListeners.delete(fn);

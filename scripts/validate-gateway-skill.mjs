@@ -36,7 +36,19 @@ const skillFile = join(skillDir, 'SKILL.md');
 const EXPECTED_NAME = 'forgeax-editor-gateway';
 
 // Required keyword anchors (case-insensitive search in body text)
-const REQUIRED_KEYWORDS = ['dispatch', 'begin', 'commit', 'listOps', 'defineOp'];
+const REQUIRED_KEYWORDS = [
+  // M1 closed-loop anchors (kept)
+  'dispatch',
+  'begin',
+  'commit',
+  'listOps',
+  'defineOp',
+  // M5 eval + scope + trace anchors (plan-strategy §5.6 AC-20)
+  'eval',
+  'scope',
+  'trace',
+  'querySnapshot',
+];
 
 // ---------------------------------------------------------------------------
 // Check 1: File existence

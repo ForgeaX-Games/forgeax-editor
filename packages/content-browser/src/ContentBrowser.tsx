@@ -312,7 +312,7 @@ export function ContentBrowser() {
     // closed tab). Harmless in standalone/pop-out where no shell listens.
     // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
     if (asset.kind === 'mesh') {
-      try { window.parent?.postMessage({ type: 'FORGEAX_FOCUS_PANEL', panel: 'mesh' }, '*'); } catch { /* cross-origin — non-fatal */ }
+      gateway.dispatch({ kind: 'focusPanel', panel: 'mesh' });
     }
   }, []);
 
@@ -455,6 +455,7 @@ export function ContentBrowser() {
   }, [gameSlug, nav.currentPath, reload]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';

@@ -1,13 +1,16 @@
-import { applyCommand, createEditSession } from '../session/document';
+import { applyCommand, createEditSession, docIdMapForSession } from '../session/document';
+import type { DocApplierCtx, EngineWriteProxy } from '../session/document';
 import type { CommandError, EditorOp, EditSession } from '../types';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
-import type { ApplierFn } from './appliers';
+import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
 import type { OpDescriptor, PlanFn, ArgsSchema } from './catalog';
 import { listOps as catalogListOps, registerBuiltinOp, registerDefinedOp, hasOp, getOp } from './catalog';
 import { querySnapshot as _querySnapshot } from './query-snapshot';
-import type { QuerySnapshotDescriptor, QuerySnapshotRow, QuerySnapshotFn } from './query-snapshot';
+import type { QuerySnapshotDescriptor, QuerySnapshotResult, QuerySnapshotFn } from './query-snapshot';
 import { validate as validateArgs } from './args-schema';
 import type { ValidateResult } from './args-schema';
+import { EngineFacade } from './engine-facade';
+import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -82,6 +85,32 @@ function nextOpHandleId(): string {
   return `op-${Date.now().toString(36)}-${(_opHandleCounter++).toString(36)}`;
 }
 
+// ── Executor + ApplierCtx (§2 D-2, requirements AC-01) ────────────────────
+//
+// The executor is the only code path that calls appliers. It constructs an
+// ApplierCtx object per execution and hands it to the applier. Document
+// appliers currently receive (session, cmd) — the executor wraps them with
+// a backward-compatible adapter that maps ctx back to session for the
+// document-domain appliers. When all appliers are migrated to ctx-shaped
+// signatures, the adapter can be removed.
+//
+// plan-strategy §2 D-2: ctx type has NO world field (AC-01).
+// plan-strategy §2 D-2: ctx type has engine / dispatchSub / query.
+
+/** ApplierCtx — constructor-injected IoC context (plan-strategy §2 D-2).
+ *  Contains ONLY the controlled proxy (engine), recursive dispatch (dispatchSub),
+ *  and read-side query (query). NO world field (AC-01 negative). */
+export interface ApplierCtx {
+  /** Controlled proxy for engine World writes. Sole mutator outside this file
+   *  is a lint violation (gateway A). */
+  engine: EngineFacade;
+  /** Recursive dispatch — transaction applier uses this to run sub-ops
+   *  through the executor (replacing the M1 module-level _dispatchDocumentSub). */
+  dispatchSub(kind: string, payload: EditorOp): ReturnType<ApplierFn>;
+  /** Read-side query snapshot function. Same as the gateway.buildQueryFn() output. */
+  query: QuerySnapshotFn;
+}
+
 /**
  * The single authoritative mutable path. Human UI and AI both call `dispatch`.
  * Maintains Undo/Redo stacks (each entry = the command + its inverse) and
@@ -131,8 +160,115 @@ export class EditGateway {
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────
   private _activeOp: ActiveOp | null = null;
 
+  // ── Executor: EngineFacade (boot-constructed, plan-strategy §2 D-2) ───────
+  // Created lazily and REBOUND when the underlying world changes. The same
+  // facade instance is reused across dispatch calls as long as doc.world is
+  // stable; a world swap (boot injection or scene replaceDoc) rebuilds it.
+  private _engineFacade: EngineFacade | null = null;
+  /** The world the cached facade currently wraps — used to detect a world swap.
+   *  M3 t16: configureHostSession dispatches `setSceneId` (a session op that
+   *  builds ctx → the facade) BEFORE ViewportComponent injects the real world
+   *  (gateway.doc.world = world). If we cached the first facade permanently it
+   *  would wrap `undefined` forever. Tracking the wrapped world and rebinding on
+   *  change makes the facade always point at the live world — no boot-order trap,
+   *  and scene switches (replaceDoc → new doc.world) get a fresh facade too. */
+  private _facadeWorld: unknown = undefined;
+
+  /** Get or create an EngineFacade bound to the CURRENT session world.
+   *  Rebuilds when doc.world changes (boot injection / scene swap). */
+  private _getEngineFacade(): EngineFacade {
+    const world = this.doc.world;
+    if (!this._engineFacade || this._facadeWorld !== world) {
+      this._engineFacade = new EngineFacade(world!);
+      this._facadeWorld = world;
+    }
+    return this._engineFacade;
+  }
+
+  /** Public accessor for the boot-constructed EngineFacade (plan-strategy §2 D-2,
+   *  research F-3 injection seam). edit-runtime calls this AFTER injecting the
+   *  world (gateway.doc.world = world) to obtain the controlled write proxy it
+   *  hands to view scaffolding (viewport / preview-skin / drag-spawn) and to
+   *  skylight's async IBL handle casting (D-11). Same facade the executor gives
+   *  appliers via ctx.engine — one write gate, one instance. */
+  engineFacade(): EngineFacade {
+    return this._getEngineFacade();
+  }
+
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
+  }
+
+  // ── Executor: build ApplierCtx (plan-strategy §2 D-2) ────────────────────
+
+  /** Build the IoC context for an applier execution.
+   *  ctx.engine / ctx.dispatchSub / ctx.query — NO world field (AC-01). */
+  private _buildCtx(): ApplierCtx {
+    const engine = this._getEngineFacade();
+    const query: QuerySnapshotFn = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
+      _querySnapshot(this.doc.world!, desc);
+    // dispatchSub: recursive dispatch through the executor — replaces M1's
+    // module-level _dispatchDocumentSub for transaction/plan sub-ops.
+    // Nested spans are automatically created via _execDocumentApplier.
+    const dispatchSub = (_kind: string, sub: EditorOp): ReturnType<ApplierFn> => {
+      return this._execDocumentApplier(sub);
+    };
+    return { engine, dispatchSub, query };
+  }
+
+  // ── Executor: span-wrapped document applier call ──────────────────────────
+
+  /** Build the DocApplierCtx for document-op execution (F-1 IoC).
+   *  engine = the cached EngineFacade (records leaves onto the active span,
+   *  AC-09); ids = the session id<->handle map (no world); dispatchSub =
+   *  span-pushing recursion through the executor (nested transaction spans).
+   *  Type-level this ctx has NO `world` field (AC-01). */
+  private _buildDocCtx(): DocApplierCtx {
+    const engine = this._getEngineFacade() as unknown as EngineWriteProxy;
+    const ids = docIdMapForSession(this.doc);
+    const ctx: DocApplierCtx = {
+      engine,
+      ids,
+      // Span-pushing sub-dispatch: a transaction sub-op recurses back through
+      // the executor so each sub-op gets its own child span AND records its own
+      // engine leaves via the same cached facade (AC-07 + AC-09).
+      dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub),
+      // Read side: same query-snapshot the session/eval ctx exposes (D-2 ctx
+      // contract, t12a). Document appliers don't read it, but it is part of the
+      // ctx shape and available for defined document ops that might.
+      query: (desc) => _querySnapshot(this.doc.world!, desc as QuerySnapshotDescriptor),
+    };
+    return ctx;
+  }
+
+  /** Execute a document applier through the executor: build DocApplierCtx →
+   *  pushSpan → call applier(ctx, cmd) → popSpan.
+   *  Used by dispatch (and, via ctx.dispatchSub, by transaction sub-ops).
+   *
+   *  The applier receives a DocApplierCtx whose only world access is the
+   *  controlled `engine` proxy — no raw world, no EditSession (AC-01 / D-2).
+   *  Every write it performs records its engine interface leaf onto the span
+   *  pushed here (AC-09). */
+  private _execDocumentApplier(cmd: EditorOp): ReturnType<ApplierFn> {
+    const kind = cmd.kind;
+    const applier = documentAppliers.get(kind);
+    if (!applier) {
+      return { ok: false, error: { code: 'UNKNOWN_OP' as const, hint: `applier not found for "${kind}"` } };
+    }
+    const ctx = this._buildDocCtx();
+    pushSpan(kind);
+    // Document appliers are (ctx, cmd) => ApplyResult. The registered ApplierFn
+    // type is intentionally loose (session: unknown) so a single table can hold
+    // both document and defineOp document appliers — the concrete applier bodies
+    // are typed against DocApplierCtx (that is where the AC-01 no-world guard
+    // lives). Pass the ctx as the first arg.
+    const r = applier(ctx as unknown as EditSession, cmd);
+    if (!r.ok) {
+      popSpan('ERROR');
+    } else {
+      popSpan('OK');
+    }
+    return r;
   }
 
   dispatch(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
@@ -154,10 +290,8 @@ export class EditGateway {
     }
 
     if (domain === 'document') {
-      // Document ops mutate the engine World and produce an inverse for Undo.
-      const applier = documentAppliers.get(kind);
-      if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
-      const r = applier(this.doc, cmd);
+      // Document ops: executor wraps applier → ctx created → span pushed.
+      const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
       // transientMode (play·scene): still apply + emit for immediate feedback,
       // but skip undo/ledger writes (AC-09) — the non-committing edit mode.
@@ -191,23 +325,35 @@ export class EditGateway {
       }
     }
 
-    // Session / transient ops: applier takes only the op (no session, no
-    // inverse). The applier mutates its store module's own state and fires that
-    // module's own listeners (selection/hover/etc.) — so the gateway must NOT
-    // call emit() here (that would fire the doc-version / _isDirty bus
-    // subscribers, wrongly marking the scene dirty on every select/hover).
+    // Session / transient ops: executor builds ctx → pushes span → calls applier.
+    // M3 t20d (D-12): the ctx is passed as the SECOND arg (applier(op, ctx)) so a
+    // session applier can move the engine world through ctx.engine — cameraOrbit's
+    // applier is the ONLY camera-move path when an AI drives it over eval (no
+    // per-frame facade write). Existing session appliers keep their (op) signature
+    // and simply ignore the extra arg (backward compatible — SessionApplier's ctx
+    // param is optional). Op stays the first arg (unchanged from M1/M2).
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
-    const r = applier(cmd);
-    if (!r.ok) return r;
+    const ctx = this._buildCtx();
+    pushSpan(kind);
+    const sResult = applier(cmd, ctx);
+    const sOk = sResult.ok;
+    popSpan(sOk ? 'OK' : 'ERROR');
+    if (!sOk) return sResult;
 
     // Ledger-only middle tier (plan-strategy §2 D-1): session ops append to the
     // flat append-only ledger (never the undo stack — they carry no inverse);
     // transient ops append to neither. transientMode gates ALL THREE domains
     // uniformly (AC-09): under it, even session ops skip the ledger write.
+    // M4 t28: defineOp-cast session ops push their sub-ops to ledger inside
+    // the applier itself (D-7: each sub-op gets its own flat entry). Skip the
+    // top-level dispatch-level push to avoid double-counting.
     if (!this.transientMode && domain === 'session') {
-      this.ledger.push(cmd);
-      this.origins.push(origin);
+      const desc = getOp(kind);
+      if (!(desc && desc.source === 'defined')) {
+        this.ledger.push(cmd);
+        this.origins.push(origin);
+      }
     }
     return { ok: true };
   }
@@ -350,13 +496,18 @@ export class EditGateway {
     }
     const entry = this.undoStack.pop();
     if (!entry) return false;
+    // undo goes through executor (plan-strategy §2 D-2: undo/redo same executor,
+    // everything leaves a span trace)
+    pushSpan(`undo:${entry.cmd.kind}`);
     const r = applyCommand(this.doc, entry.inverse);
     if (!r.ok) {
+      popSpan('ERROR');
       // should not happen; restore stack and bail
       this.undoStack.push(entry);
       return false;
     }
     this.redoStack.push({ cmd: entry.cmd, inverse: r.inverse, origin: entry.origin });
+    popSpan('OK');
     this.emit(entry.inverse);
     return true;
   }
@@ -364,12 +515,16 @@ export class EditGateway {
   redo(): boolean {
     const entry = this.redoStack.pop();
     if (!entry) return false;
+    // redo goes through executor (plan-strategy §2 D-2: everything leaves a span)
+    pushSpan(`redo:${entry.cmd.kind}`);
     const r = applyCommand(this.doc, entry.cmd);
     if (!r.ok) {
+      popSpan('ERROR');
       this.redoStack.push(entry);
       return false;
     }
     this.undoStack.push({ cmd: entry.cmd, inverse: r.inverse, origin: entry.origin });
+    popSpan('OK');
     this.emit(entry.cmd);
     return true;
   }
@@ -406,6 +561,18 @@ export class EditGateway {
     for (const fn of this.listeners) fn(this.doc, last);
   }
 
+  // ── Trace read API (plan-strategy §2 D-3, AC-10) ──────────────────────────
+
+  /** Programming read API for trace trees: recent() → last N root trees,
+   *  last() → most recent single root tree, or null if no traces recorded;
+   *  dropped() → count of root trees evicted by the ring buffer (D-3 explicit
+   *  drop detection, exposed on the gateway so scope① eval can read it). */
+  readonly trace = {
+    recent: (n: number = 1): SpanNode[] => recentRoots(n),
+    last: (): SpanNode | null => lastRoot(),
+    dropped: (): number => droppedTracesCount(),
+  };
+
   // ── M4 catalog / defineOp stubs ─────────────────────────────────────────
   // RED phase (m4-w1/w2/w4/w10): stubs return empty/error so tests can
   // compile and fail. Implemented in green phase: m4-w5 (listOps),
@@ -423,7 +590,7 @@ export class EditGateway {
 
   /** Build a query-snapshot function for defineOp plan(). */
   buildQueryFn(): QuerySnapshotFn {
-    return (descriptor: QuerySnapshotDescriptor): QuerySnapshotRow[] =>
+    return (descriptor: QuerySnapshotDescriptor): QuerySnapshotResult =>
       _querySnapshot(this.doc.world!, descriptor);
   }
 
@@ -431,23 +598,33 @@ export class EditGateway {
    * defineOp — cast a new operation from primitives at runtime (plan-strategy §2 D-4).
    *
    * Idempotent: defines a new op (does not execute). The op appears in listOps
-   * immediately (source='defined'). Dispatch calls later route through the
-   * existing document-domain path (applyCommand → inverse → undo+ledger).
+   * immediately (source='defined').
    *
-   * v1: document domain only. Other domains → INVALID_ARGS.
+   * Document domain: plan result is wrapped in a transaction op → applyCommand
+   * → single inverse → one undo+ledger step.
+   *
+   * Session domain (M4 t28, plan-strategy §2 D-7): plan result is a list of
+   * session ops. Dispatch executes them sequentially through the session
+   * executor — each sub-op gets its own ledger entry (flat append-only,
+   * D-7). Partial failure: first failure stops execution, PLAN_STEP_FAILED
+   * with hint containing failed op kind + index, already-executed ops stay
+   * in ledger (AC-18 — append-only, never pretend-rollback).
+   * Empty plan → {ok:true} with no ledger entries.
+   *
+   * Transient domain: still rejected (OOS-6).
    * Duplicate id (builtin or already-defined) → OP_ID_CONFLICT.
    */
   defineOp(spec: {
     id: string;
-    domain: 'document';
+    domain: 'document' | 'session';
     argsSchema: Record<string, unknown> | null;
     plan: PlanFn;
   }): { ok: true } | { ok: false; error: CommandError } {
     const { id, domain, argsSchema, plan } = spec;
 
-    // v1: document domain only (D-4)
-    if (domain !== 'document') {
-      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'defineOp v1 only supports domain "document"' } };
+    // Reject transient domain (OOS-6)
+    if (domain !== 'document' && domain !== 'session') {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'defineOp supports domain "document" or "session"' } };
     }
 
     // Duplicate detection: both builtin and previously-defined ids conflict
@@ -455,47 +632,133 @@ export class EditGateway {
       return { ok: false, error: { code: 'OP_ID_CONFLICT', hint: `op "${id}" already exists in catalog` } };
     }
 
-    // Register a custom document applier that wraps plan() → transaction
-    // into applyCommand. The existing dispatch() method then handles undo/
-    // ledger/inverse automatically through the document-domain path.
-    documentAppliers.set(id, (session: unknown, cmd: EditorOp) => {
+    if (domain === 'document') {
+      // EXISTING document-domain path: transaction wrapper → undo+ledger.
+      // The executor invokes this applier with a DocApplierCtx as the first arg
+      // (F-1), which this defineOp path does not consume — it delegates to the
+      // public applyCommand(this.doc, …), which builds its own ctx from the live
+      // session. this.doc IS the session the executor's ctx wraps, so routing
+      // through it is behavior-identical AND keeps the facade leaf recording
+      // (applyCommand's facade writes onto the span _execDocumentApplier pushed).
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
-      const query: unknown = (desc: QuerySnapshotDescriptor): QuerySnapshotRow[] =>
-        _querySnapshot(this.doc.world!, desc);
+      documentAppliers.set(id, (_ctx: unknown, cmd: EditorOp) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
+        const query: unknown = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
+          _querySnapshot(this.doc.world!, desc);
 
-      let planCommands: EditorOp[];
-      try {
-        planCommands = plan(query, args);
-      } catch (err) {
-        const r: { ok: false; error: CommandError } = {
-          ok: false,
-          error: { code: 'PLAN_FAILED', hint: `plan threw: ${(err as Error).message ?? String(err)}` },
+        let planCommands: EditorOp[];
+        try {
+          planCommands = plan(query, args);
+        } catch (err) {
+          const r: { ok: false; error: CommandError } = {
+            ok: false,
+            error: { code: 'PLAN_FAILED', hint: `plan threw: ${(err as Error).message ?? String(err)}` },
+          };
+          return r as unknown as ReturnType<ApplierFn>;
+        }
+
+        if (!Array.isArray(planCommands) || planCommands.length === 0) {
+          const r: { ok: false; error: CommandError } = {
+            ok: false,
+            error: { code: 'PLAN_FAILED', hint: 'plan returned empty or non-array' },
+          };
+          return r as unknown as ReturnType<ApplierFn>;
+        }
+
+        // Wrap in a transaction op → applyCommand → single inverse → one undo step
+        const txOp: EditorOp = {
+          kind: 'transaction',
+          label: `defineOp:${id}`,
+          commands: planCommands,
         };
-        return r as unknown as ReturnType<ApplierFn>;
-      }
+        return applyCommand(this.doc, txOp);
+      });
+    } else {
+      // ── Session domain (M4 t28, plan-strategy §2 D-7) ──
+      // Register a session applier that, on dispatch, runs the plan and
+      // emits each sub-op through the session executor path.
+      // Ledger layout: each sub-op gets its own flat entry (D-7: no composite).
+      // Partial failure: first fail stops, PLAN_STEP_FAILED, already-emitted
+      // ops stay in ledger (AC-18: append-only, never rollback).
+      sessionAppliers.set(id, ((op: EditorOp, _ctx?: SessionApplierCtx) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { kind: _kind, ...args } = op as { kind: string } & Record<string, unknown>;
+        const query: unknown = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
+          _querySnapshot(this.doc.world!, desc);
 
-      if (!Array.isArray(planCommands) || planCommands.length === 0) {
-        const r: { ok: false; error: CommandError } = {
-          ok: false,
-          error: { code: 'PLAN_FAILED', hint: 'plan returned empty or non-array' },
-        };
-        return r as unknown as ReturnType<ApplierFn>;
-      }
+        let planOps: EditorOp[];
+        try {
+          planOps = plan(query, args);
+        } catch (err) {
+          return { ok: false, error: { code: 'PLAN_FAILED', hint: `plan threw: ${(err as Error).message ?? String(err)}` } };
+        }
 
-      // Wrap in a transaction op → applyCommand → single inverse → one undo step
-      const txOp: EditorOp = {
-        kind: 'transaction',
-        label: `defineOp:${id}`,
-        commands: planCommands,
-      };
-      return applyCommand(session as EditSession, txOp);
-    });
+        if (!Array.isArray(planOps)) {
+          return { ok: false, error: { code: 'PLAN_FAILED', hint: 'plan returned non-array' } };
+        }
+
+        // Empty plan → explicit success with no ledger entries (D-7)
+        if (planOps.length === 0) {
+          return { ok: true };
+        }
+
+        // Execute each sub-op sequentially through the session dispatch path
+        for (let idx = 0; idx < planOps.length; idx++) {
+          const subOp = planOps[idx]!;
+          const subDomain = domainOf(subOp.kind);
+          if (subDomain === null || subDomain === 'document') {
+            return {
+              ok: false,
+              error: {
+                code: 'PLAN_STEP_FAILED',
+                hint: `session plan sub-op #${idx + 1} "${subOp.kind}" is not a session/transient op`,
+              },
+            };
+          }
+
+          const applier = (subDomain === 'session' ? sessionAppliers : transientAppliers).get(subOp.kind);
+          if (!applier) {
+            return {
+              ok: false,
+              error: {
+                code: 'PLAN_STEP_FAILED',
+                hint: `session plan sub-op #${idx + 1} "${subOp.kind}": no applier registered`,
+              },
+            };
+          }
+
+          const ctx = this._buildCtx();
+          pushSpan(subOp.kind);
+          const subResult = applier(subOp, ctx);
+          const subOk = subResult.ok;
+          popSpan(subOk ? 'OK' : 'ERROR');
+
+          if (!subOk) {
+            return {
+              ok: false,
+              error: {
+                code: 'PLAN_STEP_FAILED',
+                hint: `session plan sub-op #${idx + 1} "${subOp.kind}" failed: ${subResult.error.code}`,
+              },
+            };
+          }
+
+          // Ledger-only: session ops append to flat ledger, NEVER undo.
+          if (!this.transientMode) {
+            this.ledger.push(subOp);
+            this.origins.push('ai'); // defined ops inherit AI origin (session-plan semantics)
+          }
+        }
+
+        return { ok: true };
+      }));
+    }
 
     // Register in catalog — source='defined', visible in listOps immediately
     registerDefinedOp({
       id,
-      domain: 'document',
+      domain: domain as 'document' | 'session',
       argsSchema: argsSchema as ArgsSchema | null,
       title: id,
     });

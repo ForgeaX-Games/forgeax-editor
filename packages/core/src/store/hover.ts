@@ -17,7 +17,6 @@
 //   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp, EntityId } from '../types';
-import { gateway } from './gateway';
 import { transientAppliers } from '../io/appliers';
 
 // Hover-highlight signal: a transient "the pointer is over a handle that refers
@@ -38,9 +37,9 @@ function applySetHoverEntity(op: EditorOp): { ok: true } {
 }
 transientAppliers.set('setHoverEntity', applySetHoverEntity);
 
-export function setHoverEntity(id: EntityId | null): void {
-  gateway.dispatch({ kind: 'setHoverEntity', id });
-}
+// M3 t22 (S10 / AC-21/22): setHoverEntity write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'setHoverEntity', id }) directly. Read-side
+// (getHoverEntity / useHoverEntity) stays.
 export function getHoverEntity(): EntityId | null {
   return hoverId;
 }

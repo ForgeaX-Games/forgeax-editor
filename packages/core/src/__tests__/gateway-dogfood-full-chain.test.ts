@@ -44,7 +44,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
   };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn "${name}" failed`);
-  return cmd._id!;
+  return (cmd as any)._id!;
 }
 
 function readPosY(gw: EditGateway, entity: number): number {

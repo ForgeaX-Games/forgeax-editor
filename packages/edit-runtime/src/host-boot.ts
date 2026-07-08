@@ -33,7 +33,7 @@ import {
   HANDLE_SPHERE,
   HANDLE_CYLINDER,
 } from '@forgeax/engine-runtime';
-import { Entity } from '@forgeax/engine-ecs';
+import { Entity, toShared } from '@forgeax/engine-ecs';
 import {
   gateway,
   loadDocFromStorage,
@@ -59,14 +59,15 @@ import {
   resolveGamePath,
   apiFetch,
 } from '@forgeax/editor-core';
+import type { EngineFacade, EntityHandle } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import {
   onVagMessage,
   allowedParentOrigins,
 } from '@forgeax/editor-core/protocol';
-import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
-import { setupEditorSkylight } from './engine/skylight';
-import { installDragSpawnMeshResolver } from './engine/drag-spawn-resolve';
+import { createRunLifecycle, type RunLifecycle } from './viewport/run-lifecycle';
+import { setupEditorSkylight } from './viewport/skylight';
+import { installDragSpawnMeshResolver } from './viewport/drag-spawn-resolve';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -229,6 +230,15 @@ export interface HostSession {
 export async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
   const { app, world, renderer, cameraEntity, viewport, emitBoot, setBootStage, discoverGameCameraFromWorld, applyActiveCamera } = ctx;
 
+  // M3 t16 (plan-strategy §2 D-2 / D-11, research F-3): obtain the single
+  // core-minted EngineFacade AFTER ViewportComponent injected the world
+  // (gateway.doc.world = world). This is the controlled write proxy the boot
+  // scaffolding hands to skylight (async IBL handle casting), drag-spawn (mesh
+  // handle minting), and preview-skin (root normalize + clip writes) — every
+  // boot-side world write now goes through the same gate the executor gives
+  // appliers via ctx.engine.
+  const engine = gateway.engineFacade();
+
   // ── Load the authored scene (was bootEditor :433) ───────────────────────────
   // After the engine World + AssetRegistry are the renderer's and the pack-index
   // is configured (done by ViewportComponent before this call). Load order:
@@ -387,8 +397,8 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // HDR -> IBL Skylight + visible SkyboxBackground. Uses the shared template HDR
   // (matches what ▶ Play installs via the engine catalog at GUID 81eec382).
   void setupEditorSkylight(
-    world as never,
-    renderer.assets as never,
+    gateway,
+    engine,
     renderer.store as never,
     { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
   );
@@ -401,7 +411,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // (AC-10/AC-11). The former post-collapse preload seams (the mesh/material
   // pre-resolve loops + their sync resolvers) are deleted (AC-13) — this is
   // their live successor.
-  installDragSpawnMeshResolver(gateway, world as never, renderer);
+  installDragSpawnMeshResolver(gateway, engine, renderer);
 
   // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
   installMeshStatsPublisher(renderer);
@@ -410,7 +420,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // initSync() is deleted (plan-strategy S7 M3, requirements AC-06).
 
   // ── Preview-skin + animation hook (was bootEditor :1217) ────────────────────
-  void installPreviewSkinHook({ world, renderer, viewport });
+  void installPreviewSkinHook({ world, engine, renderer, viewport });
 
   // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
   // Capture each teardown handle so a multi-game host (studio single-realm) can
@@ -521,8 +531,8 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
 }
 
 // ── preview-skin + animation hook (was bootEditor :1217) ──────────────────────
-async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: RendererLike; viewport: ViewportLike }): Promise<void> {
-  const { world, renderer, viewport } = ctx;
+async function installPreviewSkinHook(ctx: { world: WorldLike; engine: EngineFacade; renderer: RendererLike; viewport: ViewportLike }): Promise<void> {
+  const { world, engine, renderer, viewport } = ctx;
   const slug = getSceneId();
   if (!slug || slug === 'default') return;
   await renderer.ready.catch(() => null);
@@ -547,21 +557,26 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
     const sceneRes = await assets.loadByGuid(sceneGid.value);
     if (!sceneRes.ok) { console.warn('[editor] preview skin scene load failed:', (sceneRes.error as { code?: string })?.code); return; }
     if (getSceneId() !== slug) return;
-    const sceneHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('SceneAsset', sceneRes.value);
+    // M3 t20 (S4 / AC-05): preview-skin engine writes/reads go through the injected
+    // EngineFacade (ctx.engine proxy) — allocSharedRef handle-cast + Transform
+    // normalize + AnimationPlayer addComponent are all trace-visible now. The one
+    // exception is assets.instantiate(handle, world): that is a RENDERER-registry
+    // call whose second arg is the engine World the scene instantiates into (not a
+    // mutator on the facade surface) — it keeps the raw world handle.
+    const eid = (h: unknown): EntityHandle => h as EntityHandle;
+    const sceneHandle = engine.allocSharedRef('SceneAsset', sceneRes.value);
     const inst = (assets as never as { instantiate: (h: unknown, w: unknown) => { ok: boolean; value?: unknown; error?: unknown } }).instantiate(sceneHandle, world);
     if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
     const skinRoot = inst.value as unknown as { generation: number; index: number };
     const [px, py, pz] = skin.pos ?? [0, 0, 0];
     const s = skin.scale ?? 1;
-    (world as never as { set: (e: unknown, c: unknown, d: unknown) => unknown }).set(
-      skinRoot, TransformC, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 },
-    );
-    const sceneInst = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean; value?: { mapping: unknown[] } } }).get(skinRoot, SceneInstance);
+    engine.set(eid(skinRoot), TransformC, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 });
+    const sceneInst = engine.get(eid(skinRoot), SceneInstance) as { ok: boolean; value?: { mapping: unknown[] } };
     if (!sceneInst.ok || !sceneInst.value) return;
     let skinEnt: unknown = null;
     for (const ent of sceneInst.value.mapping) {
       if (!ent) continue;
-      const r = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean } }).get(ent, Skin);
+      const r = engine.get(eid(ent), Skin);
       if (r.ok) { skinEnt = ent; break; }
     }
     if (!skinEnt) return;
@@ -573,11 +588,14 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
     const clipRes = await assets.loadByGuid(firstGid.value);
     if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
     if (getSceneId() !== slug) return;
-    const clipHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('AnimationClip', clipRes.value);
-    (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
+    const clipHandle = engine.allocSharedRef('AnimationClip', clipRes.value);
+    engine.addComponent(eid(skinEnt), {
       component: AnimationPlayer,
       data: {
-        clips: [clipHandle, 0, 0, 0],
+        // clips is array<shared<AnimationClip>,4>; slots 1-3 are the engine's
+        // NULL-handle sentinel (raw 0) — brand them so the strict input type
+        // (readonly Handle<'AnimationClip','shared'>[]) accepts the mixed row.
+        clips: [clipHandle, toShared<'AnimationClip'>(0), toShared<'AnimationClip'>(0), toShared<'AnimationClip'>(0)],
         times: new Float32Array([0, 0, 0, 0]),
         weights: new Float32Array([1, 0, 0, 0]),
         speeds: new Float32Array([1, 1, 1, 1]),
@@ -590,13 +608,9 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
 
     try {
       const { onClipControl, getClipControl } = await import('@forgeax/editor-core');
-      const wAny = world as never as {
-        get: (e: unknown, c: unknown) => { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
-        set: (e: unknown, c: unknown, d: unknown) => unknown;
-      };
       const applyClip = (): void => {
         const c = getClipControl();
-        const cur = wAny.get(skinEnt, AnimationPlayer);
+        const cur = engine.get(eid(skinEnt), AnimationPlayer) as { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
         if (!cur.ok || !cur.value) return;
         const speeds = Float32Array.from(cur.value.speeds ?? new Float32Array([1, 1, 1, 1]));
         speeds[0] = c.speed;
@@ -606,7 +620,7 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
           times[0] = Math.max(0, Math.min(1, c.phase)) * clipDurationSec;
           data.times = times;
         }
-        wAny.set(skinEnt, AnimationPlayer, data);
+        engine.set(eid(skinEnt), AnimationPlayer, data);
       };
       onClipControl(applyClip);
       applyClip();
@@ -616,12 +630,12 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
 
     try {
       const { onViewRequest } = await import('@forgeax/editor-core');
-      const { normalizeSkinTransform } = await import('./engine/preview-skin');
+      const { normalizeSkinTransform } = await import('./viewport/preview-skin');
       onViewRequest((cmd) => {
         try {
           if (cmd === 'resetCamera') { viewport.resetCamera(); return; }
           if (cmd === 'recenter') {
-            const ok = normalizeSkinTransform(world as never, { skinEntity: skinEnt, skinRoot, targetHeight: 1.9 });
+            const ok = normalizeSkinTransform(engine, { skinEntity: skinEnt, skinRoot, targetHeight: 1.9 });
             if (ok) viewport.resetCamera();
           }
         } catch (e) { console.warn('[editor] view intent failed:', (e as Error).message ?? e); }

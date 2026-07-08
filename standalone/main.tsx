@@ -33,12 +33,13 @@ import { AppKitError } from '@forgeax/editor/app-kit';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
-import { ViewportComponent } from '@forgeax/editor-edit-runtime/engine/viewport-component';
+import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
+import { installEditorBusCompat } from '@forgeax/editor-core';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -116,6 +117,11 @@ function boot(): void {
   } catch {
     /* URL/History unavailable — fine; ?scene= deep-link still works if present */
   }
+
+  // Bridge typed editor bus events to postMessage so the interface package
+  // (which has zero editor-core imports) can continue using its existing
+  // message handlers. Temporary until interface accepts bus injection.
+  installEditorBusCompat();
 
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +

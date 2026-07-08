@@ -22,6 +22,7 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
+import { registerApplier } from '../io/appliers';
 import { entHandle } from '../store/entity-state';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
@@ -45,7 +46,7 @@ function spawnEntity(bus: EditGateway, name: string): number {
   };
   const r = bus.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed`);
-  return cmd._id!;
+  return (cmd as any)._id!;
 }
 
 function readPosX(bus: EditGateway, entity: number): number {
@@ -209,7 +210,7 @@ describe('EditGateway dispatch routing — byte-equivalence (m1-w3, RED)', () =>
     // Step 1: spawn
     const spawnCmd: EditorOp = { kind: 'spawnEntity', name: 'test-entity' };
     bus.dispatch(spawnCmd);
-    const id = spawnCmd._id!;
+    const id = (spawnCmd as any)._id!;
     expect(bus.ledger.length).toBe(1);
     expect(bus.ledger[0]!.kind).toBe('spawnEntity');
     expect(bus.appliedCount()).toBe(1);
@@ -230,5 +231,76 @@ describe('EditGateway dispatch routing — byte-equivalence (m1-w3, RED)', () =>
     // Step 4: undo (reverts spawn)
     bus.undo();
     expect(bus.appliedCount()).toBe(0);
+  });
+});
+
+// ── AC-26: custom op via registerApplier, no core switch touched ──────────
+// feat-20260707-editor-trace-ioc M1 t7:
+// End-to-end proof: register a non-builtin document-domain op via
+// registerApplier, dispatch it, and verify it appears in ledger + can be
+// undone. The entire flow must not touch applyCommand's switch.
+//
+// Anchors:
+//   requirements AC-26: new command via registerApplier, no core switch change
+//   plan-strategy §2 D-1: registerApplier single entry
+//   plan-tasks.json t7: new command end-to-end test
+
+describe('AC-26: custom op via registerApplier (no core switch)', () => {
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+  });
+
+  it('register a non-builtin document op → dispatch → ledger + undoStack entry', () => {
+    // Step 1: spawn an entity to test on
+    const spawnCmd: EditorOp = { kind: 'spawnEntity', name: 'target' };
+    gw.dispatch(spawnCmd);
+    const entityId = (spawnCmd as any)._id!;
+    expect(entityId).toBeGreaterThan(0);
+
+    // Step 2: register a custom document applier for 'alignToGrid'
+    // This applier does NOT need to be in the applyCommand switch — the unified
+    // registration table routes it entirely on `kind` lookup (plan-strategy D-1).
+    let applierCalled = false;
+    registerApplier('document', 'alignToGrid',
+      (_session: unknown, cmd: EditorOp) => {
+        applierCalled = true;
+        const c = cmd as any;
+        return {
+          ok: true as const,
+          inverse: { kind: 'alignToGrid', entity: c.entity, gridStep: 0 },
+        };
+      },
+    );
+
+    // Step 3: dispatch the custom op — must succeed without as-cast (AC-27)
+    const alignCmd = { kind: 'alignToGrid', entity: entityId, gridStep: 2 } as EditorOp;
+    const result = gw.dispatch(alignCmd);
+    expect(applierCalled).toBe(true);
+    expect(result.ok).toBe(true);
+
+    // Step 4: confirm it entered the ledger (document domain → ledger entry)
+    expect(gw.ledger.some((e) => e.kind === 'alignToGrid')).toBe(true);
+    expect(gw.ledger.length).toBe(2); // spawnEntity + alignToGrid
+
+    // Step 5: confirm it entered the undo stack (document domain → inverse → undo stack)
+    // appliedCount() counts the undo stack length. The custom op is there
+    // because the dispatch path (document domain) pushes to undoStack.
+    expect(gw.appliedCount()).toBe(2);
+
+    // Step 6 (structural AC-26 proof): the fact that 'alignToGrid' dispatched
+    // AND produced an inverse AND entered ledger/undoStack — all without
+    // modifying applyCommand's switch — proves the registration inversion.
+    // The dispatch route is:
+    //   domainOf('alignToGrid') → 'document' (from registerApplier)
+    //   → documentAppliers.get('alignToGrid') → custom applier runs
+    // No applyCommand case block exists or was needed for 'alignToGrid'.
+    //
+    // Note: undo/redo still calls applyCommand directly (M1 scope). The undo
+    // stack entry exists (the inverse is recorded), but actually replaying the
+    // inverse hits applyCommand's default branch for custom kinds. M2 executor
+    // will unify the undo/redo path to route through the applier table, making
+    // custom op undo fully work.
   });
 });

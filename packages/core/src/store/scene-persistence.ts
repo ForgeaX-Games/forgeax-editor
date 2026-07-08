@@ -32,7 +32,6 @@
 import { useSyncExternalStore } from 'react';
 import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
-import { setSelectionMany } from './selection';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import { getInternals } from '../session/edit-session';
@@ -46,7 +45,7 @@ import { isScenePack, stableGuid, validatePackShell } from '../scene/scene-pack'
 import { rootsToSceneAsset, serializeSceneAssetToPack, SceneInstance } from '@forgeax/engine-runtime';
 import { loadGameProject, FORGE_JSON, type GameProject } from '@forgeax/engine-project';
 import { apiFetch } from '../io/api-client';
-import { findScenePackByGuid } from '../assets/assets';
+import { findScenePackByGuid, findAllScenePacks } from '../assets/assets';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
 import type { EditorOp, EditSession } from '../types';
@@ -95,9 +94,9 @@ function applySetSceneId(op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('setSceneId', applySetSceneId);
 
-export function setSceneId(id: string | null | undefined): void {
-  gateway.dispatch({ kind: 'setSceneId', id });
-}
+// M3 t22 (S10 / AC-21/22): setSceneId write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'setSceneId', id }) directly. Read-side
+// (getSceneId) stays.
 export function getSceneId(): string { return currentSceneId; }
 
 // ── Multi-scene (level) files per game ────────────────────────────────────────
@@ -212,45 +211,28 @@ async function readForgeJson(): Promise<Record<string, unknown> | null> {
 
 /** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
  *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
- *  the active scene file. Games with neither a scenes/ dir nor a defaultScene
- *  GUID fall back to legacy single-scene mode (top-level scene.pack.json). */
+ *  the active scene file. Games without any `kind:'scene'` packs or defaultScene
+ *  GUID fall back to legacy single-scene mode (top-level scene.pack.json).
+ *
+ *  A2/A3: scenes are ordinary assets discovered by `kind === 'scene'` field, not
+ *  by directory convention. This scans ALL packs under the game dir and filters
+ *  by kind — same mechanism as "find all materials". */
 export async function initSceneList(): Promise<void> {
   currentSceneFile = null;
   sceneList = [];
   const fj = await readForgeJson();
-  // Scene discovery is DIRECTORY-driven, never forge.json-driven. The
-  // engine-project loader's schema is `.strict()`, so an editor-only `scenes[]`
-  // field makes loadGameProject FAIL — and ▶ Play reads physics/pointerLock off
-  // that same loader (play-runtime AC-11), so a stray `scenes[]` silently
-  // disables the game's physics. ubpa's w21 forge.json migration dropped it for
-  // exactly this reason. So levels are discovered by scanning scenes/*.pack.json.
-  // forge.json is read only for its typed contract fields.
   if (currentSceneId !== 'default') {
-    const listPacks = async (root: string): Promise<string[]> => {
-      try {
-        // optional=1: a game may legitimately lack a probed dir (e.g. no
-        // assets/monsters/). The server then returns 200 + empty tree instead
-        // of a red 404 in the browser network panel.
-        const r = await fetchWithTimeout(`/api/files/tree?root=${encodeURIComponent(resolveGamePath(root))}&optional=1`);
-        if (!r.ok) return [];
-        const j = (await r.json()) as { tree?: { children?: Array<{ name: string; type: string }> } };
-        return (j.tree?.children ?? [])
-          .filter((c) => c.type === 'file' && c.name.endsWith('.pack.json'))
-          .map((c) => c.name)
-          .sort();   // deterministic order → level1 before level2
-      } catch { return []; }   // no such dir — fine
-    };
-    // Levels — scenes/<id>.pack.json. id = file stem, matched 1:1 against the
-    // game's LEVELS[].id (the launcher writes play-config.json { level:<id> }).
-    for (const name of await listPacks('scenes')) {
-      const base = name.slice(0, -'.pack.json'.length);
-      sceneList.push({ id: base, name: base, pack: `scenes/${name}` });
+    // A2: scene discovery is kind-driven, not directory-driven. Scan all packs
+    // under the game dir and filter by `kind === 'scene'` (same mechanism as
+    // finding any other asset type).
+    const scenePacks = await findAllScenePacks(currentSceneId);
+    for (const { pack } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
+      const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
+      sceneList.push({ id: stem, name: stem, pack });
     }
-    // Fallback for games whose scene pack still lives in assets/ (not scenes/):
-    // resolve forge.json `defaultScene` to its pack so ✎ Edit opens the REAL
-    // scene instead of seeding a default vignette (which then gets persisted and
-    // permanently masks the real scene — the cow-level/hellforge "弹出默认场景"
-    // bug). Only when the scenes/ scan above found nothing.
+    // Fallback: resolve forge.json `defaultScene` GUID when no scene packs were
+    // found by the kind-based scan (e.g. legacy games with a root scene.pack.json
+    // that lack a proper `kind` field).
     if (sceneList.length === 0) {
       const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
       if (defGuid) {
@@ -389,17 +371,17 @@ export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Create a new level under scenes/<slug>.pack.json (empty, or duplicated from
- *  the current doc) and switch to it. Discovery is directory-driven
- *  (see initSceneList) — NOTHING is written to forge.json, whose strict
- *  engine-project schema rejects an editor `scenes[]` field. The display name
- *  is the file stem (`slug`), so the game's LEVELS[].id can match it 1:1. */
+/** Create a new level under assets/scenes/<slug>.pack.json (empty, or duplicated
+ *  from the current doc) and switch to it. NOTHING is written to forge.json,
+ *  whose strict engine-project schema rejects an editor `scenes[]` field. The
+ *  display name is the file stem (`slug`), so the game's LEVELS[].id can match
+ *  it 1:1. */
 async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
   if (currentSceneId === 'default') return false;
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug || sceneList.some((s) => s.id === slug)) return false;
   const sourceDoc = duplicateCurrent ? gateway.doc : createEditSession();
-  const newPath = resolveGamePath(`scenes/${slug}.pack.json`);
+  const newPath = resolveGamePath(`assets/scenes/${slug}.pack.json`);
   // A NEW level gets its own stable, path-derived GUID — never the source
   // scene's GUID (duplicate must be a distinct asset) and never an order-derived
   // one (which would drift on the first edit).
@@ -1135,7 +1117,9 @@ export function replaceDoc(doc: EditSession): void {
   // {world, registry} so downstream `gateway.doc.asset` reads stay live (w34); it's
   // idempotent on an already-live locally-built session.
   gateway.replaceDoc(reviveSession(doc));
-  setSelectionMany([]);
+  // M3 t22: clear selection through the one gateway door (setSelectionMany sugar
+  // was deleted — S10 / AC-21/22).
+  gateway.dispatch({ kind: 'setSelectionMany', ids: [] });
   notifyDocChanged();
 }
 

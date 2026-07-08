@@ -13,7 +13,6 @@
 //     structurally identical (a future subscriber re-adds an accessor).
 //   requirements AC-02: session op, AI-dispatchable, ledger only.
 import type { EditorOp } from '../types';
-import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 
 // Frame-request signal: "center the viewport on the primary selection" pulse.
@@ -26,6 +25,5 @@ function applyRequestFrame(_op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('requestFrame', applyRequestFrame);
 
-export function requestFrame(): void {
-  gateway.dispatch({ kind: 'requestFrame' });
-}
+// M3 t22 (S10 / AC-21/22): requestFrame write-side sugar deleted — callers
+// dispatch gateway.dispatch({ kind: 'requestFrame' }) directly.
