@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // setAssetSelection setter.
 import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
-  ResizeHandle, useLocalSize } from '@forgeax/editor-core';
+  ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
@@ -314,7 +314,14 @@ export function ContentBrowser() {
     if (asset.kind === 'mesh') {
       gateway.dispatch({ kind: 'focusPanel', panel: 'mesh' });
     }
-  }, []);
+    if (asset.kind === 'scene') {
+      const rel = toGameRelative(asset.packPath, gameSlug);
+      const entry = rel ? getSceneList().find(s => s.pack === rel) : undefined;
+      if (entry) {
+        gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
+      }
+    }
+  }, [gameSlug]);
 
   // Double-click: drill into a folder, or open an asset.
   const handleActivate = useCallback((item: CBViewItem) => {

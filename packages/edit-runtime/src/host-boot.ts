@@ -68,7 +68,6 @@ import {
 } from '@forgeax/editor-core/protocol';
 import { createRunLifecycle, type RunLifecycle } from './viewport/run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './viewport/play-assemble';
-import { setupEditorSkylight } from './viewport/skylight';
 import { installDragSpawnMeshResolver } from './viewport/drag-spawn-resolve';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
@@ -428,15 +427,11 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     },
   });
 
-  // ── Environment skylight (was bootEditor :959) ──────────────────────────────
-  // HDR -> IBL Skylight + visible SkyboxBackground. Uses the shared template HDR
-  // (matches what ▶ Play installs via the engine catalog at GUID 81eec382).
-  void setupEditorSkylight(
-    gateway,
-    engine,
-    renderer.store as never,
-    { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
-  );
+  // ── Environment skylight ─────────────────────────────────────────────────────
+  // Skylight is now authored scene data, declared in the scene pack and loaded
+  // via loadByGuid (engine record pass handles IBL precompute lazily). The editor
+  // no longer creates its own skylight — it reads the one from the pack.
+  // See: forgeax-engine-harness/feedbacks/2026-07-08-skylight-equirect-blocks-scene-switch-serialize.md
 
   // ── Drag-spawn mesh GUID bridge (feat-20260705 M3, plan-strategy §D-3/D-4/D-9) ─
   // Content Browser mesh drops spawn with MeshFilter.assetHandle=0 + a command-

@@ -12,7 +12,6 @@
 import {
   ViewportBar,
   ViewportHints,
-  setupEditorSkylight,
   createViewport,
   applyScriptChange,
   initHotReload,
@@ -30,7 +29,7 @@ import { bus, dispatch, useSelection } from '@forgeax/editor-shared';
 
 | 入口 | 说明 |
 |:--|:--|
-| `.` | UI 组件（ViewportBar、ViewportHints）、引擎集成（setupEditorSkylight、createViewport）、热重载（applyScriptChange、initHotReload） |
+| `.` | UI 组件（ViewportBar、ViewportHints）、引擎集成（createViewport）、热重载（applyScriptChange、initHotReload） |
 | `./surface` | EditSurface（宿主壳） |
 | `./host-boot` | host 会话装配（initHostSession、configureHostSession）—— 单 realm host 入口复用 |
 | `./engine/viewport-component` | ViewportComponent —— in-process 引擎 viewport（canvas+world+renderer+camera） |
