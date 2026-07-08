@@ -1,8 +1,11 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
+// M3 (AC-03): asset assignment (setComponent) and asset-selection (a transient
+// op) go through the one gateway door — gateway.dispatch({ kind, … }) — replacing the
+// direct setAssetSelection setter and the origin-less `dispatch` wrapper.
 import {
-  setAssetSelection, requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
+  requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
   renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
-  dispatch, getSelection,
+  gateway, getSelection,
 } from '@forgeax/editor-core';
 
 /** Map an asset kind to the component patch that assigns it onto an entity. */
@@ -31,6 +34,12 @@ export interface CRUDCallbacks {
   onRename?: (asset: CBAsset) => void;
   onNewFolder?: (parentPath: string) => void;
   onReload?: () => void;
+  /**
+   * Route deletion through the host's reference-aware delete guard (C3).
+   * When provided, the context menu delegates instead of running its own
+   * `window.confirm`, so keyboard and menu deletes share one guard dialog.
+   */
+  onDelete?: (targets: CBAsset[]) => void;
 }
 
 export function buildAssetContextMenu(
@@ -64,6 +73,8 @@ export function buildAssetContextMenu(
       }
     }},
     { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+      if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
+      // Fallback for hosts without a delete guard wired in.
       const names = targets.map(a => a.name).join(', ');
       if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
       for (const a of targets) {
@@ -96,9 +107,9 @@ export function buildAssetContextMenu(
       // component. Otherwise fall back to publishing the asset selection (so the
       // Inspector / Material panel can pick it up).
       if (sel !== null && mapping) {
-        dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
+        gateway.dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
       } else {
-        setAssetSelection({ guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath });
+        gateway.dispatch({ kind: 'setAssetSelection', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
       }
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },
@@ -179,5 +190,19 @@ export function buildFolderContextMenu(
         summary: { totalAssets: assetsInFolder.length, kinds, guids: assetsInFolder.map(a => a.guid) },
       }]);
     }},
+  ];
+}
+
+/** Build context menu for blank area right-click (UE5 Content Browser parity). */
+export function buildBlankAreaContextMenu(
+  currentPath: string,
+  onCreateDirectory: (parentPath: string) => void,
+): ContextMenuItem[] {
+  return [
+    {
+      id: 'new-folder',
+      label: 'New Folder',
+      action: () => onCreateDirectory(currentPath),
+    },
   ];
 }

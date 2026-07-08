@@ -26,24 +26,20 @@
 
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { DockShell } from '@forgeax/interface/components/DockShell/DockShell';
-import { ContextMenu } from '@forgeax/interface/components/ContextMenu/ContextMenu';
-import {
-  PanelRenderersProvider,
-  DEFAULT_PANEL_RENDERERS,
-} from '@forgeax/interface/components/DockShell/panelRenderers';
-import { SurfaceKeepAliveLayer } from '@forgeax/interface/components/Surfaces/SurfaceKeepAliveLayer';
+import { App } from '@forgeax/interface/App';
+import { DEFAULT_PANEL_RENDERERS } from '@forgeax/interface/components/DockShell/panelRenderers';
 import { useAppStore } from '@forgeax/interface/store';
 import { AppKitError } from '@forgeax/editor/app-kit';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
-import { ViewportComponent } from '@forgeax/editor-edit-runtime/engine/viewport-component';
+import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
+import { installEditorBusCompat } from '@forgeax/editor-core';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -77,32 +73,6 @@ const standaloneRenderers = {
   renderEdit: (_opts: { viewportOnly?: boolean }) => <ViewportComponent />,
   renderEditorPanel: (id: string) => <EditorPanelBody id={id} />,
 };
-
-function StandaloneShell() {
-  // DockShell's root (.fx-dockwrap) is `flex: 1 1 auto` — it needs a flex parent
-  // with a definite height. So the wrapper is a full-viewport flex column.
-  return (
-    <div
-      className="forgeax-standalone-shell"
-      style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-    >
-      <PanelRenderersProvider value={standaloneRenderers}>
-        <DockShell hideChatAndForge />
-        {/* Always-mounted owner of the Edit viewport surface (interface's
-            keepalive-surface refactor). DockShell's Edit panel is only a
-            <SurfaceAnchor> placeholder; this sibling layer mounts the real
-            surface once via renderEdit (now the in-process ViewportComponent)
-            and overlays it (position:fixed) onto that anchor's rect. Mirrors
-            interface App.tsx (DockShell + SurfaceKeepAliveLayer siblings). */}
-        <SurfaceKeepAliveLayer />
-        {/* ep:* panels post VAG_CONTEXT_MENU here — without this host,
-            Assets/Hierarchy right-click menus are swallowed but never painted.
-            Mirrors interface App.tsx. */}
-        <ContextMenu />
-      </PanelRenderersProvider>
-    </div>
-  );
-}
 
 function boot(): void {
   const rootEl = document.getElementById('root');
@@ -148,13 +118,20 @@ function boot(): void {
     /* URL/History unavailable — fine; ?scene= deep-link still works if present */
   }
 
-  // React tree — DockShell + in-process panel components + SurfaceKeepAliveLayer
-  // (which owns the renderEdit ViewportComponent, overlaid on the Edit anchor).
-  // No body-level iframe, no setTimeout, no display:none.
+  // Bridge typed editor bus events to postMessage so the interface package
+  // (which has zero editor-core imports) can continue using its existing
+  // message handlers. Temporary until interface accepts bus injection.
+  installEditorBusCompat();
+
+  // Render the interface App directly — no hand-rolled StandaloneShell.
+  // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +
+  // ContextMenu (plan-strategy D-1: diff-set empty). hideChatAndForge drops
+  // the chat panel + Forge entry. panelRenderers injects standalone's
+  // in-process ViewportComponent + editor panel slots.
   try {
     createRoot(rootEl).render(
       <StrictMode>
-        <StandaloneShell />
+        <App hideChatAndForge panelRenderers={standaloneRenderers} />
       </StrictMode>,
     );
   } catch (err) {

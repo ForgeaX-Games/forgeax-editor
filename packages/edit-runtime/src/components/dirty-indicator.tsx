@@ -6,8 +6,9 @@
 // editor-core store.ts.
 //
 // M6 w36 replaced the auto-save debounce with the manual-save dirty flag
-// (`_isDirty`): every edit marks dirty; a successful saveDocToDisk (user clicks
-// Save) clears it. hasPendingDiskSave() now returns that flag, so this indicator
+// (`_isDirty`): every edit marks dirty; a successful save (user clicks Save, which
+// dispatches the saveDocToDisk op) clears it. hasPendingDiskSave() returns that
+// flag, so this indicator
 // shows pending-vs-saved state under the manual-save model (D-7).
 //
 // Anchors:

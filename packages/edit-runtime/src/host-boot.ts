@@ -33,14 +33,13 @@ import {
   HANDLE_SPHERE,
   HANDLE_CYLINDER,
 } from '@forgeax/engine-runtime';
-import { Entity } from '@forgeax/engine-ecs';
+import { Entity, toShared } from '@forgeax/engine-ecs';
 import {
-  bus,
+  gateway,
   loadDocFromStorage,
   loadDocFromDisk,
   getLoadedSceneRoot,
   rebindLoadedScene,
-  setSceneId,
   getSceneId,
   initSceneList,
   initDiskWatch,
@@ -60,14 +59,15 @@ import {
   resolveGamePath,
   apiFetch,
 } from '@forgeax/editor-core';
+import type { EngineFacade, EntityHandle } from '@forgeax/editor-core';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import {
   onVagMessage,
   allowedParentOrigins,
 } from '@forgeax/editor-core/protocol';
-import { createRunLifecycle, type RunLifecycle } from './engine/run-lifecycle';
-import { setupEditorSkylight } from './engine/skylight';
-import { installDragSpawnMeshResolver } from './engine/drag-spawn-resolve';
+import { createRunLifecycle, type RunLifecycle } from './viewport/run-lifecycle';
+import { setupEditorSkylight } from './viewport/skylight';
+import { installDragSpawnMeshResolver } from './viewport/drag-spawn-resolve';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -99,7 +99,8 @@ export type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
  */
 export async function configureHostSession(): Promise<void> {
   const qp = new URLSearchParams(location.search);
-  setSceneId(qp.get('scene'));
+  // M3 (AC-03): setSceneId is a session op — dispatch through the one gateway door.
+  gateway.dispatch({ kind: 'setSceneId', id: qp.get('scene') });
   const slug = (qp.get('scene') ?? '').trim();
   const injectedRoot = qp.get('gameRoot');
   if (slug && slug !== 'default' && injectedRoot === null) {
@@ -152,13 +153,13 @@ export async function resolveEditPhysics(): Promise<PhysicsBackend | undefined> 
 // A small demo scene so the editor opens with something to edit + render. These
 // are ordinary commands -> they land in the ledger and are undoable.
 function seedDemoScene(): void {
-  if (entIds(bus.doc).length > 0) return;
+  if (entIds(gateway.doc).length > 0) return;
   // Mirrors the new-game template's scene.json: a lowpoly vignette + a movable
   // Player. A scene-less game (or fresh workspace) opens on this same starter.
-  bus.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
-  const level = (bus.ledger.at(-1) as { _id: number })._id;
+  gateway.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
+  const level = (gateway.ledger.at(-1) as { _id: number })._id;
   const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
-    bus.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
+    gateway.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
 
   add('Ground', { Transform: { posX: 0, posY: -0.1, posZ: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, MeshFilter: { assetHandle: HANDLE_CUBE } });
   add('Sun', { Transform: { posX: 0, posY: 6, posZ: 0 }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
@@ -229,6 +230,15 @@ export interface HostSession {
 export async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
   const { app, world, renderer, cameraEntity, viewport, emitBoot, setBootStage, discoverGameCameraFromWorld, applyActiveCamera } = ctx;
 
+  // M3 t16 (plan-strategy §2 D-2 / D-11, research F-3): obtain the single
+  // core-minted EngineFacade AFTER ViewportComponent injected the world
+  // (gateway.doc.world = world). This is the controlled write proxy the boot
+  // scaffolding hands to skylight (async IBL handle casting), drag-spawn (mesh
+  // handle minting), and preview-skin (root normalize + clip writes) — every
+  // boot-side world write now goes through the same gate the executor gives
+  // appliers via ctx.engine.
+  const engine = gateway.engineFacade();
+
   // ── Load the authored scene (was bootEditor :433) ───────────────────────────
   // After the engine World + AssetRegistry are the renderer's and the pack-index
   // is configured (done by ViewportComponent before this call). Load order:
@@ -239,7 +249,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   setBootStage('loadDoc');
   await renderer.ready.catch(() => null);
   await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-  if (entIds(bus.doc).length === 0) {
+  if (entIds(gateway.doc).length === 0) {
     seedDemoScene();
     // The bare seed is a viewport convenience for a scene-less game — do NOT
     // auto-persist it to the game dir. The user's first real edit re-schedules a save.
@@ -249,7 +259,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     const loadedRoot = getLoadedSceneRoot();
     if (loadedRoot !== null) defaultSceneRoot = loadedRoot;
   }
-  emitBoot(`scene ▸ loaded entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+  emitBoot(`scene ▸ loaded entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
 
   // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
   // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
@@ -355,7 +365,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     world: world as never,
     app: app as never,
     renderer: renderer as never,
-    bus: bus as never,
+    bus: gateway as never,
     collectEntityHandles: () => collectWorldEntityHandles(),
     resolveGameModule: resolveGameModuleForPlay,
     getSlug: () => getSceneId() ?? '',
@@ -365,7 +375,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
     rebindSceneInstance: (newRoot: number) => {
       const bound = rebindLoadedScene(newRoot);
       if (bound !== null) defaultSceneRoot = bound;
-      emitBoot(`scene ▸ restored entities=${entIds(bus.doc).length} root=${defaultSceneRoot ?? 'none'}`);
+      emitBoot(`scene ▸ restored entities=${entIds(gateway.doc).length} root=${defaultSceneRoot ?? 'none'}`);
     },
     mountUiRoot: () => {
       // Controlled UI root scoped to the viewport panel, NOT document.body. It is
@@ -387,8 +397,8 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // HDR -> IBL Skylight + visible SkyboxBackground. Uses the shared template HDR
   // (matches what ▶ Play installs via the engine catalog at GUID 81eec382).
   void setupEditorSkylight(
-    world as never,
-    renderer.assets as never,
+    gateway,
+    engine,
     renderer.store as never,
     { hdrUrl: '/preview/shared-assets/template-game-default/sky.hdr' },
   );
@@ -396,12 +406,12 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // ── Drag-spawn mesh GUID bridge (feat-20260705 M3, plan-strategy §D-3/D-4/D-9) ─
   // Content Browser mesh drops spawn with MeshFilter.assetHandle=0 + a command-
   // level EditorPendingMeshAsset{guid} marker (core/assets/drag-asset-spawn.ts).
-  // This resolver subscribes to the bus, parses the guid, loadByGuid ->
-  // allocSharedRef('MeshAsset') and patches the real handle back over the bus
+  // This resolver subscribes to the gateway, parses the guid, loadByGuid ->
+  // allocSharedRef('MeshAsset') and patches the real handle back over the gateway
   // (AC-10/AC-11). The former post-collapse preload seams (the mesh/material
   // pre-resolve loops + their sync resolvers) are deleted (AC-13) — this is
   // their live successor.
-  installDragSpawnMeshResolver(bus, world as never, renderer);
+  installDragSpawnMeshResolver(gateway, engine, renderer);
 
   // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
   installMeshStatsPublisher(renderer);
@@ -410,7 +420,7 @@ export async function initHostSession(ctx: HostSessionContext): Promise<HostSess
   // initSync() is deleted (plan-strategy S7 M3, requirements AC-06).
 
   // ── Preview-skin + animation hook (was bootEditor :1217) ────────────────────
-  void installPreviewSkinHook({ world, renderer, viewport });
+  void installPreviewSkinHook({ world, engine, renderer, viewport });
 
   // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
   // Capture each teardown handle so a multi-game host (studio single-realm) can
@@ -459,7 +469,7 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
   const activeMeshGuid = (): string | null => {
     const selId = getSelection();
     if (selId !== null) {
-      const mesh = entComponent(bus.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
+      const mesh = entComponent(gateway.doc, selId, 'Mesh') as Record<string, unknown> | undefined;
       if (mesh) {
         const g = typeof mesh.meshAsset === 'string' ? mesh.meshAsset : '';
         return g.length > 0 ? g : null;
@@ -516,13 +526,13 @@ function installMeshStatsPublisher(renderer: RendererLike): void {
   };
   onAssetSelectionChange(() => { void publishForActiveMesh(); });
   onSelectionChange(() => { void publishForActiveMesh(); });
-  bus.subscribe(() => { void publishForActiveMesh(); });
+  gateway.subscribe(() => { void publishForActiveMesh(); });
   void publishForActiveMesh();
 }
 
 // ── preview-skin + animation hook (was bootEditor :1217) ──────────────────────
-async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: RendererLike; viewport: ViewportLike }): Promise<void> {
-  const { world, renderer, viewport } = ctx;
+async function installPreviewSkinHook(ctx: { world: WorldLike; engine: EngineFacade; renderer: RendererLike; viewport: ViewportLike }): Promise<void> {
+  const { world, engine, renderer, viewport } = ctx;
   const slug = getSceneId();
   if (!slug || slug === 'default') return;
   await renderer.ready.catch(() => null);
@@ -547,21 +557,26 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
     const sceneRes = await assets.loadByGuid(sceneGid.value);
     if (!sceneRes.ok) { console.warn('[editor] preview skin scene load failed:', (sceneRes.error as { code?: string })?.code); return; }
     if (getSceneId() !== slug) return;
-    const sceneHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('SceneAsset', sceneRes.value);
+    // M3 t20 (S4 / AC-05): preview-skin engine writes/reads go through the injected
+    // EngineFacade (ctx.engine proxy) — allocSharedRef handle-cast + Transform
+    // normalize + AnimationPlayer addComponent are all trace-visible now. The one
+    // exception is assets.instantiate(handle, world): that is a RENDERER-registry
+    // call whose second arg is the engine World the scene instantiates into (not a
+    // mutator on the facade surface) — it keeps the raw world handle.
+    const eid = (h: unknown): EntityHandle => h as EntityHandle;
+    const sceneHandle = engine.allocSharedRef('SceneAsset', sceneRes.value);
     const inst = (assets as never as { instantiate: (h: unknown, w: unknown) => { ok: boolean; value?: unknown; error?: unknown } }).instantiate(sceneHandle, world);
     if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
     const skinRoot = inst.value as unknown as { generation: number; index: number };
     const [px, py, pz] = skin.pos ?? [0, 0, 0];
     const s = skin.scale ?? 1;
-    (world as never as { set: (e: unknown, c: unknown, d: unknown) => unknown }).set(
-      skinRoot, TransformC, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 },
-    );
-    const sceneInst = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean; value?: { mapping: unknown[] } } }).get(skinRoot, SceneInstance);
+    engine.set(eid(skinRoot), TransformC, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 });
+    const sceneInst = engine.get(eid(skinRoot), SceneInstance) as { ok: boolean; value?: { mapping: unknown[] } };
     if (!sceneInst.ok || !sceneInst.value) return;
     let skinEnt: unknown = null;
     for (const ent of sceneInst.value.mapping) {
       if (!ent) continue;
-      const r = (world as never as { get: (e: unknown, c: unknown) => { ok: boolean } }).get(ent, Skin);
+      const r = engine.get(eid(ent), Skin);
       if (r.ok) { skinEnt = ent; break; }
     }
     if (!skinEnt) return;
@@ -573,11 +588,14 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
     const clipRes = await assets.loadByGuid(firstGid.value);
     if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
     if (getSceneId() !== slug) return;
-    const clipHandle = (world as never as { allocSharedRef: (brand: string, payload: unknown) => unknown }).allocSharedRef('AnimationClip', clipRes.value);
-    (world as never as { addComponent: (e: unknown, p: unknown) => unknown }).addComponent(skinEnt, {
+    const clipHandle = engine.allocSharedRef('AnimationClip', clipRes.value);
+    engine.addComponent(eid(skinEnt), {
       component: AnimationPlayer,
       data: {
-        clips: [clipHandle, 0, 0, 0],
+        // clips is array<shared<AnimationClip>,4>; slots 1-3 are the engine's
+        // NULL-handle sentinel (raw 0) — brand them so the strict input type
+        // (readonly Handle<'AnimationClip','shared'>[]) accepts the mixed row.
+        clips: [clipHandle, toShared<'AnimationClip'>(0), toShared<'AnimationClip'>(0), toShared<'AnimationClip'>(0)],
         times: new Float32Array([0, 0, 0, 0]),
         weights: new Float32Array([1, 0, 0, 0]),
         speeds: new Float32Array([1, 1, 1, 1]),
@@ -590,13 +608,9 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
 
     try {
       const { onClipControl, getClipControl } = await import('@forgeax/editor-core');
-      const wAny = world as never as {
-        get: (e: unknown, c: unknown) => { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
-        set: (e: unknown, c: unknown, d: unknown) => unknown;
-      };
       const applyClip = (): void => {
         const c = getClipControl();
-        const cur = wAny.get(skinEnt, AnimationPlayer);
+        const cur = engine.get(eid(skinEnt), AnimationPlayer) as { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
         if (!cur.ok || !cur.value) return;
         const speeds = Float32Array.from(cur.value.speeds ?? new Float32Array([1, 1, 1, 1]));
         speeds[0] = c.speed;
@@ -606,7 +620,7 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
           times[0] = Math.max(0, Math.min(1, c.phase)) * clipDurationSec;
           data.times = times;
         }
-        wAny.set(skinEnt, AnimationPlayer, data);
+        engine.set(eid(skinEnt), AnimationPlayer, data);
       };
       onClipControl(applyClip);
       applyClip();
@@ -616,12 +630,12 @@ async function installPreviewSkinHook(ctx: { world: WorldLike; renderer: Rendere
 
     try {
       const { onViewRequest } = await import('@forgeax/editor-core');
-      const { normalizeSkinTransform } = await import('./engine/preview-skin');
+      const { normalizeSkinTransform } = await import('./viewport/preview-skin');
       onViewRequest((cmd) => {
         try {
           if (cmd === 'resetCamera') { viewport.resetCamera(); return; }
           if (cmd === 'recenter') {
-            const ok = normalizeSkinTransform(world as never, { skinEntity: skinEnt, skinRoot, targetHeight: 1.9 });
+            const ok = normalizeSkinTransform(engine, { skinEntity: skinEnt, skinRoot, targetHeight: 1.9 });
             if (ok) viewport.resetCamera();
           }
         } catch (e) { console.warn('[editor] view intent failed:', (e as Error).message ?? e); }

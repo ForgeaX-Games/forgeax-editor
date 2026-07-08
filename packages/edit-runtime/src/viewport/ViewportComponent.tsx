@@ -7,7 +7,7 @@
 //   render the viewport IN-PROCESS (no /editor iframe). Responsibilities (the q2
 //   "viewport" boundary): canvas creation, createApp (MOVED, not copied — net-
 //   zero world construction so lint-no-second-world stays green), world/renderer
-//   unpack, bus.doc.world/registry injection, pack-index configure, the editor
+//   unpack, gateway.doc.world/registry injection, pack-index configure, the editor
 //   orbit camera, createViewport (orbit/pan/zoom/pick/gizmo), resize +
 //   game-camera discovery + active-camera wiring, the VAG console/network/error/
 //   preview bridges, and the FPS report. The APPLICATION SESSION tail (seed,
@@ -53,10 +53,12 @@ import {
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
 import {
-  bus,
+  gateway,
   getSceneId,
   switchSceneFile,
   broadcastAssetsChanged,
+  registerSessionApplier,
+  createEvalChannel,
 } from '@forgeax/editor-core';
 import { injectEditMode } from '@forgeax/editor-core';
 import { createViewport, type Viewport } from './viewport';
@@ -73,6 +75,7 @@ import { _syncDisplayMode } from './display-bus';
 import { setFps } from '../fps-store';
 import { installAssetSpawnBridge } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
+import { CommandPalette } from '../panels/command-palette';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession } from '../host-boot';
 import '../theme.css';
 
@@ -147,27 +150,41 @@ export function ViewportComponent(): React.ReactElement {
   // chrome mounts immediately (usable even if WebGPU is slow); its callbacks
   // resolve through this holder so they don't close over undefined references.
   const actionsRef = useRef<BootFns>({ playSimulation: () => {}, stopSimulation: () => {} });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // ── Global Cmd+K / Ctrl+K — toggle the command palette (M4, w9) ──────────────
+  // Owned by the viewport overlay layer so the palette can open from closed state
+  // (command-palette.tsx's internal hook could only close, never open — open is a
+  // parent-owned state). Same discipline as the possess-exit key handler in
+  // bootViewport: skip when an input/textarea/select/contentEditable is focused
+  // so the user can still type 'k' in panels.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (bootStarted) return;
     bootStarted = true;
     const container = containerRef.current;
     if (!container) return;
-    let viewport: Viewport | null = null;
-    let disposed = false;
 
-    void bootViewport(container, actionsRef, setFpsState).then((vp) => {
-      if (disposed) { vp?.dispose(); return; }
-      viewport = vp;
-    });
-
-    return () => {
-      disposed = true;
-      viewport?.dispose();
-      // NOTE: we do NOT reset bootStarted — a single document boots the engine
-      // once (AC-04). StrictMode's dev double-mount is exactly what the latch
-      // guards; the real teardown is a full page navigation.
-    };
+    void bootViewport(container, actionsRef, setFpsState);
+    // No cleanup returned: the viewport lifecycle is NOT managed by React.
+    // Standalone teardown = page navigation. Multi-game host teardown =
+    // resetEditRealm() which runs registerTeardown() handles (viewport.dispose
+    // is registered inside bootViewport). Returning a cleanup here would let
+    // StrictMode's dev double-mount dispose the viewport immediately after
+    // boot resolves (the disposed-flag race condition).
   }, []);
 
   return (
@@ -181,8 +198,13 @@ export function ViewportComponent(): React.ReactElement {
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         <ViewportChrome
           fps={fps}
-          onPlay={() => actionsRef.current.playSimulation()}
-          onStop={() => actionsRef.current.stopSimulation()}
+          // M3 (AC-02, D-11): ▶/■ go through the one gateway door as session ops.
+          // The play/stop appliers (registered at boot below) route back to
+          // actionsRef.current, so the button and an AI `gateway.dispatch({kind:'play'},
+          // 'ai')` are the same action. Defined here (the single callback source
+          // shared by ViewportBar + GameOverlay) so both surfaces dispatch uniformly.
+          onPlay={() => gateway.dispatch({ kind: 'play' })}
+          onStop={() => gateway.dispatch({ kind: 'stop' })}
           onToggleDisplay={() => {
             const q = getViewportQuadrant();
             setViewportQuadrant({ display: q.display === 'game' ? 'scene' : 'game' });
@@ -192,6 +214,11 @@ export function ViewportComponent(): React.ReactElement {
             const url = slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
             window.open(url, '_blank', 'noopener');
           }}
+        />
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
         />
       </div>
     </div>
@@ -281,40 +308,78 @@ async function bootViewport(
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
   // No new World() — single-world model (C-1).
-  bus.doc.world = world;
-  bus.doc.registry = renderer.assets;
+  gateway.doc.world = world;
+  gateway.doc.registry = renderer.assets;
   injectEditMode(world, true);
 
   void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
     if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
   });
 
-  // resize (was :521). Track the container, not the window.
-  const onResize = (): void => {
+  // resize — ResizeObserver on the container so dock-panel drags (which do NOT
+  // fire `window resize`) still update the canvas backing store + camera aspect.
+  // The observer is already batched by the browser (once per frame), so no rAF
+  // throttle is needed; the skip-when-unchanged guard prevents redundant GPU
+  // swapchain rebuilds (canvas.width assignment invalidates the current texture
+  // even when the value is the same on WebKit). Math.round is required because
+  // non-integer DPR produces fractional px that canvas truncates — without
+  // rounding the comparison would fail every frame, triggering a full
+  // render-graph recompile. `onContainerResize` is late-bound so
+  // viewport.refresh() can be wired after createViewport below.
+  let onContainerResize: (() => void) | null = null;
+  const syncCanvasSize = (): void => {
     const d = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = (container.clientWidth || window.innerWidth) * d;
-    canvas.height = (container.clientHeight || window.innerHeight) * d;
+    const w = Math.round((container.clientWidth || 1) * d);
+    const h = Math.round((container.clientHeight || 1) * d);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    onContainerResize?.();
   };
-  window.addEventListener('resize', onResize);
-  registerTeardown(() => window.removeEventListener('resize', onResize));
+  const resizeObserver = new ResizeObserver(syncCanvasSize);
+  resizeObserver.observe(container);
+  registerTeardown(() => resizeObserver.disconnect());
 
-  // editor orbit camera (was :531). Not part of the authored doc.
+  // editor orbit camera (was :531). Not part of the authored doc. M3 t21 (S4 /
+  // AC-04): the boot camera spawn is view scaffolding — it goes through the
+  // core-minted EngineFacade (the write gate), not the raw world. gateway.doc.world
+  // was injected just above, so engineFacade() binds to the live world.
   const aspect = canvas.width / canvas.height || 1;
-  const cameraEntity = world.spawn(
+  const cameraEntity = gateway.engineFacade().spawn(
     { component: Transform, data: { posY: 1.5, posZ: 9 } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
 
   // viewport interaction: orbit/pan/zoom, click-to-select, drag-to-move (was :591).
+  // M3 t16 (S4 / AC-05): the viewport receives the core-minted EngineFacade (the
+  // sole controlled write proxy), NOT the raw world. gateway.doc.world was
+  // injected just above, so engineFacade() binds to the live world.
   const viewport = createViewport({
-    canvas, world: world as never, assets: renderer.assets as never, camera: cameraEntity,
+    canvas, engine: gateway.engineFacade(), assets: renderer.assets as never, camera: cameraEntity,
     getInputTarget,
   });
-  const onViewportResize = (): void => viewport.refresh();
-  window.addEventListener('resize', onViewportResize);
-  registerTeardown(() => window.removeEventListener('resize', onViewportResize));
+  // Wire viewport.refresh() into the container ResizeObserver created above so
+  // the editor camera projection + gizmo track the new aspect ratio on every
+  // container resize (dock-panel drags + window resizes).
+  onContainerResize = () => viewport.refresh();
   registerTeardown(() => { try { viewport.dispose(); } catch { /* already disposed */ } });
+
+  // M5 t32 (plan-strategy §2 D-4 Q-5): mount eval channel on globalThis in DEV
+  // builds only. AI CLI accesses it via playwright page.evaluate — zero new
+  // network surface (OOS-9). Production builds do NOT get this hook — the AI
+  // eval channel is dev-only (AC-02 scope② production lock).
+  // D-4: the host (edit-runtime) injects rawScope ONLY in DEV so unlockRawScope()
+  // can grant scope② raw engine access here; production omits rawScope entirely
+  // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
+  // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
+  if (import.meta.env.DEV) {
+    const channel = createEvalChannel(gateway, {
+      rawScope: { world, renderer, assets: renderer.assets },
+    });
+    (globalThis as Record<string, unknown>).__forgeaxEval = channel;
+  }
 
   // possess-exit key (was :617). Esc / G un-possesses play·game -> play·scene.
   function onPossessKey(e: KeyboardEvent): void {
@@ -331,7 +396,7 @@ async function bootViewport(
 
   // play·scene non-commit (was :638). transientMode true exactly in play·scene.
   function syncTransientMode(q: { run: string; display: string }): void {
-    bus.transientMode = q.run === 'play' && q.display === 'scene';
+    gateway.transientMode = q.run === 'play' && q.display === 'scene';
   }
   syncTransientMode(getViewportQuadrant());
   registerTeardown(onViewportQuadrantChange(syncTransientMode));
@@ -396,13 +461,30 @@ async function bootViewport(
     stopSimulation: () => { session.stopSimulation(); setViewportQuadrant({ run: 'edit', display: 'scene' }); },
   };
 
+  // ── D-11 (plan-strategy §2): register the REAL play/stop session appliers ────
+  // play·stop are session-domain ops whose state machine lives here in edit-runtime
+  // (DAG downstream — core must not import it). Registering them into core's
+  // sessionAppliers table (injection direction edit-runtime→core, same shape as the
+  // ApiClient seam) is exactly what makes them SESSION-domain ops (D-1: domain =
+  // registration site). They route through actionsRef.current so an op-driven
+  // play/stop is byte-for-byte the same action the ▶/■ button fires (AC-02 human=AI
+  // parity, including the implicit active-op cancel the gateway performs before any
+  // session op runs — D-2 interrupt). Registered here, AFTER actionsRef is wired, so
+  // a dispatch that arrives at the gateway always finds a live applier (before this
+  // point the gateway would legitimately return UNKNOWN_OP — headless form). The
+  // returned unregister fns run on teardown to avoid leaking a stale applier across
+  // a cross-game realm reset.
+  const unregPlay = registerSessionApplier('play', () => { actionsRef.current.playSimulation(); return { ok: true }; });
+  const unregStop = registerSessionApplier('stop', () => { actionsRef.current.stopSimulation(); return { ok: true }; });
+  registerTeardown(() => { unregPlay(); unregStop(); });
+
   // game camera discovery now that the scene is loaded (was :695).
   discoverGameCameraFromWorld();
   applyActiveCamera();
 
   // Expose the viewport quadrant SSOT for out-of-frame scripting (was :503).
   (window as unknown as Record<string, unknown>).__forgeax_editor = {
-    app: editorApp, world, renderer, bus, switchScene: switchSceneFile,
+    app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
     playSimulation: () => actionsRef.current.playSimulation(),
     stopSimulation: () => actionsRef.current.stopSimulation(),
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
@@ -584,7 +666,7 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
       VAG_SPAWN_ENTITY: (msg) => {
         const p = msg.payload;
         if (p.mode === 'reference' && isSpawnRef(p.entity)) {
-          bus.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
+          gateway.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
         } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
           const spawnDoc = p.doc;
           const spawnEnts = spawnDoc.entities;
@@ -592,7 +674,7 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
             const ent = spawnEnts[id]!;
             return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
           });
-          bus.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
+          gateway.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
         } else {
           console.warn('[edit] VAG_SPAWN_ENTITY: malformed entity/doc payload — ignored');
           return;
@@ -613,7 +695,7 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
         // module flag so this handler's own re-fire doesn't recurse forever
         // (allowedParentOrigins includes self.origin, so self-posts reach here).
         if (refreshingCatalog) return;
-        const reg = bus.doc.registry;
+        const reg = gateway.doc.registry;
         if (reg?.refreshCatalog) {
           refreshingCatalog = true;
           void reg.refreshCatalog().finally(() => {

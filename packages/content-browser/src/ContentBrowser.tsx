@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { bus, getSceneId, resolveGamePath, setAssetSelection, showContextMenu, useDocVersion,
-  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged, createDirectory } from '@forgeax/editor-core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// M3 (AC-03): asset-selection is a transient op dispatched through the one
+// gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
+// setAssetSelection setter.
+import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
+  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
+  ResizeHandle, useLocalSize } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
 import { useFavorites } from './hooks/useFavorites';
-import { buildAssetContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { useAssetGraph } from './hooks/useAssetGraph';
+import { computeDeleteImpact } from './delete-guard';
+import { DeleteGuardDialog } from './DeleteGuardDialog';
+import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { resolveFolderMenuItems } from './folder-menu';
 import { CBFilterBar } from './CBFilterBar';
 import { CBNavigationBar } from './CBNavigationBar';
 import { CBGrid } from './CBGrid';
@@ -16,18 +24,22 @@ import { CBStatusBar } from './CBStatusBar';
 import { CBToolbar } from './CBToolbar';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
-import type { CBAsset, CBViewMode } from './types';
+import { deriveContentView } from './folder-view';
+import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
 import './content-browser.css';
 
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
 // (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
 // The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
-// reads directly from it via bus.doc.registry.listCatalog().
-// registry entries carry {guid, kind, name?, relativeUrl} — no payload/packPath,
-// so import-mode filtering and payload-derived fields are removed.
+// reads directly from it via gateway.doc.registry.listCatalog().
+// registry entries carry {guid, kind, name?, relativeUrl, refs?} — no
+// payload/packPath, so import-mode filtering and payload-derived fields are
+// removed. `refs` (forward dependency GUID edges) is surfaced by the engine
+// AssetRegistry.listCatalog() (engine refs-through-listCatalog); it powers the
+// Content Browser's "Add with Dependencies" and dependency-graph features.
 
 function registryEntryToCBAsset(
-  e: { guid: string; kind: string; name?: string; relativeUrl: string },
+  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] },
   index: number,
 ): CBAsset {
   // Use relativeUrl as a proxy for packPath for folder-tree navigation.
@@ -40,9 +52,26 @@ function registryEntryToCBAsset(
     payload: {},
     packPath: e.relativeUrl,
     packIndex: index,
-    refs: [],
+    refs: e.refs ? [...e.refs] : [],
     estimatedSize: 0,
   };
+}
+
+// Convert a catalog packPath — which is workspace-rooted (relative to the vite
+// process cwd, e.g. "forgeax-games/hellforge/assets/characters/x.pack.json";
+// see vite-plugin-pack build-catalog.ts `relative(process.cwd(), …)`) — to a
+// GAME-relative path ("assets/characters/x.pack.json") by locating the game's
+// `<slug>` path segment (the game dir basename === slug in the standalone
+// backend). Entries that don't sit under the loaded game (shared template roots,
+// ddk, other games) carry no `<slug>` segment → null, so they're excluded from
+// the Asset panel scope.
+function toGameRelative(packPath: string, slug: string): string | null {
+  if (!slug) return null;
+  const parts = packPath.replace(/^\/+/, '').split('/');
+  const i = parts.indexOf(slug);
+  if (i < 0) return null;
+  const rel = parts.slice(i + 1).join('/');
+  return rel || null;
 }
 
 export function ContentBrowser() {
@@ -58,6 +87,34 @@ export function ContentBrowser() {
   const filter = useFilter();
   const sort = useSort();
   const favorites = useFavorites();
+  // The Asset panel's folder tree is scoped to the game's DECLARED asset roots
+  // (game package.json `forgeax.assets.roots`, e.g. ["assets"]) — NOT the whole
+  // engine catalog, which also folds in scenes/ + shared template roots (needed
+  // by runtime loadByGuid, but not browsable game assets). Default to ["assets"]
+  // until the game's package.json is read.
+  const [assetRoots, setAssetRoots] = useState<string[]>(['assets']);
+
+  // Source-panel width: draggable splitter (UE-parity — widen the tree to read
+  // long folder paths). Persisted per-editor via localStorage.
+  //
+  // Isolation of the two write paths (fixes "drag doesn't resize"): the panel
+  // width is driven by a CSS variable `--cb-src-w` set on the .cb-split PARENT,
+  // NOT by a React-controlled `style={{width}}` on the panel itself. React only
+  // writes the variable on commit (drag end); during a drag we imperatively
+  // update the SAME parent variable via splitRef, so React never controls the
+  // panel's width and can't revert the imperative value when ContentBrowser
+  // re-renders (e.g. from the pack-watcher reload churn). Zero re-render during
+  // drag; CBGrid reflows on its own ResizeObserver. onDragEnd persists once.
+  const [srcWidth, setSrcWidth] = useLocalSize('cb.sourceWidth', 200, 140, 640);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const srcWidthRef = useRef(srcWidth);
+  useEffect(() => { srcWidthRef.current = srcWidth; }, [srcWidth]);
+  const onSplitDrag = useCallback((dx: number) => {
+    const next = Math.min(640, Math.max(140, srcWidthRef.current + dx));
+    srcWidthRef.current = next;
+    splitRef.current?.style.setProperty('--cb-src-w', `${next}px`);
+  }, []);
+  const onSplitDragEnd = useCallback(() => { setSrcWidth(srcWidthRef.current); }, [setSrcWidth]);
 
   const reload = useCallback(() => {
     const slug = getSceneId();
@@ -65,7 +122,7 @@ export function ContentBrowser() {
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = bus.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] } | undefined;
+    const registry = gateway.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
     const entries = registry?.listCatalog?.();
     if (!entries || entries.length === 0) {
       setAllAssets([]);
@@ -79,32 +136,101 @@ export function ContentBrowser() {
 
   useEffect(() => { reload(); }, [reload]);
 
+  // Read the game's declared asset roots from its package.json
+  // (`forgeax.assets.roots`). Falls back to the ["assets"] default on any
+  // miss so the tree still scopes sanely.
+  useEffect(() => {
+    const slug = getSceneId();
+    if (!slug || slug === 'default') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await apiFetch(
+          `/api/files?path=${encodeURIComponent(resolveGamePath('package.json'))}`,
+          { cache: 'no-store' },
+        );
+        if (!r.ok) return;
+        const j = (await r.json()) as { content?: string };
+        if (!j.content) return;
+        const pkg = JSON.parse(j.content) as { forgeax?: { assets?: { roots?: unknown } } };
+        const roots = pkg.forgeax?.assets?.roots;
+        if (!cancelled && Array.isArray(roots) && roots.length > 0 && roots.every((x) => typeof x === 'string')) {
+          setAssetRoots(roots as string[]);
+        }
+      } catch { /* keep default ['assets'] */ }
+    })();
+    return () => { cancelled = true; };
+  }, [gameSlug]);
+
   useEffect(() => {
     const accept = buildAcceptString();
     logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
   }, [gameSlug]);
 
+  // Disk directories: fetch real directory tree from server so empty dirs
+  // (created via New Folder) are visible even without pack files inside.
+  const [diskDirs, setDiskDirs] = useState<string[]>([]);
+  const fetchDiskDirs = useCallback(async () => {
+    if (!gameSlug || gameSlug === 'default') return;
+    try {
+      const dirs: string[] = [];
+      for (const root of assetRoots) {
+        const treePath = resolveGamePath(root);
+        const r = await apiFetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const j = (await r.json()) as { tree?: { children?: { name: string; path: string; type: string; children?: unknown[] }[] } | null };
+        if (!j.tree?.children) continue;
+        const walk = (nodes: { name: string; path: string; type: string; children?: unknown[] }[], prefix: string) => {
+          for (const node of nodes) {
+            if (node.type !== 'dir') continue;
+            const rel = prefix ? `${prefix}/${node.name}` : node.name;
+            dirs.push(rel);
+            if (Array.isArray(node.children)) {
+              walk(node.children as typeof nodes, rel);
+            }
+          }
+        };
+        walk(j.tree.children as { name: string; path: string; type: string; children?: unknown[] }[], root);
+      }
+      setDiskDirs(dirs);
+    } catch { /* silent */ }
+  }, [gameSlug, assetRoots]);
+
+  useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
+
   useEffect(() => {
     const handler = (e: MessageEvent) => {
-      if (e.data?.type === 'VAG_ASSETS_CHANGED') reload();
+      if (e.data?.type === 'VAG_ASSETS_CHANGED') {
+        reload();
+        void fetchDiskDirs();
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [reload]);
+  }, [reload, fetchDiskDirs]);
 
-  // Host-resolved game root (with trailing slash) — used to strip the absolute
-  // packPath prefix back to a game-relative path for the folder tree.
-  const gameRoot = resolveGamePath('');
-  const gamePrefix = gameRoot.endsWith('/') ? gameRoot : `${gameRoot}/`;
+  // Scope the catalog to THIS game's declared asset roots. Each kept entry
+  // carries its game-relative path (`assets/characters/x.pack.json`), which
+  // drives both the folder tree and path navigation. Foreign entries (no
+  // `<slug>` segment) and out-of-root entries (e.g. scenes/) are dropped, so the
+  // Asset panel never exposes folders outside `forgeax-games/<slug>/<root>`.
+  const scopedAssets = useMemo(() => {
+    const out: { asset: CBAsset; rel: string }[] = [];
+    for (const a of allAssets) {
+      const rel = toGameRelative(a.packPath, gameSlug);
+      if (!rel) continue;
+      const top = rel.split('/')[0] ?? '';
+      if (!assetRoots.includes(top)) continue;
+      out.push({ asset: a, rel });
+    }
+    return out;
+  }, [allAssets, gameSlug, assetRoots]);
 
   const packDirs = useMemo(() => {
     const dirs = new Set<string>();
-    for (const a of allAssets) {
-      const rel = a.packPath.startsWith(gamePrefix)
-        ? a.packPath.slice(gamePrefix.length)
-        : a.packPath;
+    for (const { rel } of scopedAssets) {
       const dir = rel.replace(/\/[^/]+$/, '');
-      if (!dir) continue;
+      if (!dir || dir === rel) continue;
       let cur = dir;
       while (cur) {
         dirs.add(cur);
@@ -112,39 +238,93 @@ export function ContentBrowser() {
         cur = slash > 0 ? cur.slice(0, slash) : '';
       }
     }
+    for (const d of diskDirs) dirs.add(d);
     return [...dirs].sort();
-  }, [allAssets, gamePrefix]);
+  }, [scopedAssets, diskDirs]);
 
-  const assetsInPath = useMemo(() => {
-    if (!nav.currentPath) return allAssets;
-    const fullPrefix = gamePrefix + nav.currentPath;
-    return allAssets.filter(a => a.packPath.startsWith(fullPrefix + '/') || a.packPath.startsWith(fullPrefix));
-  }, [allAssets, nav.currentPath, gamePrefix]);
+  // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
+  // directly in it (non-recursive). Folders are derived from the same rels the
+  // source panel uses — no new persisted data format.
+  const { folders: foldersInPath, assets: assetsInPath } = useMemo(
+    () => deriveContentView({
+      scopedAssets,
+      packDirs,
+      currentPath: nav.currentPath,
+      favorites: favorites.favorites,
+    }),
+    [scopedAssets, packDirs, nav.currentPath, favorites.favorites],
+  );
 
+  // Filter + sort apply to assets only; folders always render first (UE-style),
+  // sorted by name (deriveContentView already sorts them).
   const filteredAssets = useMemo(() => filter.applyFilters(assetsInPath), [filter, assetsInPath]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
 
-  const multiSelect = useMultiSelect(sortedAssets);
+  // Single ordered array shared by the view AND multi-select — handleClick
+  // resolves items by flat index, so both must see the same order.
+  const viewItems = useMemo<CBViewItem[]>(
+    () => [...foldersInPath, ...sortedAssets],
+    [foldersInPath, sortedAssets],
+  );
 
-  const handleDoubleClick = useCallback((asset: CBAsset) => {
-    setAssetSelection({
+  const multiSelect = useMultiSelect(viewItems);
+
+  // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
+  // an asset can be referenced from another root (scenes/, other packs), and the
+  // delete guard (C3) must see those cross-root referencers to warn correctly.
+  const assetGraph = useAssetGraph(allAssets);
+  const nameByGuid = useCallback(
+    (guid: string) => allAssets.find(a => a.guid === guid)?.name ?? `${guid.slice(0, 8)}…`,
+    [allAssets],
+  );
+
+  const [deleteTargets, setDeleteTargets] = useState<CBAsset[] | null>(null);
+  const requestDelete = useCallback((targets: CBAsset[]) => {
+    if (targets.length === 0) return;
+    setDeleteTargets(targets);
+  }, []);
+  const performDelete = useCallback(() => {
+    setDeleteTargets(current => {
+      if (current) {
+        for (const a of current) {
+          void deleteAsset(a.packPath, a.guid).then(ok => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
+        }
+      }
+      return null;
+    });
+  }, [reload]);
+
+  // M3 (AC-03): asset-selection is a transient op — it goes through the one
+  // gateway door (gateway.dispatch), never the direct setAssetSelection setter
+  // (封门, M3), which is no longer exported from the barrel.
+  const openAsset = useCallback((asset: CBAsset) => {
+    gateway.dispatch({ kind: 'setAssetSelection', asset: {
       guid: asset.guid,
       kind: asset.kind,
       name: asset.name,
       payload: asset.payload,
       packPath: asset.packPath,
-    });
+    } });
     // Double-clicking a mesh asset surfaces its data: ask the studio shell to
     // bring the Mesh panel to front (focus-only — the shell never force-inserts a
     // closed tab). Harmless in standalone/pop-out where no shell listens.
     // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
     if (asset.kind === 'mesh') {
-      try { window.parent?.postMessage({ type: 'FORGEAX_FOCUS_PANEL', panel: 'mesh' }, '*'); } catch { /* cross-origin — non-fatal */ }
+      gateway.dispatch({ kind: 'focusPanel', panel: 'mesh' });
     }
   }, []);
 
+  // Double-click: drill into a folder, or open an asset.
+  const handleActivate = useCallback((item: CBViewItem) => {
+    if (item.type === 'folder') { nav.navigate(item.path); return; }
+    openAsset(item);
+  }, [nav, openAsset]);
+
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
+    onDelete: requestDelete,
     onRename: (asset: CBAsset) => {
       const newName = window.prompt('Rename asset:', asset.name);
       if (newName && newName !== asset.name) {
@@ -156,31 +336,61 @@ export function ContentBrowser() {
     onNewFolder: (parentPath: string) => {
       const name = window.prompt('New folder name:');
       if (!name) return;
-      const fullPath = resolveGamePath(`${parentPath ? parentPath + '/' : ''}${name}`);
-      void createDirectory(fullPath).then(ok => {
-        if (ok) reload();
-      });
+      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
     },
-  }), [reload]);
+  }), [reload, requestDelete]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, asset: CBAsset) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
     e.preventDefault();
     e.stopPropagation();
+    const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
+    if (item.type === 'folder') {
+      const folder = item;
+      const assetsInFolder = scopedAssets
+        .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
+        .map(s => s.asset);
+      const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
+      const resolved = resolveFolderMenuItems(menuItems, {
+        onOpen: () => nav.navigate(folder.path),
+        onToggleFavorite: () => favorites.toggleFavorite(folder.path),
+        unsupportedIds: ['rename', 'delete'],
+      });
+      if (resolved.length === 0) return;
+      setTimeout(() => showContextMenu(pos, resolved), 0);
+      return;
+    }
+    const asset = item;
     const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
-    const items = menuItems.filter(m => !m.separator).map(m => ({
+    const resolved = menuItems.filter(m => !m.separator).map(m => ({
       label: m.label,
       onClick: m.action,
       disabled: m.disabled,
     }));
-    if (items.length === 0) return;
-    showContextMenu(e, items);
-  }, [multiSelect.selection, allAssets, crudCallbacks]);
+    if (resolved.length === 0) return;
+    setTimeout(() => showContextMenu(pos, resolved), 0);
+  }, [multiSelect.selection, allAssets, crudCallbacks, scopedAssets, nav, favorites]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
       multiSelect.clearSelection();
     }
   }, [multiSelect]);
+
+  const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
+    const menuItems = buildBlankAreaContextMenu(nav.currentPath, (parentPath) => {
+      const name = window.prompt('New folder name:');
+      if (!name) return;
+      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+    });
+    const resolved = menuItems.map(m => ({
+      label: m.label,
+      onClick: m.action,
+      disabled: m.disabled,
+    }));
+    setTimeout(() => showContextMenu(pos, resolved), 0);
+  }, [nav.currentPath]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -200,13 +410,7 @@ export function ContentBrowser() {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
         const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
-        const names = targets.map(a => a.name).join(', ');
-        if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
-        for (const a of targets) {
-          void deleteAsset(a.packPath, a.guid).then(ok => {
-            if (ok) { broadcastAssetsChanged(); reload(); }
-          });
-        }
+        requestDelete(targets);
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
         const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
@@ -220,7 +424,7 @@ export function ContentBrowser() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [multiSelect, crudCallbacks, reload]);
+  }, [multiSelect, crudCallbacks, reload, requestDelete]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;
@@ -251,6 +455,7 @@ export function ContentBrowser() {
   }, [gameSlug, nav.currentPath, reload]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
@@ -278,15 +483,16 @@ export function ContentBrowser() {
           Open a game to browse assets
         </div>
       ) : (
-        <div className="cb-split">
-          {/* Left: Source panel */}
+        <div className="cb-split" ref={splitRef} style={{ ['--cb-src-w' as string]: `${srcWidth}px` }}>
+          {/* Left: Source panel — width reads the --cb-src-w CSS variable on the
+              parent (set by React on commit, by the drag handle imperatively). */}
           <div className="cb-source-panel">
             {favorites.favorites.length > 0 && (
               <div className="cb-source-section">
                 <div className="cb-source-title">★ Favorites</div>
                 {favorites.favorites.map(path => (
                   <button key={path} className={`cb-source-item${nav.currentPath === path ? ' sel' : ''}`}
-                    onClick={() => nav.navigate(path)}>
+                    onClick={() => nav.navigate(path)} title={path}>
                     {path.split('/').pop() || path}
                   </button>
                 ))}
@@ -301,6 +507,7 @@ export function ContentBrowser() {
               {packDirs.map(dir => (
                 <button key={dir} className={`cb-source-item${nav.currentPath === dir ? ' sel' : ''}`}
                   onClick={() => nav.navigate(dir)}
+                  title={dir}
                   style={{ paddingLeft: `${8 + dir.split('/').length * 8}px` }}>
                   📁 {dir.split('/').pop()}
                 </button>
@@ -308,42 +515,46 @@ export function ContentBrowser() {
             </div>
           </div>
 
+          {/* Draggable divider (UE-parity): widen the tree to read long paths. */}
+          <ResizeHandle orientation="col" onDrag={onSplitDrag} onDragEnd={onSplitDragEnd}
+            title="拖动调整文件夹栏宽度" />
+
           {/* Right: Asset view */}
-          <div className="cb-asset-view" onClick={handleContainerClick}>
+          <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
             <CBNavigationBar nav={nav} gameSlug={gameSlug} />
             <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
               thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
             {loading ? (
               <div style={{ padding: 16, opacity: 0.5 }}>Loading assets…</div>
-            ) : sortedAssets.length === 0 ? (
+            ) : viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>
                 {filter.activeFilterCount > 0 || filter.searchQuery ? 'No matching assets' : 'No assets found'}
               </div>
             ) : viewMode === 'grid' ? (
               <CBGrid
-                items={sortedAssets}
+                items={viewItems}
                 thumbnailSize={thumbnailSize}
                 multiSelect={multiSelect}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             ) : viewMode === 'list' ? (
               <CBList
-                items={sortedAssets}
+                items={viewItems}
                 multiSelect={multiSelect}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             ) : (
               <CBColumn
-                items={sortedAssets}
+                items={viewItems}
                 multiSelect={multiSelect}
                 sort={sort}
-                onDoubleClick={handleDoubleClick}
+                onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             )}
-            <CBStatusBar totalItems={sortedAssets.length} selection={multiSelect.selection} />
+            <CBStatusBar totalItems={viewItems.length} selection={multiSelect.selection} />
           </div>
         </div>
       )}
@@ -368,6 +579,16 @@ export function ContentBrowser() {
         <div className="cb-drag-overlay">
           <div className="cb-drag-overlay-label">Drop files to import</div>
         </div>
+      )}
+
+      {deleteTargets && (
+        <DeleteGuardDialog
+          targets={deleteTargets}
+          impact={computeDeleteImpact(deleteTargets.map(t => t.guid), assetGraph)}
+          nameByGuid={nameByGuid}
+          onConfirm={performDelete}
+          onCancel={() => setDeleteTargets(null)}
+        />
       )}
     </div>
   );

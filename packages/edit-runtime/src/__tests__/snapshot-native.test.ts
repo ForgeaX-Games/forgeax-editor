@@ -197,7 +197,7 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
 
   it('(d) [RED] run-lifecycle.ts currently uses cloneEditSession (will be removed)', () => {
     // Documentation checkpoint: post-impl, `grep cloneEditSession
-    // packages/edit-runtime/src/engine/run-lifecycle.ts` returns zero matches.
+    // packages/edit-runtime/src/viewport/run-lifecycle.ts` returns zero matches.
     // Currently RED because run-lifecycle.ts imports cloneEditSession from
     // @forgeax/editor-core and uses it in playSimulation.
     expect(true).toBe(true); // real check: grep post-impl

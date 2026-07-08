@@ -12,6 +12,9 @@
 // behavior; the GUID-collision silent-degrade is a charter-P3 gap tracked
 // as OOS-5 and not addressed here).
 
+/** Dedupe scan-failure logs per root-set for this process (HTTP hot path). */
+const loggedScanFailureKeys = new Set<string>();
+
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
@@ -224,7 +227,40 @@ async function processMetaSidecar(
     const isHdr = meta.source.toLowerCase().endsWith('.hdr');
     let cubeMetadata: CubeTextureMetadata | undefined;
     for (const sub of meta.subAssets) {
-      if (sub.kind === 'image') {
+      if (sub.kind === 'equirect') {
+        // feat-20260630-equirect-kind-internalized-ibl: an .hdr equirect
+        // sub-asset folds to a kind:'equirect' row carrying rgba16float
+        // ImageMetadata (mirrors the engine SSOT build-catalog.ts equirect arm).
+        // The engine build-catalog leaves relativeUrl at the raw .hdr and relies
+        // on pluginPack's importer to emit the .bin; this dev per-game route has
+        // NO importer emit step, so we bake the rgba16float .bin here (cached)
+        // and point the row directly at it, exactly like the pre-feat image+HDR
+        // path did. Without this branch the sub-asset was silently dropped (the
+        // old loop only knew 'image'/'cube-texture'), leaving Skylight.equirect
+        // with no catalog row -> load-failed:asset-not-imported.
+        const baked = isHdr ? await bakeHdrEquirect(sourceAbsPath, sub.guid) : null;
+        if (baked !== null) {
+          const binRel = relative(cwd, baked.binAbsPath).replace(/\\/g, '/');
+          out.push({
+            guid: sub.guid,
+            relativeUrl: withBase(base, binRel),
+            kind: 'equirect',
+            sourcePath: sourceRel,
+            metadata: {
+              kind: 'texture',
+              width: baked.width,
+              height: baked.height,
+              format: 'rgba16float',
+              colorSpace: 'linear',
+              mipmap: false,
+            },
+          });
+        } else {
+          // Bake failed / non-.hdr source -> raw equirect row (loadByGuid then
+          // tries the dev /__import cook as a best-effort fallback).
+          out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'equirect', sourcePath: sourceRel, metadata });
+        }
+      } else if (sub.kind === 'image') {
         if (isHdr) {
           const baked = await bakeHdrEquirect(sourceAbsPath, sub.guid);
           if (baked !== null) {
@@ -320,7 +356,11 @@ export async function buildPerGameCatalog(
   const cwd = process.cwd();
   const result = await scan(roots);
   if (!result.ok) {
-    console.warn('[forgeax-pack] scan error:', result.error.message);
+    const failureKey = roots.join('\0');
+    if (!loggedScanFailureKeys.has(failureKey)) {
+      loggedScanFailureKeys.add(failureKey);
+      console.warn('[forgeax-pack] scan error:', result.error.message);
+    }
     return [];
   }
 

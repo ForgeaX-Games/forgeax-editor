@@ -2,7 +2,7 @@
 //
 // Opens a game project identified by `pointer`, using the injected `reader`
 // for all file I/O. The reader receives project-relative paths (e.g.
-// 'forge.json', 'scenes/main.pack.json') and returns the file content as a
+// 'forge.json', 'assets/scenes/main.pack.json') and returns the file content as a
 // UTF-8 string.
 //
 // Flow:
@@ -101,14 +101,17 @@ export async function openProject(
 
   const defaultSceneGuid = gp.defaultScene as string;
 
-  // 3. Read the conventional scene pack.
-  // defaultScene was declared but cannot be projected below → 'scene-missing'
-  // (a failure, distinct from 'no-scene' where no scene was ever declared).
+  // 3. Read the scene pack (A2: scenes live under assets/).
+  // Try the canonical location first, fall back to legacy for compat.
   let packRaw: string;
   try {
-    packRaw = await reader(`scenes/main.pack.json`);
+    packRaw = await reader(`assets/scenes/main.pack.json`);
   } catch {
-    return { world, sceneRoot: null, status: 'scene-missing', ok: false };
+    try {
+      packRaw = await reader(`scenes/main.pack.json`);
+    } catch {
+      return { world, sceneRoot: null, status: 'scene-missing', ok: false };
+    }
   }
 
   // 4. Parse the pack and locate the asset entry.

@@ -1,12 +1,16 @@
 // Shared entity operations used by panels and keyboard shortcuts. They go
-// through the bus (undoable) and live above core so they may touch selection.
+// through the gateway (undoable) and live above core so they may touch selection.
 //
 // feat-20260701-editor-world-container-doc-ecs-collapse M3:
 // Entity existence checks and parent reads switch to world.get.
 // nextLocalId replaced by editor-side counter (no doc dep).
 import { childrenOf, isSelfOrDescendant } from './document';
-import { bus, dispatch, setSelection, setSelectionMany } from '../store/store';
-import type { EditorCommand, EntityId } from '../types';
+// M3 (D-6): mutations + selection go through the one gateway door — gateway.dispatch —
+// replacing the deleted origin-less `dispatch` wrapper and the (now applier-private)
+// setSelection/setSelectionMany setters. These are the same session/document ops
+// the UI dispatches; ops.ts is a core-internal helper layer above the store.
+import { gateway } from '../store/store';
+import type { EditorOp, EntityId } from '../types';
 import { Name, ChildOf } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import {
@@ -18,7 +22,7 @@ import {
   entComponents,
 } from '../store/entity-state';
 
-// ── Editor-side ID counter (replaces bus.doc.nextLocalId for groupSelected) ───
+// ── Editor-side ID counter (replaces gateway.doc.nextLocalId for groupSelected) ───
 let _nextLocalId = 100;
 function nextLocalId(): number { return _nextLocalId++; }
 
@@ -29,20 +33,20 @@ function nextLocalId(): number { return _nextLocalId++; }
 
 /** Resolve legacy EntityId → engine handle (M7 entity-state, no doc.entities). */
 function toEngine(eId: EntityId): EntityHandle | undefined {
-  return entHandle(bus.doc, eId);
+  return entHandle(gateway.doc, eId);
 }
 
 /** Check entity existence via world.get(id,Name).ok (no world.hasEntity). */
 function entityExists(eId: EntityId): boolean {
-  return entExists(bus.doc, eId);
+  return entExists(gateway.doc, eId);
 }
 
 export function reparentEntity(child: EntityId, parent: EntityId | null): void {
-  if (parent !== null && isSelfOrDescendant(bus.doc, child, parent)) return;
+  if (parent !== null && isSelfOrDescendant(gateway.doc, child, parent)) return;
   // Check current parent via world ChildOf
   const eH = toEngine(child);
   if (eH !== undefined) {
-    const co = bus.doc.world.get(eH, ChildOf);
+    const co = gateway.doc.world.get(eH, ChildOf);
     if (co.ok) {
       const curParentEh = (co.value as { parent: number }).parent as EntityHandle;
       // Find legacy ID for current parent
@@ -50,17 +54,17 @@ export function reparentEntity(child: EntityId, parent: EntityId | null): void {
       if (curParentId === parent) return;
     } else if (parent === null) return;
   }
-  dispatch({ kind: 'reparent', entity: child, parent });
+  gateway.dispatch({ kind: 'reparent', entity: child, parent });
 }
 
 function eHToLegacy(engineHandle: EntityHandle): number | undefined {
-  return entLegacyId(bus.doc, engineHandle);
+  return entLegacyId(gateway.doc, engineHandle);
 }
 
 // post-order (children before parent) so the transaction's reversed inverse
 // respawns parents before children on undo (avoids INVALID_PARENT).
 function postOrder(id: EntityId, out: EntityId[]): void {
-  for (const c of childrenOf(bus.doc, id)) postOrder(c, out);
+  for (const c of childrenOf(gateway.doc, id)) postOrder(c, out);
   out.push(id);
 }
 
@@ -68,9 +72,9 @@ export function deleteEntityCascade(id: EntityId): void {
   if (!entityExists(id)) return;
   const order: EntityId[] = [];
   postOrder(id, order);
-  const commands: EditorCommand[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  dispatch({ kind: 'transaction', label: `delete ${id}`, commands });
-  setSelection(null);
+  const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
+  gateway.dispatch({ kind: 'transaction', label: `delete ${id}`, commands });
+  gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
 // Cascade-delete several entities (+ their subtrees) in one undo step. De-dupes
@@ -90,9 +94,9 @@ export function deleteManyCascade(ids: EntityId[]): void {
     }
   }
   if (order.length === 0) return;
-  const commands: EditorCommand[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  dispatch({ kind: 'transaction', label: `delete ×${ids.length}`, commands });
-  setSelection(null);
+  const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
+  gateway.dispatch({ kind: 'transaction', label: `delete ×${ids.length}`, commands });
+  gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
 // Group selected entities under a fresh empty parent (single undo step). The
@@ -102,28 +106,28 @@ export function groupSelected(ids: EntityId[]): void {
   if (ids.length < 1) return;
   const newId = nextLocalId();
   const primary = ids[ids.length - 1]!;
-  const parent = entParent(bus.doc, primary);
-  const commands: EditorCommand[] = [
+  const parent = entParent(gateway.doc, primary);
+  const commands: EditorOp[] = [
     { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } }, _id: newId },
-    ...ids.map((e): EditorCommand => ({ kind: 'reparent', entity: e, parent: newId })),
+    ...ids.map((e): EditorOp => ({ kind: 'reparent', entity: e, parent: newId })),
   ];
-  dispatch({ kind: 'transaction', label: `group ×${ids.length}`, commands });
-  setSelection(newId);
+  gateway.dispatch({ kind: 'transaction', label: `group ×${ids.length}`, commands });
+  gateway.dispatch({ kind: 'setSelection', id: newId });
 }
 
 // Inverse of group: lift a node's children up to its own parent, then remove the
 // (now-empty) node — all in one transaction (single undo).
 export function ungroupEntity(id: EntityId): void {
   if (!entityExists(id)) return;
-  const kids = childrenOf(bus.doc, id);
+  const kids = childrenOf(gateway.doc, id);
   if (kids.length === 0) return;
-  const grandParent = entParent(bus.doc, id);
-  const commands: EditorCommand[] = [
-    ...kids.map((c): EditorCommand => ({ kind: 'reparent', entity: c, parent: grandParent })),
+  const grandParent = entParent(gateway.doc, id);
+  const commands: EditorOp[] = [
+    ...kids.map((c): EditorOp => ({ kind: 'reparent', entity: c, parent: grandParent })),
     { kind: 'destroyEntity', entity: id },
   ];
-  dispatch({ kind: 'transaction', label: `ungroup ${id}`, commands });
-  setSelectionMany(kids);
+  gateway.dispatch({ kind: 'transaction', label: `ungroup ${id}`, commands });
+  gateway.dispatch({ kind: 'setSelectionMany', ids: kids });
 }
 
 // Module-level clipboard (flat copy of {name, components}; hierarchy is dropped
@@ -143,10 +147,10 @@ export function copySelected(ids: EntityId[]): number {
       // Transform / ChildOf baseline keys, so carrying them here is harmless.
       const eH = toEngine(id);
       if (eH === undefined) return null;
-      const nameResult = bus.doc.world.get(eH, Name);
+      const nameResult = gateway.doc.world.get(eH, Name);
       if (!nameResult.ok) return null;
       const name = (nameResult.value as { value: string }).value;
-      return { name, components: structuredClone(entComponents(bus.doc, id)) };
+      return { name, components: structuredClone(entComponents(gateway.doc, id)) };
     })
     .filter((c): c is ClipEntry => c !== null);
   return clipboard.length;
@@ -159,7 +163,7 @@ export function hasClipboard(): boolean {
 // shared spawn-from-clipboard helper. `translate` maps a clip entry's original
 // Transform (x,z) → the desired spawn position.
 function spawnClipboard(label: string, translate: (t: { x: number; z: number }) => { x: number; z: number }): void {
-  const commands: EditorCommand[] = [];
+  const commands: EditorOp[] = [];
   const ids: EntityId[] = [];
   for (const c of clipboard) {
     const comps = structuredClone(c.components);
@@ -173,8 +177,8 @@ function spawnClipboard(label: string, translate: (t: { x: number; z: number }) 
     ids.push(id);
     commands.push({ kind: 'spawnEntity', name: c.name, parent: null, components: comps, _id: id });
   }
-  dispatch({ kind: 'transaction', label, commands });
-  setSelectionMany(ids);
+  gateway.dispatch({ kind: 'transaction', label, commands });
+  gateway.dispatch({ kind: 'setSelectionMany', ids: ids });
 }
 
 export function pasteClipboard(): void {
@@ -194,10 +198,10 @@ export function pasteClipboardAt(wx: number, wz: number): void {
 export function duplicateEntity(id: EntityId): void {
   if (!entityExists(id)) return;
   // M7 / AC-15: name/parent/components read from world (SSOT) via entity-state.
-  dispatch({
+  gateway.dispatch({
     kind: 'spawnEntity',
-    name: `${entName(bus.doc, id)} copy`,
-    parent: entParent(bus.doc, id),
-    components: structuredClone(entComponents(bus.doc, id)),
+    name: `${entName(gateway.doc, id)} copy`,
+    parent: entParent(gateway.doc, id),
+    components: structuredClone(entComponents(gateway.doc, id)),
   });
 }

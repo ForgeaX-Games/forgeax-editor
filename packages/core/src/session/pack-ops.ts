@@ -10,6 +10,9 @@
 import { apiFetch } from '../io/api-client';
 import { fetchWithTimeout } from '../io/net';
 import { stableGuid, validatePackShell, type PackFile } from '../scene/scene-pack';
+import { sessionAppliers } from '../io/appliers';
+import { broadcastAssetsChanged } from '../store/assets-changed';
+import { resolveGamePath } from '../util/path-resolver';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -261,3 +264,16 @@ export async function createDirectory(dirPath: string): Promise<boolean> {
     return false;
   }
 }
+
+// ── Session applier: createDirectory ─────────────────────────────────────────
+// Registered into sessionAppliers (D-1) so gateway.dispatch routes it as a
+// session op (ledger only, no undo). Human UI and AI are equal callers.
+sessionAppliers.set('createDirectory', (op) => {
+  const { parentPath, name } = op as { parentPath: string; name: string };
+  const base = parentPath || 'assets';
+  const fullPath = resolveGamePath(`${base}/${name}`);
+  void createDirectory(fullPath).then(ok => {
+    if (ok) broadcastAssetsChanged();
+  });
+  return { ok: true };
+});

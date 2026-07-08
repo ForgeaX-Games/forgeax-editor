@@ -37,7 +37,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -56,12 +56,12 @@ function spawnNative(
   name: string,
   components: Record<string, unknown>,
 ): EntityHandle {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, components };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd ${name} failed: ${r.error.hint}`);
-  if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, cmd._id);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${cmd._id}`);
+  if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
+  const engineHandle = entHandle(session, (cmd as any)._id);
+  if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${(cmd as any)._id}`);
   return engineHandle;
 }
 
@@ -80,20 +80,24 @@ describe('spawn entity — cube', () => {
     }
   });
 
-  it('spawnMeshFilter cube: world RED — MeshRenderer auto-added with materials', () => {
-    // RED: current spawnComponentData only resolves MeshFilter token;
-    // it does NOT auto-add MeshRenderer with default PBR material.
+  it('spawnMeshFilter cube: auto-adds an EMPTY MeshRenderer (engine default-material fallback)', () => {
+    // A MeshFilter-only entity is archetype-absent in the engine's render walk
+    // (`with: [MeshRenderer]`) and never drawn, so spawnComponentData must attach
+    // a MeshRenderer. But it attaches an EMPTY `materials: []` — NOT a synthetic
+    // MaterialAsset handle: an uncataloged handle makes save's `_guidForAsset`
+    // return undefined -> SceneCollectAssetGuidUnresolvedError -> the whole write
+    // aborts. Empty materials route through the engine's own default-material
+    // fallback (defaultMaterialSnapshot mid-grey) and serialize with zero handles
+    // to resolve, so save succeeds.
     const s = createSession();
     const eH = spawnNative(s, 'Cube', {
       MeshFilter: { assetHandle: HANDLE_CUBE },
     });
     const mr = s.world.get(eH, MeshRenderer);
-    // This should be RED (ok=false) — no MeshRenderer was added.
-    // After m2-impl-spawn rewrites the spawn logic, this turns GREEN.
     expect(mr.ok).toBe(true);
     if (mr.ok) {
       const mats = mr.value.materials as ReadonlyArray<unknown>;
-      expect(mats.length).toBeGreaterThan(0);
+      expect(mats.length).toBe(0);
     }
   });
 });

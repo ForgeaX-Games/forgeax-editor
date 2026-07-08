@@ -15,24 +15,13 @@
 // ubpa) — there it is skipped and the scene renders with the directional sun.
 import { Skylight, SkyboxBackground, SKYBOX_MODE_CUBEMAP } from '@forgeax/engine-runtime';
 import { decodeHdr } from '@forgeax/engine-image/hdr-decoder';
+import { EditGateway, type EngineFacade } from '@forgeax/editor-core';
 
-interface RegistryLike { register?(desc: unknown): { unwrap(): unknown } }
 interface StoreLike {
   // Engine 2026-06-14: uploadCubemapFromEquirect takes 3 args
   // (world, sourceHandle, sourcePod). The source equirect is minted as a shared
-  // column handle via world.allocSharedRef('TextureAsset', pod).
+  // column handle via engine.allocSharedRef('TextureAsset', pod).
   uploadCubemapFromEquirect(world: unknown, sourceHandle: unknown, sourcePod: unknown): Promise<{ ok: boolean; value?: unknown; error?: unknown }>;
-}
-interface SpawnResultLike { unwrap(): unknown }
-interface WorldLike {
-  spawn(...componentDatas: unknown[]): SpawnResultLike;
-  /** Patch component fields on an existing entity (used to upgrade a
-   *  solid-color Skylight to image-based lighting once the cubemap is ready). */
-  set(entity: unknown, component: unknown, data: unknown): unknown;
-  /** Engine removed AssetRegistry.register; shared assets are now minted via
-   *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
-   *  directly (no Result / no .unwrap()). */
-  allocSharedRef(target: string, payload: unknown): unknown;
 }
 interface Equirect { kind: 'texture'; width: number; height: number; format: string; data: Uint8Array; colorSpace: string; mipmap: boolean }
 
@@ -84,27 +73,48 @@ async function loadHdrEquirect(url: string): Promise<Equirect | null> {
  * decode failures log a warning. The first successful decode wins.
  */
 export async function setupEditorSkylight(
-  world: WorldLike,
-  _assets: RegistryLike,
+  gateway: EditGateway,
+  engine: EngineFacade,
   store: StoreLike,
   opts: { hdrUrl?: string | readonly string[]; intensity?: number } = {},
 ): Promise<void> {
+  // M3 t20b (D-11, S12 / AC-28 / AC-29): the 4 legacy raw world writes become a
+  // TWO-PHASE gateway dispatch sequence over EXISTING builtin document ops — zero
+  // new op kinds. Every write is now an authored document op: it lands in the
+  // ledger, is undoable, and produces a trace span. Skylight/SkyboxBackground are
+  // authored environment data (Play reads them from the pack catalog), so the
+  // sole write gate for them is gateway.dispatch, NOT the ctx.engine facade (that
+  // proxy is for view scaffolding). Handle CASTING (allocSharedRef) stays facade —
+  // it is chrome minting, not an op (D-11, drag-spawn-resolve.ts:89-99 isomorph).
+  //
+  // TWO-PHASE ORDER IS A HARD CONSTRAINT (AC-29 black-screen guard, skylight.ts
+  // :92-97 note): the SYNCHRONOUS phase spawns the solid-color Skylight FIRST so
+  // the very first frame has ambient (the forgeax PBR shader computes ambient=0
+  // without a Skylight → shaded faces black; WebKit/WKWebView has no IBL at all
+  // and relies on this solid fill). The ASYNCHRONOUS phase (HDR load + cubemap
+  // precompute) upgrades it to image-based lighting LATER. Reordering — moving any
+  // async IBL work ahead of the sync solid spawn — regresses to a black first
+  // frame (same failure mode as viewport.ts:160 tonemap).
   const intensity = opts.intensity ?? 0.2;
-  // ALWAYS spawn a solid-color Skylight first. The forgeax PBR shader computes
-  // ambient=0 without a Skylight, so a lone DirectionalLight leaves shaded faces
-  // black. A cubemap-less Skylight binds the engine's 1×1 white irradiance cube
-  // — ambient is live on the first frame with no async GPU work, and it renders
-  // on WebKit/WKWebView (the desktop Studio app) whose WebGPU lacks the
-  // rgba16float render-attachment the IBL precompute needs. Neutral studio fill.
-  let skylight: unknown;
-  try {
-    skylight = world.spawn(
-      { component: Skylight, data: { colorR: 0.85, colorG: 0.9, colorB: 1.0, intensity: 0.35 } },
-    ).unwrap();
-  } catch (e) {
-    console.warn('[editor] solid skylight spawn failed:', (e as Error)?.message ?? e);
+
+  // ── PHASE 1 (synchronous): solid-color Skylight via dispatch ────────────────
+  // A cubemap-less Skylight binds the engine's 1x1 white irradiance cube — ambient
+  // is live on the first frame with no async GPU work. dispatch → read _id from
+  // the ledger tail (seedDemoScene paradigm, host-boot.ts:158-159).
+  const r1 = gateway.dispatch({
+    kind: 'spawnEntity', name: 'Skylight',
+    components: { Skylight: { colorR: 0.85, colorG: 0.9, colorB: 1.0, intensity: 0.35 } },
+  }, 'human');
+  if (!r1.ok) {
+    console.warn('[editor] solid skylight spawn failed:', r1.error?.hint ?? r1.error?.code);
     return;
   }
+  const skylight = (gateway.ledger.at(-1) as { _id?: number })?._id;
+  if (typeof skylight !== 'number') {
+    console.warn('[editor] solid skylight spawn returned no entity id');
+    return;
+  }
+
   try {
     // Skip the IBL precompute on WebKit/WKWebView — its WebGPU lacks the
     // rgba16float render-attachment the engine's equirect→cubemap pass needs
@@ -131,18 +141,33 @@ export async function setupEditorSkylight(
       if (hdr) break;
     }
     const equirect = hdr ?? buildEnvironmentEquirect();
-    // Mint the equirect source as a shared column handle, then precompute the
-    // IBL cubemap (engine 3-arg upload: world, sourceHandle, sourcePod).
-    const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
-    const res = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
+
+    // ── PHASE 2 (asynchronous): IBL upgrade via dispatch ─────────────────────
+    // Mint the equirect source as a shared column handle (chrome casting on the
+    // facade — trace leaf recorded, not an op), then precompute the IBL cubemap.
+    // uploadCubemapFromEquirect is a renderer-store GPU call that needs the engine
+    // World for device context (not a mutator) — read it from gateway.doc.world.
+    const sourceHandle = engine.allocSharedRef('TextureAsset', equirect);
+    const res = await store.uploadCubemapFromEquirect(gateway.doc.world, sourceHandle, equirect);
     if (!res.ok || res.value === undefined) { console.warn('[editor] cubemap precompute failed:', res.error); return; }
     const cubemap = res.value;
-    // Upgrade the existing Skylight to image-based lighting (neutral tint lets
-    // the cubemap drive the color).
-    world.set(skylight, Skylight, { cubemap, colorR: 1, colorG: 1, colorB: 1, intensity });
+    // Upgrade the existing Skylight to image-based lighting via setComponent
+    // (neutral tint lets the cubemap drive the color). This is the async-phase op
+    // that AC-28 asserts lands in the ledger after the two sync spawns.
+    const r2 = gateway.dispatch({
+      kind: 'setComponent', entity: skylight, component: 'Skylight',
+      patch: { cubemap, colorR: 1, colorG: 1, colorB: 1, intensity },
+    }, 'human');
+    if (!r2.ok) { console.warn('[editor] skylight IBL upgrade failed:', r2.error?.hint ?? r2.error?.code); return; }
     // Visible sky only for a real HDR — the synthetic gradient is for ambient
     // fill, not a backdrop (and the skybox needs the camera's tonemap active).
-    if (hdr) world.spawn({ component: SkyboxBackground, data: { cubemap, mode: SKYBOX_MODE_CUBEMAP } });
+    // Spawn the SkyboxBackground with its cubemap via dispatch (authored data).
+    if (hdr) {
+      gateway.dispatch({
+        kind: 'spawnEntity', name: 'SkyboxBackground',
+        components: { SkyboxBackground: { cubemap, mode: SKYBOX_MODE_CUBEMAP } },
+      }, 'human');
+    }
     // Success messages — informational, not warnings (Chrome devtools renders
     // console.warn yellow; saving the warn channel for actually-skipped paths).
     console.info(hdr ? '[editor] HDR skylight + skybox active' : '[editor] synthetic skylight active (no HDR)');

@@ -31,12 +31,12 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, type DragAssetRef } from '@forgeax/editor-core';
+import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
-// The studio shell (cross-port parent) can't read this surface's console. Forward
-// health signals up so the shell's INFO/health status bar surfaces them. The shell
-// listens for `{type:'forgeax:health', level, source, code, message}` (interface
+// Forward structured health signals from this surface to the studio shell's
+// health status bar via postMessage. The shell (healthBridge) listens for
+// `{type:'forgeax:health', level, source, code, message}` (interface
 // healthBridge.ts). Plain postMessage — no import of the interface here.
 type HealthLevel = 'info' | 'success' | 'warn' | 'error';
 function forwardHealth(level: HealthLevel, code: string, message: string): void {
@@ -251,8 +251,8 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // GLB import-mode dialog (§4 / D-8): set after a .glb/.gltf upload completes,
   // cleared once the user picks 'whole' (scene/uasset) or 'split' (sub-assets).
   const [glbModePrompt, setGlbModePrompt] = useState<{ dest: string; baseName: string; file: File } | null>(null);
-  // Asset drag-to-scene (D-4). The drag ref arrives via postMessage (cross-iframe
-  // dataTransfer is blocked), cached in pendingDragAsset for the drop event.
+  // Asset drag-to-scene (D-4). The drag ref arrives via the typed editor bus
+  // (single-realm), cached in pendingDragAsset for the drop event.
   //   assetDragPending — a CB asset drag is in flight (START..END): show a capture
   //     overlay over the iframe (the iframe would otherwise swallow drag events).
   //   assetDragActive  — the drag is currently over the viewport: highlight it.
@@ -633,26 +633,23 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
     void spawnAssetRef(ref);
   }, [spawnAssetRef]);
 
-  // Content Browser (a sibling iframe) posts FORGEAX_DRAG_ASSET_START/END up to
-  // this Shell window while an asset card is dragged (cross-iframe dataTransfer is
-  // unreadable, so we cache the ref for the drop). FORGEAX_ADD_ASSET_TO_SCENE is
-  // the context-menu "Add to Scene" path (D-6) — no drag, spawn immediately.
+  // Content Browser emits drag events on the typed editor bus (same host window
+  // since single-realm M2/M4). FORGEAX_ADD_ASSET_TO_SCENE is the context-menu
+  // "Add to Scene" path (D-6) — no drag, spawn immediately.
   useEffect(() => {
-    const onMsg = (ev: MessageEvent) => {
-      const d = ev.data as { type?: string; ref?: unknown } | null;
-      if (d?.type === 'FORGEAX_DRAG_ASSET_START' && d.ref) {
-        pendingDragAsset.current = d.ref as DragAssetRef;
-        setAssetDragPending(true);
-      } else if (d?.type === 'FORGEAX_DRAG_ASSET_END') {
-        pendingDragAsset.current = null;
-        setAssetDragPending(false);
-        setAssetDragActive(false);
-      } else if (d?.type === 'FORGEAX_ADD_ASSET_TO_SCENE' && d.ref) {
-        void spawnAssetRef(d.ref as DragAssetRef);
-      }
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
+    const offStart = panelBridge.on('dragAssetStart', (ref) => {
+      pendingDragAsset.current = ref;
+      setAssetDragPending(true);
+    });
+    const offEnd = panelBridge.on('dragAssetEnd', () => {
+      pendingDragAsset.current = null;
+      setAssetDragPending(false);
+      setAssetDragActive(false);
+    });
+    const offScene = panelBridge.on('addAssetToScene', (ref) => {
+      void spawnAssetRef(ref);
+    });
+    return () => { offStart(); offEnd(); offScene(); };
   }, [spawnAssetRef]);
 
   // ── VAG_* message consumption ──────────────────────────────────────────────
@@ -664,11 +661,9 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
       const t = (ev.data as { type?: unknown } | null)?.type;
       if (typeof t !== 'string' || !t.startsWith('VAG_')) return;
 
-      // Forward the network stream up to the Studio shell (Network panel).
-      if (t === 'VAG_NETWORK') {
-        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
-        return;
-      }
+      // VAG_NETWORK: healthBridge (same host window, single-realm) receives the
+      // original message from the engine iframe directly — no forwarding needed.
+      if (t === 'VAG_NETWORK') return;
 
       switch (t) {
         case 'VAG_FPS_STATS': {
@@ -683,12 +678,8 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
           if (!r.success) { console.warn('VAG_CONSOLE schema failure', { issues: r.error.issues }); return; }
           const { level, text } = r.data.payload;
           console[level]('[editor]', text);
-          // Forward the FULL console stream (all levels) up to the Studio shell so
-          // its Console panel (store.consoleLog) shows it — the shell is one frame
-          // above this surface and never receives the engine iframe's own
-          // VAG_CONSOLE postMessage directly.
-          try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
-          // Forward warn+ to the shell health feed; mark fatal region failures.
+          // healthBridge (same host window, single-realm) receives the original
+          // message from the engine iframe and feeds store.consoleLog directly.
           if (level === 'error' || level === 'warn') {
             const reason = level === 'error' ? fatalReason(text) : null;
             forwardHealth(level === 'error' ? 'error' : 'warn', reason ? 'scene-instantiate-failed' : 'vag-console', text);

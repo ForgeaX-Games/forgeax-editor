@@ -27,7 +27,7 @@
 //     the spawnEntity command that the bridge observes over the bus. The bridge
 //     (edit-runtime/engine/drag-spawn-resolve.ts, plan-strategy §D-3/D-4) parses
 //     the guid, loadByGuid -> allocSharedRef('MeshAsset') -> dispatches
-//     setComponent(MeshFilter.assetHandle) over the EditorBus. Round-trip to Play
+//     setComponent(MeshFilter.assetHandle) over the EditGateway. Round-trip to Play
 //     is guaranteed by engine writeback _guidForAsset (research Finding 4e).
 //   texture/material branches KEEP HANDLE_CUBE: there the cube is proxy geometry
 //   (a texture/material needs a surface to display on), not a missing-mesh

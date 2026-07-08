@@ -159,12 +159,9 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       const t = (ev.data as { type?: unknown } | null)?.type;
       if (typeof t !== 'string' || !t.startsWith('VAG_')) return;
 
-      // Forward the network stream up to the Studio shell (Network panel). The
-      // shell is one frame above and never sees the engine iframe's postMessage.
-      if (t === 'VAG_NETWORK') {
-        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
-        return;
-      }
+      // VAG_NETWORK: healthBridge (same host window, single-realm) receives the
+      // original message from the engine iframe directly — no forwarding needed.
+      if (t === 'VAG_NETWORK') return;
 
       if (t === 'VAG_FPS_STATS') {
         const r = VagFpsStatsSchema.safeParse(ev.data);
@@ -210,12 +207,8 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         }
         const { level, text } = r.data.payload;
         console[level]('[play]', text);
-        // Forward the FULL console stream (all levels) up to the Studio shell so
-        // its Console panel (store.consoleLog) shows it — the shell is one frame
-        // above this surface and never receives the engine iframe's own
-        // VAG_CONSOLE postMessage directly.
-        try { window.parent?.postMessage(ev.data, '*'); } catch { /* cross-origin */ }
-        // Forward warn+ to the shell health feed; mark fatal region failures.
+        // healthBridge (same host window, single-realm) receives the original
+        // message from the engine iframe and feeds store.consoleLog directly.
         if (level === 'error' || level === 'warn') {
           const reason = level === 'error' ? fatalReason(text) : null;
           forwardHealth(level === 'error' ? 'error' : 'warn', reason ? 'scene-instantiate-failed' : 'vag-console', text);

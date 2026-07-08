@@ -1,4 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { panelBridge } from '@forgeax/editor-core';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -11,9 +13,12 @@ interface Props {
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
+const TIP_W = 260;
+const TIP_GAP = 8;
+
 export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDoubleClick, onContextMenu }: Props) {
   const [hovered, setHovered] = useState(false);
-  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
   const thumb = getThumbnailData(asset);
 
   const handleCtxMenu = useCallback((e: React.MouseEvent) => {
@@ -32,15 +37,11 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
     };
     e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
     e.dataTransfer.effectAllowed = 'copy';
-    try {
-      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_START', ref }, '*');
-    } catch { /* cross-origin */ }
+    panelBridge.emit('dragAssetStart', ref);
   }, [asset]);
 
   const handleDragEnd = useCallback(() => {
-    try {
-      window.parent?.postMessage({ type: 'FORGEAX_DRAG_ASSET_END' }, '*');
-    } catch { /* cross-origin */ }
+    panelBridge.emit('dragAssetEnd');
   }, []);
 
   return (
@@ -53,7 +54,19 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={handleCtxMenu}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        let left = rect.right + TIP_GAP;
+        if (left + TIP_W > vw) left = rect.left - TIP_W - TIP_GAP;
+        if (left < 0) left = TIP_GAP;
+        let top = rect.top;
+        if (top + 140 > vh) top = vh - 140 - TIP_GAP;
+        if (top < 0) top = TIP_GAP;
+        setTipXY({ left, top });
+        setHovered(true);
+      }}
       onMouseLeave={() => setHovered(false)}
     >
       <div
@@ -82,8 +95,8 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
       </div>
       <div className="cb-grid-label" title={asset.name}>{asset.name}</div>
 
-      {hovered && (
-        <div ref={tooltipRef} className="cb-rich-tooltip">
+      {hovered && tipXY && createPortal(
+        <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>
           <div className="cb-tooltip-header">
             <span className="cb-tooltip-icon">{thumb.icon ?? '📦'}</span>
             <span className="cb-tooltip-name">{asset.name}</span>
@@ -95,7 +108,8 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
             <div className="cb-tooltip-row">Size: {(asset.estimatedSize / 1024).toFixed(1)} KB</div>
           )}
           {thumb.badge && <div className="cb-tooltip-row">{thumb.badge}</div>}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

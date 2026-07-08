@@ -5,19 +5,17 @@
 // editor-runtime (P1) is a fixed two-pane layout (Hierarchy + Inspector over the
 // engine canvas), not a dockview workspace yet — so these are intentional no-ops.
 // They keep the ported panels' call sites intact:
-//   • openSourcePanel → P2 will postMessage the parent interface to switch the
-//     ✎ Edit workspace to the originating Workbench plugin ("edit source" round-trip).
+//   • openSourcePanel → switches the ✎ Edit workspace to the originating Workbench
+//     plugin ("edit source" round-trip) via gateway.dispatch (session op).
 //   • focusPanel('timeline') → P2 when a Timeline panel is ported.
 //
 // Kept as thin stubs (rather than deleting the call sites) so re-syncing with the
 // prototype later is a diff, not a rewrite.
+import { gateway } from '../store/gateway';
+
 
 export function openSourcePanel(plugin: string, docId: string): void {
-  try {
-    window.parent?.postMessage({ type: 'VAG_EDITOR_OPEN_SOURCE', payload: { plugin, docId } }, '*');
-  } catch {
-    /* cross-origin — non-fatal */
-  }
+  gateway.dispatch({ kind: 'openSource', plugin, docId });
 }
 
 export function focusPanel(_id: string): boolean {

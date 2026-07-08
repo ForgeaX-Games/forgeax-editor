@@ -37,11 +37,12 @@ import { readdirSync, existsSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 
-// This helper's own directory: packages/edit-runtime/src/engine/. Used to locate
+// This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
 // family is derived from ONE fixed location regardless of which config (root or
 // edit-runtime) consumes the preset — both get the identical SSOT list.
@@ -55,7 +56,7 @@ const EDIT_RUNTIME_DIR = resolve(HELPER_DIR, '..', '..');
 //     workspace symlink graph (packages/*/node_modules/@forgeax/* -> ../../../*)
 //     where one file via combinatorially-many symlink paths becomes a distinct
 //     module -> esbuild blows up; also keeps the editor singletons (editor-shared
-//     EditorBus / active sceneId) a single instance.
+//     EditGateway / active sceneId) a single instance.
 //   - Stays resolvable: all are present here. We must NOT over-exclude with the
 //     full engine/packages tree — transitive-only packages absent from
 //     node_modules (engine-plugin / engine-debug-draw, imported by engine-app /
@@ -83,9 +84,8 @@ function sharedTemplateRoots(): string[] {
   return existsSync(dir) ? [dir] : [];
 }
 function gamePackRoots(gameDirAbs: string): string[] {
-  const perGame = ['assets', 'scenes']
-    .map((d) => join(gameDirAbs, d))
-    .filter((p) => existsSync(p));
+  const config = loadAssetConfig(gameDirAbs);
+  const perGame = (config.roots as string[]).filter((p) => existsSync(p));
   return [...perGame, ...sharedTemplateRoots()];
 }
 
@@ -187,10 +187,11 @@ export interface EngineVitePresetOptions {
   preserveSymlinks?: boolean;
   /**
    * Absolute game dir (from `--game DIR`), or null. When set, register a
-   * pluginPack self-hosting the game's assets/ + scenes/ + shared template roots
-   * so Play's loadByGuid + Edit sub-asset previews resolve WITHOUT proxying to
-   * play-runtime (:15173). null (no --game / demo seed) -> no pluginPack; the
-   * shader plugin alone still serves /shaders/manifest.json for the demo scene.
+   * pluginPack self-hosting the game's asset roots (from package.json
+   * forgeax.assets.roots) + shared template roots so Play's loadByGuid + Edit
+   * sub-asset previews resolve WITHOUT proxying to play-runtime (:15173).
+   * null (no --game / demo seed) -> no pluginPack; the shader plugin alone
+   * still serves /shaders/manifest.json for the demo scene.
    */
   gameDirAbs: string | null;
 }
@@ -245,7 +246,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // Exclude the ENTIRE @forgeax workspace family (engine-* + editor-*) from
       // vite pre-bundling — served as native ESM. SSOT-derived so it can't drift
       // the way the old hand list did; also keeps the editor singletons
-      // (EditorBus / active sceneId in editor-shared) a single shared instance.
+      // (EditGateway / active sceneId in editor-shared) a single shared instance.
       exclude: wsPkgs,
     },
     resolve: {

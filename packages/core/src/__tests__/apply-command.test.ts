@@ -9,7 +9,7 @@
 // via makeEditSession, dispatches the command, and asserts world state via
 // world.get(e, C).
 //
-// Entity IDs: applyCommand's spawnEntity sets `cmd._id = engineHandle` on the
+// Entity IDs: applyCommand's spawnEntity sets `(cmd as any)._id = engineHandle` on the
 // command object itself (side effect). Tests capture the command reference to
 // read the engine-assigned handle after dispatch.
 //
@@ -35,7 +35,7 @@ import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
 import { EditorHidden } from '../components/EditorHidden';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -50,14 +50,18 @@ function createSession(): EditSession {
 }
 
 /** Dispatch spawnEntity and extract the engine entity handle.
- *  applyCommand sets cmd._id = legacy ID; entHandle(session, legacyId) resolves
+ *  applyCommand sets (cmd as any)._id = legacy ID; entHandle(session, legacyId) resolves
  *  the real engine handle from the session's internal map. */
 function spawnEngineHandle(session: EditSession, name: string, parent?: number): { legacyId: number; engineHandle: EntityHandle } {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parent !== undefined ? { parent } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawnCmd failed: ${r.error.hint}`);
-  if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const legacyId = cmd._id;
+  // Post-t6: EditorOp union is open; _id exists on spawnEntity at runtime but
+  // TypeScript cannot narrow through the open tail. Cast for access.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const id = (cmd as any)._id;
+  if (id === undefined) throw new Error('spawnCmd did not set ._id');
+  const legacyId = id as number;
   const engineHandle = entHandle(session, legacyId);
   if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${legacyId}`);
   // entHandle stores raw numbers; this one is a live engine handle, so brand it
@@ -69,10 +73,10 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 1. spawnEntity ──────────────────────────────────────────────────────────
   it('spawnEntity: world.spawn creates entity with Name', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'MyCube' };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'MyCube' };
     const r = applyCommand(session, cmd);
     expect(r.ok).toBe(true);
-    const legacyId = cmd._id!;
+    const legacyId = (cmd as any)._id!;
     const eH = entHandle(session, legacyId)!;
     const nameResult = session.world.get(eH, Name);
     expect(nameResult.ok).toBe(true);
@@ -118,10 +122,10 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 5. setComponent ─────────────────────────────────────────────────────────
   it('setComponent: world.set(e, C, patch) partial update', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, cmd._id!)!;
-    const r = applyCommand(session, { kind: 'setComponent', entity: cmd._id!, component: 'Transform', patch: { posY: 99 } });
+    const eH = entHandle(session, (cmd as any)._id!)!;
+    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
     expect(t.ok).toBe(true);
@@ -142,10 +146,10 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 7. removeComponent ──────────────────────────────────────────────────────
   it('removeComponent: world.removeComponent detaches', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, cmd._id!)!;
-    const r = applyCommand(session, { kind: 'removeComponent', entity: cmd._id!, component: 'MeshFilter' });
+    const eH = entHandle(session, (cmd as any)._id!)!;
+    const r = applyCommand(session, { kind: 'removeComponent', entity: (cmd as any)._id!, component: 'MeshFilter' });
     expect(r.ok).toBe(true);
     expect(session.world.get(eH, MeshFilter).ok).toBe(false);
   });
@@ -171,10 +175,10 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 9. transaction ──────────────────────────────────────────────────────────
   it('transaction: sub-commands execute atomically', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Temp' };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Temp' };
     applyCommand(session, cmd);
-    const eH = entHandle(session, cmd._id!)!;
-    const r = applyCommand(session, { kind: 'transaction', label: 'rename twice', commands: [{ kind: 'rename', entity: cmd._id!, name: 'Renamed' }, { kind: 'rename', entity: cmd._id!, name: 'Final' }] });
+    const eH = entHandle(session, (cmd as any)._id!)!;
+    const r = applyCommand(session, { kind: 'transaction', label: 'rename twice', commands: [{ kind: 'rename', entity: (cmd as any)._id!, name: 'Renamed' }, { kind: 'rename', entity: (cmd as any)._id!, name: 'Final' }] });
     expect(r.ok).toBe(true);
     const nameResult = session.world.get(eH, Name);
     expect(nameResult.ok).toBe(true);

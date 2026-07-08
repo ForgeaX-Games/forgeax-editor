@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { buildPerGameCatalog } from './pack-catalog.js';
@@ -146,18 +147,25 @@ function gamesDirRoot(): string {
 // '' (game served directly under base). No baked layout literal.
 const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX ?? '';
 
-// Scan every game's assets/ dir as a pack root. One-level glob over
-// <gamesDir>/<slug>/assets deliberately excludes nested dirs like
-// shoot/backup/assets, whose .pack.json files reuse the same GUIDs and would
-// trip the scanner's duplicate-guid guard (collapsing the whole catalog).
+// Scan every game's declared asset roots as pack roots. Uses the SSOT
+// (package.json#forgeax.assets.roots via loadAssetConfig) instead of
+// hardcoding 'assets'. One-level glob over <gamesDir>/<slug>/<root>
+// deliberately excludes nested dirs like shoot/backup/assets, whose
+// .pack.json files reuse the same GUIDs and would trip the scanner's
+// duplicate-guid guard (collapsing the whole catalog).
 function gameAssetRoots(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir) return [];
   if (!existsSync(gamesDir)) return [];
-  return readdirSync(gamesDir)
-    .filter(isRealGameSlug)
-    .map((slug) => join(gamesDir, slug, 'assets'))
-    .filter((p) => existsSync(p));
+  const roots: string[] = [];
+  for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
+    const gameDir = join(gamesDir, slug);
+    const config = loadAssetConfig(gameDir);
+    for (const r of config.roots) {
+      if (existsSync(r)) roots.push(r);
+    }
+  }
+  return roots;
 }
 
 // Shared template assets live under the engine vite root (here/shared-assets)
@@ -172,28 +180,27 @@ function sharedAssetRoots(): string[] {
   return existsSync(dir) ? [dir] : [];
 }
 
-// Per-game pack roots: a game's own `assets/` AND `scenes/`. Levels live in
-// scenes/<id>.pack.json (the editor's level discovery scans there — see
-// editor-core store.initSceneList; the game's main.ts loads them by GUID from
-// THIS per-game catalog). Monsters/materials live in assets/. Both dirs are
-// optional; filter to those that exist. Without scenes/ here, asset-first Play
-// can't loadByGuid a level pack that lives in scenes/ (the editor still shows
-// it, but Play 404s the GUID) — keep this in sync with the editor convention.
+// Per-game pack roots: the game's declared asset roots from package.json
+// (forgeax.assets.roots via loadAssetConfig SSOT). Scene packs live alongside
+// other assets under the declared roots (A2/A3: scenes are ordinary assets).
 function perGamePackRoots(slug: string): string[] {
-  const base = join(gamesDirRoot(), slug);
-  return ['assets', 'scenes'].map((d) => join(base, d)).filter((p) => existsSync(p));
+  const gameDir = join(gamesDirRoot(), slug);
+  const config = loadAssetConfig(gameDir);
+  return (config.roots as string[]).filter((p) => existsSync(p));
 }
 
-// Return slugs for every game directory under the host-injected games dir that has
-// an assets/ subdirectory. Symlink game directories are included because
-// existsSync follows symlinks. This mirrors gameAssetRoots() and is the
-// per-game complement.
+// Return slugs for every game directory under the host-injected games dir that
+// has at least one declared asset root. Symlink game directories are included
+// because existsSync follows symlinks. Mirrors gameAssetRoots().
 function gameSlugs(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir || !existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)
-    .filter((slug) => existsSync(join(gamesDir, slug, 'assets')));
+    .filter((slug) => {
+      const config = loadAssetConfig(join(gamesDir, slug));
+      return config.roots.some((r) => existsSync(r));
+    });
 }
 
 // Per-game base-strip: pluginPack's middleware matches per-game routes as
@@ -371,17 +378,26 @@ export default defineConfig({
     forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
-    pluginPack({ roots: gameAssetRoots(), base: '/preview/', importers: [imageImporter, gltfImporter] }) as never,
-    // Second pluginPack instance scoped to shared template assets — needs
-    // imageImporter wired so the .hdr cube-texture sidecar produces a valid
-    // PackEntry (without it, /preview/__import on cold loadByGuid would
-    // mislabel the bare .hdr as rgba8unorm and uploadCubemapFromEquirect
-    // rejects with `invalid-source-format`). Co-existing with the per-game
-    // pluginPack is fine: GUIDs are disjoint by construction.
+    // SINGLE pluginPack instance over game roots + shared template assets.
+    // It was TWO instances (game roots, then shared) — but both register a
+    // vite plugin named 'forgeax:pack', each mounting its OWN `/__import/:guid`
+    // dev middleware. Middlewares run in registration order, and the handler
+    // 404s (`meta-not-found`) + RETURNS on a GUID absent from its own catalog
+    // instead of `next()`-ing. So the first (game-roots) instance swallowed
+    // every request for a shared-asset GUID (the template sky.hdr equirect) →
+    // the shared instance never saw it → `/__import/<sky>` 404 → solid-color
+    // skylight fallback. Merging into ONE instance with the UNION of roots puts
+    // every GUID in a single catalog + single middleware, so the cold-import
+    // cook path resolves shared + per-game GUIDs alike. imageImporter is needed
+    // for the .hdr equirect sidecar (else the bare .hdr is mislabeled rgba8unorm
+    // and uploadCubemapFromEquirect rejects with `invalid-source-format`);
+    // gltfImporter for per-game .glb cooks. A cross-root duplicate GUID no longer
+    // collapses the catalog to []: buildCatalog (build-catalog.ts) degrades to a
+    // per-root scan + first-wins de-dup, dropping only the offending root.
     pluginPack({
-      roots: sharedAssetRoots(),
+      roots: [...gameAssetRoots(), ...sharedAssetRoots()],
       base: '/preview/',
-      importers: [imageImporter],
+      importers: [imageImporter, gltfImporter],
     }) as never,
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,

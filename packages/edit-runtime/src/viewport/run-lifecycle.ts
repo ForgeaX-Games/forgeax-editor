@@ -128,7 +128,7 @@ export interface RunWorld {
   allocSharedRef(kind: string, payload: unknown): unknown;
 }
 
-/** Minimal bus surface (EditorBus, structurally). */
+/** Minimal bus surface (EditGateway, structurally). */
 export interface RunBus {
   readonly doc: EditSession;
   replaceDoc(doc: EditSession): void;

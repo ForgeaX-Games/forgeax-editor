@@ -28,7 +28,11 @@ const Position = defineComponent('Position', {
   y: 'f32',
 });
 
-const Transform = defineComponent('Transform', {
+// A structure-labeled fixture component. Named uniquely (NOT 'Transform') so it
+// cannot overwrite the canonical engine Transform in the shared global registry
+// — a name collision there corrupts other tests in the same process. The local
+// variable stays `Transform` since only the registered NAME must be unique.
+const Transform = defineComponent('NotEditingTransformFixture', {
   posX: 'f32',
   posY: 'f32',
   posZ: 'f32',

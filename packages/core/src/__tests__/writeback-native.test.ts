@@ -109,7 +109,8 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
     // Verify entity names are present.
     const names = sceneAsset.entities.map(
-      (e) => (e.components as Record<string, Record<string, unknown>>)['Name']?.['value'],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (e: any) => (e.components as Record<string, Record<string, unknown>>)['Name']?.['value'],
     );
     expect(names).toContain('Root');
     expect(names).toContain('ChildA');

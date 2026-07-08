@@ -21,7 +21,7 @@ import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Name, Transform } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // M7 / AC-15: sessions built via createEditSession + injected world; legacy ID
 // → engine handle read via entHandle (doc.entities deleted).
@@ -32,12 +32,12 @@ function createSession(): EditSession {
 }
 
 function spawnCmd(session: EditSession, name: string, parentLegacyId?: number): { legacyId: number; engineHandle: EntityHandle } {
-  const cmd: EditorCommand = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, ...(parentLegacyId !== undefined ? { parent: parentLegacyId } : {}) };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`spawn failed: ${r.error.hint}`);
-  const engineHandle = entHandle(session, cmd._id!);
-  if (engineHandle === undefined) throw new Error(`no engineHandle for ${cmd._id}`);
-  return { legacyId: cmd._id!, engineHandle };
+  const engineHandle = entHandle(session, (cmd as any)._id!);
+  if (engineHandle === undefined) throw new Error(`no engineHandle for ${(cmd as any)._id}`);
+  return { legacyId: (cmd as any)._id!, engineHandle };
 }
 
 describe('inverse commands (GREEN)', () => {
@@ -72,15 +72,15 @@ describe('inverse commands (GREEN)', () => {
     expect(r.ok).toBe(true);
     expect(session.world.get(root.engineHandle, Name).ok).toBe(false);
 
-    const inverse = (r as { ok: true; inverse: EditorCommand }).inverse;
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
     const undoR = applyCommand(session, inverse);
     expect(undoR.ok).toBe(true);
 
     // Verify the inverse spawns entities with the right names
     if (inverse.kind === 'transaction') {
-      for (const sub of inverse.commands) {
+      for (const sub of (inverse as any).commands) {
         if (sub.kind === 'spawnEntity') {
-          const spawnedId = sub._id!;
+          const spawnedId = (sub as any)._id! as number;
           const handle = entHandle(session, spawnedId);
           expect(handle).toBeDefined();
           if (handle !== undefined) {
@@ -95,17 +95,17 @@ describe('inverse commands (GREEN)', () => {
   // ── (b) setComponent ────────────────────────────────────────────────────────
   it('(b) setComponent: inverse patch contains only changed keys', () => {
     const session = createSession();
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
     applyCommand(session, cmd);
-    const eH = entHandle(session, cmd._id!)!;
+    const eH = entHandle(session, (cmd as any)._id!)!;
 
-    const r = applyCommand(session, { kind: 'setComponent', entity: cmd._id!, component: 'Transform', patch: { posY: 99 } });
+    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
     expect(t.ok).toBe(true);
     if (t.ok) expect(t.value.posY).toBe(99);
 
-    const inverse = (r as { ok: true; inverse: EditorCommand }).inverse;
+    const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
     expect(inverse.kind).toBe('setComponent');
     const invPatch = (inverse as { patch: Record<string, unknown> }).patch;
     expect(Object.keys(invPatch)).toEqual(['posY']);

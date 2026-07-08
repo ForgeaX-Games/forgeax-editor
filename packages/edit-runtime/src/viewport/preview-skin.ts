@@ -5,12 +5,7 @@
 // world-loose (matching main.tsx's `as never` engine access).
 
 import { Skin, Transform } from '@forgeax/engine-runtime';
-
-/** Minimal world surface used here (mirrors main.tsx's loose engine access). */
-interface LooseWorld {
-  get(entity: unknown, component: unknown): { ok: boolean; value?: unknown };
-  set(entity: unknown, component: unknown, data: unknown): unknown;
-}
+import type { EngineFacade, EntityHandle } from '@forgeax/editor-core';
 
 /**
  * Normalize the preview character so it stands at the origin: scale the skin
@@ -26,13 +21,22 @@ interface LooseWorld {
  * Returns false when the skin/joints/root transform can't be read.
  */
 export function normalizeSkinTransform(
-  world: LooseWorld,
+  engine: EngineFacade,
   opts: { skinEntity: unknown; skinRoot: unknown; targetHeight?: number },
 ): boolean {
+  // M3 t20 (S4 / AC-05): all engine access goes through the injected EngineFacade
+  // (ctx.engine proxy). skinEntity / joint / skinRoot are opaque engine entity
+  // handles (branded numbers minted by the engine instantiate path) — cast to the
+  // facade's number-entity surface at this loose boundary (the editor's `as never`
+  // discipline for handles it never inspects). The Transform normalize write is
+  // now trace-visible; it is view scaffolding, so not undo/ledger.
   const { skinEntity, skinRoot } = opts;
   const targetHeight = opts.targetHeight ?? 1.9;
+  // skinEntity / joint / skinRoot are opaque engine EntityHandles minted by the
+  // engine instantiate path; brand them for the strict facade get/set surface.
+  const eid = (h: unknown): EntityHandle => h as EntityHandle;
 
-  const skinRes = world.get(skinEntity, Skin);
+  const skinRes = engine.get(eid(skinEntity), Skin);
   if (!skinRes.ok || !skinRes.value) return false;
   const joints = (skinRes.value as { joints?: ArrayLike<number> }).joints;
   if (!joints || joints.length === 0) return false;
@@ -43,7 +47,7 @@ export function normalizeSkinTransform(
   for (let i = 0; i < joints.length; i++) {
     const ent = joints[i];
     if (ent === undefined) continue;
-    const tr = world.get(ent, Transform);
+    const tr = engine.get(eid(ent), Transform);
     if (!tr.ok || !tr.value) continue;
     const m = (tr.value as { world?: ArrayLike<number> }).world;
     if (!m || m.length < 16) continue;
@@ -55,7 +59,7 @@ export function normalizeSkinTransform(
   if (counted === 0) return false;
 
   // Current root transform (identity rotation, uniform scale assumed).
-  const rootRes = world.get(skinRoot, Transform);
+  const rootRes = engine.get(eid(skinRoot), Transform);
   if (!rootRes.ok || !rootRes.value) return false;
   const root = rootRes.value as { posX: number; posY: number; posZ: number; scaleX: number };
   const p = [root.posX, root.posY, root.posZ];
@@ -72,7 +76,7 @@ export function normalizeSkinTransform(
   const modelCenterZ = (centerWZ - p[2]!) / s;
   const modelMinY = (minY - p[1]!) / s;
 
-  world.set(skinRoot, Transform, {
+  engine.set(eid(skinRoot), Transform, {
     posX: -sNew * modelCenterX,
     posY: -sNew * modelMinY,
     posZ: -sNew * modelCenterZ,

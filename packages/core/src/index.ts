@@ -6,8 +6,8 @@
 // Re-exports:
 //   Scene types (EntityId, EntityNode, EditSession, SceneAsset, EntitySource)
 //   Scene pack (isScenePack, stableGuid, CUBE_GUID, SPHERE_GUID)
-//   EditorCommand & types
-//   EditorBus & bus types
+//   EditorOp & types
+//   EditGateway & gateway types
 //   Command session (createEditSession, applyCommand, etc.)
 //   Component schema (listComponentSchemas, getComponentSchema, etc.)
 //   Sync channel (EditorRole, SyncPanelId, EditorSnapshot, EditorSyncMsg, etc.)
@@ -29,7 +29,8 @@ export type {
 // the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorCommand, CommandError, ApplyResult } from './types';
+export type { EditorOp, CommandError, ApplyResult } from './types';
+export type { EditorOpLifecycle } from './types';
 
 // ── Scene pack ──
 // M1: validatePackShell + PackShellValidationError exported for AI-user discovery
@@ -44,14 +45,44 @@ export {
 } from './scene/scene-pack';
 export type { ScenePack, PackFile, ValidatePackShellResult } from './scene/scene-pack';
 
-// ── Bus ──
-export { EditorBus } from './io/bus';
+// ── Gateway ──
+export { EditGateway } from './io/gateway';
 export type {
   BusListener,
   DispatchResult,
   CommandOrigin,
   HistoryStep,
-} from './io/bus';
+  OpHandle,
+  ApplierCtx,
+} from './io/gateway';
+// M3 t16 (plan-strategy §2 D-2 / research F-3): the EngineFacade TYPE is the
+// controlled-write-proxy contract edit-runtime types its view-scaffold signatures
+// against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only export — no
+// runtime symbol added to the barrel (index.ts fan-in budget unaffected, D-8).
+export type { EngineFacade } from './io/engine-facade';
+
+// ── M5 eval channel (plan-strategy §2 D-4, D-8) ──
+// createEvalChannel is the single runtime export for the dev-accessible AI eval
+// channel. Consumed by edit-runtime to mount on globalThis.__forgeaxEval (Q-5).
+// EvalChannel type is type-only: edit-runtime types its globalThis hook against it.
+export { createEvalChannel } from './io/channel';
+export type { EvalChannel, EvaluateResult } from './io/channel';
+
+// SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last()
+// (D-3 / AC-09). Type-only export so an AI consumer writing typed code against the
+// trace read API can name the return shape. verify F-V1.
+export type { SpanNode } from './io/trace';
+
+// ── Catalog (M4 listOps / argsSchema / OpDescriptor) ──
+export type { OpDescriptor, ArgsSchema } from './io/catalog';
+
+// ── D-11 downstream session-applier seam ──
+// edit-runtime registers the real play/stop applier at boot through this seam
+// (injection direction edit-runtime→core, same shape as the ApiClient backend
+// seam — does not violate the DAG). Exposed on the barrel so the DAG-downstream
+// package can reach it (it may only import the published surface).
+export { registerSessionApplier } from './io/appliers';
+export type { SessionApplier, SessionApplierMeta } from './io/appliers';
 
 // ── Edit session (authoring working state) ──
 // M7 / AC-15: makeEditSession/projectSessionAsset/cloneEditSession deleted
@@ -109,6 +140,15 @@ export { hexToFloat, floatToHex } from './util/color-utils';
 // ── Cross-panel types ──
 export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
 
+// ── Panel bridge (typed event bus, replaces legacy postMessage self-posting) ──
+export { panelBridge, editorBus } from './io/panel-bridge';
+export type { PanelBridgeEvents, EditorBusEvents, EditorRefPayload } from './io/panel-bridge';
+export { installEditorBusCompat } from './io/editor-bus-compat';
+
+// ── Panel ops (session domain: focusPanel, openSource) ──
+// Side-effect import: registers appliers into sessionAppliers at module eval.
+import './store/panel-ops';
+
 // ── Assets ──
 export {
   loadRawAssets,
@@ -161,28 +201,25 @@ export {
 export { EDITOR_PANELS } from './manifest';
 export type { EditorPanelId } from './manifest';
 
-// ── Store (bus singleton — bus, selection, scene persistence) ──
+// ── Store (gateway singleton — gateway, selection, scene persistence) ──
+// M3 (AC-08, D-6): the 11 store OP SETTERS are SEALED — no longer on the barrel.
+// Every state mutation is a gateway op now (gateway.dispatch / begin…commit); the
+// sealed names (setSelection/setSelectionMany/toggleSelection/setGizmoMode/
+// setHoverEntity/setFieldPreview/setAssetSelection/saveDocToDisk/setSceneId/
+// requestFrame/requestRename) and the `dispatch` wrapper were removed from the
+// published surface. Getters/hooks/subscribe/async-scene ops stay public
+// (consumers READ state and await async loads). D-5 exemptions (ref-request /
+// mesh-stats / assets-changed / disk-watch) and doc-version/gateway infra are unchanged.
 export {
-  bus,
-  dispatch,
+  gateway,
   getSceneId,
   getSelection,
   getSelectionList,
   getGizmoMode,
   replaceDoc,
-  saveDocToDisk,
-  setGizmoMode,
-  setSceneId,
-  setSelection,
-  setSelectionMany,
-  setHoverEntity,
-  setFieldPreview,
-  toggleSelection,
   onSelectionChange,
   onRenameRequest,
-  requestRename,
   onGizmoModeChange,
-  requestFrame,
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
@@ -214,7 +251,6 @@ export {
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
-  setAssetSelection,
   getAssetSelection,
   useAssetSelection,
   onAssetSelectionChange,
@@ -237,6 +273,9 @@ export {
 // ── Context menu service ──
 export { ContextMenuHost, showContextMenu } from './ui/context-menu-service';
 export type { MenuItemDef } from './ui/context-menu-service';
+
+// ── Resize primitive (shared splitter: drag handle + persisted size hook) ──
+export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './io/dock-bridge';
@@ -285,6 +324,6 @@ export {
 } from './io/clip-control';
 export type { ClipControl, ViewCmd } from './io/clip-control';
 
-// UI 语义操作层(P1-12):面板 action 登记 → interface host 的 ActionRegistry。
+// UI action registration: panel action register -> interface host ActionRegistry.
 export { registerPanelAction } from './io/action-bridge';
 export type { PanelActionDef, PanelActionResult } from './io/action-bridge';

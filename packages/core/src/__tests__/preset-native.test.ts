@@ -38,7 +38,7 @@ import {
 import { applyCommand, createEditSession } from '../session/document';
 import { entHandle } from '../store/entity-state';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../scene/presets';
-import type { EditorCommand, EditSession } from '../types';
+import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -57,11 +57,12 @@ function presetSpawn(
   const preset = getPreset(presetLabel);
   if (!preset) throw new Error(`preset ${presetLabel} not found`);
   const components = buildPresetComponents(preset);
-  const cmd: EditorCommand = { kind: 'spawnEntity', name: preset.label, components };
+  const cmd: EditorOp = { kind: 'spawnEntity', name: preset.label, components };
   const r = applyCommand(session, cmd);
   if (!r.ok) throw new Error(`preset spawn ${presetLabel} failed: ${r.error.hint}`);
-  if (cmd._id === undefined) throw new Error('spawnCmd did not set ._id');
-  const engineHandle = entHandle(session, cmd._id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((cmd as any)._id === undefined) throw new Error('spawnCmd did not set ._id');
+  const engineHandle = entHandle(session, (cmd as any)._id);
   if (engineHandle === undefined) throw new Error(`no engineHandle for legacyId ${cmd._id}`);
   return engineHandle;
 }
@@ -82,15 +83,19 @@ describe('preset — Object', () => {
     }
   });
 
-  it('Object preset: RED — MeshRenderer{materials} exists on world entity', () => {
-    // RED: old Object preset uses 'Material' not 'MeshRenderer'
+  it('Object preset: MeshRenderer exists with EMPTY materials (engine default-material fallback)', () => {
+    // The Object preset carries a MeshFilter; spawnComponentData auto-adds a
+    // MeshRenderer so the entity is renderable. That MeshRenderer has EMPTY
+    // materials (NOT a synthetic uncataloged MaterialAsset handle, which would
+    // abort save via SceneCollectAssetGuidUnresolvedError) — the engine's own
+    // default-material fallback paints it mid-grey and it serializes cleanly.
     const s = createSession();
     const eH = presetSpawn(s, 'Object');
     const mr = s.world.get(eH, MeshRenderer);
     expect(mr.ok).toBe(true);
     if (mr.ok) {
       const mats = mr.value.materials as ReadonlyArray<unknown>;
-      expect(mats.length).toBeGreaterThan(0);
+      expect(mats.length).toBe(0);
     }
   });
 });
@@ -138,12 +143,12 @@ describe('preset — Point Light', () => {
     expect(p).toBeDefined();
     if (!p) return; // RED short-circuit — no preset yet
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const pl = s.world.get(eH, PointLight);
     expect(pl.ok).toBe(true);
@@ -164,12 +169,12 @@ describe('preset — Spot Light', () => {
     expect(p).toBeDefined();
     if (!p) return;
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const sl = s.world.get(eH, SpotLight);
     expect(sl.ok).toBe(true);
@@ -190,12 +195,12 @@ describe('preset — Directional Light', () => {
     expect(p).toBeDefined();
     if (!p) return;
     const components = buildPresetComponents(p);
-    const cmd: EditorCommand = { kind: 'spawnEntity', name: p.label, components };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: p.label, components };
     const r = applyCommand(s, cmd);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    if (cmd._id === undefined) return;
-    const eH = entHandle(s, cmd._id);
+    if ((cmd as any)._id === undefined) return;
+    const eH = entHandle(s, (cmd as any)._id);
     if (eH === undefined) return;
     const dl = s.world.get(eH, DirectionalLight);
     expect(dl.ok).toBe(true);
