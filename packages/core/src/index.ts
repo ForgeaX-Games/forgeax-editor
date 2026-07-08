@@ -140,6 +140,11 @@ export { hexToFloat, floatToHex } from './util/color-utils';
 // ── Cross-panel types ──
 export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
 
+// ── Typed event bus (replaces legacy postMessage self-posting) ──
+export { editorBus } from './io/editor-bus';
+export type { EditorBusEvents, EditorRefPayload } from './io/editor-bus';
+export { installEditorBusCompat } from './io/editor-bus-compat';
+
 // ── Assets ──
 export {
   loadRawAssets,

@@ -1,6 +1,6 @@
 /**
  * Content Browser → scene spawn (Add to Scene / drag-drop).
- * Runs on the MAIN viewport bus — ep:* panel iframes forward via BroadcastChannel.
+ * Single-realm: panels and viewport share the same host window.
  */
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
 import { apiFetch } from '../io/api-client';
