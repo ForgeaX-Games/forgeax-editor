@@ -131,7 +131,15 @@ async function bakeHdrEquirect(
     decodeImage: async () => {
       throw new Error('decodeImage seam unused on the .hdr bare-source bake path');
     },
-    subAssets: [{ guid, sourceIndex: 0, kind: 'image' as const }],
+    // Post feat-20260630 the image-importer's `.hdr` arm folds ONLY
+    // `kind:'equirect'` sub-assets (image-importer.ts: `if (sub.kind !==
+    // 'equirect') continue`) into a 2D rgba16float EquirectAsset POD. Requesting
+    // `kind:'image'` here made the importer produce nothing ("importer produced
+    // no asset"), so every HDR bake silently failed and the equirect arm fell
+    // through to a raw-.hdr row (rgba8unorm, no .bin). The runtime equirectLoader
+    // needs the baked .bin, so the skybox never loaded and the preview viewport
+    // fell back to the camera clear-color.
+    subAssets: [{ guid, sourceIndex: 0, kind: 'equirect' as const }],
     importSettings: { colorSpace: 'linear' as const, mipmap: false },
   };
   let produced: readonly { guid: string; payload: unknown }[];
@@ -141,6 +149,8 @@ async function bakeHdrEquirect(
     console.warn(`[forgeax-pack] hdr bake: importer threw for ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
+  // EquirectAsset mirrors TextureAsset's 2D-image surface (width/height/format/
+  // data), so the byte extraction below is identical for either payload shape.
   const tex = produced.find((a) => a.guid.toLowerCase() === guidLower)?.payload as TextureAsset | undefined;
   if (tex === undefined) {
     console.warn(`[forgeax-pack] hdr bake: importer produced no asset for ${sourceAbsPath}`);
