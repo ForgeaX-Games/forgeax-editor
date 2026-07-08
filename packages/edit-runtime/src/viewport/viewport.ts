@@ -218,6 +218,20 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     { title: 'Orbit camera' },
   );
 
+  // ── requestFrame session op (D-10 → edit-runtime migration) ─────────────────
+  // The "frame selection in viewport" pulse. Inspector Focus button and AI both
+  // dispatch { kind: 'requestFrame' } through the gateway; the applier calls the
+  // closure-local frameSelection() which re-aims the orbit camera on the selected
+  // entity. Same registerSessionApplier pattern as cameraOrbit / play / stop.
+  const unregRequestFrame = registerSessionApplier(
+    'requestFrame',
+    (_op, _ctx): { ok: true } => {
+      frameSelection();
+      return { ok: true };
+    },
+    { title: 'Frame selection in viewport' },
+  );
+
   // ── gizmo (3 axis handles on the selection) ────────────────────────────────
   // Shape follows the mode (design §3): translate/scale → axis BARS; rotate →
   // axis RINGS (circles in each axis plane). Rings are built from a pool of small
@@ -923,7 +937,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
     else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
     else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
-    else if (k === 'f') frameSelection();
+    else if (k === 'f') gateway.dispatch({ kind: 'requestFrame' });
   }
 
   // double-click an entity → select + frame it.
@@ -931,7 +945,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     if (overPanel(e.target)) return;
     if (inputToGame()) return; // play·game: no editor double-click select/frame
     const hit = pick(e.clientX, e.clientY);
-    if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); frameSelection(); }
+    if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); gateway.dispatch({ kind: 'requestFrame' }); }
   }
 
   window.addEventListener('pointerdown', onDown);
@@ -985,6 +999,7 @@ onDisplayModeChange(() => refreshGizmos());
       unsubMode();
       unsubDoc();
       unregCameraOrbit();
+      unregRequestFrame();
       despawnHandles();
       despawnParam();
     },
