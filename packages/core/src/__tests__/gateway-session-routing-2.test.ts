@@ -1,27 +1,29 @@
-// m2-w2 — TDD: session-domain routing for frame-request / rename-request /
-// scene-persistence (RED phase)
+// m2-w2 — TDD: session-domain routing for rename-request / scene-persistence
+// and requestFrame headless behavior.
 //
 // feat-20260706-editor-op-gateway-single-entry-b-catalog-defineop M2:
-// requestFrame (fire-only pulse), requestRename (fire-with-id) and the
-// scene-persistence setters (setSceneId / switchSceneFile / initSceneList /
-// createSceneFile / saveDocToDisk / loadDocFromDisk) are collected as SESSION-
-// domain ops — routed through the gateway, landing in the ledger, never the undo
-// stack. At RED (before m2-w7/m2-w8) sessionAppliers lacks these kinds, so
-// dispatch returns UNKNOWN_OP.
+// requestRename (fire-with-id) and the scene-persistence setters
+// (setSceneId / switchSceneFile / initSceneList / createSceneFile /
+// saveDocToDisk / loadDocFromDisk) are collected as SESSION-domain ops —
+// routed through the gateway, landing in the ledger, never the undo stack.
+//
+// requestFrame's applier was migrated to edit-runtime (viewport closure) via
+// registerSessionApplier — same pattern as cameraOrbit / play / stop (D-11).
+// In headless core (no edit-runtime boot), requestFrame returns UNKNOWN_OP.
 //
 // NOTE on scope (task m2-w2 (d)): save/load involve the engine pack contract
 // (rootsToSceneAsset). This headless test does NOT exercise real persistence —
 // it verifies the DISPATCH PATH reaches the ledger and the undo stack stays
-// frozen (AC-02). The frame-request / rename-request / setSceneId paths run for
-// real (no engine IO). switchSceneFile/createSceneFile/save/load are asserted at
+// frozen (AC-02). The rename-request / setSceneId paths run for real (no
+// engine IO). switchSceneFile/createSceneFile/save/load are asserted at
 // the op level (dispatch → ledger) via test-double appliers registered on a
 // throwaway gateway, because their real bodies hit /api/files and localStorage
 // which a bun headless run cannot host.
 //
 // Constraints from upstream:
 //   requirements AC-02: every session op is AI-dispatchable and lands in ledger
-//   plan-strategy §2 D-10: requestFrame collected as session op; onFrameRequest
-//     (zero-consumer dead export) removed on collection — tests do not depend on it
+//   plan-strategy §2 D-10: requestFrame collected as session op
+//   D-11: requestFrame applier registered by edit-runtime (like play/stop)
 //   research F2: frame-request / rename-request / scene-persistence setter list
 //
 // Anchors:
@@ -34,10 +36,6 @@ import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
 import { gateway } from '../store/gateway';
-// M3 t22: write-side setter sugar deleted (S10) — dispatch through the gateway
-// door directly; side-effect imports keep the session appliers registered and
-// expose the read-side accessors.
-import '../store/frame-request';
 import { onRenameRequest } from '../store/rename-request';
 import { getSceneId } from '../store/scene-persistence';
 
@@ -51,35 +49,23 @@ describe('session routing — frame-request (m2-w2)', () => {
   let gw: EditGateway;
   beforeEach(() => { gw = new EditGateway(createSession()); });
 
-  // D-10: onFrameRequest is a zero-consumer dead export removed on collection.
-  // requestFrame's observable session-op contract is now the ledger entry (a
-  // fire-only pulse); the applier fires its internal listener set (empty today)
-  // and the dispatch records the op.
+  // requestFrame's applier is registered by edit-runtime's createViewport() via
+  // registerSessionApplier (same pattern as cameraOrbit / play / stop — D-11).
+  // In headless core (no edit-runtime boot), the applier is absent → UNKNOWN_OP.
+  // This matches the play/stop headless behavior exactly.
 
-  it('(a) requestFrame op dispatches without error (fire-only pulse, no value)', () => {
+  it('(a) requestFrame returns UNKNOWN_OP in headless core (applier in edit-runtime)', () => {
     const r = gw.dispatch({ kind: 'requestFrame' } as EditorOp);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('UNKNOWN_OP');
   });
 
-  it('(b) requestFrame grows ledger, not undo', () => {
+  it('(b) requestFrame does not grow ledger or undo in headless core', () => {
     const undoBefore = gw.appliedCount();
     const ledgerBefore = gw.ledger.length;
     gw.dispatch({ kind: 'requestFrame' } as EditorOp);
-    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.ledger.length).toBe(ledgerBefore);
     expect(gw.appliedCount()).toBe(undoBefore);
-    expect(gw.ledger[gw.ledger.length - 1]!.kind).toBe('requestFrame');
-  });
-
-  it('(c) requestFrame is AI-dispatchable with a distinguishable origin', () => {
-    gw.dispatch({ kind: 'requestFrame' } as EditorOp, 'ai');
-    expect(gw.origins[gw.origins.length - 1]).toBe('ai');
-  });
-
-  it('requestFrame dispatched through the singleton gateway grows the ledger', () => {
-    // The app-level singleton gateway is the one door — a bare dispatch records it.
-    const ledgerBefore = gateway.ledger.length;
-    gateway.dispatch({ kind: 'requestFrame' } as EditorOp);
-    expect(gateway.ledger.length).toBe(ledgerBefore + 1);
   });
 });
 
