@@ -77,6 +77,16 @@ export type QuerySnapshotFn = (descriptor: QuerySnapshotDescriptor) => QuerySnap
  * - OpaqueHandle for managed handle/string/buffer fields
  * - plain number[] snap-copy for array fields
  */
+/** Fixed arity N of an `array<T, N>` schema type string, or undefined for a
+ *  scalar / variable-length `array<T>` field. Mirrors engine
+ *  parseManagedArraySchema's fixed-capacity arm without importing an ECS internal. */
+function fixedArrayArity(fieldType: string): number | undefined {
+  const m = /^array<[^,>]+,\s*(\d+)\s*>$/.exec(fieldType);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 function snapFieldValue(
   fieldType: string,
   rawValue: unknown,
@@ -195,14 +205,25 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
         for (const [fieldName, col] of Object.entries(compBundle)) {
           if (col && typeof col === 'object') {
             // TypedArray / ManagedColumnReader access
-            const colObj = col as { length?: number; [index: number]: unknown; get?: (i: number) => unknown };
-            if (i < (colObj.length ?? 0)) {
+            const colObj = col as { length?: number; subarray?: (a: number, b: number) => unknown; [index: number]: unknown; get?: (i: number) => unknown };
+            const fieldType: string | undefined = schema?.[fieldName] as string | undefined;
+            // Inline `array<T,N>` columns (feat-20260602) surface as a FLAT
+            // stride-N TypedArray: row `i` lives at [i*N, (i+1)*N), not at [i]
+            // (engine query.ts arity-aware slicing). Detect the fixed arity from
+            // the schema type and read the per-row sub-array before snapshotting.
+            const arity = fieldType ? fixedArrayArity(fieldType) : undefined;
+            if (arity !== undefined && typeof colObj.subarray === 'function') {
+              const base = i * arity;
+              if (base < (colObj.length ?? 0)) {
+                const rowView = colObj.subarray(base, base + arity);
+                fields[fieldName] = snapFieldValue(fieldType!, rowView);
+              }
+            } else if (i < (colObj.length ?? 0)) {
               const rawValue = typeof colObj.get === 'function' ? colObj.get(i) : colObj[i];
 
               // Apply value-safety classification (t26)
               // Schema field type may not be available (e.g. Entity component),
               // fall back to raw value as-is.
-              const fieldType: string | undefined = schema?.[fieldName] as string | undefined;
               if (!fieldType) {
                 // No schema info — return raw value as-is (best effort)
                 fields[fieldName] = rawValue;

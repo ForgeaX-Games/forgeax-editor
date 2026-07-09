@@ -31,11 +31,11 @@ function createSession(): EditSession {
   return session;
 }
 
-function spawnEntity(gw: EditGateway, name: string, posX: number, posY: number): number {
+function spawnEntity(gw: EditGateway, name: string, x: number, y: number): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX, posY, posZ: 0 } },
+    components: { Transform: { pos: [x, y, 0] } },
   };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn "${name}" failed`);
@@ -96,7 +96,7 @@ describe('querySnapshot dynamic resolution (t25, AC-14)', () => {
     expect(ids).toContain(e1);
   });
 
-  it('snapshot posY matches world.get Transform.posY', () => {
+  it('snapshot pos[1] matches world.get Transform.pos[1]', () => {
     const e = spawnEntity(gw, 'ball', 10, 25);
     const h = (e as EntityId as EntityHandle) as EntityHandle;
 
@@ -105,13 +105,14 @@ describe('querySnapshot dynamic resolution (t25, AC-14)', () => {
 
     const tr = gw.doc.world!.get(h, Transform);
     if (!tr.ok) return;
-    const worldPosY = (tr.value as unknown as { posY: number }).posY;
+    const worldPosY = (tr.value as unknown as { pos: number[] }).pos[1];
 
     const row = rows.find((r) => r.entity === e);
     if (row) {
       const tf = row['Transform'] as Record<string, unknown> | undefined;
       if (tf) {
-        expect(tf['posY']).toBe(worldPosY);
+        const pos = tf['pos'] as number[] | undefined;
+        expect(pos?.[1]).toBe(worldPosY);
       }
     }
   });
@@ -137,7 +138,7 @@ describe('querySnapshot non-whitelist components (t27a, AC-14)', () => {
   });
 
   it('MeshFilter component can be queried dynamically', () => {
-    spawnEntityWithComponents(gw, 'mesh-obj', { Transform: { posX: 0, posY: 0, posZ: 0 }, MeshFilter: {} });
+    spawnEntityWithComponents(gw, 'mesh-obj', { Transform: { pos: [0, 0, 0] }, MeshFilter: {} });
     const rows = snap(gw, ['MeshFilter']);
     // At least one row because we spawned an entity with MeshFilter
     expect(rows.length).toBeGreaterThanOrEqual(1);
@@ -145,21 +146,21 @@ describe('querySnapshot non-whitelist components (t27a, AC-14)', () => {
   });
 
   it('PointLight component can be queried dynamically', () => {
-    spawnEntityWithComponents(gw, 'light-obj', { Transform: { posX: 0, posY: 0, posZ: 0 }, PointLight: {} });
+    spawnEntityWithComponents(gw, 'light-obj', { Transform: { pos: [0, 0, 0] }, PointLight: {} });
     const rows = snap(gw, ['PointLight']);
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows[0]).toHaveProperty('PointLight');
   });
 
   it('Skylight component can be queried dynamically', () => {
-    spawnEntityWithComponents(gw, 'sky', { Transform: { posX: 0, posY: 0, posZ: 0 }, Skylight: {} });
+    spawnEntityWithComponents(gw, 'sky', { Transform: { pos: [0, 0, 0] }, Skylight: {} });
     const rows = snap(gw, ['Skylight']);
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows[0]).toHaveProperty('Skylight');
   });
 
   it('Camera component can be queried dynamically', () => {
-    spawnEntityWithComponents(gw, 'cam', { Transform: { posX: 0, posY: 0, posZ: 0 }, Camera: {} });
+    spawnEntityWithComponents(gw, 'cam', { Transform: { pos: [0, 0, 0] }, Camera: {} });
     const rows = snap(gw, ['Camera']);
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows[0]).toHaveProperty('Camera');
@@ -167,7 +168,7 @@ describe('querySnapshot non-whitelist components (t27a, AC-14)', () => {
 
   it('multiple non-whitelist components queried together', () => {
     spawnEntityWithComponents(gw, 'multi', {
-      Transform: { posX: 0, posY: 0, posZ: 0 },
+      Transform: { pos: [0, 0, 0] },
       MeshFilter: {},
       PointLight: {},
     });
@@ -213,7 +214,7 @@ describe('querySnapshot value safety (t27b RED, AC-15)', () => {
   // GREEN: with t26, returns {kind:'opaque-handle', type:'shared<EquirectAsset>', raw}
   it('handle-type field (shared<T>) must return OpaqueHandle', () => {
     spawnEntityWithComponents(gw, 'sky', {
-      Transform: { posX: 0, posY: 0, posZ: 0 },
+      Transform: { pos: [0, 0, 0] },
       Skylight: {},
     });
     const rows = snap(gw, ['Skylight']);
@@ -233,13 +234,13 @@ describe('querySnapshot value safety (t27b RED, AC-15)', () => {
     const row = rows[0]!;
     const tf = row['Transform'] as Record<string, unknown> | undefined;
     if (!tf) return;
-    tf['posY'] = 999;
+    (tf['pos'] as number[])[1] = 999;
     const rows2 = snap(gw, ['Transform']);
     const row2 = rows2.find((r) => r.entity === row.entity);
     if (row2) {
       const tf2 = row2['Transform'] as Record<string, unknown> | undefined;
       if (tf2) {
-        expect(tf2['posY']).toBe(20);
+        expect((tf2['pos'] as number[])[1]).toBe(20);
       }
     }
   });
@@ -261,7 +262,7 @@ describe('querySnapshot value safety (t27b RED, AC-15)', () => {
 
   // When there are no managed/snappable fields, the snapshot should work fine
   it('non-managed component snapshots work correctly', () => {
-    spawnEntityWithComponents(gw, 'cam', { Transform: { posX: 0, posY: 0, posZ: 0 }, Camera: {} });
+    spawnEntityWithComponents(gw, 'cam', { Transform: { pos: [0, 0, 0] }, Camera: {} });
     const rows = snap(gw, ['Transform', 'Camera']);
     expect(rows.length).toBeGreaterThanOrEqual(1);
   });

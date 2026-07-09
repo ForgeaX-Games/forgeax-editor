@@ -38,7 +38,7 @@ function makeScene(world: World, entities: Array<{ name: string; pos: Vec3 }>): 
     entities: entities.map((e, i) => ({
       localId: i as number,
       components: {
-        Transform: { posX: e.pos.x, posY: e.pos.y, posZ: e.pos.z, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
     })),
@@ -118,7 +118,7 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
     if (box === null) return;
 
     // Mutate transform position.
-    const setRes = world.set(box, Transform, { posX: 99, posY: 88 });
+    const setRes = world.set(box, Transform, { pos: [99, 88, 0] });
     expect(setRes.ok).toBe(true);
 
     // Spawn a runtime entity (not part of any SceneInstance).
@@ -127,7 +127,7 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
       data: { value: 'Bullet' },
     }, {
       component: Transform,
-      data: { posX: 50, posY: 50, posZ: 50, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [50, 50, 50], scale: [1, 1, 1] },
     });
     expect(spawnRes.ok).toBe(true);
     if (!spawnRes.ok) return; // narrow Result so spawnRes.value (EntityHandle) resolves
@@ -168,7 +168,7 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
       data: { value: 'RuntimeThing' },
     }, {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0, 0], scale: [1, 1, 1] },
     });
 
     // ■ Stop: despawn the scene instance entirely.

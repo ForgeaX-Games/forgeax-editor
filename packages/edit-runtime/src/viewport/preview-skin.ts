@@ -61,9 +61,9 @@ export function normalizeSkinTransform(
   // Current root transform (identity rotation, uniform scale assumed).
   const rootRes = engine.get(eid(skinRoot), Transform);
   if (!rootRes.ok || !rootRes.value) return false;
-  const root = rootRes.value as { posX: number; posY: number; posZ: number; scaleX: number };
-  const p = [root.posX, root.posY, root.posZ];
-  const s = root.scaleX || 1;
+  const root = rootRes.value as { pos: ArrayLike<number>; scale: ArrayLike<number> };
+  const p = [root.pos[0] ?? 0, root.pos[1] ?? 0, root.pos[2] ?? 0];
+  const s = root.scale[0] || 1;
 
   const worldHeight = Math.max(maxX - minX, maxY - minY, maxZ - minZ) || 1;
   const sNew = (targetHeight * s) / worldHeight;
@@ -77,11 +77,9 @@ export function normalizeSkinTransform(
   const modelMinY = (minY - p[1]!) / s;
 
   engine.set(eid(skinRoot), Transform, {
-    posX: -sNew * modelCenterX,
-    posY: -sNew * modelMinY,
-    posZ: -sNew * modelCenterZ,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: sNew, scaleY: sNew, scaleZ: sNew,
+    pos: [-sNew * modelCenterX, -sNew * modelMinY, -sNew * modelCenterZ],
+    quat: [0, 0, 0, 1],
+    scale: [sNew, sNew, sNew],
   });
   return true;
 }

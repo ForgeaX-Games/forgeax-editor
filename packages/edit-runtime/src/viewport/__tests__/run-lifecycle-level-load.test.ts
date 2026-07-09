@@ -120,8 +120,8 @@ function makeSceneAsset() {
   return {
     kind: 'scene' as const,
     entities: [
-      { localId: 0, components: { Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Root' } } },
-      { localId: 1, components: { Transform: { posX: 1, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Child' } } },
+      { localId: 0, components: { Transform: { pos: [0, 0, 0], scale: [1, 1, 1] }, Name: { value: 'Root' } } },
+      { localId: 1, components: { Transform: { pos: [1, 0, 0], scale: [1, 1, 1] }, Name: { value: 'Child' } } },
     ],
   };
 }
@@ -139,7 +139,7 @@ function makeSceneAssetWithHandle() {
       {
         localId: 0,
         components: {
-          Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+          Transform: { pos: [0, 0, 0], scale: [1, 1, 1] },
           Name: { value: 'Ground' },
           MeshFilter: { assetHandle: 'cbe42beb-8975-5096-b3a1-3dda4cb4c077' },
         },

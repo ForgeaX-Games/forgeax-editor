@@ -14,29 +14,33 @@ import { describe, expect, it } from 'bun:test';
 import { getComponentSchema } from '../scene/schema';
 
 describe('m3-test-schema-red: schema engine-native field assertions', () => {
-  // ── Transform: quatX/Y/Z/W, posX/Y/Z, scaleX/Y/Z; NO rotX/rotY/rotZ ─────────
-  it('Transform schema has quatX/Y/Z/W + posX/Y/Z + scaleX/Y/Z, no rotX/Y/Z', () => {
+  // ── Transform: pos[3]/quat[4]/scale[3] vec fields; NO rotX/rotY/rotZ ─────────
+  it('Transform schema has pos/quat/scale vec fields (array-TRS), no rotX/Y/Z', () => {
     const schema = getComponentSchema('Transform');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
 
-    // Must have quaternion SSOT fields
-    expect(keys).toContain('quatX');
-    expect(keys).toContain('quatY');
-    expect(keys).toContain('quatZ');
-    expect(keys).toContain('quatW');
+    // Array-TRS: three engine array columns collapsed into three vec fields.
+    expect(keys).toContain('pos');
+    expect(keys).toContain('quat');
+    expect(keys).toContain('scale');
 
-    // Must have position fields
-    expect(keys).toContain('posX');
-    expect(keys).toContain('posY');
-    expect(keys).toContain('posZ');
+    // Each is a 'vec' field with the engine array arity.
+    const pos = schema!.fields.find((f) => f.key === 'pos')!;
+    const quat = schema!.fields.find((f) => f.key === 'quat')!;
+    const scale = schema!.fields.find((f) => f.key === 'scale')!;
+    expect(pos.type).toBe('vec');
+    expect(quat.type).toBe('vec');
+    expect(scale.type).toBe('vec');
+    expect(pos.arity).toBe(3);
+    expect(quat.arity).toBe(4);
+    expect(scale.arity).toBe(3);
 
-    // Must have scale fields
-    expect(keys).toContain('scaleX');
-    expect(keys).toContain('scaleY');
-    expect(keys).toContain('scaleZ');
-
-    // Must NOT have editor-authored euler fields
+    // Must NOT have the old per-axis scalar keys …
+    expect(keys).not.toContain('posX');
+    expect(keys).not.toContain('quatW');
+    expect(keys).not.toContain('scaleZ');
+    // … nor editor-authored euler fields (euler is Inspector overlay only).
     expect(keys).not.toContain('rotX');
     expect(keys).not.toContain('rotY');
     expect(keys).not.toContain('rotZ');
@@ -137,18 +141,15 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
   });
 
   // ── AC-22: field names match engine defineComponent verbatim ────────────────
-  it('AC-22: Transform fields match engine defineComponent verbatim', () => {
+  it('AC-22: Transform fields match engine defineComponent verbatim (array-TRS)', () => {
     const schema = getComponentSchema('Transform');
     expect(schema).toBeDefined();
     const keys = new Set(schema!.fields.map((f) => f.key));
-    // Engine Transform defineComponent fields (verbatim from transform.ts:72-81)
-    // posX posY posZ quatX quatY quatZ quatW scaleX scaleY scaleZ world
+    // Engine Transform defineComponent columns (feat-20260709 array-TRS):
+    // pos (array<f32,3>) quat (array<f32,4>) scale (array<f32,3>) world
     // (world is engine-derived — excluded from editor schema per plan D-2)
-    expect(keys.has('posX')).toBe(true);
-    expect(keys.has('quatX')).toBe(true);
-    expect(keys.has('quatY')).toBe(true);
-    expect(keys.has('quatZ')).toBe(true);
-    expect(keys.has('quatW')).toBe(true);
-    expect(keys.has('scaleX')).toBe(true);
+    expect(keys.has('pos')).toBe(true);
+    expect(keys.has('quat')).toBe(true);
+    expect(keys.has('scale')).toBe(true);
   });
 });

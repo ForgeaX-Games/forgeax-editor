@@ -26,10 +26,11 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   quat,
   Materials,
-  HANDLE_CUBE,
-  pick as enginePick,
-  PickError,
 } from '@forgeax/engine-runtime';
+// engine #650 (Tier-2 decomposition) moved builtin handles + AssetRegistry into
+// @forgeax/engine-assets-runtime, and pick/PickError into @forgeax/engine-picking.
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { pick as enginePick, PickError } from '@forgeax/engine-picking';
 import type { World, EntityHandle, Handle } from '@forgeax/engine-ecs';
 // engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
 // @forgeax/engine-geometry leaf package.
@@ -65,26 +66,32 @@ import { isAuxVisible, onDisplayModeChange } from './display-bus';
 // ── M7-a (AC-15): doc.entities mirror deleted — gizmo/pick read the WORLD ──────
 // The dual-write mirror (EntityNode.components) is gone; the world is the SSOT.
 // entComponent(session, id, 'Transform') returns the engine-native POD
-// (posX/posY/posZ + quatX/Y/Z/W + scaleX/Y/Z). The viewport gizmo/drag math is
-// written against the editor euler-degree shape (x/y/z + rotX/rotY/rotZ), so read
-// once through this adapter and convert quat→euler HERE (euler-quat.ts is the SSOT
-// for that conversion — AGENTS.md #6). Returns undefined for organizational nodes
-// (no Transform) so callers keep their "nothing to gizmo/pick" fast-exit.
+// (pos[3] + quat[4] + scale[3] arrays — feat-20260709 array-TRS). The viewport
+// gizmo/drag math is written against the editor euler-degree shape (x/y/z +
+// rotX/rotY/rotZ), so read once through this adapter and convert quat→euler HERE
+// (euler-quat.ts is the SSOT for that conversion — AGENTS.md #6). Returns
+// undefined for organizational nodes (no Transform) so callers keep their
+// "nothing to gizmo/pick" fast-exit.
 type EditorTransform = {
   x: number; y: number; z: number;
   rotX: number; rotY: number; rotZ: number;
   scaleX: number; scaleY: number; scaleZ: number;
 };
+// Index a stored engine array<f32,N> column value (number[] | Float32Array),
+// falling back to `d` for a missing / non-finite axis.
+function ax(arr: unknown, i: number, d: number): number {
+  const v = (arr as ArrayLike<number> | undefined)?.[i];
+  return typeof v === 'number' && Number.isFinite(v) ? v : d;
+}
 function readEntTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
   const r = entComponent(world, handle, 'Transform');
   if (!r.ok) return undefined;
-  const t = r.value;
-  const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-  const e = quatToEuler(n(t.quatX, 0), n(t.quatY, 0), n(t.quatZ, 0), n(t.quatW, 1));
+  const t = r.value as Record<string, unknown>;
+  const e = quatToEuler(ax(t.quat, 0, 0), ax(t.quat, 1, 0), ax(t.quat, 2, 0), ax(t.quat, 3, 1));
   return {
-    x: n(t.posX, 0), y: n(t.posY, 0), z: n(t.posZ, 0),
+    x: ax(t.pos, 0, 0), y: ax(t.pos, 1, 0), z: ax(t.pos, 2, 0),
     rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
-    scaleX: n(t.scaleX, 1), scaleY: n(t.scaleY, 1), scaleZ: n(t.scaleZ, 1),
+    scaleX: ax(t.scale, 0, 1), scaleY: ax(t.scale, 1, 1), scaleZ: ax(t.scale, 2, 1),
   };
 }
 // EditorHidden is an editor-only marker; the entComponents walk surfaces it from
@@ -164,9 +171,9 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     // method so the pose write is byte-identical, only now trace-visible (AC-06
     // no visual regression; facade is a pure forwarding layer).
     engine.set(camera, Transform, {
-      posX: camPos[0], posY: camPos[1], posZ: camPos[2],
-      quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
-      scaleX: 1, scaleY: 1, scaleZ: 1,
+      pos: [camPos[0], camPos[1], camPos[2]],
+      quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+      scale: [1, 1, 1],
     });
     // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
     // replaces the Camera component each frame, so tonemap must be re-applied).
@@ -208,9 +215,9 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
       const tgt: Vec3 = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
       const r = computeOrbitCamera(tgt, o.yaw ?? yaw, o.pitch ?? pitch, o.dist ?? dist);
       eng.set(camera, Transform, {
-        posX: r.camPos[0], posY: r.camPos[1], posZ: r.camPos[2],
-        quatX: r.qCam[0], quatY: r.qCam[1], quatZ: r.qCam[2], quatW: r.qCam[3],
-        scaleX: 1, scaleY: 1, scaleZ: 1,
+        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
+        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+        scale: [1, 1, 1],
       });
       return { ok: true };
     },
@@ -334,7 +341,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     AXES.forEach((a, i) => {
       const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
       const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      engine.set(barEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: sx, scaleY: sy, scaleZ: sz });
+      engine.set(barEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [sx, sy, sz] });
       if (hasTips) {
         // Cone base sits at the bar's outer end, apex pointing further out along
         // the axis. scaleY is the cone's local height (→ length after the +Y→axis
@@ -342,9 +349,9 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
         const base: Vec3 = [center[0] + a.axis[0] * len, center[1] + a.axis[1] * len, center[2] + a.axis[2] * len];
         const q = TIP_QUAT[i]!;
         engine.set(tipEnts[i]!, Transform, {
-          posX: base[0], posY: base[1], posZ: base[2],
-          scaleX: tipRad, scaleY: tipLen, scaleZ: tipRad,
-          quatX: q[0], quatY: q[1], quatZ: q[2], quatW: q[3],
+          pos: [base[0], base[1], base[2]],
+          scale: [tipRad, tipLen, tipRad],
+          quat: [q[0], q[1], q[2], q[3]],
         });
         // Extend the grab AABB to the cone apex so the whole arrow is clickable.
         const reach = len + tipLen;
@@ -368,7 +375,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
       const s: Vec3 = [
         p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
       ];
-      engine.set(planeEnts[i]!, Transform, { posX: hc[0], posY: hc[1], posZ: hc[2], scaleX: s[0], scaleY: s[1], scaleZ: s[2] });
+      engine.set(planeEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [s[0], s[1], s[2]] });
       planes[i]!.center = hc;
       planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
     });
@@ -382,7 +389,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
         const th = (j / RING_SEG) * Math.PI * 2;
         const c = Math.cos(th) * len, s = Math.sin(th) * len;
         const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
-        engine.set(ringEnts[i * RING_SEG + j]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: seg, scaleY: seg, scaleZ: seg });
+        engine.set(ringEnts[i * RING_SEG + j]!, Transform, { pos: [p[0], p[1], p[2]], scale: [seg, seg, seg] });
       }
     }
   }
@@ -457,7 +464,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     const mat = ensureParamMat();
     while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
     while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { engine.despawn(e); } catch { /* gone */ } }
-    points.forEach((p, i) => engine.set(paramEnts[i]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: size, scaleY: size, scaleZ: size }));
+    points.forEach((p, i) => engine.set(paramEnts[i]!, Transform, { pos: [p[0], p[1], p[2]], scale: [size, size, size] }));
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
   function updateParamGizmo(): void {
@@ -588,20 +595,20 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   const qd = quat.create();
 
   /** Convert an editor-shape Transform (x/y/z + rotX/rotY/rotZ + scale) into the
-   *  engine-native POD (posX/posY/posZ + quatX/Y/Z/W + scale). M7-a: the world is
-   *  the SSOT — both the live preview (world.set) and the commit (setComponent →
-   *  document.ts w.set) must write engine field names, not the editor euler shape.
-   *  euler→quat uses the XYZ-order convention (euler-quat.ts SSOT, AGENTS.md #6). */
-  const toEnginePatch = (m: Record<string, number>): Record<string, number> => {
-    const data: Record<string, number> = {
-      posX: num(m.x, 0), posY: num(m.y, 0), posZ: num(m.z, 0),
-      scaleX: num(m.scaleX, 1), scaleY: num(m.scaleY, 1), scaleZ: num(m.scaleZ, 1),
+   *  engine-native POD (pos[3] + quat[4] + scale[3] arrays — feat-20260709). M7-a:
+   *  the world is the SSOT — both the live preview (world.set) and the commit
+   *  (setComponent → document.ts w.set) must write engine array fields, not the
+   *  editor euler shape. euler→quat uses XYZ order (euler-quat.ts SSOT, AGENTS.md #6). */
+  const toEnginePatch = (m: Record<string, number>): Record<string, number[]> => {
+    const data: Record<string, number[]> = {
+      pos: [num(m.x, 0), num(m.y, 0), num(m.z, 0)],
+      scale: [num(m.scaleX, 1), num(m.scaleY, 1), num(m.scaleZ, 1)],
     };
     const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
     if (rx || ry || rz) {
       quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
-      data.quatX = qd[0]!; data.quatY = qd[1]!; data.quatZ = qd[2]!; data.quatW = qd[3]!;
-    } else { data.quatX = 0; data.quatY = 0; data.quatZ = 0; data.quatW = 1; }
+      data.quat = [qd[0]!, qd[1]!, qd[2]!, qd[3]!];
+    } else { data.quat = [0, 0, 0, 1]; }
     return data;
   };
 

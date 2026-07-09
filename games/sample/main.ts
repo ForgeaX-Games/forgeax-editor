@@ -28,7 +28,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 // refs[] (the material siblings) from the pluginPack pack-index.
 const SCENE_GUID = '2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071';
 
-type Ctx = { world: World; assets?: import('@forgeax/engine-runtime').AssetRegistry };
+type Ctx = { world: World; assets?: import('@forgeax/engine-assets-runtime').AssetRegistry };
 
 interface PackNode { localId: number; components: Record<string, Record<string, unknown>> }
 
@@ -83,8 +83,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   if (loaded) {
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
     if (playerNode) {
-      const t = (playerNode.components.Transform ?? {}) as Record<string, number>;
-      initX = t.posX ?? 0; initZ = t.posZ ?? 0;
+      const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
+      initX = t.pos?.[0] ?? 0; initZ = t.pos?.[2] ?? 0;
       player = loaded.mapping.get(playerNode.localId);
     }
   }
@@ -97,7 +97,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   quat.fromAxisAngle(topQ, [1, 0, 0], topPitch);
   let camX = initX, camZ = initZ + TOP_DZ;
   const camera = world.spawn(
-    { component: Transform, data: { posX: camX, posY: TOP_DY, posZ: camZ, quatX: topQ[0]!, quatY: topQ[1]!, quatZ: topQ[2]!, quatW: topQ[3]! } },
+    { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, antialias: ANTIALIAS_FXAA, clearR: 0.4, clearG: 0.6, clearB: 1.0 } },
   ).unwrap();
 
@@ -126,8 +126,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         pz = Math.max(-BOUND, Math.min(BOUND, pz + (mvz / l) * step));
         if (player !== undefined) {
           const cur = world.get(player, Transform);
-          const py = cur.ok ? cur.value.posY : 0.75;
-          world.set(player, Transform, { posX: px, posY: py, posZ: pz });
+          const py = cur.ok ? (cur.value.pos[1] ?? 0.75) : 0.75;
+          world.set(player, Transform, { pos: [px, py, pz] });
         }
       }
 
@@ -135,7 +135,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       const a = 1 - Math.exp(-CAM_FOLLOW * dt);
       camX += (px - camX) * a;
       camZ += (pz + TOP_DZ - camZ) * a;
-      world.set(camera, Transform, { posX: camX, posY: TOP_DY, posZ: camZ, quatX: topQ[0]!, quatY: topQ[1]!, quatZ: topQ[2]!, quatW: topQ[3]! });
+      world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] });
     });
   }
 }

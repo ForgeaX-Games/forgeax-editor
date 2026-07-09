@@ -119,14 +119,14 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 5. setComponent ─────────────────────────────────────────────────────────
   it('setComponent: world.set(e, C, patch) partial update', () => {
     const session = createSession();
-    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { pos: [1, 2, 3] } } };
     applyCommand(session, cmd);
     const eH = ((cmd as any)._id! as EntityHandle);
-    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
+    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { pos: [1, 99, 3] } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
     expect(t.ok).toBe(true);
-    if (t.ok) { expect(t.value.posY).toBe(99); expect(t.value.posX).toBe(1); expect(t.value.posZ).toBe(3); }
+    if (t.ok) { expect(t.value.pos[1]).toBe(99); expect(t.value.pos[0]).toBe(1); expect(t.value.pos[2]).toBe(3); }
   });
 
   // ── 6. addComponent ─────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ describe('applyCommand world assertions (GREEN)', () => {
   // ── 7. removeComponent ──────────────────────────────────────────────────────
   it('removeComponent: world.removeComponent detaches', () => {
     const session = createSession();
-    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1 }, MeshFilter: { assetHandle: 1 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { pos: [1, 0, 0] }, MeshFilter: { assetHandle: 1 } } };
     applyCommand(session, cmd);
     const eH = ((cmd as any)._id! as EntityHandle);
     const r = applyCommand(session, { kind: 'removeComponent', entity: (cmd as any)._id!, component: 'MeshFilter' });

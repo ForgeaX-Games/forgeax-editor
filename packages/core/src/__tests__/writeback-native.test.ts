@@ -21,13 +21,13 @@ import { describe, expect, it } from 'bun:test';
 import { World, defineComponent } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import {
-  AssetRegistry,
   ChildOf,
   Name,
   rootsToSceneAsset,
   serializeSceneAssetToPack,
   Transform,
 } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { EditorHidden } from '../components/EditorHidden';
@@ -58,7 +58,7 @@ function makeRegistry(): AssetRegistry {
 function spawnRoot(world: World, name: string): EntityHandle {
   const r = world.spawn(
     { component: Name, data: { value: name } },
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0] } },
   );
   if (!r.ok) throw new Error(`spawn failed: ${r.error.message}`);
   return r.value;
@@ -67,7 +67,7 @@ function spawnRoot(world: World, name: string): EntityHandle {
 function spawnChild(world: World, name: string, parent: EntityHandle): EntityHandle {
   const r = world.spawn(
     { component: Name, data: { value: name } },
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0] } },
     { component: ChildOf, data: { parent } },
   );
   if (!r.ok) throw new Error(`spawn failed: ${r.error.message}`);
@@ -159,7 +159,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     // Create holder entity that references target via an entity-type field.
     const hr = world.spawn(
       { component: Name, data: { value: 'Holder' } },
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
       { component: TestRefHolder, data: { target } },
     );
     expect(hr.ok).toBe(true);

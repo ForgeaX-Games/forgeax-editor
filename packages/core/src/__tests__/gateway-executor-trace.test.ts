@@ -41,7 +41,7 @@ function spawnEntity(bus: EditGateway, name: string): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [0, 0, 0] } },
   };
   const r = bus.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed: ${(r as any).error?.hint}`);
@@ -165,7 +165,7 @@ describe('t12b/t11 — span tree structure + interval containment (GREEN)', () =
       kind: 'transaction',
       label: 'test-tx',
       commands: [
-        { kind: 'spawnEntity' as any, name: 'child', components: { Transform: { posX: 1, posY: 0, posZ: 0 } } },
+        { kind: 'spawnEntity' as any, name: 'child', components: { Transform: { pos: [1, 0, 0] } } },
       ],
     };
     gw.dispatch(txCmd);
@@ -187,7 +187,7 @@ describe('t12b/t11 — span tree structure + interval containment (GREEN)', () =
       kind: 'transaction',
       label: 'test-tx',
       commands: [
-        { kind: 'spawnEntity' as any, name: 'child', components: { Transform: { posX: 1, posY: 0, posZ: 0 } } },
+        { kind: 'spawnEntity' as any, name: 'child', components: { Transform: { pos: [1, 0, 0] } } },
       ],
     };
     gw.dispatch(txCmd);
@@ -243,7 +243,7 @@ describe('t12c — AC-01 negative tsc + leaf interface names (GREEN)', () => {
     const id = spawnEntity(gw, 'leaf-set');
     const r = gw.dispatch({
       kind: 'setComponent', entity: id, component: 'Transform',
-      patch: { posY: 7 },
+      patch: { pos: [0, 7, 0] },
     } as EditorOp);
     expect(r.ok).toBe(true);
     const last = gw.trace.last();
@@ -263,8 +263,8 @@ describe('t12c — AC-01 negative tsc + leaf interface names (GREEN)', () => {
       kind: 'transaction',
       label: 'leaf-tx',
       commands: [
-        { kind: 'spawnEntity' as const, name: 'a', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } },
-        { kind: 'spawnEntity' as const, name: 'b', components: { Transform: { posX: 1, posY: 0, posZ: 0 } } },
+        { kind: 'spawnEntity' as const, name: 'a', components: { Transform: { pos: [0, 0, 0] } } },
+        { kind: 'spawnEntity' as const, name: 'b', components: { Transform: { pos: [1, 0, 0] } } },
       ],
     };
     const r = gw.dispatch(txCmd);
@@ -310,8 +310,8 @@ describe('t12c — AC-01 negative tsc + leaf interface names (GREEN)', () => {
       kind: 'transaction',
       label: 'multi-child-tx',
       commands: [
-        { kind: 'spawnEntity' as any, name: 'a', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } },
-        { kind: 'spawnEntity' as any, name: 'b', components: { Transform: { posX: 1, posY: 0, posZ: 0 } } },
+        { kind: 'spawnEntity' as any, name: 'a', components: { Transform: { pos: [0, 0, 0] } } },
+        { kind: 'spawnEntity' as any, name: 'b', components: { Transform: { pos: [1, 0, 0] } } },
       ],
     };
     gw.dispatch(txCmd);
@@ -471,7 +471,7 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
     void Transform;
     const r = gw.dispatch({
       kind: 'spawnEntity', name: 'EditorCamera',
-      components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+      components: { Transform: { pos: [0, 0, 0] } },
     } as EditorOp);
     if (!r.ok) throw new Error('camera spawn failed');
     // M3 (I1): the spawn applier wrote the real handle back onto _id.
@@ -489,9 +489,9 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
     // (op) only, so `ctx` is undefined and the camera is never written.
     sessionAppliers.delete('cameraOrbit');
     registerApplier('session', 'cameraOrbit', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
-      const o = op as unknown as { target: number[]; posX: number; posY: number; posZ: number };
+      const o = op as unknown as { target: number[]; pos: number[] };
       // Simplest faithful move: write the gesture-end camera position.
-      ctx?.engine.set(camera, Transform, { posX: o.posX, posY: o.posY, posZ: o.posZ });
+      ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
       return { ok: true as const };
     }) as never);
 
@@ -500,7 +500,7 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
 
     const r = gw.dispatch({
       kind: 'cameraOrbit', target: [0, 2, 0], yaw: 0.6, pitch: -0.5, dist: 34,
-      posX: 5, posY: 6, posZ: 7,
+      pos: [5, 6, 7],
     } as EditorOp, 'ai');
     expect(r.ok).toBe(true);
 
@@ -514,11 +514,11 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
 
     // IoC facet (the RED lever): the applier actually moved the camera via
     // ctx.engine — before t20d there is no ctx, so the camera stays at origin.
-    const t = gw.doc.world!.get(camera as unknown as EntityHandle, Transform) as { ok: boolean; value?: { posX: number; posY: number; posZ: number } };
+    const t = gw.doc.world!.get(camera as unknown as EntityHandle, Transform) as { ok: boolean; value?: { pos: number[] } };
     expect(t.ok).toBe(true);
-    expect(t.value!.posX).toBe(5);
-    expect(t.value!.posY).toBe(6);
-    expect(t.value!.posZ).toBe(7);
+    expect(t.value!.pos[0]).toBe(5);
+    expect(t.value!.pos[1]).toBe(6);
+    expect(t.value!.pos[2]).toBe(7);
 
     sessionAppliers.delete('cameraOrbit');
   });

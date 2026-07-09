@@ -219,7 +219,7 @@ describe('useNumberDraft', () => {
     let committedA: number | null = null;
     let committedB: number | null = null;
     act(() => {
-      root.render(<NumberField key="entA:posX" value={1} onCommit={(n) => { committedA = n; }} />);
+      root.render(<NumberField key="entA:pos-0" value={1} onCommit={(n) => { committedA = n; }} />);
     });
     const el1 = input();
     act(() => { el1.focus(); });
@@ -229,7 +229,7 @@ describe('useNumberDraft', () => {
     // no blur happens, but the caller's `key` changes → React unmounts the
     // old instance (dropping its draft state) and mounts a fresh one.
     act(() => {
-      root.render(<NumberField key="entB:posX" value={42} onCommit={(n) => { committedB = n; }} />);
+      root.render(<NumberField key="entB:pos-0" value={42} onCommit={(n) => { committedB = n; }} />);
     });
     const el2 = input();
     expect(el2.value).toBe('42'); // shows entity B's value, not leaked "1."

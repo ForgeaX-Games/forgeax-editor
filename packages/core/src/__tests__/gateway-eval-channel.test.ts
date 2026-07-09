@@ -40,7 +40,7 @@ function spawnEntity(bus: EditGateway, name: string): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [0, 0, 0] } },
   };
   const r = bus.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed: ${(r as any).error?.hint}`);
@@ -172,7 +172,7 @@ describe('t33b — eval ≡ direct dispatch equivalent + trace read', () => {
       gw.dispatch({
         kind: 'spawnEntity',
         name: `direct-${i}`,
-        components: { Transform: { posX: i, posY: 0, posZ: 0 } },
+        components: { Transform: { pos: [i, 0, 0] } },
       }, 'ai');
     }
     const directLedgerLen = gw.ledger.length;
@@ -184,7 +184,7 @@ describe('t33b — eval ≡ direct dispatch equivalent + trace read', () => {
           gateway.dispatch({
             kind: 'spawnEntity',
             name: 'eval-' + i,
-            components: { Transform: { posX: i, posY: 0, posZ: 0 } },
+            components: { Transform: { pos: [i, 0, 0] } },
           }, 'ai');
         }
         return 'done';

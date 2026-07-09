@@ -41,7 +41,7 @@ function spawnEntity(bus: EditGateway, name: string): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [0, 0, 0] } },
   };
   const r = bus.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed`);
@@ -52,7 +52,7 @@ function readPosX(bus: EditGateway, entity: number): number {
   const h = (entity as EntityHandle) as EntityHandle;
   const tr = bus.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('Transform not on entity');
-  return (tr.value as unknown as { posX: number }).posX;
+  return (tr.value as unknown as { pos: number[] }).pos[0]!;
 }
 
 // ── (a) document domain ops execute via documentAppliers, produce inverse → undo+ledger
@@ -74,9 +74,9 @@ describe('EditGateway dispatch routing — document domain (m1-w3, RED)', () => 
   });
 
   it('setComponent (document op) via dispatch → undo → state reverts', () => {
-    const id = spawnEntity(bus, 'box'); // posX = 0
+    const id = spawnEntity(bus, 'box'); // pos[0] = 0
     const undoBefore = bus.appliedCount();
-    bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 5 } });
+    bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [5, 0, 0] } });
     expect(readPosX(bus, id)).toBe(5);
     expect(bus.appliedCount()).toBe(undoBefore + 1);
     bus.undo();
@@ -90,7 +90,7 @@ describe('EditGateway dispatch routing — document domain (m1-w3, RED)', () => 
       kind: 'transaction',
       label: 'move + rename',
       commands: [
-        { kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 10 } },
+        { kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [10, 0, 0] } },
         { kind: 'rename', entity: id, name: 'moved-box' },
       ],
     });
@@ -107,7 +107,7 @@ describe('EditGateway dispatch routing — document domain (m1-w3, RED)', () => 
     const results = [
       bus.dispatch({ kind: 'rename', entity: id, name: 'renamed' }),
       bus.dispatch({ kind: 'reparent', entity: id, parent: null }),
-      bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 1 } }),
+      bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [1, 0, 0] } }),
       bus.dispatch({ kind: 'setHidden', entity: id, hidden: false }),
     ];
     for (const r of results) {
@@ -217,7 +217,7 @@ describe('EditGateway dispatch routing — byte-equivalence (m1-w3, RED)', () =>
     expect(bus.origins[0]).toBe('human'); // default origin
 
     // Step 2: setComponent
-    bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 5 } });
+    bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [5, 0, 0] } });
     expect(readPosX(bus, id)).toBe(5);
     expect(bus.ledger.length).toBe(2);
     expect(bus.appliedCount()).toBe(2);

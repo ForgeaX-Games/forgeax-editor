@@ -37,7 +37,7 @@ describe('w7 spike: MeshFilter.assetHandle=0 sentinel round-trips through engine
     const world = new World();
 
     const spawnRes = world.spawn(
-      { component: Transform, data: { posX: 0, posY: 0.5, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+      { component: Transform, data: { pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
       { component: MeshFilter, data: { assetHandle: SENTINEL } },
     );
 

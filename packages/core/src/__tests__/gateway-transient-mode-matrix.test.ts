@@ -47,7 +47,7 @@ function createSession(): EditSession {
 }
 
 function spawn(gw: EditGateway, name: string): number {
-  const cmd: EditorOp = { kind: 'spawnEntity', name, components: { Transform: { posX: 0, posY: 0, posZ: 0 } } };
+  const cmd: EditorOp = { kind: 'spawnEntity', name, components: { Transform: { pos: [0, 0, 0] } } };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error('spawn failed');
   return (cmd as any)._id!;
@@ -57,11 +57,11 @@ function readPosX(gw: EditGateway, entity: number): number {
   const h = entity as EntityHandle;
   const tr = gw.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('no Transform');
-  return (tr.value as unknown as { posX: number }).posX;
+  return (tr.value as unknown as { pos: number[] }).pos[0]!;
 }
 
-const move = (entity: number, posX: number): EditorOp =>
-  ({ kind: 'setComponent', entity, component: 'Transform', patch: { posX } });
+const move = (entity: number, x: number): EditorOp =>
+  ({ kind: 'setComponent', entity, component: 'Transform', patch: { pos: [x, 0, 0] } });
 
 describe('transientMode matrix — document domain (m2-w4)', () => {
   let gw: EditGateway;

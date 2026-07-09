@@ -8,11 +8,17 @@
 // match engine defineComponent fields exactly. Old editor-authored schemas
 // (Mesh, Material, Light, Anim, MatGraph, GltfRef) deleted (M3 + M6 sweep).
 //
-// plan-strategy S2 D-2: Transform quatX/Y/Z/W SSOT, euler in Inspector only
+// plan-strategy S2 D-2: Transform quat SSOT (array<f32,4>), euler in Inspector only
 // plan-strategy S2 D-3: Light scheme A (three independent components)
 // research F-EngineComponents: field names verbatim from engine submodule
+//
+// feat-20260709 (engine array-TRS): Transform's 10 per-axis scalar columns
+// (posX/quatW/scaleZ…) collapsed to three engine `array<f32, N>` columns —
+// `pos` (3), `quat` (4), `scale` (3). The schema models them as a single
+// `'vec'` FieldType carrying `arity`; the Inspector renders one inline N-axis
+// row per vec field, keyed by array index (not sibling scalar keys).
 
-export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum';
+export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum' | 'vec';
 
 export interface FieldSchema {
   key: string;
@@ -27,6 +33,11 @@ export interface FieldSchema {
   default?: unknown;
   // Conditional visibility: only show this field when sibling `key` ∈ `in`.
   showWhen?: { key: string; in: string[] };
+  // `vec` only: number of scalar axes (3 for pos/scale, 4 for a quaternion).
+  // The Inspector renders `arity` inline number widgets; `labels` names each
+  // axis (defaults to x/y/z/w). The default value is a length-`arity` array.
+  arity?: number;
+  labels?: string[];
 }
 
 export interface ComponentSchema {
@@ -39,23 +50,17 @@ export interface ComponentSchema {
 }
 
 const REGISTRY: Record<string, ComponentSchema> = {
-  // ── Transform: engine-native quatX/Y/Z/W + posX/Y/Z + scaleX/Y/Z ─────────────
-  // Engine: transform.ts:71 defineComponent
-  // `world` (mat4) is engine-derived column — excluded from editor schema (D-2).
-  // Euler (rotX/rotY/rotZ) is Inspector React state only, NOT in schema/world.
+  // ── Transform: engine-native pos[3] + quat[4] + scale[3] (array-TRS) ──────────
+  // Engine: transform.ts defineComponent (feat-20260709 array columns).
+  // `world` (mat4) is an engine-derived transient column — excluded here (D-2).
+  // Euler (rotX/rotY/rotZ) is Inspector React state only, NOT in schema/world;
+  // it overlays the `quat` SSOT (array<f32,4>, [x,y,z,w]).
   Transform: {
     name: 'Transform',
     fields: [
-      { key: 'posX', type: 'number', step: 0.1 },
-      { key: 'posY', type: 'number', step: 0.1 },
-      { key: 'posZ', type: 'number', step: 0.1 },
-      { key: 'quatX', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion X (SSOT, euler is Inspector overlay)' },
-      { key: 'quatY', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion Y (SSOT, euler is Inspector overlay)' },
-      { key: 'quatZ', type: 'number', step: 0.01, default: 0, tooltip: 'rotation quaternion Z (SSOT, euler is Inspector overlay)' },
-      { key: 'quatW', type: 'number', step: 0.01, default: 1, tooltip: 'rotation quaternion W (SSOT, euler is Inspector overlay)' },
-      { key: 'scaleX', type: 'number', step: 0.1, default: 1, tooltip: 'scale along X (box width)' },
-      { key: 'scaleY', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Y (box height)' },
-      { key: 'scaleZ', type: 'number', step: 0.1, default: 1, tooltip: 'scale along Z (box depth)' },
+      { key: 'pos', type: 'vec', arity: 3, step: 0.1, default: [0, 0, 0], tooltip: 'local position [x, y, z]' },
+      { key: 'quat', type: 'vec', arity: 4, step: 0.01, default: [0, 0, 0, 1], tooltip: 'rotation quaternion [x, y, z, w] (SSOT, euler is Inspector overlay)' },
+      { key: 'scale', type: 'vec', arity: 3, step: 0.1, default: [1, 1, 1], tooltip: 'local scale [x, y, z]' },
     ],
   },
   // ── MeshFilter: engine-native assetHandle (replaces Mesh{kind}) ──────────────
@@ -166,6 +171,11 @@ export function defaultFieldValue(fs: FieldSchema): unknown {
   switch (fs.type) {
     case 'number':
       return fs.min ?? 0;
+    case 'vec':
+      // Identity-ish fallback: all-zero of the declared arity. Real vec fields
+      // (pos/quat/scale) carry explicit `default` arrays above — this only
+      // fires for a vec declared without one.
+      return new Array(fs.arity ?? 3).fill(0);
     case 'enum':
       return fs.options?.[0] ?? '';
     case 'bool':

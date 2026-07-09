@@ -105,10 +105,25 @@ function NumberDraftInput({ value, fs, testid, onCommit }: { value: number; fs?:
   );
 }
 
-// Components whose three number fields read as a single vec3 → render inline.
-const VEC3_GROUPS: Record<string, [string, string, string]> = {
-  Transform: ['posX', 'posY', 'posZ'],
-};
+// Default per-axis labels for a `vec` field (indexed). quat uses all four.
+const VEC_AXIS_LABELS = ['x', 'y', 'z', 'w'];
+
+// Read a schema `vec` field's axis labels (falls back to x/y/z/w by arity).
+function vecAxisLabels(fs: FieldSchema | undefined): string[] {
+  const n = fs?.arity ?? 3;
+  return fs?.labels ?? VEC_AXIS_LABELS.slice(0, n);
+}
+
+// Coerce a stored vec value (number[] | Float32Array | undefined) to a plain
+// number[] of the field's arity, filling missing axes from the schema default.
+function readVec(fs: FieldSchema | undefined, raw: unknown): number[] {
+  const n = fs?.arity ?? 3;
+  const def = (Array.isArray(fs?.default) ? (fs?.default as number[]) : undefined) ?? new Array(n).fill(0);
+  const src = raw as ArrayLike<number> | undefined;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(Number(src?.[i] ?? def[i] ?? 0));
+  return out;
+}
 
 // Addable/resettable components + their default payloads are now derived straight
 // from the schema registry (single source of truth shared with the Capabilities
@@ -156,12 +171,22 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
     gateway.dispatch({ kind: 'transaction', label: `batch ${component}.${key} ×${ids.length}`, commands });
   }
 
-  // Align all selected to the primary's value on one axis (one undo step).
+  // Align all selected to the primary's value on one position axis (one undo
+  // step). pos is an array<f32,3> column, so each aligned entity gets its whole
+  // pos array rewritten with the primary's value on `axis` and its own other axes.
   function alignAxis(axis: 'x' | 'y' | 'z') {
-    const posKey = `pos${axis.toUpperCase()}` as string;
+    const axisIdx = { x: 0, y: 1, z: 2 }[axis];
+    const posFs = fieldSchema('Transform', 'pos');
     const tr = entComponent(gateway.activeWorld, primary, 'Transform');
     if (!tr.ok) return;
-    setAll('Transform', posKey, Number(tr.value[posKey] ?? 0));
+    const target = readVec(posFs, (tr.value as Record<string, unknown>).pos)[axisIdx]!;
+    const commands: EditorOp[] = ids.map((id) => {
+      const cur = entComponent(gateway.activeWorld, id, 'Transform');
+      const p = cur.ok ? readVec(posFs, (cur.value as Record<string, unknown>).pos) : [0, 0, 0];
+      p[axisIdx] = target;
+      return { kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: p } };
+    });
+    gateway.dispatch({ kind: 'transaction', label: `align ${axis} ×${ids.length}`, commands });
   }
 
   const hasTransform = common.includes('Transform');
@@ -225,28 +250,44 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
             <div className="compname">{comp}</div>
             {(() => {
               const data = valueR.value as Record<string, unknown>;
-              const grp = VEC3_GROUPS[comp];
-              const vec3 = grp && grp.every((g) => typeof data[g] === 'number');
+              const vecFields = (getComponentSchema(comp)?.fields ?? []).filter((f) => f.type === 'vec');
+              const vecKeys = new Set(vecFields.map((f) => f.key));
               const rows: ReactNode[] = [];
-              if (vec3) {
+              // One inline row per vec field. A batch axis edit rewrites each
+              // selected entity's WHOLE array, preserving that entity's own other
+              // axes (array<f32,N> columns take the full vector, not a scalar).
+              for (const f of vecFields) {
+                const labels = vecAxisLabels(f);
+                const vec = readVec(f, data[f.key]);
                 rows.push(
-                  <div className="vec3-row" data-testid={`batch-${comp}-vec3`} key="__vec3">
-                    {grp.map((g) => {
-                      const fs = fieldSchema(comp, g);
-                      return (
-                        <div className={`field vec3-cell vec3-${g.slice(-1)}`} key={g}>
-                          <label>{g}</label>
-                          <NumberDraftInput key={`${primary}:${comp}:${g}`} value={Number(data[g])} fs={fs} testid={`batch-${comp}-${g}`} onCommit={(n) => setAll(comp, g, n)} />
-                        </div>
-                      );
-                    })}
+                  <div className="vec3-row" data-testid={`batch-${comp}-${f.key}`} key={`__vec_${f.key}`}>
+                    {vec.map((axVal, i) => (
+                      <div className={`field vec3-cell vec3-${labels[i] ?? i}`} key={i}>
+                        <label>{labels[i] ?? i}</label>
+                        <NumberDraftInput
+                          key={`${primary}:${comp}:${f.key}:${i}`}
+                          value={axVal}
+                          fs={{ key: f.key, type: 'number', step: f.step, tooltip: f.tooltip }}
+                          testid={`batch-${comp}-${f.key}-${i}`}
+                          onCommit={(n) => {
+                            const commands: EditorOp[] = ids.map((id) => {
+                              const cur = entComponent(gateway.activeWorld, id, comp);
+                              const arr = cur.ok ? readVec(f, (cur.value as Record<string, unknown>)[f.key]) : readVec(f, undefined);
+                              arr[i] = n;
+                              return { kind: 'setComponent', entity: id, component: comp, patch: { [f.key]: arr } };
+                            });
+                            gateway.dispatch({ kind: 'transaction', label: `batch ${comp}.${f.key}[${i}] ×${ids.length}`, commands });
+                          }}
+                        />
+                      </div>
+                    ))}
                   </div>,
                 );
               }
               return [
                 ...rows,
                 ...Object.entries(data)
-                  .filter(([k]) => !(vec3 && grp.includes(k)) && fieldVisible(comp, fieldSchema(comp, k), data))
+                  .filter(([k]) => !vecKeys.has(k) && fieldVisible(comp, fieldSchema(comp, k), data))
                   .map(([k, v]) => {
                     const fs = fieldSchema(comp, k);
                     const type = fs?.type ?? (typeof v === 'number' ? 'number' : 'string');
@@ -304,8 +345,8 @@ export function InspectorPanel() {
     // error (ok:false) — treat it as "nothing to show" and bail.
     const tv = entComponent(gateway.activeWorld, sel, 'Transform');
     if (!tv.ok) return;
-    const q = tv.value as { quatX: number; quatY: number; quatZ: number; quatW: number };
-    setEuler(quatToEuler(q.quatX, q.quatY, q.quatZ, q.quatW));
+    const q = readVec(fieldSchema('Transform', 'quat'), (tv.value as Record<string, unknown>).quat);
+    setEuler(quatToEuler(q[0]!, q[1]!, q[2]!, q[3]!));
   }, [sel]);
   const toggleComp = (comp: string) =>
     setCollapsed((prev) => {
@@ -441,26 +482,45 @@ export function InspectorPanel() {
             ? (() => {
                 const data = value as Record<string, unknown>;
                 const keys = mergedFieldKeys(comp, data).filter((k) => fieldVisible(comp, fieldSchema(comp, k), data));
-                const grp = VEC3_GROUPS[comp];
-                const vec3 = grp && grp.every((g) => typeof data[g] === 'number');
                 const out: ReactNode[] = [];
-                if (vec3) {
+                // Render every schema `vec` field as one inline N-axis row, keyed
+                // by array index. Writing an axis dispatches the WHOLE array (the
+                // engine array<f32,N> column takes the full vector, not a scalar).
+                // For Transform, the `quat` field is NOT rendered raw — the euler
+                // overlay below is its editable surface (quat stays the SSOT).
+                for (const f of getComponentSchema(comp)?.fields ?? []) {
+                  if (f.type !== 'vec') continue;
+                  if (comp === 'Transform' && f.key === 'quat') continue;
+                  const vec = readVec(f, data[f.key]);
+                  const labels = vecAxisLabels(f);
                   out.push(
-                    <div className="vec3-row" data-testid={`insp-${comp}-vec3`} key="__vec3">
-                      {grp.map((g) => (
-                        <NumberScrubField key={`${sel}:${comp}:${g}`} label={g} value={data[g] as number} fs={fieldSchema(comp, g)} testid={`insp-${comp}-${g}`} compact onCommit={(val) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [g]: val } })} />
+                    <div className="vec3-row" data-testid={`insp-${comp}-${f.key}`} key={`__vec_${f.key}`}>
+                      {vec.map((axVal, i) => (
+                        <NumberScrubField
+                          key={`${sel}:${comp}:${f.key}:${i}`}
+                          label={labels[i] ?? String(i)}
+                          value={axVal}
+                          fs={{ key: f.key, type: 'number', step: f.step, tooltip: f.tooltip }}
+                          testid={`insp-${comp}-${f.key}-${i}`}
+                          compact
+                          onCommit={(val) => {
+                            const next = readVec(f, data[f.key]);
+                            next[i] = val;
+                            gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
+                          }}
+                        />
                       ))}
                     </div>,
                   );
                 }
                 if (comp === 'Transform') {
                   // euler React state (scheme B): read local React state, blur→eulerToQuat→world setComponent
-                  // AGENTS.md #6: conversion on editor side, XYZ order, quat SSOT in world
+                  // AGENTS.md #6: conversion on editor side, XYZ order, quat SSOT in world (array<f32,4>)
                   const commitEuler = (key: string, deg: number) => {
                     const next = { ...euler, [key]: deg };
                     setEuler(next);
                     const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
-                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quatX: qx, quatY: qy, quatZ: qz, quatW: qw } });
+                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [qx, qy, qz, qw] } });
                   };
                   const ROTATIONS = [
                     { key: 'rotX', label: 'rotX', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
@@ -476,9 +536,10 @@ export function InspectorPanel() {
                   );
                 }
                 for (const k of keys) {
-                  if (vec3 && grp.includes(k)) continue;
                   const v = data[k];
-                  // skip nested object/array data (e.g. Transform.rotation) — surfaced via dedicated widgets, not as "[object Object]"
+                  // skip vec fields (rendered inline above) and any nested
+                  // object/array data — surfaced via dedicated widgets, not "[object Object]"
+                  if (fieldSchema(comp, k)?.type === 'vec') continue;
                   if (v !== null && typeof v === 'object') continue;
                   const fs = fieldSchema(comp, k);
                   const setField = (val: unknown) =>

@@ -17,14 +17,14 @@ import type { EditorOp } from '../types';
 function seedEntity(bus: EditGateway): EntityHandle {
   // Spawn one entity so setComponent has a target. The spawn itself runs in
   // normal (non-transient) mode so the fixture is deterministic.
-  const cmd: EditorOp = { kind: 'spawnEntity', name: 'box', components: { Transform: { posX: 0, posY: 0, posZ: 0 } } };
+  const cmd: EditorOp = { kind: 'spawnEntity', name: 'box', components: { Transform: { pos: [0, 0, 0] } } };
   bus.dispatch(cmd);
   return (cmd as { _id?: number })._id as EntityHandle;
 }
 
-// M7 / AC-15: Transform is native engine POD (posX field), asserted via world.
-const move = (entity: EntityHandle, posX: number): EditorOp =>
-  ({ kind: 'setComponent', entity, component: 'Transform', patch: { posX } });
+// M7 / AC-15: Transform is native engine POD (pos array field), asserted via world.
+const move = (entity: EntityHandle, x: number): EditorOp =>
+  ({ kind: 'setComponent', entity, component: 'Transform', patch: { pos: [x, 0, 0] } });
 
 describe('EditGateway.transientMode (w27, AC-11)', () => {
   let bus: EditGateway;
@@ -57,7 +57,7 @@ describe('EditGateway.transientMode (w27, AC-11)', () => {
     // non-committed. M7 / AC-15: read via world SSOT (doc.entities deleted).
     const t = bus.doc.world.get(e, Transform);
     expect(t.ok).toBe(true);
-    if (t.ok) expect((t.value as unknown as Record<string, number>).posX).toBe(42);
+    if (t.ok) expect((t.value as unknown as { pos: number[] }).pos[0]).toBe(42);
   });
 
   it('transient dispatch STILL emits (rev bumps so engine sync repaints)', () => {

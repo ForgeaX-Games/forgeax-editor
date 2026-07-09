@@ -39,7 +39,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [0, 0, 0] } },
   };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn "${name}" failed`);
@@ -50,7 +50,7 @@ function readPosY(gw: EditGateway, entity: number): number {
   const h = (entity as EntityId as EntityHandle) as EntityHandle;
   const tr = gw.doc.world!.get(h, Transform);
   if (!tr.ok) return 0;
-  return (tr.value as unknown as { posY: number }).posY;
+  return (tr.value as unknown as { pos: number[] }).pos[1]!;
 }
 
 // ── (a) gateway.listOps() returns non-empty list with builtin ops ──
@@ -153,7 +153,7 @@ describe('dogfood: cast op dispatch + undo (m4-w4, RED)', () => {
       argsSchema: { type: 'object', properties: { dy: { type: 'number' } }, required: ['dy'] },
       plan: (_query, _args) => {
         const dy = (_args as { dy: number }).dy;
-        return [{ kind: 'setComponent', entity: e, component: 'Transform', patch: { posY: posYBefore + dy } }];
+        return [{ kind: 'setComponent', entity: e, component: 'Transform', patch: { pos: [0, posYBefore + dy, 0] } }];
       },
     });
     if (!rDef.ok) throw new Error('defineOp failed');
@@ -194,7 +194,7 @@ describe('dogfood: full chain ledger trace (m4-w4, RED)', () => {
       id: 'moveUpDf4', domain: 'document',
       argsSchema: { type: 'object', properties: { dy: { type: 'number' } }, required: ['dy'] },
       plan: (_query, _args) => {
-        return [{ kind: 'setComponent', entity: ball, component: 'Transform', patch: { posY: 5 } }];
+        return [{ kind: 'setComponent', entity: ball, component: 'Transform', patch: { pos: [0, 5, 0] } }];
       },
     });
     if (!rDef.ok) throw new Error('defineOp failed');

@@ -34,12 +34,12 @@ function comp(schema: Record<string, unknown>): { toSchemaJSON(): string } {
 describe('schemaFingerprint — snapshot over registered components', () => {
   it('is stable for the same component set + schemas (order-independent)', () => {
     const a = new Map([
-      ['Transform', comp({ posX: 'f32', posY: 'f32' })],
+      ['Transform', comp({ pos: 'array<f32,3>', quat: 'array<f32,4>' })],
       ['Mesh', comp({ kind: 'string' })],
     ]);
     const b = new Map([
       ['Mesh', comp({ kind: 'string' })],
-      ['Transform', comp({ posX: 'f32', posY: 'f32' })],
+      ['Transform', comp({ pos: 'array<f32,3>', quat: 'array<f32,4>' })],
     ]);
     // Insertion order differs but the fingerprint must be identical.
     expect(schemaFingerprint(a)).toBe(schemaFingerprint(b));
@@ -53,10 +53,10 @@ describe('schemaFingerprint — snapshot over registered components', () => {
 
 describe('decideReloadTier — same fingerprint keeps the world', () => {
   it('tuning a param (no schema change) → world-update', () => {
-    const before = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32' })]]));
+    const before = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>' })]]));
     // System logic / numeric defaults changed but the component SCHEMA is
     // identical → fingerprint unchanged → keep the world.
-    const after = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32' })]]));
+    const after = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>' })]]));
     expect(before).toBe(after);
     expect(decideReloadTier(before, after)).toBe('world-update');
   });
@@ -72,15 +72,15 @@ describe('decideReloadTier — same fingerprint keeps the world', () => {
 
 describe('decideReloadTier — different fingerprint rebuilds the world', () => {
   it('adding a field → world-rebuild', () => {
-    const before = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32' })]]));
-    const after = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32', posY: 'f32' })]]));
+    const before = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>' })]]));
+    const after = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>', quat: 'array<f32,4>' })]]));
     expect(before).not.toBe(after);
     expect(decideReloadTier(before, after)).toBe('world-rebuild');
   });
 
   it('removing a field → world-rebuild', () => {
-    const before = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32', posY: 'f32' })]]));
-    const after = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32' })]]));
+    const before = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>', quat: 'array<f32,4>' })]]));
+    const after = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>' })]]));
     expect(decideReloadTier(before, after)).toBe('world-rebuild');
   });
 
@@ -92,10 +92,10 @@ describe('decideReloadTier — different fingerprint rebuilds the world', () => 
   });
 
   it('adding a whole new component → world-rebuild', () => {
-    const before = schemaFingerprint(new Map([['Transform', comp({ posX: 'f32' })]]));
+    const before = schemaFingerprint(new Map([['Transform', comp({ pos: 'array<f32,3>' })]]));
     const after = schemaFingerprint(
       new Map([
-        ['Transform', comp({ posX: 'f32' })],
+        ['Transform', comp({ pos: 'array<f32,3>' })],
         ['Velocity', comp({ vx: 'f32' })],
       ]),
     );
