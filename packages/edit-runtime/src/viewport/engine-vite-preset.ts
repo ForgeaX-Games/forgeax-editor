@@ -33,7 +33,7 @@
 
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, existsSync, realpathSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
@@ -70,36 +70,6 @@ function forgeaxWorkspacePackages(): string[] {
     }
   } catch { /* node_modules not materialised yet — fall through */ }
   return [...out];
-}
-
-// ── game-source bare-import resolution (▶ Play, --game self-host) ─────────────
-// Game sources (<gameDirAbs>/main.ts + script assets) live OUTSIDE every
-// workspace package: their node_modules walk-up only reaches the repo-root
-// node_modules, which under bun's isolated linker hoists just the host's
-// DIRECT deps — NOT the engine family (root @forgeax/ has editor-core /
-// interface / the vite plugins, no engine-runtime). The shell's own engine
-// imports resolve fine because their importers sit inside packages/* whose
-// node_modules carry the family — so this hole is invisible until ▶ Play
-// loads a game file and its `import ... from '@forgeax/engine-runtime'` 500s
-// with "Failed to resolve import" (it only surfaces on WebGPU-capable
-// runners: GPU-less headless falls back to edit BEFORE the game entry loads,
-// which is why CI stayed green until chromium's software WebGPU landed).
-// Fix at the SSOT: re-resolve game-file @forgeax imports anchored at THIS
-// package (edit-runtime), the same node_modules the dedupe/exclude lists
-// derive from. Non-game importers and non-@forgeax ids fall through (null).
-function gameEngineResolve(gameDirAbs: string): PluginOption {
-  let gameDirReal = gameDirAbs;
-  try { gameDirReal = realpathSync(gameDirAbs); } catch { /* absent dir — keep raw */ }
-  const anchor = resolve(EDIT_RUNTIME_DIR, 'package.json');
-  return {
-    name: 'forgeax:game-engine-resolve',
-    async resolveId(id, importer) {
-      if (!importer || !id.startsWith('@forgeax/')) return null;
-      if (!importer.startsWith(gameDirAbs) && !importer.startsWith(gameDirReal)) return null;
-      const r = await this.resolve(id, anchor, { skipSelf: true });
-      return r ?? null;
-    },
-  };
 }
 
 // ── shared template assets (equirect sky.hdr etc.) folded into every catalog ───
@@ -260,7 +230,6 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     plugins.push(packBaseStrip(base));
   }
   if (selfHostPack) {
-    plugins.push(gameEngineResolve(gameDirAbs));
     plugins.push(
       pluginPack({
         roots: gamePackRoots(gameDirAbs),
