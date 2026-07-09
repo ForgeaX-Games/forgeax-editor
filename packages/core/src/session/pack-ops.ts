@@ -7,7 +7,6 @@
 // M1: PackAssetEntry/PackFile dual definitions deleted — import from scene-pack.ts
 // SSOT (plan-strategy D-4, research Finding #9).
 
-import { apiFetch } from '../io/api-client';
 import { fetchWithTimeout } from '../io/net';
 import { stableGuid, validatePackShell, type PackFile } from '../scene/scene-pack';
 import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
@@ -48,7 +47,7 @@ export async function writePack(packPath: string, pack: PackFile): Promise<boole
       console.warn('[editor-core] writePack: pack shell validation failed — rejecting write', validation.error);
       return false;
     }
-    const r = await apiFetch('/api/files', {
+    const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: packPath, content: JSON.stringify(pack, null, 2) + '\n' }),
@@ -61,7 +60,7 @@ export async function writePack(packPath: string, pack: PackFile): Promise<boole
 
 export async function deleteFile(filePath: string): Promise<boolean> {
   try {
-    const r = await apiFetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    const r = await fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
     return r.ok;
   } catch {
     return false;
@@ -211,7 +210,7 @@ async function readJsonFile(path: string): Promise<Record<string, unknown> | nul
 
 async function writeJsonFile(path: string, obj: Record<string, unknown>): Promise<boolean> {
   try {
-    const r = await apiFetch('/api/files', {
+    const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path, content: JSON.stringify(obj, null, 2) + '\n' }),
@@ -261,7 +260,7 @@ export async function createPack(
 /** Create a directory via the server API. */
 export async function createDirectory(dirPath: string): Promise<boolean> {
   try {
-    const r = await apiFetch('/api/files', {
+    const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dirPath, content: '', mkdir: true }),
@@ -275,7 +274,7 @@ export async function createDirectory(dirPath: string): Promise<boolean> {
 /** Delete a directory (recursive) via the server API. */
 export async function deleteDirectory(dirPath: string): Promise<boolean> {
   try {
-    const r = await apiFetch(`/api/files?path=${encodeURIComponent(dirPath)}`, {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(dirPath)}`, {
       method: 'DELETE',
     });
     return r.ok;
@@ -366,7 +365,7 @@ function defaultPayloadFor(kind: CreatableAssetKind): Record<string, unknown> {
       const scene: SceneAsset = { kind: 'scene', entities: [] };
       return scene as unknown as Record<string, unknown>;
     }
-    // 未来扩展示例 (TS 会强制这里补 case):
+    // Future extension example (TS enforces matching cases here):
     // case 'material': { const mat: MaterialAsset = { kind:'material', passes:[], paramValues:{} }; return mat as unknown as Record<string,unknown>; }
   }
 }

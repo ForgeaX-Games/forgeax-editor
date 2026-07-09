@@ -15,7 +15,6 @@
 // resolved engine package when the engine submodule is bumped to the
 // commit that carries packages/runtime/src/collect-scene-asset.ts.
 
-import { apiFetch } from '@forgeax/editor-core';
 import { EditorHidden } from '@forgeax/editor-core';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 
@@ -145,7 +144,7 @@ export async function writebackInstance(
     };
   }
   try {
-    const r = await apiFetch('/api/files', {
+    const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: target.packPath, content: json }),

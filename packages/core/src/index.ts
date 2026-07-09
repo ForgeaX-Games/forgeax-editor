@@ -311,12 +311,6 @@ export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 // ── Dock bridge helpers ──
 export { focusPanel, openSourcePanel } from './io/dock-bridge';
 
-// ── Backend transport (M4 same-origin /api helper) ──
-// The former DIP seam (get/set/create-default accessors + ApiClient interface)
-// was a dead abstraction that never switched; M4 collapsed it to one same-origin
-// function (AC-06). Boot-path timeout calls use fetchWithTimeout (net.ts).
-export { apiFetch } from './io/api-client';
-
 // ── Project authoring (M3) ──
 export { openProject, type OpenProjectResult } from './session/open-project';
 export { createFetchReader } from './io/fetch-reader';

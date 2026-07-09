@@ -2,17 +2,17 @@
 // SIDE-EFFECT persistence cluster (disk load / save / scene-load / beacon).
 //
 // These are exactly the paths #88's real-Play safety net could NOT reach: they
-// touch the network (apiFetch / fetchWithTimeout) and the live engine world, so
+// touch the network (fetch / fetchWithTimeout) and the live engine world, so
 // before M2 they had no headless coverage. M2 (D-3) extracts them into a
 // `createDiskIo(deps)` factory whose deps make every side effect injectable — so
 // this suite drives save / load / loadByGuid / flushPendingSaveBeacon with FAKE
-// apiFetch + fetchWithTimeout + gateway, asserting:
+// fetch + fetchWithTimeout + gateway, asserting:
 //   - AC-02: the factory reaches all state THROUGH deps (deps.ctx / deps.gateway),
 //     never a module-level singleton — a fresh fake ctx fully controls behavior.
-//   - AC-02 × R-6: apiFetch is a DEP (structural injection), so a headless test
+//   - AC-02 × R-P1: fetch is a DEP (structural injection), so a headless test
 //     injects a fake that never touches the network. This is the injection seam
-//     plan-strategy §2 D-3 opens (import→deps), NOT a change to the transport body
-//     (OOS-4). lint-no-direct-api-fetch stays green: no raw fetch('/api').
+//     plan-strategy §2 D-2 opens (import→deps), NOT a change to the transport body
+//     (OOS-5).
 //   - OOS-1: the extracted bodies are behaviorally identical — a serialize
 //     failure still ABORTS the write (never POSTs an empty body over a good
 //     scene, the 0-byte data-loss guard, AGENTS.md #2).
@@ -24,7 +24,7 @@
 // Anchors:
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
 //     plan-id; AC-02 (headless-injectable DI unit, no singleton read) + AC-05
-//     (high side-effect save/load path regression) ; plan-strategy §2 D-3 (apiFetch
+//     (high side-effect save/load path regression) ; plan-strategy §2 D-2 (fetch
 //     via deps) + §5.3.
 //   (backward) covers store/persistence/disk-io.ts, extracted from
 //     scene-persistence.ts (itself split from store.ts by historical feat
@@ -55,27 +55,27 @@ function makeFakeGateway(doc?: Partial<EditSession>): {
   return { gateway, replaceCalls, dispatchCalls };
 }
 
-/** Records apiFetch / fetchWithTimeout invocations so a test can assert the
+/** Records fetch / fetchWithTimeout invocations so a test can assert the
  *  factory used the INJECTED seam (not a module import) and how many times. */
 function makeNetSpies(opts?: {
-  apiFetchImpl?: (path: string, init?: RequestInit) => Promise<Response>;
-  fetchImpl?: (url: string) => Promise<Response>;
+  fetchImpl?: (path: string, init?: RequestInit) => Promise<Response>;
+  fetchTimeoutImpl?: (url: string) => Promise<Response>;
 }) {
-  const apiFetchCalls: Array<{ path: string; init?: RequestInit }> = [];
-  const fetchCalls: string[] = [];
-  const apiFetch = (path: string, init?: RequestInit): Promise<Response> => {
-    apiFetchCalls.push({ path, init });
-    return opts?.apiFetchImpl
-      ? opts.apiFetchImpl(path, init)
-      : Promise.reject(new Error('apiFetch must not be called in this case'));
+  const fetchCalls: Array<{ path: string; init?: RequestInit }> = [];
+  const fetchTimeoutCalls: string[] = [];
+  const fetchFn = (path: string, init?: RequestInit): Promise<Response> => {
+    fetchCalls.push({ path, init });
+    return opts?.fetchImpl
+      ? opts.fetchImpl(path, init)
+      : Promise.reject(new Error('fetch must not be called in this case'));
   };
   const fetchWithTimeout = (url: string): Promise<Response> => {
-    fetchCalls.push(url);
-    return opts?.fetchImpl
-      ? opts.fetchImpl(url)
+    fetchTimeoutCalls.push(url);
+    return opts?.fetchTimeoutImpl
+      ? opts.fetchTimeoutImpl(url)
       : Promise.reject(new Error('fetchWithTimeout must not be called in this case'));
   };
-  return { apiFetch, fetchWithTimeout, apiFetchCalls, fetchCalls };
+  return { fetch: fetchFn, fetchWithTimeout, fetchCalls, fetchTimeoutCalls };
 }
 
 function makeDeps(over?: Partial<DiskIoDeps>): {
@@ -88,7 +88,7 @@ function makeDeps(over?: Partial<DiskIoDeps>): {
   const deps: DiskIoDeps = {
     ctx,
     gateway,
-    apiFetch: net.apiFetch,
+    fetch: net.fetch,
     fetchWithTimeout: net.fetchWithTimeout,
     resolveGamePath: (rel: string) => `/games/g1/${rel}`,
     notifyDocChanged: () => {},
@@ -142,39 +142,39 @@ describe('scenePath — reads ctx via deps, no network (AC-02)', () => {
 });
 
 describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)', () => {
-  it('returns false and NEVER calls apiFetch when the world is headless (serialize fails)', async () => {
+  it('returns false and NEVER calls fetch when the world is headless (serialize fails)', async () => {
     const net = makeNetSpies();
-    const { deps, ctx } = makeDeps({ apiFetch: net.apiFetch, fetchWithTimeout: net.fetchWithTimeout });
+    const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'shoot';
     ctx.isDirty = true;
     const io = createDiskIo(deps);
     const ok = await io.doSaveDocToDisk();
     expect(ok).toBe(false);
     // The 0-byte data-loss guard: no write attempted over a good on-disk scene.
-    expect(net.apiFetchCalls.length).toBe(0);
+    expect(net.fetchCalls.length).toBe(0);
     // Save aborted before clearing dirty → the next save can retry.
     expect(ctx.isDirty).toBe(true);
   });
 
   it('returns false for the default slug (no scenePath) without any network', async () => {
     const net = makeNetSpies();
-    const { deps, ctx } = makeDeps({ apiFetch: net.apiFetch, fetchWithTimeout: net.fetchWithTimeout });
+    const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'default';
     const io = createDiskIo(deps);
     expect(await io.doSaveDocToDisk()).toBe(false);
-    expect(net.apiFetchCalls.length).toBe(0);
     expect(net.fetchCalls.length).toBe(0);
+    expect(net.fetchTimeoutCalls.length).toBe(0);
   });
 });
 
 describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, resets guid (AC-02)', () => {
   it('returns false for the default slug without touching the injected net', async () => {
     const net = makeNetSpies();
-    const { deps, ctx } = makeDeps({ apiFetch: net.apiFetch, fetchWithTimeout: net.fetchWithTimeout });
+    const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'default';
     const io = createDiskIo(deps);
     expect(await io.doLoadDocFromDisk()).toBe(false);
-    expect(net.fetchCalls.length).toBe(0);
+    expect(net.fetchTimeoutCalls.length).toBe(0);
   });
 
   it('reads THIS scene path through the injected fetchWithTimeout and captures the pack guid', async () => {
@@ -188,15 +188,15 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, resets guid 
       assets: [{ guid, kind: 'scene', payload: { entities: [] }, refs: [] }],
     });
     const net = makeNetSpies({
-      fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ content: packJson }), { status: 200 })),
+      fetchTimeoutImpl: () => Promise.resolve(new Response(JSON.stringify({ content: packJson }), { status: 200 })),
     });
-    const { deps, ctx } = makeDeps({ apiFetch: net.apiFetch, fetchWithTimeout: net.fetchWithTimeout });
+    const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'shoot';
     const io = createDiskIo(deps);
     const ok = await io.doLoadDocFromDisk();
     expect(ok).toBe(false); // loadSceneByGuid fails on the headless (null) world
-    expect(net.fetchCalls.length).toBe(1);
-    expect(net.fetchCalls[0]).toContain(encodeURIComponent('/games/g1/scene.pack.json'));
+    expect(net.fetchTimeoutCalls.length).toBe(1);
+    expect(net.fetchTimeoutCalls[0]).toContain(encodeURIComponent('/games/g1/scene.pack.json'));
     // The guid was captured off the pack before the (failed) engine load.
     expect(ctx.currentSceneGuid).toBe(guid);
   });

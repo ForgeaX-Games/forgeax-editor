@@ -5,20 +5,19 @@
 //
 // M2 (w6): this is a `createDiskIo(deps)` DI factory (the run-lifecycle
 // `create<Thing>(deps)` pattern). Everything that reaches OUTSIDE the module —
-// the network (apiFetch / fetchWithTimeout), the live engine world
+// the network (fetch / fetchWithTimeout), the live engine world
 // (gateway.doc), the host path resolver, and the persistence state handle
 // (ScenePersistenceContext) — arrives THROUGH `deps`, so a reader sees the whole
 // dependency edge in the factory signature and a headless test injects fakes for
 // every one (AC-02). scene-persistence.ts is the composition root: it builds ONE
-// createDiskIo with the real gateway / apiFetch / fetchWithTimeout and re-exports
+// createDiskIo with the real gateway / fetch / fetchWithTimeout and re-exports
 // the resulting functions (barrel surface unchanged, consumers zero-change).
 //
-// D-3 apiFetch-as-dep (the core R-6 seam): `apiFetch` moved from a module-level
-// `import { apiFetch }` to `deps.apiFetch`. This is a STRUCTURAL change (allowed
-// by plan-strategy §2 D-3) — the transport body (io/api-client.ts) is untouched
-// (OOS-4). The injected value is still `getApiClient().fetch` in production, so
-// lint-no-direct-api-fetch stays satisfied — every network read goes through
-// deps.apiFetch / deps.fetchWithTimeout, never a raw hardcoded-transport call.
+// D-2 fetch-as-dep (the core R-6 seam): `fetch` injected via deps. This is a
+// STRUCTURAL change (allowed by plan-strategy §2 D-2) — the transport body is the
+// platform fetch (OOS-5). The injected value is arrow-wrapped in production, so
+// every network read goes through deps.fetch / deps.fetchWithTimeout, never a raw
+// hardcoded-transport call.
 //
 // D-8 (fan_in avoidance): this file lives under store/persistence/ and is NOT
 // re-exported from the core index.ts top-level barrel — only scene-persistence.ts
@@ -26,7 +25,7 @@
 // (42) does not rebound (plan-strategy §2 D-8 / R-4).
 //
 // OOS-1 (zero behavior change): every body here is the verbatim logic previously
-// in scene-persistence.ts; the only edits are `apiFetch`/`fetchWithTimeout`/
+// in scene-persistence.ts; the only edits are `fetch`/`fetchWithTimeout`/
 // `gateway.doc`/`resolveGamePath` reads re-pointed at `deps`. The 0-byte
 // data-loss guards (serialize-fail aborts the write; inline-asset preservation
 // net) are preserved exactly (AGENTS.md #2).
@@ -35,7 +34,7 @@
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
 //     plan-id; AC-01/AC-02 (DI factory, headless-injectable, no singleton read) +
 //     AC-08 (core max_file_loc drop) + AC-07 (bidirectional anchors);
-//     plan-strategy §2 D-3 (apiFetch via deps) + D-8 (subdir landing) + §8 naming
+//     plan-strategy §2 D-2 (fetch via deps) + D-8 (subdir landing) + §8 naming
 //     (create<Thing> / <Thing>Deps).
 //   (backward) extracted from store/scene-persistence.ts (this loop's target),
 //     itself split out of store.ts by historical feat
@@ -67,7 +66,7 @@ export interface PersistenceGateway {
 /**
  * Everything createDiskIo needs, declared explicitly (Pipeline Isolation). No
  * implicit module globals — the headless test supplies a fake ctx + fake
- * gateway + fake apiFetch / fetchWithTimeout that never touch the network.
+ * gateway + fake fetch / fetchWithTimeout that never touch the network.
  */
 export interface DiskIoDeps {
   /** The persistence-state handle (7 formerly-singleton fields). All state reads
@@ -75,9 +74,9 @@ export interface DiskIoDeps {
   readonly ctx: ScenePersistenceContext;
   /** The gateway (live doc + replaceDoc + dispatch). */
   readonly gateway: PersistenceGateway;
-  /** The injected ApiClient fetch (D-3 / R-6). Production = getApiClient().fetch;
+  /** The injected fetch (D-2 / R-P1). Production = arrow-wrapped platform fetch;
    *  headless test = a fake that records calls and never hits the network. */
-  readonly apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
   /** Timeout-guarded fetch for GET reads (io/net.ts fetchWithTimeout). Injected
    *  so headless tests drive load/echo-compare without a server. */
   readonly fetchWithTimeout: (url: string, ms?: number) => Promise<Response>;
@@ -431,7 +430,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       return false;
     }
     try {
-      const r = await deps.apiFetch('/api/files', {
+      const r = await deps.fetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: p, content }),
@@ -477,7 +476,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const ok = navigator.sendBeacon('/api/files', blob);
       // sendBeacon can refuse (queue full / too large); fall back to a keepalive
       // fetch which also survives teardown for small bodies.
-      if (!ok) void deps.apiFetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
+      if (!ok) void deps.fetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
     } catch {
       // last resort — best-effort save through the dispatch wrapper (ledger entry
       // preserved, OOS-1) or the raw impl when no wrapper is wired (headless).

@@ -19,15 +19,15 @@
 //   - scene-list.ts  — multi-scene manifest discovery + in-place switch
 //                      (createSceneList).
 //   - play-config.ts — launcher <game>/play-config.json read/write
-//                      (createPlayConfig) — the clean apiFetch-injection proof.
+//                      (createPlayConfig) — the clean fetch-injection proof.
 //   - storage.ts     — localStorage doc-key / hidden sidecar / retired mirror
 //                      (createStorage).
-// This root builds ONE of each with the real gateway / apiFetch / fetchWithTimeout
+// This root builds ONE of each with the real gateway / fetch / fetchWithTimeout
 // / resolveGamePath and re-exports their surfaces, so a headless test drives each
 // factory directly with fakes (AC-02, see __tests__/persistence-*.test.ts) while
-// consumers see the same barrel. apiFetch moved from a module import to
-// `deps.apiFetch` (D-3 / R-6 structural injection); the transport body
-// (io/api-client.ts) is untouched (OOS-4). The async-op capture-promise seam
+// consumers see the same barrel. fetch moved from a module import to
+// `deps.fetch` (D-2 / R-P1 structural injection); the transport body is the
+// platform fetch (OOS-5). The async-op capture-promise seam
 // (runAsyncOp / registerAsyncSessionOp / dispatchAsyncSessionOp, on
 // ctx.asyncOpResult) stays HERE so the one dispatch slot lives in one place; the
 // factories only produce the raw async impls this root registers + wraps.
@@ -54,7 +54,7 @@
 //     plan-id; AC-01 (7 singletons -> one explicit context, grep 0) + AC-02
 //     (headless-injectable DI units) + AC-08 (core max_file_loc drop) + AC-07
 //     (bidirectional anchors); plan-strategy §2 D-2 (ScenePersistenceContext) + D-3
-//     (create<Thing>(deps), apiFetch via deps) + D-6 (internal seams) + D-8 (subdir
+//     (create<Thing>(deps), fetch via deps) + D-6 (internal seams) + D-8 (subdir
 //     landing) + §8 naming (<Thing>Context / create<Thing> / <Thing>Deps).
 //   (backward) split out of store.ts by historical feat
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose (store.ts
@@ -70,7 +70,6 @@ import { sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import { stableGuid } from '../scene/scene-pack';
-import { apiFetch } from '../io/api-client';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
 import { createDiskIo } from './persistence/disk-io';
@@ -160,7 +159,7 @@ export const ctx = createScenePersistenceContext();
 export interface SceneFileEntry { id: string; name?: string; pack: string }
 
 // ── Compose the four persistence DI units (D-3) ───────────────────────────────
-// ONE of each factory with the real gateway / apiFetch / fetchWithTimeout /
+// ONE of each factory with the real gateway / fetch / fetchWithTimeout /
 // resolveGamePath. The DAG is one-directional: disk-io + storage are leaves
 // (state via ctx + injected net), scene-list depends on them (via wired deps),
 // and this root wires + re-exports all four. disk-watch consumes worldToPack /
@@ -168,7 +167,7 @@ export interface SceneFileEntry { id: string; name?: string; pack: string }
 const diskIo = createDiskIo({
   ctx,
   gateway,
-  apiFetch,
+  fetch: (path, init) => fetch(path, init),
   fetchWithTimeout,
   resolveGamePath,
   notifyDocChanged,
@@ -177,7 +176,7 @@ const diskIo = createDiskIo({
 
 const storage = createStorage({ ctx });
 
-const playConfig = createPlayConfig({ ctx, apiFetch, resolveGamePath });
+const playConfig = createPlayConfig({ ctx, fetch: (path, init) => fetch(path, init), resolveGamePath });
 
 const sceneList = createSceneList({
   ctx,
@@ -227,7 +226,7 @@ export const readPlayConfig = playConfig.readPlayConfig;
 export const writePlayConfig = playConfig.writePlayConfig;
 
 // ── createSceneFile: a new level pack + navigate (root glue) ───────────────────
-// Not a pure state-cluster op (it writes a new pack via apiFetch then navigates),
+// Not a pure state-cluster op (it writes a new pack via fetch then navigates),
 // so it stays wired at the root next to the async-op seam it dispatches through.
 /** Create a new level under assets/scenes/<slug>.pack.json (empty, or duplicated
  *  from the current doc) and switch to it. NOTHING is written to forge.json. The
@@ -246,7 +245,7 @@ async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise
   const newPack = { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [{ guid: newSceneGuid, kind: 'scene', payload: { entities: [] }, refs: [] }] };
   const packContent = JSON.stringify(newPack, null, 2) + '\n';
   try {
-    const w1 = await apiFetch('/api/files', {
+    const w1 = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: newPath, content: packContent }),

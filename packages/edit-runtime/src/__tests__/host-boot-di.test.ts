@@ -4,17 +4,17 @@
 //
 // These are exactly the paths #88's real-Play safety net could NOT reach in a
 // unit: initHostSession is ~234 lines of high-side-effect boot ordering that
-// touches the network (apiFetch: /api/health, /api/files), the live engine world
+// touches the network (fetch: /api/health, /api/files), the live engine world
 // (gateway), window/VAG listeners, and the disk-watch socket — so before M4 they
 // had no headless coverage. M4 (D-3) extracts them into a `createHostSession(deps)`
 // factory (the run-lifecycle `create<Thing>(deps)` pattern) whose deps make every
 // side effect injectable — so this suite drives resolveEditPhysics / initHostSession
-// / (indirectly) installPreviewSkinHook with FAKE apiFetch + fake gateway + fake
+// / (indirectly) installPreviewSkinHook with FAKE fetch + fake gateway + fake
 // core singletons, asserting:
 //   - AC-02: the factory reaches all state THROUGH deps (deps.getSceneId /
 //     deps.gateway / deps.loadDocFromDisk / ...), never a module-level singleton —
 //     a fresh fake set fully controls behavior.
-//   - AC-02 x R-6: apiFetch is a DEP (structural injection), so a headless test
+//   - AC-02 x R-P1: fetch is a DEP (structural injection), so a headless test
 //     injects a fake that never touches the network. This is the injection seam
 //     plan-strategy §2 D-3 opens (import→deps), NOT a change to the transport body
 //     (OOS-4). lint-no-direct-api-fetch stays green: no raw fetch('/api').
@@ -31,7 +31,7 @@
 // Anchors:
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
 //     plan-id; AC-02 (headless-injectable DI unit, no singleton read) + AC-05
-//     (high side-effect boot path regression) ; plan-strategy §2 D-3 (apiFetch via
+//     (high side-effect boot path regression) ; plan-strategy §2 D-2 (fetch via
 //     deps) + D-4 (host-boot DI) + §5.3.
 //   (backward) covers viewport/host-session.ts, extracted from host-boot.ts, whose
 //     boot tail arrived from main.tsx by historical feats
@@ -53,15 +53,15 @@ const GOOD_GUID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
 
 // ── Fakes — nothing here touches the network, a real engine world, or the DOM. ──
 
-/** Records apiFetch invocations so a test can assert the factory used the INJECTED
+/** Records fetch invocations so a test can assert the factory used the INJECTED
  *  seam (not a module import) and how many times, and can script the response. */
-function makeApiFetchSpy(impl?: (path: string) => Promise<Response>) {
+function makeFetchSpy(impl?: (path: string) => Promise<Response>) {
   const calls: string[] = [];
-  const apiFetch = (path: string, _init?: RequestInit): Promise<Response> => {
+  const fetchFn = (path: string, _init?: RequestInit): Promise<Response> => {
     calls.push(path);
-    return impl ? impl(path) : Promise.reject(new Error('apiFetch must not be called in this case'));
+    return impl ? impl(path) : Promise.reject(new Error('fetch must not be called in this case'));
   };
-  return { apiFetch, calls };
+  return { fetch: fetchFn, calls };
 }
 
 /** forge.json content responder — 200 with a `{ content }` envelope (the shape the
@@ -129,7 +129,7 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     flushCalls: 0,
   };
   const deps: HostSessionDeps = {
-    apiFetch: makeApiFetchSpy().apiFetch,
+    fetch: makeFetchSpy().fetch,
     gateway: gatewayCtl.gateway,
     getSceneId: () => 'default',
     resolveGamePath: (rel: string) => `/games/g1/${rel}`,
@@ -190,20 +190,20 @@ describe('createHostSession — factory shape + deps boundary (AC-02)', () => {
   });
 });
 
-describe('resolveEditPhysics — reads getSceneId via deps, apiFetch injected (AC-02 / R-6)', () => {
+describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-02 / R-6)', () => {
   it('returns undefined for the default slug WITHOUT any network', async () => {
-    const spy = makeApiFetchSpy();
-    const { deps } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'default' });
+    const spy = makeFetchSpy();
+    const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'default' });
     const host = createHostSession(deps);
     expect(await host.resolveEditPhysics()).toBeUndefined();
     expect(spy.calls.length).toBe(0);
   });
 
-  it('reads forge.physics through the injected apiFetch and maps 3d → rapier-3d', async () => {
-    const spy = makeApiFetchSpy(() =>
+  it('reads forge.physics through the injected fetch and maps 3d → rapier-3d', async () => {
+    const spy = makeFetchSpy(() =>
       Promise.resolve(forgeResponse({ id: 'g1', name: 'G1', schemaVersion: '1.0.0', physics: '3d' })),
     );
-    const { deps } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'shoot' });
+    const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'shoot' });
     const host = createHostSession(deps);
     expect(await host.resolveEditPhysics()).toBe('rapier-3d');
     expect(spy.calls.length).toBe(1);
@@ -212,10 +212,10 @@ describe('resolveEditPhysics — reads getSceneId via deps, apiFetch injected (A
 
   it('maps physics:true → rapier-3d and 2d → rapier-2d (OOS-1 mapping preserved)', async () => {
     const mk = (physics: unknown) => {
-      const spy = makeApiFetchSpy(() =>
+      const spy = makeFetchSpy(() =>
         Promise.resolve(forgeResponse({ id: 'g1', name: 'G1', schemaVersion: '1.0.0', physics })),
       );
-      const { deps } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'shoot' });
+      const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'shoot' });
       return createHostSession(deps).resolveEditPhysics();
     };
     expect(await mk(true)).toBe('rapier-3d');
@@ -223,9 +223,9 @@ describe('resolveEditPhysics — reads getSceneId via deps, apiFetch injected (A
     expect(await mk(false)).toBeUndefined();
   });
 
-  it('degrades to undefined when the injected apiFetch rejects (charter S9, OOS-1)', async () => {
-    const apiFetch = () => Promise.reject(new Error('offline'));
-    const { deps } = makeDeps({ apiFetch, getSceneId: () => 'shoot' });
+  it('degrades to undefined when the injected fetch rejects (charter S9, OOS-1)', async () => {
+    const fetchFn = () => Promise.reject(new Error('offline'));
+    const { deps } = makeDeps({ fetch, getSceneId: () => 'shoot' });
     const host = createHostSession(deps);
     expect(await host.resolveEditPhysics()).toBeUndefined();
   });
@@ -233,8 +233,8 @@ describe('resolveEditPhysics — reads getSceneId via deps, apiFetch injected (A
 
 describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {
   it('loads the doc, seeds the empty world, broadcasts assets, and wires disk-watch', async () => {
-    const spy = makeApiFetchSpy();
-    const { deps, log, gatewayCtl } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'default' });
+    const spy = makeFetchSpy();
+    const { deps, log, gatewayCtl } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'default' });
     const host = createHostSession(deps);
     const ctx = makeCtx();
     const session = await host.initHostSession(ctx);
@@ -281,10 +281,10 @@ describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {
   });
 });
 
-describe('installPreviewSkinHook (via initHostSession) — apiFetch injected, no network (AC-02)', () => {
-  it('default slug: preview-skin short-circuits before touching apiFetch', async () => {
-    const spy = makeApiFetchSpy();
-    const { deps } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'default' });
+describe('installPreviewSkinHook (via initHostSession) — fetch injected, no network (AC-02)', () => {
+  it('default slug: preview-skin short-circuits before touching fetch', async () => {
+    const spy = makeFetchSpy();
+    const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'default' });
     const host = createHostSession(deps);
     await host.initHostSession(makeCtx());
     await flush();
@@ -292,18 +292,18 @@ describe('installPreviewSkinHook (via initHostSession) — apiFetch injected, no
     expect(spy.calls.length).toBe(0);
   });
 
-  it('real slug + no preview.skin: preview-skin reads forge THROUGH the injected apiFetch then returns', async () => {
+  it('real slug + no preview.skin: preview-skin reads forge THROUGH the injected fetch then returns', async () => {
     // forge.json without a preview block → the hook loads the project, finds no
     // skin, and returns — proving the read went through the injected seam.
-    const spy = makeApiFetchSpy(() =>
+    const spy = makeFetchSpy(() =>
       Promise.resolve(forgeResponse({ id: 'g1', name: 'G1', schemaVersion: '1.0.0' })),
     );
-    const { deps } = makeDeps({ apiFetch: spy.apiFetch, getSceneId: () => 'shoot' });
+    const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'shoot' });
     const host = createHostSession(deps);
     await host.initHostSession(makeCtx());
     await flush();
     await flush();
-    // the preview-skin hook issued at least one forge read via the injected apiFetch.
+    // the preview-skin hook issued at least one forge read via the injected fetch.
     expect(spy.calls.length).toBeGreaterThan(0);
     expect(spy.calls.some((p) => p.includes(encodeURIComponent('/games/g1/forge.json')))).toBe(true);
   });

@@ -27,7 +27,7 @@ Both are rebuilt on demand — never committed. A bare `bun install` alone does 
 | Task | Command |
 |:--|:--|
 | Typecheck (all packages) | `bun run typecheck` (`tsc --noEmit`) |
-| Full lint | `bun run lint` (sync-channel + api-seam + engine-shim + no-second-world gates) |
+| Full lint | `bun run lint` (sync-channel + engine-shim + no-second-world gates) |
 | Dependency-cycle gate | `bun run lint:dep` (dependency-cruiser — asserts the DAG and direction rules) |
 | Standalone dev (recommended) | `bun run dev:standalone` → http://localhost:15290 |
 | Edit-runtime only | `bun run dev:edit-runtime` (:15280, HMR→15290) |
@@ -52,7 +52,7 @@ engine ← editor-core ← editor-content-browser ← editor-panels ← edit-run
 
 | Package | Role |
 |:--|:--|
-| `@forgeax/editor-core` | Core logic — EditSession, EditorBus, undo/redo, schema, sync-channel, animation, material graph, assets, presets, sockets, the injected **ApiClient** backend seam |
+| `@forgeax/editor-core` | Core logic — EditSession, EditorBus, undo/redo, schema, sync-channel, animation, material graph, assets, presets, sockets; backend calls = same-origin relative `/api` platform `fetch`; persistence/host DI is injected via `deps.fetch` (fakeable) |
 | `@forgeax/editor-content-browser` | Asset browser — grid/list/column views, filter/sort/history, drag-spawn, import pipeline (FBX/glTF cook via core) |
 | `@forgeax/editor-panels` | 8 business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Timeline, MaterialGraph) + panel-component injection |
 | `@forgeax/editor-edit-runtime` | Edit-mode entry — engine boot + camera + dock shell + EditorApp |
@@ -63,7 +63,7 @@ engine ← editor-core ← editor-content-browser ← editor-panels ← edit-run
 ## Invariants agents must respect (CI-enforced where noted)
 
 1. **No import cycles + direction rules.** Keep the DAG `core ← content-browser ← panels ← edit-runtime`. `bun run lint:dep` (dependency-cruiser) enforces both no-circular and upward-import direction rules. New cross-package import broke it? Fix the direction, don't add to `.dependency-cruiser.cjs`.
-2. **Backend only through the injected `ApiClient`** (`editor-core/src/api-client.ts`). A raw `fetch('/api/...')` in editor-proper source re-hardcodes the transport and trips `lint-no-direct-api-fetch.mjs` (wired into `bun run lint`). Use `getApiClient().fetch(...)`. (`packages/interface`, `api-client.ts` itself, and tests are exempt.)
+2. **Backend calls use platform `fetch`; DI via `deps.fetch`.** All editor backend calls go through same-origin relative `/api` platform `fetch`. Persistence and host subsystems accept `deps.fetch` as an injectable `(path: string, init?: RequestInit) => Promise<Response>` — the fakeable DI point. Bare `fetch(` in editor source means platform-direct; `deps.fetch(` means injectable (test substitutes).
 3. **EDITOR_PANELS is single-SSOT** in `editor-core/src/manifest.ts`. `lint-sync-channel-panels.mjs` (wired into `bun run lint`) asserts that no other file defines a duplicate `EDITOR_PANELS` literal — any second copy trips CI.
 4. **Single engine world.** The engine submodule (on-disk lib) must not grow a second engine World — `lint-no-second-world.mjs` scans `git -C packages/engine diff` to gate that. Editor-side `new World()` calls (e.g. `play-assemble.ts` level-load world, plan-strategy D-1/D-2) are legitimate: play mode creates a separate **transient** playWorld (fresh `new World()` + level-load) whose lifetime is the play session (stop drops it, no persistence), while the single persistent editWorld stays untouched. The gate's scanning domain is the engine submodule only — editor source (`packages/core`, `packages/edit-runtime`, etc.) is out of scope by design.
 5. **VAG protocol SSOT** lives in `editor-core/src/protocol.ts` (16 `VAG_*` schemas). play-runtime reaches core only through it — never via direct import (convention — not machine-enforced; `bun run lint:dep` direction rules prevent wrong-direction imports but do not gate the VAG protocol path specifically).
@@ -71,7 +71,7 @@ engine ← editor-core ← editor-content-browser ← editor-panels ← edit-run
 
 ## Self-boot levels
 
-CI (`.github/workflows/ci.yml`) re-proves on every push/PR that a fresh `clone → bun install` reaches **B2**: the standalone editor reads **and writes** a game with **no studio server**, by reusing `@forgeax/platform-io` (the real 后L1 file router, confined to one game) as its backend — see `standalone/game-backend.ts`. The B2 gate is deliberately lightweight (no engine/Rust-wasm build); heavier gates (typecheck, api-seam, e2e, engine build) live in the studio superrepo CI.
+CI (`.github/workflows/ci.yml`) re-proves on every push/PR that a fresh `clone → bun install` reaches **B2**: the standalone editor reads **and writes** a game with **no studio server**, by reusing `@forgeax/platform-io` (the real 后L1 file router, confined to one game) as its backend — see `standalone/game-backend.ts`. The B2 gate is deliberately lightweight (no engine/Rust-wasm build); heavier gates (typecheck, e2e, engine build) live in the studio superrepo CI.
 
 ## Anti-patterns when extending the editor
 

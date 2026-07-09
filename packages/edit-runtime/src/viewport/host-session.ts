@@ -6,7 +6,7 @@
 //
 // WHY THIS IS A `create<Thing>(deps)` FACTORY (M4 / AC-02 / plan-strategy §2 D-4)
 //   host-boot.ts used to hold this logic as free functions that read module-level
-//   singletons directly (gateway / apiFetch / getSceneId / loadDocFromDisk / ...)
+//   singletons directly (gateway / fetch / getSceneId / loadDocFromDisk / ...)
 //   and touched the DOM (window / VAG listeners). That made the ~234-line boot
 //   ordering — the single highest-side-effect path in the editor — impossible to
 //   drive in a unit: no browser, no network, no engine world. M4 extracts it into
@@ -18,12 +18,11 @@
 //   window/VAG beacon-listener installer and re-exports the two entry points, so
 //   ViewportComponent's import surface is unchanged (consumers zero-change).
 //
-// D-3 apiFetch-as-dep (the R-6 seam): `apiFetch` moved from a module-level
-// `import { apiFetch }` to `deps.apiFetch`. This is a STRUCTURAL change (allowed
-// by plan-strategy §2 D-3) — the transport body (core io/api-client.ts) is
-// untouched (OOS-4). The injected value is still the real same-origin apiFetch in
-// production, so lint-no-direct-api-fetch stays satisfied: every network read goes
-// through deps.apiFetch, never a raw hardcoded same-origin /api call.
+// D-2 fetch-as-dep (the R-P1 seam): `fetch` was previously imported from
+// io/api-client.ts (now deleted); now it is injected via `deps.fetch`. This is a STRUCTURAL
+// by plan-strategy §2 D-2) — the transport body is the platform fetch
+// (OOS-5). The injected value is arrow-wrapped in production, so
+// every network read goes through deps.fetch, never a raw hardcoded call.
 //
 // OOS-1 (zero behavior change): every body here is the verbatim logic previously
 // in host-boot.ts initHostSession / resolveEditPhysics / installPreviewSkinHook /
@@ -38,7 +37,7 @@
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
 //     plan-id; AC-02 (DI factory, headless-injectable, no singleton read) + AC-05
 //     (high side-effect boot path regression) + AC-07 (bidirectional anchors) +
-//     AC-08 (edit-runtime host-boot LOC drop); plan-strategy §2 D-3 (apiFetch via
+//     AC-08 (edit-runtime host-boot LOC drop); plan-strategy §2 D-2 (fetch via
 //     deps) + D-4 (host-boot DI) + §8 naming (create<Thing> / <Thing>Deps).
 //   (backward) extracted from host-boot.ts (REPLAN D8 split of main.tsx bootEditor
 //     into ViewportComponent + host-boot), with the ▶/■ run-lifecycle seam from
@@ -172,13 +171,13 @@ export interface HostGateway {
 /**
  * Everything createHostSession needs, declared explicitly (Pipeline Isolation).
  * No implicit module globals — the headless test supplies a fake gateway + fake
- * apiFetch + fake core singletons + a no-op beacon-listener installer, so the
+ * fetch + fake core singletons + a no-op beacon-listener installer, so the
  * whole boot tail runs without a browser, a network, or a real engine world.
  */
 export interface HostSessionDeps {
-  /** The injected ApiClient fetch (D-3 / R-6). Production = the real same-origin
-   *  apiFetch; headless test = a fake that records calls and never hits the net. */
-  readonly apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  /** The injected fetch (D-2 / R-P1). Production = arrow-wrapped platform fetch;
+   *  headless test = a fake that records calls and never hits the network. */
+  readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
   /** The gateway single-pointer surface (active world + dispatch + engineFacade). */
   readonly gateway: HostGateway;
   /** The active scene slug (`?scene=`), read by the physics gate + preview-skin. */
@@ -232,7 +231,6 @@ export function createHostSession(deps: HostSessionDeps): {
   initHostSession: (ctx: HostSessionContext) => Promise<HostSession>;
 } {
   const {
-    apiFetch,
     gateway,
     getSceneId,
     resolveGamePath,
@@ -264,7 +262,7 @@ export function createHostSession(deps: HostSessionDeps): {
     if (!slug || slug === 'default') return undefined;
     try {
       const gp = await loadGameProject(async () => {
-        const r = await apiFetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
+        const r = await deps.fetch(`/api/files?path=${encodeURIComponent(resolveGamePath(FORGE_JSON))}`, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { content?: string };
         if (!j.content) throw new Error('Empty content');
@@ -369,7 +367,7 @@ export function createHostSession(deps: HostSessionDeps): {
     let cachedProjectRootAbs: string | undefined;
     const getProjectRootAbs = async (): Promise<string> => {
       if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
-      const r = await apiFetch('/api/health', { cache: 'no-store' });
+      const r = await deps.fetch('/api/health', { cache: 'no-store' });
       if (!r.ok) throw new Error(`/api/health HTTP ${r.status}`);
       const j = (await r.json()) as { projectRootAbs?: string };
       if (!j.projectRootAbs) throw new Error('/api/health missing projectRootAbs');
@@ -397,7 +395,7 @@ export function createHostSession(deps: HostSessionDeps): {
       try {
         const gameForgePath = resolveGamePath(FORGE_JSON);
         const gp = await loadGameProject(async () => {
-          const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+          const r = await deps.fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const j = (await r.json()) as { content?: string };
           if (!j.content) throw new Error('Empty content');
@@ -625,7 +623,7 @@ export function createHostSession(deps: HostSessionDeps): {
     try {
       const gameForgePath = resolveGamePath(FORGE_JSON);
       const fetchRead = async (): Promise<string> => {
-        const r = await apiFetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
+        const r = await deps.fetch(`/api/files?path=${encodeURIComponent(gameForgePath)}`, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { content?: string };
         if (!j.content) throw new Error('Empty content');

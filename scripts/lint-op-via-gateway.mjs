@@ -185,7 +185,7 @@ const CONTEXT_FACTORY_RE = /^export\s+function\s+create\w*Context\s*\(/;
 // plan-strategy D-3 + §8 naming). The run-lifecycle create<Thing>(deps) form
 // extracts a persistence cluster (createDiskIo / createSceneList /
 // createPlayConfig / createStorage) into a factory whose whole dependency edge
-// -- including the gateway + apiFetch -- is the injected `deps` object. The
+// -- including the gateway + fetch -- is the injected `deps` object. The
 // factory itself dispatches nothing and mutates no module global; its RETURNED
 // functions route real ops through the gateway exactly as before (the
 // composition root wires them). Same "not a gateway-bypassing operation"

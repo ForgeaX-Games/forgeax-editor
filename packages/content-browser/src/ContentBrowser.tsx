@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // M3 (AC-03): asset-selection is a transient op dispatched through the one
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
-import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
+import { gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
   renameAssetInPack, broadcastAssetsChanged,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
@@ -145,7 +145,7 @@ export function ContentBrowser() {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await apiFetch(
+        const r = await fetch(
           `/api/files?path=${encodeURIComponent(resolveGamePath('package.json'))}`,
           { cache: 'no-store' },
         );
@@ -176,7 +176,7 @@ export function ContentBrowser() {
       const dirs: string[] = [];
       for (const root of assetRoots) {
         const treePath = resolveGamePath(root);
-        const r = await apiFetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
+        const r = await fetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
         if (!r.ok) continue;
         const j = (await r.json()) as { tree?: { children?: { name: string; path: string; type: string; children?: unknown[] }[] } | null };
         if (!j.tree?.children) continue;
@@ -310,7 +310,7 @@ export function ContentBrowser() {
 
   // M3 (AC-03): asset-selection is a transient op — it goes through the one
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
-  // (封门, M3), which is no longer exported from the barrel.
+  // (gateway-only door, M3), which is no longer exported from the barrel.
   const openAsset = useCallback((asset: CBAsset) => {
     // M1 (AC-B2): single-asset select uses the `setAssetSelectionOne` sugar op
     // (forwards to the multi-base setAssetSelection applier). The bare
@@ -507,7 +507,7 @@ export function ContentBrowser() {
 
           {/* Draggable divider (UE-parity): widen the tree to read long paths. */}
           <ResizeHandle orientation="col" onDrag={onSplitDrag} onDragEnd={onSplitDragEnd}
-            title="拖动调整文件夹栏宽度" />
+            title="Drag to resize folder tree width" />
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>

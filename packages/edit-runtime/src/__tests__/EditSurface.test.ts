@@ -95,7 +95,7 @@ describe('probeServer (success path)', () => {
     });
 
     // probeServer takes no serverBase arg anymore — backend is always same-origin
-    // /api via apiFetch (M4 / plan-strategy D-7). The probe hits a relative path.
+    // /api via fetch (M3 / plan-strategy D-2). The probe hits a relative path.
     await probeServer();
     expect(fetchedUrl).toBe('/api/workbench/active-slug');
   });

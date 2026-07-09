@@ -34,7 +34,6 @@
 //   placeholder (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { apiFetch } from '../io/api-client';
 import { resolveMeshOriginalMaterials } from '../scene/mesh-original-materials';
 
 export interface DragAssetRef {
@@ -165,7 +164,7 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
 // (edit-runtime/EditSurface.tsx, VAG spawn) — which is why it lives here in core
 // (the DAG's floor) rather than being duplicated per path. Both callers import it
 // downward (`core <- edit-runtime`), the legal direction. Deps are core-internal
-// (apiFetch + resolveMeshOriginalMaterials); no engine handle touched (core stays
+// (fetch + resolveMeshOriginalMaterials); no engine handle touched (core stays
 // UI-free, AC-03). Best-effort: any recovery miss returns undefined so the caller
 // keeps the single-material default.
 export async function recoverMeshOriginalMaterialGuids(
@@ -174,7 +173,7 @@ export async function recoverMeshOriginalMaterialGuids(
   try {
     const readRaw = async (p: string): Promise<Response | null> => {
       try {
-        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+        const r = await fetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
         return r.ok ? r : null;
       } catch {
         return null;

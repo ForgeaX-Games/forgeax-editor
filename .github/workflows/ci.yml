@@ -1,6 +1,6 @@
 name: CI
 
-# forgeax-editor standalone "clone 即跑" gate (ideal-clean-architecture.md §6 R7).
+# forgeax-editor standalone "clone-and-run" gate (ideal-clean-architecture.md §6 R7).
 #
 # The editor is a self-contained repo: `git clone --recurse-submodules` then
 # `bun install` must reach SELF-BOOT level B2 (reuse @forgeax/platform-io as the
@@ -151,7 +151,7 @@ jobs:
       - name: Install (bun, no scripts)
         run: bun install --ignore-scripts
 
-      # Gate 1 — the reused 后L1 backend's confinement contract (whitelist +
+      # Gate 1 — the reused back-L1 backend's confinement contract (whitelist +
       # single-game slug-strip / traversal). Runs against the platform-io this
       # editor repo pins, so a pin bump that weakens confinement fails here too.
       - name: Test @forgeax/platform-io
@@ -265,12 +265,12 @@ jobs:
       - name: Install (bun, no scripts)
         run: bun install --ignore-scripts
 
-      # Structural gates: sync-channel drift, DIP api-seam, the engine-shim
+      # Structural gates: sync-channel drift, the engine-shim
       # guard (no bodyless `declare module '@forgeax/engine-*'` that would blind
       # tsc to bad engine imports), the op-via-gateway seam (Gate B), and the
       # editor-trace-ioc Gate A (lint-unique-mutator: raw world writes only in
       # the EngineFacade) + setter-sugar recurrence gate (lint-no-store-setter-sugar).
-      - name: Lint (sync-channel + api-seam + engine-shim + gateway seams)
+      - name: Lint (sync-channel + engine-shim + gateway seams)
         run: bun run lint
 
       # DAG boundary gate (dependency-cruiser): core ← shared ← panels ← runtime.

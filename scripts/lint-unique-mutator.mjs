@@ -6,11 +6,10 @@
 // engine world write — world.set / world.spawn / world.despawn /
 // world.allocSharedRef — must live inside the SINGLE EngineFacade implementation
 // file (packages/core/src/io/engine-facade.ts). That file is the WRITE-GATE
-// DEFINITION ITSELF, exactly as api-client.ts is the sole legal home of raw
-// fetch() for lint-no-direct-api-fetch.mjs (AGENTS.md invariant 2). This is NOT a
-// growable file white-list (the thing OOS-2 forbids): there is exactly ONE legal
-// file and it is the gate's own body. Any diff-added raw world write in any OTHER
-// editor source file is a violation.
+// DEFINITION ITSELF -- the sole legal home of raw engine world writes. This is
+// NOT a growable file white-list (the thing OOS-2 forbids): there is exactly ONE
+// legal file and it is the gate's own body. Any diff-added raw world write in any
+// OTHER editor source file is a violation.
 //
 // WHY DIFF-SCOPED WITH BASELINE (following lint-op-via-gateway.mjs precedent):
 //   Some legacy files still carry raw world writes that are out of THIS feature's

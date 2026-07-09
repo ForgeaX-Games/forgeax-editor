@@ -30,7 +30,7 @@ import {
 } from '../editor-import-error';
 
 // ── fetch stubbing ──────────────────────────────────────────────────────────
-// probeServer calls editor-core `apiFetch`, which is `fetch(path, init)` against
+// probeServer calls same-origin `fetch(path, init)` against
 // the same origin. Overriding globalThis.fetch drives probeServer headlessly
 // (no network), exercising the SERVER_UNAVAILABLE classification branches.
 
