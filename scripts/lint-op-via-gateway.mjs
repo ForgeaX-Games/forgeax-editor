@@ -28,7 +28,13 @@
 //     mesh-stats.ts      -- derived stats broadcast
 //     assets-changed.ts  -- change signal broadcast
 //     disk-watch.ts      -- infrastructure init/teardown
-//   Also exempt: functions named init* or bootstrap (infrastructure init).
+//   Also exempt: functions named init* or bootstrap (infrastructure init), and
+//   create*Context DI-context factories (e.g. createScenePersistenceContext,
+//   feat-20260709 M1 / plan-strategy D-2 + §8 <Thing>Context naming). Such a
+//   factory RETURNS a fresh state-carrier object; it dispatches nothing and
+//   mutates no global — same "not a gateway-bypassing operation" category as
+//   init*/bootstrap*. The `create` verb in STORE_SETTER_RE targets gateway ops
+//   like createSceneFile, NOT DI factories; the `Context` suffix disambiguates.
 //
 // TEST HUNK EXEMPTION: skips __tests__/ and *.test.* paths.
 //
@@ -169,6 +175,25 @@ const EXEMPT_FILES = new Set([
 // Also exempt functions whose name starts with 'init' or 'bootstrap'
 const INIT_BOOTSTRAP_RE = /^export\s+function\s+(init|bootstrap)\w*\s*\(/;
 
+// Also exempt create*Context DI-context factories (plan-strategy D-2 + §8):
+// they return a fresh state-carrier object, dispatching nothing / mutating no
+// global — not a gateway-bypassing operation. Scoped to the `Context` suffix so
+// real store ops (createSceneFile etc.) are still caught by STORE_SETTER_RE.
+const CONTEXT_FACTORY_RE = /^export\s+function\s+create\w*Context\s*\(/;
+
+// Also exempt create<Thing>(deps: <Thing>Deps) DI factories (feat-20260709 M2 /
+// plan-strategy D-3 + §8 naming). The run-lifecycle create<Thing>(deps) form
+// extracts a persistence cluster (createDiskIo / createSceneList /
+// createPlayConfig / createStorage) into a factory whose whole dependency edge
+// -- including the gateway + apiFetch -- is the injected `deps` object. The
+// factory itself dispatches nothing and mutates no module global; its RETURNED
+// functions route real ops through the gateway exactly as before (the
+// composition root wires them). Same "not a gateway-bypassing operation"
+// category as create*Context. Scoped to a first parameter literally named `deps`
+// so real store ops (createSceneFile(id, duplicateCurrent) etc.) -- which never
+// take a single `deps` param -- are still caught by STORE_SETTER_RE.
+const DI_FACTORY_RE = /^export\s+function\s+create\w+\(\s*deps\s*:/;
+
 // Test hunk exemption pattern
 const TEST_HUNK_RE = /(__tests__|\.test\.|\.test-d\.)/;
 
@@ -257,6 +282,10 @@ for (const line of diffText.split('\n')) {
       const fnName = m[1];
       // Exempt: init*/bootstrap functions
       if (INIT_BOOTSTRAP_RE.test(added)) continue;
+      // Exempt: create*Context DI-context factories (plan-strategy D-2 + §8)
+      if (CONTEXT_FACTORY_RE.test(added)) continue;
+      // Exempt: create<Thing>(deps: ...) DI factories (plan-strategy D-3 + §8)
+      if (DI_FACTORY_RE.test(added)) continue;
       // Exempt: function names already on origin/main baseline
       if (baselineNames.has(fnName)) continue;
       offenders.push(`[rule-a] ${curFile}: ${added.trim()}`);

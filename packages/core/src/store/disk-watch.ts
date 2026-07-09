@@ -5,30 +5,34 @@
 // initDiskWatch closure. Consumer: the single-realm studio host calls
 // initDiskWatch() and later the returned stopper on cross-game teardown.
 //
-// D-6 (plan-strategy §2): disk-watch depends on scene-persistence file-private
-// symbols. It READS worldToPack / scenePath / currentSceneGuid / _isDirty and
-// CALLS loadSceneByGuid; its two `let` WRITES (currentSceneGuid, _isDirty) route
-// through the _setCurrentSceneGuid / _setDirty setters because ESM imported
-// bindings are read-only in the importer. It signals a doc reload via the public
-// notifyDocChanged(). (research F-4 / D-6 undercounted these writes as read-only;
-// the setters are D-6's sanctioned "export a minimal setter when a write point
-// exists" fix.)
+// D-6 (plan-strategy §2 D-2/D-6): disk-watch depends on scene-persistence
+// file-private symbols. It READS worldToPack / scenePath and CALLS loadSceneByGuid;
+// its two reverse-writes (currentSceneGuid, isDirty) plus their paired reads now go
+// through the SHARED `ctx` handle (ScenePersistenceContext) it imports directly —
+// ctx.currentSceneGuid / ctx.isDirty for reads, ctx.setCurrentSceneGuid / ctx.setDirty
+// for writes. M1 (D-2) converged scene-persistence's 7 module-level `let`s onto that
+// one object, so these are ordinary field writes on a handle both modules hold — the
+// pre-M1 `_setCurrentSceneGuid` / `_setDirty` setter pair (the ESM read-only-live-
+// binding workaround for `export let`) is gone. It signals a doc reload via the
+// public notifyDocChanged().
 //
 // Anchors:
-//   plan-strategy §2 D-2: cluster 11 (store.ts:1161-1248)
-//   plan-strategy §2 D-6: reads scene-persistence internal seams.
+//   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
+//     plan-id; AC-01 (no module-level mutable singleton — this file's `let` grep
+//     stays 0) + AC-07 (bidirectional anchors); plan-strategy §2 D-2 (disk-watch
+//     consumes the same ctx) + §2 D-6 (internal seams).
+//   (backward) split out of store.ts by historical feat
+//     feat-20260705-editor-core-engine-convergence-store-ts-decompose (cluster 11,
+//     store.ts:1161-1248).
 //   requirements AC-09: pure structural migration; the only body edits are the
-//     ESM-forced seam routings, each behaviorally identical to the originals.
+//     ctx-handle seam routings, each behaviorally identical to the originals.
 import { gateway } from './gateway';
 import { notifyDocChanged } from './doc-version';
 import {
   worldToPack,
   scenePath,
   loadSceneByGuid,
-  currentSceneGuid,
-  _isDirty,
-  _setDirty,
-  _setCurrentSceneGuid,
+  ctx,
 } from './scene-persistence';
 import { isScenePack } from '../scene/scene-pack';
 import { apiFetch } from '../io/api-client';
@@ -78,18 +82,18 @@ export function initDiskWatch(): () => void {
         // world's serialization. If identical, this is our own save echo — skip
         // (no teardown/reload). Comparing before the reload also avoids a
         // needless despawn+reinstantiate on every self-save.
-        const currentPack = worldToPack(gateway.doc, currentSceneGuid ?? undefined);
+        const currentPack = worldToPack(gateway.doc, ctx.currentSceneGuid ?? undefined);
         if (currentPack && JSON.stringify(parsed) === currentPack) return;
         // Genuine external edit → reload via the engine-native loadByGuid path
         // (loadSceneByGuid despawns the current scene and re-instantiates it; the
         // instantiate return handles are the identity — no map to repopulate).
         const sceneEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
         if (!sceneEntry?.guid) return;
-        if (sceneEntry.guid) _setCurrentSceneGuid(sceneEntry.guid);
+        if (sceneEntry.guid) ctx.setCurrentSceneGuid(sceneEntry.guid);
         const ok = await loadSceneByGuid(sceneEntry.guid);
         if (!ok) return;
         notifyDocChanged();
-        _setDirty(false);
+        ctx.setDirty(false);
         return;
       }
       // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
@@ -113,7 +117,7 @@ export function initDiskWatch(): () => void {
       const path = (msg.path ?? '').replace(/\\/g, '/');
       if (path !== scenePath()) return;          // only THIS game's scene.json
       if (msg.change === 'unlink') return;
-      if (_isDirty) return;                        // user has unsaved edits → don't clobber
+      if (ctx.isDirty) return;                     // user has unsaved edits → don't clobber
       // The reload itself content-compares against the current doc, so our own
       // save echo is a no-op (identical content) — no rebuild, no loop.
       if (reloadTimer) clearTimeout(reloadTimer);
