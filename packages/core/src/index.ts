@@ -155,10 +155,6 @@ import './store/panel-ops';
 // Boot timing: after gateway singleton creation, before CB first render (§C6, §F-9).
 import './store/cb-nav';
 
-// ── Folder selection (session domain: setFolderSelection) ──
-// Side-effect import: registers setFolderSelection applier at module eval (D3a).
-import './store/folder-selection';
-
 // ── Assets ──
 export {
   loadRawAssets,
@@ -191,7 +187,6 @@ export {
   renameAssetInPack,
   deleteAsset,
   createDirectory,
-  deleteDirectory,
 } from './session/pack-ops';
 
 // ── Scene types (extended, for games) ──
@@ -240,7 +235,7 @@ export {
   useFieldPreview,
   loadDocFromStorage,
   loadDocFromDisk,
-  getLoadedSceneEntities,
+  getLoadedSceneRoot,
   initDiskWatch,
   initSceneList,
   getSceneFile,
@@ -278,17 +273,6 @@ export {
   useLastSelectionDomain,
   subscribeLastSelectionDomain,
 } from './store/last-selection-domain';
-export type { SelectionDomain } from './store/last-selection-domain';
-
-// Folder selection (session domain) — D3a: setFolderSelection op + reactive read.
-export {
-  getFolderSelectionList,
-  onFolderSelectionChange,
-  useFolderSelectionSet,
-} from './store/folder-selection';
-
-// AssetsChangedHint — hint type for broadcastAssetsChanged optimization (D5).
-export type { AssetsChangedHint } from './store/assets-changed';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats } from './store/store';
 
 // ── Entity operations ──

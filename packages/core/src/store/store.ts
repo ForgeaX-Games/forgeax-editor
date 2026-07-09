@@ -88,7 +88,7 @@ export { notifyDocChanged, useDocVersion } from './doc-version';
 export {
   buildHiddenKey,
   getSceneId,
-  getLoadedSceneEntities,
+  getLoadedSceneRoot,
   getSceneFile,
   getSceneList,
   onSceneListChange,

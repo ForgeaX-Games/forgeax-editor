@@ -6,7 +6,6 @@ import {
   useAssetSelection,
   clearAssetSelection,
   registerAssetSelectAllHandler,
-  useFolderSelectionSet,
 } from '@forgeax/editor-core';
 
 type Selectable = CBAsset | CBFolder;
@@ -47,9 +46,6 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   const selectedGuids = useMemo(() => new Set(selectedList.map((a) => a.guid)), [selectedList]);
   const anchorIndexRef = useRef<number>(-1);
 
-  // D3a: folder selection paths (reactive, driven by setFolderSelection session op).
-  const folderPaths = useFolderSelectionSet();
-
   const dispatchSet = useCallback((next: Selectable[], primaryItem: Selectable | null) => {
     const assets = next
       .filter((i): i is CBAsset => i.type === 'asset')
@@ -63,14 +59,7 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   const handleClick = useCallback((index: number, e: React.MouseEvent) => {
     const item = items[index];
     if (!item) return;
-    // D3a: folder clicks dispatch setFolderSelection (session op, AI parity).
-    if (item.type === 'folder') {
-      // Clear asset selection (mutually exclusive).
-      clearAssetSelection();
-      gateway.dispatch({ kind: 'setFolderSelection', paths: [item.path] });
-      anchorIndexRef.current = index;
-      return;
-    }
+    if (item.type !== 'asset') { anchorIndexRef.current = index; return; }
     const key = itemKey(item);
     let next: Selectable[];
     if (e.shiftKey && anchorIndexRef.current >= 0) {
@@ -97,13 +86,8 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   }, []);
 
   const isSelected = useCallback(
-    (item: Selectable): boolean => {
-      if (item.type === 'folder') {
-        return folderPaths.has(item.path);
-      }
-      return selectedGuids.has(itemKey(item));
-    },
-    [selectedGuids, folderPaths],
+    (item: Selectable): boolean => selectedGuids.has(itemKey(item)),
+    [selectedGuids],
   );
 
   // Bridge Ctrl+A (asset scope) from the global keyboard router to this hook's

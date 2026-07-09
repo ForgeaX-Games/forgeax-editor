@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
 import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
-  renameAssetInPack, broadcastAssetsChanged,
+  renameAssetInPack, deleteAsset, broadcastAssetsChanged,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -199,27 +199,14 @@ export function ContentBrowser() {
   useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
 
   useEffect(() => {
-    // D5: 200ms debounce — merge consecutive VAG_ASSETS_CHANGED into one
-    // reload + fetchDiskDirs. directory-only hint skips reload (no pack change).
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = (e: MessageEvent) => {
       if (e.data?.type === 'VAG_ASSETS_CHANGED') {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = null;
-          // 'directory-only' means only folder CRUD — fetchDiskDirs is enough.
-          if (e.data?.hint !== 'directory-only') {
-            reload();
-          }
-          void fetchDiskDirs();
-        }, 200);
+        reload();
+        void fetchDiskDirs();
       }
     };
     window.addEventListener('message', handler);
-    return () => {
-      window.removeEventListener('message', handler);
-      if (timer) clearTimeout(timer);
-    };
+    return () => window.removeEventListener('message', handler);
   }, [reload, fetchDiskDirs]);
 
   // Scope the catalog to THIS game's declared asset roots. Each kept entry
@@ -300,13 +287,14 @@ export function ContentBrowser() {
     setDeleteTargets(current => {
       if (current) {
         for (const a of current) {
-          // D6: unified delete path — gateway.dispatch (same as keyboard router).
-          gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
+          void deleteAsset(a.packPath, a.guid).then(ok => {
+            if (ok) { broadcastAssetsChanged(); reload(); }
+          });
         }
       }
       return null;
     });
-  }, []);
+  }, [reload]);
 
   // M3 (AC-03): asset-selection is a transient op — it goes through the one
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
@@ -377,7 +365,7 @@ export function ContentBrowser() {
       const resolved = resolveFolderMenuItems(menuItems, {
         onOpen: () => nav.navigate(folder.path),
         onToggleFavorite: () => favorites.toggleFavorite(folder.path),
-        unsupportedIds: ['rename'],
+        unsupportedIds: ['rename', 'delete'],
       });
       if (resolved.length === 0) return;
       setTimeout(() => showContextMenu(pos, resolved), 0);

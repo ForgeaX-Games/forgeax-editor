@@ -219,7 +219,7 @@ export function installPreviewControls(editorApp: { pause(): void; resume(): voi
         }
         broadcastAssetsChanged();
       },
-      VAG_ASSETS_CHANGED: (msg) => {
+      VAG_ASSETS_CHANGED: () => {
         // A newly imported asset wrote a fresh pack-index on disk, but the
         // registry cached the pre-import index at boot and only re-fetches on a
         // per-GUID miss — so the new scene/mesh GUIDs are absent from listCatalog
@@ -238,10 +238,6 @@ export function installPreviewControls(editorApp: { pause(): void; resume(): voi
           pendingCatalogRefires -= 1;
           return;
         }
-        // D5 (O2): directory-only hint means no pack files changed — skip the
-        // expensive refreshCatalog() and the echo broadcast entirely.
-        const m = msg as { hint?: string } | undefined;
-        if (m?.hint === 'directory-only') return;
         const reg = gateway.doc.registry;
         if (reg?.refreshCatalog) {
           void reg.refreshCatalog().finally(() => {

@@ -151,16 +151,16 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
     return { sl: createSceneList(deps), ctx };
   }
 
-  it('getSceneId / getSceneFile / getSceneList / getLoadedSceneEntities read ctx', () => {
+  it('getSceneId / getSceneFile / getSceneList / getLoadedSceneRoot read ctx', () => {
     const { sl, ctx } = make();
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
     ctx.sceneList = [{ id: 'lvl1', name: 'Level 1', pack: 'p' }];
-    ctx.currentSceneEntities = [7, 9] as never;
+    ctx.currentSceneRoot = 7 as never;
     expect(sl.getSceneId()).toBe('shoot');
     expect(sl.getSceneFile()).toBe('lvl1');
     expect(sl.getSceneList()).toEqual([{ id: 'lvl1', name: 'Level 1', pack: 'p' }]);
-    expect(sl.getLoadedSceneEntities()).toEqual([7, 9]);
+    expect(sl.getLoadedSceneRoot()).toBe(7);
   });
 
   it('initSceneList on the default slug clears the list + file without any network', async () => {
