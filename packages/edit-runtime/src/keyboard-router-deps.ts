@@ -28,6 +28,7 @@ import {
   getSelectionList,
   getAssetSelectionList,
   getLastSelectionDomain,
+  getFolderSelectionList,
   deleteManyCascade,
   duplicateEntity,
   renameAssetInPack,
@@ -60,7 +61,7 @@ export interface KeyboardRouterDepsShape {
   dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) => void;
   getEntitySelection: () => number[];
   getAssetSelection: () => RouterAsset[];
-  getLastSelectionDomain: () => 'entity' | 'asset' | null;
+  getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
   isPlayMode: () => boolean;
   getDisplay: () => 'scene' | 'game';
   // Real editor value is 'editor' | 'game' (interface's KeyboardRouterDeps types
@@ -75,6 +76,8 @@ export interface KeyboardRouterDepsShape {
   duplicateAsset: (guid: string, packPath: string) => void;
   renameAsset: (guid: string, packPath: string) => void;
   selectAllAssets: () => void;
+  getFolderSelection?: () => { path: string }[];
+  deleteFolders?: (folders: { path: string }[]) => void;
 }
 
 export interface BuildKeyboardRouterDepsOptions {
@@ -146,5 +149,12 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       }
     },
     selectAllAssets: () => triggerAssetSelectAll(),
+    getFolderSelection: () => getFolderSelectionList().map((p) => ({ path: p })),
+    deleteFolders: (folders) => {
+      for (const f of folders) {
+        if (!window.confirm(`Delete folder "${f.path}" and all its contents?`)) return;
+        gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
+      }
+    },
   };
 }

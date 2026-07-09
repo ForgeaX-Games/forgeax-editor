@@ -62,6 +62,8 @@ export type BuiltinEditorOp =
   | { kind: 'saveDocToDisk' }
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
+  | { kind: 'deleteDirectory'; path: string }
+  | { kind: 'setFolderSelection'; paths: string[] }
   | { kind: 'focusPanel'; panel: string }
   | { kind: 'openSource'; plugin: string; docId: string }
   | { kind: 'setCBPath'; path: string }
