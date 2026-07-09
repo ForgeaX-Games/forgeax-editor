@@ -31,10 +31,12 @@ import {
   PointLight,
   DirectionalLight,
   SpotLight,
-  HANDLE_CUBE,
-  HANDLE_CYLINDER,
   Materials,
 } from '@forgeax/engine-runtime';
+import {
+  HANDLE_CUBE,
+  HANDLE_CYLINDER,
+} from '@forgeax/engine-assets-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 
@@ -196,16 +198,16 @@ describe('spawn entity — Transform baseline', () => {
     const tr = s.world.get(eH, Transform);
     expect(tr.ok).toBe(true);
     if (tr.ok) {
-      expect(tr.value.quatX).toBeCloseTo(0, 5);
-      expect(tr.value.quatY).toBeCloseTo(0, 5);
-      expect(tr.value.quatZ).toBeCloseTo(0, 5);
-      expect(tr.value.quatW).toBeCloseTo(1, 5);
-      expect(tr.value.posX).toBeCloseTo(0, 5);
-      expect(tr.value.posY).toBeCloseTo(0, 5);
-      expect(tr.value.posZ).toBeCloseTo(0, 5);
-      expect(tr.value.scaleX).toBeCloseTo(1, 5);
-      expect(tr.value.scaleY).toBeCloseTo(1, 5);
-      expect(tr.value.scaleZ).toBeCloseTo(1, 5);
+      expect(tr.value.quat[0]).toBeCloseTo(0, 5);
+      expect(tr.value.quat[1]).toBeCloseTo(0, 5);
+      expect(tr.value.quat[2]).toBeCloseTo(0, 5);
+      expect(tr.value.quat[3]).toBeCloseTo(1, 5);
+      expect(tr.value.pos[0]).toBeCloseTo(0, 5);
+      expect(tr.value.pos[1]).toBeCloseTo(0, 5);
+      expect(tr.value.pos[2]).toBeCloseTo(0, 5);
+      expect(tr.value.scale[0]).toBeCloseTo(1, 5);
+      expect(tr.value.scale[1]).toBeCloseTo(1, 5);
+      expect(tr.value.scale[2]).toBeCloseTo(1, 5);
     }
   });
 });

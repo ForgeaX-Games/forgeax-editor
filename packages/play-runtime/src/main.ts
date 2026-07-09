@@ -428,7 +428,7 @@ if (entry) {
 } else {
   console.log('[engine] using fallback scene; write games/<id>/main.ts to override');
   world.spawn(
-    { component: Transform, data: { posY: 0.6, posZ: 5 } },
+    { component: Transform, data: { pos: [0, 0.6, 5] } },
     { component: Camera, data: perspective({ fov: 60, aspect: window.innerWidth / window.innerHeight, far: 1000 }) },
   );
 }

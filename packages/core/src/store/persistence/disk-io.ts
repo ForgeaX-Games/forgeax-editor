@@ -47,7 +47,7 @@ import { worldRootHandles } from '../entity-state';
 import type { ScenePersistenceContext } from '../scene-persistence';
 import type { EditorOp, EditSession } from '../../types';
 import type { EntityHandle, WorldType } from '../../scene/scene-types';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of

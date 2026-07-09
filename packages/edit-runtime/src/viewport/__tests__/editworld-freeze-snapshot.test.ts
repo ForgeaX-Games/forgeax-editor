@@ -94,7 +94,7 @@ function makeSceneAsset() {
   return {
     kind: 'scene' as const,
     entities: [
-      { localId: 0, components: { Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'PlayRoot' } } },
+      { localId: 0, components: { Transform: { pos: [0, 0, 0], scale: [1, 1, 1] }, Name: { value: 'PlayRoot' } } },
     ],
   };
 }
@@ -142,8 +142,8 @@ describe('w9 — editWorld freeze + snapshot (AC-06/AC-07)', () => {
     });
 
     // Seed a couple of editWorld entities (the authored scene stand-in).
-    editWorld.spawn({ component: Name, data: { value: 'EditA' } }, { component: Transform, data: { posX: 1, posY: 2, posZ: 3, scaleX: 1, scaleY: 1, scaleZ: 1 } });
-    editWorld.spawn({ component: Name, data: { value: 'EditB' } }, { component: Transform, data: { posX: 4, posY: 5, posZ: 6, scaleX: 1, scaleY: 1, scaleZ: 1 } });
+    editWorld.spawn({ component: Name, data: { value: 'EditA' } }, { component: Transform, data: { pos: [1, 2, 3], scale: [1, 1, 1] } });
+    editWorld.spawn({ component: Name, data: { value: 'EditB' } }, { component: Transform, data: { pos: [4, 5, 6], scale: [1, 1, 1] } });
 
     editorApp.start();
 

@@ -13,7 +13,7 @@
 
 import type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 
 /** Engine World handle type (plan-strategy S2 D-1 / AC-01).
  *  Now a direct alias of the engine `World` class type: since every editor tsc

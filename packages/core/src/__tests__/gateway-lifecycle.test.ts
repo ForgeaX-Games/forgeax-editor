@@ -62,26 +62,26 @@ function createSession(): EditSession {
 }
 
 /** Spawn an entity and return its legacy ID. */
-function spawnEntity(bus: EditGateway, name: string, posX = 0): number {
+function spawnEntity(bus: EditGateway, name: string, x = 0): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [x, 0, 0] } },
   };
   const r = bus.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed: ${(r as { error: CommandError }).error.hint}`);
   return (cmd as any)._id!;
 }
 
-function moveCmd(entity: number, posX: number): EditorOp {
-  return { kind: 'setComponent', entity, component: 'Transform', patch: { posX } };
+function moveCmd(entity: number, x: number): EditorOp {
+  return { kind: 'setComponent', entity, component: 'Transform', patch: { pos: [x, 0, 0] } };
 }
 
 function readPosX(bus: EditGateway, entity: number): number {
   const h = (entity as EntityHandle) as EntityHandle;
   const tr = bus.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('Transform not on entity');
-  return (tr.value as unknown as { posX: number }).posX;
+  return (tr.value as unknown as { pos: number[] }).pos[0]!;
 }
 
 // ── (a) begin snapshots initial state, returns handle ───────────────────────
@@ -115,7 +115,7 @@ describe('EditGateway lifecycle — begin (m1-w1, RED)', () => {
 
   it('begin on a command that would fail (e.g. invalid entity) returns error', () => {
     const api = lifecycleOf(bus);
-    const r = api.begin({ kind: 'setComponent', entity: 999, component: 'Transform', patch: { posX: 5 } });
+    const r = api.begin({ kind: 'setComponent', entity: 999, component: 'Transform', patch: { pos: [5, 0, 0] } });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBeDefined();
@@ -136,7 +136,7 @@ describe('EditGateway lifecycle — update (m1-w1, RED)', () => {
     const r = api.begin(moveCmd(e, 0));
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error('begin failed');
-    const u = api.update(r.handle, { patch: { posX: 7 } } as Partial<EditorOp>);
+    const u = api.update(r.handle, { patch: { pos: [7, 0, 0] } } as Partial<EditorOp>);
     expect(u.ok).toBe(true);
     expect(readPosX(bus, e)).toBe(7);
   });
@@ -147,7 +147,7 @@ describe('EditGateway lifecycle — update (m1-w1, RED)', () => {
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
     const ledgerBefore = bus.ledger.length;
-    api.update(r.handle, { patch: { posX: 3 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [3, 0, 0] } } as Partial<EditorOp>);
     expect(bus.ledger.length).toBe(ledgerBefore);
   });
 
@@ -157,7 +157,7 @@ describe('EditGateway lifecycle — update (m1-w1, RED)', () => {
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
     const undoBefore = bus.appliedCount();
-    api.update(r.handle, { patch: { posX: 3 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [3, 0, 0] } } as Partial<EditorOp>);
     expect(bus.appliedCount()).toBe(undoBefore);
   });
 
@@ -166,9 +166,9 @@ describe('EditGateway lifecycle — update (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 1 } } as Partial<EditorOp>);
-    api.update(r.handle, { patch: { posX: 2 } } as Partial<EditorOp>);
-    api.update(r.handle, { patch: { posX: 42 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [1, 0, 0] } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [2, 0, 0] } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [42, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(42);
   });
 });
@@ -180,18 +180,18 @@ describe('EditGateway lifecycle — commit (m1-w1, RED)', () => {
   beforeEach(() => { bus = new EditGateway(createSession()); });
 
   it('commit calculates inverse from begin snapshot to final state', () => {
-    const e = spawnEntity(bus, 'box'); // posX = 0
+    const e = spawnEntity(bus, 'box'); // pos[0] = 0
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
-    // State is now posX=5
+    api.update(r.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
+    // State is now pos[0]=5
     const c = api.commit(r.handle);
     expect(c.ok).toBe(true);
-    // After commit: posX=5, one undo entry
+    // After commit: pos[0]=5, one undo entry
     expect(readPosX(bus, e)).toBe(5);
     expect(bus.appliedCount()).toBeGreaterThan(0);
-    // Undo should revert to posX=0 (begin snapshot)
+    // Undo should revert to pos[0]=0 (begin snapshot)
     bus.undo();
     expect(readPosX(bus, e)).toBe(0);
   });
@@ -201,7 +201,7 @@ describe('EditGateway lifecycle — commit (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
     const ledgerBefore = bus.ledger.length;
     api.commit(r.handle);
     expect(bus.ledger.length).toBe(ledgerBefore + 1);
@@ -212,13 +212,13 @@ describe('EditGateway lifecycle — commit (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 2 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [2, 0, 0] } } as Partial<EditorOp>);
     api.commit(r1.handle);
     // After commit, a new begin should succeed without implicitly cancelling
     const r2 = api.begin(moveCmd(e, 10));
     expect(r2.ok).toBe(true);
     if (r2.ok) {
-      api.update(r2.handle, { patch: { posX: 10 } } as Partial<EditorOp>);
+      api.update(r2.handle, { patch: { pos: [10, 0, 0] } } as Partial<EditorOp>);
       api.commit(r2.handle);
       expect(readPosX(bus, e)).toBe(10);
     }
@@ -241,7 +241,7 @@ describe('EditGateway lifecycle — commit (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0), 'ai');
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 7 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [7, 0, 0] } } as Partial<EditorOp>);
     api.commit(r.handle);
     expect(bus.origins[bus.origins.length - 1]).toBe('ai');
   });
@@ -263,14 +263,14 @@ describe('EditGateway lifecycle — cancel (m1-w1, RED)', () => {
   beforeEach(() => { bus = new EditGateway(createSession()); });
 
   it('cancel reverts state to pre-begin snapshot (boundary #1)', () => {
-    const e = spawnEntity(bus, 'box'); // posX = 0
+    const e = spawnEntity(bus, 'box'); // pos[0] = 0
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 8 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [8, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(8);
     api.cancel(r.handle);
-    // After cancel, posX should be back to 0
+    // After cancel, pos[0] should be back to 0
     expect(readPosX(bus, e)).toBe(0);
   });
 
@@ -279,7 +279,7 @@ describe('EditGateway lifecycle — cancel (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 8 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [8, 0, 0] } } as Partial<EditorOp>);
     const ledgerBefore = bus.ledger.length;
     api.cancel(r.handle);
     expect(bus.ledger.length).toBe(ledgerBefore);
@@ -290,7 +290,7 @@ describe('EditGateway lifecycle — cancel (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 8 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [8, 0, 0] } } as Partial<EditorOp>);
     const undoBefore = bus.appliedCount();
     api.cancel(r.handle);
     expect(bus.appliedCount()).toBe(undoBefore);
@@ -312,7 +312,7 @@ describe('EditGateway lifecycle — cancel (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 3 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [3, 0, 0] } } as Partial<EditorOp>);
     api.commit(r.handle);
     const c = api.cancel(r.handle);
     expect(c.ok).toBe(false);
@@ -326,24 +326,24 @@ describe('EditGateway lifecycle — single active-op slot (m1-w1, RED)', () => {
   beforeEach(() => { bus = new EditGateway(createSession()); });
 
   it('second begin implicitly cancels the first active op', () => {
-    const e = spawnEntity(bus, 'box'); // posX = 0
+    const e = spawnEntity(bus, 'box'); // pos[0] = 0
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(5);
 
-    // Second begin: should implicitly cancel r1 (revert posX to 0), then begin r2
+    // Second begin: should implicitly cancel r1 (revert pos[0] to 0), then begin r2
     const r2 = api.begin(moveCmd(e, 10));
     expect(r2.ok).toBe(true);
 
-    // After implicit cancel of r1, state should be back to pre-r1 (posX=0)
+    // After implicit cancel of r1, state should be back to pre-r1 (pos[0]=0)
     // readPosX after the second begin confirms implicit cancel reverted r1
     expect(readPosX(bus, e)).toBe(0);
 
-    // r2's begin snapshot is at posX=0 (the reverted state)
+    // r2's begin snapshot is at pos[0]=0 (the reverted state)
     if (r2.ok) {
-      api.update(r2.handle, { patch: { posX: 10 } } as Partial<EditorOp>);
+      api.update(r2.handle, { patch: { pos: [10, 0, 0] } } as Partial<EditorOp>);
       expect(readPosX(bus, e)).toBe(10);
       api.commit(r2.handle);
       expect(readPosX(bus, e)).toBe(10);
@@ -355,7 +355,7 @@ describe('EditGateway lifecycle — single active-op slot (m1-w1, RED)', () => {
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
     const ledgerBefore = bus.ledger.length;
     const undoBefore = bus.appliedCount();
 
@@ -380,13 +380,13 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
 
     // Interrupt: second begin cancels r1
     api.begin(moveCmd(e, 10));
 
     // r1 handle is now stale — update should fail with OP_INTERRUPTED
-    const u = api.update(r1.handle, { patch: { posX: 99 } } as Partial<EditorOp>);
+    const u = api.update(r1.handle, { patch: { pos: [99, 0, 0] } } as Partial<EditorOp>);
     expect(u.ok).toBe(false);
     if (!u.ok) {
       expect(u.error.code).toBe('OP_INTERRUPTED');
@@ -400,7 +400,7 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
 
     // Interrupt
     api.begin(moveCmd(e, 10));
@@ -417,7 +417,7 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
     const api = lifecycleOf(bus);
     const r1 = api.begin(moveCmd(e, 0));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
 
     // Interrupt
     api.begin(moveCmd(e, 10));
@@ -438,7 +438,7 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
     // Interrupt
     api.begin(moveCmd(e, 10));
 
-    const u = api.update(r1.handle, { patch: { posX: 99 } } as Partial<EditorOp>);
+    const u = api.update(r1.handle, { patch: { pos: [99, 0, 0] } } as Partial<EditorOp>);
     if (!u.ok) {
       // Hint should mention "interrupted" or "cancelled" so AI can self-correct
       expect(u.error.hint.toLowerCase()).toMatch(/interrupt|cancel|stale|replaced/);
@@ -459,11 +459,11 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
     // Begin a lifecycle op
     const r1 = api.begin(moveCmd(e, 3));
     if (!r1.ok) throw new Error('begin1 failed');
-    api.update(r1.handle, { patch: { posX: 7 } } as Partial<EditorOp>);
+    api.update(r1.handle, { patch: { pos: [7, 0, 0] } } as Partial<EditorOp>);
 
     // undo should implicitly cancel active op
     bus.undo();
-    // After undo: posX should be 0 (undo of the dispatch, cancels lifecycle)
+    // After undo: pos[0] should be 0 (undo of the dispatch, cancels lifecycle)
     // The stale handle should fail
     const c = api.commit(r1.handle);
     expect(c.ok).toBe(false);
@@ -478,7 +478,7 @@ describe('EditGateway lifecycle — interrupt / OP_INTERRUPTED (m1-w1, RED)', ()
 describe('EditGateway lifecycle — composite flow (m1-w1, RED)', () => {
   it('full begin-update-update-commit-undo cycle works', () => {
     const bus = new EditGateway(createSession());
-    const e = spawnEntity(bus, 'box'); // posX = 0
+    const e = spawnEntity(bus, 'box'); // pos[0] = 0
     const api = lifecycleOf(bus);
 
     const r = api.begin(moveCmd(e, 0));
@@ -486,10 +486,10 @@ describe('EditGateway lifecycle — composite flow (m1-w1, RED)', () => {
     if (!r.ok) throw new Error('begin failed');
     const h = r.handle;
 
-    api.update(h, { patch: { posX: 2 } } as Partial<EditorOp>);
+    api.update(h, { patch: { pos: [2, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(2);
 
-    api.update(h, { patch: { posX: 4 } } as Partial<EditorOp>);
+    api.update(h, { patch: { pos: [4, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(4);
 
     api.commit(h);
@@ -497,7 +497,7 @@ describe('EditGateway lifecycle — composite flow (m1-w1, RED)', () => {
     // 1 entry for spawnEntity dispatch + 1 entry for lifecycle commit = 2 total
     expect(bus.appliedCount()).toBe(2);
 
-    // Undo should revert to begin snapshot (posX=0)
+    // Undo should revert to begin snapshot (pos[0]=0)
     bus.undo();
     expect(readPosX(bus, e)).toBe(0);
   });
@@ -507,17 +507,17 @@ describe('EditGateway lifecycle — composite flow (m1-w1, RED)', () => {
   // drag snaps back to the pre-drag pose and the ledger misreports the op.
   it('redo after begin-update-commit re-applies the COMMITTED pose (not begin) [m3-w6]', () => {
     const bus = new EditGateway(createSession());
-    const e = spawnEntity(bus, 'box'); // posX = 0
+    const e = spawnEntity(bus, 'box'); // pos[0] = 0
     const api = lifecycleOf(bus);
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 5 } } as Partial<EditorOp>);
-    api.update(r.handle, { patch: { posX: 42 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [5, 0, 0] } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [42, 0, 0] } } as Partial<EditorOp>);
     api.commit(r.handle);
     expect(readPosX(bus, e)).toBe(42);
-    // Ledger records the final pose, not the begin skeleton (posX 42, not 0).
-    const last = bus.ledger[bus.ledger.length - 1] as { patch?: { posX?: number } };
-    expect(last.patch?.posX).toBe(42);
+    // Ledger records the final pose, not the begin skeleton (pos[0] 42, not 0).
+    const last = bus.ledger[bus.ledger.length - 1] as { patch?: { pos?: number[] } };
+    expect(last.patch?.pos?.[0]).toBe(42);
     // Undo → pre-begin (0); Redo → committed pose (42), NOT the begin snapshot.
     bus.undo();
     expect(readPosX(bus, e)).toBe(0);
@@ -532,7 +532,7 @@ describe('EditGateway lifecycle — composite flow (m1-w1, RED)', () => {
 
     const r = api.begin(moveCmd(e, 0));
     if (!r.ok) throw new Error('begin failed');
-    api.update(r.handle, { patch: { posX: 99 } } as Partial<EditorOp>);
+    api.update(r.handle, { patch: { pos: [99, 0, 0] } } as Partial<EditorOp>);
     expect(readPosX(bus, e)).toBe(99);
 
     api.cancel(r.handle);

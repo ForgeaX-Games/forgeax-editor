@@ -272,7 +272,7 @@ describe('world entity MeshRenderer references MaterialAsset (AC-19)', () => {
     // Spawn a cube entity with MeshRenderer referencing the MaterialAsset.
     const r = world.spawn(
       { component: Name, data: { value: 'test-cube' } },
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
       {
         component: MeshFilter,
         data: { assetHandle: HANDLE_CUBE },

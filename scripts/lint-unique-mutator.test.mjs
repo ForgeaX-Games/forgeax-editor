@@ -74,7 +74,7 @@ const write = (name, hunks) => {
 console.log('Scenario (a): VIOLATION -- raw world.set in edit-runtime source → exit 1');
 assertEqual('(a) exit 1', runLint(write('viol.diff', [{
   file: 'packages/edit-runtime/src/viewport/viewport.ts',
-  lines: ['  world.set(camera, Transform, { posX: 0 });'],
+  lines: ['  world.set(camera, Transform, { pos: [0, 0, 0] });'],
 }])).status, 1);
 
 // (b) COMPLIANT: write through ctx.engine + gateway.dispatch
@@ -82,7 +82,7 @@ console.log('Scenario (b): COMPLIANT -- engine.set / gateway.dispatch → exit 0
 assertEqual('(b) exit 0', runLint(write('comp.diff', [{
   file: 'packages/edit-runtime/src/viewport/viewport.ts',
   lines: [
-    '  engine.set(camera, Transform, { posX: 0 });',
+    '  engine.set(camera, Transform, { pos: [0, 0, 0] });',
     "  gateway.dispatch({ kind: 'spawnEntity', components: {} });",
   ],
 }])).status, 0);

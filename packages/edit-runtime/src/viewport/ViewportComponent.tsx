@@ -364,7 +364,7 @@ async function bootViewport(
   // was injected just above, so engineFacade() binds to the live world.
   const aspect = canvas.width / canvas.height || 1;
   const cameraEntity = gateway.engineFacade().spawn(
-    { component: Transform, data: { posY: 1.5, posZ: 9 } },
+    { component: Transform, data: { pos: [0, 1.5, 9] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);

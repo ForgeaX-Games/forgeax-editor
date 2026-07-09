@@ -32,9 +32,11 @@ import {
   PointLight,
   DirectionalLight,
   SpotLight,
+} from '@forgeax/engine-runtime';
+import {
   HANDLE_CUBE,
   HANDLE_CYLINDER,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-assets-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../scene/presets';
 import type { EditorOp, EditSession } from '../types';

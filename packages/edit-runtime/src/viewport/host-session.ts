@@ -44,11 +44,13 @@
 //     into ViewportComponent + host-boot), with the ▶/■ run-lifecycle seam from
 //     historical feat feat-20260707-editor-world-fork-ssot-level-load-play-activeworld.
 
+// engine #650 (Tier-2 decomposition) moved builtin mesh handles into
+// @forgeax/engine-assets-runtime.
 import {
   HANDLE_CUBE,
   HANDLE_SPHERE,
   HANDLE_CYLINDER,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-assets-runtime';
 import { toShared } from '@forgeax/engine-ecs';
 import { attachBrowserInputBackend, INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
@@ -295,14 +297,14 @@ export function createHostSession(deps: HostSessionDeps): {
     const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
       gateway.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
 
-    add('Ground', { Transform: { posX: 0, posY: -0.1, posZ: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 }, MeshFilter: { assetHandle: HANDLE_CUBE } });
-    add('Sun', { Transform: { posX: 0, posY: 6, posZ: 0 }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
-    add('TreeTrunk', { Transform: { posX: -4, posY: 0.9, posZ: -3, scaleX: 0.4, scaleY: 1.8, scaleZ: 0.4 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
-    add('TreeCanopy', { Transform: { posX: -4, posY: 2.4, posZ: -3, scaleX: 1.4, scaleY: 1.4, scaleZ: 1.4 }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
-    add('RedBox', { Transform: { posX: 3, posY: 0.5, posZ: -2, scaleX: 1, scaleY: 1, scaleZ: 1 }, MeshFilter: { assetHandle: HANDLE_CUBE } }, { plugin: 'lowpoly', docId: 'crate-01' });
-    add('BlueBall', { Transform: { posX: 4.5, posY: 0.8, posZ: 1.5, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8 }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
-    add('YellowPillar', { Transform: { posX: 2, posY: 0.75, posZ: 3.5, scaleX: 0.6, scaleY: 1.5, scaleZ: 0.6 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
-    add('Player', { Transform: { posX: 0, posY: 0.55, posZ: 0, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
+    add('Ground', { Transform: { pos: [0, -0.1, 0], scale: [24, 0.2, 24] }, MeshFilter: { assetHandle: HANDLE_CUBE } });
+    add('Sun', { Transform: { pos: [0, 6, 0] }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
+    add('TreeTrunk', { Transform: { pos: [-4, 0.9, -3], scale: [0.4, 1.8, 0.4] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
+    add('TreeCanopy', { Transform: { pos: [-4, 2.4, -3], scale: [1.4, 1.4, 1.4] }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
+    add('RedBox', { Transform: { pos: [3, 0.5, -2], scale: [1, 1, 1] }, MeshFilter: { assetHandle: HANDLE_CUBE } }, { plugin: 'lowpoly', docId: 'crate-01' });
+    add('BlueBall', { Transform: { pos: [4.5, 0.8, 1.5], scale: [0.8, 0.8, 0.8] }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
+    add('YellowPillar', { Transform: { pos: [2, 0.75, 3.5], scale: [0.6, 1.5, 0.6] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
+    add('Player', { Transform: { pos: [0, 0.55, 0], scale: [0.7, 1.1, 0.7] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
   }
 
   /**
@@ -654,7 +656,7 @@ export function createHostSession(deps: HostSessionDeps): {
       const skinRoot = inst.value as unknown as { generation: number; index: number };
       const [px, py, pz] = skin.pos ?? [0, 0, 0];
       const s = skin.scale ?? 1;
-      engine.set(eid(skinRoot), TransformC, { posX: px, posY: py, posZ: pz, scaleX: s, scaleY: s, scaleZ: s, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 });
+      engine.set(eid(skinRoot), TransformC, { pos: [px, py, pz], scale: [s, s, s], quat: [0, 0, 0, 1] });
       const sceneInst = engine.get(eid(skinRoot), SceneInstance) as { ok: boolean; value?: { mapping: unknown[] } };
       if (!sceneInst.ok || !sceneInst.value) return;
       let skinEnt: unknown = null;

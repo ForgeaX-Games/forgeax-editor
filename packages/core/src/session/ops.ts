@@ -83,7 +83,7 @@ export function groupSelected(handles: EntityHandle[]): void {
   const primary = handles[handles.length - 1]!;
   const parent = entParent(gateway.activeWorld, primary);
   const commands: EditorOp[] = [
-    { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } }, _id: groupRef },
+    { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }, _id: groupRef },
     ...handles.map((e): EditorOp => ({ kind: 'reparent', entity: e, parent: groupRef })),
   ];
   gateway.dispatch({ kind: 'transaction', label: `group x${handles.length}`, commands });
@@ -143,11 +143,11 @@ function spawnClipboard(label: string, translate: (t: { x: number; z: number }) 
   const refs: number[] = [];
   for (const c of clipboard) {
     const comps = structuredClone(c.components);
-    const t = comps.Transform as { posX?: number; posY?: number; posZ?: number } | undefined;
+    const t = comps.Transform as { pos?: number[] } | undefined;
     if (t) {
-      const moved = translate({ x: t.posX ?? 0, z: t.posZ ?? 0 });
-      t.posX = moved.x;
-      t.posZ = moved.z;
+      const pos = t.pos ?? [0, 0, 0];
+      const moved = translate({ x: pos[0] ?? 0, z: pos[2] ?? 0 });
+      t.pos = [moved.x, pos[1] ?? 0, moved.z];
     }
     const ref = nextPlaceholder();
     refs.push(ref);
@@ -171,9 +171,9 @@ export function pasteClipboard(): void {
 // Paste so the clipboard's centroid lands at (wx,wz), preserving relative layout.
 export function pasteClipboardAt(wx: number, wz: number): void {
   if (clipboard.length === 0) return;
-  const pts = clipboard.map((c) => (c.components.Transform as { posX?: number; posZ?: number } | undefined) ?? { posX: 0, posZ: 0 });
-  const cx = pts.reduce((s, t) => s + (t.posX ?? 0), 0) / pts.length;
-  const cz = pts.reduce((s, t) => s + (t.posZ ?? 0), 0) / pts.length;
+  const pts = clipboard.map((c) => (c.components.Transform as { pos?: number[] } | undefined)?.pos ?? [0, 0, 0]);
+  const cx = pts.reduce((s, p) => s + (p[0] ?? 0), 0) / pts.length;
+  const cz = pts.reduce((s, p) => s + (p[2] ?? 0), 0) / pts.length;
   spawnClipboard(`paste@ x${clipboard.length}`, (t) => ({ x: wx + (t.x - cx), z: wz + (t.z - cz) }));
 }
 

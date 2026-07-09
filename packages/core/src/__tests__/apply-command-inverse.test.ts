@@ -94,26 +94,26 @@ describe('inverse commands (GREEN)', () => {
   // ── (b) setComponent ────────────────────────────────────────────────────────
   it('(b) setComponent: inverse patch contains only changed keys', () => {
     const session = createSession();
-    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { posX: 1, posY: 2, posZ: 3 } } };
+    const cmd: EditorOp = { kind: 'spawnEntity', name: 'Ent', components: { Transform: { pos: [1, 2, 3] } } };
     applyCommand(session, cmd);
     const eH = ((cmd as any)._id! as EntityHandle);
 
-    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { posY: 99 } });
+    const r = applyCommand(session, { kind: 'setComponent', entity: (cmd as any)._id!, component: 'Transform', patch: { pos: [1, 99, 3] } });
     expect(r.ok).toBe(true);
     const t = session.world.get(eH, Transform);
     expect(t.ok).toBe(true);
-    if (t.ok) expect(t.value.posY).toBe(99);
+    if (t.ok) expect(t.value.pos[1]).toBe(99);
 
     const inverse = (r as { ok: true; inverse: EditorOp }).inverse;
     expect(inverse.kind).toBe('setComponent');
     const invPatch = (inverse as { patch: Record<string, unknown> }).patch;
-    expect(Object.keys(invPatch)).toEqual(['posY']);
+    expect(Object.keys(invPatch)).toEqual(['pos']);
 
     const undoR = applyCommand(session, inverse);
     expect(undoR.ok).toBe(true);
     const t2 = session.world.get(eH, Transform);
     expect(t2.ok).toBe(true);
-    if (t2.ok) { expect(t2.value.posY).toBe(2); expect(t2.value.posX).toBe(1); expect(t2.value.posZ).toBe(3); }
+    if (t2.ok) { expect(t2.value.pos[1]).toBe(2); expect(t2.value.pos[0]).toBe(1); expect(t2.value.pos[2]).toBe(3); }
   });
 
   // ── (c) transaction ─────────────────────────────────────────────────────────

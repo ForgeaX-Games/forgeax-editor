@@ -82,7 +82,7 @@ describe('w7 — play-mode document-domain write gate (D-5)', () => {
       { kind: 'spawnEntity', name: 'Y', components: {} },
       { kind: 'destroyEntity', entity: id },
       { kind: 'rename', entity: id, name: 'Z' },
-      { kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 1 } },
+      { kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [1, 0, 0] } },
     ] as const;
     for (const op of docOps) {
       const r = gw.dispatch(op as never);
