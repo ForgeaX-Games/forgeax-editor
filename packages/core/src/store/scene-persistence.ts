@@ -8,7 +8,7 @@
 // `ScenePersistenceContext` (see createScenePersistenceContext below), reached via
 // the module-single `ctx` const — the 7 formerly scattered module-level `let`
 // singletons (currentSceneId / currentSceneFile / sceneList / currentSceneGuid /
-// currentSceneRoot / asyncOpResult / isDirty) are its fields. A reader holds one
+// currentSceneEntities / asyncOpResult / isDirty) are its fields. A reader holds one
 // concept ("the persistence context"), not seven globals (charter F1 / AC-01: no
 // module-level mutable singleton for persistence state).
 //
@@ -105,10 +105,13 @@ export interface ScenePersistenceContext {
    *  @internal-store — disk-watch READS this to content-compare a self-save echo
    *  and WRITES it via setCurrentSceneGuid (D-6 seam). */
   currentSceneGuid: string | null;
-  /** The synthetic SceneInstance root handle of the currently loaded scene, kept
-   *  so a disk-watch reload can despawnScene it before re-instantiating (avoids a
-   *  double-spawn). null when no scene is loaded (seed / fresh workspace). */
-  currentSceneRoot: EntityHandle | null;
+  /** Top-level entity handles of the currently loaded scene. Opening a scene
+   *  materialises it FLAT (loadSceneByGuid -> reg.instantiateFlat): no synthetic
+   *  wrapper root, so there is no single handle to track — we hold the set of the
+   *  scene's top-level entities instead, so a disk-watch reload can despawn them
+   *  before re-instantiating (avoids a double-spawn). Empty when no scene is
+   *  loaded (seed / fresh workspace). */
+  currentSceneEntities: EntityHandle[];
   /** Module-scoped slot carrying an async session-op's in-flight promise from the
    *  applier back to the public setter within one synchronous dispatch (M2 D-1). */
   asyncOpResult: Promise<boolean> | null;
@@ -140,7 +143,7 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     currentSceneFile: null,
     sceneList: [],
     currentSceneGuid: null,
-    currentSceneRoot: null,
+    currentSceneEntities: [],
     asyncOpResult: null,
     isDirty: false,
     loadedInlineAssetFloor: null,
@@ -200,7 +203,7 @@ sessionAppliers.set('setSceneId', applySetSceneId);
 
 // ── scene-list / switch cluster surface (createSceneList) ──────────────────────
 export const getSceneId = sceneList.getSceneId;
-export const getLoadedSceneRoot = sceneList.getLoadedSceneRoot;
+export const getLoadedSceneEntities = sceneList.getLoadedSceneEntities;
 export const getSceneFile = sceneList.getSceneFile;
 export const getSceneList = sceneList.getSceneList;
 export const onSceneListChange = sceneList.onSceneListChange;

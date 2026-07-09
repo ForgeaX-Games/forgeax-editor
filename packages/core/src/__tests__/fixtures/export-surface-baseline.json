@@ -36,8 +36,8 @@
     "signature": "() => GizmoMode"
   },
   {
-    "name": "getLoadedSceneRoot",
-    "signature": "() => number | null"
+    "name": "getLoadedSceneEntities",
+    "signature": "() => number[]"
   },
   {
     "name": "getMeshStats",

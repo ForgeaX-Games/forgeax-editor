@@ -135,7 +135,7 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     resolveGamePath: (rel: string) => `/games/g1/${rel}`,
     loadDocFromDisk: async () => { log.loadDiskCalls++; return false; },
     loadDocFromStorage: () => { log.loadStorageCalls++; return false; },
-    getLoadedSceneRoot: () => null,
+    getLoadedSceneEntities: () => [],
     cancelPendingDiskSave: () => { log.seedCancelCalls++; },
     hasPendingDiskSave: () => false,
     flushPendingSaveBeacon: () => { log.flushCalls++; },

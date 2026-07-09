@@ -263,20 +263,41 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     return worldToPack(gateway.doc, sceneGuidForSave());
   }
 
-  // ── scene-load: canonical engine loadByGuid -> instantiate (engine SSOT) ─────
-  /** Tear down the currently loaded scene before a fresh (re)load: despawn the
-   *  SceneInstance subtree via the engine primitive. No-op when nothing loaded. */
+  // ── scene-load: canonical engine loadByGuid -> instantiateFlat (engine SSOT) ──
+  /** Tear down the currently loaded scene before a fresh (re)load. The opened
+   *  scene is FLAT (no synthetic wrapper), so teardown despawns each tracked
+   *  top-level entity: `despawnScene(e)` drops `e` plus its whole ChildOf subtree
+   *  (authored children + any nested SceneInstance anchor + that anchor's
+   *  members). A belt-and-suspenders sweep over `worldRootHandles` catches named
+   *  top-level entities added between load and reload so a reload can't orphan
+   *  anything. No-op when nothing loaded. */
   function teardownCurrentScene(): void {
     const w: WorldType = gateway.doc.world;
-    if (w && ctx.currentSceneRoot !== null) {
-      try { w.despawnScene(ctx.currentSceneRoot); } catch { /* best-effort */ }
+    if (w) {
+      const seen = new Set<number>();
+      for (const e of ctx.currentSceneEntities) {
+        if (seen.has(e as number)) continue;
+        seen.add(e as number);
+        try { w.despawnScene(e); } catch { /* best-effort */ }
+      }
+      try {
+        for (const h of worldRootHandles(w)) {
+          if (seen.has(h as number)) continue;
+          seen.add(h as number);
+          try { w.despawnScene(h); } catch { /* best-effort */ }
+        }
+      } catch { /* best-effort */ }
     }
-    ctx.currentSceneRoot = null;
+    ctx.currentSceneEntities = [];
   }
 
-  /** Load the game's scene by GUID via the engine's canonical loadByGuid ->
-   *  instantiate pipeline (the SAME sequence main.ts uses). Returns true on
-   *  success. @internal-store — disk-watch CALLS this to reload (D-6 seam). */
+  /** Open the game's scene by GUID via the engine's canonical loadByGuid ->
+   *  instantiateFlat pipeline. Opening a scene = editing the scene ITSELF: its
+   *  entities materialise FLAT (no synthetic wrapper root, no forced ChildOf), so
+   *  the hierarchy is exactly the authored ChildOf. Nested prefabs inside stay as
+   *  their own SceneInstance anchors (instantiateFlat keeps the mount path
+   *  anchored). Returns true on success. @internal-store — disk-watch CALLS this
+   *  to reload (D-6 seam). */
   async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
@@ -290,10 +311,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const loadRes = await reg.loadByGuid(parsed.value);
       if (!loadRes.ok) return false;
       const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
-      const instRes = reg.instantiate(sceneHandle, w);
+      const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) return false;
-      // Record the SceneInstance root so a later reload can despawn it.
-      ctx.currentSceneRoot = instRes.value;
+      // Track the scene's top-level entities so a later reload can despawn them.
+      ctx.currentSceneEntities = instRes.value;
       return true;
     } catch {
       return false;
@@ -304,9 +325,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    * Instantiate a scene sub-asset (e.g. an imported GLB's whole-hierarchy scene)
    * into the CURRENTLY-LOADED editor world as a NESTED SceneInstance under
    * `parentHandle`, via the engine's canonical loadByGuid -> allocSharedRef ->
-   * instantiate spine. ADDITIVE: does NOT teardown the current scene / touch
-   * currentSceneRoot. Returns the nested root handle, or null on failure —
-   * callers MUST treat null as "add failed" (NEVER fall back to a cube).
+   * instantiate spine — the ANCHORED `reg.instantiate` (keeps a SceneInstance so
+   * overrides stay isolated and the prefab source is protected), unlike
+   * loadSceneByGuid which opens the top scene FLAT. ADDITIVE: does NOT teardown
+   * the current scene / touch currentSceneEntities. Returns the nested root
+   * handle, or null on failure — callers MUST treat null as "add failed"
+   * (NEVER fall back to a cube).
    */
   async function instantiateSceneRefUnderWorld(
     sceneGuid: string,

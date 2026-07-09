@@ -240,7 +240,7 @@ export {
   useFieldPreview,
   loadDocFromStorage,
   loadDocFromDisk,
-  getLoadedSceneRoot,
+  getLoadedSceneEntities,
   initDiskWatch,
   initSceneList,
   getSceneFile,
