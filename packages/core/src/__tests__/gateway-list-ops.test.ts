@@ -87,10 +87,13 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
     'setGizmoMode', 'requestFrame', 'requestRename',
     'setSceneId', 'switchSceneFile', 'createSceneFile',
     'saveDocToDisk', 'loadDocFromDisk',
+    // keyboard-router convergence (M1/M4): setAssetSelection migrated transient→session;
+    // setAssetSelectionOne is its sugar alias; setDisplay is the scene⇄game toggle.
+    'setAssetSelection', 'setAssetSelectionOne', 'setDisplay',
   ];
 
   const TRANSIENT_OPS = [
-    'setHoverEntity', 'setFieldPreview', 'setAssetSelection',
+    'setHoverEntity', 'setFieldPreview',
   ];
 
   it('includes all 9 document primitives', () => {
@@ -151,10 +154,10 @@ describe('listOps counts match M2 consolidation (m4-w1, RED)', () => {
     expect(sessionCount).toBeGreaterThanOrEqual(11);
   });
 
-  it('transient op count >= 3', () => {
+  it('transient op count >= 2', () => {
     const ops = gw.listOps();
     const transientCount = ops.filter((o) => o.domain === 'transient').length;
-    expect(transientCount).toBeGreaterThanOrEqual(3);
+    expect(transientCount).toBeGreaterThanOrEqual(2);
   });
 
   it('document op count >= 9', () => {

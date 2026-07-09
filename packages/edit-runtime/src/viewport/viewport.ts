@@ -926,7 +926,11 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   }
 
   // W / E / R switch gizmo mode (move / rotate / scale); F frames the selection.
-  // Skipped while typing.
+  // Skipped while typing. NOTE (keyboard-router convergence M4 T4-5): Delete /
+  // Backspace / F2 / Ctrl+D / Ctrl+A / G are intentionally NOT handled here — they
+  // live in the single global-shortcuts router (interface submodule). This keeps
+  // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
+  // through the one gateway door.
   function onKey(e: KeyboardEvent): void {
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;

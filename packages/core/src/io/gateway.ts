@@ -12,6 +12,7 @@ import type { QuerySnapshotDescriptor, QuerySnapshotResult, QuerySnapshotFn } fr
 import { validate as validateArgs } from './args-schema';
 import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
+import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
@@ -106,6 +107,10 @@ export interface ApplierCtx {
   /** Controlled proxy for engine World writes. Sole mutator outside this file
    *  is a lint violation (gateway A). */
   engine: EngineFacade;
+  /** Controlled proxy for asset/pack IO (north-star §2 write-gate axis symmetry
+   *  with engine). Sole mutator outside this file is a lint-unique-mutator
+   *  violation (G-5 / AC-D1). */
+  assetIO: AssetIOFacade;
   /** Recursive dispatch — transaction applier uses this to run sub-ops
    *  through the executor (replacing the M1 module-level _dispatchDocumentSub). */
   dispatchSub(kind: string, payload: EditorOp): ReturnType<ApplierFn>;
@@ -251,7 +256,7 @@ export class EditGateway {
     const dispatchSub = (_kind: string, sub: EditorOp): ReturnType<ApplierFn> => {
       return this._execDocumentApplier(sub);
     };
-    return { engine, dispatchSub, query };
+    return { engine, assetIO, dispatchSub, query };
   }
 
   // ── Executor: span-wrapped document applier call ──────────────────────────
@@ -265,6 +270,9 @@ export class EditGateway {
     const engine = this._getEngineFacade() as unknown as EngineWriteProxy;
     const ctx: DocApplierCtx = {
       engine,
+      // Asset write gate (north-star §2 axis symmetry): document appliers such as
+      // destroyAsset reach the pack IO through this, never the raw pack-ops API.
+      assetIO,
       // M3 (I1): the transaction-scoped placeholder alias (replaces the deleted
       // legacy id-to-handle map). One map threads through a whole top-level
       // dispatch so a transaction's forward-references (spawn then reparent under
@@ -601,6 +609,11 @@ export class EditGateway {
     const applied = this.undoStack.map((e) => step(labelOf(e.cmd), e.origin, false, entityOf(e.cmd)));
     const future = [...this.redoStack].reverse().map((e) => step(labelOf(e.cmd), e.origin, true, entityOf(e.cmd)));
     return [...applied, ...future];
+  }
+
+  /** Inverse of the most recent applied step, if any (introspection / test helper). */
+  peekUndoInverse(): EditorOp | undefined {
+    return this.undoStack[this.undoStack.length - 1]?.inverse;
   }
 
   /** Move the timeline head to exactly `target` applied steps (undo/redo as needed). */

@@ -40,6 +40,10 @@ export interface OpDescriptor {
   readonly argsSchema: ArgsSchema | null;
   readonly source: 'builtin' | 'defined';
   readonly title?: string;
+  /** Marks a legacy/syntactic alias of a canonical op (e.g. setAssetSelectionOne
+   *  is the single-asset sugar form of setAssetSelection). AI listOps shows both
+   *  but flags sugar so callers learn the one canonical shape. */
+  readonly sugar?: boolean;
 }
 
 // ── Plan function type (defineOp) ──────────────────────────────────────────
@@ -85,6 +89,10 @@ const builtinOps: ReadonlyArray<{
   domain: 'document' | 'session' | 'transient';
   argsSchema: ArgsSchema | null;
   title?: string;
+  /** Marks a legacy/syntactic alias of a canonical op (e.g. setAssetSelectionOne
+   *  is the single-asset sugar form of setAssetSelection). AI listOps shows both
+   *  but flags sugar so callers learn the one canonical shape. */
+  sugar?: boolean;
 }> = [
   // ══ document domain (9 primitives) ══════════════════════════════════════
   {
@@ -195,6 +203,28 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Transaction',
   },
+  {
+    id: 'destroyAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: { packPath: { type: 'string' }, guid: { type: 'string' } },
+      required: ['packPath', 'guid'],
+    },
+    title: 'Destroy Asset',
+  },
+  {
+    id: 'restoreAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        cacheKey: { type: 'string' },
+      },
+      required: ['packPath', 'guid'],
+    },
+    title: 'Restore Asset',
+  },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
   { id: 'setSelection', domain: 'session',
@@ -262,9 +292,37 @@ const builtinOps: ReadonlyArray<{
     argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true }, key: { type: 'string' }, value: { type: 'number' } } },
     title: 'Set Field Preview',
   },
-  { id: 'setAssetSelection', domain: 'transient',
-    argsSchema: { type: 'object', properties: { asset: {} }, required: ['asset'] },
+  { id: 'setAssetSelection', domain: 'session',
+    // Base op: one op carries the whole multi-select set (AC-B2 / T0-5). assets is
+    // the selection set, primary drives single-target panels (Material).
+    argsSchema: {
+      type: 'object',
+      properties: {
+        assets: { type: 'array', items: { type: 'object' } },
+        primary: { type: 'object', nullable: true },
+      },
+      required: ['assets', 'primary'],
+    },
     title: 'Set Asset Selection',
+  },
+  { id: 'setAssetSelectionOne', domain: 'session', sugar: true,
+    // Legacy single-asset sugar form — forwards to setAssetSelection (AC-B2).
+    argsSchema: {
+      type: 'object',
+      properties: { asset: { type: 'object', nullable: true } },
+      required: ['asset'],
+    },
+    title: 'Set Asset Selection (single, sugar)',
+  },
+  { id: 'setDisplay', domain: 'session',
+    // Viewport display toggle (scene⇄game) — north-star §6/§8, symmetric to play/stop
+    // (T0-9 / G-6). Advances to the ledger, not to undo.
+    argsSchema: {
+      type: 'object',
+      properties: { display: { type: 'string', enum: ['scene', 'game'] } },
+      required: ['display'],
+    },
+    title: 'Set Viewport Display',
   },
 ];
 

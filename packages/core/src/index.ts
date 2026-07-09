@@ -258,11 +258,24 @@ export {
   hasPendingDiskSave,
   getAssetSelection,
   useAssetSelection,
+  getAssetSelectionList,
+  useAssetSelectionList,
+  clearAssetSelection,
   onAssetSelectionChange,
+  registerAssetSelectAllHandler,
+  triggerAssetSelectAll,
   publishMeshStats,
   getMeshStats,
   useMeshStats,
 } from './store/store';
+// M4 T4-2 / T5-1 (AC-C1 / C4-4): single-source Derive of "who was selected
+// last" — the keyboard router AND the panel scope-ring both read this; no
+// second divergent state (G-3 / architecture-principles Derive).
+export {
+  getLastSelectionDomain,
+  useLastSelectionDomain,
+  subscribeLastSelectionDomain,
+} from './store/last-selection-domain';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats } from './store/store';
 
 // ── Entity operations ──

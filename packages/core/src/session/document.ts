@@ -45,6 +45,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditorHidden } from '../components/EditorHidden';
 import { EngineFacade } from '../io/engine-facade';
+import { assetIO } from '../io/asset-io-facade';
 import { worldRootHandles } from '../store/entity-state';
 
 export { createEditSession } from './edit-session';
@@ -86,6 +87,9 @@ export type DocQueryFn = (descriptor: unknown) => unknown;
  *  applier body is a tsc error (AC-01 negative; ctx-world-negative guard). */
 export interface DocApplierCtx {
   engine: EngineWriteProxy;
+  /** Asset/pack write gate (north-star §2 axis symmetry with engine). Document
+   *  appliers such as destroyAsset reach pack IO through this. */
+  assetIO: import('../io/asset-io-facade').AssetIOFacade;
   alias: DocAliasMap;
   dispatchSub(ctx: DocApplierCtx, sub: EditorOp): ApplyResult;
   query: DocQueryFn;
@@ -470,6 +474,10 @@ export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
   const alias: DocAliasMap = new Map();
   const ctx: DocApplierCtx = {
     engine,
+    // Asset write gate (north-star §2 axis symmetry): begin/undo of destroyAsset
+    // reach pack IO through this, consistent with the gateway executor ctx. The
+    // shared `assetIO` singleton has no per-instance state (AC-D2).
+    assetIO,
     alias,
     // Non-span-pushing recursion reusing the SAME ctx (so the transaction alias
     // threads through every sub-op — forward-references resolve).

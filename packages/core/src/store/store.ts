@@ -116,8 +116,12 @@ export { initDiskWatch } from './disk-watch';
 export {
   getAssetSelection,
   useAssetSelection,
+  getAssetSelectionList,
+  useAssetSelectionList,
+  clearAssetSelection,
   onAssetSelectionChange,
 } from './asset-selection';
+export { registerAssetSelectAllHandler, triggerAssetSelectAll } from './asset-select-all';
 export type { SelectedAsset } from './asset-selection';
 
 // ── cluster 13: mesh-stats ──
