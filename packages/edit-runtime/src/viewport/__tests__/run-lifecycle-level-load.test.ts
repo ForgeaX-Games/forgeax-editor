@@ -87,8 +87,12 @@ function makeFakeRenderer() {
         return { ok: true as const, value: 1 };
       },
     },
-    draw(world: unknown) {
-      drawWorlds.push(world);
+    // Engine #643 migrated the frame loop to composited multi-world rendering:
+    // renderer.draw(worlds, { owner }) takes an ARRAY of worlds. Record each
+    // drawn world (flattened) so the per-world assertions below still hold.
+    draw(worlds: unknown, _opts?: unknown) {
+      if (Array.isArray(worlds)) drawWorlds.push(...worlds);
+      else drawWorlds.push(worlds);
       return { ok: true } as const;
     },
     dispose() {
