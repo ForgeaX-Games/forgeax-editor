@@ -421,6 +421,69 @@ describe('▶ Play defaultScene instantiate routes through AssetRegistry (Shared
   });
 });
 
+// ── Regression: ▶ Play must tick without a missing-resource fault ──────────────
+// The assemble form of createApp does NOT auto-inject runtime-handle resources —
+// only the plugins do. animationPlugin() (which play-assemble lists) registers
+// advanceAnimationPlayer, whose system declares
+// `resources: [ANIMATION_ASSET_RESOLVER_KEY]` UNCONDITIONALLY. When the engine
+// canvas form inserted the resolver but the assemble form / plugin did not, the
+// first play tick aborted with AppError[app-system-update-failed] "Required
+// resource 'AnimationAssetResolver' not found" — and this suite's fake renderer
+// onError no-op SWALLOWED it (115 pass, 0 fail, error only in console noise),
+// the same blindspot that hid the SharedRefReleasedError above. This test taps
+// the play WORLD's error handler (where ParamValidation routes the missing
+// resource before the frame loop wraps it) and asserts a clean tick.
+describe('▶ Play first tick has no missing-resource fault (AnimationAssetResolver regression)', () => {
+  it('captures the play world error handler and steps a frame with zero errors', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const fr = makeFakeRenderer();
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      const boot = makeFakeBootstrap();
+
+      // A play world whose error handler is observable: the missing-resource
+      // ParamValidation ('invalid') routes here BEFORE the frame loop wraps it
+      // into app-system-update-failed (which the fake renderer.onError swallows).
+      const worldErrors: unknown[] = [];
+      const makeObservedWorld = () => {
+        const w = new World() as unknown as { setErrorHandler(h: (e: unknown) => void): void };
+        w.setErrorHandler((e) => worldErrors.push(e));
+        return w;
+      };
+
+      const assemble = async () =>
+        assemblePlayWorld({
+          renderer: fr.renderer as never,
+          loadDefaultScene: async () => makeSceneAsset(),
+          resolveBootstrap: async () => boot.entry as never,
+          attachInput: () => undefined,
+          newWorld: () => makeObservedWorld() as never,
+        });
+
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: assemble as never,
+      });
+
+      await lifecycle.playSimulation();
+      expect(lifecycle.currentPlayWorld()).not.toBeNull();
+
+      // Drive frames — advanceAnimationPlayer runs each world.update(). If the
+      // resolver resource were missing this pushes an Error (RED before the
+      // engine animationPlugin self-owns the resolver).
+      fakeRaf.step();
+      fakeRaf.step();
+      expect(worldErrors).toEqual([]);
+
+      lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
 // ── AC-05 dead-concept sweep: run-lifecycle.ts must not carry epoch / 4-layer ──
 // undo vocabulary anymore (grep -i epoch zero hits, plan-strategy AC-05).
 describe('w6 — AC-05 dead-concept grep on run-lifecycle.ts source', () => {

@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
-import { stat, unlink, readFile, writeFile } from 'fs/promises';
+import { mkdir, stat, unlink, writeFile } from 'fs/promises';
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { readFileSafe, writeFileSafe, classify } from './lib/io';
 import { type FileBackend, studioFileBackend, WHITELIST_ERROR } from './lib/file-backend';
 
 interface WriteBody {
   path?: unknown;
   content?: unknown;
+  mkdir?: unknown;
 }
 
 /**
@@ -52,11 +55,28 @@ export function createFilesRouter(backend: FileBackend = studioFileBackend()) {
     } catch {
       return c.json({ error: 'invalid json body' }, 400);
     }
-    if (typeof body?.path !== 'string' || typeof body?.content !== 'string') {
-      return c.json({ error: 'fields { path: string, content: string } required' }, 400);
+    if (typeof body?.path !== 'string') {
+      return c.json({ error: 'field { path: string } required' }, 400);
     }
     const abs = backend.resolveWrite(body.path);
     if (!abs) return c.json({ error: WHITELIST_ERROR }, 400);
+
+    // mkdir branch: create a directory instead of writing a file. The editor's
+    // Content Browser "New Folder" sends { path, content: '', mkdir: true } —
+    // without this branch the handler falls through to writeFileSafe and
+    // silently creates an empty *file* named after the intended folder.
+    if (body.mkdir === true) {
+      try {
+        await mkdir(abs, { recursive: true });
+        return c.json({ path: body.path, directory: true });
+      } catch (e) {
+        return c.json({ error: (e as Error).message }, 500);
+      }
+    }
+
+    if (typeof body?.content !== 'string') {
+      return c.json({ error: 'fields { path: string, content: string } required' }, 400);
+    }
     try {
       const { bytes } = await writeFileSafe(abs, body.content);
       return c.json({ path: body.path, bytes });
@@ -113,13 +133,14 @@ export function createFilesRouter(backend: FileBackend = studioFileBackend()) {
       return c.json({ error: 'is a directory — use GET /api/files/tree?root=<path>' }, 400);
     }
     const { mime } = classify(rel);
-    const buf = await readFile(abs);
+    // 流式回传文件字节(createReadStream → WHATWG ReadableStream),Bun/Node 双跑。
+    const body = Readable.toWeb(createReadStream(abs)) as unknown as ReadableStream;
     // 媒体资源 (video/* / image/* / audio/*) 走轻量级缓存: 5 分钟内同 url 切换
     // 直接吃浏览器 disk cache, 不走 HTTP. ADR-0019 头像状态机切 state 时多次拉
     // 同一批 webm, no-cache 会让每次切换都打一次 HTTP → 视觉空白窗.
     // 文本/JSON 等仍 no-cache (热重载/编辑场景需要立即看到新内容).
     const isMedia = mime.startsWith('video/') || mime.startsWith('image/') || mime.startsWith('audio/');
-    return new Response(buf, {
+    return new Response(body, {
       headers: {
         'Content-Type': mime,
         'Content-Length': String(s.size),
