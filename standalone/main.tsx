@@ -43,6 +43,102 @@ import { installEditorBusCompat } from '@forgeax/editor-core';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
+// T4-3 / AC-C2: UI-layer DeleteGuardDialog for risky asset deletes — core stays
+// headless, the router requests a human confirm through this bus.
+import { requestDeleteGuard } from './delete-guard-bus';
+import { DeleteGuardDialog } from './DeleteGuardDialog';
+
+// keyboard-router convergence M4: the interface submodule's global-shortcuts
+// router is editor-agnostic (lint:agnostic forbids importing @forgeax/editor),
+// so we inject the editor-side callbacks it needs here — once, before React
+// mounts (useGlobalShortcuts reads them at effect time). This keeps a SINGLE
+// global keydown listener (G-1 / AC-A1) while routing Delete/F2/Ctrl+D/Ctrl+A/G
+// through the one gateway door.
+import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
+import {
+  gateway,
+  getSelectionList,
+  getAssetSelectionList,
+  getLastSelectionDomain,
+  deleteManyCascade,
+  duplicateEntity,
+  renameAssetInPack,
+  duplicateAssetInPack,
+  broadcastAssetsChanged,
+  worldRootHandles,
+  childrenOf,
+  triggerAssetSelectAll,
+} from '@forgeax/editor-core';
+import { getViewportQuadrant, getInputTarget } from '@forgeax/editor-edit-runtime/viewport/quadrant';
+
+// lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
+// (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
+// NOT (C2-1). The router reads it (via this dep) to decide which domain
+// Delete/F2/Ctrl+D/Ctrl+A act on, and the panel header rings read it (via the
+// useLastSelectionDomain hook) to show the current Delete jurisdiction. The
+// Derive itself lives in editor-core (store/last-selection-domain) so router and
+// UI share one source — no second divergent state (G-3).
+
+function buildKeyboardRouterDeps(): KeyboardRouterDeps {
+  return {
+    dispatch: (op, origin) => gateway.dispatch(op as never, (origin ?? 'human') as never),
+    getEntitySelection: () => Array.from(getSelectionList()) as unknown as number[],
+    getAssetSelection: () => getAssetSelectionList(),
+    getLastSelectionDomain: () => getLastSelectionDomain(),
+    isPlayMode: () => gateway.mode === 'play',
+    getDisplay: () => getViewportQuadrant().display,
+    getInputTarget: () => getInputTarget(),
+    deleteEntities: (ids) => deleteManyCascade(ids as never),
+    duplicateEntities: (ids) => ids.forEach((id) => duplicateEntity(id as never)),
+    renameEntity: (id) => gateway.dispatch({ kind: 'requestRename', entity: id } as never),
+    selectAllEntities: () => {
+      const world = gateway.doc.world;
+      const seen = new Set<number>();
+      const stack: number[] = [...(worldRootHandles(world) as unknown as number[])];
+      const all: number[] = [];
+      for (const h of stack) seen.add(h);
+      while (stack.length) {
+        const h = stack.pop()!;
+        all.push(h);
+        for (const c of (childrenOf(world, h as never) as unknown as number[])) {
+          if (!seen.has(c)) { seen.add(c); stack.push(c); }
+        }
+      }
+      gateway.dispatch({ kind: 'setSelectionMany', ids: all } as never);
+    },
+    deleteAssets: (assets) => {
+      // T4-3 / AC-C2: risky multi-asset delete surfaces a UI confirm dialog
+      // (UI layer, core stays headless); single-asset deletes proceed directly,
+      // matching entity-delete which also has no confirm. Cross-reference warning
+      // is the gate that decides whether a human confirm is needed (OOS-5 ref
+      // compensation is out of scope — multi-select is the in-scope trigger).
+      if (assets.length > 1) {
+        void requestDeleteGuard({
+          assets: assets.map((a) => ({ guid: a.guid, name: a.name, packPath: a.packPath })),
+        }).then((ok) => {
+          if (!ok) return;
+          for (const a of assets) {
+            gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
+          }
+        });
+        return;
+      }
+      for (const a of assets) {
+        gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
+      }
+    },
+    duplicateAsset: (guid, packPath) => {
+      void duplicateAssetInPack(guid, packPath).then(({ ok }) => { if (ok) broadcastAssetsChanged(); });
+    },
+    renameAsset: (guid, packPath) => {
+      const newName = window.prompt('Rename asset:', packPath.split('/').pop() ?? guid);
+      if (newName && newName.trim()) {
+        void renameAssetInPack(guid, packPath, newName.trim()).then((ok) => { if (ok) broadcastAssetsChanged(); });
+      }
+    },
+    selectAllAssets: () => triggerAssetSelectAll(),
+  };
+}
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
 // null when the stack was started without `cli.mjs run --game <dir>` — in that
@@ -123,6 +219,11 @@ function boot(): void {
   // message handlers. Temporary until interface accepts bus injection.
   installEditorBusCompat();
 
+  // Inject the editor-side keyboard-router callbacks (interface submodule stays
+  // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks
+  // them up at effect time.
+  registerKeyboardRouterDeps(buildKeyboardRouterDeps());
+
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +
   // ContextMenu (plan-strategy D-1: diff-set empty). hideChatAndForge drops
@@ -137,6 +238,22 @@ function boot(): void {
   } catch (err) {
     console.error('[standalone] React mount failed:', err);
     throw err;
+  }
+
+  // T4-3 / AC-C2: mount the UI-layer DeleteGuardDialog on its own React root so
+  // the keyboard router (which runs outside React, in the DI above) can request a
+  // human confirm. Dedicated root keeps the dialog above the dock chrome.
+  try {
+    const guardEl = document.createElement('div');
+    guardEl.id = 'delete-guard-root';
+    document.body.appendChild(guardEl);
+    createRoot(guardEl).render(
+      <StrictMode>
+        <DeleteGuardDialog />
+      </StrictMode>,
+    );
+  } catch (err) {
+    console.error('[standalone] DeleteGuardDialog mount failed:', err);
   }
 }
 

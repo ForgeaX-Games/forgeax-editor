@@ -1,26 +1,23 @@
-// store/asset-selection — the currently-selected pack asset (Content Browser →
+// store/asset-selection — the currently-selected pack assets (Content Browser →
 // Material panel cross-panel channel).
 //
-// State: `selectedAsset` + its listener set. Consumers: clicking an asset card
-// in the Content Browser publishes it (setAssetSelection); other panels
-// (Material, future Preview) react via useAssetSelection / onAssetSelectionChange.
+// Migrated to the SESSION domain (north-star §6: selection IS session-state) and
+// expanded to carry a MULTI-SELECTION set (AC-B2): one op carries the whole
+// selection set, so the Content Browser's high-frequency click no longer churns
+// the ledger per-branch (batching — T0-6). The legacy single-{ asset } form is
+// still accepted by the applier (forwarded to the multi form) so old call sites
+// keep working; the catalog marks it `sugar` (AC-B2).
 //
 // Anchors:
-//   plan-strategy §2 D-2: cluster 12 (store.ts:1276-1306)
-//   plan-strategy §2 D-1: setAssetSelection is a TRANSIENT-domain op — the body
-//     is the applier, registered into transientAppliers; the setter dispatches
-//     (M2 m2-w9). asset-selection belongs to transient (requirements §2 NOTE, q2
-//     human answer). No undo, no ledger.
-//   research F-2: useSyncExternalStore getter+hook kept in one file
-//   requirements AC-03: transient goes through gateway, leaves no trace.
+//   M1 (keyboard-router convergence): setAssetSelection moved from transientAppliers
+//     to sessionAppliers; payload is now { assets: SelectedAsset[]; primary }.
+//   G-2: selection is a session op → ledger-visible (AI can observe "CB selected 3
+//     assets"). clearAssetSelection is a lifecycle direct call (NOT dispatch, NOT
+//     ledger, does NOT update lastSelectionDomain — C2-1).
+//   research F-2: useSyncExternalStore getter+hook kept in one file.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { transientAppliers } from '../io/appliers';
-
-// ── Asset selection (cross-panel: Content Browser → Material panel) ──────────
-// Lightweight pub/sub for the currently-selected pack asset. When a user clicks
-// an asset card in the Content Browser, other panels (Material, future Preview)
-// can react by displaying its properties.
+import { sessionAppliers } from '../io/appliers';
 
 export interface SelectedAsset {
   guid: string;
@@ -30,35 +27,88 @@ export interface SelectedAsset {
   packPath: string;
 }
 
-let selectedAsset: SelectedAsset | null = null;
+let selectedAssets: SelectedAsset[] = [];
+let primaryAsset: SelectedAsset | null = null;
 const assetSelListeners = new Set<() => void>();
 function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
 
-// Transient applier (M2 D-1): setAssetSelection body, registered into the
-// transient table. The op payload carries the asset (or null).
+/** Set equality by guid (order-independent) — dedup guard so an unchanged
+ *  selection does not re-emit or re-push to the ledger (T0-1). */
+function sameSet(a: SelectedAsset[], b: SelectedAsset[]): boolean {
+  if (a.length !== b.length) return false;
+  const bg = new Set(b.map((x) => x.guid));
+  return a.every((x) => bg.has(x.guid));
+}
+
+// SESSION applier (G-2 / AC-B1): the setAssetSelection body. Accepts both the new
+// multi form { assets, primary } and the legacy single form { asset } (forwarded).
+// Dedups identical (set, primary) so idempotent re-dispatches are no-ops.
 function applySetAssetSelection(op: EditorOp): { ok: true } {
-  const asset = (op as { asset: SelectedAsset | null }).asset;
-  if (selectedAsset?.guid !== asset?.guid) {
-    selectedAsset = asset;
-    emitAssetSel();
+  const o = op as {
+    assets?: SelectedAsset[];
+    primary?: SelectedAsset | null;
+    asset?: SelectedAsset | null;
+  };
+  const assets = o.assets ?? (o.asset ? [o.asset] : []);
+  const primary = o.primary ?? o.asset ?? null;
+  if (sameSet(selectedAssets, assets) && primaryAsset?.guid === primary?.guid) {
+    return { ok: true };
   }
+  selectedAssets = assets;
+  primaryAsset = primary;
+  emitAssetSel();
   return { ok: true };
 }
-transientAppliers.set('setAssetSelection', applySetAssetSelection);
+sessionAppliers.set('setAssetSelection', applySetAssetSelection);
 
-// M3 t22 (S10 / AC-21/22): setAssetSelection write-side sugar deleted — callers
-// dispatch gateway.dispatch({ kind: 'setAssetSelection', asset }) directly.
-// Read-side (getAssetSelection / useAssetSelection / onAssetSelectionChange) stays.
-export function getAssetSelection(): SelectedAsset | null { return selectedAsset; }
+// Sugar alias: legacy single-asset form. Forwards to the multi base op (AC-B2).
+// Registered so old callers dispatching { kind: 'setAssetSelectionOne', asset }
+// keep working; the catalog marks this `sugar: true`.
+sessionAppliers.set('setAssetSelectionOne', (op) => {
+  const o = op as unknown as { asset: SelectedAsset | null };
+  return applySetAssetSelection({
+    kind: 'setAssetSelection',
+    assets: o.asset ? [o.asset] : [],
+    primary: o.asset ?? null,
+  });
+});
+
+/**
+ * Directly clear the asset selection — lifecycle seam (G-2 / C2-1). Not an edit
+ * op, not dispatched, not recorded in ledger/undo, and does NOT update
+ * lastSelectionDomain (which only moves on a forward select). Content Browser
+ * calls this on blur / project switch.
+ */
+export function clearAssetSelection(): void {
+  if (selectedAssets.length !== 0 || primaryAsset !== null) {
+    selectedAssets = [];
+    primaryAsset = null;
+    emitAssetSel();
+  }
+}
+
+/** The full selected-asset list (live reference — treat as read-only). */
+export function getAssetSelectionList(): SelectedAsset[] { return selectedAssets; }
+/** The primary selected asset (first / last-clicked) — backward-compat with the
+ *  Material panel's single-asset contract (onAssetSelectionChange read interface). */
+export function getAssetSelection(): SelectedAsset | null { return primaryAsset; }
+
 function subscribeAssetSel(fn: () => void): () => void {
   assetSelListeners.add(fn);
   return () => assetSelListeners.delete(fn);
 }
-export function useAssetSelection(): SelectedAsset | null {
-  return useSyncExternalStore(subscribeAssetSel, getAssetSelection, getAssetSelection);
-}
-/** Non-React subscription to asset-selection changes (used by the MAIN window in
- *  main.tsx to load the selected mesh and publish its stats). Returns unsubscribe. */
+
+/** Non-React subscription to asset-selection changes (used by UI layers + the
+ *  router's lastSelectionDomain derive). Returns unsubscribe. */
 export function onAssetSelectionChange(fn: () => void): () => void {
   return subscribeAssetSel(fn);
+}
+
+/** Reactive multi-selection list (Content Browser / Material). */
+export function useAssetSelectionList(): SelectedAsset[] {
+  return useSyncExternalStore(subscribeAssetSel, getAssetSelectionList, getAssetSelectionList);
+}
+/** Reactive primary asset (legacy single-asset consumers). */
+export function useAssetSelection(): SelectedAsset | null {
+  return useSyncExternalStore(subscribeAssetSel, getAssetSelection, getAssetSelection);
 }

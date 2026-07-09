@@ -109,7 +109,9 @@ export function buildAssetContextMenu(
       if (sel !== null && mapping) {
         gateway.dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
       } else {
-        gateway.dispatch({ kind: 'setAssetSelection', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
+        // M1 (AC-B2): single-asset select uses the setAssetSelectionOne
+        // sugar op (forwards to the multi-base setAssetSelection applier).
+        gateway.dispatch({ kind: 'setAssetSelectionOne', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
       }
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },

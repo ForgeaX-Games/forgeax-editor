@@ -10,13 +10,19 @@
 import { apiFetch } from '../io/api-client';
 import { fetchWithTimeout } from '../io/net';
 import { stableGuid, validatePackShell, type PackFile } from '../scene/scene-pack';
-import { sessionAppliers } from '../io/appliers';
+import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
+import type { DocApplierCtx } from './document';
+import { deletedEntryCache, type PackAssetEntry } from '../io/asset-io-facade';
+import type { ApplyResult, EditorOp } from '../types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function readPack(packPath: string): Promise<PackFile | null> {
+// Low-level pack IO primitives — encapsulated by AssetIOFacade (the asset write
+// gate, G-5 / AC-D1). Exported so the facade is the ONLY external caller; any
+// other file invoking these directly is a lint-unique-mutator violation.
+export async function readPack(packPath: string): Promise<PackFile | null> {
   try {
     const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
     if (!r.ok) return null;
@@ -32,7 +38,7 @@ async function readPack(packPath: string): Promise<PackFile | null> {
   }
 }
 
-async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
+export async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
   try {
     // M1: validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
     // Bad packs are rejected — disk is never touched with invalid data.
@@ -52,7 +58,7 @@ async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
   }
 }
 
-async function deleteFile(filePath: string): Promise<boolean> {
+export async function deleteFile(filePath: string): Promise<boolean> {
   try {
     const r = await apiFetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
     return r.ok;
@@ -277,3 +283,48 @@ sessionAppliers.set('createDirectory', (op) => {
   });
   return { ok: true };
 });
+
+// ── Document appliers: destroyAsset / restoreAsset (G-4 / AC-C5) ──────────────
+// These are DOCUMENT-domain ops: they carry an inverse → undo + ledger (G-4).
+// The actual pack mutation is async (HTTP /api/files), but the gateway's document
+// applier contract is SYNCHRONOUS, so we:
+//   1. snapshot the entry into deletedEntryCache BEFORE firing the async delete,
+//      so the inverse op can synchronously restore the full entry on undo;
+//   2. return { ok, inverse } synchronously; the IO runs fire-and-forget (same
+//      pattern as the createDirectory session applier).
+// destroyAsset → ctx.assetIO.deletePackEntry ; restoreAsset → ctx.assetIO.writePackEntry.
+// AC-D4: both go through the asset write gate, recording assetIO.* leaves.
+
+function _cacheKey(packPath: string, guid: string): string {
+  return `${packPath}#${guid}`;
+}
+
+export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid } = cmd as { packPath: string; guid: string };
+  const key = _cacheKey(packPath, guid);
+  // Fire the async delete; stash the snapshot so undo can restore the full entry.
+  // The document-applier contract is synchronous (returns inverse immediately);
+  // the IO is fire-and-forget. A .catch guards against an unhandled rejection if
+  // the pack write fails (network/disk) — the op already landed in undo/ledger,
+  // so a failed write must not crash the host (D-1: the gateway is the only door).
+  void ctx.assetIO.deletePackEntry(packPath, guid).then((entry) => {
+    deletedEntryCache.set(key, entry);
+  }).catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e));
+  return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp };
+}
+
+export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid, cacheKey } = cmd as { packPath: string; guid: string; cacheKey?: string };
+  const key = cacheKey ?? _cacheKey(packPath, guid);
+  const entry = deletedEntryCache.get(key);
+  if (entry) {
+    void ctx.assetIO.writePackEntry(packPath, entry).catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
+    deletedEntryCache.delete(key);
+  }
+  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp };
+}
+
+// Seed the two document appliers (symmetric inverse pair). Registered into the
+// unified table as document-domain → undo + ledger (G-4).
+registerApplier('document', 'destroyAsset', applyDestroyAsset as unknown as ApplierFn);
+registerApplier('document', 'restoreAsset', applyRestoreAsset as unknown as ApplierFn);

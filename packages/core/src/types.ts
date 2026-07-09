@@ -14,6 +14,7 @@ export type {
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityId, EntitySource } from './scene/scene-types';
+import type { SelectedAsset } from './store/asset-selection';
 
 // ── Operations ──────────────────────────────────────────────────────────────
 // Each op is a plain JSON object = it doubles as an AI tool-call payload.
@@ -35,10 +36,13 @@ export type BuiltinEditorOp =
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
+  | { kind: 'destroyAsset'; packPath: string; guid: string }
+  | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }
   | { kind: 'setSelectionMany'; ids: EntityId[] }
+  | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'requestFrame' }
   | { kind: 'requestRename'; entity: EntityId }
@@ -50,6 +54,9 @@ export type BuiltinEditorOp =
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'focusPanel'; panel: string }
   | { kind: 'openSource'; plugin: string; docId: string }
+  | { kind: 'setCBPath'; path: string }
+  | { kind: 'cbGoBack' }
+  | { kind: 'cbGoForward' }
   // play·stop (plan-strategy §2 D-11): SESSION-domain discrete instantaneous ops.
   // Their real applier (the state machine) lives in edit-runtime (DAG downstream)
   // and is injected via registerSessionApplier at boot; in headless core they are
@@ -57,10 +64,11 @@ export type BuiltinEditorOp =
   // is empty (instantaneous degenerate dispatch — no continuous lifecycle).
   | { kind: 'play' }
   | { kind: 'stop' }
+  | { kind: 'setDisplay'; display: 'scene' | 'game' }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
-  | { kind: 'setAssetSelection'; asset: unknown };
+  ;
 
 /** EditorOp — the open union type for all editor operations.
  *  BuiltinEditorOp preserves discriminated union narrowing for the 24 builtin

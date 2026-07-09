@@ -54,7 +54,7 @@ import { activeSpan, type EngineInterfaceName } from './trace';
 //   requirements AC-07: single mapping table (SSOT), fill traceable to entry
 //   plan-strategy §2 D-4: table SSOT in engine-facade.ts, single-point fill
 //   plan-strategy §2 D-5: contract-description wording, not real causality
-const ENGINE_SIDE_EFFECT_HINTS: Record<EngineInterfaceName, string> = {
+const ENGINE_SIDE_EFFECT_HINTS: Partial<Record<EngineInterfaceName, string>> = {
   'world.set':
     'by contract may mark affected render/spatial systems dirty for the next frame',
   'world.spawn':

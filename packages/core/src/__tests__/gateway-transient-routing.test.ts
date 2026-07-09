@@ -32,6 +32,7 @@ import { getFieldPreview } from '../store/field-preview';
 import {
   getAssetSelection,
   onAssetSelectionChange,
+  clearAssetSelection,
   type SelectedAsset,
 } from '../store/asset-selection';
 import { gateway } from '../store/gateway';
@@ -102,36 +103,43 @@ describe('transient routing — field-preview (m2-w3)', () => {
   });
 });
 
-describe('transient routing — asset-selection (m2-w3)', () => {
+describe('session routing — asset-selection (M1)', () => {
   let gw: EditGateway;
-  beforeEach(() => { gw = new EditGateway(createSession()); gw.dispatch({ kind: 'setAssetSelection', asset: null } as EditorOp); });
+  beforeEach(() => { gw = new EditGateway(createSession()); clearAssetSelection(); });
 
   it('(a) setAssetSelection op takes effect via gateway dispatch', () => {
     const a = asset('mat-1');
-    const r = gw.dispatch({ kind: 'setAssetSelection', asset: a } as EditorOp);
+    const r = gw.dispatch({ kind: 'setAssetSelection', assets: [a], primary: a });
     expect(r.ok).toBe(true);
     expect(getAssetSelection()?.guid).toBe('mat-1');
   });
 
-  it('(b)+(c) asset-selection leaves no trace (undo + ledger unchanged)', () => {
+  it('(b)+(c) session op grows the ledger but carries no inverse (no undo)', () => {
     const undoBefore = gw.appliedCount();
     const ledgerBefore = gw.ledger.length;
-    gw.dispatch({ kind: 'setAssetSelection', asset: asset('mat-2') } as EditorOp);
-    expect(gw.appliedCount()).toBe(undoBefore);
-    expect(gw.ledger.length).toBe(ledgerBefore);
+    gw.dispatch({ kind: 'setAssetSelection', assets: [asset('mat-2')], primary: asset('mat-2') });
+    expect(gw.appliedCount()).toBe(undoBefore); // session: no undo
+    expect(gw.ledger.length).toBe(ledgerBefore + 1); // session: ledger appends
   });
 
-  it('(d) listeners receive the change even though it is not ledgered', () => {
+  it('(d) listeners receive the change', () => {
     let fired = 0;
     const unsub = onAssetSelectionChange(() => { fired++; });
-    gw.dispatch({ kind: 'setAssetSelection', asset: asset('mat-3') } as EditorOp);
+    gw.dispatch({ kind: 'setAssetSelection', assets: [asset('mat-3')], primary: asset('mat-3') });
     unsub();
     expect(fired).toBe(1);
     expect(getAssetSelection()?.guid).toBe('mat-3');
   });
 
   it('setAssetSelection dispatched through the singleton gateway takes effect', () => {
-    gateway.dispatch({ kind: 'setAssetSelection', asset: asset('mat-4') } as EditorOp);
+    gateway.dispatch({ kind: 'setAssetSelection', assets: [asset('mat-4')], primary: asset('mat-4') });
     expect(getAssetSelection()?.guid).toBe('mat-4');
+  });
+
+  it('setAssetSelectionOne sugar forwards to the multi-base applier', () => {
+    const a = asset('mat-5');
+    const r = gw.dispatch({ kind: 'setAssetSelectionOne', asset: a });
+    expect(r.ok).toBe(true);
+    expect(getAssetSelection()?.guid).toBe('mat-5');
   });
 });

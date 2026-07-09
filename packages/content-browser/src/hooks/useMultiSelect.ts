@@ -1,10 +1,22 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { CBAsset, CBFolder, CBSelection } from '../types';
+import {
+  gateway,
+  useAssetSelectionList,
+  useAssetSelection,
+  clearAssetSelection,
+  registerAssetSelectAllHandler,
+} from '@forgeax/editor-core';
 
 type Selectable = CBAsset | CBFolder;
 
 function itemKey(item: Selectable): string {
   return item.type === 'asset' ? (item as CBAsset).guid : (item as CBFolder).path;
+}
+
+/** Map a CBAsset to the store's SelectedAsset shape (single source of truth). */
+function toSelectedAsset(a: CBAsset) {
+  return { guid: a.guid, kind: a.kind, name: a.name, payload: a.payload, packPath: a.packPath };
 }
 
 export interface MultiSelectAPI {
@@ -16,69 +28,81 @@ export interface MultiSelectAPI {
 }
 
 /**
- * Multi-select hook supporting:
- * - Single click: select one item
- * - Ctrl/Cmd + click: toggle item in selection
- * - Shift + click: range select from last anchor
- * - Ctrl+A: select all
+ * Multi-select hook — M3 T3-1 thin-shell over the asset-selection store.
+ *
+ * Selection is now a SESSION-domain op (setAssetSelection): the store is the SSOT
+ * and `useAssetSelectionList` is the reactive read. This hook no longer holds its
+ * own selection state; every mutation batches the FINAL selection set and
+ * dispatches one `setAssetSelection` op (batching — T0-6), so the global keyboard
+ * router (which dispatches the same op) and the mouse here share one source of
+ * truth and stay in sync (no dual-state drift, AC-B3).
+ *
+ * `anchorIndexRef` stays a purely local UI concept (shift-range anchor); it is NOT
+ * part of the op payload (C2-3).
  */
 export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [primary, setPrimary] = useState<Selectable | null>(null);
+  const selectedList = useAssetSelectionList();
+  const primary = useAssetSelection();
+  const selectedGuids = useMemo(() => new Set(selectedList.map((a) => a.guid)), [selectedList]);
   const anchorIndexRef = useRef<number>(-1);
+
+  const dispatchSet = useCallback((next: Selectable[], primaryItem: Selectable | null) => {
+    const assets = next
+      .filter((i): i is CBAsset => i.type === 'asset')
+      .map(toSelectedAsset);
+    const p = primaryItem && primaryItem.type === 'asset'
+      ? toSelectedAsset(primaryItem as CBAsset)
+      : (assets[0] ?? null);
+    gateway.dispatch({ kind: 'setAssetSelection', assets, primary: p });
+  }, []);
 
   const handleClick = useCallback((index: number, e: React.MouseEvent) => {
     const item = items[index];
     if (!item) return;
+    if (item.type !== 'asset') { anchorIndexRef.current = index; return; }
     const key = itemKey(item);
-
+    let next: Selectable[];
     if (e.shiftKey && anchorIndexRef.current >= 0) {
       const start = Math.min(anchorIndexRef.current, index);
       const end = Math.max(anchorIndexRef.current, index);
-      const rangeKeys = items.slice(start, end + 1).map(itemKey);
-      if (e.ctrlKey || e.metaKey) {
-        setSelectedKeys(prev => new Set([...prev, ...rangeKeys]));
-      } else {
-        setSelectedKeys(new Set(rangeKeys));
-      }
-      setPrimary(item);
+      next = items.slice(start, end + 1);
     } else if (e.ctrlKey || e.metaKey) {
-      setSelectedKeys(prev => {
-        const next = new Set(prev);
-        if (next.has(key)) {
-          next.delete(key);
-        } else {
-          next.add(key);
-        }
-        return next;
-      });
-      setPrimary(item);
-      anchorIndexRef.current = index;
+      const base = items.filter((i) => selectedGuids.has(itemKey(i)));
+      if (selectedGuids.has(key)) next = base.filter((i) => itemKey(i) !== key);
+      else next = [...base, item];
     } else {
-      setSelectedKeys(new Set([key]));
-      setPrimary(item);
-      anchorIndexRef.current = index;
+      next = [item];
     }
-  }, [items]);
+    dispatchSet(next, item);
+    anchorIndexRef.current = index;
+  }, [items, selectedGuids, dispatchSet]);
 
   const selectAll = useCallback(() => {
-    setSelectedKeys(new Set(items.map(itemKey)));
-    setPrimary(items[items.length - 1] ?? null);
-  }, [items]);
+    dispatchSet(items, items[items.length - 1] ?? null);
+  }, [items, dispatchSet]);
 
   const clearSelection = useCallback(() => {
-    setSelectedKeys(new Set());
-    setPrimary(null);
-    anchorIndexRef.current = -1;
+    clearAssetSelection();
   }, []);
 
-  const isSelected = useCallback((item: Selectable): boolean => {
-    return selectedKeys.has(itemKey(item));
-  }, [selectedKeys]);
+  const isSelected = useCallback(
+    (item: Selectable): boolean => selectedGuids.has(itemKey(item)),
+    [selectedGuids],
+  );
 
+  // Bridge Ctrl+A (asset scope) from the global keyboard router to this hook's
+  // live item list. Registered on mount, cleared on unmount.
+  useEffect(() => {
+    registerAssetSelectAllHandler(() => selectAll());
+    return () => registerAssetSelectAllHandler(null);
+  }, [selectAll]);
+
+  // selection mirrors the store (so the router's dispatch is reflected here too).
   const selection: CBSelection = {
-    items: items.filter(i => selectedKeys.has(itemKey(i))),
-    primary,
+    items: items.filter((i) => selectedGuids.has(itemKey(i))),
+    primary: (primary
+      ? (items.find((i) => i.type === 'asset' && (i as CBAsset).guid === primary.guid) ?? null)
+      : null) as CBSelection['primary'],
   };
 
   return { selection, handleClick, selectAll, clearSelection, isSelected };

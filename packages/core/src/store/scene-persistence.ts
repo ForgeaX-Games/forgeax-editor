@@ -665,6 +665,11 @@ async function doLoadDocFromDisk(): Promise<boolean> {
       if (j.content) {
         const parsed = JSON.parse(j.content);
         if (isScenePack(parsed)) {
+          // Capture the inline-asset floor from the pack AS LOADED, so a later
+          // save that would drop materials below this is refused (see the guard
+          // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk
+          // truth, not the live world (which may fail to populate handles).
+          loadedInlineAssetFloor = inlineAssetCount(parsed);
           // Preserve the scene asset's GUID across edits (its stable identity).
           const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
           if (sceneAssetEntry?.guid) currentSceneGuid = sceneAssetEntry.guid;
@@ -872,17 +877,17 @@ async function doSaveDocToDisk(): Promise<boolean> {
     return false;
   }
   // Safety net (charter §9 graceful degradation): refuse a write that would
-  // DROP inline asset bodies (materials etc.) already on disk. The engine
-  // serializer only emits the scene entry; worldToPack re-appends inline
+  // DROP inline asset bodies (materials etc.) below the load-time floor. The
+  // engine serializer only emits the scene entry; worldToPack re-appends inline
   // assets, but if that ever regresses (or a ref becomes unresolvable) the
   // pack shell is still "valid" — just truncated — so validatePackShell above
-  // can't catch it. This compares inline-asset counts and aborts on a net
-  // loss, so a bug degrades to "save refused, data preserved" rather than
-  // "scene silently turns grey on reload" (AGENTS.md #2: authoring data must
-  // round-trip or it's a data-loss bug).
-  if (!(await inlineAssetsPreserved(p, parsedNew))) {
+  // can't catch it. Guarding against the LOAD floor (not the current on-disk
+  // count) means a prior stripping write can't lower the bar, so a bug degrades
+  // to "save refused, data preserved" rather than "scene silently turns grey on
+  // reload" (AGENTS.md #2: authoring data must round-trip or it's a data-loss bug).
+  if (inlineAssetsWouldDrop(parsedNew)) {
     console.error(
-      '[editor-core] saveDocToDisk: serialized pack would drop inline assets vs on-disk — aborting write to protect materials',
+      `[editor-core] saveDocToDisk: serialized pack has ${inlineAssetCount(parsedNew)} inline asset(s) but the scene loaded with ${loadedInlineAssetFloor} — aborting write to protect materials`,
     );
     return false;
   }
@@ -931,24 +936,25 @@ export function saveDocToDisk(): Promise<boolean> {
   return dispatchAsyncSessionOp({ kind: 'saveDocToDisk' });
 }
 
-/** Safety-net guard for saveDocToDisk: returns false when writing `newPack`
- *  over the on-disk pack at `path` would reduce the inline (non-scene) asset
- *  count — i.e. drop material/texture bodies that live inside the scene.pack.
- *  Reads the current disk pack; a missing/unreadable/unparseable file is
- *  treated as "nothing to lose" (returns true) so first-time saves proceed. */
-async function inlineAssetsPreserved(path: string, newPack: unknown): Promise<boolean> {
-  const newCount = inlineAssetCount(newPack);
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(path)}`);
-    if (!r.ok) return true; // no existing file → nothing to preserve
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return true;
-    const oldCount = inlineAssetCount(JSON.parse(j.content));
-    return newCount >= oldCount;
-  } catch {
-    // Can't read/parse the old pack → don't block the save on a transient error.
-    return true;
-  }
+/** Safety-net guard shared by BOTH save paths (awaited save + sync unload beacon):
+ *  returns true when writing `newPack` would drop inline (non-scene) assets below
+ *  the count the scene was LOADED with (`loadedInlineAssetFloor`) — i.e. strip
+ *  material/texture bodies. Anchoring to the load floor (not the current on-disk
+ *  file) is what defeats the strip-loop: a prior stripping write can't lower the
+ *  bar (the old count-vs-disk guard let 0 >= 0 through forever), and this is a pure
+ *  sync check so the pagehide beacon — which cannot await a disk read — uses the
+ *  exact same guard. Floor null (no scene loaded yet) ⇒ never drops (first save). */
+function inlineAssetsWouldDrop(newPack: unknown): boolean {
+  return wouldDropInlineAssets(loadedInlineAssetFloor, newPack);
+}
+
+/** Pure floor comparison behind {@link inlineAssetsWouldDrop} (exported for unit
+ *  test — the module-var caller supplies the live `loadedInlineAssetFloor`). true
+ *  ⇒ writing `newPack` would strip inline assets below `floor` and must be refused.
+ *  `floor === null` (no scene loaded) ⇒ never drops, so first-time saves proceed. */
+export function wouldDropInlineAssets(floor: number | null, newPack: unknown): boolean {
+  if (floor === null) return false;
+  return inlineAssetCount(newPack) < floor;
 }
 
 // Manual disk save (requirements-decisions #5; plan-strategy D-7). Every edit
@@ -963,6 +969,18 @@ async function inlineAssetsPreserved(path: string, newPack: unknown): Promise<bo
  *  (D-6 seam); writes route through _setDirty. Not in facade/barrel. */
 export let _isDirty = false;
 gateway.subscribe(() => { _isDirty = true; });
+
+// Inline-asset floor captured from the on-disk pack at LOAD time. The save guard
+// (both the awaited doSaveDocToDisk path and the sync unload-time beacon) refuses
+// to write a pack that has FEWER inline (material/texture/…) assets than the scene
+// was loaded with — protecting against the data-loss loop where a save serializes
+// an edit world whose material handles didn't populate, stripping the pack, after
+// which every subsequent save re-strips (0 >= 0 passes a naive count-vs-disk guard,
+// and the beacon path had no guard at all). Anchored to the LOAD baseline (not the
+// current on-disk file) so it can't be defeated by a prior stripping write; the
+// beacon can read it synchronously (no disk await during pagehide). Reset on each
+// load; null = no scene loaded yet (guard is a no-op, e.g. first-ever save).
+let loadedInlineAssetFloor: number | null = null;
 
 /** True while the in-memory scene has unsaved edits (drives the dirty
  *  indicator + the disk-watch "don't clobber my edits" guard). Manual-save
@@ -1002,6 +1020,19 @@ export function flushPendingSaveBeacon(): void {
   if (content === null) {
     console.error('[editor-core] flushPendingSaveBeacon: serialize failed — skipping beacon to protect on-disk scene');
     return;
+  }
+  // Same material-drop guard as doSaveDocToDisk, applied SYNCHRONOUSLY (the beacon
+  // fires during pagehide/VAG_EDITOR_FLUSH and cannot await a disk read). Without
+  // it, an Edit→Play flip or tab-hide could beacon a stripped pack over a good
+  // scene — the original hole through which materials were lost. Keep _isDirty set
+  // so a later real save can still persist legitimate edits.
+  let parsedBeacon: unknown;
+  try { parsedBeacon = JSON.parse(content); } catch { parsedBeacon = undefined; }
+  if (parsedBeacon !== undefined && inlineAssetsWouldDrop(parsedBeacon)) {
+    console.error(
+      `[editor-core] flushPendingSaveBeacon: pack has ${inlineAssetCount(parsedBeacon)} inline asset(s) but the scene loaded with ${loadedInlineAssetFloor} — skipping beacon to protect materials`,
+    );
+    return; // keep _isDirty; do not clobber the on-disk scene
   }
   _isDirty = false;
   try {

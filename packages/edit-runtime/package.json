@@ -22,6 +22,10 @@
       "types": "./src/viewport/ViewportComponent.tsx",
       "import": "./src/viewport/ViewportComponent.tsx"
     },
+    "./viewport/quadrant": {
+      "types": "./src/viewport/viewport-quadrant.ts",
+      "import": "./src/viewport/viewport-quadrant.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
