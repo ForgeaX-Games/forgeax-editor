@@ -36,7 +36,7 @@ import { entName, entComponent, entComponents, entExists, entParent } from '../s
 function spawn(world: World, name: string, parent?: EntityHandle): EntityHandle {
   const comps: Array<{ component: unknown; data: Record<string, unknown> }> = [
     { component: Name, data: { value: name } },
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   ];
   if (parent !== undefined) comps.push({ component: ChildOf, data: { parent } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,8 +87,9 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
     const r = entComponent(world, h, 'Transform');
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.value.posX).toBe(0);
-      expect(r.value.scaleX).toBe(1);
+      const tv = r.value as { pos: number[]; scale: number[] };
+      expect(tv.pos[0]).toBe(0);
+      expect(tv.scale[0]).toBe(1);
     }
   });
 

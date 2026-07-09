@@ -26,12 +26,12 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import {
-  AssetRegistry,
   Name,
   Transform,
   rootsToSceneAsset,
   serializeSceneAssetToPack,
 } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneEntity, LocalEntityId } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -62,7 +62,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: nu
     entities: entities.map((e, i): SceneEntity => ({
       localId: localId(i),
       components: {
-        Transform: { posX: e.pos.x, posY: e.pos.y, posZ: e.pos.z, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
     })),
@@ -131,8 +131,9 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
     const t = entComponent(session.world as unknown as World, solo!, 'Transform');
     expect(t.ok).toBe(true);
     if (t.ok) {
-      expect(t.value.posX).toBeCloseTo(4, 4);
-      expect(t.value.posZ).toBeCloseTo(6, 4);
+      const tv = t.value as { pos: number[] };
+      expect(tv.pos[0]).toBeCloseTo(4, 4);
+      expect(tv.pos[2]).toBeCloseTo(6, 4);
     }
   });
 

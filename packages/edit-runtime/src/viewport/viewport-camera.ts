@@ -33,7 +33,7 @@ export interface OrbitCameraResult {
   fwd: Vec3;
   rgt: Vec3;
   upv: Vec3;
-  /** Camera orientation quaternion [x, y, z, w] — ready for Transform.quatX/Y/Z/W. */
+  /** Camera orientation quaternion [x, y, z, w] — ready for Transform.quat. */
   qCam: Quat;
 }
 

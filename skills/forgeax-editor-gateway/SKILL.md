@@ -4,8 +4,10 @@ description: >-
   All editor operations through a single EditGateway — dispatch (immediate op), begin/update/commit/cancel
   (continuous op), listOps (self-introspect), defineOp (compose new ops), eval (AI channel), trace (read
   span trees). Three-domain model (document/session/transient) decided by applier registration table.
-  Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds.
-  Use when building editor tools, AI-driven editing, or extending the editor with new operations.
+  Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds, driven
+  headlessly via scripts/gateway-eval.mjs.
+  Use when building editor tools, AI-driven editing, extending the editor with new operations, or
+  driving/inspecting a running editor's gateway from a script.
 ---
 
 # forgeax-editor-gateway
@@ -157,8 +159,11 @@ const result = gateway.defineOp({
     required: ['step'],
   },
   plan: (query, args) => {
-    // query returns snapshot rows: { entity, Transform: { posX, posY, posZ, ... } }
-    return query({ components: ['Transform'] }).map(e => ({
+    // query({ with: [...] }) → { ok:true, rows:[{ entity, Transform:{posX,…} }] }
+    // (descriptor key is `with`, NOT `components`; result carries rows/ok).
+    const r = query({ with: ['Transform'] });
+    if (!r.ok) return [];
+    return r.rows.map(e => ({
       kind: 'setComponent',
       entity: e.entity,
       component: 'Transform',
@@ -181,11 +186,12 @@ gateway.defineOp({
   argsSchema: { type: 'object', properties: {}, required: [] },
   plan: (query, _args) => {
     // query is fully open — any registered component name works (M5)
-    const lights = query({ components: ['Light'] });
+    const lights = query({ with: ['PointLight'] });
+    if (!lights.ok) return [];
     return lights.rows.map(row => ({
       kind: 'setComponent',
       entity: row.entity,
-      component: 'Light',
+      component: 'PointLight',
       patch: { intensity: 0 },
     }));
   },
@@ -199,7 +205,7 @@ gateway.defineOp({
 ```
 
 > [!IMPORTANT]
-> **querySnapshot is now fully open (M5/M4)**. `query({ components: [...] })` accepts ANY registered
+> **querySnapshot is now fully open (M5/M4)**. `query({ with: [...] })` accepts ANY registered
 > component name — no more whitelist of just `Transform` + `Entity`. Unknown component names now
 > return a structured error `{ok:false, error:{code:'UNKNOWN_COMPONENT', hint}}` instead of
 > silently ignoring (AC-16). Handle-type fields (`unique<T>` / `shared<T>` / `string`) are
@@ -232,7 +238,7 @@ const r2 = await page.evaluate(`
 // Inside eval code:
 typeof world        // -> 'undefined'  (scope① excludes raw engine)
 gateway.dispatch(…) // -> works (gateway is injected)
-query({ components: ['Transform'] })  // -> works (read-only query)
+query({ with: ['Transform'] })  // -> works (read-only query; descriptor key is `with`)
 await _import('@forgeax/engine-ecs')  // -> works (dynamic-import seam)
 ```
 
@@ -242,16 +248,56 @@ await _import('@forgeax/engine-ecs')  // -> works (dynamic-import seam)
 channel.unlockRawScope()
 // -> { ok: false, error: { code: 'SCOPE_LOCKED', hint: 'scope② is dev-only...' } }
 
-// DEV build (injected at boot):
-const ch = createEvalChannel(gw, { rawScope: { world, renderer } });
-ch.unlockRawScope()  // -> { ok: true }
-ch.eval('world.spawn(...)')  // -> raw world access now available
+// DEV build (edit-runtime injects rawScope = { world, renderer, assets } at boot):
+__forgeaxEval.unlockRawScope()   // -> { ok: true }
+__forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in scope
 ```
 
 **Return value**: `{ok:true, value}` on success; `{ok:false, error:{code, hint}}` on failure.
 - Syntax errors -> `code: 'SCRIPT_SYNTAX_ERROR'`
 - Runtime throws -> `code: 'SCRIPT_RUNTIME_ERROR'`
 - Error consumption via property access (`error.code`), NOT string parsing (charter P3).
+
+> [!CAUTION]
+> **An `async` snippet returns `{ok:true, value:<Promise>}` — `eval` does NOT await for you.** Any
+> snippet using `await` / `_import` (async IIFE) resolves to a Promise in `value`; await it yourself:
+> ```ts
+> const r = __forgeaxEval.eval('(async()=>{ const m = await _import("…"); return … })()');
+> const out = r.ok && typeof r.value?.then === 'function' ? await r.value : r;
+> ```
+> `scripts/gateway-eval.mjs` does this unwrap automatically.
+
+> [!IMPORTANT]
+> **The channel mounts BEFORE the scene finishes loading.** `waitForFunction(() => !!__forgeaxEval)`
+> resolves while the async `loadByGuid → instantiate` is still in flight, so an entity/hierarchy
+> query fired right at readiness sees a partial (or empty) world. Settle briefly first
+> (`scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
+> (`listOps`, `defineOp`) need no settle — pass `--settle 0`.
+
+## Scripts
+
+`scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
+(+ scene settle), evaluate one snippet, await it if async, print `{ok,value|error}` JSON. Reuse this
+instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runtime), 0 otherwise
+(domain errors like `UNKNOWN_COMPONENT` ride in `value`/`error`, exit 0).
+
+```bash
+# prereq: a running editor with a scene open, and playwright available:
+#   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
+#   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
+node scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
+node scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first
+node scripts/gateway-eval.mjs --raw "typeof world"                       # unlock scope② then eval
+node scripts/gateway-eval.mjs --file snippet.js --settle 0               # snippet from file, no settle
+```
+
+| Flag / env | Effect |
+|:--|:--|
+| `--raw` | `unlockRawScope()` before eval (grants `world`/`renderer`/`assets`; dev-only) |
+| `--file <path>` | read snippet from a file instead of argv |
+| `--settle <ms>` | wait after channel-ready for the scene to finish loading (default 1500; `0` to skip) |
+| `--url <url>` / `$FORGEAX_GATEWAY_URL` | target (default `http://localhost:15290`) |
+| `$FORGEAX_PLAYWRIGHT` / `$FORGEAX_CHROMIUM` | point at a `playwright-core` index + chrome binary when the full `playwright` package is absent |
 
 ## trace -- Read Span Trees (M5)
 

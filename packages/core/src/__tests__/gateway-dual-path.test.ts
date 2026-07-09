@@ -45,11 +45,11 @@ function createSession(): EditSession {
   return s;
 }
 
-function spawnBox(gw: EditGateway, posX = 0): number {
+function spawnBox(gw: EditGateway, x = 0): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name: 'box',
-    components: { Transform: { posX, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [x, 0, 0] } },
   } as EditorOp;
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed: ${(r as { error: CommandError }).error.hint}`);
@@ -60,7 +60,7 @@ function readPosX(gw: EditGateway, entity: number): number {
   const h = (entity as EntityHandle) as EntityHandle;
   const tr = gw.doc.world.get(h, Transform);
   if (!tr.ok) throw new Error('Transform not on entity');
-  return (tr.value as unknown as { posX: number }).posX;
+  return (tr.value as unknown as { pos: number[] }).pos[0]!;
 }
 
 describe('AC-01 dual-path isomorphism — document domain (m3-w1)', () => {
@@ -75,7 +75,7 @@ describe('AC-01 dual-path isomorphism — document domain (m3-w1)', () => {
 
     // The SAME op object (a human UI handler and an AI tool-call would build the
     // identical plain-JSON payload). setComponent is a document op → applyCommand.
-    const op = { kind: 'setComponent', entity: idH, component: 'Transform', patch: { posX: 9 } } as EditorOp;
+    const op = { kind: 'setComponent', entity: idH, component: 'Transform', patch: { pos: [9, 0, 0] } } as EditorOp;
     const rH = gwHuman.dispatch(op, 'human');
     const rA = gwAi.dispatch(op, 'ai');
     expect(rH.ok).toBe(true);
@@ -97,7 +97,7 @@ describe('AC-01 dual-path isomorphism — document domain (m3-w1)', () => {
   it('default origin is human (D-6): a UI handler omits origin and is tagged human', () => {
     const gw = new EditGateway(createSession());
     const id = spawnBox(gw);
-    gw.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 1 } } as EditorOp);
+    gw.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [1, 0, 0] } } as EditorOp);
     expect(gw.origins[gw.origins.length - 1]).toBe('human');
   });
 });
@@ -131,13 +131,13 @@ describe('AC-01 gizmo continuous op — begin/update*/commit (m3-w1)', () => {
     const undoBefore = gw.appliedCount();
     const ledgerBefore = gw.ledger.length;
 
-    const b = gw.begin({ kind: 'setComponent', entity: id, component: 'Transform', patch: { posX: 0 } } as EditorOp);
+    const b = gw.begin({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [0, 0, 0] } } as EditorOp);
     expect(b.ok).toBe(true);
     if (!b.ok) throw new Error('begin failed');
     // Three drag frames.
-    gw.update(b.handle, { patch: { posX: 1 } });
-    gw.update(b.handle, { patch: { posX: 2 } });
-    gw.update(b.handle, { patch: { posX: 3 } });
+    gw.update(b.handle, { patch: { pos: [1, 0, 0] } });
+    gw.update(b.handle, { patch: { pos: [2, 0, 0] } });
+    gw.update(b.handle, { patch: { pos: [3, 0, 0] } });
     // (d) update phase: the entity changes live (mid-drag readable state).
     expect(readPosX(gw, id)).toBe(3);
     gw.commit(b.handle);
@@ -152,19 +152,19 @@ describe('AC-01 gizmo continuous op — begin/update*/commit (m3-w1)', () => {
   });
 
   it('(d) committed world state equals a single immediate dispatch of the same final op', () => {
-    // Path 1: continuous begin/update/commit ending at posX=7.
+    // Path 1: continuous begin/update/commit ending at pos[0]=7.
     const gwLifecycle = new EditGateway(createSession());
     const idL = spawnBox(gwLifecycle, 0);
-    const b = gwLifecycle.begin({ kind: 'setComponent', entity: idL, component: 'Transform', patch: { posX: 0 } } as EditorOp);
+    const b = gwLifecycle.begin({ kind: 'setComponent', entity: idL, component: 'Transform', patch: { pos: [0, 0, 0] } } as EditorOp);
     if (!b.ok) throw new Error('begin failed');
-    gwLifecycle.update(b.handle, { patch: { posX: 4 } });
-    gwLifecycle.update(b.handle, { patch: { posX: 7 } });
+    gwLifecycle.update(b.handle, { patch: { pos: [4, 0, 0] } });
+    gwLifecycle.update(b.handle, { patch: { pos: [7, 0, 0] } });
     gwLifecycle.commit(b.handle);
 
-    // Path 2: one immediate dispatch straight to posX=7.
+    // Path 2: one immediate dispatch straight to pos[0]=7.
     const gwDispatch = new EditGateway(createSession());
     const idD = spawnBox(gwDispatch, 0);
-    gwDispatch.dispatch({ kind: 'setComponent', entity: idD, component: 'Transform', patch: { posX: 7 } } as EditorOp);
+    gwDispatch.dispatch({ kind: 'setComponent', entity: idD, component: 'Transform', patch: { pos: [7, 0, 0] } } as EditorOp);
 
     // Same final world state on both paths.
     expect(readPosX(gwLifecycle, idL)).toBe(readPosX(gwDispatch, idD));

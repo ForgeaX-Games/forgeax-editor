@@ -105,13 +105,14 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
   it('setComponent merges patch and inverse restores only touched keys', () => {
     const s = createEditSession();
     const e = spawn(s, 'lit');
-    const r = applyCommand(s, { kind: 'setComponent', entity: e, component: 'Transform', patch: { posX: 5 } });
+    const r = applyCommand(s, { kind: 'setComponent', entity: e, component: 'Transform', patch: { pos: [5, 0, 0] } });
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.inverse.kind).toBe('setComponent');
       const invPatch = (r.inverse as { patch: Record<string, unknown> }).patch;
-      expect(Object.keys(invPatch)).toEqual(['posX']);
-      expect(invPatch.posX).toBe(0);
+      expect(Object.keys(invPatch)).toEqual(['pos']);
+      // engine array<f32,3> columns yield a Float32Array view; compare by value.
+      expect(Array.from(invPatch.pos as ArrayLike<number>)).toEqual([0, 0, 0]);
     }
   });
 

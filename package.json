@@ -64,6 +64,7 @@
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@playwright/test": "^1.45.0",
     "@vitejs/plugin-react": "^4.3.0",

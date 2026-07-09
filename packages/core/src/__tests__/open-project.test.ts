@@ -74,12 +74,9 @@ const SCENE_PACK = JSON.stringify({
             components: {
               Name: { value: 'Root' },
               Transform: {
-                posX: 0,
-                posY: 0,
-                posZ: 0,
-                scaleX: 1,
-                scaleY: 1,
-                scaleZ: 1,
+                pos: [0, 0, 0],
+                quat: [0, 0, 0, 1],
+                scale: [1, 1, 1],
               },
             },
           },

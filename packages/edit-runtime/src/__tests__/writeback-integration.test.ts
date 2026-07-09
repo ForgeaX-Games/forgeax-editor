@@ -17,7 +17,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { defineComponent, World } from '@forgeax/engine-ecs';
-import { AssetRegistry, Name, Transform } from '@forgeax/engine-runtime';
+import { Name, Transform } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { writebackInstance } from '../writeback-chain';

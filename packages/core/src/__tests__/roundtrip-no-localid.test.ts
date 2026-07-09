@@ -24,12 +24,12 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import {
-  AssetRegistry,
   Name,
   Transform,
   ChildOf,
   rootsToSceneAsset,
 } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneEntity, LocalEntityId } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -58,7 +58,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: nu
     entities: entities.map((e, i): SceneEntity => ({
       localId: localId(i),
       components: {
-        Transform: { posX: e.pos.x, posY: e.pos.y, posZ: e.pos.z, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
     })),
@@ -67,7 +67,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: nu
 function spawn(world: World, name: string, parent?: EntityHandle): EntityHandle {
   const comps: Array<{ component: unknown; data: Record<string, unknown> }> = [
     { component: Name, data: { value: name } },
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   ];
   if (parent !== undefined) comps.push({ component: ChildOf, data: { parent } });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

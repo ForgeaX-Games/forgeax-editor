@@ -9,8 +9,8 @@
 // geometry (AGENTS.md #2 data-loss — geometry vanishes, never round-trips).
 //
 // We now emit only ENGINE-NATIVE components the editor registers:
-//   - Transform: engine POD (posX/posY/posZ, quatX/quatY/quatZ/quatW,
-//     scaleX/scaleY/scaleZ). Identity rotation is a unit quaternion (w=1) — the
+//   - Transform: engine POD (pos[3], quat[4], scale[3] arrays — feat-20260709
+//     array-TRS). Identity rotation is a unit quaternion [0,0,0,1] — the
 //     collapse pinned Transform on quats end-to-end (AGENTS.md #6).
 //   - MeshFilter{assetHandle}: an entity-visible mesh reference. The editor
 //     auto-adds a default-material MeshRenderer when MeshFilter is present
@@ -33,7 +33,7 @@
 //   (a texture/material needs a surface to display on), not a missing-mesh
 //   placeholder (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
 
-import { HANDLE_CUBE } from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { apiFetch } from '../io/api-client';
 import { resolveMeshOriginalMaterials } from '../scene/mesh-original-materials';
 
@@ -69,25 +69,26 @@ export function stemName(ref: DragAssetRef): string {
   return raw.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'Asset';
 }
 
-function textureScale(payload?: Record<string, unknown>): { scaleX: number; scaleY: number; scaleZ: number } {
+/** Returns a `scale` array [x, y, z]. */
+function textureScale(payload?: Record<string, unknown>): [number, number, number] {
   const w = typeof payload?.width === 'number' && payload.width > 0 ? payload.width : null;
   const h = typeof payload?.height === 'number' && payload.height > 0 ? payload.height : null;
   const base = 2;
   if (w && h) {
     const aspect = w / h;
     return aspect >= 1
-      ? { scaleX: base, scaleY: base / aspect, scaleZ: 0.02 }
-      : { scaleX: base * aspect, scaleY: base, scaleZ: 0.02 };
+      ? [base, base / aspect, 0.02]
+      : [base * aspect, base, 0.02];
   }
-  return { scaleX: base, scaleY: base, scaleZ: 0.02 };
+  return [base, base, 0.02];
 }
 
-/** engine-native Transform POD with identity quaternion rotation. */
-function nativeTransform(pos: { x?: number; y?: number; z?: number }, scale: { scaleX: number; scaleY: number; scaleZ: number }): Record<string, unknown> {
+/** engine-native Transform POD (array-TRS) with identity quaternion rotation. */
+function nativeTransform(pos: { x?: number; y?: number; z?: number }, scale: [number, number, number]): Record<string, unknown> {
   return {
-    posX: pos.x ?? 0, posY: pos.y ?? 0, posZ: pos.z ?? 0,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    ...scale,
+    pos: [pos.x ?? 0, pos.y ?? 0, pos.z ?? 0],
+    quat: [0, 0, 0, 1],
+    scale,
   };
 }
 
@@ -107,7 +108,7 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
     return {
       name,
       components: {
-        Transform: nativeTransform({ y: scale.scaleY / 2 + 0.01 }, scale),
+        Transform: nativeTransform({ y: scale[1] / 2 + 0.01 }, scale),
         MeshFilter: { assetHandle: HANDLE_CUBE },
       },
     };
@@ -121,7 +122,7 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
     return {
       name,
       components: {
-        Transform: nativeTransform({ y: 0.5 }, { scaleX: 1, scaleY: 1, scaleZ: 1 }),
+        Transform: nativeTransform({ y: 0.5 }, [1, 1, 1]),
         MeshFilter: { assetHandle: HANDLE_CUBE }, // proxy geometry (not a placeholder — a material needs a mesh to display on)
       },
     };
@@ -146,7 +147,7 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
   // component no longer exists (world-container collapse), so re-authoring it was a
   // silent data-loss (AC-04). Empty / absent -> no marker (default single material).
   const components: Record<string, unknown> = {
-    Transform: nativeTransform({ y: 0.5 }, { scaleX: 1, scaleY: 1, scaleZ: 1 }),
+    Transform: nativeTransform({ y: 0.5 }, [1, 1, 1]),
     MeshFilter: { assetHandle: 0 },
     EditorPendingMeshAsset: { guid: ref.guid },
   };

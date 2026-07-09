@@ -73,7 +73,7 @@ function spawnEntity(gw: EditGateway, name: string): number {
   const cmd: EditorOp = {
     kind: 'spawnEntity',
     name,
-    components: { Transform: { posX: 0, posY: 0, posZ: 0 } },
+    components: { Transform: { pos: [0, 0, 0] } },
   };
   const r = gw.dispatch(cmd);
   if (!r.ok) throw new Error(`spawn failed: ${(r as { error?: { hint?: string } }).error?.hint}`);
@@ -123,7 +123,7 @@ describe('AC-06/08 — span leaf carries side-effect hints (w5, RED)', () => {
       kind: 'setComponent',
       entity: id,
       component: 'Transform',
-      patch: { posY: 9 },
+      patch: { pos: [0, 9, 0] },
     } as EditorOp);
     expect(r.ok).toBe(true);
     const last = gw.trace.last();
@@ -203,7 +203,7 @@ describe('AC-07 — mapping table is the single SSOT, fill traceable (w5, RED)',
       kind: 'setComponent',
       entity: id,
       component: 'Transform',
-      patch: { posZ: 3 },
+      patch: { pos: [0, 0, 3] },
     } as EditorOp);
     const last = gw.trace.last();
     expect(last).not.toBeNull();

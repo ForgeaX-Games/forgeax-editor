@@ -23,7 +23,8 @@ import type { EntityHandle } from '../scene/scene-types';
 // global registry, corrupting every other test in the same process (the tokens
 // their entities were spawned with stop resolving). The runtime Transform
 // carries extra fields (quat*, world) the assertions here ignore.
-import { AssetRegistry, Name as TestName, rootsToSceneAsset, Transform as TestTransform } from '@forgeax/engine-runtime';
+import { Name as TestName, rootsToSceneAsset, Transform as TestTransform } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { LocalEntityId, SceneEntity } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -61,7 +62,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: Vec3 }>) {
     entities: entities.map((e, i): SceneEntity => ({
       localId: localId(i),
       components: {
-        Transform: { posX: e.pos.x, posY: e.pos.y, posZ: e.pos.z, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
     })),
@@ -115,9 +116,9 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     const xform = world.get(member, TestTransform);
     expect(xform.ok).toBe(true);
     if (!xform.ok) return;
-    expect(xform.value.posX).toBeCloseTo(1, 5);
-    expect(xform.value.posY).toBeCloseTo(2, 5);
-    expect(xform.value.posZ).toBeCloseTo(3, 5);
+    expect(xform.value.pos[0]).toBeCloseTo(1, 5);
+    expect(xform.value.pos[1]).toBeCloseTo(2, 5);
+    expect(xform.value.pos[2]).toBeCloseTo(3, 5);
   });
 
   it('(b) instantiateScene with parent → scene root is child of parent', () => {
@@ -213,9 +214,9 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     const xformB = worldB.get(boxEntB!, TestTransform);
     expect(xformB.ok).toBe(true);
     if (!xformB.ok) return;
-    expect(xformB.value.posX).toBeCloseTo(1, 4);
-    expect(xformB.value.posY).toBeCloseTo(2, 4);
-    expect(xformB.value.posZ).toBeCloseTo(3, 4);
+    expect(xformB.value.pos[0]).toBeCloseTo(1, 4);
+    expect(xformB.value.pos[1]).toBeCloseTo(2, 4);
+    expect(xformB.value.pos[2]).toBeCloseTo(3, 4);
   });
 
   // ── RED-phase verdict for editor code path ──

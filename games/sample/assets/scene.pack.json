@@ -15,16 +15,22 @@
                 "value": "Ground"
               },
               "Transform": {
-                "posX": 0,
-                "posY": -0.1,
-                "posZ": 0,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 20,
-                "scaleY": 0.2,
-                "scaleZ": 20
+                "pos": [
+                  0,
+                  -0.1,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  20,
+                  0.2,
+                  20
+                ]
               },
               "MeshFilter": {
                 "assetHandle": 0
@@ -43,16 +49,22 @@
                 "value": "Sun"
               },
               "Transform": {
-                "posX": 0,
-                "posY": 6,
-                "posZ": 0,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 1,
-                "scaleY": 1,
-                "scaleZ": 1
+                "pos": [
+                  0,
+                  6,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
               },
               "DirectionalLight": {
                 "directionX": -0.4,
@@ -65,6 +77,12 @@
                 "castShadow": true,
                 "mapSize": 2048,
                 "shadowDistance": 60
+              },
+              "Skylight": {
+                "colorR": 0.7,
+                "colorG": 0.8,
+                "colorB": 1,
+                "intensity": 1
               }
             }
           },
@@ -75,16 +93,22 @@
                 "value": "RedBox"
               },
               "Transform": {
-                "posX": -2,
-                "posY": 0.5,
-                "posZ": -1,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 1,
-                "scaleY": 1,
-                "scaleZ": 1
+                "pos": [
+                  -2,
+                  0.5,
+                  -1
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
               },
               "MeshFilter": {
                 "assetHandle": 0
@@ -103,16 +127,22 @@
                 "value": "BlueBall"
               },
               "Transform": {
-                "posX": 2,
-                "posY": 0.6,
-                "posZ": 1,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 1.2,
-                "scaleY": 1.2,
-                "scaleZ": 1.2
+                "pos": [
+                  2,
+                  0.6,
+                  1
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1.2,
+                  1.2,
+                  1.2
+                ]
               },
               "MeshFilter": {
                 "assetHandle": 1
@@ -131,16 +161,22 @@
                 "value": "Player"
               },
               "Transform": {
-                "posX": 0,
-                "posY": 0.75,
-                "posZ": 0,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 1,
-                "scaleY": 1,
-                "scaleZ": 1
+                "pos": [
+                  0,
+                  0.75,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
               }
             }
           }
@@ -176,7 +212,7 @@
             0.353,
             1
           ],
-          "metallic": 0.0,
+          "metallic": 0,
           "roughness": 0.95
         }
       },
@@ -204,7 +240,7 @@
             0.18,
             1
           ],
-          "metallic": 0.0,
+          "metallic": 0,
           "roughness": 0.6
         }
       },
@@ -232,7 +268,7 @@
             0.85,
             1
           ],
-          "metallic": 0.0,
+          "metallic": 0,
           "roughness": 0.5
         }
       },

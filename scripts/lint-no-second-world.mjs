@@ -22,15 +22,30 @@
 //   diff range, so pre-existing worlds don't false-positive and a newly introduced
 //   one does.
 //
-// SHALLOW-CLONE RESILIENCE
-//   The nested engine submodule is often a shallow clone with no fetched common
-//   ancestor, so `git merge-base HEAD origin/main` returns non-zero. We fall back
-//   to the feature-commit range `origin/main..HEAD` (commits reachable from HEAD
-//   but not origin/main = this branch's work). Test fixtures are excluded — unit
-//   tests legitimately spin up throwaway worlds.
+// DIFF BASE — the checked-out submodule HEAD (the editor's pinned gitlink), NOT
+// engine's own origin/main.
+//   The invariant is about the engine lib *as it sits on disk*: has this editor
+//   checkout mutated engine source to add a World beyond the commit it pins? The
+//   right base is therefore the submodule's own HEAD (always the pinned commit),
+//   and the diff is the WORKING TREE against it (`git diff HEAD`) — exactly the
+//   on-disk mutation the invariant forbids.
+//
+// WHY NOT origin/main
+//   Diffing against engine's origin/main coupled this gate to engine upstream
+//   history it has no business reading. Under CI's `fetch-depth: 1 +
+//   submodules: recursive`, the submodule is a shallow clone: `origin/main` is a
+//   resolvable REF but its tree object is never fetched, so `git diff
+//   origin/main..HEAD` fails with exit 128 → the gate died exit 2 on every PR.
+//   A pure pin bump (clean working tree) is engine's OWN CI's domain, not this
+//   editor gate's; this gate targets hand-edits to the on-disk engine source.
+//
+// SHALLOW-CLONE SAFE
+//   `git diff HEAD` reads only the checked-out HEAD tree, which is always present
+//   locally (it is what the submodule is checked out to). No remote history, no
+//   merge-base, no origin/main — immune to shallow clones by construction.
 //
 // Usage:   node packages/editor/scripts/lint-no-second-world.mjs [enginePath]
-// Exits    0 clean · 1 net-new world found · 2 cannot determine base (loud).
+// Exits    0 clean · 1 net-new world found · 2 git diff failed (loud).
 
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
@@ -40,35 +55,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Default: the nested engine submodule under the editor package.
 const ENGINE = resolve(process.argv[2] ?? resolve(__dirname, '..', 'packages', 'engine'));
 
-function git(args) {
-  return execFileSync('git', ['-C', ENGINE, ...args], { encoding: 'utf8' }).trim();
-}
 function gitSafe(args) {
   try {
-    return git(args);
+    return execFileSync('git', ['-C', ENGINE, ...args], { encoding: 'utf8' }).trim();
   } catch {
     return null;
   }
 }
 
-// Resolve a diff base: prefer a real merge-base; fall back to the symmetric
-// "commits on HEAD not on origin/main" range when the clone is shallow.
-function resolveRange() {
-  const mb = gitSafe(['merge-base', 'HEAD', 'origin/main']);
-  if (mb) return `${mb}...HEAD`;
-  // Shallow fallback: origin/main..HEAD (two-dot) = HEAD-only commits.
-  const cnt = gitSafe(['rev-list', '--count', 'origin/main..HEAD']);
-  if (cnt !== null) return 'origin/main..HEAD';
-  return null;
-}
-
-const range = resolveRange();
-if (range === null) {
-  console.error('[lint-no-second-world] cannot resolve diff base (origin/main unreachable) — refusing to pass blind');
-  process.exit(2);
-}
-
-// Added production-source lines only. tsc test patterns excluded.
+// Working-tree changes to engine source vs the pinned submodule HEAD. `git diff
+// HEAD` covers both unstaged and staged mutations. Empty when the submodule is
+// clean (the common case — the editor PR does not touch engine on disk).
+const range = 'HEAD';
 const diff = gitSafe(['diff', range, '--', '*.ts', '*.tsx']);
 if (diff === null) {
   console.error(`[lint-no-second-world] git diff failed for range ${range}`);

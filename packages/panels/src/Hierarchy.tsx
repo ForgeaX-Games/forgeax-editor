@@ -369,7 +369,7 @@ export function HierarchyPanel() {
           type="button"
           className="tbtn"
           data-testid="btn-add-entity"
-          onClick={() => gateway.dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } } })}
+          onClick={() => gateway.dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } } })}
         >
           + Entity
         </button>

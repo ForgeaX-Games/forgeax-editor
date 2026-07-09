@@ -15,7 +15,7 @@
 //   plan-strategy S2 D-3: Light scheme A
 //   research F-EngineComponents: MeshFilter/MeshRenderer/PointLight etc.
 
-import { HANDLE_CUBE, HANDLE_CYLINDER } from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_CYLINDER } from '@forgeax/engine-assets-runtime';
 
 export interface EntityPreset {
   /** doubles as the spawned entity's default name. */
@@ -65,7 +65,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
   {
     label: 'Ground',
     components: {
-      Transform: { posY: 0, scaleX: 24, scaleY: 0.2, scaleZ: 24 },
+      Transform: { pos: [0, 0, 0], scale: [24, 0.2, 24] },
       MeshFilter: { assetHandle: HANDLE_CUBE },
       Collider: { shape: 0, halfExtentsX: 12, halfExtentsY: 0.1, halfExtentsZ: 12 },
     },
@@ -73,7 +73,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
   {
     label: 'Character',
     components: {
-      Transform: { posY: 0.55, scaleX: 0.7, scaleY: 1.1, scaleZ: 0.7 },
+      Transform: { pos: [0, 0.55, 0], scale: [0.7, 1.1, 0.7] },
       MeshFilter: { assetHandle: HANDLE_CYLINDER },
       Collider: { shape: 2, radius: 0.35, halfHeight: 0.55 },
     },

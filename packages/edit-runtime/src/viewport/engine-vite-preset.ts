@@ -37,6 +37,7 @@ import { readdirSync, existsSync, realpathSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
@@ -270,6 +271,23 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     );
   }
   plugins.push(silenceShaderEmitInServe(forgeaxShader() as unknown as Record<string, unknown>));
+
+  // ── opt-in RHI-debug capture (FORGEAX_ENGINE_RHI_DEBUG=1) ────────────────────
+  // The vite-plugin-rhi-debug config() hook UNCONDITIONALLY injects
+  //   define: { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': '1' }
+  // and mounts the dev-server /__forgeax-debug/{tape,trigger} write endpoints, so
+  // "register the plugin?" IS the switch — registering it flips the createApp guard
+  // (engine-app create-app.ts) that mounts window.__forgeax.captureFrame. Gate it
+  // on the env flag so the default (unset) run stays byte-identical to before:
+  // no define -> the guard folds to dead code -> @forgeax/engine-rhi-debug is
+  // tree-shaken, window.__forgeax stays undefined (README tree-shake invariant).
+  // `bun run start --rhi-debug` (scripts/cli.mjs) sets the env for the spawned
+  // vite processes; both the :15290 host and :15280 edit-runtime configs share
+  // this preset, so the host (where the engine actually boots + POSTs captured
+  // tapes) gets the endpoints too.
+  if (process.env.FORGEAX_ENGINE_RHI_DEBUG === '1') {
+    plugins.push(vitePluginRhiDebug() as unknown as PluginOption);
+  }
 
   return {
     plugins,

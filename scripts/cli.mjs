@@ -169,15 +169,17 @@ async function run(argv) {
   let play = false;
   let bg = false;
   let game = '';
+  let rhiDebug = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--play') play = true;
     else if (a === '--bg') bg = true;
+    else if (a === '--rhi-debug') rhiDebug = true;
     else if (a === '--game') {
       game = argv[++i] ?? '';
       if (!game) die('--game needs a path');
     } else if (a.startsWith('--game=')) game = a.slice('--game='.length);
-    else die(`unknown run flag: ${a} (supported: --play, --bg, --game <path>)`);
+    else die(`unknown run flag: ${a} (supported: --play, --bg, --rhi-debug, --game <path>)`);
   }
 
   // --game <dir>: open a REAL game by reusing the @forgeax/platform-io backend.
@@ -188,7 +190,18 @@ async function run(argv) {
     if (!existsSync(join(gameDir, 'forge.json'))) die(`--game dir has no forge.json: ${gameDir}`);
     ok(`reusing platform-io for game '${gameDir.split(/[/\\]/).pop()}' from ${gameDir}`);
   }
-  const env = { ...process.env, FORGEAX_GAME_DIR: gameDir, FORGEAX_GAME_API_PORT: String(GAME_API_PORT) };
+  // --rhi-debug: opt-in the engine's RHI frame capture. Setting the env for every
+  // spawned vite process makes engine-vite-preset register vite-plugin-rhi-debug
+  // (which injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG=1 + the dev-server
+  // /__forgeax-debug endpoints), flipping createApp's guard so the browser gets
+  // window.__forgeax.captureFrame(n). Unset by default → zero injection, tree-shaken.
+  const env = {
+    ...process.env,
+    FORGEAX_GAME_DIR: gameDir,
+    FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
+    ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
+  };
+  if (rhiDebug) ok('RHI-debug capture enabled → window.__forgeax.captureFrame(n) in the :15290 console');
 
   // preflight — point at install if the engine build is missing.
   if (
@@ -276,6 +289,7 @@ function usage() {
                                        [+ :15173 play-runtime with --play]); Ctrl-C stops
   node scripts/cli.mjs run --game DIR  open a real game (DIR directly contains forge.json)
   node scripts/cli.mjs run --bg        start in background, returns immediately
+  node scripts/cli.mjs run --rhi-debug enable engine RHI frame capture (window.__forgeax.captureFrame)
   node scripts/cli.mjs stop            stop everything cli started (by port)
 
 First time:  node scripts/cli.mjs install && node scripts/cli.mjs run`);
