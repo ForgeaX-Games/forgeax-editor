@@ -14,20 +14,14 @@
  *   - surface.subscribe — observe surface.expose for AgentsPanel
  *   - setTheme    — pushed when light/dark or locale changes
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
-// Type-only — the runtime factories are injected via PanelRenderers so interface
-// never statically pulls @forgeax/host-sdk (studio-only) into its module graph.
-// The standalone editor shell bundles interface WITHOUT host-sdk present.
-import type { PluginPort } from '@forgeax/host-sdk';
-import { useTranslation, getLocale, subscribeLocale } from '@/i18n';
+import { getLocale, useTranslation } from '@/i18n';
 import type { BusPluginInfo } from '../../lib/bus-api';
-import { upsertSurface, removePluginSurfaces } from '../../lib/surface-store';
-import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { useAppStore } from '../../store';
-import { requestComposerInsert } from '../../lib/composer-bridge';
-import { emitForgeaXMessage } from '../../lib/forgeax-bridge';
-import { usePanelRenderers } from '../DockShell/panelRenderers';
+import { useShellStore } from '../../store';
+import { getSessionClient } from '../../store-parts/session-client';
+import { getWorkbenchClient } from '../../store';
+import { PluginIframeHost } from '../PluginHost/PluginIframeHost';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
  *  index.html reads `?pane=` and tags `<body data-pane=...>`; CSS hides the
@@ -122,23 +116,11 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
     /* localStorage unavailable (private mode) — target falls back to selector */
   }
   const wbId = PLUGIN_TO_WB_ID[targetPluginId] ?? targetPluginId.replace(/^@[^/]+\//, '');
-  useAppStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedPluginId: targetPluginId });
+  useShellStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedPluginId: targetPluginId });
 }
 
 export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
   const { t } = useTranslation();
-  // Host-SDK port factories are injected (studio-only). Absent in the standalone
-  // editor shell — but that shell never opens a wb:* plugin, so the wiring effect
-  // below simply no-ops when they're missing.
-  const { createPluginPort, createWindowTransport } = usePanelRenderers();
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Live port handle, so the visibility effect below can push updates after the
-  // initial iframe load without re-running the heavy wiring effect.
-  const portRef = useRef<PluginPort | null>(null);
-  // Mirrors `active` so the (later-invoked) iframe load handler reads the latest
-  // value rather than the value captured when the wiring effect first ran.
-  const activeRef = useRef(active);
   // STABLE cache key. Was `${version}-${Date.now()}` which defeated keep-alive:
   // any iframe remount (re-parent / reconcile) recomputed Date.now() → new URL →
   // a full cold reload that tore down the WebGPU ctx + WS + scroll on every
@@ -157,14 +139,14 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   // 修复：pinnedSlug 缺失时回落到服务端解析的 activeSlug（沿用 GameSwitcher /
   // FilesPanel 的 `pinnedSlug ?? activeSlug` 既有约定），并在 slug 解析完成前**不挂载**
   // iframe，杜绝 per-game 插件以无 slug 抢跑。
-  const pinnedSlug = useAppStore((s) => s.pinnedSlug);
+  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const [slugFetched, setSlugFetched] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/workbench/active-slug')
-      .then((r) => r.json())
-      .then((j: { activeSlug?: string | null }) => {
+    getWorkbenchClient()
+      .getActiveSlug()
+      .then((j) => {
         if (!cancelled) setActiveSlug(j?.activeSlug ?? null);
       })
       .catch(() => {})
@@ -181,173 +163,47 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   const rawSrc = slugReady ? buildIframeSrc(plugin, pane, effectiveSlug) : null;
   const src = rawSrc ? rawSrc + (rawSrc.includes('?') ? '&' : '?') + `fxv=${encodeURIComponent(iframeCacheKey)}` : null;
 
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !src) return;
-    // No host-sdk injected (standalone editor shell) → no plugin RPC. The raw
-    // postMessage navigate fallback below still works without it.
-    if (!createPluginPort || !createWindowTransport) return;
-    let port: PluginPort | null = null;
+  const handleNavigate = useCallback((targetPluginId: string, payload?: Record<string, unknown>) => {
+    doNavigate(targetPluginId, payload);
+  }, []);
 
-    // Raw postMessage fallback for plugins still on the legacy PlatformBridge
-    // (wb-character/wb-anim) that don't speak host-sdk. They can request a
-    // workbench switch with one line:
-    //   window.parent.postMessage({ type: 'FORGEAX_NAVIGATE', targetPluginId, payload }, '*')
-    // Scoped to this iframe's contentWindow so a hidden keep-alive sibling
-    // can't hijack the navigation.
-    const onRawMessage = (ev: MessageEvent) => {
-      if (ev.source !== iframe.contentWindow) return;
-      if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
-      const d = ev.data as {
-        type?: string;
-        targetPluginId?: string;
-        payload?: Record<string, unknown>;
-        text?: string;
-      } | null;
-      if (!d) return;
-      if (d.type === 'FORGEAX_NAVIGATE' && d.targetPluginId) {
-        doNavigate(d.targetPluginId, d.payload);
-        return;
-      }
-      // Plugin → host chat composer prefill (e.g. wb-game-video「添加到对话」).
-      // Prefills the caret without auto-sending; the author reviews then sends.
-      if (d.type === 'FORGEAX_COMPOSER_INSERT' && typeof d.text === 'string' && d.text.trim()) {
-        const text = d.text.trim();
-        requestComposerInsert({
-          kind: 'paste',
-          display: text.length > 48 ? `${text.slice(0, 48)}…` : text,
-          detail: text,
-          tooltip: {
-            title: text.length > 64 ? `${text.slice(0, 64)}…` : text,
-            lines: [text.length > 200 ? `${text.slice(0, 200)}…` : text],
-          },
-        });
-        return;
-      }
-    };
-    window.addEventListener('message', onRawMessage);
-
-    const onLoad = () => {
-      const win = iframe.contentWindow;
-      if (!win) {
-        setError('iframe contentWindow unavailable');
-        return;
-      }
-      const transport = createWindowTransport({
-        target: win,
-        // Same-origin in dev (vite proxy) and same-host:port for now.
-        targetOrigin: '*',
-        expectedSource: () => iframe.contentWindow,
-      });
-      port = createPluginPort({
-        pluginId: plugin.id,
-        transport,
-        initial: {
-          locale: getLocale(),
-          theme: 'dark',
-          pane: pane ?? 'center',
-        },
-        onInvalid: (_, reason) => {
-          // Silent in prod; useful while debugging A3/A4 wb-character pilot.
-          if (import.meta.env.DEV) {
-            // eslint-disable-next-line no-console
-            console.warn('[StandalonePluginIframe] invalid envelope:', reason);
-          }
-        },
-      });
-
-      // Doc 06 §chat-bridge — plugin → ChatPanel. Plugin calls
-      // `host.chat.post(text)`; we emit it onto the active session's EventBus
-      // (server reflects user_input → session-stream renders the bubble). This
-      // is the app-agnostic send path — the shell never imports chat. Attachments
-      // aren't carried by the bus emit yet; dropped with a dev-mode warning.
-      port.onChat((e) => {
-        if (!e.text || !e.text.trim()) return;
-        if (e.attachments && e.attachments.length > 0 && import.meta.env.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn('[plugin chat.post] attachments dropped (not yet supported):', plugin.id, e.attachments);
-        }
-        const st = useAppStore.getState();
-        const sid = st.activeSid;
-        if (!sid) return;
-        const to = st.tabs.find((tb) => tb.sid === sid)?.agentId ?? undefined;
-        void emitForgeaXMessage(sid, e.text, to ? { to } : {}).catch((err) => {
-          if (import.meta.env.DEV) {
-            // eslint-disable-next-line no-console
-            console.warn('[plugin chat.post] emit failed:', plugin.id, err);
-          }
-        });
-      });
-      // Phase D2 — forward plugin tool.call to /api/tools/call. Caller is
-      // marked `workbench` so the server-side ToolRegistry can attribute the
-      // call to a plugin iframe rather than confusing it with chat AI.
-      port.onToolCall(async (call) => {
-        try {
-          const r = await fetch('/api/tools/call', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              toolId: call.toolId,
-              args: call.args ?? {},
-              caller: { kind: 'workbench', agentId: plugin.id },
-            }),
-          });
-          const body = (await r.json()) as { ok: boolean; result?: unknown; error?: string };
-          return body.ok
-            ? { ok: true, result: body.result }
-            : { ok: false, error: body.error ?? 'tool call failed' };
-        } catch (e) {
-          return { ok: false, error: (e as Error).message };
-        }
-      });
-      port.surface.subscribe((s) => {
-        upsertSurface({
-          pluginId: plugin.id,
-          surfaceId: s.surfaceId,
-          actions: s.actions,
-          snapshot: s.snapshot,
-          updatedAt: Date.now(),
-        });
-      });
-
-      // 跨工作台跳转:wb-character「生成动画」→ 切到 wb-anim 并透传 charId/role。
-      // 走 host-sdk 的 navigate.request envelope。详见 packages/types host-sdk.ts。
-      port.onNavigate((e) => doNavigate(e.targetPluginId, e.payload));
-
-      portRef.current = port;
-      // Push current keep-alive visibility once the channel is live. Read the
-      // ref (not the closed-over `active`) so a plugin that booted while hidden
-      // (preloaded in the keep-alive layer) immediately pauses its render loop.
-      port.setVisibility(activeRef.current);
-    };
-
-    iframe.addEventListener('load', onLoad);
-    return () => {
-      iframe.removeEventListener('load', onLoad);
-      window.removeEventListener('message', onRawMessage);
-      port?.close();
-      portRef.current = null;
-      removePluginSurfaces(plugin.id);
-    };
-  }, [plugin.id, src, pane, createPluginPort, createWindowTransport]);
-
-  // Keep-alive visibility: push on every `active` flip without tearing down the
-  // iframe.
-  useEffect(() => {
-    activeRef.current = active;
-    portRef.current?.setVisibility(active);
-  }, [active]);
-
-  // Host locale → keep-alive plugin iframes (SDK theme.changed + legacy postMessage).
-  useEffect(() => {
-    return subscribeLocale((loc) => {
-      portRef.current?.setTheme({ locale: loc });
-      const win = iframeRef.current?.contentWindow;
-      if (win) {
-        win.postMessage({ type: 'forgeax:locale-changed', locale: loc }, '*');
+  const handleChatPost = useCallback((e: { text: string; attachments?: unknown[] }) => {
+    if (!e.text || !e.text.trim()) return;
+    if (e.attachments && e.attachments.length > 0 && import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn('[plugin chat.post] attachments dropped (not yet supported):', plugin.id, e.attachments);
+    }
+    const st = useShellStore.getState();
+    const sid = st.activeSid;
+    if (!sid) return;
+    const to = st.tabs.find((tb) => tb.sid === sid)?.agentId ?? undefined;
+    void getSessionClient().emitForgeaXMessage(sid, e.text, to ? { to } : {}).catch((err) => {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn('[plugin chat.post] emit failed:', plugin.id, err);
       }
     });
-  }, []);
+  }, [plugin.id]);
+
+  const handleToolCall = useCallback(async (call: { toolId: string; args?: unknown }) => {
+    try {
+      const r = await fetch('/api/tools/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          toolId: call.toolId,
+          args: call.args ?? {},
+          caller: { kind: 'workbench', agentId: plugin.id },
+        }),
+      });
+      const body = (await r.json()) as { ok: boolean; result?: unknown; error?: string };
+      return body.ok
+        ? { ok: true as const, result: body.result }
+        : { ok: false as const, error: body.error ?? 'tool call failed' };
+    } catch (e) {
+      return { ok: false as const, error: (e as Error).message };
+    }
+  }, [plugin.id]);
 
   if (!src) {
     return (
@@ -360,33 +216,15 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   }
 
   return (
-    <div
-      className="wb-plugin-iframe-wrap"
-      data-active={active ? 'true' : 'false'}
-      // Keep-alive hide: `visibility:hidden` (NOT display:none) preserves the
-      // WebGL context + layout so re-showing is a one-frame composite with zero
-      // JS/network. Off-screen + no pointer events so the hidden iframe can't
-      // intercept clicks meant for the visible panel underneath.
-      style={
-        active
-          ? undefined
-          : { visibility: 'hidden', pointerEvents: 'none' }
-      }
-      aria-hidden={active ? undefined : true}
-    >
-      {error ? (
-        <div style={{ padding: 20, color: '#c44' }}>{t('standalonePlugin.iframeLoadFailed', { error })}</div>
-      ) : null}
-      <iframe
-        ref={iframeRef}
-        src={src}
-        title={plugin.id}
-        style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
-        // allow-downloads lets plugin frames trigger <a download> saves (e.g.
-        // wb-gen3d asset-bundle export); without it Chrome silently blocks any
-        // download initiated inside a sandboxed iframe.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-      />
-    </div>
+    <PluginIframeHost
+      pluginId={plugin.id}
+      src={src}
+      pane={pane}
+      active={active}
+      onNavigate={handleNavigate}
+      onChatPost={handleChatPost}
+      onToolCall={handleToolCall}
+      loadErrorText={(error) => t('standalonePlugin.iframeLoadFailed', { error })}
+    />
   );
 }

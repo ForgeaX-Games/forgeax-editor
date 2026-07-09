@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { Gamepad2, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { useAppStore } from '../../store';
-import { emitForgeaXMessage } from '../../lib/forgeax-bridge';
+import { useShellStore } from '../../store';
+import { getSessionClient } from '../../store-parts/session-client';
+import { getWorkbenchClient } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
 import { useTranslation } from '@/i18n';
 import './TopBar.css';
@@ -22,18 +23,17 @@ export function GameSwitcher() {
   const [modal, setModal] = useState<null | 'game'>(null);
   const [games, setGames] = useState<GameRow[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
-  const pinnedSlug = useAppStore((s) => s.pinnedSlug);
-  const setPinnedSlug = useAppStore((s) => s.setPinnedSlug);
-  const switchGame = useAppStore((s) => s.switchGame);
+  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
+  const setPinnedSlug = useShellStore((s) => s.setPinnedSlug);
+  const switchGame = useShellStore((s) => s.switchGame);
 
   const currentSlug = pinnedSlug ?? activeSlug;
   const currentGame = games.find((g) => g.slug === currentSlug);
 
   const reload = async () => {
     try {
-      const r = await fetch('/api/workbench/games');
-      const j = (await r.json()) as { games?: GameRow[]; activeSlug?: string };
-      setGames(j.games ?? []);
+      const j = await getWorkbenchClient().listGames();
+      setGames((j.games as unknown as GameRow[]) ?? []);
       setActiveSlug(j.activeSlug ?? null);
     } catch { /* ignore */ }
   };
@@ -59,7 +59,7 @@ export function GameSwitcher() {
   const onDelete = async (slug: string) => {
     if (!(await confirmDialog({ body: t('gameSwitcher.deleteConfirm', { slug }), danger: true }))) return;
     try {
-      await fetch(`/api/workbench/games/${slug}`, { method: 'DELETE' });
+      await getWorkbenchClient().deleteGame(slug);
       if (pinnedSlug === slug) setPinnedSlug(null);
       await reload();
     } catch (e) {
@@ -155,7 +155,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const switchGame = useAppStore((s) => s.switchGame);
+  const switchGame = useShellStore((s) => s.switchGame);
 
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -166,14 +166,9 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch('/api/workbench/games', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ slug: cleaned, name: name.trim() || cleaned, brief: brief.trim() }),
-      });
-      const j = (await r.json()) as { ok?: boolean; error?: string };
-      if (!r.ok || !j.ok) {
-        setErr(j.error ?? `HTTP ${r.status}`);
+      const j = await getWorkbenchClient().createGame({ slug: cleaned, name: name.trim() || cleaned, brief: brief.trim() });
+      if (!j.ok) {
+        setErr(j.error ?? 'create failed');
         setBusy(false);
         return;
       }
@@ -188,11 +183,11 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
       // user_input → chat session-stream renders it). The shell never imports
       // chat — the bus IS the app-agnostic send channel.
       if (brief.trim()) {
-        const st = useAppStore.getState();
+        const st = useShellStore.getState();
         const sid = st.activeSid;
         if (sid) {
           const to = st.tabs.find((tb) => tb.sid === sid)?.agentId ?? undefined;
-          void emitForgeaXMessage(sid, t('gameSwitcher.kickoffMessage', { slug: cleaned, brief: brief.trim() }), to ? { to } : {});
+          void getSessionClient().emitForgeaXMessage(sid, t('gameSwitcher.kickoffMessage', { slug: cleaned, brief: brief.trim() }), to ? { to } : {});
         }
       }
     } catch (e) {

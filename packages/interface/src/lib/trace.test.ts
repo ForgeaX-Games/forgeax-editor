@@ -4,15 +4,15 @@
  */
 import './telemetry-test-prelude';
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { useAppStore, type TelemetrySpan } from '../store';
+import { useShellStore, type TelemetrySpan } from '../store';
 import { beginChatTurn, chatFirstToken, chatTurnEnd, toTraceparent, beginAppBoot, appBootSpan, endAppBoot } from './trace';
 
 const spans = (): TelemetrySpan[] =>
-  useAppStore.getState().telemetry.filter((r): r is TelemetrySpan => r.kind === 'span');
+  useShellStore.getState().telemetry.filter((r): r is TelemetrySpan => r.kind === 'span');
 const finals = (name: string): TelemetrySpan[] => spans().filter((s) => s.name === name && s.endTs != null);
 
 beforeEach(() => {
-  useAppStore.setState({ telemetry: [] });
+  useShellStore.setState({ telemetry: [] });
   // rAF 同步化,让 chatTurnEnd 的 ui.render/ui.send 收尾确定性发生。
   (globalThis as { requestAnimationFrame?: (cb: () => void) => void }).requestAnimationFrame = (cb) => {
     cb();
@@ -142,7 +142,7 @@ describe('browser tracer chat.turn', () => {
       expect(stall!.parentSpanId).toBe(finals('ui.send').length ? undefined : stall!.parentSpanId); // 挂在 ui.send 下(root 未结束)
 
       // 有首 token 的轮:看门狗到点也不应报
-      useAppStore.setState({ telemetry: [] });
+      useShellStore.setState({ telemetry: [] });
       stallTimers.length = 0;
       beginChatTurn('mochi', 'sid-stall', 'codebuddy');
       chatFirstToken('mochi'); // 拿到响应

@@ -1,0 +1,111 @@
+/* TourOverlay — coach-mark guided tour over the live shell. The scrim is a
+   single full-viewport layer with a bright outline ring tracking the current
+   anchor; the coach card floats next to it. Tokens mirror the onboarding
+   prototype (accent = brand lime). */
+
+.tour-root {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toplevel, 99999);
+  pointer-events: none;
+}
+
+/* Dim scrim — pointer-events auto so clicks outside the card don't leak to the
+   shell (the tour is modal). The cutout ring is a separate element. */
+.tour-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  animation: tour-fade-in 0.15s ease-out;
+}
+
+/* Highlight ring drawn over the anchor. box-shadow spread paints the dim as a
+   "hole" so the anchor reads through while everything else stays scrimmed. */
+.tour-ring {
+  position: absolute;
+  border-radius: 8px;
+  outline: 2px solid var(--primary, #d4ff48);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  transition: top 0.2s ease, left 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+
+.tour-coach {
+  position: absolute;
+  z-index: 1;
+  max-width: 260px;
+  background: var(--bg-1, #191919);
+  border: 1px solid var(--primary, #d4ff48);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  animation: tour-fade-in 0.15s ease-out;
+}
+
+.tour-coach-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tour-coach-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(212, 255, 72, 0.14);
+  color: var(--primary, #d4ff48);
+  border: 1px solid rgba(212, 255, 72, 0.35);
+  font-variant-numeric: tabular-nums;
+}
+
+.tour-coach-anchor {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.tour-coach-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.62));
+  margin-bottom: 10px;
+}
+
+.tour-coach-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tour-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border: 1px solid var(--border, #404040);
+  background: transparent;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+}
+.tour-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.tour-btn-ghost { border-color: transparent; color: var(--text-mute, rgba(255, 255, 255, 0.4)); }
+.tour-btn-ghost:hover:not(:disabled) { color: var(--text-secondary, rgba(255, 255, 255, 0.62)); }
+.tour-btn-primary {
+  background: var(--primary, #d4ff48);
+  color: var(--color-text-on-bright-primary, #12161c);
+  border: none;
+  font-weight: 600;
+}
+.tour-btn-primary:hover { filter: brightness(1.05); }
+
+@keyframes tour-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

@@ -11,7 +11,7 @@
  *  且本 tab 可见而无 lease 时机会式 acquire(单 tab 断续场景自愈;两 tab 同可见时后
  *  acquire 者胜,server 只认现任 leaseId,不会双应答)。
  */
-import { onSessionEvent, type SessionEvent } from './forgeax-bridge';
+import { getSessionClient, type SessionEvent } from '../store-parts/session-client';
 import {
   buildManifest,
   dispatchAction,
@@ -25,7 +25,7 @@ import { installUiActionHighlight } from './ui-action-highlight';
 import { installVagActionBridge } from './vag-action-bridge';
 import { buildA11ySummary } from './a11y-summary';
 import { isTrustedMessageOrigin } from './trustedOrigins';
-import { useAppStore } from '../store';
+import { useShellStore } from '../store';
 
 const clientId = (() => {
   try {
@@ -199,7 +199,7 @@ export function bootUiBridge(): void {
   installShortcutReceiver(); // todo 004:iframe 内全局快捷键(⌘K 等)转发上来,顶层重放
 
   // ui_* 查询应答(onSessionEvent 按 key 幂等,HMR 安全;world/frame 由 perception-stream 继续中转)。
-  onSessionEvent('ui-bridge', (evt) => void answerUiQuery(evt));
+  getSessionClient().onSessionEvent('ui-bridge', (evt) => void answerUiQuery(evt));
 
   // registry 变更 → debounce 重推 manifest(只推本 tab 持 lease 的 sid)。
   onRegistryChange(() => {
@@ -212,7 +212,7 @@ export function bootUiBridge(): void {
 
   // 获焦 / 可见 → acquire(displace:「最后获焦 tab」成为权威 surface)。
   const onFocus = (): void => {
-    const sid = useAppStore.getState().activeSid;
+    const sid = useShellStore.getState().activeSid;
     if (sid) void acquireLease(sid);
   };
   window.addEventListener('focus', onFocus);
@@ -222,7 +222,7 @@ export function bootUiBridge(): void {
 
   // activeSid 变化 → 对新会话建 lease + 推 manifest。
   let lastSid: string | null = null;
-  useAppStore.subscribe((state) => {
+  useShellStore.subscribe((state) => {
     const sid = state.activeSid ?? null;
     if (sid && sid !== lastSid) {
       lastSid = sid;

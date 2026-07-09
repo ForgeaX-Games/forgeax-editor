@@ -127,6 +127,18 @@ const violHunks = [
       "}",
     ],
   },
+  // A real store op named create* whose FIRST param is not `deps` must STILL be
+  // flagged -- the DI_FACTORY_RE exemption (feat-20260709 M2) is scoped to the
+  // `deps` first-parameter signature so it never widens the hole to real ops like
+  // createSceneFile(id, duplicateCurrent).
+  {
+    file: 'packages/core/src/store/persistence/scene-list.ts',
+    lines: [
+      "export function createLevelDirectly(id: string, dup: boolean): void {",
+      "  writeToDisk(id, dup);",
+      "}",
+    ],
+  },
 ];
 const violDiffPath = join(diffDir, 'violation.diff');
 writeFileSync(violDiffPath, makeDiff(violHunks));
@@ -225,6 +237,38 @@ const exemptHunks = [
       "export function publishExtraStats(stats: unknown): void {",
       "  extraStats = stats;",
       "  emit();",
+      "}",
+    ],
+  },
+  // scene-persistence.ts: create*Context DI-context factory (feat-20260709 M1 /
+  // plan-strategy D-2 + §8). Returns a fresh state carrier, dispatches nothing,
+  // mutates no global -> not a gateway-bypassing op (CONTEXT_FACTORY_RE exempt).
+  {
+    file: 'packages/core/src/store/scene-persistence.ts',
+    lines: [
+      "export function createScenePersistenceContext(): ScenePersistenceContext {",
+      "  return { currentSceneId: 'default', isDirty: false };",
+      "}",
+    ],
+  },
+  // persistence/disk-io.ts: create<Thing>(deps: <Thing>Deps) DI factory
+  // (feat-20260709 M2 / plan-strategy D-3 + §8). The whole dependency edge is the
+  // injected `deps`; the factory dispatches nothing and mutates no global -> not a
+  // gateway-bypassing op (DI_FACTORY_RE exempt).
+  {
+    file: 'packages/core/src/store/persistence/disk-io.ts',
+    lines: [
+      "export function createDiskIo(deps: DiskIoDeps): DiskIo {",
+      "  return { doSaveDocToDisk, doLoadDocFromDisk };",
+      "}",
+    ],
+  },
+  // persistence/scene-list.ts: another DI factory taking `deps` (same exemption).
+  {
+    file: 'packages/core/src/store/persistence/scene-list.ts',
+    lines: [
+      "export function createSceneList(deps: SceneListDeps): SceneList {",
+      "  return { initSceneList, doSwitchSceneFile };",
       "}",
     ],
   },

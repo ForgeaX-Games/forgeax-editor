@@ -1,14 +1,15 @@
 // ProjectSwitcher (workspace/agentic-dir switcher) + its New/Open modal,
-// extracted from TopBar.tsx (§D). activateWorkspace() lives here too since both
-// the switcher and the modal call it.
+// extracted from TopBar.tsx (§D). The workspace activator lives in the shared
+// lib/workspace-activate so first-run onboarding reuses the exact same flow.
 import { useState, useEffect } from 'react';
 import { FolderTree, FolderOpen, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useTranslation } from '@/i18n';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
-import { STORAGE_KEYS, SESSION_KEYS } from '../../lib/storageKeys';
-import { reloadOnceForWorkspace, waitForEngineSettled } from '../../lib/workspace-reload';
+import { setCurrentProject } from '../../lib/workbenches';
+import { activateWorkspace } from '../../lib/workspace-activate';
+import { reloadOnceForWorkspace } from '../../lib/workspace-reload';
 import { FsBrowser } from './FsBrowser';
 import './FsBrowser.css';
 import './TopBar.css';
@@ -39,6 +40,10 @@ export function ProjectSwitcher() {
       const j = (await r.json()) as { projects?: ProjectRow[]; current?: string };
       setProjects(j.projects ?? []);
       setCurrent(j.current ?? '');
+      // T7: propagate the active project id into the workbenches module so
+      // every localStorage read/write namespaces under
+      // `forgeax:project:${projId}:*`. Idempotent for the same id.
+      setCurrentProject(j.current ?? 'default');
     } catch { /* ignore */ }
   };
 
@@ -74,7 +79,7 @@ export function ProjectSwitcher() {
     if (!row) return;
     setSwitching(true);
     try {
-      await activateWorkspace(row.absPath, true);
+      await activateWorkspace({ path: row.absPath, initIfMissing: true });
       // Engine restart + symlink swap done server-side; full page reload
       // re-binds all UI state (chat / agents / preview iframe) to the new
       // workspace. activateWorkspace() already updated localStorage.forgeax.pinnedSlug
@@ -127,10 +132,10 @@ export function ProjectSwitcher() {
               background: 'var(--bg-2)',
               zIndex: 1,
             }}
-            title={t('projectSwitcher.newWorkspaceTooltip')}
+            title={t('projectSwitcher.newProjectTooltip')}
           >
             <Plus size={12} style={{ marginRight: 4 }} />
-            <span className="tb-game-name">{t('projectSwitcher.newWorkspace')}</span>
+            <span className="tb-game-name">{t('projectSwitcher.newProject')}</span>
           </button>
           {projects.length === 0 && <div className="tb-game-empty">{t('projectSwitcher.empty')}</div>}
           {projects.map((p) => (
@@ -186,36 +191,6 @@ interface NewProjectModalProps {
   onOpened: (absPath: string) => void;
 }
 
-/**
- * Shared workspace activator — POST /api/workspaces/activate and re-pin
- * localStorage.forgeax.pinnedSlug to the server-resolved activeSlug, so the
- * post-reload iframe lands on a real game rather than whatever slug the OLD
- * workspace had pinned.
- */
-async function activateWorkspace(absPath: string, initIfMissing: boolean) {
-  const r = await fetch('/api/workspaces/activate', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path: absPath, initIfMissing }),
-  });
-  const j = (await r.json()) as { ok?: boolean; error?: string; absPath?: string; activeSlug?: string };
-  if (!r.ok || !j.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-  try {
-    if (j.activeSlug) localStorage.setItem(STORAGE_KEYS.pinnedSlug, j.activeSlug);
-    else localStorage.removeItem(STORAGE_KEYS.pinnedSlug);
-  } catch { /* ignore quota / disabled storage */ }
-  // Seed the workspace-changed dedup key to the resolved root so the broadcast
-  // that `activate` fanned out to THIS tab is skipped (broadcast.ts dedups on
-  // equality) — the caller drives the single reload instead of racing it (005).
-  try {
-    if (j.absPath) sessionStorage.setItem(SESSION_KEYS.activeRoot, j.absPath);
-  } catch { /* ignore quota / disabled storage */ }
-  // Wait for the engine vite to finish the symlink-flip restart before the caller
-  // reloads, so the post-reload preview loads exactly once against a live engine.
-  await waitForEngineSettled(j.activeSlug);
-  return j;
-}
-
 function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<ModalTab>(initialTab);
@@ -242,7 +217,7 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
       const j = (await r.json()) as { ok?: boolean; error?: string; absDir?: string };
       if (!r.ok || !j.ok) { setErr(j.error ?? `HTTP ${r.status}`); setBusy(false); return; }
       // 2) immediately activate the new workspace
-      await activateWorkspace(j.absDir ?? '', true);
+      await activateWorkspace({ path: j.absDir ?? '', initIfMissing: true });
       reloadOnceForWorkspace();
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
@@ -251,7 +226,7 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
     setBusy(true);
     setErr(null);
     try {
-      await activateWorkspace(absPath, initIfMissing);
+      await activateWorkspace({ path: absPath, initIfMissing });
       onClose();
       onOpened(absPath);
       reloadOnceForWorkspace();

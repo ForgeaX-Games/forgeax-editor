@@ -51,7 +51,7 @@ export function GlobalStatusBar() {
   }, [items]);
 
   return (
-    <div className="global-status-bar" role="status" aria-live="polite" aria-label="forgeax status bar">
+    <div className="global-status-bar" role="status" aria-live="polite" aria-label="forgeax status bar" data-fx-slot="StatusBar">
       <Slot slot="left"   items={bySlot.left}   tick={tick} />
       <Slot slot="center" items={bySlot.center} tick={tick} />
       <Slot slot="right"  items={bySlot.right}  tick={tick} />

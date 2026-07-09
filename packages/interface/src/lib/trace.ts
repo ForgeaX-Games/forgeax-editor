@@ -10,7 +10,7 @@
  * 活动 trace,续建 ui.first-token/ui.stream/ui.turn-end/ui.render(rAF 取真实上屏帧)。
  * 浏览器自己是 root、自己持 traceId(按 agentId 索引活动 trace),**无需服务端 echo**。
  */
-import { useAppStore, type TelemetrySpan, type TelemetryRecord } from '../store';
+import { useShellStore, type TelemetrySpan, type TelemetryRecord } from '../store';
 
 // ─── id + 序列化 ──────────────────────────────────────────────────────────
 function randHex(bytes: number): string {
@@ -47,7 +47,7 @@ const uploadBuf: TelemetryRecord[] = [];
 
 function emit(span: TelemetrySpan): void {
   try {
-    useAppStore.getState().pushTelemetry([span]);
+    useShellStore.getState().pushTelemetry([span]);
   } catch {
     /* 可观测性绝不拖垮 UI */
   }

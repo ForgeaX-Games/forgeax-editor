@@ -34,15 +34,21 @@ import type { World, EntityHandle, Handle } from '@forgeax/engine-ecs';
 // engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
 // @forgeax/engine-geometry leaf package.
 import { meshFromInterleaved } from '@forgeax/engine-geometry';
-import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
-import { vec3 } from '@forgeax/engine-math';
 
 // M2 extraction: pure geometry lives in viewport-ray.ts; orbit math in viewport-camera.ts.
-// viewport.ts is now a DI factory (createViewport) + re-export barrel (plan-strategy D-5).
+// M6 extraction (plan-strategy §2 D-5, AC-08): pure gizmo + param-gizmo geometry
+// (axis/plane/ring constants, cone mesh data, light/camera wireframe point sets)
+// lives in viewport-gizmo-geometry.ts. viewport.ts is now a DI factory
+// (createViewport) + re-export barrel — the engine wiring + interaction state
+// machine stay here; all pure math is imported from the three sibling modules.
 export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
+import {
+  DEG2RAD, AXES, PLANES, RING_SEG, TIP_QUAT, type PlaneHandle,
+  buildConeMeshData, lightGizmoPoints, cameraGizmoPoints,
+} from './viewport-gizmo-geometry';
 
 import type { OpHandle, EngineFacade } from '@forgeax/editor-core';
 import { worldEntityHandles, entExists, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
@@ -86,13 +92,6 @@ function readEntTransform(world: World, handle: EntityHandle): EditorTransform |
 function isEntHidden(world: World, handle: EntityHandle): boolean {
   return 'EditorHidden' in entComponents(world, handle);
 }
-
-const DEG2RAD = Math.PI / 180;
-
-// ── factory-local buffer (used by updateParamGizmo) ────────────────────────
-// Single reusable Float32Array for engine vec3 operations within the factory.
-// All pure-geometry functions now use their own buffer in viewport-ray.ts.
-const _v3 = new Float32Array(3) as EngineVec3;
 
 // ── runtime wiring ────────────────────────────────────────────────────────────
 
@@ -237,19 +236,8 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   // axis RINGS (circles in each axis plane). Rings are built from a pool of small
   // cube segments (a torus mesh isn't in the handle set), reused frame-to-frame so
   // orbiting/dragging only world.set transforms — never respawns.
-  const AXES: { axis: Vec3; color: [number, number, number] }[] = [
-    { axis: [1, 0, 0], color: [1.0, 0.25, 0.2] },  // X red
-    { axis: [0, 1, 0], color: [0.3, 1.0, 0.35] },  // Y green
-    { axis: [0, 0, 1], color: [0.3, 0.55, 1.0] },  // Z blue
-  ];
-  // Plane handles (translate only): drag two axes at once. ax/ay index into x/y/z;
-  // `normal` is the third axis (the plane's normal, for ray∩plane drag).
-  const PLANES: { ax: number; ay: number; normal: Vec3; mat: number }[] = [
-    { ax: 0, ay: 1, normal: [0, 0, 1], mat: 2 }, // XY plane (Z-normal, blue tint)
-    { ax: 1, ay: 2, normal: [1, 0, 0], mat: 0 }, // YZ plane (X-normal, red tint)
-    { ax: 0, ay: 2, normal: [0, 1, 0], mat: 1 }, // XZ plane (Y-normal, green tint)
-  ];
-  const RING_SEG = 24; // cube segments per ring
+  // AXES / PLANES / RING_SEG / TIP_QUAT are the shared gizmo layout constants,
+  // now imported from viewport-gizmo-geometry.ts (M6 extraction, AC-08).
   let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
   type Shape = 'translate' | 'scale' | 'rings';
   let shape: Shape | null = null;
@@ -274,27 +262,12 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   let coneMesh: Handle<'MeshAsset', 'shared'> | null = null;
   function ensureCone(): Handle<'MeshAsset', 'shared'> {
     if (coneMesh) return coneMesh;
-    const SEG = 16;
-    const v: number[] = [];
-    const push = (x: number, y: number, z: number): void => { v.push(x, y, z, 0, 1, 0, 0, 0); };
-    push(0, 1, 0);  // 0: apex
-    push(0, 0, 0);  // 1: base center
-    for (let i = 0; i < SEG; i++) { const t = (i / SEG) * Math.PI * 2; push(Math.cos(t), 0, Math.sin(t)); }
-    const idx: number[] = [];
-    for (let i = 0; i < SEG; i++) {
-      const a = 2 + i, b = 2 + ((i + 1) % SEG);
-      idx.push(0, a, b);  // side face
-      idx.push(1, b, a);  // base cap
-    }
-    coneMesh = engine.allocSharedRef('MeshAsset', meshFromInterleaved(new Float32Array(v), new Uint16Array(idx)));
+    // Cone vertex/index geometry is pure (viewport-gizmo-geometry.ts); only the
+    // engine.allocSharedRef upload stays here (the one side-effecting edge).
+    const { vertices, indices } = buildConeMeshData();
+    coneMesh = engine.allocSharedRef('MeshAsset', meshFromInterleaved(vertices, indices));
     return coneMesh;
   }
-  // Quaternion that rotates the cone's local +Y to point down each world axis.
-  const TIP_QUAT: [number, number, number, number][] = [
-    [0, 0, -0.70710678, 0.70710678], // X: +Y → +X
-    [0, 0, 0, 1],                     // Y: identity
-    [0.70710678, 0, 0, 0.70710678],   // Z: +Y → +Z
-  ];
 
   function ensureMats(): Handle<'MaterialAsset', 'shared'>[] {
     if (!gizmoMats) gizmoMats = AXES.map((a) => {
@@ -486,20 +459,6 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { engine.despawn(e); } catch { /* gone */ } }
     points.forEach((p, i) => engine.set(paramEnts[i]!, Transform, { posX: p[0], posY: p[1], posZ: p[2], scaleX: size, scaleY: size, scaleZ: size }));
   }
-  const addSeg = (out: Vec3[], a: Vec3, b: Vec3, n = 10): void => {
-    for (let i = 0; i <= n; i++) { const k = i / n; out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k]); }
-  };
-  const circlePts = (center: Vec3, u: Vec3, v: Vec3, r: number, n = 40): Vec3[] => {
-    const o: Vec3[] = [];
-    for (let j = 0; j < n; j++) { const th = (j / n) * Math.PI * 2, c = Math.cos(th) * r, s = Math.sin(th) * r; o.push([center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s]); }
-    return o;
-  };
-  function forwardOf(t?: Record<string, number>): Vec3 {
-    const q = quat.create();
-    quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
-    const o = new Float32Array(3) as EngineVec3; quat.transformVec3(o, q, [0, 0, -1] as unknown as EngineVec3);
-    return [o[0]!, o[1]!, o[2]!];
-  }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
   function updateParamGizmo(): void {
     // Display gate (w23): display='game' → hide param gizmos (Light range/spot, Camera frustum).
@@ -514,49 +473,11 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
     const light = comps.Light as Record<string, unknown> | undefined;
     const cam = comps.Camera as Record<string, unknown> | undefined;
+    // The wireframe POINT SETS are pure geometry (viewport-gizmo-geometry.ts); the
+    // engine dot-pool placement (placeDots) is the only side-effecting edge here.
     const pts: Vec3[] = [];
-    if (light) {
-      const type = (light.type as string) ?? 'point';
-      if (type === 'directional') {
-        vec3.normalize(_v3, [num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
-        const dir: Vec3 = [_v3[0]!, _v3[1]!, _v3[2]!];
-        const len = Math.max(2, dist * 0.18);
-        const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];
-        addSeg(pts, center, tip, 16);
-        const [u, v] = orthoBasis(dir);
-        const back = len * 0.18;
-        for (const s of [u, v, [-u[0], -u[1], -u[2]] as Vec3, [-v[0], -v[1], -v[2]] as Vec3]) {
-          addSeg(pts, tip, [tip[0] - dir[0] * back + s[0] * back, tip[1] - dir[1] * back + s[1] * back, tip[2] - dir[2] * back + s[2] * back], 5);
-        }
-      } else if (type === 'spot') {
-        const range = num(light.range as number, 0) || 6;
-        const half = num(light.spotAngle as number, 30) * DEG2RAD;
-        const fwd = forwardOf(t);
-        const [u, v] = orthoBasis(fwd);
-        const baseC: Vec3 = [center[0] + fwd[0] * range, center[1] + fwd[1] * range, center[2] + fwd[2] * range];
-        const br = Math.tan(half) * range;
-        pts.push(...circlePts(baseC, u, v, br, 36));
-        for (let j = 0; j < 4; j++) { const th = (j / 4) * Math.PI * 2, c = Math.cos(th) * br, s = Math.sin(th) * br; addSeg(pts, center, [baseC[0] + u[0] * c + v[0] * s, baseC[1] + u[1] * c + v[1] * s, baseC[2] + u[2] * c + v[2] * s], 10); }
-      } else { // point (or unknown) → range sphere = 3 axis rings
-        const range = num(light.range as number, 0) || 3;
-        for (const a of AXES) { const [u, v] = orthoBasis(a.axis); pts.push(...circlePts(center, u, v, range, 36)); }
-      }
-    }
-    if (cam) {
-      const fov = num(cam.fov as number, 60) * DEG2RAD;
-      const near = num(cam.near as number, 0.1);
-      const far = Math.min(num(cam.far as number, 1000), dist * 4 + 30); // clamp so it stays on-screen
-      const fwd = forwardOf(t);
-      const [right, up] = orthoBasis(fwd);
-      const rect = (depth: number): Vec3[] => {
-        const hh = Math.tan(fov / 2) * depth, hw = hh * (aspect() || 1);
-        const cC: Vec3 = [center[0] + fwd[0] * depth, center[1] + fwd[1] * depth, center[2] + fwd[2] * depth];
-        const corner = (sx: number, sy: number): Vec3 => [cC[0] + right[0] * hw * sx + up[0] * hh * sy, cC[1] + right[1] * hw * sx + up[1] * hh * sy, cC[2] + right[2] * hw * sx + up[2] * hh * sy];
-        return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
-      };
-      const n4 = rect(near), f4 = rect(far);
-      for (let i = 0; i < 4; i++) { addSeg(pts, n4[i]!, n4[(i + 1) % 4]!, 6); addSeg(pts, f4[i]!, f4[(i + 1) % 4]!, 8); addSeg(pts, n4[i]!, f4[i]!, 10); }
-    }
+    if (light) pts.push(...lightGizmoPoints(light, center, t, dist));
+    if (cam) pts.push(...cameraGizmoPoints(cam, center, t, dist, aspect()));
     placeDots(pts, Math.max(0.05, dist * 0.006));
   }
 
@@ -660,7 +581,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   let axisT0 = 0;
   let angle0 = 0;
   // plane-handle drag (translate only): which plane + the ray∩plane point at grab.
-  let dragPlane: { ax: number; ay: number; normal: Vec3; mat: number } | null = null;
+  let dragPlane: PlaneHandle | null = null;
   let planeGrab: Vec3 = [0, 0, 0];
   // the changed Transform fields, committed as ONE command on release.
   let livePatch: Record<string, number> = {};
@@ -720,6 +641,33 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   // Selectors updated to match current DockShell (dockview-based) + keep-alive layer.
   const overPanel = (t: EventTarget | null): boolean =>
     !!(t as HTMLElement | null)?.closest?.('.fx-dockshell, .fx-dockwrap, .fx-dock-popout, .ed-toolbar');
+
+  // Wheel-only: also yield to portaled floating UI (Radix) and any real scroller.
+  // overPanel stays dock-only for pointer/click; wheel needs the wider gate because
+  // Select/Dropdown/Dialog portal onto document.body outside .fx-dockshell.
+  const FLOATING_UI =
+    '[data-radix-popper-content-wrapper], [data-radix-select-viewport], ' +
+    '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], ' +
+    '.settings-panel-overlay, .settings-panel-shell';
+  const hasScrollableAncestor = (el: HTMLElement | null): boolean => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      const { overflowY } = getComputedStyle(n);
+      if (
+        (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+        n.scrollHeight > n.clientHeight + 1
+      ) return true;
+    }
+    return false;
+  };
+  const shouldYieldWheel = (t: EventTarget | null): boolean => {
+    const el = t as HTMLElement | null;
+    if (!el?.closest) return false;
+    if (overPanel(el)) return true;
+    if (el.closest(FLOATING_UI)) return true;
+    if (hasScrollableAncestor(el)) return true;
+    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    return false;
+  };
 
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
@@ -892,7 +840,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   }
 
   function onWheel(e: WheelEvent): void {
-    if (overPanel(e.target)) return;
+    if (shouldYieldWheel(e.target)) return;
     if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
     e.preventDefault();
     dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));

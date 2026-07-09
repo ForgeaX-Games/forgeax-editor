@@ -11,7 +11,7 @@ import { useTranslation } from '@/i18n';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
 import { pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
 import { getWindowManager, type SurfaceDescriptor } from '../../lib/platform';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { pickLang } from '../../lib/bus-api';
 import { usePanelRenderers } from './panelRenderers';
 
@@ -31,9 +31,9 @@ interface Props {
 export function WbPluginDockPanel({ pluginId }: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const addDockedPlugin = useAppStore((s) => s.addDockedPlugin);
-  const removeDockedPlugin = useAppStore((s) => s.removeDockedPlugin);
-  const detachSurface = useAppStore((s) => s.detachSurface);
+  const addDockedPlugin = useShellStore((s) => s.addDockedPlugin);
+  const removeDockedPlugin = useShellStore((s) => s.removeDockedPlugin);
+  const detachSurface = useShellStore((s) => s.detachSurface);
   const manifest = usePluginManifest(pluginId);
   const { workbenchPanels } = usePanelRenderers();
 

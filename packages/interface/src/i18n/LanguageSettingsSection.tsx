@@ -6,7 +6,8 @@
  */
 
 import { Globe } from 'lucide-react';
-import { Section } from '../components/TopBar/SettingsDrawer';
+import { Section } from '../components/SettingsPrimitives';
+import { Checkbox } from '../components/ui/checkbox';
 import {
   Select,
   SelectContent,

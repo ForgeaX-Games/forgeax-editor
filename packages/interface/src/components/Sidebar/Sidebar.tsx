@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Bot, Files, PanelLeftClose, PanelLeftOpen, Wrench, ExternalLink, PictureInPicture2 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { emitDeepLink } from '../../lib/deep-link-bus';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
-import { AgentsPanel } from './AgentsPanel';
 import { FilesPanel } from './FilesPanel';
+import { AgentsPanelSlot } from '../DockShell/panelRegistry';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { pluginRendersInMainArea, pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
@@ -65,17 +65,6 @@ const BUILTINS: BuiltinEntry[] = [
   { kind: 'builtin', id: 'files', label: 'Files', Icon: Files },
 ];
 
-// Final fallback when the bus endpoint is unreachable (e.g. server boot lag
-// or a regression in scan). Keeps the legacy 5 placeholder tabs labeled in zh
-// so the UI never collapses to just Agents/Files.
-const FALLBACK_WBS: Array<Pick<BusPluginInfo, 'id' | 'icon' | 'displayName'> & { workbench: NonNullable<BusPluginInfo['workbench']> }> = [
-  { id: 'fallback-character', icon: undefined, displayName: { en: 'Character / Narrative', zh: '角色叙事' }, workbench: { id: 'character', icon: '👤', position: 110 } },
-  { id: 'fallback-scene', icon: undefined, displayName: { en: 'Scene / PCG', zh: '场景 / PCG' }, workbench: { id: 'scene', icon: '🗺️', position: 180 } },
-  { id: 'fallback-skill', icon: undefined, displayName: { en: 'Skill / VFX', zh: '技能 / VFX' }, workbench: { id: 'skill', icon: '⚡', position: 140 } },
-  { id: 'fallback-look', icon: undefined, displayName: { en: 'Color / Look', zh: '色彩 / Look' }, workbench: { id: 'look', icon: '🎨', position: 120 } },
-  { id: 'fallback-library', icon: undefined, displayName: { zh: 'Library' }, workbench: { id: 'library', icon: '🖼️', position: 200 } },
-];
-
 // 2026-05-17 — `KIND_LABELS` 与 SidebarKindFooter 一起删除。bus-kind 计数
 // 现在仅由底栏 GlobalStatusBar.PulseFeeds 显示。
 
@@ -86,7 +75,7 @@ const HOST_SIDEBAR_SCHEMA = {
   type: 'object',
   properties: {
     workbenchTab: { type: 'string', description: 'Currently active workbench tab id (e.g. agents, files, wb:character)' },
-    mode: { type: 'string', enum: ['edit', 'workbench', 'bus'] },
+    mode: { type: 'string', enum: ['scene', 'ai', 'bus'] },
     entries: {
       type: 'array',
       items: {
@@ -103,32 +92,30 @@ const HOST_SIDEBAR_SCHEMA = {
 
 interface HostSidebarSnapshot {
   workbenchTab: string;
-  mode: 'edit' | 'workbench' | 'bus';
+  mode: 'scene' | 'ai' | 'bus';
   entries: Array<{ id: string; label: string; kind: 'builtin' | 'bus' }>;
 }
 
 export function Sidebar() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const { workbenchTab, setWorkbenchTab } = useAppStore();
-  const mode = useAppStore((s) => s.mode);
-  const setMode = useAppStore((s) => s.setMode);
-  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const floatingSurfaces = useAppStore((s) => s.floatingSurfaces);
-  const detachSurface = useAppStore((s) => s.detachSurface);
-  const redockSurface = useAppStore((s) => s.redockSurface);
+  const { workbenchTab, setWorkbenchTab } = useShellStore();
+  const mode = useShellStore((s) => s.mode);
+  const setMode = useShellStore((s) => s.setMode);
+  const sidebarCollapsed = useShellStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useShellStore((s) => s.toggleSidebar);
+  const floatingSurfaces = useShellStore((s) => s.floatingSurfaces);
+  const detachSurface = useShellStore((s) => s.detachSurface);
+  const redockSurface = useShellStore((s) => s.redockSurface);
   // Plugins currently open as top-level DockShell panels — their iframes are
   // rendered in that panel, so KeepAlivePluginIframes skips them here.
-  const dockedPlugins = useAppStore((s) => s.dockedPlugins);
+  const dockedPlugins = useShellStore((s) => s.dockedPlugins);
 
   const [busPlugins, setBusPlugins] = useState<BusPluginInfo[] | null>(null);
-  const [busError, setBusError] = useState<string | null>(null);
 
-  // Sidebar is a persistent component (it does not remount on tab switches),
-  // so a single failed boot-time fetch would pin FALLBACK_WBS — which lacks
-  // `entry.standalone` — for the whole session, leaving left-pane plugins
-  // permanently un-mountable. Retry a few times before giving up.
+  // Sidebar is a persistent component (it does not remount on tab switches).
+  // Retry the bus fetch a few times before giving up so a slow boot doesn't
+  // pin the sidebar to an empty state for the whole session.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -142,12 +129,9 @@ export function Sidebar() {
         .then((res) => {
           if (cancelled) return;
           setBusPlugins(res.items);
-          setBusError(null);
         })
-        .catch((err: unknown) => {
+        .catch(() => {
           if (cancelled) return;
-          const msg = err instanceof Error ? err.message : String(err);
-          setBusError(msg);
           if (attempts >= MAX_ATTEMPTS) {
             setBusPlugins([]);
             return;
@@ -164,7 +148,7 @@ export function Sidebar() {
   }, []);
 
   const busEntries = useMemo<BusEntry[]>(() => {
-    const source = busPlugins && busPlugins.length > 0 ? busPlugins : (busError ? FALLBACK_WBS as BusPluginInfo[] : []);
+    const source = busPlugins ?? [];
     return source
       .filter((m) => !m.workbench?.hidden)
       .map<BusEntry>((m) => ({
@@ -174,7 +158,7 @@ export function Sidebar() {
         emoji: m.workbench?.icon ?? m.icon ?? '🧩',
         manifest: m,
       }));
-  }, [busPlugins, busError, locale]);
+  }, [busPlugins, locale]);
 
   const entries: Entry[] = useMemo(() => [...BUILTINS, ...busEntries], [busEntries]);
   useEffect(() => {
@@ -238,7 +222,7 @@ export function Sidebar() {
           // and the center can never desync (architecture review §B3).
           const entry = entriesRef.current.find((e) => e.id === a.tab);
           const manifest = entry?.kind === 'bus' ? entry.manifest : null;
-          useAppStore.getState().openWorkbench({
+          useShellStore.getState().openWorkbench({
             tab: a.tab,
             expandedPluginId: manifest && pluginRendersInMainArea(manifest) ? manifest.id : null,
           });
@@ -249,12 +233,12 @@ export function Sidebar() {
         argsSchema: {
           type: 'object',
           required: ['mode'],
-          properties: { mode: { type: 'string', enum: ['edit', 'workbench', 'bus'] } },
+          properties: { mode: { type: 'string', enum: ['scene', 'ai', 'bus'] } },
         },
         run: (raw) => {
           const a = (raw ?? {}) as { mode?: unknown };
-          if (a.mode === 'edit' || a.mode === 'workbench' || a.mode === 'bus') {
-            useAppStore.getState().setMode(a.mode);
+          if (a.mode === 'scene' || a.mode === 'ai' || a.mode === 'bus') {
+            useShellStore.getState().setMode(a.mode);
           }
         },
       },
@@ -428,7 +412,7 @@ export function Sidebar() {
                       <ExternalLink size={12} />
                     </button>
                   )}
-                  {activeEntry.id === 'agents' ? <AgentsPanel /> : <FilesPanel />}
+                  {activeEntry.id === 'agents' ? <AgentsPanelSlot /> : <FilesPanel />}
                 </>
               );
             })()
@@ -508,8 +492,8 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   const description = pickLang(m.description, locale, '');
   const descriptionAlt = pickLang(m.description, locale === 'zh' ? 'en' : 'zh', '');
   const showAlt = descriptionAlt && descriptionAlt !== description;
-  const setMode = useAppStore((s) => s.setMode);
-  const openSettingsStore = useAppStore((s) => s.openOverlay);
+  const setMode = useShellStore((s) => s.setMode);
+  const openSettingsStore = useShellStore((s) => s.openOverlay);
   const dir = m.id.startsWith('@forgeax-plugin/')
     ? m.id.slice('@forgeax-plugin/'.length)
     : m.id;

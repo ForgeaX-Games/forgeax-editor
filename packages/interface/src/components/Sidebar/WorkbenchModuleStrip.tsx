@@ -17,6 +17,13 @@ function shortenLabel(label: string): string {
 /** Preview wb-module-strip — bus workbench plugins in 6-column grid. */
 export function WorkbenchModuleStrip({ entries, activeTabId, onSelect }: Props) {
   const { t } = useTranslation();
+  if (!entries || entries.length === 0) {
+    return (
+      <div className="wb-module-strip wb-module-strip--empty" role="listbox" aria-label={t('workbenchModuleStrip.ariaLabel')}>
+        <span className="wb-module-strip__empty">{t('workbenchModuleStrip.empty')}</span>
+      </div>
+    );
+  }
   return (
     <div className="wb-module-strip" role="listbox" aria-label={t('workbenchModuleStrip.ariaLabel')}>
       {entries.map((e) => {

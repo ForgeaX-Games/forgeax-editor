@@ -90,7 +90,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation, type TFunction } from '@/i18n';
 import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
 import './BusAdminPanel.css';
 
@@ -1850,10 +1850,10 @@ function PluginDetail({
   // P3.33 — reverse deep-link wiring. kind=agent rows offer "← 在 Sidebar 高亮"
   // (sets store.pendingSidebarFocusPluginId → AgentsPanel scrolls + flashes the
   // matching card). kind=workbench rows offer "← 打开 wb-* tab" (setMode
-  // 'workbench' + setWorkbenchTab(wb.id) so MainArea opens the placeholder).
+  // 'ai' + setWorkbenchTab(wb.id) so MainArea opens the placeholder).
   // Together with P3.32's forward AgentsPanel pill + P2.7f's wb-tab "在 Bus
   // 详情查看 →" button, this completes the Sidebar ⇄ Bus admin round-trip.
-  const openWorkbench = useAppStore((s) => s.openWorkbench);
+  const openWorkbench = useShellStore((s) => s.openWorkbench);
   // R5/P2 — reverse deep-links now emit bus intents (their consumers —
   // AgentsPanel scroll / Sidebar kind-flash — were lost in R4 and are re-added
   // in P4/P6 in the right app; publishing is harmless while unsubscribed).

@@ -1,19 +1,51 @@
 import { create } from 'zustand';
 import { t } from '@/i18n';
 import { peek } from './lib/bus';
-import { recordLog } from './lib/logSink';
 import { alertDialog } from './lib/dialog';
+import { createObservabilityState } from './store-parts/observability';
+import { createShellState } from './store-parts/shell';
+import { getSessionClient } from './store-parts/session-client';
+import { getWorkbenchClient } from './store-parts/workbench-client';
+import {
+  cleanupLegacySessionKeys,
+  loadActiveSid,
+  loadAgentBySid,
+  loadProviderOverride,
+  persistActiveSid,
+  persistAgentBySid,
+  saveProviderOverride,
+} from './store-parts/persistence';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/platform';
-import { bootAppMode } from './lib/workspaces';
-import { resolveKernelForAgent } from './lib/agent-cli-provider';
+import { bootAppMode } from './lib/workbenches';
 import { STORAGE_KEYS } from './lib/storageKeys';
+import { getLastModel } from './lib/model-prefs';
+import { resolveKernelForAgent } from './lib/agent-cli-provider';
+
+export { configureSessionClient, type SessionClient } from './store-parts/session-client';
+export {
+  configureWorkbenchClient,
+  getWorkbenchClient,
+  type WorkbenchClient,
+  type WorkbenchAgent,
+  type WorkbenchAgentsResponse,
+  type EngineRootCandidate,
+  type GameRow,
+  type AndroidConfig,
+  type PackageGameOptions,
+  type PackageJobStatus,
+  type HistoryRecord,
+  type CleanPackageResult,
+} from './store-parts/workbench-client';
 
 // P2.6d — 'bus' joins as a top-level mode for the Bus admin panel.
 // Mirrors the Viewport / Workbench switch in the TopBar; rendered by MainArea.
 // 2026-06-30: 'preview'/'play' removed; 'edit' retained as the 2x2 viewport workspace (OOS-5).
-export type AppMode = 'edit' | 'workbench' | 'bus';
+// 2026-07-07 (T3): AI workbench mode id renamed 'workbench' → 'ai'.
+// 2026-07-07 (T4): AI workbench tools-rail panel id renamed 'workbench' → 'tools'.
+// 2026-07-08 (v9): Scene workbench mode id renamed 'edit' → 'scene' (id/name align).
+export type AppMode = 'scene' | 'ai' | 'bus';
 
-// ③ PreviewFile 已移到 @forgeax/workbench/file-preview（L1 不再持有文件预览态）。
+// ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（L1 不再持有文件预览态）。
 
 export interface ToolCall {
   callId: string;
@@ -252,7 +284,7 @@ export function tabLabel(tab: Pick<ChatTab, 'sid' | 'displayName'>): string {
   return n && n.length > 0 ? n : `session ${tab.sid.slice(0, 6)}`;
 }
 
-interface AppState {
+export interface AppState {
   // ── UI mode ──
   mode: AppMode;
   setMode: (m: AppMode) => void;
@@ -296,8 +328,8 @@ interface AppState {
   // Browser form: detach is a no-op (WindowManager.canDetach() === false), so
   // this map stays empty and behavior is unchanged.
   floatingSurfaces: Record<string, true>;
-  detachSurface: (d: SurfaceDescriptor, opts?: { title?: string }) => Promise<void>;
-  redockSurface: (d: SurfaceDescriptor) => Promise<void>;
+  detachSurface: (d: import('./lib/platform').SurfaceDescriptor, opts?: { title?: string }) => Promise<void>;
+  redockSurface: (d: import('./lib/platform').SurfaceDescriptor) => Promise<void>;
   /** Plugin IDs currently open as top-level DockShell panels (so Sidebar knows
    *  to hide their keep-alive iframes to avoid double-rendering). */
   dockedPlugins: Set<string>;
@@ -335,7 +367,7 @@ interface AppState {
   /** Read cache w/ guarded null fallback. */
   getCachedAgentForSid: (sid: string | null) => string | null;
 
-  // ── Workbench file preview（③ 已抽到 @forgeax/workbench/file-preview，走 bus 'workbench:files'）──
+  // ── Workbench file preview（③ 已抽到 @forgeax/ai-workbench/file-preview,走 bus 'workbench:files'）──
   // openFiles/activeFilePath/openFile/activateFile/closeFile/updatePreviewContent/savePreviewFile
   // 不再进 L1 store。壳侧打开文件走 bus 命令 'workbench:open-file'（见 workbench/file-preview.ts）。
 
@@ -484,9 +516,8 @@ interface AppState {
   toggleChatpanel: () => void;
 }
 
-// rendererToolCallToLegacy moved to lib/event-engine/message-builder.ts —
-// it is shared by live and replay paths so its home is colocated with the
-// callback factories that use it (P6).
+// Chat message/event-engine logic lives in @forgeax/chat. L1 keeps only the
+// session registry and injected session-client contract used by shell chrome.
 
 // turnsToChatMessages removed — replay no longer goes through batch
 // onTurn/CompletedTurn flatten. Both live and replay now feed events into
@@ -496,24 +527,6 @@ interface AppState {
 // onMessage(tool_call) sees the same m.text.length snapshot in both paths.
 
 
-// localStorage key for the persistent cli provider override. Picking 'claude-code'
-// should survive a page reload — matches the "pick once, keep using it" feedback.
-const PROVIDER_OVERRIDE_KEY = 'forgeax.providerOverride';
-function loadProviderOverride(): string | null {
-  try {
-    const v = localStorage.getItem(PROVIDER_OVERRIDE_KEY);
-    return v && v !== 'null' ? v : null;
-  } catch {
-    return null;
-  }
-}
-function saveProviderOverride(id: string | null): void {
-  try {
-    if (id === null) localStorage.removeItem(PROVIDER_OVERRIDE_KEY);
-    else localStorage.setItem(PROVIDER_OVERRIDE_KEY, id);
-  } catch { /* ignore (private mode / SSR) */ }
-}
-
 // Cross-tab sync: when a sibling tab writes to PROVIDER_OVERRIDE_KEY, push
 // the new value into our zustand state so the cli-selector button rerenders
 // without a manual reload. Without this, two open tabs drift — tab A shows
@@ -522,10 +535,10 @@ function saveProviderOverride(id: string | null): void {
 // path uses setProviderOverride directly.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
-    if (e.key !== PROVIDER_OVERRIDE_KEY) return;
+    if (e.key !== 'forgeax.providerOverride') return;
     const next = e.newValue && e.newValue !== 'null' ? e.newValue : null;
-    if (useAppStore.getState().providerOverride !== next) {
-      useAppStore.setState({ providerOverride: next });
+    if (useShellStore.getState().providerOverride !== next) {
+      useShellStore.setState({ providerOverride: next });
     }
   });
 }
@@ -556,31 +569,16 @@ if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
     if (e.key === STORAGE_KEYS.replyLanguage) {
       const next = e.newValue === 'zh' ? 'zh' : 'en';
-      if (useAppStore.getState().replyLanguage !== next) useAppStore.setState({ replyLanguage: next });
+      if (useShellStore.getState().replyLanguage !== next) useShellStore.setState({ replyLanguage: next });
     } else if (e.key === STORAGE_KEYS.followInput) {
       const next = e.newValue !== '0';
-      if (useAppStore.getState().followInput !== next) useAppStore.setState({ followInput: next });
+      if (useShellStore.getState().followInput !== next) useShellStore.setState({ followInput: next });
     }
   });
 }
 
 // agent 安装偏好（DEFAULT_INSTALLED_AGENT_IDS / uninstalled / bootstrap / seed）已
 // 整体抽到 @forgeax/settings/agent-prefs（① · 走 bus 'prefs:agents'）—— L1 不再持有。
-
-const SETTINGS_SECTION_KEY = 'forgeax.settingsSection';
-
-function loadSettingsSection(): string | null {
-  try {
-    const v = localStorage.getItem(SETTINGS_SECTION_KEY);
-    return v && v.trim() ? v : null;
-  } catch { return null; }
-}
-function saveSettingsSection(id: string | null): void {
-  try {
-    if (id) localStorage.setItem(SETTINGS_SECTION_KEY, id);
-    else localStorage.removeItem(SETTINGS_SECTION_KEY);
-  } catch { /* ignore */ }
-}
 
 // R5/P1 — the broadcast `/ws` daemon socket moved OUT of the store's module-load
 // side-effect into the shared `lib/broadcast-stream` primitive, wired at boot by
@@ -592,57 +590,11 @@ function saveSettingsSection(id: string | null): void {
 // 2026-05-20 重做：不再持久化 tabs 数组本身（tabs = GET /api/sessions 派生）。
 // 只持久化 activeSid（用户上次看的是哪条），boot 时再 init。同时一次性清掉
 // 老 key (forgeax.tabs / forgeax.activeTabId) 防止旧数据残留。
-const ACTIVE_SID_KEY = 'forgeax.activeSid';
-const AGENT_BY_SID_KEY = 'forgeax.agentBySid';
-// 老 keys —— 启动时一次性 cleanup 清掉，老用户回来不会带着无效"幽灵 tab" 启动。
-const LEGACY_TABS_KEY = 'forgeax.tabs';
-const LEGACY_ACTIVE_TAB_KEY = 'forgeax.activeTabId';
-
-(function cleanupLegacyKeys(): void {
-  try {
-    localStorage.removeItem(LEGACY_TABS_KEY);
-    localStorage.removeItem(LEGACY_ACTIVE_TAB_KEY);
-  } catch { /* ignore (private mode / SSR) */ }
-})();
+cleanupLegacySessionKeys();
 
 /** Persisted per-sid agent cache —— ref ink-renderer `agentByInstance` 移植。
  *  对外只暴露 read / write 两个动作；boot 时一次性 load 当 init state，runtime
  *  写盘交给 `setTabAgent` 的副作用。 */
-function loadAgentBySid(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(AGENT_BY_SID_KEY);
-    if (!raw) return {};
-    const obj = JSON.parse(raw) as unknown;
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
-    const out: Record<string, string> = {};
-    for (const [sid, agent] of Object.entries(obj as Record<string, unknown>)) {
-      if (typeof sid === 'string' && typeof agent === 'string' && sid && agent) {
-        out[sid] = agent;
-      }
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-function persistAgentBySid(map: Record<string, string>): void {
-  try { localStorage.setItem(AGENT_BY_SID_KEY, JSON.stringify(map)); }
-  catch { /* ignore */ }
-}
-
-function loadActiveSid(): string | null {
-  try {
-    const v = localStorage.getItem(ACTIVE_SID_KEY);
-    return v && v.trim() ? v : null;
-  } catch { return null; }
-}
-function persistActiveSid(sid: string | null): void {
-  try {
-    if (sid) localStorage.setItem(ACTIVE_SID_KEY, sid);
-    else localStorage.removeItem(ACTIVE_SID_KEY);
-  } catch { /* ignore */ }
-}
-
 /** Patch a session tab's registry field (key = sid). Mirrors providerOverride
  *  to the top-level default when the patched tab is active. Chat message state
  *  no longer lives on the tab — it's owned by the chat app's session store. */
@@ -675,7 +627,7 @@ let _initSessionsPending: Promise<void> | null = null;
 async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
   if (!sid) return;
   try {
-    const { listSessionAgents } = await import('./lib/forgeax-bridge');
+    const { listSessionAgents } = getSessionClient();
     const agents = await listSessionAgents(sid);
     if (agents.length === 0) return;
     // tab.agentId 还没绑（cached === null）→ 用 depth=1 root 兜底。
@@ -687,7 +639,7 @@ async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
     // 是 user intent，list_agents 没观察到 ≠ 该 pin 无效。早先这里强制重指 root
     // 正是用户报的「点击 mochi 头像但 forge/root 接管对话」bug 的源头之一。
     const root = agents.find((a) => a.depth === 1)?.path ?? agents[0]!.path;
-    const tab = useAppStore.getState().tabs.find((t) => t.sid === sid);
+    const tab = useShellStore.getState().tabs.find((t) => t.sid === sid);
     const cached = tab?.agentId ?? null;
     const cachedInTree = cached ? agents.some((a) => a.path === cached) : false;
     const wantPath = cached ? cached : root;
@@ -696,14 +648,14 @@ async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
     // wantPath === cached but `target` is undefined. We still want to keep
     // the pin and show running:false until the auto-scaffold lands. No
     // tab.messagesByAgent rewiring needed since the pin is unchanged.
-    useAppStore.setState((s) => {
+    useShellStore.setState((s) => {
       // Only update agentBySid when we're filling a previously-empty slot.
       // Keeping a marketplace pin: cached !== null already => leave as-is.
       const agentBySid = cached ? s.agentBySid : { ...s.agentBySid, [sid]: wantPath };
       const tabs = s.tabs.map((t) => (t.sid === sid ? { ...t, agentId: wantPath } : t));
       return { tabs, agentBySid };
     });
-    if (!cached) persistAgentBySid(useAppStore.getState().agentBySid);
+    if (!cached) persistAgentBySid(useShellStore.getState().agentBySid);
   } catch (e) {
     console.warn('[syncActiveAgentRunning] failed', (e as Error).message);
   }
@@ -726,60 +678,9 @@ const _initialMirror = {
 // module-load side-effect. telemetry + workspace-changed now wired via
 // `boot/broadcast.ts` (bootBroadcast); daemon-tick is chat's (subscribeDaemonTick).
 
-export const useAppStore = create<AppState>((set, get) => ({
-  // 启动 mode 跟随持久化的活动工作区（Play/Edit/AI），避免刷新后 tab 高亮与主区域
-  // 内容错位（见 lib/workspaces.ts bootAppMode 注释）。
-  mode: bootAppMode(),
-  setMode: (m) => set({ mode: m }),
-  workbenchTab: 'agents',
-  setWorkbenchTab: (t) => set({ workbenchTab: t }),
-  workbenchExpandedPluginId: null,
-  setWorkbenchExpandedPluginId: (id) => set({ workbenchExpandedPluginId: id }),
-  openWorkbench: ({ tab, expandedPluginId }) => set((s) => ({
-    mode: 'workbench',
-    workbenchTab: tab ?? s.workbenchTab,
-    // `undefined` = leave center untouched (e.g. pure tab nav); explicit null
-    // clears it; a string expands that plugin. Open paths always pass it.
-    workbenchExpandedPluginId: expandedPluginId !== undefined ? expandedPluginId : s.workbenchExpandedPluginId,
-  })),
-
-  dockedPlugins: new Set<string>(),
-  addDockedPlugin: (id) => set((s) => ({ dockedPlugins: new Set([...s.dockedPlugins, id]) })),
-  removeDockedPlugin: (id) => set((s) => { const next = new Set(s.dockedPlugins); next.delete(id); return { dockedPlugins: next }; }),
-
-  floatingSurfaces: {},
-  detachSurface: async (d, opts) => {
-    const wm = getWindowManager();
-    if (!wm.canDetach()) return; // browser form — no-op
-    const key = surfaceKey(d);
-    // Optimistically mark floating so the main window tears down its keep-alive
-    // iframe BEFORE the new window boots — avoids a transient double instance.
-    set((s) => ({ floatingSurfaces: { ...s.floatingSurfaces, [key]: true } }));
-    const ok = await wm.openSurfaceWindow(d, { title: opts?.title });
-    if (!ok) {
-      // Window failed to open — revert so the surface stays docked & visible.
-      set((s) => {
-        const next = { ...s.floatingSurfaces };
-        delete next[key];
-        return { floatingSurfaces: next };
-      });
-    }
-  },
-  redockSurface: async (d) => {
-    const wm = getWindowManager();
-    await wm.closeSurfaceWindow(d);
-    get().markSurfaceDocked(surfaceKey(d));
-  },
-  markSurfaceDocked: (key) =>
-    set((s) => {
-      if (!s.floatingSurfaces[key]) return {} as Partial<typeof s>;
-      const next = { ...s.floatingSurfaces };
-      delete next[key];
-      return { floatingSurfaces: next };
-    }),
+export const useShellStore = create<AppState>((set, get) => ({
+  ...createShellState(set, get),
   // R5/P2 — deep-link slots moved to L1 bus (lib/deep-link-bus.ts); removed from store.
-  activeSession: 'main-design',
-  setActiveSession: (s) => set({ activeSession: s }),
   setTabAgent: (sid, agentId) => {
     set((s) => {
       const tabs = s.tabs.map((t) => (t.sid === sid ? { ...t, agentId } : t));
@@ -793,7 +694,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     if (agentId) {
       void resolveKernelForAgent(agentId).then((kernelId) => {
-        useAppStore.setState((s) => {
+        useShellStore.setState((s) => {
           const tab = s.tabs.find((t) => t.sid === sid);
           if (!tab || tab.agentId !== agentId) return {};
           const patch = patchTabField(s, sid, { providerOverride: kernelId });
@@ -812,8 +713,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!sid) return null;
     return get().agentBySid[sid] ?? null;
   },
-  // providerOverride 设置：写盘当默认 + mirror 到 active tab。switchToSession 时
-  // mirror 自动从新 tab 的 providerOverride 拉过去，这俩 setter 不需要 tab-aware。
+  // providerOverride 是全局单一设置（Settings › Providers）：写盘当默认 + mirror 到
+  // active tab 仅作记录。switchToSession 不再从 tab 反向拉 provider（会让 Settings 激活值
+  // 随 session 乱跳），切 session 只对齐模型、不动全局 provider。
   replyLanguage: loadReplyLanguage(),
   followInput: loadFollowInput(),
   setReplyLanguage: (lang) => {
@@ -860,40 +762,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 
 
-  consoleLog: [],
-  pushConsole: (entry) => {
-    recordLog('console', entry); // mirror to disk (.forgeax/logs/console.jsonl)
-    set((s) => ({
-      // Cap at 500 entries to bound memory; oldest drop off.
-      consoleLog: s.consoleLog.length >= 500
-        ? [...s.consoleLog.slice(s.consoleLog.length - 499), entry]
-        : [...s.consoleLog, entry],
-    }));
-  },
-  clearConsole: () => set({ consoleLog: [] }),
-
-  networkLog: [],
-  pushNetwork: (entry) => {
-    recordLog('network', entry); // mirror to disk (.forgeax/logs/network.jsonl)
-    set((s) => ({
-      // Cap at 500 entries to bound memory; oldest drop off.
-      networkLog: s.networkLog.length >= 500
-        ? [...s.networkLog.slice(s.networkLog.length - 499), entry]
-        : [...s.networkLog, entry],
-    }));
-  },
-  clearNetwork: () => set({ networkLog: [] }),
-
-  telemetry: [],
-  pushTelemetry: (records) => {
-    if (!records.length) return;
-    set((s) => {
-      const next = [...s.telemetry, ...records];
-      // Cap at 500 records (S4); drop oldest.
-      return { telemetry: next.length > 500 ? next.slice(next.length - 500) : next };
-    });
-  },
-  clearTelemetry: () => set({ telemetry: [] }),
+  ...createObservabilityState(set),
 
   liveAgents: {},
   agentFileActivity: {},
@@ -933,12 +802,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ pinnedSlug: s });
   },
 
-  // ③ 文件预览态实现整体移到 @forgeax/workbench/file-preview（走 bus 'workbench:files'）。
+  // ③ 文件预览态实现整体移到 @forgeax/ai-workbench/file-preview(走 bus 'workbench:files')。
 
   // ── Tab-aware messages/streaming state (P6 step 1) ──
   // The data lives in `tabs[active].messages` etc.; these top-level fields
   // are a *mirror* of the active tab for back-compat with components that
-  // already do `useAppStore(s => s.messages)`. Initial values come from the
+  // already do `useShellStore(s => s.messages)`. Initial values come from the
   // persisted-tabs loader so the first render sees the right tab content.
   //
   // Note: TS narrows spread types to optional; we re-state the literal fields
@@ -951,7 +820,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   initSessions: async () => {
     if (_initSessionsPending) return _initSessionsPending;
     _initSessionsPending = (async () => {
-      const { fetchSessionList, createSession, connectForgeaXWs } = await import('./lib/forgeax-bridge');
+      const { fetchSessionList, createSession, connectForgeaXWs } = getSessionClient();
       try {
         // 列表恒按当前 game 收口（pinnedSlug；null 时 server 回落 active game）。
         const scope = get().pinnedSlug ?? undefined;
@@ -979,12 +848,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const active = persisted && newTabs.some((t) => t.sid === persisted)
           ? persisted
           : (newTabs[0]?.sid ?? null);
-        const activeTab = newTabs.find((t) => t.sid === active) ?? null;
+        // provider 是全局设置，绝不从 tab 反推（会随 active session 乱跳）。
         set({
           tabs: newTabs,
           activeSid: active,
           currentSessionId: active,
-          providerOverride: activeTab?.providerOverride ?? get().providerOverride,
         });
         persistActiveSid(active);
         connectForgeaXWs(active);
@@ -999,7 +867,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   refreshSessions: async () => {
-    const { fetchSessionList } = await import('./lib/forgeax-bridge');
+    const { fetchSessionList } = getSessionClient();
     try {
       // 同 initSessions：按当前 game 收口（pinnedSlug；null → server 回落 active game）。
       const metas = await fetchSessionList(get().pinnedSlug ?? undefined);
@@ -1028,13 +896,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         const active = s.activeSid && merged.some((t) => t.sid === s.activeSid)
           ? s.activeSid
           : (merged[0]?.sid ?? null);
-        const activeTab = merged.find((t) => t.sid === active) ?? null;
         persistActiveSid(active);
+        // provider 全局，不从 tab 反推。
         return {
           tabs: merged,
           activeSid: active,
           currentSessionId: active,
-          providerOverride: activeTab?.providerOverride ?? s.providerOverride,
         };
       });
     } catch (e) {
@@ -1047,8 +914,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 后续新建 session 绑到该 game)→ 按 game 收口刷新列表 → 落最近活跃一条/空则新建。
     get().setPinnedSlug(slug);
     try {
-      const r = await fetch(`/api/workbench/games/${encodeURIComponent(slug)}/activate`, { method: 'POST' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await getWorkbenchClient().activateGame(slug);
     } catch (e) {
       // pin 已切了 preview/agents,但 server 没记下 active game —— 显式报出而非默默
       // 让 session scope 错位。仍继续刷新(server 端 fallback 会按旧 active game 收口)。
@@ -1071,12 +937,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   createNewSession: async (opts) => {
-    const { createSession, connectForgeaXWs } = await import('./lib/forgeax-bridge');
+    const { createSession, connectForgeaXWs } = getSessionClient();
     try {
       // ① defaultBootstrapAgent 来自 settings/agent-prefs 的 bus 快照（L1 不再持有）。
       const bootstrap = (peek('prefs:agents') as { defaultBootstrapAgent?: string | null } | undefined)
         ?.defaultBootstrapAgent ?? null;
-      const { sid } = await createSession({
+      const { sid, bootstrappedAgent } = await createSession({
         // 用户主动在 UI 里建 session（点 + 新建），可以传一个语义化的 displayName。
         // 不传时让 server 端落 undefined（UI 自己用 tabLabel 占位反映"无名"）。
         displayName: opts?.displayName,
@@ -1091,6 +957,36 @@ export const useAppStore = create<AppState>((set, get) => ({
       const seedOverride = opts?.providerOverride !== undefined
         ? opts.providerOverride
         : get().providerOverride;
+      // Seed the bootstrapped agent's model. The scaffold default is
+      // AGENT_DEFAULTS.models.model (claude-opus-4-8), which is fine for the
+      // native path but wrong for a CLI driver (that id isn't in the driver's
+      // catalog). Precedence:
+      //   1. the model the user last HAND-PICKED for this provider (model-prefs)
+      //      — "new session resumes where I left off";
+      //   2. else, for a CLI driver, its catalog default (first non-hidden) so
+      //      the model belongs to the active provider;
+      //   3. else (native, nothing remembered) leave the scaffold default.
+      // Only cases 1/2 write; awaited-before-activate so the composer never
+      // flashes a stale id; best-effort so a catalog hiccup can't block create.
+      if (bootstrappedAgent) {
+        try {
+          const catalogProviderId =
+            seedOverride && seedOverride !== 'forgeax' ? seedOverride : null;
+          const remembered = getLastModel(catalogProviderId);
+          if (remembered || catalogProviderId) {
+            const { listModels, setAgentModels } = await import('./lib/model-config');
+            const catalog = await listModels(catalogProviderId);
+            const rememberedOk =
+              !!remembered && catalog.some((m) => m.id === remembered && !m.hidden);
+            const next = rememberedOk
+              ? remembered
+              : catalogProviderId
+                ? (catalog.find((m) => !m.hidden)?.id ?? catalog[0]?.id)
+                : undefined;
+            if (next) await setAgentModels(sid, bootstrappedAgent, [next]);
+          }
+        } catch { /* best-effort — leave the scaffold default */ }
+      }
       set((s) => {
         const newTab: ChatTab = {
           sid,
@@ -1125,13 +1021,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!t2) return;
     }
     const target = get().tabs.find((t) => t.sid === sid)!;
+    // 切 session：把该 session 的模型对齐到「当前设置的 provider」。provider 是全局
+    // 单一设置（Settings › Providers），但从盘上加载的 session（如切 game 带出的历史
+    // 会话）其 agent.json 模型可能仍属于旧 provider。若不在当前 provider 的 catalog 里
+    // → 切到该 provider 上次手选模型（model-prefs）或默认；已属于则不动。在翻 activeSid
+    // 之前做，好让 composer 首帧 fetch 直接画对齐后的值（不闪旧模型）。best-effort，
+    // 绝不因对齐失败阻断切换。
+    const agentPath = target.agentId ?? get().agentBySid[sid] ?? null;
+    if (agentPath) {
+      try {
+        const { reconcileSessionModelToActiveProvider } = await import('./lib/model-route');
+        await reconcileSessionModelToActiveProvider(sid, agentPath);
+      } catch { /* never block a session switch on model reconcile */ }
+    }
+    // provider 是全局单一设置（Settings › Providers；chat 内切换器已隐藏），切
+    // session 绝不改动它——否则 Settings 的激活 provider 会跟着目标 tab 的历史值乱跳。
+    // session 与全局 provider 的错配只对齐「模型」（上面 reconcile 已做），不动 provider。
     set({
       activeSid: sid,
       currentSessionId: sid,
-      providerOverride: target.providerOverride,
     });
     persistActiveSid(sid);
-    const { connectForgeaXWs } = await import('./lib/forgeax-bridge');
+    const { connectForgeaXWs } = getSessionClient();
     connectForgeaXWs(sid);
     void _syncActiveAgentRunning(sid);
   },
@@ -1159,7 +1070,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 2. 真删盘 —— DELETE /api/sessions/:sid。失败也照常往下走（盘上残留比 UI
     //    幽灵 tab 还在更可接受），错误吐到控制台。
-    const { deleteSession, connectForgeaXWs, createSession } = await import('./lib/forgeax-bridge');
+    const { deleteSession, connectForgeaXWs, createSession } = getSessionClient();
     try { await deleteSession(sid); }
     catch (e) { console.warn('[closeSession] DELETE failed', e); }
 
@@ -1179,7 +1090,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           tabs: [fresh],
           activeSid: newSid,
           currentSessionId: newSid,
-          providerOverride: fresh.providerOverride,
           ...omitSessionResidue(s),
         }));
         persistActiveSid(newSid);
@@ -1204,7 +1114,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         tabs: remainingMetas,
         activeSid: next.sid,
         currentSessionId: next.sid,
-        providerOverride: next.providerOverride,
         ...omitSessionResidue(s),
       };
     });
@@ -1217,29 +1126,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // TODO: 等 server 加 PATCH /api/sessions/:sid { displayName } 后写盘。当前
     // 只是 UI 临时改名，刷新会 revert 到 server 真值。
   },
-
-  activeOverlay: null,
-  // overlayParam 初值取持久化的 settings section（关掉再开回到上次 tab）。
-  overlayParam: loadSettingsSection(),
-  openOverlay: (id, param) => {
-    const p = param ?? get().overlayParam ?? null;
-    saveSettingsSection(p); // 仅 settings 用到；其它 overlay 无 param，幂等无害
-    set({ activeOverlay: id, overlayParam: p });
-  },
-  setOverlayParam: (param) => {
-    saveSettingsSection(param);
-    set({ overlayParam: param });
-  },
-  closeOverlay: () => set({ activeOverlay: null }),
-
-  fullscreen: false,
-  setFullscreen: (v) => set({ fullscreen: v }),
-  toggleFullscreen: () => set((s) => ({ fullscreen: !s.fullscreen })),
-
-  sidebarCollapsed: false,
-  chatpanelCollapsed: false,
-  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-  toggleChatpanel: () => set((s) => ({ chatpanelCollapsed: !s.chatpanelCollapsed })),
 
   setActiveEmitter: async (emitterId) => {
     // 重做后 activeSid 就是 server-side thread id（一一对应，不再有"tab 没绑
@@ -1266,3 +1152,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
 }));
+
+/**
+ * @deprecated Renamed to `useShellStore` (T24 · ADR 0024). Kept as an alias
+ * so out-of-tree consumers (chat / editor / workbench / dashboard / settings
+ * / studio / harness — 74 callsites across 7 submodules) keep booting while
+ * they migrate. Both names point to the SAME store instance; there is no
+ * behavior difference. Remove this line once every submodule has been
+ * repointed and pin-bumped in root.
+ */
+export const useAppStore = useShellStore;

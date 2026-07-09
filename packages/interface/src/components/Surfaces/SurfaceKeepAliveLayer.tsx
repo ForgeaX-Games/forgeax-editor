@@ -22,7 +22,7 @@
 // editor-agnostic: the real surfaces come from PanelRenderers context (studio injects
 // @forgeax/editor's PlaySurface/EditSurface); interface keeps ZERO editor imports.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { FatalBanner } from '../StatusBar/FatalBanner';
 import {
@@ -33,18 +33,22 @@ import {
 } from '../../lib/surfaceAnchors';
 import './SurfaceKeepAlive.css';
 
-type AppMode = 'edit' | 'workbench';
+// AppMode = shell workspace mode. The engine's edit-time surface kind is still
+// 'edit' (see SurfaceKind in ../../lib/surfaceAnchors); the workbench-id / mode-id
+// 'edit' was renamed to 'scene' by the v9 workbench-schema migration.
+type AppMode = 'scene' | 'ai';
 
 function kindForMode(mode: AppMode): SurfaceKind | null {
-  if (mode === 'edit') return 'edit';
+  if (mode === 'scene') return 'edit';
   return null; // workbench / custom workspaces show neither surface
 }
 
 const ALL_KINDS: SurfaceKind[] = ['edit'];
 
 export function SurfaceKeepAliveLayer(): ReactNode {
-  const mode = useAppStore((s) => s.mode) as AppMode;
-  const { renderPreview, renderEdit } = usePanelRenderers();
+  const mode = useShellStore((s) => s.mode) as AppMode;
+  const { surfaces } = usePanelRenderers();
+  const SceneEditor = surfaces?.SceneEditor;
   const activeKind = kindForMode(mode);
 
   // Visited set only grows — a surface, once mounted, is never torn down. Seeded
@@ -106,30 +110,48 @@ export function SurfaceKeepAliveLayer(): ReactNode {
   // window resize/scroll, and ResizeObserver of whichever anchors currently exist.
   useEffect(() => {
     syncLayout();
-    const onWin = () => syncLayout();
+    let layoutRaf = 0;
+    const scheduleSync = () => {
+      if (layoutRaf) return;
+      layoutRaf = requestAnimationFrame(() => {
+        layoutRaf = 0;
+        syncLayout();
+      });
+    };
+    const onWin = () => scheduleSync();
     window.addEventListener('resize', onWin);
     window.addEventListener('scroll', onWin, true);
-    const offAnchors = subscribeAnchors(syncLayout);
-    const offRelayout = subscribeRelayout(syncLayout);
 
     let ro: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => syncLayout());
+    const observeCurrentAnchors = () => {
+      if (!ro) return;
+      ro.disconnect();
       for (const kind of ALL_KINDS) {
         const a = getAnchor(kind);
         if (a) ro.observe(a);
       }
+    };
+
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => scheduleSync());
+      observeCurrentAnchors();
     }
+    const offAnchors = subscribeAnchors(() => {
+      observeCurrentAnchors();
+      syncLayout();
+    });
+    const offRelayout = subscribeRelayout(scheduleSync);
+
     // A short rAF burst right after a switch catches the dockview rebuild settling
     // (anchor mounts a frame or two after the workspace flips) without a permanent
     // loop. Each tick is a single getBoundingClientRect — negligible.
     let frames = 0;
-    let raf = 0;
+    let burstRaf = 0;
     const tick = () => {
       syncLayout();
-      if (++frames < 30) raf = requestAnimationFrame(tick);
+      if (++frames < 30) burstRaf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+    burstRaf = requestAnimationFrame(tick);
 
     return () => {
       window.removeEventListener('resize', onWin);
@@ -137,14 +159,22 @@ export function SurfaceKeepAliveLayer(): ReactNode {
       offAnchors();
       offRelayout();
       ro?.disconnect();
-      if (raf) cancelAnimationFrame(raf);
+      if (layoutRaf) cancelAnimationFrame(layoutRaf);
+      if (burstRaf) cancelAnimationFrame(burstRaf);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKind]);
 
   const renderSurface = (kind: SurfaceKind): ReactNode => {
-    if (kind === 'edit') return renderEdit ? renderEdit({ viewportOnly: true }) : <NoEditor kind="edit" />;
-    return renderEdit ? renderEdit({ viewportOnly: true }) : <NoEditor kind="edit" />;
+    // Single-kind surface today ('edit'); the preview/edit merge (2026-06-30)
+    // collapsed both into one viewport. Kept the kind-switch so future modes
+    // (play, debug) can add sibling branches without restructuring.
+    if (kind !== 'edit') return <NoEditor kind={kind} />;
+    return SceneEditor ? (
+      <div data-fx-slot="SceneEditor" style={{ display: 'contents' }}><SceneEditor viewportOnly={true} /></div>
+    ) : (
+      <NoEditor kind="edit" />
+    );
   };
 
   return (

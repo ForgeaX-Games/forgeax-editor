@@ -19,8 +19,8 @@
 
 .motion-pressable,
 .pressable,
-.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon),
-.studio-shell [role='button']:not([aria-disabled='true']),
+.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon):not(.no-motion-lift),
+.studio-shell [role='button']:not([aria-disabled='true']):not(.no-motion-lift),
 .studio-shell .mode-tab,
 .studio-shell .tb-icon-btn,
 .studio-shell .tb-game-btn,
@@ -48,8 +48,8 @@
 
 .motion-pressable:hover,
 .pressable:hover,
-.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon):hover,
-.studio-shell [role='button']:not([aria-disabled='true']):hover,
+.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon):not(.no-motion-lift):hover,
+.studio-shell [role='button']:not([aria-disabled='true']):not(.no-motion-lift):hover,
 .studio-shell .mode-tab:hover,
 .studio-shell .tb-icon-btn:hover,
 .studio-shell .tb-game-btn:hover,
@@ -71,8 +71,8 @@
 
 .motion-pressable:active,
 .pressable:active,
-.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon):active,
-.studio-shell [role='button']:not([aria-disabled='true']):active,
+.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.cb-soon):not(.no-motion-lift):active,
+.studio-shell [role='button']:not([aria-disabled='true']):not(.no-motion-lift):active,
 .studio-shell .mode-tab:active,
 .studio-shell .tb-icon-btn:active,
 .studio-shell .tb-game-btn:active,
@@ -95,8 +95,8 @@
 
 /* Child-layer micro motion: the preview feels richer because icons/avatars
    move independently from their parent surface instead of only changing color. */
-.studio-shell button:not(:disabled):not([aria-disabled='true']) > svg,
-.studio-shell [role='button']:not([aria-disabled='true']) > svg,
+.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.no-motion-lift) > svg,
+.studio-shell [role='button']:not([aria-disabled='true']):not(.no-motion-lift) > svg,
 .studio-shell .wb-rail-icon-btn svg,
 .studio-shell .tb-icon-btn svg,
 .studio-shell .mode-tab svg,
@@ -115,8 +115,8 @@
     transform var(--motion-duration-base) var(--motion-ease-out);
 }
 
-.studio-shell button:not(:disabled):not([aria-disabled='true']):hover > svg,
-.studio-shell [role='button']:not([aria-disabled='true']):hover > svg,
+.studio-shell button:not(:disabled):not([aria-disabled='true']):not(.no-motion-lift):hover > svg,
+.studio-shell [role='button']:not([aria-disabled='true']):not(.no-motion-lift):hover > svg,
 .studio-shell .wb-rail-icon-btn:hover svg,
 .studio-shell .tb-icon-btn:hover svg,
 .studio-shell .mode-tab:hover svg,

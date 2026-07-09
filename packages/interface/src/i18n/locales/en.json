@@ -12,6 +12,101 @@
     "today": "Today",
     "yesterday": "Yesterday"
   },
+  "onboarding": {
+    "step": { "welcome": "Welcome · Language · Connect", "project": "Set up workspace", "home": "Enter home" },
+    "welcome": {
+      "title": "Welcome to Forgeax Studio!",
+      "lead": "Just tell Forge \"make a game about X\" — it plans, writes the code, and shows your game running live.",
+      "language": "Language"
+    },
+    "connect": {
+      "title": "Connect a model",
+      "hint": "Pick one or configure several — you can change any of them later in Settings.",
+      "keyBadge": "Configured",
+      "keyTitle": "Use an API Key",
+      "keySub": "Any OpenAI-compatible endpoint (official / OpenRouter / private proxy).",
+      "keyCta": "Enter API Key",
+      "cliBadge": "Connected",
+      "cliTitle": "Use a local CLI",
+      "cliSub": "Connect a local claude-code / codex / cursor-agent.",
+      "cliCta": "Connect local CLI",
+      "cliStatus": {
+        "loading": "checking…",
+        "ok": "connectable",
+        "down": "unavailable",
+        "unknown": "not detected"
+      }
+    },
+    "collapse": "Collapse",
+    "connected": { "key": "API Key", "cli": "Local CLI · {{cli}}" },
+    "check": {
+      "checking": "Checking connection…",
+      "ok": "Connected: {{list}}. Continuing shortly…",
+      "fail": "Connection failed. Check the connection method you configured.",
+      "failCli": "Connection failed. Is local CLI · {{cli}} installed and running? Install guide:"
+    },
+    "next": "Next",
+    "nextCountdown": "Next ({{n}})",
+    "back": "Back",
+    "skip": "Skip setup",
+    "project": {
+      "title": "Set up your workspace",
+      "root": "Project root",
+      "rootHint": "Projects are created as games under this workspace (~/ is your home).",
+      "changeRoot": "Change",
+      "rootPickTitle": "Choose workspace directory",
+      "name": "Project name",
+      "namePlaceholder": "e.g. my-first-game",
+      "nameRequired": "Enter a project name (≥2 chars, lowercase/digits/hyphens).",
+      "willCreate": "Will create project: {{name}}",
+      "busy": {
+        "new": "Creating your project…",
+        "template": "Copying the template into your project… this can take a few seconds",
+        "open": "Opening the directory…"
+      },
+      "newTitle": "New empty project",
+      "newDesc": "Create an empty project under the current workspace (default game template).",
+      "newCta": "Create",
+      "openTitle": "Open a directory",
+      "openDesc": "Adopt an existing game directory on disk into this workspace (keeps its own path).",
+      "openCta": "Choose directory",
+      "sampleTitle": "From a template",
+      "sampleDesc": "Copy a built-in game as a new project in this workspace.",
+      "sampleCta": "Choose template",
+      "select": "Select",
+      "footer": "Any option creates/opens a workspace and enters the home screen."
+    },
+    "template": {
+      "title": "Pick a built-in template",
+      "loading": "Loading templates…",
+      "empty": "No built-in templates available.",
+      "picked": "Picked",
+      "cancel": "Cancel",
+      "confirm": "Confirm"
+    },
+    "tour": {
+      "sidebar": { "anchor": "Left · Sidebar", "body": "Agent team, Workbench tool entries, and long-term memory all live here." },
+      "preview": { "anchor": "Center · Preview", "body": "The live game canvas. Forge edits the code once and this updates in seconds." },
+      "chat": { "anchor": "Right · ChatPanel", "body": "Where you talk to Forge. State needs, watch the thinking, send messages." },
+      "tbLeft": { "anchor": "Top-left · Switchers", "body": "Switch project, game, and Forge session here." },
+      "tbCenter": { "anchor": "Top-center · Workspace tabs", "body": "Play · Edit · AI workspaces, each remembering its layout; add or remove them." },
+      "tbRight": { "anchor": "Top-right · Tools & publish", "body": "Dashboard monitoring, layout, settings, and one-click publish." },
+      "prev": "Prev",
+      "skip": "Skip",
+      "next": "Next",
+      "done": "Done"
+    },
+    "nudge": {
+      "title": "Send your first message",
+      "body": "Describe the game you want to make in the chat and watch it come alive in the preview.",
+      "gotIt": "Got it",
+      "connectTitle": "Connect a model to send",
+      "connectSub": "Your message is saved. Pick a source and we'll send it right after you connect.",
+      "connectKey": "Add an API key",
+      "connectCli": "Use a local CLI",
+      "connectCancel": "Not now"
+    }
+  },
   "lang": {
     "auto": "Auto",
     "switcherTitle": "Agent reply language",
@@ -21,6 +116,26 @@
   "settings": {
     "title": "Settings",
     "subtitle": "configure forgeax · plugins · keys · account",
+    "providers": {
+      "hint": "Connect a model source: a LiteLLM proxy or a local CLI.",
+      "activeBanner": "Currently using: {{source}}",
+      "setActive": "Set as active",
+      "inUse": "In use",
+      "switched": "Switched model source: {{source}}",
+      "api": {
+        "title": "LiteLLM Proxy",
+        "hint": "Point at your LiteLLM proxy: set Base URL + Key. Both the model catalog and the native ForgeaX kernel route through it (the key is mirrored to ANTHROPIC_* so forgeax-core speaks to the proxy).",
+        "useLabel": "Use LiteLLM for model calls",
+        "useReason": "Enter and save both the LiteLLM Base URL and Key first"
+      },
+      "cli": {
+        "title": "Local CLI",
+        "hint": "Detects installed claude-code / codex / cursor-agent / codebuddy and can run a 1-token Test.",
+        "healthy": "Healthy",
+        "unavailable": "Unavailable",
+        "useReason": "This CLI is unavailable and cannot be set as active"
+      }
+    },
     "groups": {
       "config": "Config",
       "plugin": "Plugins",
@@ -132,6 +247,7 @@
       "groups": {
         "layout": "Layout",
         "mode": "Top mode",
+        "edit": "Edit",
         "overlay": "Overlay",
         "focus": "Focus",
         "general": "General"
@@ -608,10 +724,10 @@
     }
   },
   "projectSwitcher": {
-    "triggerTooltip": "workspace (agentic working dir) · switching hot-restarts engine + cli",
+    "triggerTooltip": "project (agentic working dir) · switching hot-restarts engine + cli",
     "switching": "Switching…",
-    "newWorkspaceTooltip": "Create a new workspace (agentic working dir)",
-    "newWorkspace": "New workspace",
+    "newProjectTooltip": "Create a new project (agentic working dir)",
+    "newProject": "New project",
     "empty": "No projects yet",
     "currentSuffix": "· current",
     "extSourceTooltip": "From ~/.forgeax/known-projects.json",
@@ -942,6 +1058,7 @@
     "closeOverlay": "Close current overlay · browser fullscreen → game fullscreen → Settings → Dashboard in order",
     "modePreview": "Switch to Preview mode",
     "modeWorkbench": "Switch to Workbench mode",
+    "switchWorkbenchN": "Switch to workbench {{n}} (Blender parity — indexed into workbench list)",
     "openPlugins": "Settings → Plugins (was the Bus mode tab)",
     "focusComposer": "Focus the right ChatPanel composer"
   },
@@ -1001,6 +1118,8 @@
   "dockShell": {
     "popoutToWindow": "Pop out to a separate OS window",
     "resetLayout": "Reset Layout",
+    "reset": "Reset",
+    "resetPositions": "Reset panel positions",
     "editorPanels": "Editor Panels",
     "mainPanels": "Main Panels",
     "morePanels": "More Panels",
@@ -1135,10 +1254,11 @@
     "imagePart": "[Image: {{path}}]",
     "imageGeneric": "[Image]"
   },
-  "workspaceTabs": {
-    "addWorkspace": "New workspace",
+  "workbenchSwitcher": {
+    "addWorkbench": "New workbench",
     "rename": "Rename",
-    "deleteWorkspace": "Delete workspace"
+    "duplicate": "Duplicate",
+    "deleteWorkbench": "Delete workbench"
   },
   "consolePanel": {
     "clearTitle": "Clear console",
@@ -1191,7 +1311,8 @@
     "linkTitle": "{{base}} — click to view in Bus details →"
   },
   "workbenchModuleStrip": {
-    "ariaLabel": "Workbench modules"
+    "ariaLabel": "Workbench modules",
+    "empty": "No workbench plugins available"
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · click to view in Bus details →"

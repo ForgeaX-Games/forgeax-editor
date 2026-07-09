@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { History, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { t, useTranslation } from '@/i18n';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { confirmDialog } from '../../lib/dialog';
 import './TopBar.css';
 
@@ -57,14 +57,14 @@ function formatRelative(ts: number | undefined): string {
 export function SessionSwitcher() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const pinnedSlug = useAppStore((s) => s.pinnedSlug);
-  const activeSid = useAppStore((s) => s.activeSid);
-  const tabs = useAppStore((s) => s.tabs);
-  const busyByAgentBySid = useAppStore((s) => s.busyByAgentBySid);
-  const createNewSession = useAppStore((s) => s.createNewSession);
-  const switchToSession = useAppStore((s) => s.switchToSession);
-  const closeSession = useAppStore((s) => s.closeSession);
-  const refreshSessions = useAppStore((s) => s.refreshSessions);
+  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
+  const activeSid = useShellStore((s) => s.activeSid);
+  const tabs = useShellStore((s) => s.tabs);
+  const busyByAgentBySid = useShellStore((s) => s.busyByAgentBySid);
+  const createNewSession = useShellStore((s) => s.createNewSession);
+  const switchToSession = useShellStore((s) => s.switchToSession);
+  const closeSession = useShellStore((s) => s.closeSession);
+  const refreshSessions = useShellStore((s) => s.refreshSessions);
 
   // Dropdown open / pinnedSlug 变化时刷新一次 server list（防止外部进程直接
   // 改了 ~/.forgeax/sessions/ 后 UI 看不到）。

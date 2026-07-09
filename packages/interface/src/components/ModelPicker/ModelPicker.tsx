@@ -179,7 +179,11 @@ export function ModelPicker(props: ModelPickerProps) {
         (props as SingleProps).onChange(res.selected ?? modelId);
         setOpen(false);
       } catch (err) {
-        console.warn('[model-picker] set_agent_models failed', { modelId, err });
+        // Surface the server message string — an Error object serializes to `{}`
+        // in the console-warn → log pipeline, which was hiding the real cause
+        // (e.g. "set_agent_models: agent path not found in tree: <path>").
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[model-picker] set_agent_models failed: ${msg}`, { modelId, agentPath: writeToAgent.agentPath, sid: writeToAgent.sid });
         // Still close — the trigger label keeps the prior selection so the user
         // sees the write didn't land.
         setOpen(false);

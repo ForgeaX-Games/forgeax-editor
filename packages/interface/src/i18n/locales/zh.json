@@ -12,6 +12,101 @@
     "today": "今天",
     "yesterday": "昨天"
   },
+  "onboarding": {
+    "step": { "welcome": "欢迎 · 语言 · 连接模型", "project": "设置 workspace", "home": "进入首页" },
+    "welcome": {
+      "title": "欢迎来到 Forgeax Studio！",
+      "lead": "只需要告诉 Forge “做一个 xxx 的游戏”，它会自动计划、写代码并且实时向你展示正在创作的游戏。",
+      "language": "界面语言"
+    },
+    "connect": {
+      "title": "连接一个模型",
+      "hint": "可任选一种或同时配置多种方式，之后都能在设置里修改。",
+      "keyBadge": "已配置",
+      "keyTitle": "使用 API Key",
+      "keySub": "任意 OpenAI 兼容端点（官方 / OpenRouter / 私有代理）。",
+      "keyCta": "填写 API Key",
+      "cliBadge": "已连接",
+      "cliTitle": "使用本地 CLI",
+      "cliSub": "可以连接本地 claude-code / codex / cursor-agent 使用。",
+      "cliCta": "连接本地 CLI",
+      "cliStatus": {
+        "loading": "检测中…",
+        "ok": "可连接",
+        "down": "不可用",
+        "unknown": "未检测到"
+      }
+    },
+    "collapse": "收起",
+    "connected": { "key": "API Key", "cli": "本地 CLI · {{cli}}" },
+    "check": {
+      "checking": "正在检测连接…",
+      "ok": "连接成功：{{list}}。即将进入下一步…",
+      "fail": "连接失败，请检查你配置的连接方式是否正确。",
+      "failCli": "连接失败，本地 CLI · {{cli}} 是否已安装并正常启动，安装教程："
+    },
+    "next": "下一步",
+    "nextCountdown": "下一步（{{n}}）",
+    "back": "上一步",
+    "skip": "跳过设置",
+    "project": {
+      "title": "设置你的 workspace",
+      "root": "项目根目录",
+      "rootHint": "项目会作为一个 game 建在这个 workspace 下（~/ 即用户主目录）。",
+      "changeRoot": "更改",
+      "rootPickTitle": "选择 workspace 目录",
+      "name": "项目名称",
+      "namePlaceholder": "例如 my-first-game",
+      "nameRequired": "请填写项目名称（≥2 位，小写字母/数字/连字符）。",
+      "willCreate": "将创建项目：{{name}}",
+      "busy": {
+        "new": "正在创建项目…",
+        "template": "正在从模板复制项目…（可能需要几秒）",
+        "open": "正在打开目录…"
+      },
+      "newTitle": "新建空项目",
+      "newDesc": "在当前 workspace 下新建一个空项目（默认游戏模板）。",
+      "newCta": "新建",
+      "openTitle": "打开目录",
+      "openDesc": "把磁盘上任意一个已有游戏目录挂进当前 workspace（保留其自身路径）。",
+      "openCta": "选择目录",
+      "sampleTitle": "从模板创建",
+      "sampleDesc": "以一个内置游戏为模板，拷贝成当前 workspace 下的新项目。",
+      "sampleCta": "选择模板",
+      "select": "选择",
+      "footer": "选择任一方式后会创建/打开 workspace 并进入首页。"
+    },
+    "template": {
+      "title": "选择一个内置模板",
+      "loading": "正在加载模板…",
+      "empty": "没有可用的内置模板。",
+      "picked": "已选",
+      "cancel": "取消",
+      "confirm": "确认"
+    },
+    "tour": {
+      "sidebar": { "anchor": "左栏 · Sidebar", "body": "Agent 团队、Workbench 工具入口、长期记忆都在这里。" },
+      "preview": { "anchor": "中栏 · Preview", "body": "游戏实时画布。Forge 改一次代码，这里几秒后就变。" },
+      "chat": { "anchor": "右栏 · ChatPanel", "body": "跟 Forge 对话的地方。说需求、看思考过程、发消息。" },
+      "tbLeft": { "anchor": "顶栏左区 · 切换器", "body": "切换项目、游戏、Forge 会话的地方。" },
+      "tbCenter": { "anchor": "顶栏中区 · 工作区标签", "body": "Play·Edit·AI 工作区，各自记住布局、可增删。" },
+      "tbRight": { "anchor": "顶栏右区 · 工具与发布", "body": "Dashboard 监控、布局、设置，一键发布打包。" },
+      "prev": "上一个",
+      "skip": "跳过",
+      "next": "下一个",
+      "done": "完成"
+    },
+    "nudge": {
+      "title": "发出你的第一条消息",
+      "body": "在右侧对话框描述你想做的游戏，就能在 Preview 看到它跑起来。",
+      "gotIt": "知道了",
+      "connectTitle": "先连接一个模型再发送",
+      "connectSub": "你的消息已保留。选一个来源，连接后会自动帮你把它发出去。",
+      "connectKey": "填入 API Key",
+      "connectCli": "使用本地 CLI",
+      "connectCancel": "暂不"
+    }
+  },
   "lang": {
     "auto": "自动",
     "switcherTitle": "Agent 回复语言",
@@ -21,6 +116,26 @@
   "settings": {
     "title": "设置",
     "subtitle": "configure forgeax · plugins · keys · account",
+    "providers": {
+      "hint": "连接一个模型来源：LiteLLM 代理或本地 CLI。",
+      "activeBanner": "当前使用：{{source}}",
+      "setActive": "设为使用",
+      "inUse": "当前使用",
+      "switched": "已切换模型来源：{{source}}",
+      "api": {
+        "title": "LiteLLM 代理",
+        "hint": "指向你的 LiteLLM 代理：填 Base URL 与 Key。模型目录和原生 ForgeaX 内核都走它（Key 会镜像到 ANTHROPIC_*，让 forgeax-core 直连该代理）。",
+        "useLabel": "用 LiteLLM 调用模型",
+        "useReason": "先填写并保存 LiteLLM 的 Base URL 与 Key"
+      },
+      "cli": {
+        "title": "本地 CLI",
+        "hint": "检测本地已安装的 claude-code / codex / cursor-agent / codebuddy，并可发 1-token Test 测延迟。",
+        "healthy": "健康",
+        "unavailable": "不可用",
+        "useReason": "该 CLI 当前不可用，无法设为使用"
+      }
+    },
     "groups": {
       "config": "配置",
       "plugin": "插件",
@@ -132,6 +247,7 @@
       "groups": {
         "layout": "布局",
         "mode": "顶部模式",
+        "edit": "编辑",
         "overlay": "浮层",
         "focus": "聚焦",
         "general": "通用"
@@ -608,10 +724,10 @@
     }
   },
   "projectSwitcher": {
-    "triggerTooltip": "workspace（agentic 工作目录）· 切换会热重启 engine + cli",
+    "triggerTooltip": "项目（agentic 工作目录）· 切换会热重启 engine + cli",
     "switching": "切换中…",
-    "newWorkspaceTooltip": "新建一个 workspace（agentic 工作目录）",
-    "newWorkspace": "新建 workspace",
+    "newProjectTooltip": "新建一个项目（agentic 工作目录）",
+    "newProject": "新建项目",
     "empty": "暂无 project",
     "currentSuffix": "· 当前",
     "extSourceTooltip": "来自 ~/.forgeax/known-projects.json",
@@ -942,6 +1058,7 @@
     "closeOverlay": "关闭当前浮层 · 浏览器全屏 → 游戏全屏 → Settings → Dashboard 依次撤回",
     "modePreview": "切到 Preview 模式",
     "modeWorkbench": "切到 Workbench 模式",
+    "switchWorkbenchN": "切到第 {{n}} 个 workbench(Blender 风格 · 按列表索引)",
     "openPlugins": "Settings → Plugins(原 Bus mode tab)",
     "focusComposer": "聚焦右侧 ChatPanel 输入框"
   },
@@ -1001,6 +1118,8 @@
   "dockShell": {
     "popoutToWindow": "弹出为独立 OS 窗口",
     "resetLayout": "重置布局",
+    "reset": "重置",
+    "resetPositions": "重置面板位置",
     "editorPanels": "编辑器面板",
     "mainPanels": "主面板",
     "morePanels": "更多面板",
@@ -1135,10 +1254,11 @@
     "imagePart": "[图片: {{path}}]",
     "imageGeneric": "[图片]"
   },
-  "workspaceTabs": {
-    "addWorkspace": "新建工作区",
+  "workbenchSwitcher": {
+    "addWorkbench": "新建 workbench",
     "rename": "重命名",
-    "deleteWorkspace": "删除工作区"
+    "duplicate": "复制",
+    "deleteWorkbench": "删除 workbench"
   },
   "consolePanel": {
     "clearTitle": "清空 console",
@@ -1191,7 +1311,8 @@
     "linkTitle": "{{base}} — 单击在 Bus 详情查看 →"
   },
   "workbenchModuleStrip": {
-    "ariaLabel": "工作台模块"
+    "ariaLabel": "工作台模块",
+    "empty": "暂无工作台插件"
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · 单击在 Bus 详情查看 →"

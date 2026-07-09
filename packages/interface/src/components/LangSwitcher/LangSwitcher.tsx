@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Languages, Check } from 'lucide-react';
 import { useTranslation } from '../../i18n';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import './LangSwitcher.css';
 
 /**
@@ -16,10 +16,10 @@ import './LangSwitcher.css';
  */
 export function LangSwitcher({ className = '' }: { className?: string }) {
   const { t } = useTranslation();
-  const replyLanguage = useAppStore((s) => s.replyLanguage);
-  const followInput = useAppStore((s) => s.followInput);
-  const pinReplyLanguage = useAppStore((s) => s.pinReplyLanguage);
-  const setFollowInput = useAppStore((s) => s.setFollowInput);
+  const replyLanguage = useShellStore((s) => s.replyLanguage);
+  const followInput = useShellStore((s) => s.followInput);
+  const pinReplyLanguage = useShellStore((s) => s.pinReplyLanguage);
+  const setFollowInput = useShellStore((s) => s.setFollowInput);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 

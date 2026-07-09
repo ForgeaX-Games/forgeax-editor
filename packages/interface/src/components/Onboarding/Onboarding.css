@@ -1,0 +1,196 @@
+/* Onboarding — faithful port of first-run-onboarding-prototype. Scoped under
+   .fx-ob-overlay so the class names can't collide with the shell. Tokens map to
+   the brand palette (lime accent) with hard fallbacks so it renders correctly
+   even before theme tokens resolve. */
+
+.fx-ob-overlay {
+  --ob-accent: var(--primary, #d4ff48);
+  --ob-on-accent: var(--on-primary, #12161c);
+  --ob-bg-chrome: #141414;
+  --ob-bg-editor: #181818;
+  --ob-text: var(--text-primary, #e8e8e8);
+  --ob-text-2: rgba(232, 232, 232, 0.62);
+  --ob-text-3: rgba(232, 232, 232, 0.40);
+  --ob-text-4: rgba(232, 232, 232, 0.26);
+  --ob-fill-1: rgba(232, 232, 232, 0.14);
+  --ob-fill-2: rgba(232, 232, 232, 0.10);
+  --ob-fill-3: rgba(232, 232, 232, 0.06);
+  --ob-fill-4: rgba(232, 232, 232, 0.035);
+  --ob-stroke-1: rgba(232, 232, 232, 0.20);
+  --ob-stroke-2: rgba(232, 232, 232, 0.12);
+  --ob-stroke-3: rgba(232, 232, 232, 0.08);
+  --ob-ok: #3fa266;
+  --ob-ok-bg: rgba(63, 162, 102, 0.14);
+  --ob-warn: #e0a44a;
+  --ob-warn-bg: rgba(224, 164, 74, 0.13);
+  --ob-info-bg: rgba(89, 156, 231, 0.12);
+  --ob-err-bg: rgba(224, 74, 90, 0.14);
+
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toplevel, 99999);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 10, 15, 0.82);
+  color: var(--ob-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  animation: fx-ob-fade 0.15s ease-out;
+}
+
+.fx-ob-card-shell { width: min(720px, 96vw); max-height: 92vh; overflow: auto; }
+
+.fx-ob-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.fx-ob-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ob-fill-2); }
+.fx-ob-dot.active { background: var(--ob-accent); }
+.fx-ob-dot.passed { background: var(--ob-text-3); }
+.fx-ob-lbl { font-size: 12px; color: var(--ob-text-3); }
+.fx-ob-lbl.active { color: var(--ob-text); font-weight: 600; }
+.fx-ob-bar { width: 18px; height: 1px; background: var(--ob-stroke-3); }
+
+.fx-ob-frame { border: 1px solid var(--ob-stroke-2); border-radius: 10px; overflow: hidden; background: var(--ob-bg-chrome); }
+.fx-ob-frame-body { padding: 20px; background: var(--ob-bg-editor); }
+
+.fx-ob-h2 { font-size: 18px; font-weight: 620; margin: 0 0 2px; }
+.fx-ob-h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.fx-ob-sec { color: var(--ob-text-2); }
+.fx-ob-muted { color: var(--ob-text-3); }
+.fx-ob-small { font-size: 12px; }
+.fx-ob-tiny { font-size: 11px; }
+
+.fx-ob-stack { display: flex; flex-direction: column; }
+.fx-ob-row { display: flex; align-items: center; gap: 8px; }
+.fx-ob-grow { flex: 1; }
+.fx-ob-gap6 > * + * { margin-top: 6px; }
+.fx-ob-gap8 > * + * { margin-top: 8px; }
+.fx-ob-gap10 > * + * { margin-top: 10px; }
+.fx-ob-gap12 > * + * { margin-top: 12px; }
+.fx-ob-gap14 > * + * { margin-top: 14px; }
+.fx-ob-divider { height: 1px; background: var(--ob-stroke-3); margin: 4px 0; }
+
+.fx-ob-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px;
+  font-size: 12px; border: 1px solid var(--ob-stroke-2); background: transparent; color: var(--ob-text-2);
+  cursor: pointer; user-select: none;
+}
+.fx-ob-pill.active { background: var(--ob-fill-1); color: var(--ob-text); border-color: var(--ob-stroke-1); }
+.fx-ob-pill.sm { padding: 1px 7px; font-size: 11px; }
+.fx-ob-pill.static { cursor: default; }
+
+.fx-ob-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px;
+  border-radius: 7px; font-size: 13px; font-weight: 500; border: 1px solid var(--ob-stroke-1);
+  background: transparent; color: var(--ob-text); cursor: pointer;
+}
+.fx-ob-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.fx-ob-btn-primary { background: var(--ob-accent); color: var(--ob-on-accent); border: none; }
+.fx-ob-btn-secondary { background: var(--ob-fill-2); }
+.fx-ob-btn-ghost { background: transparent; border-color: transparent; color: var(--ob-text-3); }
+.fx-ob-btn-ghost:hover { color: var(--ob-text-2); }
+.fx-ob-btn-block { width: 100%; }
+
+/* Match the connect panel's Select trigger (shadcn h-9 / rounded-md / shadow-sm
+   / transparent bg / focus ring) so the API-key inputs and the CLI dropdown read
+   as one consistent control family. */
+.fx-ob-input {
+  width: 100%; height: 36px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--ob-stroke-1);
+  background: transparent; color: var(--ob-text); font-size: 14px; outline: none;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fx-ob-input::placeholder { color: var(--ob-text-4, #888); }
+.fx-ob-input:focus { border-color: var(--ob-accent); box-shadow: 0 0 0 1px var(--ob-accent); }
+
+.fx-ob-card { border: 1px solid var(--ob-stroke-2); border-radius: 9px; background: var(--ob-fill-4); overflow: hidden; }
+.fx-ob-card.sel { border-color: var(--ob-accent); }
+.fx-ob-card-ch { display: flex; align-items: center; justify-content: space-between; padding: 7px 11px; font-size: 12px; color: var(--ob-text-2); border-bottom: 1px solid var(--ob-stroke-3); }
+.fx-ob-card-cb { padding: 11px; }
+.fx-ob-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.fx-ob-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/* Project-step cards (新建 / 示例模板 / 打开目录): equal-height columns with the
+   action button pinned to the bottom. The description reserves a fixed 3-line box
+   so cards with shorter copy don't sit their "选择" button higher than the row's
+   tallest card — the reported button-misalignment. Scoped to the grids so the
+   TemplateModal's clickable .fx-ob-card rows are untouched. */
+.fx-ob-grid2 > .fx-ob-card,
+.fx-ob-grid3 > .fx-ob-card { display: flex; flex-direction: column; }
+.fx-ob-grid2 > .fx-ob-card > .fx-ob-card-cb,
+.fx-ob-grid3 > .fx-ob-card > .fx-ob-card-cb { flex: 1; display: flex; flex-direction: column; }
+.fx-ob-grid2 > .fx-ob-card .fx-ob-card-cb > .fx-ob-stack,
+.fx-ob-grid3 > .fx-ob-card .fx-ob-card-cb > .fx-ob-stack { flex: 1; }
+.fx-ob-grid2 > .fx-ob-card .fx-ob-card-cb .fx-ob-small.fx-ob-sec,
+.fx-ob-grid3 > .fx-ob-card .fx-ob-card-cb .fx-ob-small.fx-ob-sec { min-height: calc(1.5em * 3.5); }
+.fx-ob-grid2 > .fx-ob-card .fx-ob-card-cb .fx-ob-btn-block,
+.fx-ob-grid3 > .fx-ob-card .fx-ob-card-cb .fx-ob-btn-block { margin-top: auto; }
+
+.fx-ob-panel { border: 1px solid var(--ob-stroke-3); border-radius: 8px; padding: 12px; }
+
+.fx-ob-callout { border-radius: 8px; padding: 9px 11px; font-size: 13px; }
+.fx-ob-callout.ok { background: var(--ob-ok-bg); color: #a8dcbf; }
+.fx-ob-callout.warn { background: var(--ob-warn-bg); color: #e9c993; }
+.fx-ob-callout.info { background: var(--ob-info-bg); color: #bcd8f6; }
+.fx-ob-callout.err { background: var(--ob-err-bg); color: #eaa6ae; }
+.fx-ob-callout .t { font-weight: 600; display: block; margin-bottom: 2px; color: var(--ob-text); }
+.fx-ob-callout a { color: #87c3ff; }
+
+/* In-flight project init feedback: spinner + message so the server-side game
+   copy (new / template / open) reads as active work, not a frozen UI. */
+.fx-ob-busy { display: flex; align-items: center; gap: 9px; }
+.fx-ob-spinner {
+  flex: none;
+  width: 15px; height: 15px;
+  border: 2px solid rgba(188, 216, 246, 0.28);
+  border-top-color: #bcd8f6;
+  border-radius: 50%;
+  animation: fx-ob-spin 0.7s linear infinite;
+}
+@keyframes fx-ob-spin { to { transform: rotate(360deg); } }
+
+/* nested modal (template picker / connect prompt) */
+.fx-ob-modal-scrim {
+  /* Re-declare the --ob-* palette here too: ConnectModelPrompt renders a bare
+     .fx-ob-modal-scrim at the app root (no .fx-ob-overlay ancestor), so without
+     this the tokens don't cascade and the modal renders unstyled (transparent
+     bg / invisible borders). Keep in sync with the .fx-ob-overlay block above. */
+  --ob-accent: var(--primary, #d4ff48);
+  --ob-on-accent: var(--on-primary, #12161c);
+  --ob-bg-chrome: #141414;
+  --ob-bg-editor: #181818;
+  --ob-text: var(--text-primary, #e8e8e8);
+  --ob-text-2: rgba(232, 232, 232, 0.62);
+  --ob-text-3: rgba(232, 232, 232, 0.40);
+  --ob-text-4: rgba(232, 232, 232, 0.26);
+  --ob-fill-1: rgba(232, 232, 232, 0.14);
+  --ob-fill-2: rgba(232, 232, 232, 0.10);
+  --ob-fill-3: rgba(232, 232, 232, 0.06);
+  --ob-fill-4: rgba(232, 232, 232, 0.035);
+  --ob-stroke-1: rgba(232, 232, 232, 0.20);
+  --ob-stroke-2: rgba(232, 232, 232, 0.12);
+  --ob-stroke-3: rgba(232, 232, 232, 0.08);
+  --ob-ok: #3fa266;
+  --ob-ok-bg: rgba(63, 162, 102, 0.14);
+  --ob-warn: #e0a44a;
+  --ob-warn-bg: rgba(224, 164, 74, 0.13);
+  --ob-info-bg: rgba(89, 156, 231, 0.12);
+  --ob-err-bg: rgba(224, 74, 90, 0.14);
+  color: var(--ob-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 1; display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.fx-ob-modal { max-width: 460px; width: 100%; background: var(--ob-bg-chrome); border: 1px solid var(--ob-stroke-1); border-radius: 10px; overflow: hidden; }
+.fx-ob-modal-inner { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+/* first-chat nudge coach floating near the composer */
+.fx-ob-nudge {
+  position: fixed; z-index: var(--z-toplevel, 99999); max-width: 300px;
+  background: var(--ob-bg-chrome); border: 1px solid var(--ob-accent); border-radius: 10px; padding: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes fx-ob-fade { from { opacity: 0; } to { opacity: 1; } }

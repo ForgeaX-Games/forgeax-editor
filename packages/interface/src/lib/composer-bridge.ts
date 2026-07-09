@@ -8,7 +8,7 @@
 // insert slot (`requestComposerInsert` / `useComposerPendingInsert`). The chat
 // app (@forgeax/chat) and chrome (App.tsx / ContextMenu / TopBar) talk through
 // these exports; the chat store no longer exposes a `composerPendingInsert`
-// field on `useAppStore`.
+// field on `useShellStore`.
 //
 // ── Reference registry — the SINGLE source of truth for "what can be referenced
 //    into the Chat composer, and how".
@@ -440,7 +440,7 @@ export function buildComponentPill(p: { entityId?: number; entityName: string; c
 // clears. A queue lets batch "Add to AI Chat" (multi-select) insert all pills.
 //
 // Lives here (interface L1), NOT in the chat store, so the slot is a chrome-level
-// bridge the chat app reads — chat never shares useAppStore internals (R4 §5.3).
+// bridge the chat app reads — chat never shares useShellStore internals (R4 §5.3).
 interface ComposerInsertBridge {
   pendingInsert: PillPayload | null;
   queue: PillPayload[];

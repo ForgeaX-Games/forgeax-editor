@@ -2,12 +2,12 @@ import { useRef } from 'react';
 import type { ReactElement } from 'react';
 import { MoveLeft, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from '@/i18n';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { usePluginManifest } from '../../lib/use-plugin-manifest';
 import { pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
 import { KeepAlivePluginIframes } from './KeepAlivePluginIframes';
-import { WorkbenchAgentPicker } from './WorkbenchAgentPicker';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 /**
  * Always-mounted overlay that owns the *center* (MainArea) standalone-plugin
@@ -27,12 +27,13 @@ import { WorkbenchAgentPicker } from './WorkbenchAgentPicker';
 export function CenterPluginLayer(): ReactElement {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const mode = useAppStore((s) => s.mode);
-  const expandedPluginId = useAppStore((s) => s.workbenchExpandedPluginId);
-  const setExpandedPluginId = useAppStore((s) => s.setWorkbenchExpandedPluginId);
-  const floatingSurfaces = useAppStore((s) => s.floatingSurfaces);
-  const detachSurface = useAppStore((s) => s.detachSurface);
-  const redockSurface = useAppStore((s) => s.redockSurface);
+  const CornerAgentPicker = usePanelRenderers().slots?.CornerAgentPicker;
+  const mode = useShellStore((s) => s.mode);
+  const expandedPluginId = useShellStore((s) => s.workbenchExpandedPluginId);
+  const setExpandedPluginId = useShellStore((s) => s.setWorkbenchExpandedPluginId);
+  const floatingSurfaces = useShellStore((s) => s.floatingSurfaces);
+  const detachSurface = useShellStore((s) => s.detachSurface);
+  const redockSurface = useShellStore((s) => s.redockSurface);
   const live = usePluginManifest(expandedPluginId ?? '');
 
   // Per-plugin manifest cache. `usePluginManifest` flips back to 'loading' on
@@ -55,17 +56,17 @@ export function CenterPluginLayer(): ReactElement {
   // matching manifest on the genuine first open.
   const resolved = cached ?? liveForThis;
   const isStandalone = !!resolved?.entry?.standalone;
-  const activePlugin = mode === 'workbench' && expandedPluginId && isStandalone ? resolved : null;
+  const activePlugin = mode === 'ai' && expandedPluginId && isStandalone ? resolved : null;
 
   // Only show loading when we have NOTHING resolved yet (genuine first open),
   // never on a cached re-visit.
-  const showLoading = mode === 'workbench' && !!expandedPluginId && live === 'loading' && !resolved;
+  const showLoading = mode === 'ai' && !!expandedPluginId && live === 'loading' && !resolved;
   const showError =
-    mode === 'workbench' && !!expandedPluginId && live !== 'loading' && !isStandalone
+    mode === 'ai' && !!expandedPluginId && live !== 'loading' && !isStandalone
     // wb-plugin-author renders inline via WorkbenchPluginHost, not here.
     && resolved !== null;
   const showUnavailable =
-    mode === 'workbench' && !!expandedPluginId && live === null && !resolved;
+    mode === 'ai' && !!expandedPluginId && live === null && !resolved;
 
   const layerActive = !!activePlugin || showLoading || showError || showUnavailable;
 
@@ -127,7 +128,11 @@ export function CenterPluginLayer(): ReactElement {
       {layerActive && (
         <div className="wb-plugin-host-bar">
           {back}
-          <WorkbenchAgentPicker preferredAgentPluginId={activePlugin?.workbench?.preferredAgent} />
+          {CornerAgentPicker
+            ? <div data-fx-slot="CornerAgentPicker" style={{ display: 'contents' }}>
+                <CornerAgentPicker preferredAgentPluginId={activePlugin?.workbench?.preferredAgent} />
+              </div>
+            : null}
           {windowToggle}
         </div>
       )}

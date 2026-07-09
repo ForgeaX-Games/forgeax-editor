@@ -6,9 +6,11 @@
  *   Ctrl+Shift+B  toggle Sidebar
  *   Ctrl+Shift+C  toggle ChatPanel
  *   Ctrl+Shift+D  toggle Dashboard overlay
- *   Ctrl+Shift+1  mode: Viewport
- *   Ctrl+Shift+2  mode: Workbench
- *   Ctrl+Shift+3  open Settings → Plugins (was the Bus mode tab)
+ *   Ctrl+Shift+1..9  switch to workbench N (Blender parity — index into the
+ *                    persisted workbench list, so custom workbenches also
+ *                    reachable by ordinal)
+ *   Ctrl+Shift+0  open Settings → Plugins (was Ctrl+Shift+3 before P3.5 —
+ *                 relocated so 1..9 are free for workbench switching)
  *   Ctrl+/        focus chat composer
  *   Ctrl+H        open Settings → Changelog
  *   Esc           close current overlay (Settings → Dashboard → Fullscreen)
@@ -24,7 +26,8 @@
 
 import { useEffect } from 'react';
 import { t } from '@/i18n';
-import { useAppStore } from '../store';
+import { useShellStore } from '../store';
+import { loadWorkbenchList, setActiveWorkbench } from './workbenches';
 
 export interface ShortcutDef {
   /** 显示给用户的字符串,e.g. "Ctrl+Shift+F"。Mac 上 UI 会自动替换 Ctrl → ⌘/⌃。 */
@@ -234,7 +237,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
 // Build the shortcut registry. Each match() / run() is plain JS so we can
 // drive them from a Settings table later (or a Command Palette).
 export function buildShortcuts(): ShortcutDef[] {
-  const store = useAppStore.getState;
+  const store = useShellStore.getState;
   const shortcuts: ShortcutDef[] = [
     // ── Layout (collapse / fullscreen) ──
     {
@@ -323,26 +326,37 @@ export function buildShortcuts(): ShortcutDef[] {
       },
     },
 
-    // ── Top-level mode ──
-    {
-      combo: 'Ctrl+Shift+1',
+    // ── Workbench switch (Blender parity: Ctrl+Shift+1..9 → workbench N) ──
+    // P3.5 · Was three fixed-mode bindings (Viewport / Workbench / Plugins);
+    // now indexes into loadWorkbenchList().list so custom workbenches are
+    // reachable by ordinal, matching Blender's workspace-tab shortcut
+    // ergonomic and VSCode's Ctrl+N-tab switcher.
+    //
+    // Mode side-effect: we can't call setMode directly here — the derivation
+    // 'scene' vs 'ai' lives in modeForWorkbench() in WorkbenchSwitcher.tsx. To
+    // avoid a shortcuts → component import cycle, we mirror the same rule
+    // inline (only 'scene' id → 'scene' mode; every other id → 'ai' mode).
+    // WorkbenchSwitcher subscribes to workbench-list changes and re-renders,
+    // but AppMode is a store field — someone has to write it.
+    ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map((n): ShortcutDef => ({
+      combo: `Ctrl+Shift+${n}`,
       group: 'mode',
-      label: t('shortcuts.modeViewport'),
-      match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit1' || e.key === '1' || e.key === '!'),
-      run: () => { store().setMode('edit'); return true; },
-    },
+      label: t('shortcuts.switchWorkbenchN', { n }),
+      match: (e) => mod(e) && e.shiftKey && e.code === `Digit${n}`,
+      run: () => {
+        const { list } = loadWorkbenchList();
+        const wb = list[n - 1];
+        if (!wb) return false; // no Nth workbench — let default browser behavior through
+        setActiveWorkbench(wb.id);
+        store().setMode(wb.id === 'scene' ? 'scene' : 'ai');
+        return true;
+      },
+    })),
     {
-      combo: 'Ctrl+Shift+2',
-      group: 'mode',
-      label: t('shortcuts.modeWorkbench'),
-      match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit2' || e.key === '2' || e.key === '@'),
-      run: () => { store().setMode('workbench'); return true; },
-    },
-    {
-      combo: 'Ctrl+Shift+3',
-      group: 'mode',
+      combo: 'Ctrl+Shift+0',
+      group: 'overlay',
       label: t('shortcuts.openPlugins'),
-      match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit3' || e.key === '3' || e.key === '#'),
+      match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit0' || e.key === '0' || e.key === ')'),
       run: () => { store().openOverlay('settings', 'plugins'); return true; },
     },
 

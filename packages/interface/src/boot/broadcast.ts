@@ -11,7 +11,7 @@
 import { connect, subscribeBroadcast } from '../lib/broadcast-stream';
 import { SESSION_KEYS } from '../lib/storageKeys';
 import { reloadOnceForWorkspace, waitForEngineSettled } from '../lib/workspace-reload';
-import { useAppStore, type TelemetryRecord } from '../store';
+import { useShellStore, type TelemetryRecord } from '../store';
 
 const _BOOT_FLAG = '__FORGEAX_BOOT_BROADCAST__';
 type WithFlag = { [_BOOT_FLAG]?: true };
@@ -28,7 +28,7 @@ export function bootBroadcast(): void {
       const records = Array.isArray((m as { records?: unknown }).records)
         ? ((m as { records: TelemetryRecord[] }).records)
         : [];
-      if (records.length) useAppStore.getState().pushTelemetry(records);
+      if (records.length) useShellStore.getState().pushTelemetry(records);
     });
 
     // Workspace 热切换：server 重指了 FORGEAX_PROJECT_ROOT。旧 root 作用域的 in-tab

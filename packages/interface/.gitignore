@@ -46,3 +46,8 @@ test-*.png
 
 # self-signed dev TLS cert (FORGEAX_INTERFACE_HTTPS=1)
 .tls/
+
+# wb-narrative marketplace 插件运行 IP-DNA extraction 时写入 process.cwd()
+# 的 job 记录(见 marketplace/plugins/wb-narrative/src/ip-dna/job.ts)。
+# 属于 transient 运行时 telemetry,不应入库。
+.ipdna-jobs/

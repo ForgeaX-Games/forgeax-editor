@@ -11,88 +11,129 @@
 //
 // This is the same shape as the existing `wb:*` plugin merge: DockShell owns
 // the docking mechanics, the host supplies the panel bodies.
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
 // Type-only — erased at build. The runtime factories are INJECTED via
 // PanelRenderers below so interface never statically pulls @forgeax/host-sdk
 // into its module graph (it's a studio-only package; the standalone editor
 // shell has no host-sdk and must still bundle interface). See B in the
 // dependency-inversion refactor.
 import type { createPluginPort, createWindowTransport } from '@forgeax/host-sdk';
+import type { DockRegion } from './regions';
 
+/**
+ * A dock panel descriptor. Carries everything the DockRegion needs to know
+ * to render a panel: title (tab label), optional visual/behavior hints
+ * (order/icon/when/defaultRegion), and the body renderer.
+ *
+ * Phase 1 uses `defaultRegion` as the initial home; user overrides live in
+ * the active workbench's `panelLocations` (see useActiveWorkbench). Phase 2
+ * wires the override via UI.
+ */
+export interface PanelDescriptor {
+  /** Tab label shown on the dock tab. */
+  title: string;
+  /** Sort order within the region. Lower = earlier. Default 0. */
+  order?: number;
+  /** Reserved for Phase 2 activity-bar icon. Ignored today. */
+  icon?: string;
+  /** Predicate for conditional visibility. Missing = always visible. */
+  when?: () => boolean;
+  /** Where this panel lives absent a user override. Default 'DockShell'. */
+  defaultRegion?: DockRegion;
+  /** Panel body renderer. */
+  render: () => ReactNode;
+}
+
+/**
+ * Structural slot registry for the interface shell.
+ *
+ * Categories reflect where in the shell each slot lives — this is the SSOT
+ * for the compositional design so future maintainers can find "where should
+ * I put this new injection" by role, not by naming coincidence.
+ *
+ *   panels    — draggable dockview panel bodies (user-arrangeable)
+ *   overlays  — full-screen modal-style layers
+ *   surfaces  — heavy engine viewports (kept alive above dockview)
+ *   chrome    — fixed shell regions outside dockview
+ *   detached  — bodies of DETACHED OS windows (Tauri or `window.open`)
+ *   slots     — well-defined sub-slots inside interface-owned components
+ *   hostSDK   — capability factories (not rendering)
+ *
+ * All render targets are React Components (capitalized nouns) — consumers
+ * use JSX `<X.Y />` directly, no render-function-call syntax.
+ *
+ * (v9 · 2026-07-08) The former `workbench` category — a feature-name grouping
+ * mixing MainArea body / sidebar sub-nav / detached windows — was eliminated.
+ * Its five slots are now reclassified by structural role into `detached.*`
+ * and `slots.*`. Structural categories no longer contain feature names.
+ */
 export interface PanelRenderers {
-  /** Editor sub-panel ids (ep:*). Empty when no editor is wired. */
-  editorPanelIds: readonly string[];
-  /** ep:* tab titles, keyed by panel id. */
-  editorPanelTitles: Record<string, string>;
-  /** Renders the edit surface (engine viewport). Omitted → placeholder. */
-  renderEdit?: (opts: { viewportOnly?: boolean }) => ReactNode;
-  /** Renders the play/preview surface. Omitted → placeholder. */
-  renderPreview?: () => ReactNode;
-  /**
-   * Renders a single editor panel (ep:*) by its id. Injected by the host
-   * (standalone / studio) so interface never statically imports editor
-   * panel components (DIP zero-cycle paradigm, same as renderEdit/renderChat).
-   * Omitted (interface-alone) -> the ep:* panel shows a neutral placeholder.
+  /** Draggable dock panels (dockview body injection).
+   *  Consumers mount via `<DockPanelHost id={id}/>` which looks each id up here. */
+  panels?: Record<string, PanelDescriptor>;
+
+  /** Full-screen overlays (modals, dashboards). Positioned above dockview + chrome. */
+  overlays?: {
+    Dashboard?: ComponentType;
+    Settings?: ComponentType;
+  };
+
+  /** Heavy engine surfaces. Positioned by SurfaceKeepAliveLayer above the
+   *  dockview 'viewport' panel anchor, so they survive dockview rebuilds.
    *
-   * plan-strategy section 2 D4 (M2 injection slot); interface holds NO editor/
-   * engine import -- the slot's id is a plain string, matching the existing
-   * `editorPanelIds: readonly string[]` convention.
-   */
-  renderEditorPanel?: (id: string) => ReactNode;
-  /**
-   * Renders the chat surface (the Forge conversation UI). Injected by studio
-   * from `@forgeax/chat` (R4 — chat is a 前L2 app composed into the shell, not
-   * an interface import). Omitted (interface-alone / standalone editor) → the
-   * chat panel renders a neutral placeholder. interface holds NO `@forgeax/chat`
-   * import; the body comes through this slot exactly like renderEdit/renderPreview.
-   */
-  renderChat?: () => ReactNode;
-  /**
-   * Renders the dashboard overlay (Overview / Sessions / Analytics). Injected
-   * by studio from `@forgeax/dashboard` (R4 — dashboard is a 前L2 app composed
-   * into the shell). Its DATA (sessions / telemetry) stays in interface's L1
-   * store; this slot only supplies the body. Omitted → no overlay (interface
-   * holds NO `@forgeax/dashboard` import).
-   */
-  renderDashboard?: () => ReactNode;
-  /**
-   * Renders the settings overlay (the unified settings panel + its sections
-   * register side-effect). Injected by studio from `@forgeax/settings` (R4).
-   * Its DATA (settingsOpen / settingsSection) stays in interface's L1 store;
-   * this slot supplies the body. Omitted → no overlay (interface holds NO
-   * `@forgeax/settings` import).
-   */
-  renderSettings?: () => ReactNode;
-  /**
-   * Renders the workbench main-area surface (R4 — injected by studio from
-   * `@forgeax/workbench`). The variant selects which entrypoint:
-   *  - 'full'   → the workbenchTab router (WorkbenchMode), used by MainArea.
-   *  - 'agents' → the agents browser (AgentsMainArea), detached 'agents' window.
-   *  - 'files'  → the file workbench with the empty-gallery suppressed
-   *               (WorkbenchModeDefault showGalleryWhenEmpty={false}), detached
-   *               'files' window.
-   * The workbench DATA + the plugin-HOSTING runtime (WorkbenchPluginHost,
-   * keep-alive iframes, CenterPluginLayer, wb:* dock panels, host-sdk RPC) stay
-   * in interface (L1 shell infrastructure); this slot supplies only the
-   * navigation/gallery UI body. Omitted (interface-alone) → placeholder.
-   */
-  renderWorkbench?: (variant: 'full' | 'agents' | 'files') => ReactNode;
-  /**
-   * Inline workbench panels (non-iframe React panels), keyed by bus plugin id.
-   * The host (studio) injects concrete panels like wb-plugin-author; interface
-   * itself holds NO specific plugin id and renders whatever is registered.
-   * Omitted (standalone) → no inline panels, host falls back to the
-   * iframe/placeholder branch. See A in the dependency-inversion refactor.
-   */
+   *  2026-06-30: preview/edit merged into a single 'viewport' panel; the old
+   *  `Preview` slot was retired. `SceneEditor` is now the only engine surface
+   *  — a WYSIWYG viewport that switches between edit-time gizmos and play-time
+   *  simulation on the same in-process engine. Future play/debug modes would
+   *  add sibling slots here. */
+  surfaces?: {
+    SceneEditor?: ComponentType<{ viewportOnly?: boolean }>;
+  };
+
+  /** Fixed shell chrome regions (outside dockview). */
+  chrome?: {
+    /** Items injected into the bottom StatusBar (pulse feeds, version badge). */
+    StatusFeeds?: ComponentType;
+  };
+
+  /** Bodies of DETACHED OS-windows (Tauri or `window.open`) keyed by surface id.
+   *  Rendered inside <DetachedSurface> when a panel/surface is popped out.
+   *  Same host bundle loads with `?surface=...` in the URL; DetachedSurface
+   *  reads these slots to mount the correct body. */
+  detached?: {
+    AgentsBrowser?: ComponentType;
+    FilesBrowser?: ComponentType;
+  };
+
+  /** Sub-slot injection points — each is a well-defined callsite inside an
+   *  interface-owned component where studio fills in feature-specific content.
+   *  Each slot has ONE render callsite.
+   *
+   *  Leaf names are globally unique on purpose — DOM slot markers use the
+   *  bare leaf name (data-fx-slot="MainAreaBody") without a "slots:" prefix. */
+  slots?: {
+    /** MainArea body when app mode is not the SceneEditor mode (i.e., 'ai'). */
+    MainAreaBody?: ComponentType;
+    /** Sidebar's Agents sub-nav body. */
+    SidebarAgents?: ComponentType;
+    /** Plugin-host top-right widget (in MainArea when a wb:* plugin is expanded). */
+    CornerAgentPicker?: ComponentType<{ preferredAgentPluginId?: string }>;
+  };
+
+  /** Host-SDK factories for wb:* plugin iframe RPC (studio-only). Injected as
+   *  types-only from interface (no runtime host-sdk import in L1). */
+  hostSDK?: {
+    createPluginPort?: typeof createPluginPort;
+    createWindowTransport?: typeof createWindowTransport;
+  };
+
+  /** Editor sub-panel ids (ep:*). Empty when no editor is wired. Stays at the
+   *  top level because it's a plain data list, not a component slot. */
+  editorPanelIds: readonly string[];
+
+  /** Inline (non-iframe) workbench panels, keyed by bus plugin id. Not a
+   *  fixed slot — plugins register themselves here. Stays at top level. */
   workbenchPanels?: Record<string, () => ReactNode>;
-  /**
-   * Host-SDK port factories for the studio-only wb:* plugin iframe RPC.
-   * Injected so interface's StandalonePluginIframe can import these as TYPES
-   * only — when absent (standalone), no plugin iframe RPC is wired (the
-   * standalone shell never opens a wb:* plugin). See B.
-   */
-  createPluginPort?: typeof createPluginPort;
-  createWindowTransport?: typeof createWindowTransport;
 }
 
 // Default editor panel ids + titles. These are plain strings (NOT an import
@@ -113,7 +154,6 @@ export const DEFAULT_EDITOR_PANEL_TITLES: Record<string, string> = {
 
 export const DEFAULT_PANEL_RENDERERS: PanelRenderers = {
   editorPanelIds: DEFAULT_EDITOR_PANEL_IDS,
-  editorPanelTitles: DEFAULT_EDITOR_PANEL_TITLES,
 };
 
 const PanelRenderersContext = createContext<PanelRenderers>(DEFAULT_PANEL_RENDERERS);

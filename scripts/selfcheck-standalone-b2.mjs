@@ -143,27 +143,28 @@ async function main() {
     }
 
     // (6) prefs wire — the SECOND reused platform-io L1 router (createPrefsRouter,
-    //     §5 复用不另写后端). The client GET/PUTs /api/prefs/workspace-layout/* on
+    //     §5 复用不另写后端). The client GET/PUTs /api/prefs/workbench-layout/* on
     //     boot + every layout change; without this router those 404'd in --game
     //     mode. Gate it the same way as /api/files so the reuse can't be焊回去.
+    //     (workbench-api-rename: workspace-layout → workbench-layout, ids scene/ai.)
     {
-      // empty workspace-layout → 200 + json null (not 404, not SPA html)
-      const rGet = await fetch(`${BASE}/api/prefs/workspace-layout/preview`);
+      // empty workbench-layout → 200 + json null (not 404, not SPA html)
+      const rGet = await fetch(`${BASE}/api/prefs/workbench-layout/scene`);
       const ct = rGet.headers.get('content-type') ?? '';
-      check('GET /api/prefs/workspace-layout → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
+      check('GET /api/prefs/workbench-layout → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
       check('empty layout → null', (await rGet.json()) === null);
 
       // PUT a layout → ok, then GET it back (persists under <game>/.forgeax/prefs)
       const layout = { panels: { main: {} }, ts: 'b2-prefs' };
-      const rPut = await fetch(`${BASE}/api/prefs/workspace-layout/preview`, {
+      const rPut = await fetch(`${BASE}/api/prefs/workbench-layout/scene`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),
       });
       const putBody = await rPut.json();
-      check('PUT /api/prefs/workspace-layout → 200 ok', rPut.status === 200 && putBody?.ok === true, `status ${rPut.status} ${JSON.stringify(putBody)}`);
+      check('PUT /api/prefs/workbench-layout → 200 ok', rPut.status === 200 && putBody?.ok === true, `status ${rPut.status} ${JSON.stringify(putBody)}`);
 
-      const rBack = await fetch(`${BASE}/api/prefs/workspace-layout/preview`);
+      const rBack = await fetch(`${BASE}/api/prefs/workbench-layout/scene`);
       const back = await rBack.json();
       check('GET written layout → persisted content matches', back?.ts === 'b2-prefs', JSON.stringify(back));
     }

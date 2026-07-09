@@ -11,11 +11,10 @@ import {
   FileAudio,
   File as FileIcon,
 } from 'lucide-react';
-import { useAppStore } from '../../store';
+import { useShellStore, getWorkbenchClient } from '../../store';
 import { publish } from '../../lib/bus';
 import { useBusSnapshot } from '../../lib/use-bus-snapshot';
 import { useTranslation } from '@/i18n';
-import { workbenchAgentsUrl } from '../../lib/workbench-lang';
 
 // P4.1 — FilesPanel fp-types ext-distribution mini-strip.
 // Sibling to P4.0 AgentsPanel ap-tribes: a one-row legend above the tree
@@ -150,7 +149,7 @@ export function FilesPanel() {
   // ③ 文件预览态归 workbench（bus 'workbench:files'）—— 打开走命令，高亮读快照。
   const openFile = (path: string) => { publish('workbench:open-file', { path } as never); };
   const activeFilePath = (useBusSnapshot('workbench:files') as { activeFilePath?: string | null } | undefined)?.activeFilePath ?? null;
-  const pinnedSlug = useAppStore((s) => s.pinnedSlug);
+  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
   const [autoSlug, setAutoSlug] = useState<string | null>(null);
   const activeSlug = pinnedSlug ?? autoSlug;
   const [tree, setTree] = useState<Node | null>(null);
@@ -175,9 +174,9 @@ export function FilesPanel() {
     setTree(null);
     const load = async () => {
       try {
-        const wb = await fetch(workbenchAgentsUrl()).then((r) => r.json()) as { activeSlug?: string };
+        const wb = await getWorkbenchClient().getActiveSlug();
         if (cancelled) return;
-        const slug = pinnedSlug ?? wb.activeSlug;
+        const slug = pinnedSlug ?? wb.activeSlug ?? undefined;
         if (!slug) {
           setError('no active game');
           setLoading(false);

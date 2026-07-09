@@ -1,4 +1,4 @@
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 import { useTranslation } from '@/i18n';
 
 // ConsolePanel — a standalone dock panel for the engine/editor console stream
@@ -6,8 +6,8 @@ import { useTranslation } from '@/i18n';
 // dockable/floatable/pop-out-able panel). Reuses the existing console-row styles.
 export function ConsolePanel() {
   const { t } = useTranslation();
-  const consoleLog = useAppStore((s) => s.consoleLog);
-  const clearConsole = useAppStore((s) => s.clearConsole);
+  const consoleLog = useShellStore((s) => s.consoleLog);
+  const clearConsole = useShellStore((s) => s.clearConsole);
   return (
     <div className="fx-console-panel">
       <div className="fx-console-bar">

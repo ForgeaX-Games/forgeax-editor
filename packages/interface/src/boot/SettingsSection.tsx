@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 import { Sparkles, RefreshCw } from 'lucide-react';
 import { useTranslation } from '@/i18n';
-import { Section } from '../components/TopBar/SettingsDrawer';
+import { Section } from '../components/SettingsPrimitives';
 import { SPLASH_THEMES, themeById } from './themes';
 import { useSplashConfig } from './store';
 import { DEFAULT_SPLASH, type SplashConfig, type SplashThemeId } from './types';

@@ -29,7 +29,7 @@ export type {
 // the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorOp, CommandError, ApplyResult } from './types';
+export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind } from './types';
 export type { EditorOpLifecycle } from './types';
 
 // ── Scene pack ──
@@ -179,16 +179,13 @@ export { cookGltfMeta } from './assets/gltf-cook';
 export { cookFbxMeta, type FbxCookResult } from './assets/fbx-cook';
 export type { GltfCookResult } from './assets/gltf-cook';
 
-// ── Pack CRUD (M2) ──
+// ── Pack CRUD (M2) — applier-gated: direct createPack / addAssetToPack etc.
+//   removed from public export (OOS-3); pack writes go through ctx.assetIO seam. ──
+export { assetIO, AssetIOFacade } from './io/asset-io-facade';
 export {
   generateAssetGuid,
-  addAssetToPack,
-  removeAssetFromPack,
   renameAssetInPack,
-  duplicateAssetInPack,
-  moveAsset,
   deleteAsset,
-  createPack,
   createDirectory,
 } from './session/pack-ops';
 

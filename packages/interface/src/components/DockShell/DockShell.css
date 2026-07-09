@@ -91,6 +91,15 @@
 /* Wrapper so the layout control can pin over the dock. */
 .fx-dockwrap { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
 
+/* Secondary region — AuxBar. Fixed-width column to the right of DockShell;
+   DockShell keeps `flex: 1 1 auto` (from .fx-dockwrap above) and grows to fill
+   remaining space. Auto-hidden empty regions render as `null`, so this rule
+   only applies when AuxBar has ≥1 panel and actually occupies layout space.
+   Width is applied inline from useAuxBarWidth so drag updates propagate
+   without a CSS variable dance. Default + clamping live in the store.
+   position: relative anchors the .fx-auxbar-resizer absolutely at the left edge. */
+.fx-dockregion-AuxBar { flex: 0 0 auto; position: relative; }
+
 /* While dragging a tab/group anywhere, disable ONLY iframes so dockview's drop
    overlay receives dragover over iframe panels (iframes swallow native drag).
    IMPORTANT: do NOT disable .dv-react-part — dockview's own drop detection lives
@@ -178,3 +187,35 @@ html.fx-dock-dragging iframe { pointer-events: none !important; }
 .wb-dock-name { font-weight: 700; color: var(--color-text-primary, #eee); margin-bottom: 4px; }
 .wb-dock-desc { font-size: 12px; margin-bottom: 8px; }
 .wb-dock-id { font-family: monospace; font-size: 10px; opacity: 0.5; }
+
+/* AuxBar resize handle — 6px column on the LEFT edge. Cursor col-resize + a
+   subtle hover to signal draggability. During drag we overlay a full-viewport
+   catcher via ::after (below) to keep the pointer from being stolen by the
+   viewport iframe mid-drag. */
+.fx-auxbar-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.fx-auxbar-resizer:hover,
+body.fx-auxbar-resizing .fx-auxbar-resizer {
+  background: rgba(120, 200, 255, 0.35);
+}
+/* During drag, put a transparent full-viewport overlay so the iframe
+   (engine viewport) can't intercept pointermove. The overlay itself is a
+   pseudo-element so the pointer still reaches the resizer above it; iframes
+   below inherit `pointer-events: none` from the rule that follows. */
+body.fx-auxbar-resizing::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  cursor: col-resize;
+}
+body.fx-auxbar-resizing iframe { pointer-events: none; }

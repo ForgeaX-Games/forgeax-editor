@@ -9,9 +9,9 @@
  *  等价路径 P1 接线,声明先行,UI run() 已经就是调同一 HTTP API,server 是行为 SSOT)。
  */
 import { registerAction, registerStateSlice } from './action-registry';
-import { createSession, fetchSessionList } from './forgeax-bridge';
-import { useAppStore, tabLabel, type AppMode } from '../store';
-import { setActiveWorkspace } from './workspaces';
+import { getSessionClient } from '../store-parts/session-client';
+import { useShellStore, tabLabel, type AppMode } from '../store';
+import { setActiveWorkbench } from './workbenches';
 import { useHealthStore } from '../components/StatusBar/healthStore';
 import { getBrowserConsole, clearBrowserConsole } from '../components/StatusBar/healthBridge';
 import { listBusPlugins, pickLang } from './bus-api';
@@ -22,28 +22,28 @@ let registered = false;
 export function registerBuiltinActions(): void {
   if (registered) return;
   registered = true;
-  const st = () => useAppStore.getState();
+  const st = () => useShellStore.getState();
 
   // ── 视图 / 布局(纯 UI)──────────────────────────────────────────────────
   registerAction({
     id: 'app.set_mode',
     title: '切换主模式',
     description:
-      "Switch the app's main workspace: 'edit' (game editing) or 'workbench' (AI · plugins & tools). Same as clicking the Edit / AI tabs.",
+      "Switch the app's main workspace: 'scene' (game editing) or 'ai' (AI · plugins & tools). Same as clicking the Scene / AI tabs.",
     // 'bus' 已退役(bus 清单 2026-05-17 移进 Settings 浮层的 Plugins 段,mode==='bus' 不再渲染);
     // 只留两个真能切换的工作区,避免选了没反应。需要 bus 请用 overlay.open{id:'settings'}。
     schema: {
       type: 'object',
-      properties: { mode: { type: 'string', enum: ['edit', 'workbench'] } },
+      properties: { mode: { type: 'string', enum: ['scene', 'ai'] } },
       required: ['mode'],
     },
     capability: 'write',
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
     surface: 'ui',
     run: (args) => {
-      const mode = args.mode as AppMode; // 'edit' | 'workbench'
+      const mode = args.mode as AppMode; // 'scene' | 'ai'
       // 当前布局按活动工作区渲染;只 setMode 是历史遗留、DockShell 不认(与 workbench.open 同病根)。
-      setActiveWorkspace(mode);
+      setActiveWorkbench(mode);
       st().setMode(mode);
       return { status: 'completed', stateDigest: { mode: st().mode, activeWorkspace: mode } };
     },
@@ -95,13 +95,13 @@ export function registerBuiltinActions(): void {
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
     surface: 'ui',
     run: (args) => {
-      // 当前布局按「活动工作区」渲染(Edit / AI 标签,AI 的 workspace id 即 'workbench');
+      // 当前布局按「活动工作区」渲染(Edit / AI 标签,AI 的 workbench id 即 'ai');
       // 只 setMode 是历史遗留、DockShell 不认——必须切活动工作区,和标签的 switchTo 一致。
-      setActiveWorkspace('workbench');
+      setActiveWorkbench('ai');
       st().openWorkbench({ ...(typeof args.tab === 'string' ? { tab: args.tab } : {}) });
       return {
         status: 'completed',
-        stateDigest: { mode: st().mode, activeWorkspace: 'workbench', workbenchTab: st().workbenchTab },
+        stateDigest: { mode: st().mode, activeWorkspace: 'ai', workbenchTab: st().workbenchTab },
       };
     },
   });
@@ -147,9 +147,9 @@ export function registerBuiltinActions(): void {
     },
     run: (args) => {
       const pluginId = args.pluginId as string;
-      setActiveWorkspace('workbench');
+      setActiveWorkbench('ai');
       st().openWorkbench({ expandedPluginId: pluginId });
-      return { status: 'completed', stateDigest: { activeWorkspace: 'workbench', expandedPluginId: pluginId } };
+      return { status: 'completed', stateDigest: { activeWorkspace: 'ai', expandedPluginId: pluginId } };
     },
   });
 
@@ -298,7 +298,7 @@ export function registerBuiltinActions(): void {
     surface: 'both',
     timeoutMs: 20_000,
     run: async (args) => {
-      const { sid } = await createSession(
+      const { sid } = await getSessionClient().createSession(
         typeof args.displayName === 'string' ? { displayName: args.displayName } : undefined,
       );
       await st().refreshSessions();
@@ -359,7 +359,7 @@ export function registerBuiltinActions(): void {
     capability: 'read',
     surface: 'both',
     run: async () => {
-      const rows = await fetchSessionList(st().pinnedSlug ?? undefined);
+      const rows = await getSessionClient().fetchSessionList(st().pinnedSlug ?? undefined);
       return {
         status: 'completed',
         stateDigest: rows.map((s) => ({ sid: s.sid, displayName: s.displayName ?? null })),

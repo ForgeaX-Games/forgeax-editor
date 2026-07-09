@@ -15,6 +15,10 @@
       "types": "./src/protocol.ts",
       "import": "./src/protocol.ts"
     },
+    "./shortcut-forwarder": {
+      "types": "./src/shortcut-forwarder.ts",
+      "import": "./src/shortcut-forwarder.ts"
+    },
     "./manifest": {
       "types": "./src/manifest.ts",
       "import": "./src/manifest.ts"

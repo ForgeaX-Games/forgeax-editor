@@ -15,7 +15,8 @@ import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import type { DocApplierCtx } from './document';
 import { deletedEntryCache, type PackAssetEntry } from '../io/asset-io-facade';
-import type { ApplyResult, EditorOp } from '../types';
+import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
+import type { SceneAsset } from '@forgeax/engine-types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -328,3 +329,40 @@ export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
 // unified table as document-domain → undo + ledger (G-4).
 registerApplier('document', 'destroyAsset', applyDestroyAsset as unknown as ApplierFn);
 registerApplier('document', 'restoreAsset', applyRestoreAsset as unknown as ApplierFn);
+
+// ── Document applier: createAsset (G-5 create gate) ──────────────────────────
+// D2: createAsset is a DOCUMENT-domain op — it produces an inverse (destroyAsset)
+// for free Undo, enters the ledger, and writes through ctx.assetIO (the sole
+// asset write gate, symmetric to ctx.engine for ECS writes).
+
+/** Payload factory — the ONLY location with knowledge of what a blank asset looks
+ *  like per kind. UI/AI never carry payloads; the applier constructs them here.
+ *  switch has NO default branch — TS enforces that every CreatableAssetKind member
+ *  has a case (future extensions must add one here or fail to compile). */
+function defaultPayloadFor(kind: CreatableAssetKind): Record<string, unknown> {
+  switch (kind) {
+    case 'scene': {
+      const scene: SceneAsset = { kind: 'scene', entities: [] };
+      return scene as unknown as Record<string, unknown>;
+    }
+    // 未来扩展示例 (TS 会强制这里补 case):
+    // case 'material': { const mat: MaterialAsset = { kind:'material', passes:[], paramValues:{} }; return mat as unknown as Record<string,unknown>; }
+  }
+}
+
+function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid, assetKind, name, refs } = cmd as {
+    packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[];
+  };
+  const payload = defaultPayloadFor(assetKind);
+  // Fire-and-forget async IO through the asset gate (symmetrical to destroyAsset).
+  // The document-applier contract is synchronous: return inverse immediately,
+  // IO completes in background. On success the ledger entry is valid; on failure
+  // the op is still committed (same pattern as destroyAsset/createDirectory).
+  void ctx.assetIO.createAssetInPack({ packPath, asset: { guid, kind: assetKind, name, payload, refs } })
+    .then(() => broadcastAssetsChanged())
+    .catch((e) => console.warn('[editor-core] createAsset IO failed:', e));
+  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp };
+}
+
+registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);

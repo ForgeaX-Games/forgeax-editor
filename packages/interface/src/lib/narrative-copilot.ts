@@ -17,7 +17,7 @@
  *  START 侧（左栏回填 + 中间预览直播）由 wb-narrative viz 的 useAutoAttach 自包含完成，
  *  不在本模块职责内。 */
 
-import { onSessionEvent, emitForgeaXMessage } from './forgeax-bridge';
+import { getSessionClient } from '../store-parts/session-client';
 
 const START_TOOL = 'narrative:start-pipeline';
 const POLL_MS = 5_000;
@@ -97,7 +97,7 @@ async function nudgeKotone(
     ? `【叙事工坊 · 系统通知】你刚启动的管线已完成（输出目录：${runKey}）。请用 narrative:get-run-status / narrative:get-story-tree / narrative:read-file 看一下产出，按你剧情师的视角给用户一段完成总结：跑了哪些环节、产出是什么、是否符合用户需求（默认符合，明显跑偏才指出并建议 narrative:regenerate-step）。`
     : `【叙事工坊 · 系统通知】你刚启动的管线已结束，状态为「${status}」（输出目录：${runKey}）。请用 narrative:get-run-status 看一下停在哪一步、为什么，给用户一句说明并建议下一步（narrative:resume-pipeline 续跑 / 重新启动等）。`;
 
-  await emitForgeaXMessage(sid, content, {
+  await getSessionClient().emitForgeaXMessage(sid, content, {
     to: agent,
     type: 'user_input',
     // session-stream 据此把它渲染成「叙事工坊」系统来信行，而非伪装成用户气泡。
@@ -109,7 +109,7 @@ async function nudgeKotone(
 
 /** Boot 时调一次（main.tsx）。按 key 注册，HMR 重载会覆盖旧 handler。 */
 export function subscribeNarrativeCopilot(): void {
-  onSessionEvent('narrative-copilot', (e) => {
+  getSessionClient().onSessionEvent('narrative-copilot', (e) => {
     const ev = e.event;
     if (!ev || ev.type !== 'hook:toolCall') return;
     const payload = ev.payload as { name?: string; toolCall?: { name?: string } };

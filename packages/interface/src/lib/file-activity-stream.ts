@@ -23,7 +23,7 @@
  *  rendered as system messages by the fallback path). */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { onSessionEvent, type SessionEvent } from './forgeax-bridge';
+import { getSessionClient, type SessionEvent } from '../store-parts/session-client';
 
 export interface FileLockSnapshot {
   agentPath: string;
@@ -80,7 +80,7 @@ function dispatchFileActivity(evt: SessionEvent): void {
 /** Wired in main.tsx alongside subscribeSessionStream. Idempotent — same
  *  handler key, HMR-safe. */
 export function subscribeFileActivityStream(): void {
-  onSessionEvent('file-activity', dispatchFileActivity);
+  getSessionClient().onSessionEvent('file-activity', dispatchFileActivity);
 }
 
 function subscribe(cb: () => void): () => void {

@@ -746,6 +746,12 @@
 .settings-help { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.45)); margin-top: 6px; line-height: 1.5; }
 .settings-help code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 2px; font-size: 10px; color: var(--color-kind-cli-provider); }
 
+/* CLI Test round-trip result — readable status color (the shared .settings-help
+   dim gray was unreadable for a pass/fail signal). Green = ok, red = failed. */
+.settings-test-result { display: inline; margin-left: 8px; font-size: 10px; line-height: 1.5; font-weight: 600; }
+.settings-test-result.is-ok { color: var(--accent-green); }
+.settings-test-result.is-err { color: var(--accent-error); }
+
 .ok-pill { background: rgba(74,222,128,0.12); color: var(--accent-green); padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
 .err-pill { background: rgba(255,107,107,0.12); color: var(--accent-error); padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
 

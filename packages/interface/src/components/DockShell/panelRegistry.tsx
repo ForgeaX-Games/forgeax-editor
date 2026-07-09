@@ -13,7 +13,6 @@ import type { IDockviewPanelProps } from 'dockview';
 import { Sidebar } from '../Sidebar/Sidebar';
 import { MainArea } from '../MainArea/MainArea';
 import { ViewportPanel } from '../MainArea/SurfacePanels';
-import { AgentsPanel } from '../Sidebar/AgentsPanel';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
 import { TelemetryViewer } from '../MainArea/TelemetryViewer';
@@ -24,17 +23,18 @@ import { RecoveryBoundary } from '../ErrorBoundary';
 // DEFAULT_* list here is the neutral fallback for interface-alone; studio
 // overrides it with the editor-shared SSOT through the context provider.
 import { DEFAULT_EDITOR_PANEL_IDS, DEFAULT_EDITOR_PANEL_TITLES, usePanelRenderers } from './panelRenderers';
+import { DockPanelHost } from './DockPanelHost';
 
-// Chat panel body comes from the injected `renderChat` slot (R4: chat is a
-// 前L2 @forgeax/chat app, NOT an interface import). studio injects it; when
-// absent (interface-alone / standalone editor) we render a neutral placeholder
-// so the dock slot stays valid. Mirrors the renderEdit/renderPreview seam.
-function ChatPanelSlot(): ReactNode {
-  const { renderChat } = usePanelRenderers();
-  if (renderChat) return renderChat();
+// Agents panel body — injected by studio from `@forgeax/ai-workbench`.
+// When absent (interface-alone / standalone editor) render a neutral placeholder
+// so the dock/pop-out slot stays valid. Exported so Sidebar can reuse the same
+// placeholder path (consistent UX between dock-panel and sidebar mount).
+export function AgentsPanelSlot(): ReactNode {
+  const SidebarAgents = usePanelRenderers().slots?.SidebarAgents;
+  if (SidebarAgents) return <div data-fx-slot="SidebarAgents" style={{ display: 'contents' }}><SidebarAgents /></div>;
   return (
     <div className="surface-placeholder">
-      <div className="surface-placeholder-title">No chat app configured</div>
+      <div className="surface-placeholder-title">No agents app configured</div>
     </div>
   );
 }
@@ -52,24 +52,28 @@ export interface PanelDef {
   group: 'core' | 'optional';
   /** Can pop out into a real OS window (DetachedSurface). */
   canPopOut?: boolean;
+  /** Stable `data-tour-id` for the onboarding TourOverlay to anchor a coach
+   *  mark on this panel's live body. Omitted → not a tour target. */
+  tourId?: string;
 }
 
 // ── core + optional panels ───────────────────────────────────────────────────
 // Order within each array is the order the layout menu lists them.
 export const CORE_PANELS: PanelDef[] = [
-  { id: 'workbench', title: 'Tools', group: 'core', canPopOut: true, render: () => <Sidebar /> },
-  // 'main' is a backward-compat alias kept for saved layouts (renders MainArea).
-  { id: 'main', title: 'Workbench', group: 'core', canPopOut: true, render: () => <MainArea /> },
+  { id: 'tools', title: 'Tools', group: 'core', canPopOut: true, tourId: 'sidebar', render: () => <Sidebar /> },
+  // 'main' is the plugin-launcher / catalog panel (formerly titled 'Workbench',
+  // which was redundant with the top-level workbench tab strip). It renders MainArea.
+  { id: 'main', title: 'Studio', group: 'core', canPopOut: true, render: () => <MainArea /> },
   // In flat-architecture mode 'viewport' is the combined panel (engine canvas +
   // gizmo); the editor's React sub-panels live as ep:* panels.
   // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
-  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, render: () => <ViewportPanel /> },
-  // R4: chat body comes from the injected renderChat slot (ChatPanelSlot).
-  { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, render: () => <ChatPanelSlot /> },
+  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, tourId: 'preview', render: () => <ViewportPanel /> },
+  // R4: chat body comes from the studio-injected panels['chat'] registry.
+  { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, tourId: 'chat', render: () => <DockPanelHost id="chat" /> },
 ];
 
 export const OPTIONAL_PANELS: PanelDef[] = [
-  { id: 'agents', title: 'Agents', group: 'optional', canPopOut: true, render: () => <AgentsPanel /> },
+  { id: 'agents', title: 'Agents', group: 'optional', canPopOut: true, render: () => <DockPanelHost id="agents" /> },
   { id: 'files', title: 'Files', group: 'optional', canPopOut: true, render: () => <FilesPanel /> },
   { id: 'console', title: 'Console', group: 'optional', canPopOut: true, render: () => <ConsolePanel /> },
   // Observability (trace + log) feed — trace waterfall + log stream, fed by the
@@ -82,8 +86,8 @@ export const OPTIONAL_PANELS: PanelDef[] = [
 ];
 
 // ── editor panel family (ep:*) ───────────────────────────────────────────────
-// Each panel renders as an in-process React component via the injected
-// renderEditorPanel slot (single-realm M2). The default id list lives in
+// Each panel renders as an in-process React component via the panels
+// registry (single-realm M2). The default id list lives in
 // ./panelRenderers (a plain string list, NOT an editor-package import) so
 // interface is self-contained; studio injects the real editor SSOT through
 // PanelRenderers context. These module-level exports are the interface-alone
@@ -102,31 +106,43 @@ function withBoundary(scope: string, render: () => ReactNode): () => ReactNode {
   return () => <RecoveryBoundary scope={scope} fullscreen={false}>{render()}</RecoveryBoundary>;
 }
 
-/** Editor panel body — resolved from the injected renderEditorPanel slot
- *  (single-realm M2: the host injects EDITOR_PANEL_COMPONENTS[id] as an
- *  in-process React component). Falls back to a neutral "panel not mounted"
- *  placeholder when no host is wired (interface-alone) or the id has no
- *  registered component (D6: timeline / matgraph / systems drift ids).
- *  EditorPanelFrame.tsx (pre-M2 iframe panel shell) was deleted in M4.
- *  withBoundary (E1) still wraps it so a render throw in one panel doesn't
- *  take down the host.
- *  Anchors: plan-strategy S2 D6 / S4 R5; requirements AC-04/AC-05, edge E1. */
-function EditorPanelSlot({ id }: { id: string }): ReactNode {
-  const { renderEditorPanel } = usePanelRenderers();
-  const body = renderEditorPanel?.(id);
-  if (body !== undefined && body !== null) return body;
-  return (
-    <div className="surface-placeholder" data-panel={id} data-panel-unmounted="1">
-      <div className="surface-placeholder-title">Panel not mounted</div>
-    </div>
+// Tour anchors for editor (`ep:*`) panels. The default 'edit' workspace has no
+// workbench 'sidebar' panel — its left column is the Hierarchy panel — so the
+// first tour step ('sidebar') anchors here instead. Same id as CORE workbench
+// so whichever left panel a workspace mounts gets highlighted.
+const EP_TOUR_IDS: Record<string, string | undefined> = {
+  hierarchy: 'sidebar',
+};
+
+function tourWrap(tourId: string | undefined, render: () => ReactNode): () => ReactNode {
+  if (!tourId) return render;
+  // Layout-neutral tour anchor: render the panel body UNCHANGED (no wrapper in
+  // the flow) and append an out-of-flow, zero-size marker. The TourOverlay reads
+  // the marker's PARENT rect (the dockview content box = the panel's real area),
+  // so highlighting never perturbs the panel's own layout.
+  return () => (
+    <>
+      {render()}
+      <span
+        data-tour-id={tourId}
+        data-tour-anchor-parent="1"
+        aria-hidden="true"
+        style={{ position: 'absolute', width: 0, height: 0, pointerEvents: 'none' }}
+      />
+    </>
   );
 }
 
+
 /** dockview component map: id → renderer (incl. ep:* editor panels). The
- *  wb:<pluginId> dynamic plugin renderers are merged in by DockShell at runtime. */
+ *  wb:<pluginId> dynamic plugin renderers are merged in by DockShell at runtime.
+ *  Editor panel bodies (ep:*) resolve through the panels registry via
+ *  DockPanelHost — the same seam used by chat/agents. When no body is
+ *  registered (interface-alone / drift ids), DockPanelHost renders the
+ *  "Panel not mounted" placeholder. */
 export const PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> = {
-  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, withBoundary(`panel:${p.id}`, p.render)])),
-  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, () => <EditorPanelSlot id={id} />)])),
+  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, withBoundary(`panel:${p.id}`, tourWrap(p.tourId, p.render))])),
+  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, tourWrap(EP_TOUR_IDS[id], () => <DockPanelHost id={id} />))])),
 };
 
 /** id → title (incl. ep:* editor panels). */
@@ -136,7 +152,7 @@ export const PANEL_TITLE: Record<string, string> = {
 };
 
 /** Core panel ids offered in the layout menu's main-panels section (excludes 'main' alias). */
-export const CORE_PANEL_IDS = ['workbench', 'viewport', 'chat'] as const;
+export const CORE_PANEL_IDS = ['tools', 'viewport', 'chat'] as const;
 /** Optional panel ids (layout menu more-panels section). */
 export const OPTIONAL_PANEL_IDS = OPTIONAL_PANELS.map((p) => p.id) as readonly string[];
 /** Panels that can pop out into a real OS window. */

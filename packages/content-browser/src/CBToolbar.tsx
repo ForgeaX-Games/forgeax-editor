@@ -1,28 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-core';
-import { generateAssetGuid, addAssetToPack, createPack, gateway } from '@forgeax/editor-core';
-import { ASSET_KINDS, type AssetKind } from './types';
+import { generateAssetGuid, gateway } from '@forgeax/editor-core';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { buildAcceptString, logImport } from './import-registry';
+import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 
 interface Props {
   currentPath: string;
   onReload: () => void;
   onImportProgress?: (progress: ImportProgress | null) => void;
 }
-
-const KIND_ICONS: Record<string, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
-};
-
-const EMPTY_PAYLOADS: Partial<Record<AssetKind, () => Record<string, unknown>>> = {
-  material: () => ({ kind: 'material', passes: [], paramValues: { baseColor: [0.8, 0.8, 0.8, 1.0] } }),
-  scene: () => ({ kind: 'scene', nodes: [] }),
-  shader: () => ({ kind: 'shader', source: '// WGSL shader\n' }),
-};
 
 export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -42,25 +29,18 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
     });
   }, [acceptString, basePath, currentPath]);
 
-  const handleCreateAsset = useCallback(async (kind: AssetKind) => {
+  const handleCreateAsset = useCallback((spec: CreatableAssetSpec) => {
     setAddMenuOpen(false);
-    const name = window.prompt(`New ${kind} name:`);
+    const name = window.prompt(`New ${spec.label} name:`, spec.defaultNamePrefix);
     if (!name) return;
-
-    const packPath = `${basePath}/${name}.pack.json`;
-    const guid = generateAssetGuid();
-    const payloadFactory = EMPTY_PAYLOADS[kind];
-    const payload = payloadFactory ? payloadFactory() : { kind };
-
-    const created = await createPack(basePath, name);
-    if (created) {
-      await addAssetToPack(created, { guid, kind, name, payload });
-    } else {
-      await addAssetToPack(packPath, { guid, kind, name, payload });
-    }
-    broadcastAssetsChanged();
-    onReload();
-  }, [basePath, onReload]);
+    gateway.dispatch({
+      kind: 'createAsset',
+      packPath: `${basePath}/${name}.pack.json`,
+      guid: generateAssetGuid(),
+      assetKind: spec.kind,
+      name,
+    }, 'human');
+  }, [basePath]);
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
@@ -134,9 +114,9 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
                 📁 New Folder
               </button>
               <div className="cb-dropdown-sep" />
-              {ASSET_KINDS.map(kind => (
-                <button key={kind} className="cb-dropdown-item" onClick={() => void handleCreateAsset(kind)}>
-                  {KIND_ICONS[kind] ?? '📦'} {kind}
+              {CREATABLE_ASSET_KINDS.map(spec => (
+                <button key={spec.kind} className="cb-dropdown-item" onClick={() => handleCreateAsset(spec)}>
+                  {spec.icon} {spec.label}
                 </button>
               ))}
             </div>

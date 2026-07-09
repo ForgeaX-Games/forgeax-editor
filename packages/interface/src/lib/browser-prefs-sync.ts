@@ -1,13 +1,29 @@
 /** Persist + restore browser localStorage UI prefs via `/api/prefs/browser-localStorage`.
  *  Snapshot lands in `.forgeax/prefs/browser-localStorage.json` for export-instance. */
 
+import { STORAGE_KEYS } from './storageKeys';
+
 const SYNC_DEBOUNCE_MS = 1500;
 const SYNC_INTERVAL_MS = 30_000;
 
 const KEY_PREFIXES = ['forgeax.', 'wb-', 'wb:'];
 const KEY_EXACT = ['wb-agent-persona:selected-agent-id'];
 
+// First-run onboarding is a per-browser-profile gate, NOT a portable UI pref.
+// Mirroring it through the server snapshot re-seeds a stale phase back into
+// localStorage on every load (and races the async restore against first paint),
+// which silently kills / replays the wizard and makes a local reset impossible.
+// Keep onboarding purely local: excluding here blocks BOTH push and restore
+// (restoreBrowserLocalStorage also gates on shouldSyncKey), so any pre-existing
+// snapshot entries become inert. Trade-off: an imported instance re-runs the
+// first-run flow once — acceptable, and safer than silently skipping it.
+const KEY_EXCLUDE = new Set<string>([
+  STORAGE_KEYS.onboarding,
+  STORAGE_KEYS.onboardingSeenLegacy,
+]);
+
 function shouldSyncKey(key: string): boolean {
+  if (KEY_EXCLUDE.has(key)) return false;
   if (KEY_EXACT.includes(key)) return true;
   return KEY_PREFIXES.some((p) => key.startsWith(p));
 }

@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import { Brain, Sparkles, Wrench, Bot, Gauge } from 'lucide-react';
 import { useTranslation } from '@/i18n';
-import { useAppStore } from '../../../store';
+import { useShellStore } from '../../../store';
 import { emitDeepLink } from '../../../lib/deep-link-bus';
 import { listBusPlugins } from '../../../lib/bus-api';
 import { dashApi } from '../../../lib/dashboard-api';
@@ -92,8 +92,8 @@ function ResourcePulseFeed() {
 
 function ModelBindingPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useAppStore((s) => s.setMode);
-  const openOverlay = useAppStore((s) => s.openOverlay);
+  const setMode = useShellStore((s) => s.setMode);
+  const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -145,8 +145,8 @@ function ModelBindingPulseFeed() {
 
 function SkillPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useAppStore((s) => s.setMode);
-  const openOverlay = useAppStore((s) => s.openOverlay);
+  const setMode = useShellStore((s) => s.setMode);
+  const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -197,8 +197,8 @@ function SkillPulseFeed() {
 
 function ToolPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useAppStore((s) => s.setMode);
-  const openOverlay = useAppStore((s) => s.openOverlay);
+  const setMode = useShellStore((s) => s.setMode);
+  const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);
@@ -249,8 +249,8 @@ function ToolPulseFeed() {
 
 function AgentPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useAppStore((s) => s.setMode);
-  const openOverlay = useAppStore((s) => s.openOverlay);
+  const setMode = useShellStore((s) => s.setMode);
+  const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
   const [ids, setIds] = useState<string[]>([]);

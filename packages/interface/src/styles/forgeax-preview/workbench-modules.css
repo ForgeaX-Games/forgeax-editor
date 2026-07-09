@@ -29,3 +29,16 @@
   max-width: 48px;
   line-height: 1.15;
 }
+
+/* Empty state — 无 bus workbench 插件时的占位(role=status 让 AT 读出) */
+.wb-module-strip--empty {
+  display: block;
+  padding: 12px 8px;
+  text-align: center;
+}
+
+.wb-module-strip__empty {
+  color: var(--muted-foreground, #888);
+  font-size: 11px;
+  line-height: 1.4;
+}

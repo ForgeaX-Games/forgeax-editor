@@ -13,7 +13,10 @@
 //
 // NOT forwarded here (D-6 @internal-store seams — store/ internal only, never in
 // this facade nor the barrel): scene-persistence's worldToPack / scenePath /
-// loadSceneByGuid / _isDirty / currentSceneGuid / _setDirty / _setCurrentSceneGuid.
+// loadSceneByGuid / the `ctx` ScenePersistenceContext handle (M1 D-2: converged
+// the 7 module-level singletons + disk-watch's reverse-writes onto one object —
+// the former _isDirty / currentSceneGuid exports + _setDirty / _setCurrentSceneGuid
+// setter pair are gone).
 //
 // The old clip-control import (F-10) had no consuming body left after the split,
 // so it is absent here — not deleted as cleanup, simply nothing to host.

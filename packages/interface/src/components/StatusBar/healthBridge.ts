@@ -21,7 +21,7 @@
 
 import { pushHealth, type HealthLevel, type HealthSource } from './healthStore';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { useAppStore, type NetworkEntry, type TelemetryRecord } from '../../store';
+import { useShellStore, type NetworkEntry, type TelemetryRecord } from '../../store';
 
 let installed = false;
 
@@ -120,7 +120,7 @@ export function ingestVagTelemetry(data: unknown): boolean {
   if ((data as { type?: unknown } | null)?.type !== 'VAG_TELEMETRY') return false;
   const recs = (data as { records?: unknown }).records;
   if (!Array.isArray(recs) || recs.length === 0) return true;
-  useAppStore.getState().pushTelemetry(recs as TelemetryRecord[]);
+  useShellStore.getState().pushTelemetry(recs as TelemetryRecord[]);
   return true;
 }
 
@@ -209,7 +209,7 @@ export function installHealthBridge(): void {
       // Console panel: the FULL stream (all levels, all sources). Play/Edit
       // surfaces re-forward their nested engine iframe's VAG_CONSOLE up to here,
       // so this is the single point that feeds store.consoleLog.
-      useAppStore.getState().pushConsole({
+      useShellStore.getState().pushConsole({
         level: asConsoleLevel(payload?.level),
         text,
         ts: typeof payload?.ts === 'number' ? payload.ts : Date.now(),
@@ -229,7 +229,7 @@ export function installHealthBridge(): void {
     if (type === 'VAG_NETWORK') {
       const p = data?.payload as Partial<NetworkEntry> | undefined;
       if (!p || typeof p.url !== 'string') return;
-      useAppStore.getState().pushNetwork({
+      useShellStore.getState().pushNetwork({
         kind: (['fetch', 'xhr', 'ws'] as const).includes(p.kind as never) ? (p.kind as NetworkEntry['kind']) : 'fetch',
         method: typeof p.method === 'string' ? p.method : 'GET',
         url: p.url,

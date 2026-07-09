@@ -44,7 +44,9 @@ export type EngineInterfaceName =
   | 'world.removeComponent'
   | 'assetIO.readPackEntry'
   | 'assetIO.writePackEntry'
-  | 'assetIO.deletePackEntry';
+  | 'assetIO.deletePackEntry'
+  | 'assetIO.createAssetInPack'
+  | 'assetIO.cloneAssetInPack';
 
 /** Record an asset-IO interface leaf onto the current active span's engineCalls
  *  list (symmetric to engine-facade's _recordLeaf, AC-D4). Used by AssetIOFacade.

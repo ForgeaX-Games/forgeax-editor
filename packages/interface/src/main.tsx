@@ -26,7 +26,7 @@ import { subscribePermissionStream } from './lib/permission-stream';
 import { subscribePerceptionStream } from './lib/perception-stream';
 import { bootUiBridge } from './lib/ui-bridge';
 import { syncBrowserPrefsFromServer, startBrowserPrefsSync } from './lib/browser-prefs-sync';
-import { useAppStore } from './store';
+import { useShellStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
 import { DetachedSurface } from './components/DetachedSurface';
 import { installHealthBridge } from './components/StatusBar/healthBridge';
@@ -124,7 +124,7 @@ function bootStore() {
   subscribePermissionStream();
   subscribePerceptionStream();
   bootUiBridge(); // UI 语义操作层(ActionRegistry + lease + ui_* 应答;方案:产品AI化-语义操作层)
-  void useAppStore.getState().initSessions();
+  void useShellStore.getState().initSessions();
 }
 
 function bootFullShell(el: HTMLElement) {
@@ -138,14 +138,14 @@ function bootFullShell(el: HTMLElement) {
   // (the main window re-mounts its keep-alive iframe). No-op in the browser
   // (WindowManager.onSurfaceWindowClosed never fires there).
   getWindowManager().onSurfaceWindowClosed((d) => {
-    useAppStore.getState().markSurfaceDocked(surfaceKey(d));
+    useShellStore.getState().markSurfaceDocked(surfaceKey(d));
   });
 
   if (import.meta.env.DEV) {
     // DevTools bridge — exposes the Zustand store to window.__dev so that the
     // external forgeax-devtools panel (~/Dev/forgeax-devtools/) can read and
     // patch store state without being part of this repo. Stripped in production.
-    (window as unknown as Record<string, unknown>)['__dev'] = useAppStore;
+    (window as unknown as Record<string, unknown>)['__dev'] = useShellStore;
   }
 
   appBootSpan('app.boot.shell', () => {

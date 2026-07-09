@@ -15,7 +15,7 @@
  *  events with type `permission:*` are routed here exclusively. */
 
 import { useSyncExternalStore } from 'react';
-import { onSessionEvent, type SessionEvent } from './forgeax-bridge';
+import { getSessionClient, type SessionEvent } from '../store-parts/session-client';
 
 export interface PendingPermission {
   reqId: string;
@@ -64,7 +64,7 @@ function dispatchPermission(evt: SessionEvent): void {
 
 /** Wired in main.tsx. Idempotent (same handler key, HMR-safe). */
 export function subscribePermissionStream(): void {
-  onSessionEvent('permission', dispatchPermission);
+  getSessionClient().onSessionEvent('permission', dispatchPermission);
 }
 
 function subscribe(cb: () => void): () => void {

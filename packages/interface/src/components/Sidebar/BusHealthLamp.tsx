@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from '@/i18n';
 import { dashApi } from '../../lib/dashboard-api';
-import { useAppStore } from '../../store';
+import { useShellStore } from '../../store';
 
 type BusState =
   | { kind: 'loading' }
@@ -37,9 +37,9 @@ function classify(bus: NonNullable<Awaited<ReturnType<typeof dashApi.health>>['b
 export function BusHealthLamp() {
   const { t } = useTranslation();
   const [state, setState] = useState<BusState>({ kind: 'loading' });
-  const setMode = useAppStore((s) => s.setMode);
-  const openOverlay = useAppStore((s) => s.openOverlay);
-  const mode = useAppStore((s) => s.mode);
+  const setMode = useShellStore((s) => s.setMode);
+  const openOverlay = useShellStore((s) => s.openOverlay);
+  const mode = useShellStore((s) => s.mode);
 
   useEffect(() => {
     let cancelled = false;
