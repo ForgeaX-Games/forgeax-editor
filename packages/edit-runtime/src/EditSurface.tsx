@@ -66,62 +66,19 @@ function fatalReason(text: string): string | null {
 // downward from core (legal `core <- edit-runtime` direction), so there is no
 // per-path duplication.
 
-// ── EditorImportError ──────────────────────────────────────────────────────────
-
-export type EditorImportErrorCode = 'SERVER_UNAVAILABLE' | 'UNKNOWN';
-
-const ERROR_HINTS: Record<EditorImportErrorCode, { hint: string; expected: string }> = {
-  SERVER_UNAVAILABLE: {
-    hint: 'The forgeax server (:18900) is not reachable from this host. Asset import and workbench features will be disabled. Start the server with `bash start.sh` in the forgeax-studio root.',
-    expected: 'A running forgeax server reachable at the same-origin /api endpoint.',
-  },
-  UNKNOWN: {
-    hint: 'An unexpected error occurred during the server probe.',
-    expected: 'A valid response from the server probe endpoint.',
-  },
-};
-
-export class EditorImportError extends Error {
-  code: EditorImportErrorCode;
-  hint: string;
-  expected: string;
-
-  constructor(code: EditorImportErrorCode) {
-    const info = ERROR_HINTS[code];
-    super(`EditorImportError: ${code} — ${info.hint}`);
-    this.name = 'EditorImportError';
-    this.code = code;
-    this.hint = info.hint;
-    this.expected = info.expected;
-  }
-}
-
-// ── probeServer ────────────────────────────────────────────────────────────────
-
-export interface ProbeResult {
-  available: boolean;
-  slug?: string | null;
-  error?: EditorImportError;
-}
-
-export async function probeServer(): Promise<ProbeResult> {
-  try {
-    const r = await apiFetch('/api/workbench/active-slug');
-    if (!r.ok) {
-      return {
-        available: false,
-        error: new EditorImportError('SERVER_UNAVAILABLE'),
-      };
-    }
-    const j = (await r.json()) as { activeSlug?: string | null };
-    return { available: true, slug: j.activeSlug ?? null };
-  } catch {
-    return {
-      available: false,
-      error: new EditorImportError('SERVER_UNAVAILABLE'),
-    };
-  }
-}
+// ── EditorImportError + probeServer ──────────────────────────────────────────
+// The structured import/probe error taxonomy (EditorImportError.code/.hint/
+// .expected) and the mount-time server probe that emits it moved to
+// ./editor-import-error (M5 / w16, AC-09 / plan-strategy §2 D-7). Re-exported
+// here to preserve EditSurface's published `/surface` face — src/edit.ts
+// re-exports EditorImportError + EditorImportErrorCode from this module.
+export {
+  EditorImportError,
+  type EditorImportErrorCode,
+  type ProbeResult,
+  probeServer,
+} from './editor-import-error';
+import { probeServer } from './editor-import-error';
 
 // ── Asset import ───────────────────────────────────────────────────────────────
 
@@ -286,7 +243,8 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // once. If the iframe src tracked `slug` directly, switching GAMES would cold-boot
   // the new game's editor here AND the new game's preview in the (hidden) Play iframe
   // simultaneously → two concurrent WebGPU boots wedge the WKWebView GPU process
-  // ("切一个新游戏的 edit 又卡死"). So the iframe loads `loadedSlug`, which only
+  // ("switching to a new game's edit surface wedges/freezes it"). So the iframe
+  // loads `loadedSlug`, which only
   // advances to the latest `slug` while THIS surface is visible — a hidden surface
   // defers the new game until shown, so only one engine boots at a time. `slug`
   // still loads on first mount (loadedSlug seeded = slug).
@@ -315,7 +273,8 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // ── Auto-pause when hidden (keep-alive background) ──────────────────────────
   // The shell keeps the editor MOUNTED but display:none'd when you switch to Play,
   // so the editor iframe + its WebGPU context survive without a reboot (fixes
-  // "Play→Edit 切回去就死掉"). While hidden, pause the editor's render loop so only
+  // "Play→Edit switch-back kills the surface"). While hidden, pause the editor's
+  // render loop so only
   // the visible surface draws; the context stays alive for an instant resume.
   // VAG_PREVIEW_PAUSE/PLAY are handled by edit-runtime installPreviewControls
   // (→ app.pause/resume); raw postMessage is fine (the receiver schema-validates).

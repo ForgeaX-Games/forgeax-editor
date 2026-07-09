@@ -38,10 +38,26 @@ import ts from 'typescript';
 
 const PKG_ROOT = path.resolve(import.meta.dir, '..');
 const INDEX_TS = path.resolve(PKG_ROOT, 'index.ts');
+const GATEWAY_TS = path.resolve(PKG_ROOT, 'io', 'gateway.ts');
 const BASELINE_PATH = path.resolve(
   import.meta.dir,
   'fixtures',
   'export-surface-baseline.json',
+);
+// M3-w9 (feat-20260709-...-wave2-c-domain-scen): the EditGateway public-entry
+// surface freeze baseline (AC-03 / plan-strategy §2 D-4). Frozen SEPARATELY from
+// the barrel store surface above so the M3 gateway detail-sinking refactor (w10)
+// has a machine witness that no public method signature drifted. The listOps()
+// self-introspection output is frozen alongside (OpDescriptor[] equivalence).
+const GATEWAY_SURFACE_BASELINE_PATH = path.resolve(
+  import.meta.dir,
+  'fixtures',
+  'gateway-surface-baseline.json',
+);
+const LISTOPS_INTROSPECTION_BASELINE_PATH = path.resolve(
+  import.meta.dir,
+  'fixtures',
+  'gateway-listops-introspection-baseline.json',
 );
 
 // ---------------------------------------------------------------------------
@@ -313,4 +329,252 @@ describe('AC-01 export-surface snapshot', () => {
   },
   60_000,
 );
+});
+
+// ---------------------------------------------------------------------------
+// AC-03 EditGateway public-entry surface freeze (M3-w9)
+// ---------------------------------------------------------------------------
+//
+// The M3 refactor (w10) sinks NON-ENTRY implementation detail (labelOf /
+// entityOf / step / nextOpHandleId free functions + buildQueryFn assembly +
+// history/step construction) out of gateway.ts into io/gateway-history.ts +
+// io/gateway-query.ts. plan-strategy §2 D-4 + requirements AC-03 / OOS-2 demand
+// the EditGateway PUBLIC ENTRY FACE stay byte-for-byte frozen through that move:
+// dispatch / begin / update / commit / cancel / undo / redo / listOps /
+// defineOp / querySnapshot (+ the rest of the public class members) keep their
+// exact type signatures, and listOps() self-introspection output stays
+// equivalent. This block is the machine witness for that freeze — it extracts
+// each public class member's signature via the same compiler-API route as the
+// barrel block above and diffs against a committed baseline.
+//
+// This freezes the SIGNATURE of the public surface (the AI-user self-introspection
+// contract, charter P2/F1). The stronger "consumers typecheck with zero edits +
+// no new `as`" judgement (AC-03 application-point) is proven separately in w11 by
+// running `bun run typecheck` across the real import→call chains — that is the
+// live consumer path the requirements mandate over an isolated *.test-d.ts.
+
+interface MemberEntry {
+  name: string;
+  signature: string;
+}
+
+function extractGatewayPublicSurface(
+  program: ts.Program,
+  checker: ts.TypeChecker,
+): MemberEntry[] {
+  const sf = program.getSourceFile(GATEWAY_TS);
+  if (!sf) throw new Error(`Source file not found: ${GATEWAY_TS}`);
+
+  // Locate the EditGateway class declaration.
+  let classDecl: ts.ClassDeclaration | undefined;
+  ts.forEachChild(sf, (node) => {
+    if (ts.isClassDeclaration(node) && node.name?.text === 'EditGateway') {
+      classDecl = node;
+    }
+  });
+  if (!classDecl) throw new Error('EditGateway class declaration not found');
+
+  const entries: MemberEntry[] = [];
+
+  const hasPrivateOrProtected = (mods: ts.NodeArray<ts.ModifierLike> | undefined): boolean => {
+    if (!mods) return false;
+    for (const m of mods) {
+      if (m.kind === ts.SyntaxKind.PrivateKeyword || m.kind === ts.SyntaxKind.ProtectedKeyword) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const member of classDecl.members) {
+    // A member is part of the PUBLIC surface iff:
+    //   - it has a name (skip index signatures / static blocks)
+    //   - it is NOT declared private/protected
+    //   - its name does not start with `_` (the file's convention for private state)
+    // Methods, getters, and public property/arrow-fn members (e.g. `trace`,
+    // readonly `ledger`) all count — they are the AI-user consumable surface.
+    if (
+      ts.isMethodDeclaration(member) ||
+      ts.isGetAccessor(member) ||
+      ts.isPropertyDeclaration(member)
+    ) {
+      const nameNode = member.name;
+      if (!nameNode || !ts.isIdentifier(nameNode)) continue;
+      const name = nameNode.text;
+      if (name.startsWith('_')) continue;
+      if (hasPrivateOrProtected(member.modifiers)) continue;
+
+      const symbol = checker.getSymbolAtLocation(nameNode);
+      if (!symbol) {
+        entries.push({ name, signature: '<unresolved>' });
+        continue;
+      }
+      const type = checker.getTypeOfSymbolAtLocation(symbol, member);
+      const isStatic = (member.modifiers ?? []).some(
+        (m) => m.kind === ts.SyntaxKind.StaticKeyword,
+      );
+      const signature = checker.typeToString(
+        type,
+        undefined,
+        ts.TypeFormatFlags.NoTruncation,
+      );
+      entries.push({ name: `${isStatic ? 'static ' : ''}${name}`, signature });
+    }
+  }
+
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  return entries;
+}
+
+function diffMembers(
+  baseline: MemberEntry[],
+  current: MemberEntry[],
+): { mismatches: string[]; onlyInBaseline: string[]; onlyInCurrent: string[] } {
+  const baselineMap = new Map(baseline.map((e) => [e.name, e.signature]));
+  const currentMap = new Map(current.map((e) => [e.name, e.signature]));
+  const mismatches: string[] = [];
+  const onlyInBaseline: string[] = [];
+  const onlyInCurrent: string[] = [];
+  for (const [name, sig] of baselineMap) {
+    const curSig = currentMap.get(name);
+    if (curSig === undefined) onlyInBaseline.push(name);
+    else if (curSig !== sig) {
+      mismatches.push(`  ${name}:\n    baseline: ${sig}\n    current:  ${curSig}`);
+    }
+  }
+  for (const name of currentMap.keys()) {
+    if (!baselineMap.has(name)) onlyInCurrent.push(name);
+  }
+  return { mismatches, onlyInBaseline, onlyInCurrent };
+}
+
+describe('AC-03 EditGateway public-entry surface freeze (M3-w9)', () => {
+  test(
+    'public method/getter/property signatures match committed baseline',
+    () => {
+      const { program, checker } = createProgram();
+      const entries = extractGatewayPublicSurface(program, checker);
+
+      // Sanity: the ten frozen entry methods (plan-strategy §2 D-4 / AC-03)
+      // must all be present in the extracted public surface.
+      const names = new Set(entries.map((e) => e.name));
+      const FROZEN_ENTRY = [
+        'dispatch', 'begin', 'update', 'commit', 'cancel',
+        'undo', 'redo', 'listOps', 'defineOp', 'buildQueryFn',
+      ];
+      for (const m of FROZEN_ENTRY) {
+        expect(names.has(m)).toBe(true);
+      }
+      for (const e of entries) {
+        expect(e.name.length).toBeGreaterThan(0);
+        expect(e.signature.length).toBeGreaterThan(0);
+        expect(e.signature).not.toBe('<unresolved>');
+      }
+
+      if (!existsSync(GATEWAY_SURFACE_BASELINE_PATH)) {
+        writeFileSync(
+          GATEWAY_SURFACE_BASELINE_PATH,
+          JSON.stringify(entries, null, 2) + '\n',
+          'utf8',
+        );
+        console.log(
+          `[AC-03] Gateway surface baseline written to ${GATEWAY_SURFACE_BASELINE_PATH} (${entries.length} members).`,
+        );
+        return;
+      }
+
+      const baseline: MemberEntry[] = JSON.parse(
+        readFileSync(GATEWAY_SURFACE_BASELINE_PATH, 'utf8'),
+      );
+      const { mismatches, onlyInBaseline, onlyInCurrent } = diffMembers(baseline, entries);
+
+      const errs: string[] = [];
+      if (mismatches.length > 0) {
+        errs.push(`${mismatches.length} public member(s) drifted:\n${mismatches.join('\n')}`);
+      }
+      if (onlyInBaseline.length > 0) {
+        errs.push(`${onlyInBaseline.length} public member(s) removed: ${onlyInBaseline.join(', ')}`);
+      }
+      if (onlyInCurrent.length > 0) {
+        errs.push(`${onlyInCurrent.length} public member(s) added: ${onlyInCurrent.join(', ')}`);
+      }
+      if (errs.length > 0) {
+        throw new Error(
+          `AC-03 EditGateway public entry surface changed!\n\n${errs.join('\n\n')}\n\n` +
+            `The M3 refactor may sink only NON-ENTRY implementation detail (plan-strategy §2 D-4). ` +
+            `Update ${GATEWAY_SURFACE_BASELINE_PATH} ONLY after human review.`,
+        );
+      }
+
+      expect(mismatches.length).toBe(0);
+      expect(onlyInBaseline.length).toBe(0);
+      expect(onlyInCurrent.length).toBe(0);
+    },
+    60_000,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// AC-03 listOps() self-introspection output freeze (M3-w9)
+// ---------------------------------------------------------------------------
+//
+// listOps() is the AI-user "what ops can I call?" self-introspection entry
+// (charter P2/F1). The M3 detail-sinking must NOT alter its output. This block
+// captures the runtime OpDescriptor[] from a real EditGateway instance (builtin
+// ops only — same shape play-runtime/panels/__forgeaxEval consumers observe) and
+// diffs it against a committed baseline. Runtime capture (not compiler-API) is
+// deliberate: it freezes the actual data an AI caller receives, one call → full
+// capability set (plan-strategy §8 API).
+
+describe('AC-03 listOps() self-introspection output freeze (M3-w9)', () => {
+  test('builtin OpDescriptor[] matches committed baseline', () => {
+    // Import at test time so the catalog is fully registered (builtin ops are
+    // registered as a side effect of importing the gateway/catalog chain).
+    const { EditGateway } = require('../io/gateway') as typeof import('../io/gateway');
+    const { createEditSession } = require('../session/document') as typeof import('../session/document');
+    const gw = new EditGateway(createEditSession());
+
+    // Normalize to a stable, diff-friendly, JSON-round-trip-safe shape, sorted by id.
+    // Filter to source='builtin': the catalog is a PROCESS-GLOBAL registry, so
+    // sibling test files that call defineOp leak `source='defined'` ops into it
+    // when the whole suite runs in one process. The frozen contract is the
+    // BUILTIN self-introspection surface (plan-strategy §8: one call → full
+    // built-in capability set); runtime-defined ops are not part of it. Filtering
+    // by source makes the freeze isolation-safe AND semantically exact.
+    const ops = [...gw.listOps()]
+      .filter((o) => o.source === 'builtin')
+      .map((o) => ({
+        id: o.id,
+        domain: o.domain,
+        source: o.source,
+        argsSchema: o.argsSchema ?? null,
+        ...(o.title !== undefined ? { title: o.title } : {}),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    expect(ops.length).toBeGreaterThan(0);
+    for (const o of ops) {
+      expect(o.id.length).toBeGreaterThan(0);
+      expect(['document', 'session', 'transient']).toContain(o.domain);
+      expect(['builtin', 'defined']).toContain(o.source);
+    }
+
+    if (!existsSync(LISTOPS_INTROSPECTION_BASELINE_PATH)) {
+      writeFileSync(
+        LISTOPS_INTROSPECTION_BASELINE_PATH,
+        JSON.stringify(ops, null, 2) + '\n',
+        'utf8',
+      );
+      console.log(
+        `[AC-03] listOps introspection baseline written (${ops.length} ops).`,
+      );
+      return;
+    }
+
+    const baseline = JSON.parse(
+      readFileSync(LISTOPS_INTROSPECTION_BASELINE_PATH, 'utf8'),
+    );
+    // Full structural equality: any id/domain/source/argsSchema/title drift fails.
+    expect(ops).toEqual(baseline);
+  });
 });

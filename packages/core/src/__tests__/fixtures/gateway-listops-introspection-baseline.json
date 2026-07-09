@@ -1,0 +1,553 @@
+[
+  {
+    "id": "addComponent",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "component": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "entity",
+        "component"
+      ]
+    },
+    "title": "Add Component"
+  },
+  {
+    "id": "cbGoBack",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Go Back"
+  },
+  {
+    "id": "cbGoForward",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Go Forward"
+  },
+  {
+    "id": "createSceneFile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "duplicateCurrent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "title": "Create Scene"
+  },
+  {
+    "id": "destroyAsset",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "packPath": {
+          "type": "string"
+        },
+        "guid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packPath",
+        "guid"
+      ]
+    },
+    "title": "Destroy Asset"
+  },
+  {
+    "id": "destroyEntity",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity"
+      ]
+    },
+    "title": "Destroy Entity"
+  },
+  {
+    "id": "loadDocFromDisk",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Load from Disk"
+  },
+  {
+    "id": "play",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Play"
+  },
+  {
+    "id": "removeComponent",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "component": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "component"
+      ]
+    },
+    "title": "Remove Component"
+  },
+  {
+    "id": "rename",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "name"
+      ]
+    },
+    "title": "Rename"
+  },
+  {
+    "id": "reparent",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "parent": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity"
+      ]
+    },
+    "title": "Reparent"
+  },
+  {
+    "id": "requestFrame",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Request Frame"
+  },
+  {
+    "id": "requestRename",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity"
+      ]
+    },
+    "title": "Request Rename"
+  },
+  {
+    "id": "restoreAsset",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "packPath": {
+          "type": "string"
+        },
+        "guid": {
+          "type": "string"
+        },
+        "cacheKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packPath",
+        "guid"
+      ]
+    },
+    "title": "Restore Asset"
+  },
+  {
+    "id": "saveDocToDisk",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Save to Disk"
+  },
+  {
+    "id": "setAssetSelection",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "primary": {
+          "type": "object",
+          "nullable": true
+        }
+      },
+      "required": [
+        "assets",
+        "primary"
+      ]
+    },
+    "title": "Set Asset Selection"
+  },
+  {
+    "id": "setAssetSelectionOne",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "type": "object",
+          "nullable": true
+        }
+      },
+      "required": [
+        "asset"
+      ]
+    },
+    "title": "Set Asset Selection (single, sugar)"
+  },
+  {
+    "id": "setCBPath",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "title": "Set Content Browser Path"
+  },
+  {
+    "id": "setComponent",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "component": {
+          "type": "string"
+        },
+        "patch": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "entity",
+        "component",
+        "patch"
+      ]
+    },
+    "title": "Set Component"
+  },
+  {
+    "id": "setDisplay",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "display": {
+          "type": "string",
+          "enum": [
+            "scene",
+            "game"
+          ]
+        }
+      },
+      "required": [
+        "display"
+      ]
+    },
+    "title": "Set Viewport Display"
+  },
+  {
+    "id": "setFieldPreview",
+    "domain": "transient",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "nullable": true
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        }
+      }
+    },
+    "title": "Set Field Preview"
+  },
+  {
+    "id": "setGizmoMode",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "translate",
+            "rotate",
+            "scale"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "title": "Set Gizmo Mode"
+  },
+  {
+    "id": "setHidden",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "hidden": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "entity",
+        "hidden"
+      ]
+    },
+    "title": "Set Hidden"
+  },
+  {
+    "id": "setHoverEntity",
+    "domain": "transient",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "nullable": true
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "title": "Set Hover Entity"
+  },
+  {
+    "id": "setSceneId",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "title": "Set Scene Id"
+  },
+  {
+    "id": "setSelection",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "nullable": true
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "title": "Set Selection"
+  },
+  {
+    "id": "setSelectionMany",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ]
+    },
+    "title": "Select Many"
+  },
+  {
+    "id": "spawnEntity",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "number"
+        },
+        "components": {
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        }
+      }
+    },
+    "title": "Spawn Entity"
+  },
+  {
+    "id": "stop",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Stop"
+  },
+  {
+    "id": "switchSceneFile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "title": "Switch Scene"
+  },
+  {
+    "id": "toggleSelection",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "title": "Toggle Selection"
+  },
+  {
+    "id": "transaction",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "commands": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "label",
+        "commands"
+      ]
+    },
+    "title": "Transaction"
+  }
+]

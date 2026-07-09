@@ -1,0 +1,122 @@
+[
+  {
+    "name": "activeWorld",
+    "signature": "World"
+  },
+  {
+    "name": "appliedCount",
+    "signature": "() => number"
+  },
+  {
+    "name": "begin",
+    "signature": "(cmd: EditorOp, origin?: CommandOrigin) => { ok: true; handle: OpHandle; } | { ok: false; error: CommandError; }"
+  },
+  {
+    "name": "buildQueryFn",
+    "signature": "() => QuerySnapshotFn"
+  },
+  {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
+    "name": "canRedo",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "canUndo",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "commit",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
+    "name": "defineOp",
+    "signature": "(spec: { id: string; domain: \"document\" | \"session\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
+  },
+  {
+    "name": "dispatch",
+    "signature": "(cmd: EditorOp, origin?: CommandOrigin) => DispatchResult"
+  },
+  {
+    "name": "doc",
+    "signature": "EditSession"
+  },
+  {
+    "name": "engineFacade",
+    "signature": "() => EngineFacade"
+  },
+  {
+    "name": "enterPlay",
+    "signature": "(playWorld: World) => void"
+  },
+  {
+    "name": "exitPlay",
+    "signature": "() => void"
+  },
+  {
+    "name": "historySteps",
+    "signature": "() => HistoryStep[]"
+  },
+  {
+    "name": "jumpTo",
+    "signature": "(target: number) => void"
+  },
+  {
+    "name": "ledger",
+    "signature": "EditorOp[]"
+  },
+  {
+    "name": "listOps",
+    "signature": "() => readonly OpDescriptor[]"
+  },
+  {
+    "name": "mode",
+    "signature": "\"play\" | \"edit\""
+  },
+  {
+    "name": "origins",
+    "signature": "CommandOrigin[]"
+  },
+  {
+    "name": "peekUndoInverse",
+    "signature": "() => EditorOp | undefined"
+  },
+  {
+    "name": "redo",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "replaceDoc",
+    "signature": "(doc: EditSession) => void"
+  },
+  {
+    "name": "rev",
+    "signature": "number"
+  },
+  {
+    "name": "static registerBuiltinOp",
+    "signature": "(op: Readonly<OpDescriptor>) => void"
+  },
+  {
+    "name": "subscribe",
+    "signature": "(fn: BusListener) => () => void"
+  },
+  {
+    "name": "trace",
+    "signature": "{ recent: (n?: number) => SpanNode[]; last: () => SpanNode | null; dropped: () => number; }"
+  },
+  {
+    "name": "transientMode",
+    "signature": "boolean"
+  },
+  {
+    "name": "undo",
+    "signature": "() => boolean"
+  },
+  {
+    "name": "update",
+    "signature": "(handle: OpHandle, patch: Record<string, any>) => DispatchResult"
+  }
+]

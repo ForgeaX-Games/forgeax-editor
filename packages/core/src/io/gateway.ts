@@ -7,13 +7,20 @@ import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from '
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
 import type { OpDescriptor, PlanFn, ArgsSchema } from './catalog';
 import { listOps as catalogListOps, registerBuiltinOp, registerDefinedOp, hasOp, getOp } from './catalog';
-import { querySnapshot as _querySnapshot } from './query-snapshot';
-import type { QuerySnapshotDescriptor, QuerySnapshotResult, QuerySnapshotFn } from './query-snapshot';
+import type { QuerySnapshotFn } from './query-snapshot';
 import { validate as validateArgs } from './args-schema';
 import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
+// M3 w10 (plan-strategy §2 D-4, AC-04): non-entry history/step + op-handle detail
+// and the querySnapshot read-side assembly are sunk into these sibling modules.
+// gateway.ts keeps ONLY the single-entry dispatch/apply/ledger narrative; the
+// helpers it imports here shape steps / mint ids / bind the reader to the world —
+// none of them route a command or decide a domain.
+import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
+import type { CommandOrigin, HistoryStep } from './gateway-history';
+import { makeQueryFn } from './gateway-query';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -21,35 +28,16 @@ export type DispatchResult =
   | { ok: true }
   | { ok: false; error: CommandError };
 
-/** Who issued a command — human UI action vs AI tool-call. */
-export type CommandOrigin = 'human' | 'ai';
+// CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
+// detail, w10). Re-exported here so the barrel (index.ts) surface stays byte-
+// identical — every consumer keeps importing them from editor-core unchanged
+// (AC-03 consumers zero-edit).
+export type { CommandOrigin, HistoryStep };
 
 interface StackEntry {
   cmd: EditorOp;
   inverse: EditorOp;
   origin: CommandOrigin;
-}
-
-/** One timeline step for the History panel. */
-export interface HistoryStep {
-  label: string;
-  origin: CommandOrigin;
-  /** true if this step is currently undone (a redoable "future" step). */
-  future: boolean;
-  /** the entity this command operated on, if any (for selection sync). */
-  entity?: number;
-}
-
-function labelOf(cmd: EditorOp): string {
-  return cmd.kind + ('component' in cmd ? ` ${(cmd as { component: string }).component}` : '');
-}
-
-function entityOf(cmd: EditorOp): number | undefined {
-  return 'entity' in cmd ? (cmd as { entity: number }).entity : undefined;
-}
-
-function step(label: string, origin: CommandOrigin, future: boolean, entity: number | undefined): HistoryStep {
-  return entity === undefined ? { label, origin, future } : { label, origin, future, entity };
 }
 
 // ── Lifecycle types (plan-strategy §2 D-2) ──────────────────────────────────
@@ -81,11 +69,6 @@ interface ActiveOp {
    * verify F1). begin() takes the origin; the whole lifecycle carries it.
    */
   origin: CommandOrigin;
-}
-
-let _opHandleCounter = 0;
-function nextOpHandleId(): string {
-  return `op-${Date.now().toString(36)}-${(_opHandleCounter++).toString(36)}`;
 }
 
 // ── Executor + ApplierCtx (§2 D-2, requirements AC-01) ────────────────────
@@ -248,8 +231,9 @@ export class EditGateway {
    *  ctx.engine / ctx.dispatchSub / ctx.query — NO world field (AC-01). */
   private _buildCtx(): ApplierCtx {
     const engine = this._getEngineFacade();
-    const query: QuerySnapshotFn = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
-      _querySnapshot(this.doc.world!, desc);
+    // Read-side reader bound to the LIVE world (makeQueryFn calls getWorld per
+    // query, so a world swap is reflected) — sunk assembly, w10.
+    const query: QuerySnapshotFn = makeQueryFn(() => this.doc.world);
     // dispatchSub: recursive dispatch through the executor — replaces M1's
     // module-level _dispatchDocumentSub for transaction/plan sub-ops.
     // Nested spans are automatically created via _execDocumentApplier.
@@ -285,8 +269,10 @@ export class EditGateway {
       dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub, alias),
       // Read side: same query-snapshot the session/eval ctx exposes (D-2 ctx
       // contract, t12a). Document appliers don't read it, but it is part of the
-      // ctx shape and available for defined document ops that might.
-      query: (desc) => _querySnapshot(this.doc.world!, desc as QuerySnapshotDescriptor),
+      // ctx shape and available for defined document ops that might. Sunk
+      // assembly via makeQueryFn (w10); DocQueryFn's structural (desc:unknown)
+      // shape widens the io QuerySnapshotFn — cast at the boundary as before.
+      query: makeQueryFn(() => this.doc.world) as unknown as DocApplierCtx['query'],
     };
     return ctx;
   }
@@ -663,10 +649,11 @@ export class EditGateway {
     registerBuiltinOp(op);
   }
 
-  /** Build a query-snapshot function for defineOp plan(). */
+  /** Build a query-snapshot function for defineOp plan(). Public entry face is
+   *  frozen (AC-03); the read-side assembly it returns is sunk into
+   *  io/gateway-query.ts (makeQueryFn, w10). */
   buildQueryFn(): QuerySnapshotFn {
-    return (descriptor: QuerySnapshotDescriptor): QuerySnapshotResult =>
-      _querySnapshot(this.doc.world!, descriptor);
+    return makeQueryFn(() => this.doc.world);
   }
 
   /**
@@ -719,8 +706,7 @@ export class EditGateway {
       documentAppliers.set(id, (_ctx: unknown, cmd: EditorOp) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
-        const query: unknown = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
-          _querySnapshot(this.doc.world!, desc);
+        const query: unknown = makeQueryFn(() => this.doc.world);
 
         let planCommands: EditorOp[];
         try {
@@ -759,8 +745,7 @@ export class EditGateway {
       sessionAppliers.set(id, ((op: EditorOp, _ctx?: SessionApplierCtx) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = op as { kind: string } & Record<string, unknown>;
-        const query: unknown = (desc: QuerySnapshotDescriptor): QuerySnapshotResult =>
-          _querySnapshot(this.doc.world!, desc);
+        const query: unknown = makeQueryFn(() => this.doc.world);
 
         let planOps: EditorOp[];
         try {

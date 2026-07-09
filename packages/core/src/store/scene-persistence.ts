@@ -1,402 +1,244 @@
-// store/scene-persistence — the game's authored scene: disk load/save, multi-scene
-// (level) management, engine-native world<->pack serialization, and the dirty
-// tracker. This is the largest cluster (25 value exports).
+// store/scene-persistence — the COMPOSITION ROOT for the game's authored-scene
+// persistence. It owns the ONE mutable state handle (ScenePersistenceContext),
+// wires the four persistence DI units, holds the async session-op capture-promise
+// seam + the eval-time dirty subscription, and re-exports the composed surface so
+// the store.ts barrel + disk-watch consumers stay unchanged.
 //
-// State: currentSceneId / currentSceneFile / sceneList / currentSceneGuid /
-// currentSceneRoot / _isDirty (module-level). Consumers: the whole editor via
-// the barrel; disk-watch reads the internal seams below.
+// State: all mutable persistence state lives on ONE explicit handle,
+// `ScenePersistenceContext` (see createScenePersistenceContext below), reached via
+// the module-single `ctx` const — the 7 formerly scattered module-level `let`
+// singletons (currentSceneId / currentSceneFile / sceneList / currentSceneGuid /
+// currentSceneRoot / asyncOpResult / isDirty) are its fields. A reader holds one
+// concept ("the persistence context"), not seven globals (charter F1 / AC-01: no
+// module-level mutable singleton for persistence state).
+//
+// M2 DI decomposition (w6/w7): the four responsibility clusters are extracted
+// into `create<Thing>(deps)` factories under ./persistence/ (run-lifecycle form):
+//   - disk-io.ts     — high side-effect: disk load/save, world<->pack, scene-load,
+//                      save beacon (createDiskIo).
+//   - scene-list.ts  — multi-scene manifest discovery + in-place switch
+//                      (createSceneList).
+//   - play-config.ts — launcher <game>/play-config.json read/write
+//                      (createPlayConfig) — the clean apiFetch-injection proof.
+//   - storage.ts     — localStorage doc-key / hidden sidecar / retired mirror
+//                      (createStorage).
+// This root builds ONE of each with the real gateway / apiFetch / fetchWithTimeout
+// / resolveGamePath and re-exports their surfaces, so a headless test drives each
+// factory directly with fakes (AC-02, see __tests__/persistence-*.test.ts) while
+// consumers see the same barrel. apiFetch moved from a module import to
+// `deps.apiFetch` (D-3 / R-6 structural injection); the transport body
+// (io/api-client.ts) is untouched (OOS-4). The async-op capture-promise seam
+// (runAsyncOp / registerAsyncSessionOp / dispatchAsyncSessionOp, on
+// ctx.asyncOpResult) stays HERE so the one dispatch slot lives in one place; the
+// factories only produce the raw async impls this root registers + wraps.
 //
 // R3 (plan-strategy §4 / research F-4): the top-level `gateway.subscribe(...)` that
-// sets `_isDirty = true` is an EVAL-TIME side effect and MUST stay a top-level
+// sets `ctx.isDirty = true` is an EVAL-TIME side effect and MUST stay a top-level
 // statement — NOT lazified — or dirty tracking breaks.
 //
 // D-6 internal seams (plan-strategy §2, @internal-store): disk-watch depends on
 // scene-persistence file-private symbols. worldToPack / scenePath /
-// loadSceneByGuid / _isDirty / currentSceneGuid are exported for disk-watch to
-// READ; _setDirty / _setCurrentSceneGuid are minimal setters disk-watch calls to
-// WRITE those `let`s (ESM imported bindings are read-only in the importer, so a
-// cross-module `let` write must route through a setter — D-6's "export a minimal
-// setter when a write point exists"). These seams DO NOT enter the store.ts
-// facade or the barrel.
+// loadSceneByGuid (the composed diskIo's functions, re-exported verbatim) + the
+// `ctx` handle are exported for disk-watch to READ ctx.currentSceneGuid /
+// ctx.isDirty; disk-watch WRITES them through the cohesive ctx.setCurrentSceneGuid
+// / ctx.setDirty methods on that SAME live handle. These seams DO NOT enter the
+// store.ts facade or the barrel.
+//
+// D-8 (fan_in avoidance): the extracted DI units live under store/persistence/ and
+// are NOT re-exported from core's index.ts top-level barrel — only this root
+// (already in the store barrel) forwards them, so index.ts fan_in (42) does not
+// rebound (plan-strategy §2 D-8 / R-4).
 //
 // Anchors:
-//   plan-strategy §2 D-2: cluster 10 (store.ts:320-1141 + replaceDoc/
-//     clearDocStorage at 1250-1269, physically interleaved after disk-watch).
-//   plan-strategy §2 D-6: internal seams; §2 D-7: buildHiddenKey / clearDocStorage
-//     are dead exports (†) kept verbatim; stripEditorHiddenMarker is test-consumed.
+//   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
+//     plan-id; AC-01 (7 singletons -> one explicit context, grep 0) + AC-02
+//     (headless-injectable DI units) + AC-08 (core max_file_loc drop) + AC-07
+//     (bidirectional anchors); plan-strategy §2 D-2 (ScenePersistenceContext) + D-3
+//     (create<Thing>(deps), apiFetch via deps) + D-6 (internal seams) + D-8 (subdir
+//     landing) + §8 naming (<Thing>Context / create<Thing> / <Thing>Deps).
+//   (backward) split out of store.ts by historical feat
+//     feat-20260705-editor-core-engine-convergence-store-ts-decompose (store.ts
+//     1344 -> 14 files; scene-persistence.ts 1032 = the debt this loop retires;
+//     git-log-verified creation commit 1ceb6b3 / release snapshot 96364b2).
+//   plan-strategy §2 D-7: buildHiddenKey / clearDocStorage are dead exports (†)
+//     kept verbatim; stripEditorHiddenMarker is test-consumed.
 //   research F-4 / R3: gateway.subscribe kept top-level.
-//   requirements AC-09: pure structural migration; the only body edits are the
-//     ESM-forced seam routings (docVersion++/for -> notifyDocChanged();
-//     selectionList=[]/emitSelection -> setSelectionMany([]); disk-watch's writes
-//     -> setters), each behaviorally identical.
-import { useSyncExternalStore } from 'react';
+//   requirements AC-09: pure structural migration — every read/write is
+//     behaviorally identical (OOS-1 zero behavior change).
 import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
-import { worldRootHandles } from './entity-state';
-import { isScenePack, stableGuid, validatePackShell } from '../scene/scene-pack';
-import { rootsToSceneAsset, serializeSceneAssetToPack, SceneInstance } from '@forgeax/engine-runtime';
-import { loadGameProject, FORGE_JSON, type GameProject } from '@forgeax/engine-project';
+import { stableGuid } from '../scene/scene-pack';
 import { apiFetch } from '../io/api-client';
-import { findScenePackByGuid, findAllScenePacks } from '../assets/assets';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
-import type { EditorOp, EditSession } from '../types';
-import type { EntityHandle, WorldType } from '../scene/scene-types';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
-import type { SceneAsset } from '@forgeax/engine-types';
+import { createDiskIo } from './persistence/disk-io';
+import { createSceneList } from './persistence/scene-list';
+import { createPlayConfig } from './persistence/play-config';
+import { createStorage } from './persistence/storage';
+import type { EditorOp } from '../types';
+import type { EntityHandle } from '../scene/scene-types';
 
-// Engine wire constant for an unspawned SceneInstance.mapping slot (gap left by
-// a deleted entity). Kept as a local literal because engine-runtime does not
-// re-export it and editor-core deliberately does not import from engine-ecs;
-// the value is stable (@forgeax/engine-ecs entity-handle.ts ENTITY_NULL_RAW).
-const ENTITY_NULL_RAW = 0xffffffff;
-
-// ── Scene document persistence (autosave/restore), PER GAME/SCENE ─────────────
-// Keyed by the scene slug from `?scene=<slug>` (the active game). Previously a
-// single global key meant every game opened the SAME doc — so picking shoot-opt
-// showed whatever was last edited (or the demo). Now each game has its own
-// persisted editor scene; switching games loads that game's scene, and edits
-// save back to it. `setSceneId` must run at boot BEFORE loadDocFromStorage.
-const DOC_KEY_PREFIX = 'forgeax:editor:doc:v1';
-let currentSceneId = 'default';
-function docKey(id: string): string {
-  return `${DOC_KEY_PREFIX}:${id}${currentSceneFile ? `:${currentSceneFile}` : ''}`;
+// ── ScenePersistenceContext: the one mutable persistence-state handle (D-2) ────
+// The 7 formerly module-level `let` singletons collapse into ONE object with
+// cohesive read/write methods for the cross-module (disk-watch) write points.
+// A single `const ctx = createScenePersistenceContext()` is the module's whole
+// mutable persistence surface — every unit reads/writes `ctx.<field>` via deps.ctx.
+// disk-watch imports the SAME `ctx` and calls ctx.setDirty / ctx.setCurrentSceneGuid,
+// so its two reverse-writes land on the shared live handle (not a snapshot) —
+// the semantic equal of the deleted _setDirty / _setCurrentSceneGuid setters
+// (plan-strategy §2 D-2 / D-6; §8 naming: <Thing>Context; AC-01).
+export interface ScenePersistenceContext {
+  /** Active game slug from `?scene=<slug>` ('default' before setSceneId at boot). */
+  currentSceneId: string;
+  /** The one level this window edits (UE "level asset" model); null = legacy
+   *  single top-level scene.pack.json mode. */
+  currentSceneFile: string | null;
+  /** Discovered scene manifest for the active game (multi-scene / level list). */
+  sceneList: SceneFileEntry[];
+  /** The active scene asset's STABLE GUID, captured from disk on load. A scene's
+   *  GUID is its identity (forge.json defaultScene / sibling level packs reference
+   *  it, Play's catalog resolves it) and must survive edits — moving an entity
+   *  must not mint a new GUID. Saving re-uses this so the pack on disk keeps the
+   *  GUID forge.json points at. Reset on every load attempt; null until known.
+   *  @internal-store — disk-watch READS this to content-compare a self-save echo
+   *  and WRITES it via setCurrentSceneGuid (D-6 seam). */
+  currentSceneGuid: string | null;
+  /** The synthetic SceneInstance root handle of the currently loaded scene, kept
+   *  so a disk-watch reload can despawnScene it before re-instantiating (avoids a
+   *  double-spawn). null when no scene is loaded (seed / fresh workspace). */
+  currentSceneRoot: EntityHandle | null;
+  /** Module-scoped slot carrying an async session-op's in-flight promise from the
+   *  applier back to the public setter within one synchronous dispatch (M2 D-1). */
+  asyncOpResult: Promise<boolean> | null;
+  /** True while the in-memory scene has unsaved edits (dirty indicator + the
+   *  disk-watch "don't clobber my edits" guard). @internal-store — disk-watch
+   *  READS this and WRITES it via setDirty after an external reload (D-6 seam). */
+  isDirty: boolean;
+  /** Inline-asset floor captured from the on-disk pack at LOAD time. The save
+   *  guard (both the awaited doSaveDocToDisk path and the sync unload-time beacon)
+   *  refuses to write a pack with FEWER inline (material/texture/…) assets than the
+   *  scene was loaded with — defeating the data-loss loop where a strip lowers the
+   *  on-disk count so a naive count-vs-disk guard lets 0 >= 0 pass forever (and the
+   *  beacon path had no guard at all). Anchored to the LOAD baseline (not the
+   *  current on-disk file); the beacon reads it synchronously (no disk await during
+   *  pagehide). null = no scene loaded yet (guard is a no-op, e.g. first-ever save). */
+  loadedInlineAssetFloor: number | null;
+  /** Cohesive dirty write — disk-watch's reverse-write seam (== deleted _setDirty). */
+  setDirty(v: boolean): void;
+  /** Cohesive scene-GUID write — disk-watch's reverse-write seam
+   *  (== deleted _setCurrentSceneGuid). */
+  setCurrentSceneGuid(guid: string): void;
 }
 
-// ── Editor-only hidden sidecar (plan-strategy §2 D-4) ─────────────────────────
-// Hidden entities are editor view-layer state (OOS-6: no Enable/Disable component
-// in the engine). They are NOT stored in SceneAsset pack payload — the pack schema's
-// additionalProperties:false three-layer validation is the fail-fast guarantee
-// (requirements AC-01, AC-10). Instead, hidden ids live in localStorage sidecar
-// keys, following the same {sceneId}:{sceneFile} scoping convention as docKey().
-const HIDDEN_SIDECAR_KEY_PREFIX = 'forgeax:editor:hidden:v1';
-export function buildHiddenKey(sceneId?: string, sceneFile?: string | null): string {
-  const sid = sceneId || currentSceneId;
-  const sfile = sceneFile !== undefined ? sceneFile : currentSceneFile;
-  return sfile
-    ? `${HIDDEN_SIDECAR_KEY_PREFIX}:${sid}:${sfile}`
-    : `${HIDDEN_SIDECAR_KEY_PREFIX}:${sid}`;
+/** Build the single persistence-state handle. Field initial values are the exact
+ *  historical `let` initializers (OOS-1 zero behavior change). */
+export function createScenePersistenceContext(): ScenePersistenceContext {
+  return {
+    currentSceneId: 'default',
+    currentSceneFile: null,
+    sceneList: [],
+    currentSceneGuid: null,
+    currentSceneRoot: null,
+    asyncOpResult: null,
+    isDirty: false,
+    loadedInlineAssetFloor: null,
+    setDirty(v: boolean): void { this.isDirty = v; },
+    setCurrentSceneGuid(guid: string): void { this.currentSceneGuid = guid; },
+  };
 }
 
-// Session applier (M2 D-1): setSceneId body, registered into the session table.
+/** @internal-store — the module-single persistence context. Exported so disk-watch
+ *  reaches the SAME live handle; NOT re-exported through the store.ts facade/barrel. */
+export const ctx = createScenePersistenceContext();
+
+/** A game's scene-manifest entry (one level pack). */
+export interface SceneFileEntry { id: string; name?: string; pack: string }
+
+// ── Compose the four persistence DI units (D-3) ───────────────────────────────
+// ONE of each factory with the real gateway / apiFetch / fetchWithTimeout /
+// resolveGamePath. The DAG is one-directional: disk-io + storage are leaves
+// (state via ctx + injected net), scene-list depends on them (via wired deps),
+// and this root wires + re-exports all four. disk-watch consumes worldToPack /
+// scenePath / loadSceneByGuid off diskIo (re-exported below).
+const diskIo = createDiskIo({
+  ctx,
+  gateway,
+  apiFetch,
+  fetchWithTimeout,
+  resolveGamePath,
+  notifyDocChanged,
+  saveDocToDiskViaDispatch: () => { void saveDocToDisk(); },
+});
+
+const storage = createStorage({ ctx });
+
+const playConfig = createPlayConfig({ ctx, apiFetch, resolveGamePath });
+
+const sceneList = createSceneList({
+  ctx,
+  gateway,
+  fetchWithTimeout,
+  resolveGamePath,
+  flushPendingSaveBeacon: () => diskIo.flushPendingSaveBeacon(),
+  loadDocFromDisk: () => diskIo.doLoadDocFromDisk(),
+  loadDocFromStorage: () => storage.loadDocFromStorage(),
+  replaceDoc: (doc) => diskIo.replaceDoc(doc),
+});
+
+// ── Session applier: setSceneId (M2 D-1) ──────────────────────────────────────
+// setSceneId body, registered into the session table. M3 t22 (S10 / AC-21/22):
+// the write-side sugar was deleted — callers dispatch gateway.dispatch({ kind:
+// 'setSceneId', id }) directly. Read-side (getSceneId) stays.
 function applySetSceneId(op: EditorOp): { ok: true } {
   const v = ((op as { id: string | null | undefined }).id ?? '').trim();
-  currentSceneId = v || 'default';
+  ctx.currentSceneId = v || 'default';
   return { ok: true };
 }
 sessionAppliers.set('setSceneId', applySetSceneId);
 
-// M3 t22 (S10 / AC-21/22): setSceneId write-side sugar deleted — callers
-// dispatch gateway.dispatch({ kind: 'setSceneId', id }) directly. Read-side
-// (getSceneId) stays.
-export function getSceneId(): string { return currentSceneId; }
-
-// ── Multi-scene (level) files per game ────────────────────────────────────────
-// A game may declare multiple scene packs in its forge.json:
-//   { "scenes": [{ "id": "level1", "name": "Level 1", "pack": "scenes/level1.pack.json" }, …],
-//     "defaultScene": "level1" }
-// The editor then edits ONE of them at a time (`currentSceneFile`), switchable
-// live via the SceneSwitcher UI — the UE "level asset" model.
-//
-// Scene-as-asset is the canonical model: a scene is a GUID-keyed asset, and
-// `forge.json.defaultScene` (a scene GUID) is the engine SSOT for which scene
-// ▶ Play boots and ✎ Edit opens. The editor discovers it by resolving that GUID
-// to the pack that declares it (findScenePackByGuid, scanning scenes/ + assets/
-// + root). The engine's own templates/game-default is now this shape:
-// `assets/scene.pack.json` + `forge.json.defaultScene`.
-//
-// The single top-level `scene.pack.json` mode (currentSceneFile stays null, every
-// path/key reduces to the single-scene shape) is retained only as LEGACY COMPAT
-// for older games that predate scene-as-asset and carry no defaultScene GUID — it
-// is NOT the canonical shape. New/template games go through the defaultScene path.
-export interface SceneFileEntry { id: string; name?: string; pack: string }
-let currentSceneFile: string | null = null;
-let sceneList: SceneFileEntry[] = [];
-// The active scene asset's STABLE GUID, captured from disk on load. A scene's
-// GUID is its identity (forge.json defaultScene / sibling level packs reference
-// it, ▶ Play's catalog resolves it) and must survive edits — moving an entity
-// must not mint a new GUID. Saving re-uses this so the pack on disk keeps the
-// GUID forge.json points at. Reset on every load attempt; null until known.
-/** @internal-store — disk-watch READS this to content-compare a self-save echo
- *  (D-6 seam); writes route through _setCurrentSceneGuid. Not in facade/barrel. */
-export let currentSceneGuid: string | null = null;
-// The synthetic SceneInstance root handle of the currently loaded scene, kept so
-// a disk-watch reload can despawnScene it before re-instantiating (avoids a
-// double-spawn). null when no scene is loaded (seed / fresh workspace).
-let currentSceneRoot: EntityHandle | null = null;
-/** The synthetic SceneInstance root of the scene loaded into the LIVE editor
- *  world (gateway.doc.world) by loadSceneByGuid. run-lifecycle reads this to snapshot
- *  the scene for ▶ Play / ■ Stop (getSceneInstanceState/despawnScene must use a
- *  root in the SAME world the game runs in — NOT openProject's throwaway world).
- *  null when no scene is loaded (seed / fresh workspace). */
-export function getLoadedSceneRoot(): number | null { return currentSceneRoot; }
-const sceneListListeners = new Set<() => void>();
-function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
-function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${currentSceneId}`; }
-
-export function getSceneFile(): string | null { return currentSceneFile; }
-export function getSceneList(): SceneFileEntry[] { return sceneList; }
-export function onSceneListChange(fn: () => void): () => void {
-  sceneListListeners.add(fn);
-  return () => sceneListListeners.delete(fn);
-}
-export function useSceneList(): SceneFileEntry[] {
-  return useSyncExternalStore(onSceneListChange, getSceneList, getSceneList);
-}
-export function useSceneFile(): string | null {
-  return useSyncExternalStore(onSceneListChange, getSceneFile, getSceneFile);
-}
-
-function forgeJsonPath(): string | null {
-  return currentSceneId === 'default' ? null : resolveGamePath(FORGE_JSON);
-}
-
-/**
- * Read forge.json via the authoritative loadGameProject loader (AC-11).
- * Returns typed GameProject for contract fields (id/name/defaultScene/physics/pointerLock/preview).
- * Returns null if forge.json missing or invalid — callers handle gracefully.
- */
-async function readGameProject(): Promise<GameProject | null> {
-  const p = forgeJsonPath();
-  if (!p) return null;
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    const content = j.content;
-    const result = await loadGameProject(async (_path: string) => content);
-    if (!result.ok) {
-      // forge.json exists but doesn't pass strict validation — log and return null.
-      // Most common case: scenes[] present (editor-managed multi-scene, D-5).
-      console.warn('[editor-core] loadGameProject failed:', result.error.code, result.error.hint);
-      return null;
-    }
-    return result.value;
-  } catch { return null; }
-}
-
-/**
- * Read raw forge.json content as Record for editor-local scenes[] access (D-5).
- * Preserved so initSceneList/addScene/switchSceneFile can read/write scenes[]
- * without strict loader rejection. This is the editor's multi-scene management path
- * (OOS-6/step 3) — NOT converged to strict loader.
- */
-async function readRawForgeJson(): Promise<Record<string, unknown> | null> {
-  const p = forgeJsonPath();
-  if (!p) return null;
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    const parsed = JSON.parse(j.content);
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
-  } catch { return null; }
-}
-
-async function readForgeJson(): Promise<Record<string, unknown> | null> {
-  // Legacy alias — delegates to raw reader for scenes[] access (D-5).
-  // Contract fields: use readGameProject() for typed access.
-  return readRawForgeJson();
-}
-
-/** Discover the game's scene manifest. Must run AFTER setSceneId and BEFORE the
- *  first loadDocFromDisk/loadDocFromStorage so paths and storage keys resolve to
- *  the active scene file. Games without any `kind:'scene'` packs or defaultScene
- *  GUID fall back to legacy single-scene mode (top-level scene.pack.json).
- *
- *  A2/A3: scenes are ordinary assets discovered by `kind === 'scene'` field, not
- *  by directory convention. This scans ALL packs under the game dir and filters
- *  by kind — same mechanism as "find all materials". */
-export async function initSceneList(): Promise<void> {
-  currentSceneFile = null;
-  sceneList = [];
-  const fj = await readForgeJson();
-  if (currentSceneId !== 'default') {
-    // A2: scene discovery is kind-driven, not directory-driven. Scan all packs
-    // under the game dir and filter by `kind === 'scene'` (same mechanism as
-    // finding any other asset type).
-    const scenePacks = await findAllScenePacks(currentSceneId);
-    for (const { pack } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
-      const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-      sceneList.push({ id: stem, name: stem, pack });
-    }
-    // Fallback: resolve forge.json `defaultScene` GUID when no scene packs were
-    // found by the kind-based scan (e.g. legacy games with a root scene.pack.json
-    // that lack a proper `kind` field).
-    if (sceneList.length === 0) {
-      const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
-      if (defGuid) {
-        const pack = await findScenePackByGuid(currentSceneId, defGuid);
-        if (pack) {
-          const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-          sceneList.push({ id: stem, name: stem, pack });
-        }
-      }
-    }
-  }
-  if (sceneList.length > 0) {
-    // Binding priority — a window edits exactly ONE scene (UE-style):
-    //   1. `?sceneFile=<id>` in the URL — the window's own hard binding
-    //      (set when an asset/level is opened from the Assets panel; lets
-    //      multiple editor windows edit different levels side by side)
-    //   2. per-game localStorage — what this game last had open (survives the
-    //      Studio Edit iframe being rebuilt without URL params)
-    //   3. forge.json defaultScene → (NOTHING) — no alphabetical fallback
-    let urlWant: string | null = null;
-    try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
-    let want: string | null = null;
-    try { want = localStorage.getItem(sceneFileStorageKey()); } catch { /* unavailable */ }
-    const def = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
-    // forge.json.defaultScene is a scene GUID (the engine SSOT — the scene ▶ Play
-    // boots). Resolve it to the pack that DECLARES that scene asset and prefer
-    // that entry, so ✎ Edit opens the SAME scene Play does — not merely the
-    // alphabetically-first level. (The old `s.id === def` test never matched:
-    // sceneList ids are file stems, `def` is a GUID, so it silently fell through
-    // to firstScene and only lined up by luck when the default sorted first.)
-    const defPack = def ? await findScenePackByGuid(currentSceneId, def) : null;
-    const defId = defPack
-      ? (sceneList.find((s) => s.pack === defPack)?.id ?? null)
-      : null;
-    // NO alphabetical `firstScene` fallback: binding must come from an EXPLICIT,
-    // authoritative signal (URL ?sceneFile= / per-game localStorage / defaultScene
-    // GUID). `kind:"scene"` packs are discovered by kind alone — with no marker
-    // separating an authored MAIN scene from a runtime PREFAB (e.g. shoot-opt's
-    // enemy ships under assets/enemies/*.pack.json, instantiated via
-    // assets.instantiate). Auto-binding the alphabetically-first pack loaded an
-    // enemy prefab AS the editable scene, and the first dirty-flush then
-    // serialized the live world back over that prefab file, corrupting it. When
-    // nothing binds, stay null (legacy/seed path — same as a code-driven game with
-    // zero scene packs, e.g. fps) and tell the author how to pick a scene.
-    currentSceneFile =
-      (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
-      : (want && sceneList.some((s) => s.id === want)) ? want
-      : defId ? defId
-      : null;
-    if (currentSceneFile === null) {
-      console.warn(
-        `[editor-core] ${sceneList.length} scene pack(s) found but none bound for edit: `
-        + `set forge.json "defaultScene" to a scene GUID, or open a scene from the Assets panel `
-        + `(?sceneFile=<id>). Not auto-opening one — an unmarked pack may be a runtime prefab, `
-        + `and editing+saving it would overwrite the authored asset.`,
-      );
-    }
-  }
-  emitSceneList();
-}
-
-/** Open another scene/asset pack IN THIS WINDOW: flush the outgoing scene's
- *  pending save, persist the selection, and navigate to a URL that carries the
- *  binding (`?sceneFile=<id>`) — one editor window edits exactly one scene;
- *  multiple windows can edit different levels side by side (UE model). The
- *  navigation reload also re-enters the proven cold-boot path (the engine-sync
- *  structural-rebuild path currently leaves the renderer black — pre-existing
- *  fullRebuild issue; value-only doc changes still live-patch as before). */
-async function doSwitchSceneFile(id: string): Promise<boolean> {
-  if (id === currentSceneFile) return true;
-  if (!sceneList.some((s) => s.id === id)) return false;
-  flushPendingSaveBeacon();
-  try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
-  // IN-PLACE switch (no location.reload). Reloading the main window re-creates the
-  // WebGPU device, which wedges WKWebView's GPU process (the desktop "切场景就死机").
-  // Instead: update the URL via history, repair the per-file sync channel, reload the
-  // doc (createEngineSync re-renders the viewport reactively — same world/renderer,
-  // no context recreate), and signal the DOM-only panels (no GPU) to re-pair via the
-  // per-game control channel. Falls back to a full reload if the in-place path throws.
-  try {
-    currentSceneFile = id;
-    const u = new URL(location.href);
-    u.searchParams.set('sceneFile', id);
-    try { history.replaceState(history.state, '', u.toString()); } catch { /* SSR/old */ }
-    // Internal call → the impl, not the dispatching wrapper (no nested dispatch).
-    const ok = await doLoadDocFromDisk();
-    if (!ok) loadDocFromStorage();
-    // loadDocFromDisk/Storage set gateway.doc DIRECTLY and notify React doc listeners,
-    // but NOT the gateway.subscribe listeners the viewport uses to (re)build the
-    // RENDERED scene — so without this the viewport keeps showing the OLD scene
-    // (verified: doc updates 64→136 but world stays 67). Fire them via replaceDoc,
-    // which also clears the previous scene's undo history (correct for a swap).
-    replaceDoc(gateway.doc);
-    return true;
-  } catch (e) {
-    console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
-    const u = new URL(location.href);
-    u.searchParams.set('sceneFile', id);
-    location.assign(u.toString());
-    return true;
-  }
-}
+// ── scene-list / switch cluster surface (createSceneList) ──────────────────────
+export const getSceneId = sceneList.getSceneId;
+export const getLoadedSceneRoot = sceneList.getLoadedSceneRoot;
+export const getSceneFile = sceneList.getSceneFile;
+export const getSceneList = sceneList.getSceneList;
+export const onSceneListChange = sceneList.onSceneListChange;
+export const useSceneList = sceneList.useSceneList;
+export const useSceneFile = sceneList.useSceneFile;
+export const initSceneList = sceneList.initSceneList;
 
 // Session op (M2 D-1): switchSceneFile carries an id payload, so its applier
 // reads the id off the op before running the async impl (capture-promise seam).
 sessionAppliers.set('switchSceneFile', (op) => {
-  runAsyncOp(() => doSwitchSceneFile((op as { id: string }).id));
+  runAsyncOp(() => sceneList.doSwitchSceneFile((op as { id: string }).id));
   return { ok: true };
 });
 export function switchSceneFile(id: string): Promise<boolean> {
   return dispatchAsyncSessionOp({ kind: 'switchSceneFile', id });
 }
 
-// ── Launcher config (UE-style "play this level") ─────────────────────────────
-// <game>/play-config.json (host-resolved) — read by the GAME at boot:
-//   { mode: 'campaign' }                  → ▶ Play runs main from level 1
-//   { mode: 'level', level: '<sceneId>' } → ▶ Play runs just that level
-// The editor's PlayLauncher select writes it via /api/files (gitignored,
-// per-developer launcher state).
-export interface PlayConfig { mode: 'campaign' | 'level'; level?: string; endAfter?: boolean }
-function playConfigPath(): string | null {
-  return currentSceneId === 'default' ? null : resolveGamePath('play-config.json');
-}
-export async function readPlayConfig(): Promise<PlayConfig> {
-  const p = playConfigPath();
-  if (!p) return { mode: 'campaign' };
-  try {
-    // optional=1: play-config.json is per-developer launcher state that may not
-    // exist yet (default = campaign). The flag makes the server return 200
-    // { exists:false } instead of 404, so an absent config logs no red error.
-    const r = await apiFetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
-    if (r.ok) {
-      const j = (await r.json()) as { content?: string };
-      if (j.content) {
-        const cfg = JSON.parse(j.content) as PlayConfig;
-        if (cfg && (cfg.mode === 'campaign' || cfg.mode === 'level')) return cfg;
-      }
-    }
-  } catch { /* missing → campaign */ }
-  return { mode: 'campaign' };
-}
-export async function writePlayConfig(cfg: PlayConfig): Promise<boolean> {
-  const p = playConfigPath();
-  if (!p) return false;
-  try {
-    const r = await apiFetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: p, content: JSON.stringify(cfg, null, 2) + '\n' }),
-    });
-    return r.ok;
-  } catch { return false; }
-}
+// ── play-config cluster surface (createPlayConfig) ────────────────────────────
+export type { PlayConfig } from './persistence/play-config';
+export const readPlayConfig = playConfig.readPlayConfig;
+export const writePlayConfig = playConfig.writePlayConfig;
 
+// ── createSceneFile: a new level pack + navigate (root glue) ───────────────────
+// Not a pure state-cluster op (it writes a new pack via apiFetch then navigates),
+// so it stays wired at the root next to the async-op seam it dispatches through.
 /** Create a new level under assets/scenes/<slug>.pack.json (empty, or duplicated
- *  from the current doc) and switch to it. NOTHING is written to forge.json,
- *  whose strict engine-project schema rejects an editor `scenes[]` field. The
- *  display name is the file stem (`slug`), so the game's LEVELS[].id can match
- *  it 1:1. */
+ *  from the current doc) and switch to it. NOTHING is written to forge.json. The
+ *  display name is the file stem (`slug`), so the game's LEVELS[].id can match it
+ *  1:1. */
 async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
-  if (currentSceneId === 'default') return false;
+  if (ctx.currentSceneId === 'default') return false;
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!slug || sceneList.some((s) => s.id === slug)) return false;
+  if (!slug || ctx.sceneList.some((s) => s.id === slug)) return false;
   const sourceDoc = duplicateCurrent ? gateway.doc : createEditSession();
+  void sourceDoc; // reserved for a future duplicate-content path (historical signature parity)
   const newPath = resolveGamePath(`assets/scenes/${slug}.pack.json`);
-  // A NEW level gets its own stable, path-derived GUID — never the source
-  // scene's GUID (duplicate must be a distinct asset) and never an order-derived
-  // one (which would drift on the first edit).
-  // M5: construct a minimal empty-scene pack directly (sessionToPack deleted).
-  // A new empty scene has no entities — the pack is just a skeleton.
+  // A NEW level gets its own stable, path-derived GUID — never the source scene's
+  // GUID and never an order-derived one (which would drift on the first edit).
   const newSceneGuid = stableGuid('scene|' + newPath);
   const newPack = { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [{ guid: newSceneGuid, kind: 'scene', payload: { entities: [] }, refs: [] }] };
   const packContent = JSON.stringify(newPack, null, 2) + '\n';
@@ -409,13 +251,12 @@ async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise
     if (!w1.ok) return false;
   } catch { return false; }
   // Persist + navigate this window into the new scene (see switchSceneFile).
-  try { localStorage.setItem(sceneFileStorageKey(), slug); } catch { /* unavailable */ }
+  try { localStorage.setItem(`forgeax:editor:sceneFile:${ctx.currentSceneId}`, slug); } catch { /* unavailable */ }
   const u = new URL(location.href);
   u.searchParams.set('sceneFile', slug);
   location.assign(u.toString());
   return true;
 }
-
 // Session op (M2 D-1): createSceneFile carries id + duplicateCurrent payload.
 sessionAppliers.set('createSceneFile', (op) => {
   const o = op as { id: string; duplicateCurrent: boolean };
@@ -426,654 +267,91 @@ export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<
   return dispatchAsyncSessionOp({ kind: 'createSceneFile', id, duplicateCurrent });
 }
 
-/** Rebuild a fresh EditSession around an incoming {world, registry} so its
- *  `asset` getter stays live after a scene swap.
- *
- *  feat-20260701 M7 / AC-15: EditSession is just {world, registry} with the
- *  engine World as the entity SSOT. feat-20260703 (single realm): the cross-
- *  window snapshot/BroadcastChannel revive path is gone — callers always pass a
- *  locally-built doc with a live world. M3 (I1): the session carries no internal
- *  identity state — handle IS identity. */
-function reviveSession(doc: EditSession): EditSession {
-  const fresh = createEditSession();
-  // Single realm (feat-20260703): every doc reaching here is locally built and
-  // carries a live engine World (the cross-window BroadcastChannel snapshot path
-  // + dead-world cache were deleted with the sync engine). Reattach the incoming
-  // world/registry onto a fresh EditSession so its `asset` getter is restored.
-  fresh.world = doc.world;
-  if (doc.registry !== undefined && doc.registry !== null) fresh.registry = doc.registry;
-  return fresh;
-}
+// ── storage cluster surface (createStorage) ───────────────────────────────────
+export const buildHiddenKey = storage.buildHiddenKey;
+export const loadDocFromStorage = storage.loadDocFromStorage;
+export const clearDocStorage = storage.clearDocStorage;
 
-export function loadDocFromStorage(): boolean {
-  // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-  // The legacy localStorage doc-mirror stored the EntityNode/doc.entities dual
-  // write. With the engine World as the sole entity SSOT, that mirror can no
-  // longer rehydrate into a live World (structuredClone of a World POD is inert),
-  // so scene state now reloads exclusively from the on-disk pack
-  // (loadDocFromDisk → loadWorldFromPack → world.instantiateScene). This
-  // localStorage fast-path is retired.
-  return false;
-}
+// ── High-side-effect surface: re-export the composed diskIo unit (D-3/D-6) ─────
+// disk-watch imports worldToPack / scenePath / loadSceneByGuid + ctx from HERE;
+// the store.ts barrel forwards flushPendingSaveBeacon / replaceDoc /
+// instantiateSceneRefUnderWorld / stripEditorHiddenMarker / inlineAssetCount.
+/** @internal-store — disk-watch READS this (D-6 seam). Not in facade/barrel. */
+export const scenePath = diskIo.scenePath;
+/** @internal-store — disk-watch READS this to serialize for the echo compare. */
+export const worldToPack = diskIo.worldToPack;
+/** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */
+export const loadSceneByGuid = diskIo.loadSceneByGuid;
+export const instantiateSceneRefUnderWorld = diskIo.instantiateSceneRefUnderWorld;
+export const flushPendingSaveBeacon = diskIo.flushPendingSaveBeacon;
+export const replaceDoc = diskIo.replaceDoc;
+export const stripEditorHiddenMarker = diskIo.stripEditorHiddenMarker;
+export const inlineAssetCount = diskIo.inlineAssetCount;
+// Pure load-floor strip guard (#101) — no deps, so re-exported straight from
+// disk-io rather than composed onto the diskIo instance. store.ts forwards it.
+export { wouldDropInlineAssets } from './persistence/disk-io';
 
-// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-// The per-change localStorage doc-mirror is retired. It stored the deleted
-// EntityNode/doc.entities structure; serializing the {world} EditSession yields
-// an inert World POD that loadDocFromStorage can no longer rehydrate. Durable
-// state lives in the on-disk scene pack (loadDocFromDisk/saveDocToDisk).
-
-// ── Disk persistence: the game's authored scene-asset ────────────────────────
-// Design (editor-feature-spec §15): the EditSession is the SSOT, serialized as
-// self-describing JSON. We persist it to the GAME's folder so it's git-trackable,
-// AI-readable, and the same file ▶ Play can instantiate. Path is host-resolved
-// (resolveGamePath) from a game-relative name, e.g. `scene.pack.json` — the
-// editor never bakes in where the game lives on disk.
-// Reached via the server's /api/files (same-origin through the interface proxy).
-// localStorage stays as a fast offline mirror; disk is the durable source.
-//
-// The durable on-disk format is the engine's NATIVE scene pack (`scene.pack.json`)
-// — the editor in-memory EditSession is converted to/from it via
-// @forgeax/scene's sessionToPack/packToSession. (Legacy `scene.json` is still READ for
-// backward-compat; it is migrated to a pack on the next save.)
-/** @internal-store — disk-watch READS this to filter ws events to THIS game's
- *  scene file (D-6 seam). Not in facade/barrel. */
-export function scenePath(): string | null {
-  if (currentSceneId === 'default') return null;
-  if (currentSceneFile) {
-    const entry = sceneList.find((s) => s.id === currentSceneFile);
-    if (entry) return resolveGamePath(entry.pack);
-  }
-  return resolveGamePath('scene.pack.json');
-}
-/** The scene asset GUID to persist for the active scene. Prefers the GUID we
- *  read from disk (the scene's stable identity, e.g. the one forge.json's
- *  defaultScene points at); for a brand-new scene with no file yet, derives a
- *  STABLE GUID from the scene path (NOT from doc.order, which churns on every
- *  add/delete). Never returns the order-derived fallback for an existing scene —
- *  that drift is exactly what broke ▶ Play resolution after an edit. */
-function sceneGuidForSave(): string | undefined {
-  if (currentSceneGuid) return currentSceneGuid;
-  const p = scenePath();
-  return p ? stableGuid('scene|' + p) : undefined;
-}
-
-/**
- * Engine-native world→pack serialization (M5 / AC-08).
- * Replaces sessionToPack: uses rootsToSceneAsset + serializeSceneAssetToPack
- * on the live engine World. Returns null if world/registry unavailable or
- * collection/serialization fails.
- */
-/** Remove the editor-only `EditorHidden` marker from a collected SceneAsset's
- *  entities so it never lands in the persisted pack (AC-04), while the entities
- *  themselves stay (AC-05). SceneAsset/entities are readonly, so rebuild. */
-export function stripEditorHiddenMarker(asset: unknown): unknown {
-  const a = asset as { kind: string; entities?: ReadonlyArray<{ localId: unknown; components: Record<string, unknown> }> };
-  if (!a || !Array.isArray(a.entities)) return asset;
-  return {
-    ...a,
-    entities: a.entities.map((e) => {
-      if (!e.components || !('EditorHidden' in e.components)) return e;
-      const { EditorHidden: _drop, ...rest } = e.components;
-      return { ...e, components: rest };
-    }),
-  };
-}
-
-/** @internal-store — disk-watch READS this to serialize the live world for the
- *  self-save echo content-compare (D-6 seam). Not in facade/barrel. */
-export function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
-  const w: WorldType = doc.world;
-  const reg: AssetRegistry | undefined = doc.registry;
-  if (!w || !reg) {
-    console.warn('[editor-core] worldToPack: world or registry missing');
-    return null;
-  }
-  // Collect ALL root entities (visible AND hidden) so hidden entities survive
-  // the round-trip (AC-05: "隐藏一个实体 → save → reopen，实体仍在" — the entity is
-  // serialized normally; only its EditorHidden MARKER is stripped so the pack
-  // carries no hidden field, AC-04: "pack 序列化不含 hidden 字段"). Filtering the
-  // whole hidden entity out (the earlier impl) reproduced exactly the
-  // scene-pack.ts:178 data-loss bug AC-05 exists to fix (verify F6 / AGENTS.md #2).
-  // Derive roots from the live world (World exposes no `rootEntities` field —
-  // see worldRootHandles). M3 (I1): entities are enumerated via a Name query, so
-  // the editor camera/gizmo (no Name) and nameless mount anchors are naturally
-  // excluded — matching the old authored-only root set.
-  const rootHandles: EntityHandle[] = worldRootHandles(w);
-  // Use engine's rootsToSceneAsset + serializeSceneAssetToPack pipeline.
-  const assetR = rootsToSceneAsset(reg, w, rootHandles);
-  if (!assetR.ok) {
-    console.warn('[editor-core] worldToPack: rootsToSceneAsset failed:', assetR.error);
-    return null;
-  }
-  // Strip the editor-only EditorHidden marker from every collected entity — it
-  // is a registered component so rootsToSceneAsset would otherwise emit it into
-  // the pack (AC-04). The entity itself stays (AC-05). SceneAsset is readonly →
-  // rebuild entities without the marker.
-  const strippedAsset = stripEditorHiddenMarker(assetR.value) as SceneAsset;
-  const packR = serializeSceneAssetToPack(strippedAsset, sceneGuid);
-  if (!packR.ok) {
-    console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
-    return null;
-  }
-  // Round-trip inline assets (materials etc.) that live IN this scene.pack.
-  // serializeSceneAssetToPack emits only the `scene` asset; every shared ref
-  // (material / mesh GUID) is collected into the scene entry's refs[] as a
-  // GUID string, but the engine serializer never writes the referenced asset
-  // BODIES back. That is correct for CATALOG assets (their own .pack.json /
-  // .glb file, resolved via pack-index) and BUILTIN meshes (auto-registered,
-  // packageOf === null), but for INLINE materials — whose payload physically
-  // lives inside THIS scene.pack.json — dropping the body is data loss: on
-  // reload pack-index points their GUID back at scene.pack.json, finds no
-  // matching asset entry, and the MeshRenderer falls back to default grey.
-  // (This is the "add-to-scene → whole scene turned grey" regression.)
-  //
-  // Discriminator (verified against the live registry): a ref is inline to
-  // this scene iff its package path equals the scene asset's package path.
-  //   inline material  -> packageOf(ref).path === packageOf(sceneGuid).path
-  //   catalog asset     -> packageOf(ref).path is a DIFFERENT file (skip)
-  //   builtin mesh      -> packageOf(ref) === null (skip; auto-registers)
-  //   editor-authored   -> packageOf(ref) === null but kind !== scene/mesh
-  //                        (no owning file yet -> inline it here so it persists)
-  appendInlineAssets(packR.value as Record<string, unknown>, reg, sceneGuid);
-  return JSON.stringify(packR.value, null, 2) + '\n';
-}
-
-/** Count the inline (non-scene) asset entries in a serialized pack object —
- *  the material/texture/etc. bodies that must survive a save round-trip. Used
- *  by the saveDocToDisk safety net to refuse a write that would drop them. */
-export function inlineAssetCount(pack: unknown): number {
-  const assets = (pack as { assets?: ReadonlyArray<{ kind?: string }> })?.assets;
-  if (!Array.isArray(assets)) return 0;
-  return assets.filter((a) => a?.kind !== 'scene').length;
-}
-
-/** Re-append inline asset bodies (materials etc. whose payload lives in THIS
- *  scene.pack) to a freshly serialized pack, so saving round-trips them instead
- *  of silently dropping the payload. Mutates `pack.assets` in place. */
-function appendInlineAssets(
-  pack: Record<string, unknown>,
-  reg: AssetRegistry,
-  sceneGuid: string | undefined,
-): void {
-  const assets = pack.assets as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(assets)) return;
-  const sceneEntry = assets.find((a) => a.kind === 'scene');
-  const refs = (sceneEntry?.refs as ReadonlyArray<string> | undefined) ?? [];
-  if (refs.length === 0) return;
-
-  // The package path that identifies "inline to this scene". Prefer the scene
-  // GUID's own package path; fall back to the scene entry's guid.
-  const scenePkgGuid = sceneGuid ?? (sceneEntry?.guid as string | undefined);
-  const scenePath = scenePkgGuid ? reg.packageOf(scenePkgGuid)?.path : undefined;
-
-  const already = new Set(assets.map((a) => (a.guid as string | undefined)?.toLowerCase()));
-
-  for (const refGuid of refs) {
-    const key = refGuid.toLowerCase();
-    if (already.has(key)) continue;
-    const pkg = reg.packageOf(refGuid);
-    const payload = reg.lookup(refGuid) as { kind?: string } | undefined;
-    if (!payload) continue; // unresolvable — leave as a bare ref (catalog/builtin)
-    // Builtin meshes (packageOf === null, kind mesh) auto-register on load; a
-    // catalog asset has its own file (path !== scenePath). Only inline when the
-    // asset's body genuinely belongs in this scene.pack:
-    //   - same package path as the scene, OR
-    //   - no owning package (null) AND not a builtin mesh (editor-authored).
-    const isInline =
-      (pkg != null && pkg.path === scenePath) ||
-      (pkg === null && payload.kind !== 'mesh' && payload.kind !== 'scene');
-    if (!isInline) continue;
-    assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [] });
-    already.add(key);
-  }
-}
-
-/** The exact byte content saveDocToDisk would write for the current doc (used by
- *  the disk watcher to recognise its own echo).
- *
- *  Returns `null` when serialization FAILS (world/registry missing, or the engine
- *  rootsToSceneAsset / serializeSceneAssetToPack pipeline errors — e.g. a spawned
- *  entity carries a component the pack serializer can't persist). Callers MUST
- *  treat null as "do not write": the earlier `?? ''` fallback wrote an EMPTY
- *  string to disk on any serialize failure, silently clobbering the real
- *  scene.pack.json with 0 bytes (the "add City_Sample_512 → scene destroyed" data
- *  loss). A failed save must abort, never overwrite good data (AGENTS.md #2:
- *  authoring data must round-trip or it's a data-loss bug). */
-function serializedPack(): string | null {
-  return worldToPack(gateway.doc, sceneGuidForSave());
-}
-
-/** Load the active game's scene from disk (native pack preferred, legacy
- *  scene.json fallback). Returns true if a valid doc was loaded.
- *
- *  M4: scene-load uses engine-native world.instantiateScene instead of the
- *  deleted packToSession projection layer (AC-09). The pack JSON is parsed
- *  into a SceneAsset POD, refs indices resolved to GUID strings, then
- *  allocSharedRef('SceneAsset', ...) + world.instantiateScene materialises
- *  entities directly into the world — no doc.entities intermediate. */
-async function doLoadDocFromDisk(): Promise<boolean> {
-  const p = scenePath();
-  if (!p) return false;
-  // Forget the previous scene's identity before loading a new one, so a failed
-  // load can't make us save under a stale GUID (sceneGuidForSave falls back to a
-  // path-derived stable GUID when this stays null).
-  currentSceneGuid = null;
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
-    if (r.ok) {
-      const j = (await r.json()) as { content?: string };
-      if (j.content) {
-        const parsed = JSON.parse(j.content);
-        if (isScenePack(parsed)) {
-          // Capture the inline-asset floor from the pack AS LOADED, so a later
-          // save that would drop materials below this is refused (see the guard
-          // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk
-          // truth, not the live world (which may fail to populate handles).
-          loadedInlineAssetFloor = inlineAssetCount(parsed);
-          // Preserve the scene asset's GUID across edits (its stable identity).
-          const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
-          if (sceneAssetEntry?.guid) currentSceneGuid = sceneAssetEntry.guid;
-          // Load via the engine's canonical loadByGuid -> instantiate path (the
-          // SAME sequence the game's main.ts uses). This resolves refs[] ->
-          // GUID -> user-tier handle inside the engine (allocSharedRef mint), so
-          // shared refs are live before spawn retains them — the earlier
-          // hand-rolled loadWorldFromPack fed GUID STRINGS straight to
-          // instantiateScene, which coerced them to 0 and tripped
-          // SharedRefReleasedError. The instantiated handles ARE the identity
-          // (handle IS identity), so the loaded scene is reflected directly by the
-          // live world walk (else the seed() fallback misfires and drops the old vocab).
-          if (sceneAssetEntry?.guid) {
-            const ok = await loadSceneByGuid(sceneAssetEntry.guid);
-            if (ok) {
-              notifyDocChanged();
-              return true;
-            }
-          }
-          // GUID missing or engine load failed → fall through to seed.
-        }
-      }
-    }
-  } catch { /* fall through to seed */ }
-  // feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-  // The legacy pre-native-pack `scene.json` load path (which revived a
-  // doc.entities EditSession) is retired — M4 already deleted packToSession, so
-  // there is no converter from the flat entities format into the engine World.
-  // Only engine-native scene packs (loadWorldFromPack) load; a legacy scene.json
-  // is migrated on the next save.
-  return false;
-}
-
-registerAsyncSessionOp('loadDocFromDisk', doLoadDocFromDisk);
-/** Load the game's authored scene from disk (session op — ledger only, no undo).
- *  Internal callers (switchSceneFile) use doLoadDocFromDisk directly to avoid a
- *  nested dispatch; this exported wrapper is the human/AI entry point (m2-w8). */
+// ── Disk load / save session ops (session-domain, ledger only, no undo) ────────
+registerAsyncSessionOp('loadDocFromDisk', diskIo.doLoadDocFromDisk);
+/** Load the game's authored scene from disk (session op). Internal callers
+ *  (switchSceneFile) use diskIo.doLoadDocFromDisk directly to avoid a nested
+ *  dispatch; this exported wrapper is the human/AI entry point (m2-w8). */
 export function loadDocFromDisk(): Promise<boolean> {
   return dispatchAsyncSessionOp({ kind: 'loadDocFromDisk' });
 }
 
-// ── Scene-load: canonical engine loadByGuid → instantiate (engine SSOT) ─────
-//
-// The editor loads a scene the SAME way the game's main.ts does — the engine's
-// AssetRegistry.loadByGuid<SceneAsset>() (which recursively pulls the scene AND
-// its refs[] material/mesh/equirect siblings from the configured pack-index),
-// then allocSharedRef + registry.instantiate(). The engine's _resolveSceneGuids
-// mints one user-tier shared handle per unique GUID (allocSharedRef) BEFORE the
-// spawn retains it, so shared refs are always live. The prior hand-rolled path
-// (resolveRefsInComponents → world.instantiateScene with GUID STRINGS still in
-// the shared<T> fields) fed non-numeric values into Uint32 columns; `as number`
-// is erased at runtime, so retain saw a released/never-alloc'd slot →
-// SharedRefReleasedError. AGENTS.md #1: converge on the engine primitive, do not
-// re-hand-roll GUID resolution.
-
-/** Tear down the currently loaded scene before a fresh (re)load: despawn the
- *  SceneInstance subtree via the engine primitive. No-op when nothing is loaded.
- *  M3 (I1): there is no legacy-id map to clear — handle IS identity, so despawn
- *  is the whole teardown (the hierarchy re-walks the live world after). */
-function teardownCurrentScene(): void {
-  const w: WorldType = gateway.doc.world;
-  if (w && currentSceneRoot !== null) {
-    try { w.despawnScene(currentSceneRoot); } catch { /* best-effort */ }
-  }
-  currentSceneRoot = null;
-}
-
-/**
- * Load the game's scene by GUID via the engine's canonical loadByGuid →
- * instantiate pipeline. M3 (I1 / AC-02): the editor no longer rebuilds a
- * legacy-id<->handle map from SceneInstance.mapping — the instantiate return
- * value's handles ARE the runtime identity, and hierarchy/selection read them
- * straight off the live world (childrenOf walks activeWorld). localId stays
- * inside the engine's on-disk serialization (rootsToSceneAsset) and is not read
- * back into editor runtime state (AC-03). Returns true on success.
- *
- * @internal-store — disk-watch CALLS this to reload on a genuine external edit
- * (D-6 seam). Not in facade/barrel.
- */
-export async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
-  // engine World / AssetRegistry are injected on gateway.doc.
-  const w: WorldType = gateway.doc.world;
-  const reg: AssetRegistry | undefined = gateway.doc.registry;
-  if (!w || !reg) return false;
-  try {
-    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-    const parsed = AssetGuid.parse(sceneGuid);
-    if (!parsed.ok) return false;
-
-    // Clear any previously loaded scene first so a reload doesn't double-spawn.
-    teardownCurrentScene();
-
-    // loadByGuid pulls the scene + recursively its refs[] into the registry
-    // catalog; the returned payload has each handle field resolved to a GUID
-    // string. instantiate then mints GUID→handle and spawns every node.
-    const loadRes = await reg.loadByGuid(parsed.value);
-    if (!loadRes.ok) return false;
-    const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
-    const instRes = reg.instantiate(sceneHandle, w);
-    if (!instRes.ok) return false;
-    // Record the SceneInstance root so a later reload can despawn it. No map to
-    // fill: the world is the single source of truth for entity identity now.
-    currentSceneRoot = instRes.value;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Instantiate a scene sub-asset (e.g. an imported GLB's whole-hierarchy scene)
- * into the CURRENTLY-LOADED editor world as a NESTED SceneInstance under
- * `parentHandle`, via the engine's canonical loadByGuid → allocSharedRef →
- * instantiate spine (the SAME path loadSceneByGuid uses for the top scene).
- *
- * Unlike loadSceneByGuid this is ADDITIVE: it does NOT teardown the current
- * scene and does NOT touch `currentSceneRoot`. The caller owns the wrapper
- * entity (a gateway-spawned node) that becomes the mount's ROOT so the nested
- * SceneInstance is a NON-root anchor — which is exactly what `rootsToSceneAsset`
- * folds into a single `mounts[]` entry keyed by this scene GUID (AGENTS.md #2:
- * round-trips through save → reopen → Play via the engine's native mount
- * mechanism, no new sidecar format, no HANDLE_CUBE placeholder).
- *
- * The nested instance's member entities have no Name, so the hierarchy walk
- * (worldRootHandles / childrenOf) never surfaces them: they render + round-trip
- * because `rootsToSceneAsset` walks the world's live SceneInstance state
- * (getSceneInstanceState). The wrapper is the single selectable Hierarchy node.
- * Per-node selection inside the mount is a follow-up.
- *
- * Returns the nested SceneInstance root handle, or null on failure. Callers
- * MUST treat null as "add failed" and surface it — NEVER fall back to a cube.
- */
-export async function instantiateSceneRefUnderWorld(
-  sceneGuid: string,
-  parentHandle: number,
-): Promise<number | null> {
-  const w: WorldType = gateway.doc.world;
-  const reg: AssetRegistry | undefined = gateway.doc.registry;
-  if (!w || !reg) return null;
-  try {
-    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-    const parsed = AssetGuid.parse(sceneGuid);
-    if (!parsed.ok) return null;
-    // loadByGuid pulls the scene + recursively its mesh/material/texture refs
-    // into the registry catalog; instantiate mints GUID→handle onto MeshFilter/
-    // MeshRenderer and spawns every node under `parentHandle`.
-    const loadRes = await reg.loadByGuid(parsed.value);
-    if (!loadRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error); return null; }
-    const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
-    // parentHandle is a raw engine handle at the host boundary (typed number,
-    // same convention as run-lifecycle / line ~1031); brand it before the
-    // engine-typed instantiate call.
-    const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
-    if (!instRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
-    return instRes.value as number;
-  } catch (err) {
-    console.warn('[editor-core] instantiateSceneRefUnderWorld: threw', err);
-    return null;
-  }
-}
-
-// M3 (I1 / AC-02): the session-map populate + rebind helpers + the owned-localId
-// helper are DELETED. They existed only to rebuild the legacy id-to-handle map
-// from SceneInstance.mapping after a load or a ▶/■ Stop re-instantiate. With
-// handle IS identity, the instantiate return value's handles ARE the runtime
-// identity and the hierarchy re-walks the live world (childrenOf(activeWorld)) —
-// there is no map to fill or rebind. M2 already removed the rebind helper's only
-// lifecycle consumer (old run-lifecycle L4), so its deletion leaves zero residue.
-
-/** Write the active game's scene to disk as a native engine scene pack. This is
- *  the MANUAL save (D-7): the user clicks Save in the toolbar → this runs and,
- *  on success, clears the dirty flag so the dirty indicator turns off.
- *
- *  M2 (D-1, m2-w8): save/load/switch/create are SESSION-domain ops. dispatch is
- *  synchronous but these bodies are async — so the collection uses a
- *  capture-promise seam: the registered applier runs the impl ONCE and captures
- *  the in-flight promise; the public async setter dispatches (records the ledger
- *  entry, and for an AI dispatch actually triggers the impl) then returns the
- *  captured promise so UI callers still await the real boolean. Single
- *  execution, one ledger entry, engine pack contract (rootsToSceneAsset) and
- *  the getApiClient seam unchanged — "change the door, not the body". */
-async function doSaveDocToDisk(): Promise<boolean> {
-  const p = scenePath();
-  if (!p) return false;
-  // Serialize FIRST and bail if it failed — never POST an empty body over a good
-  // scene (the 0-byte data-loss bug). Keep _isDirty set so the next save retries.
-  const content = serializedPack();
-  if (content === null) {
-    console.error('[editor-core] saveDocToDisk: serialize failed — aborting write to protect on-disk scene');
-    return false;
-  }
-  // M1: validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
-  // Producer-side validation: worldToPack already self-validates via the engine
-  // pipeline, but this guard ensures the serialized JSON satisfies the shell schema
-  // before touching disk — even if the engine pipeline produces a corrupted pack.
-  let parsedNew: unknown;
-  try {
-    parsedNew = JSON.parse(content);
-    if (!validatePackShell(parsedNew).ok) {
-      console.error('[editor-core] saveDocToDisk: pack shell validation failed — aborting write');
-      return false;
-    }
-  } catch {
-    console.error('[editor-core] saveDocToDisk: failed to parse serialized content');
-    return false;
-  }
-  // Safety net (charter §9 graceful degradation): refuse a write that would
-  // DROP inline asset bodies (materials etc.) below the load-time floor. The
-  // engine serializer only emits the scene entry; worldToPack re-appends inline
-  // assets, but if that ever regresses (or a ref becomes unresolvable) the
-  // pack shell is still "valid" — just truncated — so validatePackShell above
-  // can't catch it. Guarding against the LOAD floor (not the current on-disk
-  // count) means a prior stripping write can't lower the bar, so a bug degrades
-  // to "save refused, data preserved" rather than "scene silently turns grey on
-  // reload" (AGENTS.md #2: authoring data must round-trip or it's a data-loss bug).
-  if (inlineAssetsWouldDrop(parsedNew)) {
-    console.error(
-      `[editor-core] saveDocToDisk: serialized pack has ${inlineAssetCount(parsedNew)} inline asset(s) but the scene loaded with ${loadedInlineAssetFloor} — aborting write to protect materials`,
-    );
-    return false;
-  }
-  try {
-    const r = await apiFetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: p, content }),
-    });
-    if (r.ok) _isDirty = false;
-    return r.ok;
-  } catch {
-    return false;
-  }
+registerAsyncSessionOp('saveDocToDisk', diskIo.doSaveDocToDisk);
+export function saveDocToDisk(): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'saveDocToDisk' });
 }
 
 // ── Async session-op collection seam (M2 D-1, m2-w8) ──────────────────────────
 // dispatch() is sync but save/load/switch/create are async. The applier runs the
 // impl and stashes the in-flight promise; the public setter dispatches (ledger +
-// AI trigger) then returns the stashed promise. A module-scoped slot carries the
-// promise from applier back to the setter within one synchronous dispatch call —
-// there is no reentrancy risk because dispatch runs the applier synchronously
-// before returning, so the setter reads the slot immediately after.
-let _asyncOpResult: Promise<boolean> | null = null;
+// AI trigger) then returns the stashed promise. The slot is ctx.asyncOpResult
+// (ScenePersistenceContext) — one handle, no scattered `let`. This seam stays in
+// the composition root so the one dispatch slot lives in one place.
 /** Run an async op impl and stash its promise for the setter to return. Attaches
- *  a no-op rejection handler so a RAW dispatch (AI fire-and-forget, or a headless
- *  environment with no path resolver) does not surface an unhandled rejection;
- *  the setter's caller still awaits the same promise and sees the real result. */
+ *  a no-op rejection handler so a RAW dispatch (AI fire-and-forget / headless) does
+ *  not surface an unhandled rejection; the setter's caller still awaits the same
+ *  promise and sees the real result. */
 function runAsyncOp(impl: () => Promise<boolean>): void {
   const pr = impl();
   pr.catch(() => {});
-  _asyncOpResult = pr;
+  ctx.asyncOpResult = pr;
 }
 function registerAsyncSessionOp(kind: string, impl: () => Promise<boolean>): void {
   sessionAppliers.set(kind, () => { runAsyncOp(impl); return { ok: true }; });
 }
 function dispatchAsyncSessionOp(op: EditorOp): Promise<boolean> {
-  _asyncOpResult = Promise.resolve(false);
+  ctx.asyncOpResult = Promise.resolve(false);
   const r = gateway.dispatch(op);
   if (!r.ok) return Promise.resolve(false);
-  return _asyncOpResult ?? Promise.resolve(false);
+  return ctx.asyncOpResult ?? Promise.resolve(false);
 }
 
-registerAsyncSessionOp('saveDocToDisk', doSaveDocToDisk);
-export function saveDocToDisk(): Promise<boolean> {
-  return dispatchAsyncSessionOp({ kind: 'saveDocToDisk' });
-}
-
-/** Safety-net guard shared by BOTH save paths (awaited save + sync unload beacon):
- *  returns true when writing `newPack` would drop inline (non-scene) assets below
- *  the count the scene was LOADED with (`loadedInlineAssetFloor`) — i.e. strip
- *  material/texture bodies. Anchoring to the load floor (not the current on-disk
- *  file) is what defeats the strip-loop: a prior stripping write can't lower the
- *  bar (the old count-vs-disk guard let 0 >= 0 through forever), and this is a pure
- *  sync check so the pagehide beacon — which cannot await a disk read — uses the
- *  exact same guard. Floor null (no scene loaded yet) ⇒ never drops (first save). */
-function inlineAssetsWouldDrop(newPack: unknown): boolean {
-  return wouldDropInlineAssets(loadedInlineAssetFloor, newPack);
-}
-
-/** Pure floor comparison behind {@link inlineAssetsWouldDrop} (exported for unit
- *  test — the module-var caller supplies the live `loadedInlineAssetFloor`). true
- *  ⇒ writing `newPack` would strip inline assets below `floor` and must be refused.
- *  `floor === null` (no scene loaded) ⇒ never drops, so first-time saves proceed. */
-export function wouldDropInlineAssets(floor: number | null, newPack: unknown): boolean {
-  if (floor === null) return false;
-  return inlineAssetCount(newPack) < floor;
-}
-
+// ── Dirty flag: the toolbar's save-indicator source ───────────────────────────
 // Manual disk save (requirements-decisions #5; plan-strategy D-7). Every edit
-// lands in localStorage immediately (above) and marks the in-memory scene DIRTY.
-// The on-disk scene.pack.json is written ONLY when the user clicks Save (the UI
-// layer calls saveDocToDisk), NOT on a debounce timer — deliberately deviating
-// from the prior 400ms auto-save so authoring edits are not silently persisted.
-// `_isDirty` is the dirty-indicator source the toolbar reads (via
-// hasPendingDiskSave); it clears on a successful saveDocToDisk / explicit cancel
-// / beacon flush.
-/** @internal-store — disk-watch READS this to skip clobbering unsaved edits
- *  (D-6 seam); writes route through _setDirty. Not in facade/barrel. */
-export let _isDirty = false;
-gateway.subscribe(() => { _isDirty = true; });
+// marks the in-memory scene DIRTY; the on-disk scene.pack.json is written ONLY
+// when the user clicks Save (the UI calls saveDocToDisk), NOT on a debounce timer.
+// `ctx.isDirty` is the dirty-indicator source the toolbar reads (via
+// hasPendingDiskSave); it clears on a successful save / explicit cancel / beacon
+// flush. R3: this top-level gateway.subscribe is an EVAL-TIME side effect and MUST
+// stay top-level (do NOT lazify) or dirty tracking breaks.
+gateway.subscribe(() => { ctx.isDirty = true; });
 
-// Inline-asset floor captured from the on-disk pack at LOAD time. The save guard
-// (both the awaited doSaveDocToDisk path and the sync unload-time beacon) refuses
-// to write a pack that has FEWER inline (material/texture/…) assets than the scene
-// was loaded with — protecting against the data-loss loop where a save serializes
-// an edit world whose material handles didn't populate, stripping the pack, after
-// which every subsequent save re-strips (0 >= 0 passes a naive count-vs-disk guard,
-// and the beacon path had no guard at all). Anchored to the LOAD baseline (not the
-// current on-disk file) so it can't be defeated by a prior stripping write; the
-// beacon can read it synchronously (no disk await during pagehide). Reset on each
-// load; null = no scene loaded yet (guard is a no-op, e.g. first-ever save).
-let loadedInlineAssetFloor: number | null = null;
-
-/** True while the in-memory scene has unsaved edits (drives the dirty
- *  indicator + the disk-watch "don't clobber my edits" guard). Manual-save
- *  model: this stays true until the user saves (or a flush/cancel clears it). */
+/** True while the in-memory scene has unsaved edits (drives the dirty indicator +
+ *  the disk-watch "don't clobber my edits" guard). */
 export function hasPendingDiskSave(): boolean {
-  return _isDirty;
+  return ctx.isDirty;
 }
 
 /** Clear the dirty flag WITHOUT writing. Used after the editor seeds a default
- *  scene for a genuinely scene-less game: the bare seed must NOT be persisted to
- *  the game dir (that creates a scene.pack.json the user never authored — and,
- *  for a game whose real scene the editor failed to locate, it would permanently
- *  mask it). The seed stays in-memory; the user's first real edit re-marks
- *  dirty. */
+ *  scene for a genuinely scene-less game: the bare seed must NOT be persisted. */
 export function cancelPendingDiskSave(): void {
-  _isDirty = false;
+  ctx.isDirty = false;
 }
 
-// Flush unsaved edits SYNCHRONOUSLY-SAFE, even as the editor iframe is being
-// torn down (mode switch edit→play unmounts EditMode → destroys this iframe). A
-// normal `await fetch` would be aborted with the iframe; `navigator.sendBeacon`
-// is the one write the browser guarantees to deliver during unload/pagehide. The
-// server's POST /api/files reads c.req.json(), so a Blob typed application/json
-// parses identically to the regular fetch save. Called on pagehide /
-// visibilitychange(hidden) and on the VAG_EDITOR_FLUSH postMessage the interface
-// sends right before it unmounts the editor — so an in-flight edit is not lost
-// when the user flips to Play, even under the manual-save model (D-7).
-export function flushPendingSaveBeacon(): void {
-  if (!_isDirty) return; // nothing dirty
-  const p = scenePath();
-  if (!p) return;
-  // Serialize BEFORE clearing dirty / sending — if it fails, do NOT beacon an
-  // empty body over a good scene (this unload-time path was the silent 0-byte
-  // clobber: add City_Sample_512 → dirty → pagehide → beacon empty). Keep dirty
-  // set so a later successful save can still persist.
-  const content = serializedPack();
-  if (content === null) {
-    console.error('[editor-core] flushPendingSaveBeacon: serialize failed — skipping beacon to protect on-disk scene');
-    return;
-  }
-  // Same material-drop guard as doSaveDocToDisk, applied SYNCHRONOUSLY (the beacon
-  // fires during pagehide/VAG_EDITOR_FLUSH and cannot await a disk read). Without
-  // it, an Edit→Play flip or tab-hide could beacon a stripped pack over a good
-  // scene — the original hole through which materials were lost. Keep _isDirty set
-  // so a later real save can still persist legitimate edits.
-  let parsedBeacon: unknown;
-  try { parsedBeacon = JSON.parse(content); } catch { parsedBeacon = undefined; }
-  if (parsedBeacon !== undefined && inlineAssetsWouldDrop(parsedBeacon)) {
-    console.error(
-      `[editor-core] flushPendingSaveBeacon: pack has ${inlineAssetCount(parsedBeacon)} inline asset(s) but the scene loaded with ${loadedInlineAssetFloor} — skipping beacon to protect materials`,
-    );
-    return; // keep _isDirty; do not clobber the on-disk scene
-  }
-  _isDirty = false;
-  try {
-    const blob = new Blob([JSON.stringify({ path: p, content })], { type: 'application/json' });
-    const ok = navigator.sendBeacon('/api/files', blob);
-    // sendBeacon can refuse (queue full / too large); fall back to a keepalive
-    // fetch which also survives teardown for small bodies.
-    if (!ok) void apiFetch('/api/files', { method: 'POST', headers: { 'content-type': 'application/json' }, body: blob, keepalive: true });
-  } catch {
-    // last resort — best-effort async save (may be aborted on teardown)
-    void saveDocToDisk();
-  }
-}
-
-/** Replace the entire authored document (scene load/import). Resets selection
- * and undo history since old inverses no longer apply to the new doc. */
-export function replaceDoc(doc: EditSession): void {
-  // reviveSession rebuilds a fresh EditSession around the incoming
-  // {world, registry} so downstream `gateway.doc.asset` reads stay live (w34); it's
-  // idempotent on an already-live locally-built session.
-  gateway.replaceDoc(reviveSession(doc));
-  // M3 t22: clear selection through the one gateway door (setSelectionMany sugar
-  // was deleted — S10 / AC-21/22).
-  gateway.dispatch({ kind: 'setSelectionMany', ids: [] });
-  notifyDocChanged();
-}
-
-export function clearDocStorage(): void {
-  try {
-    localStorage.removeItem(docKey(currentSceneId));
-  } catch {
-    /* noop */
-  }
-}
-
-// ── D-6 internal seams: minimal setters for disk-watch's cross-module writes ──
-// ESM imported `let` bindings are read-only in the importer; disk-watch WRITES
-// `_isDirty` and `currentSceneGuid` after an external reload, so those writes
-// route through these setters (plan-strategy §2 D-6). @internal-store — NOT in
-// the facade / barrel. Bodies are the exact assignments disk-watch used inline.
-/** @internal-store */
-export function _setDirty(v: boolean): void { _isDirty = v; }
-/** @internal-store */
-export function _setCurrentSceneGuid(guid: string): void { currentSceneGuid = guid; }
+// ── D-6 internal seams (M1 D-2): disk-watch's cross-module writes land on the
+//    shared `ctx` handle via its cohesive ctx.setDirty / ctx.setCurrentSceneGuid
+//    methods (see ScenePersistenceContext at the top of this file). ─────────────
