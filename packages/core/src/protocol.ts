@@ -49,6 +49,7 @@ export const VagAssetsChangedSchema = z.object({
       slug: z.string().optional(),
     })
     .optional(),
+  hint: z.enum(['directory-only', 'pack-changed']).optional(),
 });
 export type VagAssetsChangedMessage = z.infer<typeof VagAssetsChangedSchema>;
 

@@ -1,5 +1,5 @@
 // store/last-selection-domain — the Derive of "who was selected last" that
-// drives the keyboard router's dual-domain routing (AC-C1) AND the panel
+// drives the keyboard router's triple-domain routing (AC-C1) AND the panel
 // header scope indicators (T5-1 / C4-4 "add a visual clue, not an implicit
 // rule").
 //
@@ -7,8 +7,9 @@
 // (via interface submodule deps) and the UI panels both read it — there is no
 // second divergent state. It is derived purely from the public selection emit
 // signals, exactly as the router does:
-//   - onSelectionChange   (entity forward-select) → 'entity'
-//   - onAssetSelectionChange (asset forward-select) → 'asset'
+//   - onSelectionChange        (entity forward-select) → 'entity'
+//   - onAssetSelectionChange    (asset forward-select)  → 'asset'
+//   - onFolderSelectionChange   (folder forward-select) → 'folder'
 //   - clear* does NOT advance it (lifecycle clear, C2-1)
 // Initial value is 'entity' (T0-3: null → default 'entity').
 //
@@ -20,8 +21,9 @@
 import { useSyncExternalStore } from 'react';
 import { onSelectionChange } from './selection';
 import { onAssetSelectionChange } from './asset-selection';
+import { onFolderSelectionChange } from './folder-selection';
 
-export type SelectionDomain = 'entity' | 'asset' | null;
+export type SelectionDomain = 'entity' | 'asset' | 'folder' | null;
 
 let domain: SelectionDomain = 'entity';
 const listeners = new Set<() => void>();
@@ -47,6 +49,9 @@ onSelectionChange(() => {
 });
 onAssetSelectionChange(() => {
   if (domain !== 'asset') { domain = 'asset'; emit(); }
+});
+onFolderSelectionChange(() => {
+  if (domain !== 'folder') { domain = 'folder'; emit(); }
 });
 
 /** Reactive read for UI panels — lights the header scope ring. */

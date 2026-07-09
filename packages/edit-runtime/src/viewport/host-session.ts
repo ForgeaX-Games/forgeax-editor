@@ -187,8 +187,8 @@ export interface HostSessionDeps {
   readonly loadDocFromDisk: () => Promise<boolean>;
   /** Load the authored scene from the localStorage mirror. */
   readonly loadDocFromStorage: () => boolean;
-  /** The root entity of the last-loaded scene (▶ snapshot base), or null. */
-  readonly getLoadedSceneRoot: () => number | null;
+  /** Top-level entity handles of the last-loaded (flat) scene. */
+  readonly getLoadedSceneEntities: () => number[];
   /** Clear the dirty flag WITHOUT writing (bare seed must not auto-persist). */
   readonly cancelPendingDiskSave: () => void;
   /** True while the in-memory scene has unsaved edits (play-uses-last-saved hint). */
@@ -236,7 +236,7 @@ export function createHostSession(deps: HostSessionDeps): {
     resolveGamePath,
     loadDocFromDisk,
     loadDocFromStorage,
-    getLoadedSceneRoot,
+    getLoadedSceneEntities,
     cancelPendingDiskSave,
     hasPendingDiskSave,
     flushPendingSaveBeacon,
@@ -328,9 +328,10 @@ export function createHostSession(deps: HostSessionDeps): {
     // After the engine World + AssetRegistry are the renderer's and the pack-index
     // is configured (done by ViewportComponent before this call). Load order:
     // on-disk authored scene -> localStorage mirror -> demo seed; seed only when
-    // the result is EMPTY. defaultSceneRoot binds to the root loadSceneByGuid
-    // instantiated into the LIVE world (▶ snapshot / ■ restore use it).
-    let defaultSceneRoot: number | undefined;
+    // the result is EMPTY. The opened scene is FLAT (loadSceneByGuid ->
+    // reg.instantiateFlat): no synthetic wrapper root. Play/Stop re-instantiate
+    // the saved scene into a separate fresh playWorld (run-lifecycle), so the edit
+    // world's loaded entities are never used for a ▶ snapshot / ■ restore.
     setBootStage('loadDoc');
     await renderer.ready.catch(() => null);
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
@@ -340,11 +341,7 @@ export function createHostSession(deps: HostSessionDeps): {
       // auto-persist it to the game dir. The user's first real edit re-schedules a save.
       cancelPendingDiskSave();
     }
-    {
-      const loadedRoot = getLoadedSceneRoot();
-      if (loadedRoot !== null) defaultSceneRoot = loadedRoot;
-    }
-    emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} root=${defaultSceneRoot ?? 'none'}`);
+    emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
 
     // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
     // asynchronously by the scene load above (configurePackIndex + loadByGuid, both

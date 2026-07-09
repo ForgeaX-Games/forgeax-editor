@@ -68,7 +68,7 @@ export interface SceneList {
   getSceneId(): string;
   getSceneFile(): string | null;
   getSceneList(): SceneFileEntry[];
-  getLoadedSceneRoot(): number | null;
+  getLoadedSceneEntities(): number[];
   onSceneListChange(fn: () => void): () => void;
   useSceneList(): SceneFileEntry[];
   useSceneFile(): string | null;
@@ -85,7 +85,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
   function getSceneId(): string { return ctx.currentSceneId; }
   function getSceneFile(): string | null { return ctx.currentSceneFile; }
   function getSceneList(): SceneFileEntry[] { return ctx.sceneList; }
-  function getLoadedSceneRoot(): number | null { return ctx.currentSceneRoot; }
+  function getLoadedSceneEntities(): number[] { return ctx.currentSceneEntities.slice(); }
   function onSceneListChange(fn: () => void): () => void {
     sceneListListeners.add(fn);
     return () => sceneListListeners.delete(fn);
@@ -253,7 +253,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     getSceneId,
     getSceneFile,
     getSceneList,
-    getLoadedSceneRoot,
+    getLoadedSceneEntities,
     onSceneListChange,
     useSceneList,
     useSceneFile,
