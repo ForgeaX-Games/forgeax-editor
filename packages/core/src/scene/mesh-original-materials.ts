@@ -1,20 +1,14 @@
 // Recover the ORIGINAL per-submesh material GUIDs for an imported `mesh`
-// sub-asset, so a single-mesh drag / "Add to Scene" can restore the source glTF
-// materials instead of a single grey placeholder.
+// sub-asset (single-mesh drag / "Add to Scene"), so the source glTF materials
+// are restored instead of one grey placeholder.
 //
-// WHY this is needed (root cause): a cooked `*.glb.meta.json` splits a GLB into
-// independent `mesh` / `material` / `scene` sub-assets. The `mesh` sub-asset is
-// geometry ONLY (`submeshes`, no materials); the per-submesh material binding
-// lives in the sibling `scene` sub-asset. So when the user drops a single mesh
-// card, the drag ref carries no material info.
-//
-// HOW (self-contained, no engine-internal scene-ref decode): the binding is
-// reconstructable from the SOURCE GLB + the meta's sub-asset table:
-//   - the mesh sub-asset's `sourceIndex` IS the glTF mesh index;
-//   - `parseGlb(...).meshes` yields one row per primitive (in submesh order),
-//     each carrying its owning `meshIndex` and `materialIndex`;
-//   - material sub-assets map `sourceIndex` (= glTF material index) -> GUID.
-// Pair them positionally -> the per-submesh material GUID list.
+// feat-20260708 M1 (plan-strategy D-1, AC-01): this is a THIN editor-side
+// adapter over the engine glTF pipeline, NOT a parallel material-binding engine.
+// It reuses `parseGlb` (the engine SSOT parser) and only reconstructs the
+// cook-stage GUID list the engine has no export for (engine bridge works on
+// runtime IR + handles; the editor works on `*.glb.meta.json` + cook GUIDs).
+// The ONE convention it mirrors — `materials[i] <-> submeshes[i]` positional
+// pairing — is anchored to its engine SSOT below (see the prims.map).
 //
 // Design: docs/design/editor-mesh-drag-original-materials.md §3.2/§3.3.
 
@@ -98,16 +92,19 @@ async function resolveUncached(
   };
   if (!parsed?.ok || !parsed.value) return null;
 
-  // One row per primitive, in submesh order (parseGlb preserves doc.meshes order;
-  // the engine bridge merges by meshIndex with materials[i] <-> submeshes[i]).
+  // Positional pairing SSOT: mirrors `bridge.ts:540-564` — parseGlb yields one
+  // row per primitive in submesh order, and the engine bridge merges by meshIndex
+  // with `materials[i] <-> submeshes[i]`. Producing one GUID per prim in the same
+  // order keeps the editor's recovery aligned to that engine contract; the '' slot
+  // (a prim with no glTF material) is preserved so the edit-runtime resolver can
+  // apply the same firstMatHandle count-alignment the bridge does (plan-strategy D-3).
   const prims = parsed.value.meshes.filter((m) => m.meshIndex === targetMeshIndex);
   if (prims.length === 0) return null;
 
   const guids = prims.map((p) =>
     p.materialIndex !== null ? (materialGuidByIndex.get(p.materialIndex) ?? '') : '',
   );
-  if (guids.every((g) => g === '')) return null;
-  return guids;
+  return guids.every((g) => g === '') ? null : guids;
 }
 
 /** Test/debug: drop the resolve cache. */

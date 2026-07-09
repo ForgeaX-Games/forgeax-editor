@@ -161,7 +161,7 @@ export {
 export type { PackAsset, RawAsset } from './assets/assets';
 
 // ── Drag-to-scene (Content Browser → viewport spawn) ──
-export { buildSpawnEntityFromDragRef } from './assets/drag-asset-spawn';
+export { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids } from './assets/drag-asset-spawn';
 export type { DragAssetRef, SpawnRefEntity } from './assets/drag-asset-spawn';
 export { spawnAssetRefToScene, spawnAssetRefToScene as spawnAssetToScene, requestAddAssetToScene } from './scene/spawn-asset-ref';
 
