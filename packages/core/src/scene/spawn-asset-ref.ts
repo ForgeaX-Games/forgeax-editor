@@ -4,8 +4,7 @@
  */
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
 import { apiFetch } from '../io/api-client';
-import { buildSpawnEntityFromDragRef, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
-import { resolveMeshOriginalMaterials } from './mesh-original-materials';
+import { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 
@@ -26,34 +25,19 @@ function toDragRef(ref: AssetChatRef): DragAssetRef {
 
 async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   const kind = ref.kind ?? '';
-  const entity = buildSpawnEntityFromDragRef(ref);
-  if (!entity) return false;
 
-  if (kind === 'mesh') {
-    try {
-      const readRaw = async (p: string): Promise<Response | null> => {
-        try {
-          const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
-          return r.ok ? r : null;
-        } catch {
-          return null;
-        }
-      };
-      const subs = await resolveMeshOriginalMaterials(
-        { guid: ref.guid, path: ref.path, payload: ref.payload },
-        {
-          fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
-          fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
-        },
-      );
-      if (subs && subs.length > 0) {
-        const mat = (entity.components.Material ?? (entity.components.Material = {})) as Record<string, unknown>;
-        mat.submeshMaterials = subs;
-      }
-    } catch (err) {
-      console.warn('[spawn-asset] original-material recovery failed:', (err as Error)?.message ?? err);
-    }
-  }
+  // feat-20260708 M1 path 1 (plan-strategy D-4, AC-02/AC-04): for a mesh ref,
+  // recover the source glTF per-submesh material GUIDs BEFORE building the spawn
+  // command, so they ride an EditorPendingMeshMaterials marker (drag-asset-spawn.ts)
+  // that the edit-runtime resolver turns into MeshRenderer.materials[]. This REPLACES
+  // the old `Material.submeshMaterials` death-write — `Material` was deleted by the
+  // world-container collapse, so spawnComponentData dropped it without a trace:
+  // recovered materials never reached the world and vanished on reopen/Play
+  // (AGENTS.md #2 / AC-04). Best-effort: any recovery miss leaves it single-material.
+  const materialGuids = kind === 'mesh' ? await recoverMeshOriginalMaterialGuids(ref) : undefined;
+
+  const entity = buildSpawnEntityFromDragRef(ref, materialGuids ? { materialGuids } : undefined);
+  if (!entity) return false;
 
   gateway.dispatch({ kind: 'spawnEntity', name: entity.name, components: entity.components });
   broadcastAssetsChanged();

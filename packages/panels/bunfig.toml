@@ -1,0 +1,5 @@
+[test]
+# Register happy-dom globals before any test runs so DOM/component tests
+# (useNumberDraft, etc.) get a real document / Element / focus-event cascade.
+# Mirrors packages/interface/bunfig.toml + test/happydom.ts.
+preload = ["./test/happydom.ts"]

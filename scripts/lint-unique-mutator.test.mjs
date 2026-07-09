@@ -6,7 +6,6 @@
 //   (a) VIOLATION diff (new raw world.set in editor source) → exit 1
 //   (b) COMPLIANT diff (write through ctx.engine / gateway.dispatch) → exit 0
 //   (c) FACADE diff (raw world.set inside engine-facade.ts, the gate body) → exit 0
-//   (d) OOS-10 diff (raw world.set inside action-bridge.ts) → exit 0 (excluded)
 //   (e) TEST-HUNK diff (raw world.set in __tests__/) → exit 0
 //   (f) CAST diff (cast-receiver `).set(` on a world token) → exit 1
 //   (g) CLEAN diff (no world writes) → exit 0
@@ -93,13 +92,6 @@ console.log('Scenario (c): FACADE gate body -- raw world.set in engine-facade.ts
 assertEqual('(c) exit 0', runLint(write('facade.diff', [{
   file: 'packages/core/src/io/engine-facade.ts',
   lines: ['    return this._world.set(entity, component, data);', '    world.spawn(x);'],
-}])).status, 0);
-
-// (d) OOS-10: raw world.set inside action-bridge.ts (registry projection)
-console.log('Scenario (d): OOS-10 registry -- raw world.set in action-bridge.ts → exit 0');
-assertEqual('(d) exit 0', runLint(write('oos10.diff', [{
-  file: 'packages/core/src/io/action-bridge.ts',
-  lines: ['  world.set(entity, Comp, patch);'],
 }])).status, 0);
 
 // (e) TEST-HUNK

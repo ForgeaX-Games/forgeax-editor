@@ -31,7 +31,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, resolveMeshOriginalMaterials, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
+import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, recoverMeshOriginalMaterialGuids, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // Forward structured health signals from this surface to the studio shell's
@@ -58,6 +58,13 @@ const FATAL_PATTERNS: RegExp[] = [
 function fatalReason(text: string): string | null {
   return FATAL_PATTERNS.some((re) => re.test(text)) ? text : null;
 }
+
+// Imported-mesh material recovery (path 2, feat-20260708 M1): both spawn paths
+// share ONE helper `recoverMeshOriginalMaterialGuids` (editor-core/assets/
+// drag-asset-spawn.ts) — see plan-strategy D-4 / AC-02. Path 2 (this file, VAG
+// spawn) and path 1 (core spawn-asset-ref.ts, gateway.dispatch) both import it
+// downward from core (legal `core <- edit-runtime` direction), so there is no
+// per-path duplication.
 
 // ── EditorImportError ──────────────────────────────────────────────────────────
 
@@ -343,17 +350,20 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // `const` referenced in their dependency arrays would hit the TDZ at render).
   const spawnMeshOrAssetRef = useCallback(async (ref: DragAssetRef): Promise<void> => {
     const kind = ref.kind ?? '';
-    const entity = buildSpawnEntityFromDragRef(ref);
+    // feat-20260708 M1 path 2 (plan-strategy D-4, AC-02/AC-04): recover the mesh's
+    // source glTF per-submesh material GUIDs and let them ride the spawn command's
+    // EditorPendingMeshMaterials marker (drag-asset-spawn.ts). This restores the
+    // resolver call that was previously reduced to a dead import + a drop-on-spawn
+    // TODO: the old code wrote `Material.submeshMaterials` (a component the collapse
+    // deleted, so spawnComponentData dropped it -> materials vanished on
+    // reopen/Play, AGENTS.md #2 / AC-04). The marker travels with VagSpawnEntity
+    // into the iframe editor's gateway, where the SAME drag-spawn resolver
+    // (installDragSpawnMeshResolver) turns the GUIDs into MeshRenderer.materials[]
+    // handles — the identical marker channel path 1 (spawn-asset-ref.ts) uses.
+    // Best-effort: any recovery miss leaves the entity single-material.
+    const materialGuids = kind === 'mesh' ? await recoverMeshOriginalMaterialGuids(ref) : undefined;
+    const entity = buildSpawnEntityFromDragRef(ref, materialGuids ? { materialGuids } : undefined);
     if (!entity) { console.warn('[editor] unsupported asset kind for scene spawn:', kind); return; }
-    // F-1 review round 1: buildSpawnEntityFromDragRef now emits engine-native
-    // components only (Transform{quat} + MeshFilter{HANDLE_CUBE}); the editor
-    // auto-adds a default-material MeshRenderer. The former per-submesh original-
-    // material recovery wrote `Material.submeshMaterials` — a component the
-    // collapse deleted, so it was silently dropped by spawnComponentData. Real
-    // imported-mesh geometry + original-material association is engine-MVP-OOS
-    // (feat-future-asset-system, engine mesh-filter.ts:44). Follow-up: review F-4.
-    // TODO(imported-mesh-materials): rewire to MeshRenderer{materials} once the
-    // asset system can register imported MeshAsset/MaterialAsset handles.
     sendVagMessage(iframeRef.current?.contentWindow ?? null, VagSpawnEntitySchema, {
       mode: 'reference', entity, name: entity.name,
     });

@@ -1,7 +1,6 @@
 import {
   createApp,
   loadGame,
-  isLoadGameError,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
@@ -27,7 +26,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SceneAsset, AssetError } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { BootstrapContext, GameContext } from './types';
+import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 
 const root = document.getElementById('app') ?? document.body;
@@ -84,7 +83,6 @@ const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_templat
 // ▶ Play simulates. forge.json is fetched no-store so a freshly-toggled flag
 // takes effect on the next reload.
 let physics: 'rapier-3d' | 'rapier-2d' | undefined;
-let wantsPointerLock = false;
 // Host-injected (vite define) URL-space games prefix. The host owns the layout;
 // play-runtime bakes no `<games-dir>` literal. '' → game served directly under base.
 declare const __FORGEAX_GAMES_URL_PREFIX__: string;
@@ -116,12 +114,26 @@ if (gpResult?.ok) {
     if (p === '3d' || p === true || p === 'rapier-3d') physics = 'rapier-3d';
     else if (p === '2d' || p === 'rapier-2d') physics = 'rapier-2d';
   }
-  // ── Pointer-lock gate (per-game opt-in via forge.json) ──────────────────────
-  // Default = off → no HUD, no cursor grab (clean preview).
-  if (gameId && gameId !== '_template') {
-    wantsPointerLock = gp.pointerLock === true || gp.input === 'fps';
-  }
 }
+
+// ── Pointer-capture bridge (M5 w22 / D-6) ──────────────────────────────────
+// WKWebView denies the web Pointer Lock API for embedded content, so the engine
+// input backend's W3C requestPointerLock() cannot grab the cursor inside the
+// Tauri shell. Instead the host injects a lockProvider (below) that forwards a
+// fx-pointer-capture postMessage to the parent window; the Tauri shell relays it
+// to the set_pointer_capture Rust command (CGAssociateMouseAndMouseCursorPosition).
+// requestLock is fire-and-forget (D-7 optimistic placement): the backend cannot
+// await the Rust result across the postMessage boundary, so it treats a synchronous
+// return as engaged. Harmless on web (no parent handler -> no native grab).
+// OOS-4: this only wraps the EXISTING postMessage->invoke bridge -- the Rust
+// set_pointer_capture command and the shell relay are untouched.
+const post = (capture: boolean): void => {
+  try {
+    window.parent.postMessage({ type: 'fx-pointer-capture', capture }, '*');
+  } catch {
+    /* parent gone / cross-origin */
+  }
+};
 
 // ── createApp (replaces manual createRenderer + World + component registration) ──
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
@@ -132,7 +144,17 @@ if (gpResult?.ok) {
 // (mirrors edit-runtime). CreateAppOptions.physics is a READBACK field (a
 // PhysicsWorld handle), NOT the backend selector — passing the backend string
 // there was silently dropped, so Play never actually got physics.
-const app = await createApp(canvas, physics ? { plugins: [physicsPlugin(physics)] } : {}, {
+// lockProvider (M5 w22): host-supplied pointer-lock implementation wrapping the
+// fx-pointer-capture bridge above. The engine backend routes onCanvasClick
+// through requestLock()/exitLock() when a lockProvider is present (D-2), gated by
+// the game-driven setPointerLockAllowed (D-3) wired onto ctx below.
+const app = await createApp(canvas, {
+  ...(physics ? { plugins: [physicsPlugin(physics)] } : {}),
+  lockProvider: {
+    requestLock: () => post(true),
+    exitLock: () => post(false),
+  },
+}, {
   shaderManifestUrl: '/preview/shaders/manifest.json',
   // Dev-mode import transport with explicit URL that matches the engine
   // pluginPack middleware's literal route. The default
@@ -223,81 +245,25 @@ window.addEventListener('resize', () => {
   canvas.height = window.innerHeight * Math.min(window.devicePixelRatio, 2);
 });
 
-// ── FPS mouse capture via NATIVE cursor grab — OPT-IN per game ──
-// WKWebView denies the web Pointer Lock API for embedded content, so for
-// first-person games we ask the Tauri shell (via the parent window) to freeze
-// + hide the OS cursor (CGAssociateMouseAndMouseCursorPosition(false)). This is
-// intrusive for the majority of games (top-down / click / WASD): a persistent
-// "click to lock" HUD plus grabbing the cursor on click is noise there. So it's
-// gated — a game opts in with `"pointerLock": true` (or `"input": "fps"`) in
-// its forge.json. Default = off → no HUD, no cursor grab (clean preview).
-// (wantsPointerLock is resolved above from the single loadGameProject call.)
-// engine-input auto-calls canvas.requestPointerLock() on EVERY canvas click
-// (browser-backend onCanvasClick) — that pops Chrome's "cursor hidden, press Esc"
-// banner even for top-down / click / WASD games that never use mouse-look. For
-// non-FPS games (the default), no-op the canvas's requestPointerLock so the banner
-// never appears. FPS games (below) use the native Tauri cursor-grab path instead.
-if (!wantsPointerLock) {
-  try { (canvas as unknown as { requestPointerLock: () => void }).requestPointerLock = () => {}; } catch { /* ignore */ }
-} else {
-  // FPS / pointerLock games: engine-input's onCanvasClick auto-calls
-  // canvas.requestPointerLock() on EVERY canvas click (browser-backend.ts) with
-  // NO .catch and NO focus gate. The new Pointer Lock spec returns a Promise
-  // that REJECTS asynchronously — most notoriously in WKWebView (desktop app)
-  // where the window starts unfocused: `WrongDocumentError: Pointer lock
-  // requires the window to have focus`. A bare auto-call → unhandled rejection
-  // (the ×4 [play]/[shell] errors), and if it lands on the load/init path it can
-  // wedge the iframe at "加载中…". try/catch does NOT catch a rejected Promise,
-  // so wrapping the engine's call in try/catch (which games do) is insufficient.
-  // Replace the canvas's instance method with a SAFE version that actually locks
-  // but (a) focus-gates — no-op when the window lacks focus, the next focused
-  // click re-locks — and (b) swallows the rejected Promise. Renderer-agnostic:
-  // WrongDocumentError fires in any browser without focus, so this fixes desktop
-  // (WKWebView) and web alike. The real method is saved so the games' own
-  // pointer-lock chains (which read HTMLElement.prototype.requestPointerLock
-  // BEFORE this runs, then call realRequestLock.call(canvas)) keep working.
-  try {
-    const realRequestLock = (canvas as HTMLCanvasElement).requestPointerLock.bind(canvas);
-    (canvas as unknown as { requestPointerLock: () => void }).requestPointerLock = () => {
-      try {
-        if (!document.hasFocus()) { try { window.focus(); } catch { /* ignore */ } }
-        if (!document.hasFocus()) return; // still unfocused → skip; next focused click re-locks
-        const r = realRequestLock() as unknown;
-        if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => {});
-      } catch { /* ignore — denied / not user-activated */ }
-    };
-  } catch { /* ignore */ }
-}
-if (wantsPointerLock) {
-  const hud = document.getElementById('hud');
-  if (hud) hud.style.display = 'block';
-  const setHud = (m: string) => { if (hud) hud.textContent = m; };
-  canvas.style.cursor = 'crosshair';
-  canvas.tabIndex = 0;
-  (canvas.style as CSSStyleDeclaration & { outline: string }).outline = 'none';
-  let captured = false;
-  const post = (capture: boolean) => { try { window.parent.postMessage({ type: 'fx-pointer-capture', capture }, '*'); } catch { /* ignore */ } };
-  const setCaptured = (v: boolean) => {
-    captured = v;
-    post(v);
-    setHud(v ? '🎮 已锁定 · 移动鼠标转视角 · ESC 释放' : '🖱️ 点击锁定鼠标 (FPS)');
-  };
-  setHud('🖱️ 点击锁定鼠标 (FPS)');
-  canvas.addEventListener('mousedown', () => { try { window.focus(); canvas.focus(); } catch { /* ignore */ } });
-  canvas.addEventListener('click', () => setCaptured(true));
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && captured) setCaptured(false); });
-  // Release the native cursor grab if Play loses focus / is torn down (app switch,
-  // Play→Edit unmount). Without this the OS cursor stays frozen → whole window
-  // uninteractable. (Esc-only release was insufficient — the shell also releases
-  // on PlaySurface unmount; this is the in-game belt-and-suspenders.)
-  const releaseOnLeave = () => { if (captured) setCaptured(false); };
-  window.addEventListener('blur', releaseOnLeave);
-  window.addEventListener('pagehide', releaseOnLeave);
-}
+// ── FPS pointer-lock: fully converged to the engine input backend (M5 w24) ──
+// The former hand-rolled block here (per-game forge.json gate, canvas
+// requestPointerLock prototype override + focus-gate, mousedown/click/keydown-ESC
+// listeners, a locally-tracked `captured` flag double-writing a shell HUD, and
+// blur/pagehide release) is deleted. All of that capability now lives in the
+// engine: the input backend's onCanvasClick drives the lock through the injected
+// lockProvider (post(true)/post(false) -> fx-pointer-capture bridge, wired at
+// createApp above), the game gate is command-set via ctx.setPointerLockAllowed
+// (the template's setMode owns mode as the SSOT), release is handled by the
+// backend (ESC / blur / setPointerLockAllowed(false)), and the lock HUD text is
+// driven by the template reading snap.mouse.pointerLocked. The play-runtime shell
+// `#hud` element (index.html) is retained but no longer script-driven here.
+// PlaySurface.tsx keeps its blur/hide/unmount fx-pointer-capture:false release as
+// an out-of-band belt-and-suspenders for the keep-alive display:none case, which
+// the backend cannot observe (D-6).
 
 // ── Capture variables for ctx assembly (D-2 / R3) ──────────────────────────
 // ctx assembly is deferred until after the defaultScene instantiate block so
-// the readonly GameContext can be populated with the instantiated root +
+// the readonly BootstrapContext can be populated with the instantiated root +
 // SceneAsset in a single object literal — no write-back or temporal coupling.
 let defaultSceneRoot: EntityHandle | undefined;
 let defaultScene: SceneAsset | undefined;
@@ -360,7 +326,7 @@ if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.
 }
 // No else-branch needed — absent defaultScene = graceful skip (AC-06).
 
-// ── GameContext (D-2: assembled after instantiate, so defaultSceneRoot +
+// ── BootstrapContext (D-2: assembled after instantiate, so defaultSceneRoot +
 // defaultScene are captured in a single readonly literal — no write-back) ──
 // B (controlled UI root): symmetric with the embedded editor host so games have
 // ONE mount path (`ctx.uiRoot`), not a play-vs-edit fork. Here the container is
@@ -371,10 +337,11 @@ playUiRoot.id = 'game-ui-root';
 playUiRoot.style.cssText = 'position:fixed;inset:0;pointer-events:none';
 document.body.appendChild(playUiRoot);
 
-const ctx: GameContext = {
-  world,
-  // GameContext no longer carries `renderer` (engine moved the registry to the
-  // top-level `assets` field); keep only what the interface declares.
+const ctx: BootstrapContext = {
+  // BootstrapContext no longer carries `renderer` here (engine moved the registry
+  // to the top-level `assets` field); keep only what the interface declares.
+  // `world` is the first parameter of the bootstrap(world, ctx) entry hook, not a
+  // ctx field, so it is passed separately at the entry() call below.
   assets: renderer.assets,
   app: app.value,
   registerUpdate(fn) { app.value.registerUpdate(fn); },
@@ -383,6 +350,11 @@ const ctx: GameContext = {
   // so every side effect is discarded regardless. Present only to keep the
   // contract identical to the editor host (games register defensively).
   registerCleanup() { /* reload-on-stop discards everything */ },
+  // M5 w22 / D-3: command-set pointer-lock gate. The game template calls this
+  // when the view mode changes (setPointerLockAllowed(mode === 'fps')). Delegate
+  // to the input backend, which owns the lock SSOT and immediately releases on
+  // set(false). Optional-chained: engines predating the setter omit the method.
+  setPointerLockAllowed: (allowed: boolean) => app.value.input?.setPointerLockAllowed?.(allowed),
   ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
   ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
@@ -429,9 +401,12 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   };
   const result = await loadGame(id, resolver);
   if (!result.ok) {
-    if (isLoadGameError(result.error)) {
-      console.log(`[engine] loadGame: ${result.error.code} — using fallback`);
-    }
+    // Graceful degradation stays (return null → fallback scene), but surface the
+    // REAL reason: LoadGameError carries the underlying throw in .detail.cause
+    // (e.g. a syntax/import error inside the game's src/*.ts). Passing the whole
+    // error object lets the fmtArg console bridge unwrap .detail.cause + stack —
+    // logging only .code hid the actual failure behind a bare `import-failed`.
+    console.error('[engine] loadGame failed — using fallback scene:', result.error);
     return null;
   }
   return result.value;

@@ -55,7 +55,7 @@
 //     5-plugin set + physicsPlugin)
 //   plan-strategy D-8 (playWorld does NOT inject EditMode — same shape as game runtime)
 //   requirements AC-04 (fresh new World → assemble → defaultScene loadByGuid →
-//     instantiateScene → bootstrap)
+//     registry.instantiate (GUID→handle resolve) → bootstrap)
 //   research Finding 1 (AppAssembleArgs: renderer + world both host-provided) /
 //     Finding 2 (GUID path is pure read, sidesteps fidelity hazards)
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
@@ -70,11 +70,31 @@ import { physicsPlugin } from '@forgeax/engine-physics';
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
 
 /** Minimal renderer surface the assemble + shield need. `dispose` is the member
- *  the shield intercepts; the rest pass through. */
+ *  the shield intercepts; the rest pass through. `assets` is the engine
+ *  AssetRegistry — its `instantiate` spine is what resolves a scene payload's
+ *  GUID-string handles → fresh per-world numeric handles before spawn. */
 export interface ShieldableRenderer {
   dispose(): void;
   readonly assets: unknown;
   [k: string]: unknown;
+}
+
+/**
+ * The AssetRegistry seam the play path uses to instantiate the defaultScene.
+ * `instantiate(sceneHandle, world)` runs `_resolveSceneGuids` (GUID string →
+ * per-world numeric handle mint via world.allocSharedRef) BEFORE
+ * world.instantiateScene — the sanctioned engine spine every other editor
+ * scene-load path uses (scene-persistence.ts loadSceneByGuid, host-boot preview
+ * skin). Its Result `value` is the root EntityHandle directly (not `{ root }`).
+ * Skipping it and calling the raw world.instantiateScene on a GUID-string
+ * payload is what caused the SharedRefReleasedError on ▶ Play.
+ */
+interface SceneInstantiator {
+  instantiate(
+    sceneHandle: unknown,
+    world: unknown,
+    parent?: unknown,
+  ): { ok: boolean; value?: unknown; error?: unknown };
 }
 
 /** The App handle assemblePlayWorld returns to the lifecycle (start/stop). */
@@ -153,8 +173,9 @@ export function shieldRendererDispose(renderer: ShieldableRenderer): ShieldableR
  *
  * Order: shield renderer → new World() → attachInput (pre-inject backend) →
  * createApp(assemble: shielded renderer + fresh world + explicit plugin set) →
- * loadDefaultScene → allocSharedRef → instantiateScene → resolveBootstrap →
- * bootstrap(world, ctx). Returns { playApp, playWorld, detach }; the lifecycle
+ * loadDefaultScene → allocSharedRef → registry.instantiate (GUID→handle resolve
+ * → spawn) → resolveBootstrap → bootstrap(world, ctx). Returns { playApp,
+ * playWorld, detach }; the lifecycle
  * calls playApp.start() and, on ■ Stop, playApp.stop() + detach() then drops all
  * references.
  */
@@ -196,26 +217,37 @@ export async function assemblePlayWorld(
     registerUpdate(fn: (dt: number) => void): void;
     readonly renderer: unknown;
     readonly world: unknown;
+    // M5 w23 / D-3: the assemble form exposes the host pre-injected input backend
+    // (INPUT_BACKEND_KEY) verbatim as App.input, so the game-facing ctx setter
+    // below can delegate the pointer-lock game gate to it.
+    readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
 
   // ── defaultScene: pure-read GUID path (research Finding 2) ──
-  // loadByGuid returned the SceneAsset payload; mint a shared handle on the play
-  // world and instantiate. Absent defaultScene → skip (graceful, AC-04).
+  // loadByGuid returned the SceneAsset payload — its handle-typed fields (e.g.
+  // MeshFilter.assetHandle) hold GUID STRINGS (parseScenePayload resolves the
+  // on-disk refs[] indices to GUIDs). Mint a scene handle on the play world, then
+  // instantiate THROUGH the AssetRegistry spine (deps.renderer.assets.instantiate)
+  // so _resolveSceneGuids mints those GUID strings → fresh per-world numeric
+  // handles BEFORE world.instantiateScene spawns. Calling the raw
+  // world.instantiateScene here (bypassing the registry) fed GUID strings into
+  // the numeric shared-ref retain path → SharedRefReleasedError on ▶ Play.
+  // Same spine as scene-persistence.ts loadSceneByGuid + host-boot preview skin.
+  // Absent defaultScene → skip (graceful, AC-04).
   let defaultSceneRoot: unknown;
   let defaultScene: unknown;
   const sceneAsset = await deps.loadDefaultScene();
   if (sceneAsset !== null && sceneAsset !== undefined) {
     defaultScene = sceneAsset;
-    const w = playWorld as {
-      allocSharedRef(kind: string, payload: unknown): unknown;
-      instantiateScene(handle: unknown): { ok: boolean; value?: { root: unknown }; error?: unknown };
-    };
+    const w = playWorld as { allocSharedRef(kind: string, payload: unknown): unknown };
     const handle = w.allocSharedRef('SceneAsset', sceneAsset);
-    const instRes = w.instantiateScene(handle);
+    const reg = deps.renderer.assets as SceneInstantiator;
+    // reg.instantiate's Result value is the root EntityHandle directly (not { root }).
+    const instRes = reg.instantiate(handle, playWorld);
     if (instRes.ok) {
-      defaultSceneRoot = instRes.value?.root;
+      defaultSceneRoot = instRes.value;
     } else {
-      console.warn('[editor] ▶ Play defaultScene instantiate failed:', (instRes as { error?: unknown }).error);
+      console.warn('[editor] ▶ Play defaultScene instantiate failed:', instRes.error);
     }
   }
 
@@ -230,6 +262,14 @@ export async function assemblePlayWorld(
       assets: rendererAssets,
       app: playApp,
       registerUpdate: (fn: (dt: number) => void) => playApp.registerUpdate(fn),
+      // M5 w23 / D-3: command-set pointer-lock game gate, wired the same way as
+      // the play-runtime host. Delegates to the assemble-form App.input backend
+      // (host pre-injected via INPUT_BACKEND_KEY). This is the game gate half of
+      // the dual gate; the host gate (getInputTarget() === 'game', evaluated per
+      // click in ViewportComponent's createApp pointerLockAllowed predicate) is
+      // an independent fact and stays in place (D-3: AND-composition, not
+      // double-write).
+      setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };

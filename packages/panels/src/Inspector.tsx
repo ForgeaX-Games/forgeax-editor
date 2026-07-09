@@ -9,6 +9,7 @@ import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisi
 import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
 import type { EditorOp, EntityHandle } from '@forgeax/editor-core';
+import { useNumberDraft } from './useNumberDraft';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -37,6 +38,7 @@ function NumberScrubField({ label, value, fs, testid, onCommit, compact, appear 
   const display = drag ? drag.v : value;
   const ranged = !compact && fs?.min !== undefined && fs?.max !== undefined;
   const axis = compact ? label.slice(-1).toLowerCase() : '';
+  const numberInput = useNumberDraft(display, fs, onCommit);
   return (
     <div className={compact ? `field vec3-cell vec3-${axis}` : `field${appear ? ' appear-in' : ''}`} data-testid={`${testid}-field`}>
       <label
@@ -44,6 +46,10 @@ function NumberScrubField({ label, value, fs, testid, onCommit, compact, appear 
         title={fs?.tooltip ?? 'drag to scrub'}
         data-testid={`${testid}-scrub`}
         onPointerDown={(e) => {
+          // A scrub drag steals control from the text field without a natural
+          // blur in between — flush any in-progress typed draft first so it
+          // isn't silently dropped by the drag that's about to start.
+          numberInput.flush();
           (e.target as Element).setPointerCapture(e.pointerId);
           setDrag({ x: e.clientX, base: value, v: value });
         }}
@@ -66,16 +72,36 @@ function NumberScrubField({ label, value, fs, testid, onCommit, compact, appear 
         <input type="range" min={fs!.min} max={fs!.max} step={fs?.step ?? 0.01} data-testid={`${testid}-slider`} value={display} onChange={(e) => onCommit(Number(e.target.value))} />
       )}
       <input
-        type="number"
-        step={fs?.step}
-        min={fs?.min}
-        max={fs?.max}
+        type="text"
+        inputMode="decimal"
         style={{ maxWidth: 72 }}
         data-testid={testid}
-        value={display}
-        onChange={(e) => onCommit(clampToField(fs, Number(e.target.value)))}
+        value={numberInput.value}
+        onFocus={numberInput.onFocus}
+        onChange={numberInput.onChange}
+        onBlur={numberInput.onBlur}
+        onKeyDown={numberInput.onKeyDown}
       />
     </div>
+  );
+}
+
+// Leaf number input for contexts (like BatchPanel's field list, built inside a
+// .map()) that can't call the useNumberDraft hook inline — hooks need a real
+// component of their own so call order stays stable across renders.
+function NumberDraftInput({ value, fs, testid, onCommit }: { value: number; fs?: FieldSchema | undefined; testid: string; onCommit: (n: number) => void }) {
+  const numberInput = useNumberDraft(value, fs, onCommit);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      data-testid={testid}
+      value={numberInput.value}
+      onFocus={numberInput.onFocus}
+      onChange={numberInput.onChange}
+      onBlur={numberInput.onBlur}
+      onKeyDown={numberInput.onKeyDown}
+    />
   );
 }
 
@@ -210,7 +236,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                       return (
                         <div className={`field vec3-cell vec3-${g.slice(-1)}`} key={g}>
                           <label>{g}</label>
-                          <input type="number" step={fs?.step} min={fs?.min} max={fs?.max} data-testid={`batch-${comp}-${g}`} value={Number(data[g])} onChange={(e) => setAll(comp, g, clampToField(fs, Number(e.target.value)))} />
+                          <NumberDraftInput key={`${primary}:${comp}:${g}`} value={Number(data[g])} fs={fs} testid={`batch-${comp}-${g}`} onCommit={(n) => setAll(comp, g, n)} />
                         </div>
                       );
                     })}
@@ -240,7 +266,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                       ))}
                     </select>
                   ) : type === 'number' ? (
-                    <input type="number" step={fs?.step} min={fs?.min} max={fs?.max} data-testid={`batch-${comp}-${k}`} value={Number(v)} onChange={(e) => setAll(comp, k, clampToField(fs, Number(e.target.value)))} />
+                    <NumberDraftInput key={`${primary}:${comp}:${k}`} value={Number(v)} fs={fs} testid={`batch-${comp}-${k}`} onCommit={(n) => setAll(comp, k, n)} />
                   ) : (
                     <input data-testid={`batch-${comp}-${k}`} value={String(v)} onChange={(e) => setAll(comp, k, e.target.value)} />
                   )}
@@ -422,7 +448,7 @@ export function InspectorPanel() {
                   out.push(
                     <div className="vec3-row" data-testid={`insp-${comp}-vec3`} key="__vec3">
                       {grp.map((g) => (
-                        <NumberScrubField key={g} label={g} value={data[g] as number} fs={fieldSchema(comp, g)} testid={`insp-${comp}-${g}`} compact onCommit={(val) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [g]: val } })} />
+                        <NumberScrubField key={`${sel}:${comp}:${g}`} label={g} value={data[g] as number} fs={fieldSchema(comp, g)} testid={`insp-${comp}-${g}`} compact onCommit={(val) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [g]: val } })} />
                       ))}
                     </div>,
                   );
@@ -444,7 +470,7 @@ export function InspectorPanel() {
                   out.push(
                     <div className="vec3-row" data-testid="insp-Transform-rot-vec3" key="__rot">
                       {ROTATIONS.map((r) => (
-                        <NumberScrubField key={r.key} label={r.label} value={euler[r.key as keyof typeof euler]} fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }} testid={r.testid} compact onCommit={(val) => commitEuler(r.key, val)} />
+                        <NumberScrubField key={`${sel}:${r.key}`} label={r.label} value={euler[r.key as keyof typeof euler]} fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }} testid={r.testid} compact onCommit={(val) => commitEuler(r.key, val)} />
                       ))}
                     </div>,
                   );
@@ -461,7 +487,7 @@ export function InspectorPanel() {
                   if (type === 'number') {
                     // live-follow any viewport gizmo bound to this `<comp>.<key>` scalar (e.g. Light.spotAngle, Light.range)
                     const liveNum = fieldPrev && fieldPrev.id === sel && fieldPrev.key === `${comp}.${k}` ? fieldPrev.value : (typeof v === 'number' ? v : 0);
-                    out.push(<NumberScrubField key={k} label={k} value={liveNum} fs={fs} testid={`insp-${comp}-${k}`} onCommit={setField} appear={!!fs?.showWhen} />);
+                    out.push(<NumberScrubField key={`${sel}:${comp}:${k}`} label={k} value={liveNum} fs={fs} testid={`insp-${comp}-${k}`} onCommit={setField} appear={!!fs?.showWhen} />);
                     continue;
                   }
                   const strVal = v === undefined || v === null ? '' : String(v);

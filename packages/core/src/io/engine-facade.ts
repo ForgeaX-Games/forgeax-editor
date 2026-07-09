@@ -36,6 +36,39 @@ import type {
 } from '@forgeax/engine-ecs';
 import { activeSpan, type EngineInterfaceName } from './trace';
 
+// feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
+// "engine interface name -> side-effect hint" table (SSOT, AC-07 / D-4). It
+// lives HERE, next to _recordLeaf (the sole fill point), so the fill is
+// single-point and every leaf hint is traceable to a literal in this table.
+// There must be NO second Record<EngineInterfaceName, ...> anywhere (the AC-07
+// falsification point — grep-asserted by trace-side-effect-hints.test.ts).
+//
+// Each entry is an editor-side DECLARATIVE contract description — worded "by
+// contract may trigger ...", NOT "actually triggers ...". This is a seam
+// declaration, not engine real runtime causality: the real side-effect SSOT
+// belongs at the engine interface definition (North-Star §7), which is
+// cross-repo and OOS-1 (explicitly excluded). Hard-coding real causality here
+// would be AGENTS.md anti-pattern #1 (hand-rolling engine behavior); we do NOT.
+//
+// Anchors:
+//   requirements AC-07: single mapping table (SSOT), fill traceable to entry
+//   plan-strategy §2 D-4: table SSOT in engine-facade.ts, single-point fill
+//   plan-strategy §2 D-5: contract-description wording, not real causality
+const ENGINE_SIDE_EFFECT_HINTS: Record<EngineInterfaceName, string> = {
+  'world.set':
+    'by contract may mark affected render/spatial systems dirty for the next frame',
+  'world.spawn':
+    'by contract may insert the entity into archetype storage and spatial indices',
+  'world.despawn':
+    'by contract may remove the entity from archetype storage and trigger spatial index rebuild',
+  'world.allocSharedRef':
+    'by contract may pin a shared asset payload until the last handle is released',
+  'world.addComponent':
+    'by contract may migrate the entity to a new archetype and mark dependent systems dirty',
+  'world.removeComponent':
+    'by contract may migrate the entity to a new archetype and mark dependent systems dirty',
+};
+
 // M3 t16 (CI-typecheck fix feat-20260707): the facade's write methods forward the
 // engine World's OWN branded types (EntityHandle / Result<T, EcsError> / Handle) so
 // (a) view-scaffold callers that consumed `world.spawn(...).unwrap()` keep working
@@ -50,11 +83,23 @@ import { activeSpan, type EngineInterfaceName } from './trace';
 
 /** Record a leaf engine interface name onto the current active span's
  *  attributes, if an active span exists. No-op when outside any span
- *  (e.g., per-frame scaffolding writes — OOS-5 / D-2 harmonization). */
+ *  (e.g., per-frame scaffolding writes — OOS-5 / D-2 harmonization).
+ *
+ *  After pushing engineCalls (unchanged, D-3), it also derives a declarative
+ *  side-effect hint from the SSOT table (w7, AC-06/07): if the table has an
+ *  entry AND this interface has not already been pushed onto sideEffects (dedup
+ *  key = engineInterface, D-8), push {engineInterface, hint}. A missing table
+ *  entry is silently skipped (requirements boundary: sideEffects may be shorter
+ *  than engineCalls, never throws). */
 function _recordLeaf(name: EngineInterfaceName): void {
   const span = activeSpan();
-  if (span) {
-    span.attributes.engineCalls.push(name);
+  if (!span) return;
+  span.attributes.engineCalls.push(name);
+  const hint = ENGINE_SIDE_EFFECT_HINTS[name];
+  if (hint === undefined) return;
+  const already = span.attributes.sideEffects.some((h) => h.engineInterface === name);
+  if (!already) {
+    span.attributes.sideEffects.push({ engineInterface: name, hint });
   }
 }
 
