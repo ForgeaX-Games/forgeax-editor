@@ -670,9 +670,17 @@ function isSpawnDoc(x: unknown): x is SpawnDoc {
 }
 
 // Re-entrancy guard for the VAG_ASSETS_CHANGED → refreshCatalog → re-broadcast
-// cycle: the re-broadcast is itself a VAG_ASSETS_CHANGED that reaches this same
-// handler (self-origin is allowed), so without this flag it would loop forever.
-let refreshingCatalog = false;
+// cycle: the post-refresh re-broadcast is itself a VAG_ASSETS_CHANGED that
+// reaches this same handler (self-origin is allowed). A plain boolean that is
+// cleared BEFORE the re-broadcast fails — the self-post arrives after the flag
+// is already down and re-triggers refreshCatalog → re-broadcast → infinite loop
+// (each turn also fires the panel's /api/files/tree fetch, exhausting the vite
+// proxy's ephemeral ports → EADDRNOTAVAIL flood). Instead we COUNT the self-fires
+// we still owe: every started refresh emits exactly one re-broadcast on
+// completion (++), and every receipt that finds the counter positive is that
+// echo (── and return, no refresh). Refreshes and echoes stay paired 1:1, so the
+// cycle can never self-sustain even if a genuine change lands mid-refresh.
+let pendingCatalogRefires = 0;
 
 function installPreviewControls(editorApp: { pause(): void; resume(): void }): () => void {
   return onVagMessage(window, {
@@ -709,15 +717,21 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
         // synchronous listCatalog() and the subsequent Add-to-Scene loadByGuid
         // both see the new asset — no page reload needed. The panel is a separate
         // VAG_ASSETS_CHANGED listener that reloads from listCatalog; to hand it
-        // fresh data we re-fire the event AFTER the refresh lands, guarded by a
-        // module flag so this handler's own re-fire doesn't recurse forever
-        // (allowedParentOrigins includes self.origin, so self-posts reach here).
-        if (refreshingCatalog) return;
+        // fresh data we re-fire the event AFTER the refresh lands (self-posts
+        // reach here because allowedParentOrigins includes self.origin).
+        //
+        // Swallow our own post-refresh echo (see pendingCatalogRefires above):
+        // if we owe an echo, THIS is it — consume it and stop, or we'd loop.
+        if (pendingCatalogRefires > 0) {
+          pendingCatalogRefires -= 1;
+          return;
+        }
         const reg = gateway.doc.registry;
         if (reg?.refreshCatalog) {
-          refreshingCatalog = true;
           void reg.refreshCatalog().finally(() => {
-            refreshingCatalog = false;
+            // Owe exactly one echo, then fire it: panels reload from the now-
+            // fresh catalog; the echo returns to us above and is consumed.
+            pendingCatalogRefires += 1;
             broadcastAssetsChanged();
           });
         }
