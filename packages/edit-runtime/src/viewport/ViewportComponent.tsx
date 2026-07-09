@@ -381,13 +381,18 @@ async function bootViewport(
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
   }
 
-  // possess-exit key (was :617). Esc / G un-possesses play·game -> play·scene.
+  // game-view-exit key (was :617). Esc / G exits display='game' back to 'scene'
+  // for ANY run mode: play·game -> play·scene (un-possess) AND edit·game ->
+  // edit·scene. `run` is left untouched (orthogonal-axis contract). Without the
+  // edit·game case there was no keyboard exit: entering game view from Edit hides
+  // the ViewportBar (its G button) and only leaves the barely-discoverable
+  // GameOverlay hover, so the user could get stuck with no aids and no toolbar.
   function onPossessKey(e: KeyboardEvent): void {
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
     const q = getViewportQuadrant();
-    if (q.run !== 'play' || q.display !== 'game') return;
+    if (q.display !== 'game') return;
     const k = e.key;
     if (k === 'Escape' || k === 'g' || k === 'G') setViewportQuadrant({ display: 'scene' });
   }
