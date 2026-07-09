@@ -19,7 +19,12 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ViewportComponent } from './viewport/ViewportComponent';
+import { installShortcutForwarder } from '@forgeax/editor-core/shortcut-forwarder';
 import './theme.css';
+
+// todo 004:本 Edit 视口作为 studio 的 iframe 嵌入时,把全局快捷键(⌘K 命令面板 /
+// Ctrl+Shift+* / Esc)转发给 studio 顶层。独立运行(顶层窗口)时是 no-op。
+installShortcutForwarder();
 
 // M3: single-realm — sync engine deleted (plan-strategy S7 M3).
 // Popout entry branch is dead code, removed in place.
