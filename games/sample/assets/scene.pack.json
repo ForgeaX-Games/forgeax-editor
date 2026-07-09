@@ -65,6 +65,12 @@
                 "castShadow": true,
                 "mapSize": 2048,
                 "shadowDistance": 60
+              },
+              "Skylight": {
+                "colorR": 0.7,
+                "colorG": 0.8,
+                "colorB": 1,
+                "intensity": 1
               }
             }
           },

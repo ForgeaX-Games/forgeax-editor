@@ -74,6 +74,7 @@
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",

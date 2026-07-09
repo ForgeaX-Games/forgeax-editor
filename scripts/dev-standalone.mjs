@@ -33,7 +33,10 @@ children.push(
 );
 
 console.log('[dev-standalone] starting standalone host :15290 ...');
-children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT }));
+// Forward env (not just the default process.env fallback) so an exported
+// FORGEAX_ENGINE_RHI_DEBUG=1 reaches the host too — the host is where the engine
+// boots + POSTs captured tapes, so it needs the rhi-debug plugin's endpoints.
+children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env: { ...process.env } }));
 
 // Keep alive until a child exits (then cleanup trap tears the rest down).
 await new Promise((resolvePromise) => {
