@@ -60,6 +60,7 @@ import {
   getSelectionList,
   getAssetSelectionList,
   getLastSelectionDomain,
+  getFolderSelectionList,
   deleteManyCascade,
   duplicateEntity,
   renameAssetInPack,
@@ -137,6 +138,13 @@ function buildKeyboardRouterDeps(): KeyboardRouterDeps {
       }
     },
     selectAllAssets: () => triggerAssetSelectAll(),
+    getFolderSelection: () => getFolderSelectionList().map((p) => ({ path: p })),
+    deleteFolders: (folders) => {
+      for (const f of folders) {
+        if (!window.confirm(`Delete folder "${f.path}" and all its contents?`)) return;
+        gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
+      }
+    },
   };
 }
 

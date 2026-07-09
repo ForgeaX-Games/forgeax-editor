@@ -161,7 +161,10 @@ export function buildFolderContextMenu(
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
     { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
-    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => { /* folder delete needs server API */ } },
+    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+      if (!window.confirm(`Delete folder "${folder.name}" and all its contents?`)) return;
+      gateway.dispatch({ kind: 'deleteDirectory', path: folder.path }, 'human');
+    }},
     { id: 'copy-path', label: 'Copy Path', action: () => {
       void navigator.clipboard.writeText(folder.path);
     }},
