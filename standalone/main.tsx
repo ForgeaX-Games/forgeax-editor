@@ -27,8 +27,9 @@
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
-import { DEFAULT_PANEL_RENDERERS } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { DEFAULT_PANEL_RENDERERS, type PanelRenderers, type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
 import { useAppStore } from '@forgeax/interface/store';
+import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
@@ -39,6 +40,9 @@ import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewpor
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
+// EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
+// + the panels registry keys, same source studio's editorRenderers uses.
+import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
 import { installEditorBusCompat } from '@forgeax/editor-core';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
@@ -145,12 +149,17 @@ function buildKeyboardRouterDeps(): KeyboardRouterDeps {
 // case no game is served and the editor shows its built-in demo seed.
 declare const __FORGEAX_GAME_SLUG__: string | null;
 
-// ── panel renderer injection (single realm) ───────────────────────────────────
-// renderEdit  = the in-process ViewportComponent (NOT an iframe src). SurfaceKeep-
-//   AliveLayer mounts it once and overlays it on the Edit anchor's rect.
-// renderEditorPanel = the in-process panel body for ep:<id>; placeholder for ids
-//   with no registered component (D6: timeline / matgraph / systems drift ids).
-// renderChat / renderPreview left to the defaults (neutral placeholders).
+// ── panel renderer injection (single realm, PanelRenderers v9 shape) ──────────
+// v9 (2026-07-08) reclassified PanelRenderers into structural category slots:
+//   surfaces.SceneEditor — the in-process engine viewport (NOT an iframe).
+//     SurfaceKeepAliveLayer mounts it once above the dockview 'viewport' anchor.
+//     (replaces the pre-v9 `renderEdit(opts)` render function)
+//   panels — Record<bareId, PanelDescriptor>; DockPanelHost looks each ep:*
+//     panel body up here. (replaces the pre-v9 `renderEditorPanel(id)`)
+//   editorPanelIds — the ep:* id list DockShell registers (SSOT: editor-core
+//     manifest). Its absence renders every editor panel as "Panel not mounted".
+// Mirrors studio's editorRenderers.tsx (the v9 reference assembly), minus the
+// studio-only chat/agents/overlays/detached/hostSDK slots.
 function EditorPanelBody({ id }: { id: string }): ReactNode {
   const Comp = EDITOR_PANEL_COMPONENTS[id];
   if (Comp) return <Comp />;
@@ -161,13 +170,35 @@ function EditorPanelBody({ id }: { id: string }): ReactNode {
   );
 }
 
-const standaloneRenderers = {
+// Tab labels for the dock panels. Keep in sync with studio's editorRenderers
+// EDITOR_PANEL_TITLES (display-only; ids stay the EDITOR_PANELS SSOT).
+const EDITOR_PANEL_TITLES: Record<string, string> = {
+  hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
+  history: 'History', capabilities: 'Capabilities',
+  material: 'Material', timeline: 'Timeline', matgraph: 'Mat Graph',
+  mesh: 'Mesh', launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
+};
+
+const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
+  EDITOR_PANELS.map((id, i) => [id, {
+    title: EDITOR_PANEL_TITLES[id] ?? id,
+    order: 100 + i,
+    render: () => <EditorPanelBody id={id} />,
+  }]),
+);
+
+// Module-scope named component (stable identity across renders — no re-mounts).
+// viewportOnly is accepted for slot-signature parity; the in-process component
+// always renders the full engine surface.
+function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
+  return <ViewportComponent />;
+}
+
+const standaloneRenderers: PanelRenderers = {
   ...DEFAULT_PANEL_RENDERERS,
-  // In-process viewport — a component, not an iframe. viewportOnly is accepted
-  // for signature parity with the old iframe renderer but the in-process
-  // component always renders the full engine surface.
-  renderEdit: (_opts: { viewportOnly?: boolean }) => <ViewportComponent />,
-  renderEditorPanel: (id: string) => <EditorPanelBody id={id} />,
+  editorPanelIds: [...EDITOR_PANELS],
+  panels: standalonePanels,
+  surfaces: { SceneEditor: StandaloneSceneEditor },
 };
 
 function boot(): void {
@@ -192,6 +223,21 @@ function boot(): void {
     else localStorage.removeItem('forgeax.gameRoot');
   } catch {
     /* store/localStorage unavailable — fine; demo seed path still works */
+  }
+
+  // Studio's first-run onboarding (welcome→project wizard: language pick +
+  // connect-a-model) is a STUDIO product flow — the standalone editor has no
+  // Forge/chat/model to connect, and during the welcome/project phases App
+  // renders ONLY the onboarding wizard (the whole dock shell stays unmounted).
+  // Seed the persisted state machine to 'done' BEFORE mount so the standalone
+  // host always boots straight into the shell. Unconditional write = idempotent.
+  try {
+    localStorage.setItem(
+      STORAGE_KEYS.onboarding,
+      JSON.stringify({ v: 2, phase: 'done', done: { tour: true, firstChat: true } }),
+    );
+  } catch {
+    /* localStorage unavailable — worst case the wizard shows; not fatal */
   }
 
   // single-realm (feat-20260703): bridge the --game slug into the URL query so

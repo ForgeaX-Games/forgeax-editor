@@ -25,6 +25,7 @@
   },
   "workspaces": [
     "packages/*",
+    "packages/interface/packages/*",
     "packages/engine/packages/*"
   ],
   "scripts": {
