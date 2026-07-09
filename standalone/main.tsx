@@ -59,21 +59,10 @@ import { DeleteGuardDialog } from './DeleteGuardDialog';
 // global keydown listener (G-1 / AC-A1) while routing Delete/F2/Ctrl+D/Ctrl+A/G
 // through the one gateway door.
 import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
-import {
-  gateway,
-  getSelectionList,
-  getAssetSelectionList,
-  getLastSelectionDomain,
-  deleteManyCascade,
-  duplicateEntity,
-  renameAssetInPack,
-  assetIO,
-  broadcastAssetsChanged,
-  worldRootHandles,
-  childrenOf,
-  triggerAssetSelectAll,
-} from '@forgeax/editor-core';
-import { getViewportQuadrant, getInputTarget } from '@forgeax/editor-edit-runtime/viewport/quadrant';
+// keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
+// standalone host produce the SAME dep object — no divergence (the old inline copy
+// here was silently missing from studio, killing its G/Esc keyboard path).
+import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
 
 // lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
 // (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
@@ -83,65 +72,12 @@ import { getViewportQuadrant, getInputTarget } from '@forgeax/editor-edit-runtim
 // Derive itself lives in editor-core (store/last-selection-domain) so router and
 // UI share one source — no second divergent state (G-3).
 
-function buildKeyboardRouterDeps(): KeyboardRouterDeps {
-  return {
-    dispatch: (op, origin) => gateway.dispatch(op as never, (origin ?? 'human') as never),
-    getEntitySelection: () => Array.from(getSelectionList()) as unknown as number[],
-    getAssetSelection: () => getAssetSelectionList(),
-    getLastSelectionDomain: () => getLastSelectionDomain(),
-    isPlayMode: () => gateway.mode === 'play',
-    getDisplay: () => getViewportQuadrant().display,
-    getInputTarget: () => getInputTarget(),
-    deleteEntities: (ids) => deleteManyCascade(ids as never),
-    duplicateEntities: (ids) => ids.forEach((id) => duplicateEntity(id as never)),
-    renameEntity: (id) => gateway.dispatch({ kind: 'requestRename', entity: id } as never),
-    selectAllEntities: () => {
-      const world = gateway.doc.world;
-      const seen = new Set<number>();
-      const stack: number[] = [...(worldRootHandles(world) as unknown as number[])];
-      const all: number[] = [];
-      for (const h of stack) seen.add(h);
-      while (stack.length) {
-        const h = stack.pop()!;
-        all.push(h);
-        for (const c of (childrenOf(world, h as never) as unknown as number[])) {
-          if (!seen.has(c)) { seen.add(c); stack.push(c); }
-        }
-      }
-      gateway.dispatch({ kind: 'setSelectionMany', ids: all } as never);
-    },
-    deleteAssets: (assets) => {
-      // T4-3 / AC-C2: risky multi-asset delete surfaces a UI confirm dialog
-      // (UI layer, core stays headless); single-asset deletes proceed directly,
-      // matching entity-delete which also has no confirm. Cross-reference warning
-      // is the gate that decides whether a human confirm is needed (OOS-5 ref
-      // compensation is out of scope — multi-select is the in-scope trigger).
-      if (assets.length > 1) {
-        void requestDeleteGuard({
-          assets: assets.map((a) => ({ guid: a.guid, name: a.name, packPath: a.packPath })),
-        }).then((ok) => {
-          if (!ok) return;
-          for (const a of assets) {
-            gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
-          }
-        });
-        return;
-      }
-      for (const a of assets) {
-        gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
-      }
-    },
-    duplicateAsset: (guid, packPath) => {
-      void assetIO.duplicateAssetInPack(packPath, guid).then(({ ok }) => { if (ok) broadcastAssetsChanged(); });
-    },
-    renameAsset: (guid, packPath) => {
-      const newName = window.prompt('Rename asset:', packPath.split('/').pop() ?? guid);
-      if (newName && newName.trim()) {
-        void renameAssetInPack(packPath, guid, newName.trim()).then((ok) => { if (ok) broadcastAssetsChanged(); });
-      }
-    },
-    selectAllAssets: () => triggerAssetSelectAll(),
-  };
+// Standalone's router deps = the shared SSOT builder + this host's DeleteGuardDialog
+// bus as the risky-multi-delete confirm gate (the one host-specific piece).
+function makeKeyboardRouterDeps(): KeyboardRouterDeps {
+  return buildKeyboardRouterDeps({
+    confirmDeleteAssets: (assets) => requestDeleteGuard({ assets }),
+  }) as KeyboardRouterDeps;
 }
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
@@ -268,7 +204,7 @@ function boot(): void {
   // Inject the editor-side keyboard-router callbacks (interface submodule stays
   // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks
   // them up at effect time.
-  registerKeyboardRouterDeps(buildKeyboardRouterDeps());
+  registerKeyboardRouterDeps(makeKeyboardRouterDeps());
 
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +

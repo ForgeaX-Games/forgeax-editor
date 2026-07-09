@@ -505,3 +505,28 @@ describe('w6 — AC-05 dead-concept grep on run-lifecycle.ts source', () => {
     expect(runLifecycleSrc).not.toContain('removeBootstrapSystems');
   });
 });
+
+// The editor's OWN input backend (ViewportComponent createApp canvas form) must
+// NEVER request pointer lock: two backends share the viewport canvas during
+// ▶ Play, and pointer lock belongs solely to the game's play backend (which the
+// game gates per view-mode via ctx.setPointerLockAllowed). The pre-#78 predicate
+// `pointerLockAllowed: () => getInputTarget() === 'game'` made the editor backend
+// lock the cursor during play·game regardless of the game's top-down/FPS choice
+// — the root cause of the "top-down game locks + throws on next click" bug. This
+// source-contract test pins the always-deny gate so a revert to the game-quadrant
+// predicate is caught at unit time (the real createApp path needs a WebGPU canvas,
+// so a source grep is the pragmatic guard).
+describe('editor input backend never requests pointer lock (two-backend regression)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const viewportComponentSrc = readFileSync(resolve(here, '..', 'ViewportComponent.tsx'), 'utf8');
+
+  it('createApp is given pointerLockAllowed: () => false', () => {
+    expect(viewportComponentSrc).toContain('pointerLockAllowed: () => false');
+  });
+
+  it('does NOT gate the editor backend lock on getInputTarget() === \'game\' (the pre-#78 bug)', () => {
+    // The predicate string may still appear inside the explanatory comment, so
+    // assert it is not present as a live pointerLockAllowed binding.
+    expect(viewportComponentSrc).not.toContain("pointerLockAllowed: () => getInputTarget() === 'game'");
+  });
+});

@@ -26,6 +26,10 @@
       "types": "./src/viewport/viewport-quadrant.ts",
       "import": "./src/viewport/viewport-quadrant.ts"
     },
+    "./keyboard-router-deps": {
+      "types": "./src/keyboard-router-deps.ts",
+      "import": "./src/keyboard-router-deps.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",

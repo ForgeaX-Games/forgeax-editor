@@ -270,8 +270,22 @@ async function bootViewport(
   // construction across the M2 diff (lint-no-second-world). ─────────────────────
   emitBoot('boot ▸ createApp');
   const app = await createApp(canvas, {
-    // Pointer-lock gate: only the play·game quadrant captures the cursor.
-    pointerLockAllowed: () => getInputTarget() === 'game',
+    // Pointer-lock gate: the EDITOR's own backend must NEVER request pointer lock.
+    // It exists only for edit-mode orbit/pan/pick + play·scene free-look, all of
+    // which use drag deltas (setPointerCapture, D-5) — never a locked cursor.
+    //
+    // Pointer lock during ▶ Play belongs SOLELY to the game's own play backend
+    // (host-boot.ts attachPlayInput), which the game gates per view-mode via
+    // ctx.setPointerLockAllowed(mode === 'fps'). Two backends share this one
+    // canvas; if the editor backend also locked, it would override the game's
+    // top-down/FPS decision — the exact bug where a top-down game locked the
+    // cursor and threw on the next click (setPointerCapture-while-locked /
+    // "lock cannot be acquired immediately after exit"). The old
+    // `getInputTarget() === 'game'` predicate here was a pre-#78 leftover from
+    // when the editor had a single backend that WAS the game backend during
+    // play; after the world-fork split added a separate play backend it became
+    // wrong. Always-deny is correct: the editor never consumes lock.
+    pointerLockAllowed: () => false,
     ...(editPhysics ? { plugins: [physicsPlugin(editPhysics)] } : {}),
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
