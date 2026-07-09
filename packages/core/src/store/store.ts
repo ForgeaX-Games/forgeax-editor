@@ -106,6 +106,7 @@ export {
   replaceDoc,
   clearDocStorage,
   inlineAssetCount,
+  wouldDropInlineAssets,
 } from './scene-persistence';
 export type { SceneFileEntry, PlayConfig } from './scene-persistence';
 

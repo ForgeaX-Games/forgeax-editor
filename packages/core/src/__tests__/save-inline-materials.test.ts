@@ -18,7 +18,7 @@
 // probes; a headless bun test cannot host the WebGPU editor world.
 
 import { describe, expect, it } from 'bun:test';
-import { inlineAssetCount } from '../store/store';
+import { inlineAssetCount, wouldDropInlineAssets } from '../store/store';
 
 describe('inlineAssetCount — safety-net counter for save round-trip', () => {
   it('counts non-scene asset entries (inline material bodies)', () => {
@@ -63,5 +63,41 @@ describe('inlineAssetCount — safety-net counter for save round-trip', () => {
     expect(inlineAssetCount({})).toBe(0);
     expect(inlineAssetCount({ assets: 'nope' })).toBe(0);
     expect(inlineAssetCount(undefined)).toBe(0);
+  });
+});
+
+// The load-FLOOR guard (wouldDropInlineAssets) replaces the old count-vs-current-
+// disk check. Anchoring to what the scene was LOADED with — not the current on-disk
+// file — is what defeats the self-perpetuating strip loop that turned hello5 grey:
+// once a stripping write hit disk, the old guard compared 0 (new) >= 0 (disk) and
+// passed forever. The floor is the on-disk material count captured at load; both
+// the awaited save and the sync unload beacon refuse any pack below it.
+describe('wouldDropInlineAssets — load-floor material-strip guard', () => {
+  const full = { assets: [{ kind: 'scene' }, { kind: 'material' }, { kind: 'material' }] }; // 2 inline
+  const stripped = { assets: [{ kind: 'scene' }] }; // 0 inline
+
+  it('refuses a save that drops below the load floor (the strip)', () => {
+    expect(wouldDropInlineAssets(2, stripped)).toBe(true);
+  });
+
+  it('allows a save that preserves the floor', () => {
+    expect(wouldDropInlineAssets(2, full)).toBe(false);
+  });
+
+  it('allows a save that ADDS inline assets above the floor', () => {
+    const more = { assets: [{ kind: 'scene' }, { kind: 'material' }, { kind: 'material' }, { kind: 'material' }] };
+    expect(wouldDropInlineAssets(2, more)).toBe(false);
+  });
+
+  it('DEFEATS the fixed point: floor=2 still refuses a 0-material re-strip even after disk is already 0', () => {
+    // The old bug: prior save stripped disk to 0, so 0 >= 0 (new vs disk) passed
+    // and re-stripped forever. The floor (2, from load) refuses it regardless of
+    // what is currently on disk.
+    expect(wouldDropInlineAssets(2, stripped)).toBe(true);
+  });
+
+  it('null floor (no scene loaded yet) never blocks — first-time save proceeds', () => {
+    expect(wouldDropInlineAssets(null, stripped)).toBe(false);
+    expect(wouldDropInlineAssets(null, full)).toBe(false);
   });
 });
