@@ -13,7 +13,7 @@
 //   feat (keyboard-router convergence) M2 T2-1: AssetIOFacade encapsulates the
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
 import type { PackFile } from '../scene/scene-pack';
-import { readPack, writePack, deleteAsset } from '../session/pack-ops';
+import { readPack, writePack, deleteAsset, generateAssetGuid } from '../session/pack-ops';
 import { recordAssetLeaf } from './trace';
 
 /** A single asset entry inside a pack file (derived from the zod PackFile shape). */
@@ -68,6 +68,50 @@ export class AssetIOFacade {
     if (idx >= 0) pack.assets[idx] = entry;
     else pack.assets.push(entry);
     return writePack(packPath, pack);
+  }
+
+  /** Create a new asset entry in a pack (creates the pack file if missing).
+   *  Single gate for `createAsset` document op — all other callers are lint-gated. */
+  async createAssetInPack(opts: {
+    packPath: string;
+    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] };
+  }): Promise<{ ok: boolean }> {
+    recordAssetLeaf('assetIO.createAssetInPack');
+    let pack = await readPack(opts.packPath);
+    if (!pack) {
+      // Create the pack file on first asset
+      pack = { schemaVersion: '1.0', kind: 'internal-text-package', assets: [] };
+    }
+    pack.assets.push({
+      guid: opts.asset.guid,
+      kind: opts.asset.kind,
+      name: opts.asset.name,
+      payload: opts.asset.payload as Record<string, unknown>,
+      refs: opts.asset.refs ?? [],
+    });
+    const ok = await writePack(opts.packPath, pack);
+    return { ok };
+  }
+
+  /** Clone an asset within the same pack (new GUID, same kind/payload).
+   *  Exposed via assetIO singleton for OOS-3 compliant external consumers
+   *  (CBContextMenu etc.) — pack writes stay inside the gate. */
+  async cloneAssetInPack(packPath: string, guid: string): Promise<{ ok: boolean; newGuid: string }> {
+    recordAssetLeaf('assetIO.cloneAssetInPack');
+    const pack = await readPack(packPath);
+    if (!pack) return { ok: false, newGuid: '' };
+    const source = pack.assets.find((a) => a.guid === guid);
+    if (!source) return { ok: false, newGuid: '' };
+    const targetGuid = generateAssetGuid();
+    pack.assets.push({
+      guid: targetGuid,
+      kind: source.kind,
+      name: source.name ? `${source.name} (copy)` : undefined,
+      payload: structuredClone(source.payload),
+      refs: [...source.refs],
+    });
+    const ok = await writePack(packPath, pack);
+    return { ok, newGuid: targetGuid };
   }
 }
 

@@ -63,7 +63,7 @@ import {
   deleteManyCascade,
   duplicateEntity,
   renameAssetInPack,
-  duplicateAssetInPack,
+  assetIO,
   broadcastAssetsChanged,
   worldRootHandles,
   childrenOf,
@@ -128,12 +128,12 @@ function buildKeyboardRouterDeps(): KeyboardRouterDeps {
       }
     },
     duplicateAsset: (guid, packPath) => {
-      void duplicateAssetInPack(guid, packPath).then(({ ok }) => { if (ok) broadcastAssetsChanged(); });
+      void assetIO.duplicateAssetInPack(packPath, guid).then(({ ok }) => { if (ok) broadcastAssetsChanged(); });
     },
     renameAsset: (guid, packPath) => {
       const newName = window.prompt('Rename asset:', packPath.split('/').pop() ?? guid);
       if (newName && newName.trim()) {
-        void renameAssetInPack(guid, packPath, newName.trim()).then((ok) => { if (ok) broadcastAssetsChanged(); });
+        void renameAssetInPack(packPath, guid, newName.trim()).then((ok) => { if (ok) broadcastAssetsChanged(); });
       }
     },
     selectAllAssets: () => triggerAssetSelectAll(),
