@@ -218,9 +218,13 @@ describe('AC-01 export-surface snapshot', () => {
     // saveDocToDisk/setSceneId/requestFrame/requestRename) off the barrel → 50.
     // feat-20260707-editor-world-fork M3 (AC-02) then DELETED rebindLoadedScene
     // (the ▶/■ Stop legacy-map rebind — no map to rebind under handle identity),
-    // dropping the published store surface to 50 − 1 = 49. This count is the
-    // machine witness that the sealed setters + the deleted rebind left the surface.
-    expect(entries.length).toBe(49);
+    // dropping the published store surface to 50 − 1 = 49.
+    // tweak-20260709-hierarchy-delete-key-wire (keyboard-router convergence) then
+    // PUBLISHED 5 asset-selection surface symbols the router + CB panel both read
+    // (getAssetSelectionList / useAssetSelectionList / clearAssetSelection /
+    // registerAssetSelectAllHandler / triggerAssetSelectAll) → 49 + 5 = 54. This
+    // count is the machine witness that the barrel surface moved exactly as intended.
+    expect(entries.length).toBe(54);
 
     // Every entry must be non-empty.
     for (const e of entries) {

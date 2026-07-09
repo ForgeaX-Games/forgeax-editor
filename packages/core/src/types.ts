@@ -14,6 +14,7 @@ export type {
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityId, EntitySource } from './scene/scene-types';
+import type { SelectedAsset } from './store/asset-selection';
 
 // ── Operations ──────────────────────────────────────────────────────────────
 // Each op is a plain JSON object = it doubles as an AI tool-call payload.
@@ -21,7 +22,16 @@ import type { EntityId, EntitySource } from './scene/scene-types';
 // (plan-strategy §2 D-6). Every op carries enough information for the applier
 // to compute an inverse for free Undo.
 
-/** Builtin editor ops — the closed discriminated union of all 24 editor primitives.
+/** Asset kinds the editor can create from an empty template (Add button).
+ *  ⚠️  NOT the engine `Asset['kind']` union (15 kinds) — most kinds are import-only
+ *  (mesh/texture/audio/…). This is the editor-side product decision of which
+ *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
+ *
+ *  扩展：加一条字面量 + 对应 spec 行 + applier switch case。*/
+export type CreatableAssetKind = 'scene';
+// 未来扩展示例： 'material' | 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
+
+/** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
  *  Narrowable on `kind` for strong type inference at call sites. Custom ops
  *  registered via registerApplier/defineOp don't need to be added here (AC-27). */
 export type BuiltinEditorOp =
@@ -35,10 +45,14 @@ export type BuiltinEditorOp =
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
+  | { kind: 'destroyAsset'; packPath: string; guid: string }
+  | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
+  | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }
   | { kind: 'setSelectionMany'; ids: EntityId[] }
+  | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'requestFrame' }
   | { kind: 'requestRename'; entity: EntityId }
@@ -50,6 +64,9 @@ export type BuiltinEditorOp =
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'focusPanel'; panel: string }
   | { kind: 'openSource'; plugin: string; docId: string }
+  | { kind: 'setCBPath'; path: string }
+  | { kind: 'cbGoBack' }
+  | { kind: 'cbGoForward' }
   // play·stop (plan-strategy §2 D-11): SESSION-domain discrete instantaneous ops.
   // Their real applier (the state machine) lives in edit-runtime (DAG downstream)
   // and is injected via registerSessionApplier at boot; in headless core they are
@@ -57,10 +74,11 @@ export type BuiltinEditorOp =
   // is empty (instantaneous degenerate dispatch — no continuous lifecycle).
   | { kind: 'play' }
   | { kind: 'stop' }
+  | { kind: 'setDisplay'; display: 'scene' | 'game' }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
-  | { kind: 'setAssetSelection'; asset: unknown };
+  ;
 
 /** EditorOp — the open union type for all editor operations.
  *  BuiltinEditorOp preserves discriminated union narrowing for the 24 builtin

@@ -11,7 +11,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelection, useSelectionList, useLastSelectionDomain } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 
@@ -260,11 +260,40 @@ function Row({
   );
 }
 
+// T5-1 / C4-4: a small scope indicator that lights when the panel's selection
+// domain is the current Delete-jurisdiction domain. Pure visual clue — the
+// routing decision itself lives in the keyboard router (interface submodule).
+function DeleteScopeRing({ active, domain }: { active: boolean; domain: 'entity' | 'asset' }) {
+  const other = domain === 'entity' ? 'Content Browser 资产' : 'Hierarchy 实体';
+  const here = domain === 'entity' ? 'Hierarchy 实体' : 'Content Browser 资产';
+  return (
+    <span
+      data-testid="delete-scope-ring"
+      data-domain={domain}
+      data-active={active}
+      title={active ? `Delete 键当前管辖：${here}` : `Delete 键当前管辖：${other}`}
+      style={{
+        display: 'inline-block',
+        width: 9,
+        height: 9,
+        borderRadius: '50%',
+        border: `2px solid ${active ? '#4ade80' : '#555'}`,
+        background: active ? '#4ade80' : 'transparent',
+        boxShadow: active ? '0 0 6px 1px #4ade80' : 'none',
+        transition: 'all .15s ease',
+      }}
+    />
+  );
+}
+
 export function HierarchyPanel() {
   const { t } = useTranslation();
   useDocVersion();
   const sel = useSelection();
   const selList = useSelectionList();
+  // T5-1 / C4-4: show the current Delete-jurisdiction domain as a visual
+  // clue (no implicit rule). Lights when this panel's domain (entity) is active.
+  const delDomain = useLastSelectionDomain();
   const roots = childrenOf(gateway.activeWorld, null);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
@@ -309,8 +338,32 @@ export function HierarchyPanel() {
       })
     : [];
   return (
-    <div className="panel" data-testid="panel-hierarchy" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <h3 style={{ flexShrink: 0 }}>Hierarchy</h3>
+    <div
+      className="panel"
+      data-testid="panel-hierarchy"
+      style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+      // Step 1 (keyboard-router convergence): wire Delete / Backspace on the panel
+      // itself so the keystroke deletes the current entity selection through the
+      // one gateway door. JSX onKeyDown is scoped to this panel (G-1 level 2),
+      // so it stays even after Step 2 moves the global router in — it never races
+      // with the document-level listener. Typing targets (rename input / filter)
+      // are excluded so Backspace edits text instead of deleting nodes.
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+        const tgt = e.target as HTMLElement;
+        if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return;
+        const cur = [...getSelectionList()];
+        if (cur.length === 0) return;
+        e.preventDefault();
+        if (cur.length > 1) deleteManyCascade(cur);
+        else deleteEntity(cur[0]!);
+      }}
+    >
+      <h3 style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+        Hierarchy
+        <DeleteScopeRing active={delDomain === 'entity'} domain="entity" />
+      </h3>
       <div style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', flexShrink: 0 }}>
         <button
           type="button"

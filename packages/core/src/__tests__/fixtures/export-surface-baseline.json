@@ -1,26 +1,14 @@
 [
   {
-    "name": "MeshStats",
-    "signature": "MeshStatsWire"
-  },
-  {
-    "name": "PlayConfig",
-    "signature": "PlayConfig"
-  },
-  {
-    "name": "SceneFileEntry",
-    "signature": "SceneFileEntry"
-  },
-  {
-    "name": "SelectedAsset",
-    "signature": "SelectedAsset"
-  },
-  {
     "name": "broadcastAssetsChanged",
     "signature": "() => void"
   },
   {
     "name": "cancelPendingDiskSave",
+    "signature": "() => void"
+  },
+  {
+    "name": "clearAssetSelection",
     "signature": "() => void"
   },
   {
@@ -38,6 +26,10 @@
   {
     "name": "getAssetSelection",
     "signature": "() => SelectedAsset | null"
+  },
+  {
+    "name": "getAssetSelectionList",
+    "signature": "() => SelectedAsset[]"
   },
   {
     "name": "getGizmoMode",
@@ -96,6 +88,10 @@
     "signature": "() => boolean"
   },
   {
+    "name": "MeshStats",
+    "signature": "MeshStatsWire"
+  },
+  {
     "name": "notifyDocChanged",
     "signature": "() => void"
   },
@@ -120,12 +116,20 @@
     "signature": "(fn: () => void) => () => void"
   },
   {
+    "name": "PlayConfig",
+    "signature": "PlayConfig"
+  },
+  {
     "name": "publishMeshStats",
     "signature": "(stats: MeshStatsWire | null) => void"
   },
   {
     "name": "readPlayConfig",
     "signature": "() => Promise<PlayConfig>"
+  },
+  {
+    "name": "registerAssetSelectAllHandler",
+    "signature": "(fn: (() => void) | null) => void"
   },
   {
     "name": "replaceDoc",
@@ -148,12 +152,28 @@
     "signature": "(handle: EntityHandle) => void"
   },
   {
+    "name": "SceneFileEntry",
+    "signature": "SceneFileEntry"
+  },
+  {
+    "name": "SelectedAsset",
+    "signature": "SelectedAsset"
+  },
+  {
     "name": "switchSceneFile",
     "signature": "(id: string) => Promise<boolean>"
   },
   {
+    "name": "triggerAssetSelectAll",
+    "signature": "() => void"
+  },
+  {
     "name": "useAssetSelection",
     "signature": "() => SelectedAsset | null"
+  },
+  {
+    "name": "useAssetSelectionList",
+    "signature": "() => SelectedAsset[]"
   },
   {
     "name": "useDocVersion",

@@ -41,7 +41,21 @@ export type EngineInterfaceName =
   | 'world.despawn'
   | 'world.allocSharedRef'
   | 'world.addComponent'
-  | 'world.removeComponent';
+  | 'world.removeComponent'
+  | 'assetIO.readPackEntry'
+  | 'assetIO.writePackEntry'
+  | 'assetIO.deletePackEntry'
+  | 'assetIO.createAssetInPack'
+  | 'assetIO.cloneAssetInPack';
+
+/** Record an asset-IO interface leaf onto the current active span's engineCalls
+ *  list (symmetric to engine-facade's _recordLeaf, AC-D4). Used by AssetIOFacade.
+ *  No-op when outside any span (per-frame scaffolding writes — OOS-5 harmonization). */
+export function recordAssetLeaf(name: EngineInterfaceName): void {
+  const span = activeSpan();
+  if (!span) return;
+  span.attributes.engineCalls.push(name);
+}
 
 /**
  * feat-20260708-editor-io-layer-enrich M2 (w6): a declarative side-effect hint

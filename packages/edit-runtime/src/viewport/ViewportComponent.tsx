@@ -207,7 +207,9 @@ export function ViewportComponent(): React.ReactElement {
           onStop={() => gateway.dispatch({ kind: 'stop' })}
           onToggleDisplay={() => {
             const q = getViewportQuadrant();
-            setViewportQuadrant({ display: q.display === 'game' ? 'scene' : 'game' });
+            // M4 T4-7 (G-6): route the G button through the one gateway door as a
+            // session op, so display toggle is ledger-visible + AI-equivalent.
+            gateway.dispatch({ kind: 'setDisplay', display: q.display === 'game' ? 'scene' : 'game' }, 'human');
           }}
           onFullscreen={() => {
             const slug = getSceneId();
@@ -381,23 +383,18 @@ async function bootViewport(
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
   }
 
-  // game-view-exit key (was :617). Esc / G exits display='game' back to 'scene'
-  // for ANY run mode: play·game -> play·scene (un-possess) AND edit·game ->
-  // edit·scene. `run` is left untouched (orthogonal-axis contract). Without the
-  // edit·game case there was no keyboard exit: entering game view from Edit hides
-  // the ViewportBar (its G button) and only leaves the barely-discoverable
-  // GameOverlay hover, so the user could get stuck with no aids and no toolbar.
-  function onPossessKey(e: KeyboardEvent): void {
-    const el = e.target as HTMLElement | null;
-    const tag = el?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-    const q = getViewportQuadrant();
-    if (q.display !== 'game') return;
-    const k = e.key;
-    if (k === 'Escape' || k === 'g' || k === 'G') setViewportQuadrant({ display: 'scene' });
-  }
-  window.addEventListener('keydown', onPossessKey, { capture: true });
-  registerTeardown(() => window.removeEventListener('keydown', onPossessKey, { capture: true } as EventListenerOptions));
+  // possess-exit key removed (keyboard-router convergence M4 T4-7 / AC-Cb1): G /
+  // Esc display-toggle now lives in the single global-shortcuts router
+  // (interface submodule global-shortcuts.ts). Dispatching setDisplay through the
+  // gateway makes display toggle ledger-visible + AI-equivalent (G-6), and the
+  // router's play·game guard yields G to the game (T0-10 / RK-10).
+  //
+  // MERGE NOTE (main #96): main added a local `onPossessKey` here as a hotfix for
+  // "no keyboard exit from edit·game (ViewportBar hidden → user stuck)". The
+  // convergence SUPERSEDES that local handler: the global-shortcuts router catches
+  // G/Esc for BOTH edit·game and play·game and dispatches setDisplay → the
+  // registerSessionApplier('setDisplay') below applies scene⇄game. Keeping the
+  // local handler too would double-handle the key, so it is intentionally dropped.
 
   // play·scene non-commit (was :638). transientMode true exactly in play·scene.
   function syncTransientMode(q: { run: string; display: string }): void {
@@ -487,6 +484,17 @@ async function bootViewport(
   const unregPlay = registerSessionApplier('play', () => { actionsRef.current.playSimulation(); return { ok: true }; });
   const unregStop = registerSessionApplier('stop', () => { actionsRef.current.stopSimulation(); return { ok: true }; });
   registerTeardown(() => { unregPlay(); unregStop(); });
+
+  // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
+  // is ledger-visible + AI-equivalent, symmetric to play/stop. The router (and the
+  // ViewportBar / GameOverlay G buttons) dispatch it; the real quadrant mutation
+  // lives here in edit-runtime (DAG downstream — core stays headless, RK-11).
+  const unregSetDisplay = registerSessionApplier('setDisplay', (op) => {
+    const { display } = op as { display: 'scene' | 'game' };
+    setViewportQuadrant({ display });
+    return { ok: true };
+  });
+  registerTeardown(() => { unregSetDisplay(); });
 
   // game camera discovery now that the scene is loaded (was :695).
   discoverGameCameraFromWorld();
@@ -662,9 +670,17 @@ function isSpawnDoc(x: unknown): x is SpawnDoc {
 }
 
 // Re-entrancy guard for the VAG_ASSETS_CHANGED → refreshCatalog → re-broadcast
-// cycle: the re-broadcast is itself a VAG_ASSETS_CHANGED that reaches this same
-// handler (self-origin is allowed), so without this flag it would loop forever.
-let refreshingCatalog = false;
+// cycle: the post-refresh re-broadcast is itself a VAG_ASSETS_CHANGED that
+// reaches this same handler (self-origin is allowed). A plain boolean that is
+// cleared BEFORE the re-broadcast fails — the self-post arrives after the flag
+// is already down and re-triggers refreshCatalog → re-broadcast → infinite loop
+// (each turn also fires the panel's /api/files/tree fetch, exhausting the vite
+// proxy's ephemeral ports → EADDRNOTAVAIL flood). Instead we COUNT the self-fires
+// we still owe: every started refresh emits exactly one re-broadcast on
+// completion (++), and every receipt that finds the counter positive is that
+// echo (── and return, no refresh). Refreshes and echoes stay paired 1:1, so the
+// cycle can never self-sustain even if a genuine change lands mid-refresh.
+let pendingCatalogRefires = 0;
 
 function installPreviewControls(editorApp: { pause(): void; resume(): void }): () => void {
   return onVagMessage(window, {
@@ -701,15 +717,21 @@ function installPreviewControls(editorApp: { pause(): void; resume(): void }): (
         // synchronous listCatalog() and the subsequent Add-to-Scene loadByGuid
         // both see the new asset — no page reload needed. The panel is a separate
         // VAG_ASSETS_CHANGED listener that reloads from listCatalog; to hand it
-        // fresh data we re-fire the event AFTER the refresh lands, guarded by a
-        // module flag so this handler's own re-fire doesn't recurse forever
-        // (allowedParentOrigins includes self.origin, so self-posts reach here).
-        if (refreshingCatalog) return;
+        // fresh data we re-fire the event AFTER the refresh lands (self-posts
+        // reach here because allowedParentOrigins includes self.origin).
+        //
+        // Swallow our own post-refresh echo (see pendingCatalogRefires above):
+        // if we owe an echo, THIS is it — consume it and stop, or we'd loop.
+        if (pendingCatalogRefires > 0) {
+          pendingCatalogRefires -= 1;
+          return;
+        }
         const reg = gateway.doc.registry;
         if (reg?.refreshCatalog) {
-          refreshingCatalog = true;
           void reg.refreshCatalog().finally(() => {
-            refreshingCatalog = false;
+            // Owe exactly one echo, then fire it: panels reload from the now-
+            // fresh catalog; the echo returns to us above and is consumed.
+            pendingCatalogRefires += 1;
             broadcastAssetsChanged();
           });
         }

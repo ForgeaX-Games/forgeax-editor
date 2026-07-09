@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
 import { apiFetch, gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
-  renameAssetInPack, duplicateAssetInPack, deleteAsset, broadcastAssetsChanged,
+  renameAssetInPack, deleteAsset, broadcastAssetsChanged,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -300,7 +300,12 @@ export function ContentBrowser() {
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
   // (封门, M3), which is no longer exported from the barrel.
   const openAsset = useCallback((asset: CBAsset) => {
-    gateway.dispatch({ kind: 'setAssetSelection', asset: {
+    // M1 (AC-B2): single-asset select uses the `setAssetSelectionOne` sugar op
+    // (forwards to the multi-base setAssetSelection applier). The bare
+    // `{kind:'setAssetSelection', asset}` mix is no longer valid — argsSchema
+    // requires the base `{assets, primary}` shape; sugar keeps the old single
+    // call site working without re-emitting the full set.
+    gateway.dispatch({ kind: 'setAssetSelectionOne', asset: {
       guid: asset.guid,
       kind: asset.kind,
       name: asset.name,
@@ -398,40 +403,6 @@ export function ContentBrowser() {
     }));
     setTimeout(() => showContextMenu(pos, resolved), 0);
   }, [nav.currentPath]);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        e.preventDefault();
-        multiSelect.selectAll();
-        return;
-      }
-      const primary = multiSelect.selection.primary;
-      if (!primary || primary.type !== 'asset') return;
-      const asset = primary as CBAsset;
-
-      if (e.key === 'F2') {
-        e.preventDefault();
-        crudCallbacks.onRename?.(asset);
-      } else if (e.key === 'Delete') {
-        e.preventDefault();
-        const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
-        const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
-        requestDelete(targets);
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
-        e.preventDefault();
-        const selectedAssets = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
-        const targets = selectedAssets.length > 0 ? selectedAssets : [asset];
-        for (const a of targets) {
-          void duplicateAssetInPack(a.packPath, a.guid).then(({ ok }) => {
-            if (ok) { broadcastAssetsChanged(); reload(); }
-          });
-        }
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [multiSelect, crudCallbacks, reload, requestDelete]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;

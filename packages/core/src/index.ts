@@ -29,7 +29,7 @@ export type {
 // the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorOp, CommandError, ApplyResult } from './types';
+export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind } from './types';
 export type { EditorOpLifecycle } from './types';
 
 // ── Scene pack ──
@@ -150,6 +150,11 @@ export { installEditorBusCompat } from './io/editor-bus-compat';
 // Side-effect import: registers appliers into sessionAppliers at module eval.
 import './store/panel-ops';
 
+// ── CB nav (session domain: setCBPath, cbGoBack, cbGoForward) ──
+// Side-effect import: registers cb-nav appliers into sessionAppliers at module eval.
+// Boot timing: after gateway singleton creation, before CB first render (§C6, §F-9).
+import './store/cb-nav';
+
 // ── Assets ──
 export {
   loadRawAssets,
@@ -174,16 +179,13 @@ export { cookGltfMeta } from './assets/gltf-cook';
 export { cookFbxMeta, type FbxCookResult } from './assets/fbx-cook';
 export type { GltfCookResult } from './assets/gltf-cook';
 
-// ── Pack CRUD (M2) ──
+// ── Pack CRUD (M2) — applier-gated: direct createPack / addAssetToPack etc.
+//   removed from public export (OOS-3); pack writes go through ctx.assetIO seam. ──
+export { assetIO, AssetIOFacade } from './io/asset-io-facade';
 export {
   generateAssetGuid,
-  addAssetToPack,
-  removeAssetFromPack,
   renameAssetInPack,
-  duplicateAssetInPack,
-  moveAsset,
   deleteAsset,
-  createPack,
   createDirectory,
 } from './session/pack-ops';
 
@@ -253,11 +255,24 @@ export {
   hasPendingDiskSave,
   getAssetSelection,
   useAssetSelection,
+  getAssetSelectionList,
+  useAssetSelectionList,
+  clearAssetSelection,
   onAssetSelectionChange,
+  registerAssetSelectAllHandler,
+  triggerAssetSelectAll,
   publishMeshStats,
   getMeshStats,
   useMeshStats,
 } from './store/store';
+// M4 T4-2 / T5-1 (AC-C1 / C4-4): single-source Derive of "who was selected
+// last" — the keyboard router AND the panel scope-ring both read this; no
+// second divergent state (G-3 / architecture-principles Derive).
+export {
+  getLastSelectionDomain,
+  useLastSelectionDomain,
+  subscribeLastSelectionDomain,
+} from './store/last-selection-domain';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats } from './store/store';
 
 // ── Entity operations ──
@@ -323,3 +338,9 @@ export {
   setViewRequestForwarder,
 } from './io/clip-control';
 export type { ClipControl, ViewCmd } from './io/clip-control';
+
+// ── CB nav read interface (feat-20260708-cb-nav-session-op-convergence M1) ──
+// Public read surface for CB navigation state. CB package imports these from
+// @forgeax/editor-core (no deep import into store/cb-nav internals — §C4).
+// Dispatch mutations via gateway.dispatch({ kind: 'setCBPath'/'cbGoBack'/'cbGoForward' }).
+export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-nav';

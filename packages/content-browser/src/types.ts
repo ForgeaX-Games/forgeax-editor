@@ -124,6 +124,14 @@ export interface AssetChatRef {
 
 // ── Navigation history ───────────────────────────────────────────────────────
 
+/**
+ * @deprecated Navigation history now lives in editor-core's session-domain
+ * store (packages/core/src/store/cb-nav.ts, module-private CBNavEntry).
+ * This type has zero consumers in this package as of
+ * feat-20260708-cb-nav-session-op-convergence (useNavHistory.ts is now a
+ * thin gateway shim). Retained per plan-strategy D-4 (no core<->CB type
+ * coupling); slated for removal in a future cleanup pass.
+ */
 export interface CBNavEntry {
   path: string;
   timestamp: number;

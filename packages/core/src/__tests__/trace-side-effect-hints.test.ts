@@ -156,13 +156,15 @@ describe('AC-07 — mapping table is the single SSOT, fill traceable (w5, RED)',
   it('exactly one Record<EngineInterfaceName,...> table DECLARATION exists across packages/core/src', () => {
     // AC-07 falsification target: a SECOND table would be a `const NAME: Record<
     // EngineInterfaceName, ...>` DECLARATION. Match the declaration form (a const
-    // typed as the Record) so prose mentions of the type in comments/strings —
-    // which legitimately reference the SSOT by name — are not counted.
+    // typed as the Record — optionally wrapped in `Partial<…>`, since not every
+    // EngineInterfaceName carries a hint) so prose mentions of the type in
+    // comments/strings — which legitimately reference the SSOT by name — are not
+    // counted.
     let out = '';
     try {
       out = execFileSync(
         'git',
-        ['grep', '-nP', String.raw`const\s+\w+\s*:\s*Record<\s*EngineInterfaceName`, '--', 'packages/core/src'],
+        ['grep', '-nP', String.raw`const\s+\w+\s*:\s*(?:Partial<\s*)?Record<\s*EngineInterfaceName`, '--', 'packages/core/src'],
         { cwd: REPO_ROOT, encoding: 'utf8' },
       );
     } catch (e) {
