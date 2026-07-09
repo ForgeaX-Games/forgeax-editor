@@ -642,6 +642,33 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   const overPanel = (t: EventTarget | null): boolean =>
     !!(t as HTMLElement | null)?.closest?.('.fx-dockshell, .fx-dockwrap, .fx-dock-popout, .ed-toolbar');
 
+  // Wheel-only: also yield to portaled floating UI (Radix) and any real scroller.
+  // overPanel stays dock-only for pointer/click; wheel needs the wider gate because
+  // Select/Dropdown/Dialog portal onto document.body outside .fx-dockshell.
+  const FLOATING_UI =
+    '[data-radix-popper-content-wrapper], [data-radix-select-viewport], ' +
+    '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], ' +
+    '.settings-panel-overlay, .settings-panel-shell';
+  const hasScrollableAncestor = (el: HTMLElement | null): boolean => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      const { overflowY } = getComputedStyle(n);
+      if (
+        (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+        n.scrollHeight > n.clientHeight + 1
+      ) return true;
+    }
+    return false;
+  };
+  const shouldYieldWheel = (t: EventTarget | null): boolean => {
+    const el = t as HTMLElement | null;
+    if (!el?.closest) return false;
+    if (overPanel(el)) return true;
+    if (el.closest(FLOATING_UI)) return true;
+    if (hasScrollableAncestor(el)) return true;
+    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    return false;
+  };
+
   function onDown(e: PointerEvent): void {
     if (overPanel(e.target)) return; // let panels handle their own clicks
     if (inputToGame()) return; // play·game: input belongs to the game — let it pass through to canvas
@@ -813,7 +840,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   }
 
   function onWheel(e: WheelEvent): void {
-    if (overPanel(e.target)) return;
+    if (shouldYieldWheel(e.target)) return;
     if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
     e.preventDefault();
     dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
