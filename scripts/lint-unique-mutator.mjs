@@ -27,7 +27,6 @@
 //   VIOLATION unless the file is the EngineFacade implementation itself.
 //
 // EXPLICIT EXCLUSIONS (OOS-10 red line — registry projection layer kept verbatim):
-//   - action-bridge.ts        (registry projection / VAG trust boundary)
 //   - **/protocol.ts + VAG_*  (cross-iframe transport SSOT)
 //   - studio surface paths (useSurface) — not in this repo, defensive only
 //   - the engine submodule (packages/engine/**) — not editor source
@@ -131,7 +130,6 @@ const FACADE_FILE = 'packages/core/src/io/engine-facade.ts';
 
 // OOS-10 registry-projection exclusions (basename or path fragment).
 const EXCLUDED_BASENAMES = new Set([
-  'action-bridge.ts',
   'protocol.ts',
 ]);
 const EXCLUDED_PATH_FRAGMENTS = [

@@ -25,7 +25,8 @@ import { WorkbenchAgentPicker } from './WorkbenchAgentPicker';
  * handled here — WorkbenchMode still routes it to WorkbenchPluginHost.
  */
 export function CenterPluginLayer(): ReactElement {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const mode = useAppStore((s) => s.mode);
   const expandedPluginId = useAppStore((s) => s.workbenchExpandedPluginId);
   const setExpandedPluginId = useAppStore((s) => s.setWorkbenchExpandedPluginId);
@@ -63,8 +64,10 @@ export function CenterPluginLayer(): ReactElement {
     mode === 'workbench' && !!expandedPluginId && live !== 'loading' && !isStandalone
     // wb-plugin-author renders inline via WorkbenchPluginHost, not here.
     && resolved !== null;
+  const showUnavailable =
+    mode === 'workbench' && !!expandedPluginId && live === null && !resolved;
 
-  const layerActive = !!activePlugin || showLoading || showError;
+  const layerActive = !!activePlugin || showLoading || showError || showUnavailable;
 
   // Windowing — the center surface descriptor for the active plugin.
   const canDetach = getWindowManager().canDetach();
@@ -102,7 +105,7 @@ export function CenterPluginLayer(): ReactElement {
           className="wb-plugin-window-toggle"
           onClick={() =>
             void detachSurface(centerDescriptor, {
-              title: activePlugin ? pickLang(activePlugin.displayName, 'zh', activePlugin.id) : undefined,
+              title: activePlugin ? pickLang(activePlugin.displayName, locale, activePlugin.id) : undefined,
             })
           }
           title={t('centerPlugin.detachTitle')}
@@ -137,7 +140,7 @@ export function CenterPluginLayer(): ReactElement {
         {isCenterFloating && activePlugin && (
           <div className="fx-center-plugin-status fx-surface-floating" style={{ padding: 20, color: '#888' }}>
             <p>
-              {t('centerPlugin.openedInWindowPrefix')}<code>{pickLang(activePlugin.displayName, 'zh', activePlugin.id)}</code>{t('centerPlugin.openedInWindowSuffix')}
+              {t('centerPlugin.openedInWindowPrefix')}<code>{pickLang(activePlugin.displayName, locale, activePlugin.id)}</code>{t('centerPlugin.openedInWindowSuffix')}
             </p>
             <button className="wb-plugin-window-toggle" onClick={() => void redockSurface(centerDescriptor!)}>
               <PictureInPicture2 size={12} /><span>{t('centerPlugin.redock')}</span>
@@ -152,6 +155,11 @@ export function CenterPluginLayer(): ReactElement {
         {showError && (
           <div className="fx-center-plugin-status" style={{ padding: 20, color: '#888' }}>
             {t('centerPlugin.missingStandalonePrefix')}<code>{expandedPluginId}</code>{t('centerPlugin.missingStandaloneMid')}<code>entry.standalone</code>{t('centerPlugin.missingStandaloneSuffix')}
+          </div>
+        )}
+        {showUnavailable && (
+          <div className="fx-center-plugin-status" style={{ padding: 20, color: '#c44' }}>
+            {t('centerPlugin.pluginUnavailablePrefix')}<code>{expandedPluginId}</code>{t('centerPlugin.pluginUnavailableSuffix')}
           </div>
         )}
       </div>

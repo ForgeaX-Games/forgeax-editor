@@ -29,6 +29,22 @@ interface ProviderRow {
   health: { ok: boolean; detail?: string };
 }
 
+// LLM 鉴权/路由 key —— 改这些会换掉「代理暴露哪些模型」(尤其切 LiteLLM 代理),
+// 故保存成功后要强制重拉模型目录(浏览器 window 缓存不会自己失效)。镜像 server 侧
+// SIDECAR_CRED_KEYS(cli/src/api/settings.ts)。
+const LLM_CRED_KEYS = new Set([
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'GEMINI_API_KEY',
+  'LITELLM_PROXY_KEY',
+  'LITELLM_PROXY_BASE_URL',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_BASE_URL',
+]);
+
 const MODEL_OPTIONS = [
   { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 (current)' },
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
@@ -142,6 +158,14 @@ export function SettingsDrawer({ onClose }: { onClose: () => void }) {
       } else {
         flash('ok', t('settings.env.saved', { count: j.touched ?? 0 }));
         await reload();
+        // 改了 LLM 凭据 → 强制重拉模型目录(新 key/base-url 可能换掉可用模型;server 侧
+        // 缓存按 key 自失效,但浏览器 window 缓存不会 → 这里主动刷,让选择器免刷新即更新)。
+        if (Object.keys(patch).some((k) => LLM_CRED_KEYS.has(k))) {
+          try {
+            const { refreshAllModelCatalogs } = await import('../ModelPicker/useModelCatalog');
+            await refreshAllModelCatalogs();
+          } catch { /* 模型刷新失败不影响凭据已保存 */ }
+        }
       }
     } catch (e) {
       flash('err', (e as Error).message);

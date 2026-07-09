@@ -9,6 +9,8 @@
 // `coder` for `coding` — normalize so a single CSS rule family
 // (.dash-agent-cell-dot.r-coding) lights up both surfaces.
 
+import { workbenchAgentsUrl } from './workbench-lang';
+
 export type AgentRoleMap = ReadonlyMap<string, string>;
 
 const ROLE_ALIAS: Readonly<Record<string, string>> = {
@@ -26,7 +28,7 @@ function tribeKey(raw: string): string {
 }
 
 export async function fetchAgentRoleMap(): Promise<AgentRoleMap> {
-  const r = await fetch('/api/workbench/agents');
+  const r = await fetch(workbenchAgentsUrl());
   if (!r.ok) throw new Error(`GET /api/workbench/agents → ${r.status}`);
   const j = (await r.json()) as AgentsRaw;
   const out = new Map<string, string>();

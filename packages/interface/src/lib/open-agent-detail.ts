@@ -15,6 +15,17 @@ const WB_PLUGIN_ID = '@forgeax-plugin/wb-agent-persona';
 const STORAGE_KEY = 'wb-agent-persona:selected-agent-id';
 const CHANNEL = 'wb-agent-persona';
 
+/** Runtime orchestrator alias from `/api/workbench/agents` — not a bus agent
+ *  plugin, so wb-agent-persona can't resolve it. Degrade to the editable lead
+ *  persona (arin), matching GROUP_REGISTRY in wb-agent-persona/index.html. */
+const PERSONA_EDITOR_ALIASES: Record<string, string> = {
+  forge: 'arin',
+};
+
+function personaEditorAgentId(agentId: string): string {
+  return PERSONA_EDITOR_ALIASES[agentId] ?? agentId;
+}
+
 export interface OpenAgentDetailOptions {
   /**
    * When true (default), also `setTabAgent(activeSid, agentId)` — i.e. switch
@@ -35,10 +46,11 @@ export function openAgentDetail(
 ): void {
   if (!agentId) return;
   const { switchChat = true } = opts;
-  try { localStorage.setItem(STORAGE_KEY, agentId); } catch { /* private mode */ }
+  const personaId = personaEditorAgentId(agentId);
+  try { localStorage.setItem(STORAGE_KEY, personaId); } catch { /* private mode */ }
   try {
     const bc = new BroadcastChannel(CHANNEL);
-    bc.postMessage({ type: 'select-agent', id: agentId });
+    bc.postMessage({ type: 'select-agent', id: personaId });
     bc.close();
   } catch { /* old browser */ }
   const store = useAppStore.getState();

@@ -1,0 +1,133 @@
+/* First-run coach-mark for the Publish dropdown. Ported from
+   previews/publish-onboarding-preview.html, scoped with .fx-ob-* so it can't
+   collide with app styles. Rendered via portal to document.body. */
+
+/* Sit just above the dropdown content (--z-menu 10100) so the spotlight dims
+   the menu and the callout/finger render on top of it, but stay below toasts
+   (--z-toast) and tooltips (--z-tooltip). */
+.fx-ob-blocker {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-menu, 10100) + 20);
+  background: transparent;
+  cursor: default;
+}
+
+/* The "hole": a transparent box whose huge box-shadow dims everything around
+   it. pointer-events:none so the element underneath stays visible/clickable. */
+.fx-ob-spot {
+  position: fixed;
+  z-index: calc(var(--z-menu, 10100) + 21);
+  border-radius: 10px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(6, 6, 9, 0.72), 0 0 22px 4px rgba(212, 255, 72, 0.35);
+  border: 2px solid rgba(212, 255, 72, 0.85);
+  transition: top .3s cubic-bezier(.2, .8, .25, 1), left .3s cubic-bezier(.2, .8, .25, 1),
+    width .3s cubic-bezier(.2, .8, .25, 1), height .3s cubic-bezier(.2, .8, .25, 1);
+}
+
+.fx-ob-tip {
+  position: fixed;
+  z-index: calc(var(--z-menu, 10100) + 23);
+  width: 300px;
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.2));
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  padding: 15px 16px 12px;
+  color: var(--text, #ececee);
+  transition: top .3s cubic-bezier(.2, .8, .25, 1), left .3s cubic-bezier(.2, .8, .25, 1);
+}
+
+.fx-ob-em {
+  color: var(--accent, #d4ff48);
+  display: inline-flex;
+}
+.fx-ob-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 8px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fx-ob-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: #10120a;
+  background: var(--accent, #d4ff48);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.fx-ob-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text, #ececee);
+  margin: 0 0 6px;
+}
+.fx-ob-hint {
+  font-size: 12px;
+  color: var(--muted, rgba(255, 255, 255, 0.56));
+  margin: 8px 0 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.fx-ob-hint svg { flex: none; margin-top: 1px; color: var(--accent, #d4ff48); }
+
+.fx-ob-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fx-ob-count { font-size: 11.5px; color: var(--faint, rgba(255, 255, 255, 0.4)); }
+.fx-ob-grow { flex: 1; }
+.fx-ob-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--text, #ececee);
+  transition: background .12s ease, transform .1s ease;
+}
+.fx-ob-btn:hover { background: rgba(255, 255, 255, 0.06); }
+.fx-ob-btn:active { transform: scale(.97); }
+.fx-ob-btn.ghost { border-color: transparent; color: var(--faint, rgba(255, 255, 255, 0.4)); }
+.fx-ob-btn.primary {
+  background: var(--accent, #d4ff48);
+  color: #10120a;
+  border-color: var(--accent, #d4ff48);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.fx-ob-btn.primary:hover { background: #e2ff6b; }
+
+.fx-ob-arrow {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.2));
+  transform: rotate(45deg);
+}
+.fx-ob-tip[data-arrow="up"] .fx-ob-arrow { top: -7px; border-right: none; border-bottom: none; }
+.fx-ob-tip[data-arrow="right"] .fx-ob-arrow { right: -7px; border-left: none; border-bottom: none; }
+
+.fx-ob-finger {
+  position: fixed;
+  z-index: calc(var(--z-menu, 10100) + 22);
+  pointer-events: none;
+  color: var(--accent, #d4ff48);
+  animation: fxObPoint 1s ease-in-out infinite;
+}
+.fx-ob-finger svg { filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .5)); }
+@keyframes fxObPoint {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}

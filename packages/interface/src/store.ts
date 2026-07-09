@@ -5,6 +5,8 @@ import { recordLog } from './lib/logSink';
 import { alertDialog } from './lib/dialog';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/platform';
 import { bootAppMode } from './lib/workspaces';
+import { resolveKernelForAgent } from './lib/agent-cli-provider';
+import { STORAGE_KEYS } from './lib/storageKeys';
 
 // P2.6d — 'bus' joins as a top-level mode for the Bus admin panel.
 // Mirrors the Viewport / Workbench switch in the TopBar; rendered by MainArea.
@@ -380,6 +382,21 @@ interface AppState {
   providerOverride: string | null;
   setProviderOverride: (id: string | null) => void;
 
+  // ── Agent chat reply language (global, persisted; decoupled from UI locale) ──
+  /** Language the agent is asked to reply in. Global across sessions, persisted.
+   *  Default 'en'. When `followInput` is on, the detected language of each user
+   *  message takes precedence (resolved per-turn in the chat send path). */
+  replyLanguage: 'en' | 'zh';
+  /** Highest-priority rule: reply language follows the detected language of the
+   *  user's input. Global, persisted, default true. */
+  followInput: boolean;
+  /** Pure setter for the reply language (keeps followInput as-is). */
+  setReplyLanguage: (lang: 'en' | 'zh') => void;
+  setFollowInput: (on: boolean) => void;
+  /** Explicit language pick from the quick switcher / three-dot menu: pins the
+   *  reply language AND turns followInput OFF (the user's manual choice wins). */
+  pinReplyLanguage: (lang: 'en' | 'zh') => void;
+
   // ── Agent install prefs（① 已抽到 @forgeax/settings/agent-prefs，走 bus 'prefs:agents'）──
   // defaultBootstrapAgent / uninstalledAgentIds 不再进 L1 store —— 见 settings/agent-prefs.ts。
 
@@ -509,6 +526,40 @@ if (typeof window !== 'undefined') {
     const next = e.newValue && e.newValue !== 'null' ? e.newValue : null;
     if (useAppStore.getState().providerOverride !== next) {
       useAppStore.setState({ providerOverride: next });
+    }
+  });
+}
+
+// ── Agent chat reply language (global + persisted, cross-tab synced) ──────────
+function loadReplyLanguage(): 'en' | 'zh' {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.replyLanguage) === 'zh' ? 'zh' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+function saveReplyLanguage(lang: 'en' | 'zh'): void {
+  try { localStorage.setItem(STORAGE_KEYS.replyLanguage, lang); } catch { /* ignore */ }
+}
+function loadFollowInput(): boolean {
+  try {
+    // Default ON: only an explicit '0' disables it.
+    return localStorage.getItem(STORAGE_KEYS.followInput) !== '0';
+  } catch {
+    return true;
+  }
+}
+function saveFollowInput(on: boolean): void {
+  try { localStorage.setItem(STORAGE_KEYS.followInput, on ? '1' : '0'); } catch { /* ignore */ }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEYS.replyLanguage) {
+      const next = e.newValue === 'zh' ? 'zh' : 'en';
+      if (useAppStore.getState().replyLanguage !== next) useAppStore.setState({ replyLanguage: next });
+    } else if (e.key === STORAGE_KEYS.followInput) {
+      const next = e.newValue !== '0';
+      if (useAppStore.getState().followInput !== next) useAppStore.setState({ followInput: next });
     }
   });
 }
@@ -740,6 +791,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistAgentBySid(agentBySid);
       return { tabs, agentBySid };
     });
+    if (agentId) {
+      void resolveKernelForAgent(agentId).then((kernelId) => {
+        useAppStore.setState((s) => {
+          const tab = s.tabs.find((t) => t.sid === sid);
+          if (!tab || tab.agentId !== agentId) return {};
+          const patch = patchTabField(s, sid, { providerOverride: kernelId });
+          if (s.activeSid === sid) {
+            saveProviderOverride(kernelId);
+            return { ...patch, providerOverride: kernelId };
+          }
+          return patch;
+        });
+      });
+    }
   },
 
   agentBySid: loadAgentBySid(),
@@ -749,6 +814,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   // providerOverride 设置：写盘当默认 + mirror 到 active tab。switchToSession 时
   // mirror 自动从新 tab 的 providerOverride 拉过去，这俩 setter 不需要 tab-aware。
+  replyLanguage: loadReplyLanguage(),
+  followInput: loadFollowInput(),
+  setReplyLanguage: (lang) => {
+    saveReplyLanguage(lang);
+    set({ replyLanguage: lang });
+  },
+  setFollowInput: (on) => {
+    saveFollowInput(on);
+    set({ followInput: on });
+  },
+  pinReplyLanguage: (lang) => {
+    // Manual pick wins: pin the language and stop following the input language.
+    saveReplyLanguage(lang);
+    saveFollowInput(false);
+    set({ replyLanguage: lang, followInput: false });
+  },
+
   setProviderOverride: (id) => {
     saveProviderOverride(id);
     set((s) => {

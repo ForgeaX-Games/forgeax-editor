@@ -113,29 +113,35 @@ function install() {
   requireCmd('bun', 'install bun: https://bun.sh');
   requireCmd('pnpm', 'install pnpm: https://pnpm.io (engine is a pnpm workspace)');
 
-  step('1/5 fetching submodules (engine + interface + platform-io) ...');
+  step('1/6 fetching submodules (engine + interface + platform-io) ...');
   sh('git', ['submodule', 'update', '--init', '--recursive']);
   ok('submodules ready');
 
-  step('2/5 installing editor workspace deps (bun) ...');
+  step('2/6 installing editor workspace deps (bun) ...');
   sh('bun', ['install']);
   ok('bun deps ready');
 
-  step('3/5 installing engine deps (pnpm) ...');
+  step('3/6 installing engine deps (pnpm) ...');
   sh('pnpm', ['install'], { cwd: ENGINE_DIR });
   ok('engine deps ready');
 
-  step('4/6 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
+  // wasm MUST precede the engine dist build: the engine `app` package's tsup
+  // build inlines wgpu-wasm/dist/index.mjs, which `import`s ../pkg/wgpu_wasm.js.
+  // If pkg/ is absent (fresh clone — wasm is gitignored, built on demand),
+  // esbuild fails to resolve it and the whole `pnpm -r build` aborts.
+  // ENFORCED by scripts/lint-wasm-before-dist.mjs (bun run lint) — do not move
+  // ensureWasm() below the `pnpm -r ... build` step or CI's typecheck job fails.
+  step('4/6 ensuring wgpu wasm binary ...');
+  ensureWasm();
+
+  step('5/6 ensuring fbx wasm binary ...');
+  ensureFbxWasm();
+
+  step('6/6 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
   // Only the library packages emit the dist/ the editor imports. apps/hello/*
   // are example apps that need extra fixtures and are NOT needed here.
   sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
   ok('engine dist built');
-
-  step('5/6 ensuring wgpu wasm binary ...');
-  ensureWasm();
-
-  step('6/6 ensuring fbx wasm binary ...');
-  ensureFbxWasm();
 
   step('verifying critical artifacts ...');
   let missing = false;

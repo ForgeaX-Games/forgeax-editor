@@ -40,7 +40,10 @@ export function ContextMenu() {
       e.preventDefault();
       const selection = window.getSelection()?.toString() ?? '';
       const items = buildMenu(e.target, selection);
-      if (items.length === 0) return;
+      if (items.length === 0) {
+        setState(null);
+        return;
+      }
       setState({ x: e.clientX, y: e.clientY, items });
     };
     document.addEventListener('contextmenu', onCtx, { capture: true });
@@ -50,9 +53,10 @@ export function ContextMenu() {
   // Editor-iframe menus → render here at the top layer (no iframe clipping).
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      if (!isTrustedMessageOrigin(e.origin)) return;
+      if (!isTrustedMessageOrigin(e.origin)) return; // foreign-origin guard
       const d = e.data as { type?: string; menuId?: string; x?: number; y?: number; items?: WireMenuItem[] } | null;
       if (!d || d.type !== 'VAG_CONTEXT_MENU' || !Array.isArray(d.items)) return;
+      // Find the iframe that sent this so we can map its client coords → ours.
       const frame = [...document.querySelectorAll('iframe')].find((f) => f.contentWindow === e.source) as HTMLIFrameElement | undefined;
       const rect = frame?.getBoundingClientRect();
       const x = (rect?.left ?? 0) + (d.x ?? 0);

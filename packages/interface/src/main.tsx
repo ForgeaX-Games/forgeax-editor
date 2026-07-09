@@ -24,6 +24,7 @@ import { subscribeNarrativeCopilot } from './lib/narrative-copilot';
 import { subscribeFileActivityStream } from './lib/file-activity-stream';
 import { subscribePermissionStream } from './lib/permission-stream';
 import { subscribePerceptionStream } from './lib/perception-stream';
+import { bootUiBridge } from './lib/ui-bridge';
 import { syncBrowserPrefsFromServer, startBrowserPrefsSync } from './lib/browser-prefs-sync';
 import { useAppStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
@@ -122,6 +123,7 @@ function bootStore() {
   subscribeFileActivityStream();
   subscribePermissionStream();
   subscribePerceptionStream();
+  bootUiBridge(); // UI 语义操作层(ActionRegistry + lease + ui_* 应答;方案:产品AI化-语义操作层)
   void useAppStore.getState().initSessions();
 }
 

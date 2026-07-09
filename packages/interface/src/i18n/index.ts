@@ -48,7 +48,20 @@ const CATALOGS: Record<Locale, Catalog> = { en: en as Catalog, zh: zh as Catalog
 let current: Locale = DEFAULT_LOCALE;
 const listeners = new Set<() => void>();
 
+function broadcastLocaleToPlugins(locale: Locale): void {
+  if (typeof window === 'undefined') return;
+  const msg = { type: 'forgeax:locale-changed', locale };
+  for (const iframe of document.querySelectorAll('iframe')) {
+    try {
+      iframe.contentWindow?.postMessage(msg, '*');
+    } catch {
+      /* cross-origin or detached */
+    }
+  }
+}
+
 function emit() {
+  broadcastLocaleToPlugins(current);
   for (const fn of listeners) fn();
 }
 
@@ -90,6 +103,13 @@ export function initI18n(): void {
 
 export function getLocale(): Locale {
   return current;
+}
+
+/** Subscribe to host locale changes (same-tab; storage events don't fire locally). */
+export function subscribeLocale(listener: (locale: Locale) => void): () => void {
+  const wrapped = () => listener(current);
+  listeners.add(wrapped);
+  return () => listeners.delete(wrapped);
 }
 
 export function setLocale(next: Locale, opts: { persist?: boolean } = {}): void {

@@ -12,7 +12,7 @@
  *   - onChat       — plugin → composer text  (TODO B-phase: dispatch into store)
  *   - onToolCall   — plugin → tool registry  (TODO B-phase: real registry)
  *   - surface.subscribe — observe surface.expose for AgentsPanel
- *   - setTheme    — pushed when light/dark or locale changes (TODO)
+ *   - setTheme    — pushed when light/dark or locale changes
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
@@ -20,11 +20,12 @@ import type { ReactElement } from 'react';
 // never statically pulls @forgeax/host-sdk (studio-only) into its module graph.
 // The standalone editor shell bundles interface WITHOUT host-sdk present.
 import type { PluginPort } from '@forgeax/host-sdk';
-import { useTranslation } from '@/i18n';
+import { useTranslation, getLocale, subscribeLocale } from '@/i18n';
 import type { BusPluginInfo } from '../../lib/bus-api';
 import { upsertSurface, removePluginSurfaces } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
 import { useAppStore } from '../../store';
+import { requestComposerInsert } from '../../lib/composer-bridge';
 import { emitForgeaXMessage } from '../../lib/forgeax-bridge';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 
@@ -82,6 +83,7 @@ function buildIframeSrc(
   const params: string[] = [];
   if (pane) params.push(`pane=${encodeURIComponent(pane)}`);
   if (slug) params.push(`slug=${encodeURIComponent(slug)}`);
+  params.push(`locale=${encodeURIComponent(getLocale())}`);
   if (params.length === 0) return base;
   return base + (base.includes('?') ? '&' : '?') + params.join('&');
 }
@@ -97,6 +99,7 @@ const PLUGIN_TO_WB_ID: Record<string, string> = {
   '@forgeax-plugin/wb-character': 'character',
   '@forgeax-plugin/wb-skill': 'skill',
   '@forgeax-plugin/wb-reel': 'reel',
+  '@forgeax-plugin/wb-game-video': 'gamevideo',
 };
 
 /** localStorage key the host writes the cross-workbench handoff payload to.
@@ -195,9 +198,32 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
     const onRawMessage = (ev: MessageEvent) => {
       if (ev.source !== iframe.contentWindow) return;
       if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
-      const d = ev.data as { type?: string; targetPluginId?: string; payload?: Record<string, unknown> } | null;
-      if (!d || d.type !== 'FORGEAX_NAVIGATE' || !d.targetPluginId) return;
-      doNavigate(d.targetPluginId, d.payload);
+      const d = ev.data as {
+        type?: string;
+        targetPluginId?: string;
+        payload?: Record<string, unknown>;
+        text?: string;
+      } | null;
+      if (!d) return;
+      if (d.type === 'FORGEAX_NAVIGATE' && d.targetPluginId) {
+        doNavigate(d.targetPluginId, d.payload);
+        return;
+      }
+      // Plugin → host chat composer prefill (e.g. wb-game-video「添加到对话」).
+      // Prefills the caret without auto-sending; the author reviews then sends.
+      if (d.type === 'FORGEAX_COMPOSER_INSERT' && typeof d.text === 'string' && d.text.trim()) {
+        const text = d.text.trim();
+        requestComposerInsert({
+          kind: 'paste',
+          display: text.length > 48 ? `${text.slice(0, 48)}…` : text,
+          detail: text,
+          tooltip: {
+            title: text.length > 64 ? `${text.slice(0, 64)}…` : text,
+            lines: [text.length > 200 ? `${text.slice(0, 200)}…` : text],
+          },
+        });
+        return;
+      }
     };
     window.addEventListener('message', onRawMessage);
 
@@ -217,7 +243,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
         pluginId: plugin.id,
         transport,
         initial: {
-          locale: 'zh',
+          locale: getLocale(),
           theme: 'dark',
           pane: pane ?? 'center',
         },
@@ -311,6 +337,17 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
     activeRef.current = active;
     portRef.current?.setVisibility(active);
   }, [active]);
+
+  // Host locale → keep-alive plugin iframes (SDK theme.changed + legacy postMessage).
+  useEffect(() => {
+    return subscribeLocale((loc) => {
+      portRef.current?.setTheme({ locale: loc });
+      const win = iframeRef.current?.contentWindow;
+      if (win) {
+        win.postMessage({ type: 'forgeax:locale-changed', locale: loc }, '*');
+      }
+    });
+  }, []);
 
   if (!src) {
     return (

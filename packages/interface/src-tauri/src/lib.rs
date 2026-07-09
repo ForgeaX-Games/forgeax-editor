@@ -424,6 +424,18 @@ fn start_bundled_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     let engine_port: u16 = std::env::var("FORGEAX_DESKTOP_ENGINE_PORT")
         .ok().and_then(|v| v.parse().ok()).unwrap_or(15273);
 
+    // Per-stack agent-host socket — mirrors scripts/run.ts's PORT_SERVER derivation.
+    // The bundled server runs main.ts DIRECTLY (not via run.ts), so without this it
+    // falls back to the USER-GLOBAL ~/.forgeax/agent-host.sock and could reuse an
+    // agent-host spawned by another (non-derived) stack — whose cred-vault would
+    // then seed creds/upstream from the WRONG stack. Deriving from server_port keeps
+    // the .app's host private. agent-host main.ts mkdirs the parent dir, so safe.
+    let agent_host_sock = app
+        .path()
+        .home_dir()
+        .map(|h| h.join(".forgeax").join(format!("agent-host-{server_port}.sock")))
+        .unwrap_or_else(|_| projects_dir.join(format!("agent-host-{server_port}.sock")));
+
     // Per-sidecar rolling logs (perf-analysis §6 observability): a crashed
     // sidecar's stdout/stderr lands here for post-mortem instead of vanishing.
     let log_dir = projects_dir.join(".logs");
@@ -437,6 +449,7 @@ fn start_bundled_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
         let main_ts = main_ts.clone();
         let res_root = res_root.clone();
         let projects_dir = projects_dir.clone();
+        let agent_host_sock = agent_host_sock.clone();
         std::sync::Arc::new(move || {
             app.shell()
                 .sidecar("bun")
@@ -444,6 +457,9 @@ fn start_bundled_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                 .args(["run", &main_ts.to_string_lossy()])
                 .env("FORGEAX_RESOURCE_ROOT", res_root.to_string_lossy().to_string())
                 .env("FORGEAX_PROJECT_ROOT", projects_dir.to_string_lossy().to_string())
+                // Private per-stack agent-host socket (see derivation above) — keeps
+                // the .app off any other stack's shared host + cred-vault.
+                .env("FORGEAX_AGENT_HOST_SOCK", agent_host_sock.to_string_lossy().to_string())
                 .env("FORGEAX_SERVE_SPA", "1")
                 .env("FORGEAX_SERVER_HOST", "127.0.0.1")
                 // Dedicated desktop ports (18810 / engine 15273) so the .app

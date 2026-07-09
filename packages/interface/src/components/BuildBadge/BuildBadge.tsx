@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from '@/i18n';
 import {
   listBusPlugins,
   pickLang,
@@ -93,6 +94,8 @@ function groupByKind(items: BusPluginInfo[]): Array<{ label: string; rows: BusPl
 }
 
 export function BuildBadge() {
+  const { i18n } = useTranslation();
+  const locale = i18n.language;
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -346,7 +349,7 @@ export function BuildBadge() {
                 <span style={groupCountStyle}>{g.rows.length}</span>
               </div>
               {g.rows.map((p) => {
-                const name = pickLang(p.displayName, 'zh', p.id);
+                const name = pickLang(p.displayName, locale, p.id);
                 const icon =
                   p.icon ??
                   p.workbench?.icon ??

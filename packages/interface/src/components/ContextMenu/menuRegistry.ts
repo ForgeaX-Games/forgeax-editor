@@ -1,4 +1,5 @@
 import { buildReferenceFor, REFERENCE_LABEL, requestComposerInsert, type PillPayload } from '../../lib/composer-bridge';
+import { aiIntentsFor, intentPill, actionIntentPill } from '../../lib/ai-intents';
 import { t } from '@/i18n';
 
 export type MenuItem =
@@ -86,6 +87,32 @@ function selectionPill(selection: string): PillPayload | null {
   };
 }
 
+/** 右键唤 AI(P1-10):意图项列表 —— kind 专属 + 通用兜底 + data-fx-action derive。
+ *  点击 = 把「detail 带指令的 pill」插 composer,用户可补充后发送(不 autoSend,
+ *  §8 人为最终权威:发送权留给用户)。 */
+function aiIntentItems(target: Element, refKind: string | undefined, pill: PillPayload | null): MenuItem[] {
+  const items: MenuItem[] = [];
+  if (pill) {
+    for (const intent of aiIntentsFor(refKind)) {
+      items.push({
+        kind: 'item',
+        label: `AI:${intent.label}`,
+        onClick: () => requestComposerInsert(intentPill(pill, intent)),
+      });
+    }
+  }
+  // ActionRegistry derive:右键落在已登记功能上 → 「让 AI 执行此功能」(注册即得)。
+  const act = actionIntentPill(target);
+  if (act) {
+    items.push({
+      kind: 'item',
+      label: `AI:让 AI 执行「${act.title}」`,
+      onClick: () => requestComposerInsert(act.pill),
+    });
+  }
+  return items;
+}
+
 export function buildMenu(target: EventTarget | null, selection: string): MenuItem[] {
   if (!(target instanceof Element)) return [];
 
@@ -124,26 +151,38 @@ export function buildMenu(target: EventTarget | null, selection: string): MenuIt
   // Units with their own dedicated menu (e.g. workspace tabs) opt out of the
   // global menu so the two don't stack and intercept each other's clicks.
   if (ref?.descriptor.ownMenu) return [];
-  const refItem = referenceItemFor(ref?.pill ?? selectionPill(selection));
+  const pill = ref?.pill ?? selectionPill(selection);
+  const refItem = referenceItemFor(pill);
+  const aiItems = aiIntentItems(target, ref?.descriptor.kind, pill);
   const copyItems: MenuItem[] = (ref?.descriptor.copy?.(ref.el) ?? []).map((c) => ({
     kind: 'item', label: c.label, onClick: () => copy(c.text),
   }));
 
   if (ref || copyItems.length > 0) {
-    return withReference(refItem, copyItems);
+    return withAiIntents(withReference(refItem, copyItems), aiItems);
   }
 
   // 5) Plain selected text — reference + copy.
   if (selection.trim().length > 0) {
-    return withReference(refItem, [{ kind: 'item', label: t('contextMenu.copy'), onClick: () => copy(selection) }]);
+    return withAiIntents(
+      withReference(refItem, [{ kind: 'item', label: t('contextMenu.copy'), onClick: () => copy(selection) }]),
+      aiItems,
+    );
   }
 
-  // 6) Catch-all: reference alone if we have one.
-  return refItem ? [refItem] : [];
+  // 6) Catch-all: reference + AI intents if we have any.
+  return withAiIntents(refItem ? [refItem] : [], aiItems);
 }
 
 function withReference(ref: MenuItem | null, items: MenuItem[]): MenuItem[] {
   if (!ref) return items;
   if (items.length === 0) return [ref];
   return [ref, { kind: 'sep' }, ...items];
+}
+
+/** 把 AI 意图项作为独立分组挂到菜单尾部(有内容才加分隔)。 */
+function withAiIntents(items: MenuItem[], aiItems: MenuItem[]): MenuItem[] {
+  if (aiItems.length === 0) return items;
+  if (items.length === 0) return aiItems;
+  return [...items, { kind: 'sep' }, ...aiItems];
 }

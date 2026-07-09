@@ -13,6 +13,7 @@ import { pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost'
 import { getWindowManager, type SurfaceDescriptor } from '../../lib/platform';
 import { useAppStore } from '../../store';
 import { pickLang } from '../../lib/bus-api';
+import { usePanelRenderers } from './panelRenderers';
 
 // Lazy-load StandalonePluginIframe so its @forgeax/host-sdk dependency stays
 // OUT of DockShell's static import graph. This matters for the editor
@@ -28,16 +29,27 @@ interface Props {
 }
 
 export function WbPluginDockPanel({ pluginId }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const addDockedPlugin = useAppStore((s) => s.addDockedPlugin);
   const removeDockedPlugin = useAppStore((s) => s.removeDockedPlugin);
   const detachSurface = useAppStore((s) => s.detachSurface);
   const manifest = usePluginManifest(pluginId);
+  const { workbenchPanels } = usePanelRenderers();
 
   useEffect(() => {
     addDockedPlugin(pluginId);
     return () => removeDockedPlugin(pluginId);
   }, [pluginId, addDockedPlugin, removeDockedPlugin]);
+
+  const InlinePanel = workbenchPanels?.[pluginId];
+  if (InlinePanel) {
+    return (
+      <div className="wb-dock-panel wb-dock-inline">
+        <InlinePanel />
+      </div>
+    );
+  }
 
   if (!manifest || manifest === 'loading') {
     return (
@@ -47,8 +59,8 @@ export function WbPluginDockPanel({ pluginId }: Props) {
     );
   }
 
-  const label = pickLang(manifest.displayName, 'zh', manifest.id);
-  const desc = pickLang(manifest.description ?? '', 'zh', '');
+  const label = pickLang(manifest.displayName, locale, manifest.id);
+  const desc = pickLang(manifest.description ?? '', locale, '');
   const isStandalone = pluginRendersInSidebarLeftPane(manifest);
 
   if (isStandalone) {

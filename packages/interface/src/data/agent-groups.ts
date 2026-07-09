@@ -43,13 +43,16 @@
 
 export type AgentGroupKind = 'skin' | 'subagent-family';
 
+/** Bilingual copy for skin-group card chrome (follows interface locale). */
+export type GroupLocalizedText = { en: string; zh: string };
+
 export interface SkinGroup {
   id: string;
   kind: 'skin';
   /** Card title for the collapsed group head. */
-  label: string;
+  label: GroupLocalizedText;
   /** Card subtitle / role label. */
-  sublabel: string;
+  sublabel: GroupLocalizedText;
   /**
    * Agent id whose avatar / persona is shown when no member is currently active.
    * Must be one of `memberIds`.
@@ -111,8 +114,8 @@ export const AGENT_GROUPS: AgentGroup[] = [
   {
     id: 'coder-skins',
     kind: 'skin',
-    label: '程序员',
-    sublabel: '5 种人格皮肤 + 4 个 CLI 驱动',
+    label: { en: 'Coders', zh: '程序员' },
+    sublabel: { en: '5 persona skins + 4 CLI drivers', zh: '5 种人格皮肤 + 4 个 CLI 驱动' },
     representativeId: 'mochi',
     memberIds: ['mochi', 'rin', 'sakura', 'kaede', 'kumo'],
     providerDefaultIds: ['cc-coder', 'claude-code-default', 'codex-default', 'cursor-default'],
@@ -126,6 +129,7 @@ export const AGENT_GROUPS: AgentGroup[] = [
       'character-designer-2d',
       'vfx-artist-3d',
       'lowpoly',
+      'ui-designer',
     ],
   },
   {

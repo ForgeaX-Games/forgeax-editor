@@ -8,6 +8,7 @@ import { HealthIndicator } from './components/StatusBar/HealthIndicator';
 import { PulseFeeds } from './components/StatusBar/feeds/PulseFeeds';
 import { VersionBadge } from './components/StatusBar/VersionBadge';
 import { ContextMenu } from './components/ContextMenu/ContextMenu';
+import { CommandPalette } from './components/CommandPalette/CommandPalette';
 import { FirstRunSetup } from './components/FirstRun/FirstRunSetup';
 import { DialogHost } from './lib/dialog';
 import { bootStageAppMounted } from './boot/driver';
@@ -53,10 +54,12 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
     bootStageAppMounted();
   }, []);
   // ── ✎ Edit → chat reference pills ──────────────────────────────────────────
-  // The editor posts VAG_EDITOR_REF (via editorBus compat bridge) when the user
-  // "references to chat" a scene entity / component / asset. Turn it into a
-  // composer pill via the shared referenceRegistry builders. Payload is validated
-  // inline so the interface keeps ZERO dependency on @forgeax/editor.
+  // The editor iframe posts VAG_EDITOR_REF when the user "references to chat" a
+  // scene entity / component / asset. Turn it into a composer pill via the shared
+  // referenceRegistry builders. Restored after the EditMode→EditSurface slim
+  // (0dccba7) dropped this listener; payload is validated inline so the interface
+  // keeps ZERO dependency on @forgeax/editor (the cycle the panel-renderer
+  // refactor 52b6f61 removed — re-importing the editor schema would re-create it).
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
       if (!isTrustedMessageOrigin(ev.origin)) return; // foreign-origin guard
@@ -120,8 +123,8 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
   }, []);
 
   // ── ✎ Edit → focus a dock panel (e.g. double-click a mesh → Mesh tab) ───────
-  // The editor posts FORGEAX_FOCUS_PANEL { panel } (via editorBus compat bridge)
-  // to bring a panel to front. Relayed as APP_EVENTS.focusPanel CustomEvent so
+  // The editor iframe posts FORGEAX_FOCUS_PANEL { panel } to bring a panel to
+  // front. Relayed as the focus-only APP_EVENTS.focusPanel CustomEvent so the
   // DockShell activates the tab WITHOUT reopening a closed one (no force-insert).
   // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
   useEffect(() => {
@@ -193,6 +196,8 @@ export function App({ hideChatAndForge, panelRenderers }: AppProps = {}) {
           interface's L1 store. Omitted (interface-alone) → no overlay. */}
       {(panelRenderers ?? DEFAULT_PANEL_RENDERERS).renderSettings?.()}
       <ContextMenu />
+      {/* 命令面板(Ctrl/⌘+K)——数据源 = ActionRegistry,与按钮 / AI 同一张注册表。 */}
+      <CommandPalette />
       {/* Imperative async confirm()/alert() replacement (shadcn AlertDialog). */}
       <DialogHost />
     </div>

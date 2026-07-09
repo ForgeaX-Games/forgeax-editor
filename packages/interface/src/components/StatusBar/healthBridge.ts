@@ -6,13 +6,13 @@
  * Sources captured here:
  *   1. The shell itself: window 'error' / 'unhandledrejection' + a console.error
  *      wrapper → source 'shell'.
- *   2. Engine iframe health: `postMessage({type:'forgeax:health', level,
- *      source, code, message})` from play / edit / plugin runtimes. In single-
- *      realm (M2/M4) these reach the host window directly from the engine iframe.
+ *   2. iframe-forwarded health: `postMessage({type:'forgeax:health', level,
+ *      source, code, message})` from play / edit / plugin runtimes (cross-origin,
+ *      so this is how their console errors reach the shell at all).
  *   3. The pre-existing VAG wire: VAG_CONSOLE (error/warn lines) + VAG_DEVICE_LOST.
- *      These also reach the host window directly from the engine iframe; we map
- *      them onto the health store so nothing is missed even before a runtime ships
- *      the new `forgeax:health` envelope. Source is inferred from the iframe URL.
+ *      These already reach the host window from the runtimes; we map them onto the
+ *      health store too so nothing is missed even before a runtime ships the new
+ *      `forgeax:health` envelope. Source is inferred from the iframe URL.
  *
  * We deliberately do NOT import @forgeax/editor here (that would re-create the
  * interface→editor cycle the panel-renderer split removed). The wire contract is
@@ -27,6 +27,42 @@ let installed = false;
 
 const CONSOLE_LEVELS = ['log', 'warn', 'error', 'info', 'debug'] as const;
 type ConsoleLevel = (typeof CONSOLE_LEVELS)[number];
+
+// ── Browser (shell) console capture — full-fidelity ring buffer ──────────────
+// healthStore 只收 error/warn/health(喂状态栏,不该被 info/log 噪音淹)。这里另置一个
+// 独立的**全量**外壳控制台环形缓冲(所有 level),供 console.read{source:'browser'} 读,
+// 不污染状态栏。上限 BROWSER_CONSOLE_MAX,超出丢最旧(与 healthStore=400 / consoleLog=500 同策略)。
+export interface BrowserConsoleEntry {
+  level: ConsoleLevel;
+  text: string;
+  ts: number;
+  /** 连续相同(level+text)行折叠计数;>1 表示重复了几次(防 RAF 刷屏淹没缓冲)。 */
+  repeat?: number;
+}
+const BROWSER_CONSOLE_MAX = 500;
+const browserConsole: BrowserConsoleEntry[] = [];
+function recordBrowserConsole(level: ConsoleLevel, text: string): void {
+  if (text.startsWith('[health]')) return; // 防 pushHealth→console 自捕获回环
+  // 去重:与上一条 level+text 相同 → 折叠成 repeat 计数并刷新 ts,不新增(60Hz 刷屏只留一条)。
+  const last = browserConsole[browserConsole.length - 1];
+  if (last && last.level === level && last.text === text) {
+    last.repeat = (last.repeat ?? 1) + 1;
+    last.ts = Date.now();
+    return;
+  }
+  browserConsole.push({ level, text, ts: Date.now() });
+  if (browserConsole.length > BROWSER_CONSOLE_MAX) {
+    browserConsole.splice(0, browserConsole.length - BROWSER_CONSOLE_MAX);
+  }
+}
+/** console.read{source:'browser'} 读取全量外壳控制台(只读引用,勿改)。 */
+export function getBrowserConsole(): readonly BrowserConsoleEntry[] {
+  return browserConsole;
+}
+/** 清空外壳控制台缓冲(console.clear{source:'browser'} 用)。 */
+export function clearBrowserConsole(): void {
+  browserConsole.length = 0;
+}
 function asConsoleLevel(x: unknown): ConsoleLevel {
   return (CONSOLE_LEVELS as readonly string[]).includes(String(x)) ? (String(x) as ConsoleLevel) : 'log';
 }
@@ -112,34 +148,33 @@ export function installHealthBridge(): void {
     pushHealth({ level: 'error', source: 'shell', code: 'unhandled-rejection', message: `unhandled rejection: ${msg}` });
   });
 
-  // Wrap console.error so shell-side fetch rejects / React warnings that only
-  // hit console.error still land in the INFO feed. Keep the original behaviour.
+  // Wrap console.* so shell-side logs are captured. ALL levels feed the full-fidelity
+  // browserConsole ring buffer (read by console.read{source:'browser'}); error/warn
+  // ALSO feed the health store (status bar) as before. Original behaviour preserved.
   const fmtArgs = (args: unknown[]): string =>
     args.map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
 
-  const origError = console.error.bind(console);
-  console.error = (...args: unknown[]): void => {
-    origError(...args);
+  const wrapConsole = (
+    level: ConsoleLevel,
+    orig: (...a: unknown[]) => void,
+    toHealth: HealthLevel | null,
+  ) => (...args: unknown[]): void => {
+    orig(...args);
     try {
       const text = fmtArgs(args);
-      // Skip messages this bridge itself produced via pushHealth → console (avoid loops).
-      if (text.startsWith('[health]')) return;
-      pushHealth({ level: 'error', source: 'shell', code: 'console-error', message: text });
+      if (text.startsWith('[health]')) return; // skip this bridge's own pushHealth→console (avoid loops)
+      recordBrowserConsole(level, text);
+      if (toHealth) pushHealth({ level: toHealth, source: 'shell', code: `console-${level}`, message: text });
     } catch { /* never let logging throw */ }
   };
 
-  // Also wrap console.warn — shell-side warnings (incl. the [vag]/[sync] rejection
-  // diagnostics and the trustedOrigins guards) were previously NOT captured into
-  // the health feed (only console.error was), so they died in DevTools.
-  const origWarn = console.warn.bind(console);
-  console.warn = (...args: unknown[]): void => {
-    origWarn(...args);
-    try {
-      const text = fmtArgs(args);
-      if (text.startsWith('[health]')) return;
-      pushHealth({ level: 'warn', source: 'shell', code: 'console-warn', message: text });
-    } catch { /* never let logging throw */ }
-  };
+  // error/warn → health feed (status bar) + browser buffer; log/info/debug → buffer only
+  // (keep the status bar's signal from drowning in info/log noise).
+  console.error = wrapConsole('error', console.error.bind(console), 'error');
+  console.warn = wrapConsole('warn', console.warn.bind(console), 'warn');
+  console.log = wrapConsole('log', console.log.bind(console), null);
+  console.info = wrapConsole('info', console.info.bind(console), null);
+  console.debug = wrapConsole('debug', console.debug.bind(console), null);
 
   // ── 2 + 3. iframe-forwarded messages ───────────────────────────────────────
   window.addEventListener('message', (ev: MessageEvent) => {
@@ -171,9 +206,9 @@ export function installHealthBridge(): void {
       const payload = data?.payload as { level?: unknown; text?: unknown; ts?: unknown } | undefined;
       const text = typeof payload?.text === 'string' ? payload.text : '';
       if (!text) return;
-      // Console panel: the FULL stream (all levels, all sources). Engine iframes
-      // post VAG_CONSOLE directly to this host window (single-realm) — this is
-      // the single point that feeds store.consoleLog.
+      // Console panel: the FULL stream (all levels, all sources). Play/Edit
+      // surfaces re-forward their nested engine iframe's VAG_CONSOLE up to here,
+      // so this is the single point that feeds store.consoleLog.
       useAppStore.getState().pushConsole({
         level: asConsoleLevel(payload?.level),
         text,
@@ -189,8 +224,8 @@ export function installHealthBridge(): void {
       return;
     }
 
-    // Network panel feed — engine iframes post VAG_NETWORK directly to this
-    // host window (single-realm; the single point that feeds store.networkLog).
+    // Network panel feed — Play/Edit surfaces re-forward their engine iframe's
+    // VAG_NETWORK up to here (the single point that feeds store.networkLog).
     if (type === 'VAG_NETWORK') {
       const p = data?.payload as Partial<NetworkEntry> | undefined;
       if (!p || typeof p.url !== 'string') return;

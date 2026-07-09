@@ -7,7 +7,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useTranslation } from '@/i18n';
 import { useAppStore } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
-import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { STORAGE_KEYS, SESSION_KEYS } from '../../lib/storageKeys';
+import { reloadOnceForWorkspace, waitForEngineSettled } from '../../lib/workspace-reload';
 import { FsBrowser } from './FsBrowser';
 import './FsBrowser.css';
 import './TopBar.css';
@@ -77,8 +78,10 @@ export function ProjectSwitcher() {
       // Engine restart + symlink swap done server-side; full page reload
       // re-binds all UI state (chat / agents / preview iframe) to the new
       // workspace. activateWorkspace() already updated localStorage.forgeax.pinnedSlug
-      // to the resolved activeSlug so the post-reload iframe points at a real game.
-      window.location.reload();
+      // to the resolved activeSlug, seeded the workspace-changed dedup key, and
+      // waited for the engine to settle — so this reloads once, against a healthy
+      // engine (todo 005). reloadOnceForWorkspace() dedups vs the broadcast path.
+      reloadOnceForWorkspace();
     } catch (e) {
       void alertDialog({ body: (e as Error).message });
       setSwitching(false);
@@ -201,6 +204,15 @@ async function activateWorkspace(absPath: string, initIfMissing: boolean) {
     if (j.activeSlug) localStorage.setItem(STORAGE_KEYS.pinnedSlug, j.activeSlug);
     else localStorage.removeItem(STORAGE_KEYS.pinnedSlug);
   } catch { /* ignore quota / disabled storage */ }
+  // Seed the workspace-changed dedup key to the resolved root so the broadcast
+  // that `activate` fanned out to THIS tab is skipped (broadcast.ts dedups on
+  // equality) — the caller drives the single reload instead of racing it (005).
+  try {
+    if (j.absPath) sessionStorage.setItem(SESSION_KEYS.activeRoot, j.absPath);
+  } catch { /* ignore quota / disabled storage */ }
+  // Wait for the engine vite to finish the symlink-flip restart before the caller
+  // reloads, so the post-reload preview loads exactly once against a live engine.
+  await waitForEngineSettled(j.activeSlug);
   return j;
 }
 
@@ -231,7 +243,7 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
       if (!r.ok || !j.ok) { setErr(j.error ?? `HTTP ${r.status}`); setBusy(false); return; }
       // 2) immediately activate the new workspace
       await activateWorkspace(j.absDir ?? '', true);
-      window.location.reload();
+      reloadOnceForWorkspace();
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
 
@@ -242,7 +254,7 @@ function NewProjectModal({ initialTab, onClose, onOpened }: NewProjectModalProps
       await activateWorkspace(absPath, initIfMissing);
       onClose();
       onOpened(absPath);
-      window.location.reload();
+      reloadOnceForWorkspace();
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
 

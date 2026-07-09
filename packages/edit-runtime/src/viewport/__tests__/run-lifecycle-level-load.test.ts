@@ -70,14 +70,29 @@ function installFakeRaf() {
 }
 
 // ── Fake renderer — records draw(world) targets; dispose is observable. ──
+// `assets.instantiate` is the AssetRegistry seam play-assemble routes the
+// defaultScene through (GUID→handle resolve + spawn). It's a recording spy here:
+// the lifecycle tests don't assert on spawned scene entities, and the dedicated
+// regression test below asserts play uses THIS spy, never the raw
+// world.instantiateScene (the SharedRefReleasedError bug).
 function makeFakeRenderer() {
   const drawWorlds: unknown[] = [];
+  const instantiateCalls: Array<{ handle: unknown; world: unknown }> = [];
   let disposeCalls = 0;
   const renderer = {
     ready: Promise.resolve({ ok: true }),
-    assets: {},
-    draw(world: unknown) {
-      drawWorlds.push(world);
+    assets: {
+      instantiate(handle: unknown, world: unknown) {
+        instantiateCalls.push({ handle, world });
+        return { ok: true as const, value: 1 };
+      },
+    },
+    // Engine #643 migrated the frame loop to composited multi-world rendering:
+    // renderer.draw(worlds, { owner }) takes an ARRAY of worlds. Record each
+    // drawn world (flattened) so the per-world assertions below still hold.
+    draw(worlds: unknown, _opts?: unknown) {
+      if (Array.isArray(worlds)) drawWorlds.push(...worlds);
+      else drawWorlds.push(worlds);
       return { ok: true } as const;
     },
     dispose() {
@@ -90,6 +105,7 @@ function makeFakeRenderer() {
   return {
     renderer,
     drawWorlds,
+    instantiateCalls,
     get disposeCalls() {
       return disposeCalls;
     },
@@ -97,12 +113,37 @@ function makeFakeRenderer() {
 }
 
 // A minimal SceneAsset instantiable headlessly (same shape as snapshot-native).
+// NOTE: no MeshFilter / shared<> handle field — so this asset alone does NOT
+// exercise the GUID→handle resolve step. makeSceneAssetWithHandle() below covers
+// the real production shape (the SharedRefReleasedError regression).
 function makeSceneAsset() {
   return {
     kind: 'scene' as const,
     entities: [
       { localId: 0, components: { Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Root' } } },
       { localId: 1, components: { Transform: { posX: 1, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 }, Name: { value: 'Child' } } },
+    ],
+  };
+}
+
+// A SceneAsset carrying a MeshFilter.assetHandle as a GUID STRING — the shape
+// parseScenePayload produces after resolving on-disk refs[] indices. Only the
+// AssetRegistry.instantiate spine (renderer.assets.instantiate → _resolveSceneGuids)
+// can turn this into a live per-world numeric handle; the raw world.instantiateScene
+// would feed the GUID string into the numeric shared-ref retain path and throw
+// SharedRefReleasedError. This is the production case the level-load smoke missed.
+function makeSceneAssetWithHandle() {
+  return {
+    kind: 'scene' as const,
+    entities: [
+      {
+        localId: 0,
+        components: {
+          Transform: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+          Name: { value: 'Ground' },
+          MeshFilter: { assetHandle: 'cbe42beb-8975-5096-b3a1-3dda4cb4c077' },
+        },
+      },
     ],
   };
 }
@@ -299,6 +340,81 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
       t.lifecycle.stopSimulation(); // stray
       const resumeCount2 = t.editorApp.calls.filter((c) => c === 'resume').length;
       expect(resumeCount2).toBe(resumeCount1); // no extra resume
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
+// ── Regression: ▶ Play must resolve GUID-string handles via the AssetRegistry ──
+// spine, NOT call the raw world.instantiateScene (SharedRefReleasedError bug).
+//
+// Root cause recap: a defaultScene payload's MeshFilter.assetHandle is a GUID
+// STRING (parseScenePayload). play-assemble originally did the raw
+// world.instantiateScene(handle), which fed that string into the numeric
+// shared-ref retain path → "SharedRefReleasedError: handle is already released".
+// The fix routes through renderer.assets.instantiate (→ _resolveSceneGuids mints
+// GUID→per-world numeric handle first). This test would have caught the bug: the
+// prior fakes had assets:{} + a handle-free scene, so the resolve step was never
+// exercised.
+describe('▶ Play defaultScene instantiate routes through AssetRegistry (SharedRefReleasedError regression)', () => {
+  it('calls renderer.assets.instantiate with the scene handle + play world, never the raw world.instantiateScene', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const fr = makeFakeRenderer();
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      const boot = makeFakeBootstrap();
+
+      // A play world that alloc's shared refs fine but EXPLODES if anyone calls
+      // the raw instantiateScene directly — that's exactly the bypass the bug did.
+      let rawInstantiateSceneCalls = 0;
+      const makeGuardedWorld = () => {
+        const real = new World() as unknown as {
+          allocSharedRef(kind: string, payload: unknown): unknown;
+          instantiateScene(...a: unknown[]): unknown;
+          [k: string]: unknown;
+        };
+        return new Proxy(real, {
+          get(target, prop, recv) {
+            if (prop === 'instantiateScene') {
+              return () => {
+                rawInstantiateSceneCalls += 1;
+                throw new Error('raw world.instantiateScene called directly — must go through AssetRegistry.instantiate');
+              };
+            }
+            return Reflect.get(target, prop, recv);
+          },
+        });
+      };
+
+      const assemble = async () =>
+        assemblePlayWorld({
+          renderer: fr.renderer as never,
+          loadDefaultScene: async () => makeSceneAssetWithHandle(),
+          resolveBootstrap: async () => boot.entry as never,
+          attachInput: () => undefined,
+          newWorld: () => makeGuardedWorld() as never,
+        });
+
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: assemble as never,
+      });
+
+      // Must NOT throw (the bug threw SharedRefReleasedError here).
+      await lifecycle.playSimulation();
+      const playWorld = lifecycle.currentPlayWorld();
+      expect(playWorld).not.toBeNull();
+
+      // Routed through the registry spine exactly once, with the play world.
+      expect(fr.instantiateCalls.length).toBe(1);
+      expect(fr.instantiateCalls[0]?.world).toBe(playWorld);
+      // The raw ECS instantiate was never called directly.
+      expect(rawInstantiateSceneCalls).toBe(0);
+
+      lifecycle.stopSimulation();
     } finally {
       fakeRaf.restore();
     }

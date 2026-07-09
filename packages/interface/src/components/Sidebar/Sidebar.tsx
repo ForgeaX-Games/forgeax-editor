@@ -10,7 +10,7 @@ import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { pluginRendersInMainArea, pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
 import { KeepAlivePluginIframes } from '../MainArea/KeepAlivePluginIframes';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
-import { useTranslation, getLocale } from '@/i18n';
+import { useTranslation } from '@/i18n';
 import './Sidebar.css';
 
 // Phase B4 — the static `PLUGIN_PANEL_LOADERS` import map is gone. Plugins
@@ -108,7 +108,8 @@ interface HostSidebarSnapshot {
 }
 
 export function Sidebar() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const { workbenchTab, setWorkbenchTab } = useAppStore();
   const mode = useAppStore((s) => s.mode);
   const setMode = useAppStore((s) => s.setMode);
@@ -169,11 +170,11 @@ export function Sidebar() {
       .map<BusEntry>((m) => ({
         kind: 'bus',
         id: `wb:${m.workbench?.id ?? m.id}`,
-        label: pickLang(m.displayName, getLocale(), m.workbench?.id ?? m.id),
+        label: pickLang(m.displayName, locale, m.workbench?.id ?? m.id),
         emoji: m.workbench?.icon ?? m.icon ?? '🧩',
         manifest: m,
       }));
-  }, [busPlugins, busError]);
+  }, [busPlugins, busError, locale]);
 
   const entries: Entry[] = useMemo(() => [...BUILTINS, ...busEntries], [busEntries]);
   useEffect(() => {
@@ -455,7 +456,7 @@ export function Sidebar() {
               if (!leftPaneActivePlugin || !getWindowManager().canDetach()) return null;
               const desc: SurfaceDescriptor = { kind: 'plugin', id: leftPaneActivePlugin.id, pane: 'left' };
               const floating = !!floatingSurfaces[surfaceKey(desc)];
-              const label = pickLang(leftPaneActivePlugin.displayName, getLocale(), leftPaneActivePlugin.id);
+              const label = pickLang(leftPaneActivePlugin.displayName, locale, leftPaneActivePlugin.id);
               return floating ? (
                 <div className="ws-pane-floating">
                   <span>{t('sidebar.inSeparateWindow')}</span>
@@ -501,11 +502,12 @@ export function Sidebar() {
 // promoted to default-visible mini-strips. i18n readers (en) no longer have
 // to read the Chinese line first.
 function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblingCount: number }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const m = entry.manifest;
-  const description = pickLang(m.description, 'zh', '');
-  const descriptionEn = pickLang(m.description, 'en', '');
-  const showEn = descriptionEn && descriptionEn !== description;
+  const description = pickLang(m.description, locale, '');
+  const descriptionAlt = pickLang(m.description, locale === 'zh' ? 'en' : 'zh', '');
+  const showAlt = descriptionAlt && descriptionAlt !== description;
   const setMode = useAppStore((s) => s.setMode);
   const openSettingsStore = useAppStore((s) => s.openOverlay);
   const dir = m.id.startsWith('@forgeax-plugin/')
@@ -537,7 +539,7 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
         </div>
       </div>
       {description ? <div className="bus-tool-desc">{description}</div> : null}
-      {showEn ? <div className="bus-tool-desc-en" lang="en">{descriptionEn}</div> : null}
+      {showAlt ? <div className="bus-tool-desc-en" lang={locale === 'zh' ? 'en' : 'zh'}>{descriptionAlt}</div> : null}
       <div className="bus-tool-grid">
         <div className="bus-tool-cell">
           <div className="bus-tool-cell-label">kind</div>

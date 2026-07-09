@@ -34,6 +34,8 @@
 //   placeholder (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
 
 import { HANDLE_CUBE } from '@forgeax/engine-runtime';
+import { apiFetch } from '../io/api-client';
+import { resolveMeshOriginalMaterials } from '../scene/mesh-original-materials';
 
 export interface DragAssetRef {
   type: 'asset';
@@ -47,6 +49,16 @@ export interface DragAssetRef {
 export interface SpawnRefEntity {
   name: string;
   components: Record<string, unknown>;
+}
+
+/** Optional spawn extras resolved by the caller BEFORE building the command.
+ *  feat-20260708 M1 (plan-strategy D-2/D-4): `materialGuids` is the recovered
+ *  original per-submesh material GUID list (one entry per submesh, `''` where a
+ *  primitive had no glTF material — see resolveMeshOriginalMaterials). When
+ *  present and non-empty it rides the mesh spawn command as an
+ *  `EditorPendingMeshMaterials` marker for the edit-runtime resolver to consume. */
+export interface SpawnRefOptions {
+  materialGuids?: string[];
 }
 
 const TEXTURE_KINDS = new Set(['texture', 'image']);
@@ -80,7 +92,7 @@ function nativeTransform(pos: { x?: number; y?: number; z?: number }, scale: { s
 }
 
 /** Map a dragged asset ref to a single reference-mode spawn entity, or null if unsupported. */
-export function buildSpawnEntityFromDragRef(ref: DragAssetRef): SpawnRefEntity | null {
+export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOptions): SpawnRefEntity | null {
   const kind = ref.kind ?? '';
   const name = stemName(ref);
 
@@ -124,12 +136,59 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef): SpawnRefEntity |
   // plan-strategy §D-3/D-4) reads the marker, resolves guid -> real mesh handle,
   // and patches MeshFilter.assetHandle over the bus. No HANDLE_CUBE here — a real
   // mesh must round-trip to Play (AGENTS.md #2, requirements AC-10/AC-11).
-  return {
-    name,
-    components: {
-      Transform: nativeTransform({ y: 0.5 }, { scaleX: 1, scaleY: 1, scaleZ: 1 }),
-      MeshFilter: { assetHandle: 0 },
-      EditorPendingMeshAsset: { guid: ref.guid },
-    },
+  //
+  // feat-20260708 M1 (plan-strategy D-2/D-4, AC-02/AC-04): when the caller has
+  // recovered the source glTF per-submesh material GUIDs (resolveMeshOriginalMaterials)
+  // they ride a SECOND command-level marker `EditorPendingMeshMaterials{guids}`
+  // (same `Editor*` silent-drop convention). The edit-runtime resolver's material
+  // branch (drag-spawn-resolve.ts) turns them into MeshRenderer.materials[] handles.
+  // This REPLACES the deleted `Material.submeshMaterials` death-write — that
+  // component no longer exists (world-container collapse), so re-authoring it was a
+  // silent data-loss (AC-04). Empty / absent -> no marker (default single material).
+  const components: Record<string, unknown> = {
+    Transform: nativeTransform({ y: 0.5 }, { scaleX: 1, scaleY: 1, scaleZ: 1 }),
+    MeshFilter: { assetHandle: 0 },
+    EditorPendingMeshAsset: { guid: ref.guid },
   };
+  const materialGuids = opts?.materialGuids;
+  if (materialGuids && materialGuids.length > 0) {
+    components.EditorPendingMeshMaterials = { guids: materialGuids };
+  }
+  return { name, components };
+}
+
+// feat-20260708 M1 (plan-strategy D-4, AC-02/AC-04): recover a mesh ref's original
+// per-submesh material GUIDs so they can ride the spawn command's
+// EditorPendingMeshMaterials marker. Shared by BOTH spawn paths — path 1
+// (core/scene/spawn-asset-ref.ts, gateway.dispatch) and path 2
+// (edit-runtime/EditSurface.tsx, VAG spawn) — which is why it lives here in core
+// (the DAG's floor) rather than being duplicated per path. Both callers import it
+// downward (`core <- edit-runtime`), the legal direction. Deps are core-internal
+// (apiFetch + resolveMeshOriginalMaterials); no engine handle touched (core stays
+// UI-free, AC-03). Best-effort: any recovery miss returns undefined so the caller
+// keeps the single-material default.
+export async function recoverMeshOriginalMaterialGuids(
+  ref: DragAssetRef,
+): Promise<string[] | undefined> {
+  try {
+    const readRaw = async (p: string): Promise<Response | null> => {
+      try {
+        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(p)}`);
+        return r.ok ? r : null;
+      } catch {
+        return null;
+      }
+    };
+    const subs = await resolveMeshOriginalMaterials(
+      { guid: ref.guid, path: ref.path, payload: ref.payload },
+      {
+        fetchText: async (p) => { const r = await readRaw(p); return r ? r.text() : null; },
+        fetchBytes: async (p) => { const r = await readRaw(p); return r ? r.arrayBuffer() : null; },
+      },
+    );
+    return subs && subs.length > 0 ? subs : undefined;
+  } catch (err) {
+    console.warn('[editor] original-material recovery failed:', (err as Error)?.message ?? err);
+    return undefined;
+  }
 }

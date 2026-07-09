@@ -15,9 +15,20 @@ export interface ModelCatalogEntry {
   defaultTemperature?: number;
   /** loadModelsCatalog 兜底字段（盘上条目不规整时附原 raw） */
   spec?: unknown;
-  /** 'disk' = ~/.forgeax/key/models.json 命中;
-   *  'live' = LiteLLM /v1/models 才有, UI 可加 badge 提示用户没本地元数据 */
-  source?: 'disk' | 'live';
+  /** 元数据来源(与 `live` 正交):'disk' = 命中 ~/.forgeax/key/models.json 的富元
+   *  数据;'live' = 只在 /v1/models 上、用默认 spec 兜底;'driver' = rented CLI
+   *  driver catalog。UI 不再据 disk/live 加徽章。 */
+  source?: 'disk' | 'live' | 'driver';
+  /** 该 id 当前是否由 live proxy 提供。live 权威时整份列表统一为 true(offline 回退
+   *  到盘时统一 false)——UI 的 live 徽章据此「要么全有要么全无」,不再让有本地元数
+   *  据的行看起来像非 live。 */
+  live?: boolean;
+  /** Present when source='driver'. Keeps rented-CLI catalogs separate from gateway models. */
+  driverId?: string;
+  /** Human-facing label for the driver group. */
+  driverLabel?: string;
+  /** Rented CLIs report token usage but no local $ cost metering. */
+  costMetering?: 'none' | 'gateway';
   /** 用户在 Settings → Models 里隐藏的模型不会出现在 Composer 单选下拉里。
    *  inline (Settings) + multi (ModelLab) 仍展示全量,通过眼睛 icon 切换。 */
   hidden?: boolean;
@@ -61,10 +72,14 @@ async function callExecute<T>(name: string, args: string[]): Promise<T> {
   return j.result.data as T;
 }
 
-/** Catalog 来自 `~/.forgeax/key/models.json`（server 实时读盘）。
- *  返回顺序按 JSON 字面顺序，前端不再二次排序，让用户编辑 models.json 控制展示序。 */
-export async function listModels(): Promise<ModelCatalogEntry[]> {
-  const data = await callQuery<{ models: ModelCatalogEntry[] }>("list_models", []);
+/** Catalog 来自 `~/.forgeax/key/models.json`（disk）与 LiteLLM `/v1/models`（live）
+ *  的合并：live 权威时展示集合即 live 那份，disk 只静默补元数据。
+ *  返回顺序由 server 端按「强度」排好（claude 族最前 → 版本号降序 → tier），
+ *  前端不再二次排序，直接平铺渲染。providerId 非空时返回对应 rented CLI 的
+ *  driver-scoped catalog。 */
+export async function listModels(providerId?: string | null): Promise<ModelCatalogEntry[]> {
+  const args = providerId ? [providerId] : [];
+  const data = await callQuery<{ models: ModelCatalogEntry[] }>("list_models", args);
   return data.models ?? [];
 }
 

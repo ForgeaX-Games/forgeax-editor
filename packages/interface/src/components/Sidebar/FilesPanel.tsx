@@ -15,6 +15,7 @@ import { useAppStore } from '../../store';
 import { publish } from '../../lib/bus';
 import { useBusSnapshot } from '../../lib/use-bus-snapshot';
 import { useTranslation } from '@/i18n';
+import { workbenchAgentsUrl } from '../../lib/workbench-lang';
 
 // P4.1 — FilesPanel fp-types ext-distribution mini-strip.
 // Sibling to P4.0 AgentsPanel ap-tribes: a one-row legend above the tree
@@ -174,7 +175,7 @@ export function FilesPanel() {
     setTree(null);
     const load = async () => {
       try {
-        const wb = await fetch('/api/workbench/agents?lang=zh').then((r) => r.json()) as { activeSlug?: string };
+        const wb = await fetch(workbenchAgentsUrl()).then((r) => r.json()) as { activeSlug?: string };
         if (cancelled) return;
         const slug = pinnedSlug ?? wb.activeSlug;
         if (!slug) {

@@ -6,6 +6,7 @@
  * 见 ADR-0019 §Decision §3.
  */
 import type { AgentAvatarRules } from './types';
+import { workbenchAgentsUrl } from '../../lib/workbench-lang';
 
 interface WorkbenchAgent {
   id: string;
@@ -40,7 +41,7 @@ export function getAvatarRulesSnapshot(): Record<string, AgentAvatarRules> | nul
 export function ensureAvatarRulesLoaded(): Promise<Record<string, AgentAvatarRules>> {
   if (_rules) return Promise.resolve(_rules);
   if (_inflight) return _inflight;
-  _inflight = fetch('/api/workbench/agents?lang=zh')
+  _inflight = fetch(workbenchAgentsUrl())
     .then((r) => r.json())
     .then((j: { agents?: WorkbenchAgent[] }) => {
       const dict: Record<string, AgentAvatarRules> = {};

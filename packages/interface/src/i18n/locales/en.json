@@ -12,6 +12,12 @@
     "today": "Today",
     "yesterday": "Yesterday"
   },
+  "lang": {
+    "auto": "Auto",
+    "switcherTitle": "Agent reply language",
+    "followInput": "Follow my input",
+    "followInputDesc": "The agent replies in the language you type in."
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "configure forgeax · plugins · keys · account",
@@ -30,7 +36,7 @@
     "noSectionsHint2": "useSettingsSection({ id, label, node }) — mount one anywhere to add it.",
     "language": {
       "label": "Language",
-      "description": "Interface language. English is the source; other languages are a translation overlay.",
+      "description": "Interface language. Controls all UI chrome, agent catalog labels, and the language agents reply in.",
       "selectAria": "Select interface language"
     },
     "env": {
@@ -277,7 +283,7 @@
     "placeholderStreaming": "Reply in progress — you can keep typing; [Enter] queues it, sent in order after the current reply finishes",
     "placeholderStreamingInterrupt": " · ⚡ interrupt and send now",
     "placeholderOverrideDownSuffix": " ⚠ (unavailable)",
-    "imageUploadSoon": "Image upload — coming soon",
+    "imageUpload": "Attach image — click to choose, or paste one into the input",
     "comingSoon": "Coming soon",
     "mentionAgentTitle": "Mention agent ({{count}}) — click to insert @<agent> into the input box",
     "mentionSoon": "@ mention — coming soon",
@@ -389,6 +395,7 @@
     "noProducedFiles": "No produced files yet",
     "subagentsHint": "{n} sub-specialists below · talk to the lead (click to view Persona only)",
     "skinGroupHint": "Affects chat tone only · click to switch skin · double-click to edit Persona",
+    "skinChipTitle": "click to switch · double-click to edit Persona",
     "providerCodersHint": "{n} CLI drivers below · click to switch driver + open Persona editor"
   },
   "gameSwitcher": {
@@ -729,8 +736,9 @@
       "menuTitle": "Package Game",
       "platformWeb": "Web (Static Site)",
       "platformWindows": "Windows (.exe)",
+      "platformMac": "macOS (.app Launcher)",
       "platformAndroid": "Android (Project Export)",
-      "platformIos": "iOS (Coming Soon)",
+      "platformIos": "iOS (Project Export)",
       "rebuildEngine": "Rebuild Engine Core",
       "rebuildEngineHint": "Developer mode: rebuild Rust→WASM engine core (wgpu-wasm)",
       "engineRoot": "Engine Root",
@@ -742,9 +750,26 @@
       "historyDeleteConfirm": "Delete this record?",
       "historyRetry": "Retry",
       "historyCleanArtifacts": "Also clean artifacts",
-      "progressTitle": "Packaging…",
+      "progressTitle": "Packaging your game",
       "progressPhase": "Phase: {{phase}}",
       "progressClose": "Close",
+      "progressHint": "This can take a moment — you can keep working, we'll let you know when it's done.",
+      "progressLogs": "Build log",
+      "phaseLabel": {
+        "queued": "Getting ready",
+        "starting": "Getting ready",
+        "cleanup": "Cleaning previous build",
+        "shell": "Preparing launcher",
+        "shell-build": "Compiling launcher",
+        "toolchain": "Setting up toolchain",
+        "engine-rebuild": "Rebuilding engine core",
+        "web-build": "Bundling the game",
+        "assemble": "Assembling package",
+        "export-android-project": "Exporting Android project",
+        "done": "Finishing up",
+        "failed": "Failed",
+        "error": "Error"
+      },
       "jobSuccess": "Package succeeded",
       "jobFailed": "Package failed",
       "cachedShell": "Used cached launcher",
@@ -761,7 +786,42 @@
       "cleanFailed": "Cleanup failed",
       "cleanFreed": "Freed about {{size}}",
       "cleaning": "Cleaning local cache…",
-      "cleaningHint": "Removing the isolated toolchain and caches, please wait (may take a few to a dozen seconds for large dirs)."
+      "cleaningHint": "Removing the isolated toolchain and caches, please wait (may take a few to a dozen seconds for large dirs).",
+      "platformCloud": "One-Click Publish to Platform",
+      "comingSoon": "Coming soon",
+      "viewGuide": "View publish guide",
+      "success": {
+        "ready": "Your game is packaged — play it locally or share the folder.",
+        "play": "Play now",
+        "playServing": "Starting local server…",
+        "playFailed": "Could not start the local server — copy the command below and run it in a terminal.",
+        "open": "Open folder",
+        "copyPath": "Copy path",
+        "copyCmd": "Copy command",
+        "copied": "Copied"
+      },
+      "doc": {
+        "web": { "what": "Bundle the game into a self-contained website folder — drop it on any server (or run it locally) and share a link.", "when": "Lightest way to share · needs a WebGPU browser" },
+        "windows": { "what": "Produce a folder with a launcher .exe — double-click to play, no browser or internet needed.", "when": "For a downloadable PC build" },
+        "macos": { "what": "Produce a folder with a launcher + a double-clickable \"Play\".command — runs the game locally on this Mac.", "when": "For a downloadable / local playtest Mac build" },
+        "android": { "what": "Export a standard Android Studio project (not a ready APK); open it in Android Studio to build the app.", "when": "Asks for app name / package id / icon first" },
+        "cloud": { "what": "The easiest path — no export, no config: publish to the cloud in one click and get a shareable online link in seconds.", "when": "Coming soon" },
+        "ios": { "what": "Export an Xcode project to build an iOS app.", "when": "Asks for app name / bundle id / icon first" },
+        "engine": { "what": "Advanced switch — rebuild the engine core before packaging.", "when": "Only when the export looks different from the preview" },
+        "engineRoot": { "what": "Which engine build the export bundles against.", "when": "Usually auto-selected — leave as is" },
+        "history": { "what": "Every export is recorded here; retry or delete any of them.", "when": "To trace or re-run a previous build" },
+        "clean": { "what": "Free the disk space used by the build cache — never touches exported products or history.", "when": "When disk space is tight" }
+      }
+    },
+    "onboard": {
+      "introTitle": "Your game is ready!",
+      "introDesc": "You and Forge just built a game that runs — it's in the preview on the right. Now let's try publishing it!",
+      "introHint": "Click the \"Publish\" button at the top-right to continue",
+      "next": "Next",
+      "prev": "Back",
+      "skip": "Skip",
+      "done": "Get started",
+      "counter": "{{n}} / {{total}}"
     },
     "android": {
       "title": "Export Android Studio Project",
@@ -782,6 +842,30 @@
       "iconPick": "Choose PNG",
       "iconRemove": "Remove",
       "iconHint": "Optional PNG, 512×512 recommended, ≤2MB.",
+      "iconErrType": "Icon must be a PNG image",
+      "iconErrSize": "Icon too large (must be ≤2MB)",
+      "cancel": "Cancel",
+      "confirm": "Start Export"
+    },
+    "ios": {
+      "title": "Export Xcode Project",
+      "subtitle": "Generates an Xcode project (WKWebView shell + full game) that you open in Xcode to configure signing and archive an IPA (requires macOS + Xcode).",
+      "bundleIdLabel": "Bundle Identifier (Bundle ID)",
+      "bundleIdHint": "e.g. com.acme.mygame — at least two segments, each starting with a letter.",
+      "bundleIdError": "Invalid bundle identifier, e.g. com.acme.mygame",
+      "appNameLabel": "App Name",
+      "appNameError": "Must be 1–30 characters",
+      "projectNameLabel": "Project Name (project_name)",
+      "projectNameHint": "Used as the Xcode project folder name (.xcodeproj).",
+      "projectNameError": "Only letters, digits, \"-\" and \"_\"",
+      "orientationLabel": "Screen Orientation",
+      "orientationLandscape": "Landscape",
+      "orientationPortrait": "Portrait",
+      "orientationHint": "The exported app launches locked to the selected orientation.",
+      "iconLabel": "App Icon (ICON)",
+      "iconPick": "Choose PNG",
+      "iconRemove": "Remove",
+      "iconHint": "Optional PNG, 1024×1024 recommended, ≤2MB.",
       "iconErrType": "Icon must be a PNG image",
       "iconErrSize": "Icon too large (must be ≤2MB)",
       "cancel": "Cancel",
@@ -878,7 +962,9 @@
     "loadingPluginSuffix": "…",
     "missingStandalonePrefix": "Plugin ",
     "missingStandaloneMid": " is missing a ",
-    "missingStandaloneSuffix": " entry."
+    "missingStandaloneSuffix": " entry.",
+    "pluginUnavailablePrefix": "Could not load plugin ",
+    "pluginUnavailableSuffix": ". Make sure forgeax-server is running (bun scripts/run.ts in forgeax-studio), then refresh."
   },
   "errorBoundary": {
     "retry": "Retry",

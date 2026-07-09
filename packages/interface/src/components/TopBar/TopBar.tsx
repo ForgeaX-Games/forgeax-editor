@@ -4,8 +4,9 @@ import { SessionSwitcher } from './SessionSwitcher';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { GameSwitcher } from './GameSwitcher';
 import { AndroidPackageDialog, type AndroidPackageConfig } from './AndroidPackageDialog';
+import { IosPackageDialog, type IosPackageConfig } from './IosPackageDialog';
 import { STORAGE_KEYS, APP_EVENTS } from '../../lib/storageKeys';
-import { CircleGauge, LayoutGrid, Rocket, Settings, ShieldAlert, Check, X, Globe, Monitor, Smartphone, Apple, ChevronDown, History, RefreshCw, Trash2, Loader2, Wrench, Eraser } from 'lucide-react';
+import { CircleGauge, LayoutGrid, Rocket, Settings, ShieldAlert, Check, X, Globe, Monitor, Laptop, Smartphone, Apple, ChevronDown, History, RefreshCw, Trash2, Loader2, Wrench, Eraser, UploadCloud, PlayCircle, FolderOpen, Copy, HelpCircle, Info, ChevronRight, CheckCircle2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -25,6 +26,8 @@ import { dashApi } from '../../lib/dashboard-api';
 import { alertDialog, confirmDialog } from '../../lib/dialog';
 import { listBusPlugins } from '../../lib/bus-api';
 import { useTranslation } from '@/i18n';
+import { PublishOnboarding } from './PublishOnboarding';
+import { publishDoc } from './publish-options';
 import './TopBar.css';
 
 type BusCountState =
@@ -332,9 +335,27 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
   const [progressLogs, setProgressLogs] = useState<string[]>([]);
   const [cleaning, setCleaning] = useState(false);
   const [androidDialog, setAndroidDialog] = useState<{ slug: string; defaultAppName: string } | null>(null);
+  const [iosDialog, setIosDialog] = useState<{ slug: string; defaultAppName: string } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [onboardActive, setOnboardActive] = useState(false);
   const { pendingConfirms, ack, deny } = useConfirmToast();
 
-  type TargetPlatform = 'web' | 'windows' | 'android' | 'ios';
+  // Publish dropdown open-state is controlled so the first-run coach-mark can
+  // drive it (open it on option steps, close it on the intro). While the tour
+  // is active it owns menuOpen entirely — Radix's own open/close requests are
+  // ignored. On the very first open we kick off the tour instead.
+  const handleMenuOpenChange = (open: boolean) => {
+    if (onboardActive) return;
+    if (open && !localStorage.getItem(STORAGE_KEYS.publishOnboarded)) {
+      localStorage.setItem(STORAGE_KEYS.publishOnboarded, '1');
+      setMenuOpen(false);
+      setOnboardActive(true);
+      return;
+    }
+    setMenuOpen(open);
+  };
+
+  type TargetPlatform = 'web' | 'windows' | 'macos' | 'android' | 'ios';
 
   // Detect engine-root candidates for the standalone export. The export script
   // must run inside an engine root that has its deps (vite, @forgeax/*) — the
@@ -379,7 +400,19 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
     setAndroidDialog({ slug, defaultAppName: slug });
   };
 
-  const onPackageGame = async (platform: TargetPlatform, androidCfg?: AndroidPackageConfig) => {
+  // iOS also needs user config (bundleId / name / icon / orientation) before
+  // packaging, so it opens a dialog first and calls onPackageGame from onConfirm.
+  const openIosDialog = async () => {
+    if (packaging) return;
+    const slug = await resolvePackageSlug();
+    if (!slug) {
+      await alertDialog({ title: t('topbar.package.title'), body: t('topbar.package.noGame') });
+      return;
+    }
+    setIosDialog({ slug, defaultAppName: slug });
+  };
+
+  const onPackageGame = async (platform: TargetPlatform, cfg?: AndroidPackageConfig | IosPackageConfig) => {
     if (packaging) return;
     const slug = await resolvePackageSlug();
     if (!slug) {
@@ -397,7 +430,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
           rebuildEngine,
           forceRebuild: false,
           engineRoot: selectedEngineRoot,
-          ...(androidCfg ?? {}),
+          ...(cfg ?? {}),
         }),
       });
       const j = (await r.json()) as Record<string, unknown>;
@@ -422,15 +455,13 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
       await alertDialog({
         title: t('topbar.package.done', { slug, platform }),
         body: (
-          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <div>{t('topbar.package.exportDir')}</div>
-            <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{String(j.outDir ?? '')}</pre>
-            <div>{t('topbar.package.runLocally')}</div>
-            <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{String(j.runHint ?? '')}</pre>
-            {platform === 'web' && (
-              <div style={{ opacity: 0.7, marginTop: 8 }}>{t('topbar.package.webgpuHint')}</div>
-            )}
-          </div>
+          <PackageSuccessBody
+            outDir={String(j.outDir ?? '')}
+            runHint={String(j.runHint ?? '')}
+            platform={platform}
+            slug={slug!}
+            t={t}
+          />
         ),
       });
     } catch (e) {
@@ -466,15 +497,14 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
             await alertDialog({
               title: t('topbar.package.done', { slug, platform }),
               body: (
-                <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-                  <div>{t('topbar.package.exportDir')}</div>
-                  <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{String(res.outDir ?? '')}</pre>
-                  <div>{t('topbar.package.runLocally')}</div>
-                  <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0', fontSize: 12 }}>{String(res.runHint ?? '')}</pre>
-                  {Boolean(res.usedCachedShell) && (
-                    <div style={{ opacity: 0.7 }}>{t('topbar.package.cachedShell')}</div>
-                  )}
-                </div>
+                <PackageSuccessBody
+                  outDir={String(res.outDir ?? '')}
+                  runHint={String(res.runHint ?? '')}
+                  platform={platform}
+                  slug={slug}
+                  usedCachedShell={Boolean(res.usedCachedShell)}
+                  t={t}
+                />
               ),
             });
           } else {
@@ -700,7 +730,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
           <Settings size={16} />
         </button>
         <TbDivider />
-        <DropdownMenu>
+        <DropdownMenu open={menuOpen} onOpenChange={handleMenuOpenChange} modal={false}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -712,28 +742,55 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
               <ChevronDown size={10} style={{ marginLeft: 2, opacity: 0.6 }} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={6}>
+          <DropdownMenuContent align="end" sideOffset={6} className="tb-publish-menu">
             <DropdownMenuLabel>{t('topbar.package.menuTitle')}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => onPackageGame('web')}>
+            <DropdownMenuItem data-onboard="web" title={publishDoc(t, 'web').what} onClick={() => onPackageGame('web')}>
               <Globe size={14} />
-              {t('topbar.package.platformWeb')}
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformWeb')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'web').when}</span>
+              </span>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onPackageGame('windows')}>
+            <DropdownMenuItem data-onboard="windows" title={publishDoc(t, 'windows').what} onClick={() => onPackageGame('windows')}>
               <Monitor size={14} />
-              {t('topbar.package.platformWindows')}
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformWindows')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'windows').when}</span>
+              </span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={packaging} onClick={() => { void openAndroidDialog(); }}>
+            <DropdownMenuItem data-onboard="macos" title={publishDoc(t, 'macos').what} onClick={() => onPackageGame('macos')}>
+              <Laptop size={14} />
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformMac')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'macos').when}</span>
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuItem data-onboard="android" disabled={packaging} title={publishDoc(t, 'android').what} onClick={() => { void openAndroidDialog(); }}>
               <Smartphone size={14} />
-              {t('topbar.package.platformAndroid')}
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformAndroid')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'android').when}</span>
+              </span>
             </DropdownMenuItem>
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem data-onboard="ios" disabled={packaging} title={publishDoc(t, 'ios').what} onClick={() => { void openIosDialog(); }}>
               <Apple size={14} />
-              {t('topbar.package.platformIos')}
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformIos')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'ios').when}</span>
+              </span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel style={{ fontSize: 11, opacity: 0.6 }}>{t('topbar.package.engineRoot')}</DropdownMenuLabel>
+            {/* Coming soon — one-click cloud/platform publish is a grayed placeholder. */}
+            <DropdownMenuItem disabled title={publishDoc(t, 'cloud').what}>
+              <UploadCloud size={14} />
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.platformCloud')}</span>
+                <span className="tb-mi-sub">{t('topbar.package.comingSoon')}</span>
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel style={{ fontSize: 11, opacity: 0.6 }} title={publishDoc(t, 'engineRoot').what}>{t('topbar.package.engineRoot')}</DropdownMenuLabel>
             {engineRoots.length === 0 ? (
               <DropdownMenuItem disabled style={{ fontSize: 11, opacity: 0.5 }}>
                 {t('topbar.package.engineRootNone')}
@@ -759,29 +816,47 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
+              data-onboard="engine"
+              title={publishDoc(t, 'engine').what}
               onClick={(e) => { e.preventDefault(); setRebuildEngine(!rebuildEngine); }}
               style={{ gap: 6 }}
             >
               <Wrench size={14} />
-              <span style={{ flex: 1 }}>{t('topbar.package.rebuildEngine')}</span>
+              <span className="tb-mi-txt">
+                <span className="tb-mi-title">{t('topbar.package.rebuildEngine')}</span>
+                <span className="tb-mi-sub">{publishDoc(t, 'engine').when}</span>
+              </span>
               <span style={{ width: 14, height: 14, borderRadius: 3, border: '1px solid #666', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
                 {rebuildEngine ? '✓' : ''}
               </span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setShowHistory(true)}>
+            <DropdownMenuItem data-onboard="history" title={publishDoc(t, 'history').what} onClick={() => setShowHistory(true)}>
               <History size={14} />
               {t('topbar.package.history')}
             </DropdownMenuItem>
             <DropdownMenuItem
+              data-onboard="clean"
+              title={publishDoc(t, 'clean').what}
               onClick={(e) => { e.preventDefault(); void onCleanCache(); }}
               style={{ gap: 6, color: 'var(--destructive, #e05260)' }}
             >
               <Eraser size={14} />
               {t('topbar.package.clean')}
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={(e) => { e.preventDefault(); setOnboardActive(true); }}>
+              <HelpCircle size={14} />
+              {t('topbar.package.viewGuide')}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <PublishOnboarding
+          active={onboardActive}
+          onClose={() => setOnboardActive(false)}
+          setMenuOpen={setMenuOpen}
+          t={t}
+        />
       </div>
     </div>
     <ConfirmToastList confirms={pendingConfirms} onAck={ack} onDeny={deny} />
@@ -796,7 +871,7 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
         </div>
       </div>
     )}
-    {showProgress && <PackageProgressOverlay phase={progressPhase} logs={progressLogs} onClose={() => { setShowProgress(false); }} t={t} />}
+    {showProgress && <PackageProgressOverlay phase={progressPhase} logs={progressLogs} platform={packagingPlatform} onClose={() => { setShowProgress(false); }} t={t} />}
     {showHistory && <PackageHistoryDialog onClose={() => setShowHistory(false)} onRetry={onRetryPackage} t={t} />}
     {androidDialog && (
       <AndroidPackageDialog
@@ -807,33 +882,159 @@ export function TopBar({ hideChatAndForge }: TopBarProps = {}) {
         onConfirm={(cfg) => { setAndroidDialog(null); void onPackageGame('android', cfg); }}
       />
     )}
+    {iosDialog && (
+      <IosPackageDialog
+        slug={iosDialog.slug}
+        defaultAppName={iosDialog.defaultAppName}
+        t={t}
+        onCancel={() => setIosDialog(null)}
+        onConfirm={(cfg) => { setIosDialog(null); void onPackageGame('ios', cfg); }}
+      />
+    )}
     </>
   );
 }
 
 // GameSwitcher + NewGameModal + timeSince extracted → ./GameSwitcher (§D).
 
+// ── PackageSuccessBody ──
+// The body of the "packaging done" dialog. Turns the old read-only outDir /
+// runHint text into actionable buttons: one-click playtest (web), open the
+// product folder in the OS file manager, and copy the path / run command.
+function PackageSuccessBody({ outDir, runHint, platform, slug, usedCachedShell, t }: {
+  outDir: string;
+  runHint: string;
+  platform: string;
+  slug: string;
+  usedCachedShell?: boolean;
+  t: (k: string, opts?: Record<string, string | number>) => string;
+}) {
+  const [copied, setCopied] = useState<'path' | 'cmd' | null>(null);
+
+  const copy = async (text: string, which: 'path' | 'cmd') => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      setTimeout(() => setCopied((c) => (c === which ? null : c)), 1600);
+    } catch { /* ignore */ }
+  };
+  const reveal = async () => {
+    try { await fetch('/api/workbench/package/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: outDir }) }); } catch { /* ignore */ }
+  };
+  // Playtest is served by the studio server itself (same-origin, secure
+  // localhost context, correct .wasm MIME) — no npx/serve.sh spawn, so the tab
+  // opens instantly onto a ready server instead of a maybe-not-bound one.
+  const play = () => {
+    window.open(`/api/workbench/play/${encodeURIComponent(slug)}/`, '_blank');
+  };
+
+  const isWeb = platform === 'web';
+
+  return (
+    <div className="tb-pkg-success">
+      <div className="tb-pkg-head">
+        <CheckCircle2 size={20} className="tb-pkg-head-ic" />
+        <span className="tb-pkg-head-txt">{t('topbar.package.success.ready')}</span>
+      </div>
+
+      <div className="tb-pkg-path">
+        <FolderOpen size={14} className="tb-pkg-path-ic" />
+        <code className="tb-pkg-path-txt">{outDir}</code>
+      </div>
+
+      <div className="tb-success-actions">
+        {isWeb && (
+          <button type="button" className="tb-sa-btn primary" onClick={play}>
+            <PlayCircle size={18} />
+            <span>{t('topbar.package.success.play')}</span>
+          </button>
+        )}
+        <button type="button" className={`tb-sa-btn${isWeb ? '' : ' primary'}`} onClick={() => { void reveal(); }}>
+          <FolderOpen size={18} />
+          <span>{t('topbar.package.success.open')}</span>
+        </button>
+        <button type="button" className="tb-sa-btn" onClick={() => { void copy(outDir, 'path'); }}>
+          {copied === 'path' ? <Check size={18} /> : <Copy size={18} />}
+          <span>{copied === 'path' ? t('topbar.package.success.copied') : t('topbar.package.success.copyPath')}</span>
+        </button>
+        {runHint && (
+          <button type="button" className="tb-sa-btn" onClick={() => { void copy(runHint, 'cmd'); }}>
+            {copied === 'cmd' ? <Check size={18} /> : <Copy size={18} />}
+            <span>{copied === 'cmd' ? t('topbar.package.success.copied') : t('topbar.package.success.copyCmd')}</span>
+          </button>
+        )}
+      </div>
+
+      {runHint && (
+        <details className="tb-pkg-cmd">
+          <summary><ChevronRight size={13} className="tb-pkg-cmd-caret" />{t('topbar.package.runLocally')}</summary>
+          <pre>{runHint}</pre>
+        </details>
+      )}
+
+      {usedCachedShell && (
+        <div className="tb-pkg-hint"><Info size={13} /><span>{t('topbar.package.cachedShell')}</span></div>
+      )}
+      {isWeb && (
+        <div className="tb-pkg-hint"><Info size={13} /><span>{t('topbar.package.webgpuHint')}</span></div>
+      )}
+    </div>
+  );
+}
+
 // ── PackageProgressOverlay ──
-function PackageProgressOverlay({ phase, logs, onClose, t }: { phase: string; logs: string[]; onClose: () => void; t: (k: string, opts?: Record<string, string | number>) => string }) {
+// A polished "packaging in progress" card: an animated orb + humanized phase
+// label, an indeterminate shimmer bar (we have no % from the backend), the
+// latest build line, a reassuring hint, and a collapsible terminal log.
+function PackageProgressOverlay({ phase, logs, platform, onClose, t }: {
+  phase: string;
+  logs: string[];
+  platform?: string;
+  onClose: () => void;
+  t: (k: string, opts?: Record<string, string | number>) => string;
+}) {
   const logsRef = useRef<HTMLPreElement>(null);
+  const [showLogs, setShowLogs] = useState(false);
   useEffect(() => {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-  }, [logs]);
+  }, [logs, showLogs]);
+
+  // Humanize the phase; fall back to the raw phase if no label key exists.
+  const labelKey = `topbar.package.phaseLabel.${phase}`;
+  const label = t(labelKey);
+  const phaseText = label === labelKey || label.startsWith('topbar.') ? phase : label;
+  const lastLine = logs.length ? logs[logs.length - 1] : '';
 
   return (
     <div className="tb-progress-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="tb-progress-dialog">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <Loader2 size={16} className="tb-spinner" />
-          <span style={{ fontWeight: 600 }}>{t('topbar.package.progressTitle')}</span>
+      <div className="tb-progress-dialog tb-prog">
+        <div className="tb-prog-head">
+          <span className="tb-prog-orb"><Loader2 size={20} className="tb-spinner" /></span>
+          <div className="tb-prog-headtxt">
+            <div className="tb-prog-title">
+              {t('topbar.package.progressTitle')}
+              {platform && <span className="tb-prog-badge">{platform}</span>}
+            </div>
+            <div className="tb-prog-phase">{phaseText}</div>
+          </div>
         </div>
-        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>{t('topbar.package.progressPhase', { phase })}</div>
-        <pre ref={logsRef} style={{ maxHeight: 200, overflowY: 'auto', fontSize: 11, lineHeight: 1.5, margin: 0, padding: 8, borderRadius: 4, background: 'rgba(0,0,0,0.3)' }}>
-          {logs.join('\n') || '…'}
-        </pre>
-        <button type="button" onClick={onClose} style={{ marginTop: 10, fontSize: 12, cursor: 'pointer' }}>
-          {t('topbar.package.progressClose')}
-        </button>
+
+        <div className="tb-prog-bar" role="progressbar" aria-label={phaseText}><span /></div>
+
+        {lastLine && <div className="tb-prog-line">{lastLine}</div>}
+        <div className="tb-prog-hint">{t('topbar.package.progressHint')}</div>
+
+        <details
+          className="tb-prog-logbox"
+          onToggle={(e) => setShowLogs((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary><ChevronRight size={13} className="tb-prog-caret" />{t('topbar.package.progressLogs')}</summary>
+          <pre ref={logsRef}>{logs.join('\n') || '…'}</pre>
+        </details>
+
+        <div className="tb-prog-foot">
+          <button type="button" className="tb-prog-close" onClick={onClose}>{t('topbar.package.progressClose')}</button>
+        </div>
       </div>
     </div>
   );

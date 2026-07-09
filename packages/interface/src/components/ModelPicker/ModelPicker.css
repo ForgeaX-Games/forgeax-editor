@@ -140,7 +140,8 @@
 .mp-ctx { color: var(--text-dim); }
 .mp-reasoning,
 .mp-modality,
-.mp-live {
+.mp-live,
+.mp-driver {
   display: inline-flex;
   align-items: center;
   padding: 1px 5px;
@@ -155,6 +156,7 @@
 .mp-modalities { display: inline-flex; gap: 2px; margin-left: 2px; }
 
 .mp-live { background: rgba(98, 142, 255, 0.08); color: #5b8bff; border-color: rgba(98, 142, 255, 0.32); }
+.mp-driver { background: rgba(212, 255, 72, 0.08); color: var(--primary); border-color: rgba(212, 255, 72, 0.32); }
 
 .mp-tail { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .mp-arrow { color: var(--primary); }

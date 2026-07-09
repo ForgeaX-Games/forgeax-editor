@@ -12,6 +12,12 @@
     "today": "今天",
     "yesterday": "昨天"
   },
+  "lang": {
+    "auto": "自动",
+    "switcherTitle": "Agent 回复语言",
+    "followInput": "跟随我的输入",
+    "followInputDesc": "Agent 用你输入的语言回复。"
+  },
   "settings": {
     "title": "设置",
     "subtitle": "configure forgeax · plugins · keys · account",
@@ -30,7 +36,7 @@
     "noSectionsHint2": "useSettingsSection({ id, label, node }) 在任意组件里挂载一项即可。",
     "language": {
       "label": "语言",
-      "description": "界面语言。英文为源语言，其他语言为翻译覆盖层。",
+      "description": "界面语言。控制所有 UI 文案、Agent 目录展示语言，以及 Agent 回复所用语言。",
       "selectAria": "选择界面语言"
     },
     "env": {
@@ -277,7 +283,7 @@
     "placeholderStreaming": "回复进行中 — 可继续输入,[Enter] 排队,当前回复结束后依次发送",
     "placeholderStreamingInterrupt": " · ⚡ 打断并立即发送",
     "placeholderOverrideDownSuffix": " ⚠ (不可用)",
-    "imageUploadSoon": "图片上传 — 即将上线",
+    "imageUpload": "添加图片 — 点击选择,或直接粘贴到输入框",
     "comingSoon": "即将上线",
     "mentionAgentTitle": "Mention agent ({{count}}) — 单击插入 @<agent> 到输入框",
     "mentionSoon": "@ 提示 — 即将上线",
@@ -389,6 +395,7 @@
     "noProducedFiles": "暂无产物文件",
     "subagentsHint": "下挂 {n} 个专科 · 跟主 agent 说就行（点开仅查看 Persona）",
     "skinGroupHint": "仅作用于聊天语气 · 单击切换皮肤 · 双击进 Persona 编辑",
+    "skinChipTitle": "单击切换 · 双击进 Persona 编辑",
     "providerCodersHint": "下挂 {n} 个 CLI 驱动 · 点击切换驱动 + 进 Persona 编辑"
   },
   "gameSwitcher": {
@@ -729,8 +736,9 @@
       "menuTitle": "打包游戏",
       "platformWeb": "Web (静态站点)",
       "platformWindows": "Windows (.exe)",
+      "platformMac": "macOS (.app 启动器)",
       "platformAndroid": "Android (工程导出)",
-      "platformIos": "iOS (即将推出)",
+      "platformIos": "iOS (工程导出)",
       "rebuildEngine": "重新编译引擎核心",
       "rebuildEngineHint": "开发者模式：重新编译 Rust→WASM 引擎核心 (wgpu-wasm)",
       "engineRoot": "引擎根目录",
@@ -742,9 +750,26 @@
       "historyDeleteConfirm": "确定删除此记录？",
       "historyRetry": "重试",
       "historyCleanArtifacts": "同时清理产物",
-      "progressTitle": "正在打包…",
+      "progressTitle": "正在打包你的游戏",
       "progressPhase": "阶段: {{phase}}",
       "progressClose": "关闭",
+      "progressHint": "这可能需要一点时间——你可以继续忙别的，打包完成会通知你。",
+      "progressLogs": "构建日志",
+      "phaseLabel": {
+        "queued": "准备中",
+        "starting": "准备中",
+        "cleanup": "清理上一次构建",
+        "shell": "准备启动器",
+        "shell-build": "编译启动器",
+        "toolchain": "配置工具链",
+        "engine-rebuild": "重建引擎核心",
+        "web-build": "打包游戏",
+        "assemble": "组装安装包",
+        "export-android-project": "导出 Android 工程",
+        "done": "收尾中",
+        "failed": "失败",
+        "error": "出错"
+      },
       "jobSuccess": "打包成功",
       "jobFailed": "打包失败",
       "cachedShell": "使用了缓存的启动器",
@@ -761,7 +786,42 @@
       "cleanFailed": "清理失败",
       "cleanFreed": "已释放约 {{size}}",
       "cleaning": "正在清理本地缓存…",
-      "cleaningHint": "正在删除隔离工具链与缓存，请稍候（体积较大时可能需要几秒到十几秒）。"
+      "cleaningHint": "正在删除隔离工具链与缓存，请稍候（体积较大时可能需要几秒到十几秒）。",
+      "platformCloud": "一键发布到平台",
+      "comingSoon": "即将支持",
+      "viewGuide": "查看发布引导",
+      "success": {
+        "ready": "游戏打包完成 —— 可以本地试玩，或把文件夹分享出去。",
+        "play": "立即试玩",
+        "playServing": "正在启动本地服务…",
+        "playFailed": "无法启动本地服务，请复制下面的命令到终端运行。",
+        "open": "打开文件夹",
+        "copyPath": "复制路径",
+        "copyCmd": "复制命令",
+        "copied": "已复制"
+      },
+      "doc": {
+        "web": { "what": "把游戏打包成一个自包含的网站文件夹，丢到任意服务器（或本地）就能跑，发个链接别人就能玩。", "when": "最轻量的分享方式 · 需 WebGPU 浏览器" },
+        "windows": { "what": "生成一个带启动器 .exe 的文件夹，双击即玩，不用装浏览器、不用联网。", "when": "适合做成可下载的 PC 版" },
+        "macos": { "what": "生成一个带启动器 + 可双击「Play」.command 的文件夹，在这台 Mac 上本地运行游戏。", "when": "适合本地试玩 / 做可下载的 Mac 版" },
+        "android": { "what": "导出一个标准的 Android Studio 工程（不是直接 APK），在 Android Studio 里编译成手机 App。", "when": "点它会先让你填应用名 / 包名 / 图标" },
+        "cloud": { "what": "最省事的方式：不用导出、不用配置，点一下就发布到云端，几秒后拿到在线链接，任何人打开即玩。", "when": "即将支持" },
+        "ios": { "what": "导出 Xcode 工程以构建 iOS App。", "when": "点它会先让你填应用名 / Bundle ID / 图标" },
+        "engine": { "what": "高级开关，打包前重新编译引擎核心，一般不用管。", "when": "仅当导出结果和预览不一致时勾选" },
+        "engineRoot": { "what": "导出时绑定的引擎构建版本。", "when": "通常自动选好，保持默认即可" },
+        "history": { "what": "每一次导出的记录都在这里，可一键重试或删除。", "when": "想追溯或重跑某次导出时" },
+        "clean": { "what": "释放打包缓存占用的磁盘空间，只删缓存，不碰你已导出的成品和历史。", "when": "磁盘紧张时" }
+      }
+    },
+    "onboard": {
+      "introTitle": "游戏做好啦！",
+      "introDesc": "你和 Forge 一起做出了一个能跑的游戏 —— 右边预览里就是它。现在，试试把它发布出去吧！",
+      "introHint": "点一下右上角的「发布」按钮继续",
+      "next": "下一步",
+      "prev": "上一步",
+      "skip": "跳过",
+      "done": "开始使用",
+      "counter": "{{n}} / {{total}}"
     },
     "android": {
       "title": "导出 Android Studio 工程",
@@ -782,6 +842,30 @@
       "iconPick": "选择 PNG",
       "iconRemove": "移除",
       "iconHint": "可选，PNG，建议 512×512，≤2MB。",
+      "iconErrType": "图标必须为 PNG 图片",
+      "iconErrSize": "图标过大（需 ≤2MB）",
+      "cancel": "取消",
+      "confirm": "开始导出"
+    },
+    "ios": {
+      "title": "导出 Xcode 工程",
+      "subtitle": "生成一个可用 Xcode 打开的 iOS 工程（内嵌 WKWebView 外壳 + 完整游戏），你可在其中配置签名并归档导出 IPA（需 macOS + Xcode）。",
+      "bundleIdLabel": "应用标识 (Bundle ID)",
+      "bundleIdHint": "例如 com.acme.mygame，至少两段，每段以字母开头。",
+      "bundleIdError": "Bundle ID 格式无效，示例：com.acme.mygame",
+      "appNameLabel": "应用名称",
+      "appNameError": "长度需为 1–30 个字符",
+      "projectNameLabel": "工程名 (project_name)",
+      "projectNameHint": "作为 Xcode 工程目录名（.xcodeproj）。",
+      "projectNameError": "仅允许字母、数字、「-」和「_」",
+      "orientationLabel": "屏幕方向",
+      "orientationLandscape": "横屏",
+      "orientationPortrait": "竖屏",
+      "orientationHint": "导出的 App 将锁定为所选方向启动。",
+      "iconLabel": "应用图标 (ICON)",
+      "iconPick": "选择 PNG",
+      "iconRemove": "移除",
+      "iconHint": "可选，PNG，建议 1024×1024，≤2MB。",
       "iconErrType": "图标必须为 PNG 图片",
       "iconErrSize": "图标过大（需 ≤2MB）",
       "cancel": "取消",
@@ -878,7 +962,9 @@
     "loadingPluginSuffix": "…",
     "missingStandalonePrefix": "插件 ",
     "missingStandaloneMid": " 缺少 ",
-    "missingStandaloneSuffix": " 入口。"
+    "missingStandaloneSuffix": " 入口。",
+    "pluginUnavailablePrefix": "无法加载插件 ",
+    "pluginUnavailableSuffix": "。请确认 forgeax-server 已启动（在 forgeax-studio 目录运行 bun scripts/run.ts），然后刷新页面。"
   },
   "errorBoundary": {
     "retry": "重试",

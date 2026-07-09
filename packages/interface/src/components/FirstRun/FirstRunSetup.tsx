@@ -85,6 +85,12 @@ export function FirstRunSetup() {
       });
       const j = (await r.json()) as { error?: string };
       if (!r.ok || j.error) { setErr(j.error ?? t('firstRun.errSaveFailed')); setBusy(false); return; }
+      // 首个凭据落地 → 重拉模型目录:选择器可能已在 overlay 背后拿到空/仅磁盘的目录,
+      // 现在有 key 了要用新凭据重探(否则要刷新页面才见到代理暴露的模型)。
+      try {
+        const { refreshAllModelCatalogs } = await import('../ModelPicker/useModelCatalog');
+        await refreshAllModelCatalogs();
+      } catch { /* 模型刷新失败不影响凭据已保存 */ }
       markSeen();
       setNeedsKey(false);
     } catch (e) { setErr((e as Error).message); setBusy(false); }

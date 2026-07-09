@@ -54,9 +54,26 @@ function pendingMeshGuid(cmd: EditorOp | null): string | null {
   return typeof guid === 'string' && guid.length > 0 ? guid : null;
 }
 
+/** Pull the pending-material marker GUID list from a spawnEntity command, or null.
+ *  One entry per submesh in submesh order; `''` marks a primitive with no source
+ *  glTF material (feat-20260708 M1, plan-strategy D-2). */
+function pendingMaterialGuids(cmd: EditorOp | null): string[] | null {
+  if (cmd === null || cmd.kind !== 'spawnEntity') return null;
+  const components = (cmd as { components?: Record<string, unknown> }).components;
+  const marker = components?.EditorPendingMeshMaterials as { guids?: unknown } | undefined;
+  const guids = marker?.guids;
+  return Array.isArray(guids) && guids.length > 0 && guids.every((g) => typeof g === 'string')
+    ? (guids as string[])
+    : null;
+}
+
 /**
- * Subscribe the drag-spawn mesh resolver to the EditGateway. Idempotent per GUID:
- * failed GUIDs are never retried, resolved GUIDs are re-patched from cache.
+ * Subscribe the drag-spawn resolver to the EditGateway. Two INDEPENDENT branches
+ * ride the same spawnEntity command:
+ *   - the MESH branch resolves EditorPendingMeshAsset -> MeshFilter.assetHandle;
+ *   - the MATERIAL branch resolves EditorPendingMeshMaterials -> MeshRenderer.materials[].
+ * Both are idempotent per GUID: failed GUIDs are never retried, resolved GUIDs are
+ * re-patched from cache (redo replay / a second entity sharing the asset).
  */
 export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFacade, renderer: RendererLike): void {
   // M3 migration bridge (t16→t20): the injected proxy is `engine` (EngineFacade).
@@ -65,26 +82,24 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
   // (ctx.engine proxy). allocSharedRef is chrome handle-casting, not a document op
   // — the resulting handle rides the setComponent bus dispatch below (which DOES
   // go through the ledger). The facade returns an opaque handle; narrow to the u32
-  // the MeshFilter.assetHandle patch expects.
+  // the MeshFilter.assetHandle patch expects. §5.6 lint-unique-mutator: the ONLY
+  // world write here is engine.allocSharedRef (facade method) — never raw world.*.
   const failed = new Set<string>();
   const resolved = new Map<string, number>();
+  const failedMat = new Set<string>();
+  const resolvedMat = new Map<string, number>();
 
-  const patch = (entity: number, assetHandle: number): void => {
+  const patchMesh = (entity: number, assetHandle: number): void => {
     bus.dispatch({ kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle } }, 'ai');
   };
 
-  bus.subscribe((_doc, lastCommand) => {
-    const guid = pendingMeshGuid(lastCommand);
-    if (guid === null) return;
-    // lastCommand is a spawnEntity here; applyCommand fills _id (document.ts).
-    const entity = (lastCommand as Extract<EditorOp, { kind: 'spawnEntity' }>)._id;
-    if (typeof entity !== 'number') return;
-
+  // ── MESH branch (feat-20260705 M3, behaviour unchanged) ──────────────────────
+  const resolveMesh = (entity: number, guid: string): void => {
     // Retry-storm guard: a GUID that already failed is never re-attempted.
     if (failed.has(guid)) return;
     // Cache hit (redo replay / second entity sharing the mesh): re-patch, no reload.
     const cached = resolved.get(guid);
-    if (cached !== undefined) { patch(entity, cached); return; }
+    if (cached !== undefined) { patchMesh(entity, cached); return; }
 
     const parsed = AssetGuid.parse(guid);
     if (!parsed.ok) {
@@ -102,7 +117,68 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       }
       const handle = engine.allocSharedRef('MeshAsset', res.value) as number;
       resolved.set(guid, handle);
-      patch(entity, handle);
+      patchMesh(entity, handle);
     })();
+  };
+
+  // Resolve ONE material GUID to a handle (cache + failed-guard + structured error),
+  // or undefined if unresolvable. Mirrors the mesh branch's discipline (D-5).
+  const resolveOneMaterial = async (guid: string): Promise<number | undefined> => {
+    const cached = resolvedMat.get(guid);
+    if (cached !== undefined) return cached;
+    if (failedMat.has(guid)) return undefined; // already failed: no retry, no dup error
+    const parsed = AssetGuid.parse(guid);
+    if (!parsed.ok) {
+      failedMat.add(guid);
+      console.error('[drag-spawn-resolve:material]', { guid, code: 'bad-guid', hint: 'AssetGuid.parse failed' });
+      return undefined;
+    }
+    const res = await renderer.assets.loadByGuid(parsed.value);
+    if (!res.ok || res.value === undefined) {
+      failedMat.add(guid);
+      console.error('[drag-spawn-resolve:material]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
+      return undefined;
+    }
+    const handle = engine.allocSharedRef('MaterialAsset', res.value) as number;
+    resolvedMat.set(guid, handle);
+    return handle;
+  };
+
+  // ── MATERIAL branch (feat-20260708 M1, plan-strategy D-2/D-3/D-5) ─────────────
+  const resolveMaterials = async (entity: number, guids: string[]): Promise<void> => {
+    // Resolve each non-empty GUID in submesh order; the first that resolves is the
+    // firstMatHandle used to fill '' slots (and load misses) so the emitted
+    // materials[].length always equals guids.length — the same count-alignment the
+    // engine bridge enforces (bridge.ts:539-562), else the engine fail-fast
+    // `mesh-renderer-material-count-mismatch` would skip the entity (D-3).
+    const handleByGuid = new Map<string, number>();
+    let firstMatHandle: number | undefined;
+    for (const g of guids) {
+      if (g === '') continue;
+      const handle = await resolveOneMaterial(g);
+      if (handle === undefined) continue;
+      handleByGuid.set(g, handle);
+      if (firstMatHandle === undefined) firstMatHandle = handle;
+    }
+    // Nothing resolved (all '' or all failed): keep the engine's default-material
+    // MeshRenderer (graceful degradation, R-3) — a length-0 patch would be a no-op
+    // and a partial one cannot satisfy count alignment.
+    if (firstMatHandle === undefined) return;
+
+    const materials = guids.map((g) => (g !== '' ? (handleByGuid.get(g) ?? firstMatHandle) : firstMatHandle));
+    bus.dispatch({ kind: 'setComponent', entity, component: 'MeshRenderer', patch: { materials } }, 'ai');
+  };
+
+  bus.subscribe((_doc, lastCommand) => {
+    if (lastCommand === null || lastCommand.kind !== 'spawnEntity') return;
+    // lastCommand is a spawnEntity here; applyCommand fills _id (document.ts).
+    const entity = (lastCommand as Extract<EditorOp, { kind: 'spawnEntity' }>)._id;
+    if (typeof entity !== 'number') return;
+
+    const meshGuid = pendingMeshGuid(lastCommand);
+    if (meshGuid !== null) resolveMesh(entity, meshGuid);
+
+    const matGuids = pendingMaterialGuids(lastCommand);
+    if (matGuids !== null) void resolveMaterials(entity, matGuids);
   });
 }

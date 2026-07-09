@@ -950,15 +950,13 @@
   background: rgba(108,196,255,0.10);
   border: 1px solid rgba(108,196,255,0.34);
 }
-/* P4.59 — 5th stats pill, lavender to mirror the per-tile `.wbg-tile-tag.ver.bumped`
+/* P4.59 — 5th stats pill, brand lime to mirror the per-tile `.wbg-tile-tag.ver.bumped`
    chip from P4.58. Reads "v N" where N = plugins whose manifest version is
-   not 0.0.x. Same #c4a3ff hue family as the per-tile bumped chip / orchestrator
-   ★ pin so the player learns "lavender = bumped / main version" once and reads
-   it the same way at strip-level and tile-level. */
+   not 0.0.x. Same workbench lime family as tile icons / wb-id chips. */
 .wbg-stats-bumped {
-  color: rgba(196,163,255,0.95);
-  background: rgba(196,163,255,0.10);
-  border: 1px solid rgba(196,163,255,0.42);
+  color: rgba(var(--rgb-accent-green), 0.95);
+  background: rgba(var(--rgb-accent-green), 0.10);
+  border: 1px solid rgba(var(--rgb-accent-green), 0.42);
   font-variant-numeric: tabular-nums;
 }
 .wbg-grid {
@@ -992,26 +990,16 @@
   outline: 1px solid rgba(75,222,128,0.6);
   outline-offset: 1px;
 }
-/* P4.61 — escalate the "bumped manifest version" signal from sub-pixel chips
-   (P4.58 meta chip · P4.59 header strip pill · P4.60 corner ᵛ badge on emoji)
-   up to the tile FRAME itself. Bumped tile (today only wb-character-forge
-   v0.1.0) gets a 2px lavender left-edge inset bar + barely-perceptible
-   lavender tint + slightly more saturated border. Across the 12-tile grid the
-   bumped one now pops at glance without zooming in — the left-edge accent is
-   the first frame-level differentiator beyond hover state. Color family
-   exactly mirrors `.wbg-tile-tag.ver.bumped` (rgba 196,163,255) so the muscle
-   memory chain holds: corner ᵛ → meta chip vN.N.N → strip pill v · N → tile
-   frame edge — all the same lavender. Hover still escalates to the standard
-   lime green so click-affordance language stays consistent across tiles. */
+/* P4.61 — bumped manifest version: brand-lime left-edge accent on the tile frame. */
 .wbg-tile.bumped {
-  background: rgba(196,163,255,0.025);
-  border-color: rgba(196,163,255,0.22);
-  box-shadow: inset 2px 0 0 rgba(196,163,255,0.55);
+  background: rgba(var(--rgb-accent-green), 0.025);
+  border-color: rgba(var(--rgb-accent-green), 0.22);
+  box-shadow: inset 2px 0 0 rgba(var(--rgb-accent-green), 0.55);
 }
 .wbg-tile.bumped:hover {
-  background: rgba(75,222,128,0.06);
-  border-color: rgba(75,222,128,0.35);
-  box-shadow: inset 2px 0 0 rgba(196,163,255,0.75);
+  background: rgba(var(--rgb-accent-green), 0.06);
+  border-color: rgba(var(--rgb-accent-green), 0.35);
+  box-shadow: inset 2px 0 0 rgba(var(--rgb-accent-green), 0.75);
 }
 /* P4.56 — top-right `#N` rank badge on each gallery tile (1..N derived from
    manifest workbench.position sort order). Gives the 12-tile grid an at-a-
@@ -1051,14 +1039,13 @@
   position: relative;
   display: inline-block;
   width: max-content;
+  color: var(--color-brand-primary);
+  opacity: 0.88;
 }
-/* P4.60 — corner `ᵛ` badge anchored to top-right of the icon glyph (only on
-   tiles where manifest version has bumped past 0.0.x). Roll-up of the same
-   "bumped lavender" language used on the meta-row `.wbg-tile-tag.ver.bumped`
-   chip (P4.58) and the header `.wbg-stats-bumped` pill (P4.59), now landing
-   on the icon itself so the bumped tile pops at a 3rd visual depth: emoji
-   glyph + corner v sticker. Stronger glance signal than the chip — players
-   spot the lavender corner before reading any chip text. */
+.wbg-tile:hover .wbg-tile-ico {
+  opacity: 1;
+}
+/* P4.60 — corner `ᵛ` badge on bumped tiles (brand lime, workbench tribe). */
 .wbg-tile-ico-ver {
   position: absolute;
   top: -3px;
@@ -1068,9 +1055,9 @@
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.02em;
-  color: rgba(196,163,255,0.95);
-  background: rgba(196,163,255,0.12);
-  border: 1px solid rgba(196,163,255,0.42);
+  color: rgba(var(--rgb-accent-green), 0.95);
+  background: rgba(var(--rgb-accent-green), 0.12);
+  border: 1px solid rgba(var(--rgb-accent-green), 0.42);
   padding: 1px 3px;
   border-radius: 4px;
   pointer-events: none;
@@ -1144,27 +1131,19 @@
   font-variant-numeric: tabular-nums;
   text-transform: none;
 }
-/* P4.58 — manifest `version` chip on each gallery tile.
-   Default (.ver, 0.0.x placeholder) — muted lavender so it sits behind
-   the green wb-id / grey size / amber WIP chips, just a quiet readout.
-   `.bumped` (version not matching 0.0.*) lights up the same lavender at
-   higher saturation — today only wb-character-forge v0.1.0 lights up,
-   giving a 12th-chip differentiator that compounds with the existing
-   🛠/📡 chips: "this is the only one with real tools, events, AND a
-   bumped manifest version". Same chip footprint as siblings so the
-   meta row stays one line on size-md tiles. */
+/* P4.58 — manifest `version` chip: muted brand lime (workbench tribe, not agent violet). */
 .wbg-tile-tag.ver {
-  color: rgba(196,163,255,0.62);
-  background: rgba(196,163,255,0.05);
-  border-color: rgba(196,163,255,0.18);
+  color: rgba(var(--rgb-accent-green), 0.55);
+  background: rgba(var(--rgb-accent-green), 0.05);
+  border-color: rgba(var(--rgb-accent-green), 0.18);
   font-variant-numeric: tabular-nums;
   text-transform: none;
   letter-spacing: 0.01em;
 }
 .wbg-tile-tag.ver.bumped {
-  color: rgba(196,163,255,0.95);
-  background: rgba(196,163,255,0.12);
-  border-color: rgba(196,163,255,0.42);
+  color: rgba(var(--rgb-accent-green), 0.95);
+  background: rgba(var(--rgb-accent-green), 0.12);
+  border-color: rgba(var(--rgb-accent-green), 0.42);
   font-weight: 700;
 }
 
@@ -1835,6 +1814,9 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+.wm-agents-lang {
+  margin-left: auto;
 }
 .wm-agents-title {
   font-size: 14px;

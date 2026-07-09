@@ -1,7 +1,6 @@
 /**
- * Language settings section body — rendered inside the SettingsPanel "System"
- * group. Lets the user switch the interface language at runtime. English is the
- * source of truth; every other language is a translation overlay.
+ * Language settings section — interface locale only. Agent catalog labels,
+ * Persona editor chrome, and chat reply language all follow this setting.
  *
  * Registered from SectionsRegister.tsx via useSettingsSection({ id: 'language' }).
  */

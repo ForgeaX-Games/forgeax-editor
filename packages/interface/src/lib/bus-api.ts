@@ -87,6 +87,16 @@ export interface BusEntryInfo {
   };
 }
 
+export interface BusAgentInfo {
+  id: string;
+  role?: string;
+  personaFile?: string;
+  memoryDir?: string;
+  preferredCliProvider?: string;
+  defaultLang?: string;
+  multiInstance?: boolean;
+}
+
 export interface BusPluginInfo {
   id: string;
   version: string;
@@ -101,6 +111,7 @@ export interface BusPluginInfo {
   tools?: BusToolInfo[];
   events?: BusEventInfo[];
   cliProvider?: BusCliProviderInfo;
+  agent?: BusAgentInfo;
   entry?: BusEntryInfo;
   /** kind=agent 才有：统一命名。title=「中文职能·英文名」，sub=灰字英文职能。 */
   naming?: { title: string; sub: string };
