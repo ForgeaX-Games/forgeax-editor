@@ -150,6 +150,11 @@ export { installEditorBusCompat } from './io/editor-bus-compat';
 // Side-effect import: registers appliers into sessionAppliers at module eval.
 import './store/panel-ops';
 
+// ── CB nav (session domain: setCBPath, cbGoBack, cbGoForward) ──
+// Side-effect import: registers cb-nav appliers into sessionAppliers at module eval.
+// Boot timing: after gateway singleton creation, before CB first render (§C6, §F-9).
+import './store/cb-nav';
+
 // ── Assets ──
 export {
   loadRawAssets,
@@ -323,3 +328,9 @@ export {
   setViewRequestForwarder,
 } from './io/clip-control';
 export type { ClipControl, ViewCmd } from './io/clip-control';
+
+// ── CB nav read interface (feat-20260708-cb-nav-session-op-convergence M1) ──
+// Public read surface for CB navigation state. CB package imports these from
+// @forgeax/editor-core (no deep import into store/cb-nav internals — §C4).
+// Dispatch mutations via gateway.dispatch({ kind: 'setCBPath'/'cbGoBack'/'cbGoForward' }).
+export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-nav';

@@ -1,5 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
-import type { CBNavEntry } from '../types';
+// plan-strategy §7 M2 D-3: thin gateway shim — replaces the local history
+// stack with a read from the session store (packages/core/src/store/cb-nav.ts)
+// and dispatch through the singleton gateway.
+//
+// initialPath is accepted for API backward-compatibility but intentionally
+// ignored: canonical state lives in the core session store (requirements §C6).
+import { useCallback } from 'react';
+import { gateway, useCBNav } from '@forgeax/editor-core';
 
 export interface NavHistoryAPI {
   currentPath: string;
@@ -10,35 +16,21 @@ export interface NavHistoryAPI {
   goForward: () => void;
 }
 
-export function useNavHistory(initialPath: string = ''): NavHistoryAPI {
-  const [currentPath, setCurrentPath] = useState(initialPath);
-  const historyRef = useRef<CBNavEntry[]>([{ path: initialPath, timestamp: Date.now() }]);
-  const indexRef = useRef(0);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function useNavHistory(_initialPath: string = ''): NavHistoryAPI {
+  const { path, canGoBack, canGoForward } = useCBNav();
 
-  const canGoBack = indexRef.current > 0;
-  const canGoForward = indexRef.current < historyRef.current.length - 1;
-
-  const navigate = useCallback((path: string) => {
-    const history = historyRef.current;
-    historyRef.current = history.slice(0, indexRef.current + 1);
-    historyRef.current.push({ path, timestamp: Date.now() });
-    indexRef.current = historyRef.current.length - 1;
-    setCurrentPath(path);
+  const navigate = useCallback((p: string) => {
+    gateway.dispatch({ kind: 'setCBPath', path: p });
   }, []);
 
   const goBack = useCallback(() => {
-    if (indexRef.current > 0) {
-      indexRef.current -= 1;
-      setCurrentPath(historyRef.current[indexRef.current]!.path);
-    }
+    gateway.dispatch({ kind: 'cbGoBack' });
   }, []);
 
   const goForward = useCallback(() => {
-    if (indexRef.current < historyRef.current.length - 1) {
-      indexRef.current += 1;
-      setCurrentPath(historyRef.current[indexRef.current]!.path);
-    }
+    gateway.dispatch({ kind: 'cbGoForward' });
   }, []);
 
-  return { currentPath, canGoBack, canGoForward, navigate, goBack, goForward };
+  return { currentPath: path, canGoBack, canGoForward, navigate, goBack, goForward };
 }

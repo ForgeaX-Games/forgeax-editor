@@ -50,6 +50,9 @@ export type BuiltinEditorOp =
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'focusPanel'; panel: string }
   | { kind: 'openSource'; plugin: string; docId: string }
+  | { kind: 'setCBPath'; path: string }
+  | { kind: 'cbGoBack' }
+  | { kind: 'cbGoForward' }
   // play·stop (plan-strategy §2 D-11): SESSION-domain discrete instantaneous ops.
   // Their real applier (the state machine) lives in edit-runtime (DAG downstream)
   // and is injected via registerSessionApplier at boot; in headless core they are

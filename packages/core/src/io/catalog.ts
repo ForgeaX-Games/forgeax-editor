@@ -240,6 +240,15 @@ const builtinOps: ReadonlyArray<{
   { id: 'loadDocFromDisk', domain: 'session', argsSchema: null, title: 'Load from Disk' },
   { id: 'play', domain: 'session', argsSchema: null, title: 'Play' },
   { id: 'stop', domain: 'session', argsSchema: null, title: 'Stop' },
+  // CB navigation (feat-20260708-cb-nav-session-op-convergence M1):
+  // setCBPath/cbGoBack/cbGoForward are session-domain ops (ledger-only, no undo).
+  // argsSchema enables AI self-discovery via gateway.listOps() (plan-strategy §8.1 P1).
+  { id: 'setCBPath', domain: 'session',
+    argsSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    title: 'Set Content Browser Path',
+  },
+  { id: 'cbGoBack', domain: 'session', argsSchema: null, title: 'Go Back' },
+  { id: 'cbGoForward', domain: 'session', argsSchema: null, title: 'Go Forward' },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════
   { id: 'setHoverEntity', domain: 'transient',
