@@ -29,7 +29,7 @@ import type { ImageError } from '@forgeax/engine-types';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
-import { installShortcutForwarder } from '@forgeax/editor-core/shortcut-forwarder';
+import { installShortcutForwarder } from './shortcut-forwarder';
 
 // todo 004:本 Play/preview 视口作为 studio 的 iframe 嵌入时,把全局快捷键(⌘K 命令面板 /
 // Ctrl+Shift+* / Esc)转发给 studio 顶层。独立运行(顶层窗口)时是 no-op。

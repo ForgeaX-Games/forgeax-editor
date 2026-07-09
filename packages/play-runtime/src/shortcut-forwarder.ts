@@ -1,14 +1,13 @@
-/** shortcut-forwarder —— MIRROR of `@forgeax/host-sdk/src/shortcut-forwarder.ts`.
+/** shortcut-forwarder —— VENDORED copy of `@forgeax/editor-core/src/shortcut-forwarder.ts`
+ *  (itself a MIRROR of studio 权威 `@forgeax/host-sdk/src/shortcut-forwarder.ts`).
  *
- *  ⚠ 权威在 studio 的 `@forgeax/host-sdk`(跨仓无法直接 import,editor 是独立 submodule)。
- *  改动请先改权威、再同步本文件。本副本经 `@forgeax/editor-core/shortcut-forwarder` 导出,供
- *  edit-runtime 使用(它在 DAG 下游、可 import editor-core)。play-runtime 经 VAG 协议与 core
- *  通信,禁止运行时 import editor-core,故它另 vendor 一份本地副本(见 play-runtime/src/shortcut-forwarder.ts)。
+ *  ⚠ play-runtime 经 VAG_* iframe 协议与 core 通信,**禁止**运行时 import `@forgeax/editor-core`
+ *  (invariant #5 / `lint-play-vag-boundary`)。转发器是浏览器基础设施、零依赖,故这里 vendor
+ *  一份本地副本而非跨包 import。改动请先改权威(host-sdk),再同步 editor-core 与本文件。
  *
  *  让全局快捷键(⌘K 命令面板 / Ctrl+Shift+* 布局键 / Esc)在 iframe 内也生效:studio 顶层的
  *  命令面板 + useGlobalShortcuts 拿不到跨 iframe 的按键,故各 iframe 内装本转发器,白名单命中
- *  → postMessage 给 parent;studio host 校验 origin 后在顶层重放。editor interface 是中间帧,
- *  转发器自带 relay,把 runtime 子帧的按键逐层上抛到 studio。
+ *  → postMessage 给 parent;studio host 校验 origin 后在顶层重放。
  *
  *  浏览器专用,零依赖。只传可序列化数据。
  */
@@ -57,7 +56,7 @@ function postUp(msg: ForwardedKey): void {
 
 /**
  * 在**当前 iframe** 内安装转发器。顶层帧是 no-op。返回卸载函数。
- * 中间帧(editor interface)同时 relay 子帧转来的按键、逐层上抛,自适应嵌套层级。
+ * 中间帧同时 relay 子帧转来的按键、逐层上抛,自适应嵌套层级。
  */
 let installed = false;
 
