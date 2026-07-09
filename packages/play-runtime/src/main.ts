@@ -1,7 +1,6 @@
 import {
   createApp,
   loadGame,
-  isLoadGameError,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
@@ -402,9 +401,12 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   };
   const result = await loadGame(id, resolver);
   if (!result.ok) {
-    if (isLoadGameError(result.error)) {
-      console.log(`[engine] loadGame: ${result.error.code} — using fallback`);
-    }
+    // Graceful degradation stays (return null → fallback scene), but surface the
+    // REAL reason: LoadGameError carries the underlying throw in .detail.cause
+    // (e.g. a syntax/import error inside the game's src/*.ts). Passing the whole
+    // error object lets the fmtArg console bridge unwrap .detail.cause + stack —
+    // logging only .code hid the actual failure behind a bare `import-failed`.
+    console.error('[engine] loadGame failed — using fallback scene:', result.error);
     return null;
   }
   return result.value;
