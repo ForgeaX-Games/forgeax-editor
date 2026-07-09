@@ -98,8 +98,8 @@ export interface KeyboardRouterDeps {
   getEntitySelection: () => number[];
   /** Current asset-selection list (for Delete / F2 / Ctrl+D routing). */
   getAssetSelection: () => RouterSelectedAsset[];
-  /** Derive of "who was selected last" — drives dual-domain key routing (AC-C1). */
-  getLastSelectionDomain: () => 'entity' | 'asset' | null;
+  /** Derive of "who was selected last" — drives triple-domain key routing (AC-C1). */
+  getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
   /** True under ▶ Play (entity-domain Delete must early-return, AC-A5b). */
   isPlayMode: () => boolean;
   /** Current viewport display axis (for G toggle, AC-Cb4). */
@@ -122,6 +122,10 @@ export interface KeyboardRouterDeps {
   renameAsset: (guid: string, packPath: string) => void;
   /** Asset: select all assets in the active browser (CB-scoped, wired by CB). */
   selectAllAssets: () => void;
+  /** Folder: get current folder selection paths (D3b). */
+  getFolderSelection?: () => { path: string }[];
+  /** Folder: delete the given folders (D3b). */
+  deleteFolders?: (folders: { path: string }[]) => void;
 }
 
 let routerDeps: KeyboardRouterDeps | null = null;
@@ -140,10 +144,15 @@ export function registerKeyboardRouterDeps(deps: KeyboardRouterDeps | null): voi
 function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
   const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 
-  // Dual-domain Delete (AC-C2): asset domain → destroyAsset op; entity domain →
-  // cascade delete. Entity+play early-returns (edit-rejected-in-play).
+  // Triple-domain Delete (AC-C2): folder → asset → entity.
+  // Entity+play early-returns (edit-rejected-in-play).
   const routeDelete = (): boolean => {
     const domain = deps.getLastSelectionDomain() ?? 'entity';
+    if (domain === 'folder') {
+      const folders = deps.getFolderSelection?.();
+      if (folders && folders.length > 0) { deps.deleteFolders?.(folders); return true; }
+      return false;
+    }
     if (domain === 'asset') {
       const assets = deps.getAssetSelection();
       if (assets.length > 0) { deps.deleteAssets(assets); return true; }

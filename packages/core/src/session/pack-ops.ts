@@ -272,6 +272,18 @@ export async function createDirectory(dirPath: string): Promise<boolean> {
   }
 }
 
+/** Delete a directory (recursive) via the server API. */
+export async function deleteDirectory(dirPath: string): Promise<boolean> {
+  try {
+    const r = await apiFetch(`/api/files?path=${encodeURIComponent(dirPath)}`, {
+      method: 'DELETE',
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Session applier: createDirectory ─────────────────────────────────────────
 // Registered into sessionAppliers (D-1) so gateway.dispatch routes it as a
 // session op (ledger only, no undo). Human UI and AI are equal callers.
@@ -280,7 +292,16 @@ sessionAppliers.set('createDirectory', (op) => {
   const base = parentPath || 'assets';
   const fullPath = resolveGamePath(`${base}/${name}`);
   void createDirectory(fullPath).then(ok => {
-    if (ok) broadcastAssetsChanged();
+    if (ok) broadcastAssetsChanged('directory-only');
+  });
+  return { ok: true };
+});
+
+sessionAppliers.set('deleteDirectory', (op) => {
+  const { path } = op as { path: string };
+  const fullPath = resolveGamePath(path);
+  void deleteDirectory(fullPath).then(ok => {
+    if (ok) broadcastAssetsChanged('directory-only');
   });
   return { ok: true };
 });

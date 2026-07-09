@@ -3,7 +3,7 @@
 //
 // M1 (plan-strategy D-2) collapses scene-persistence.ts's 7 module-level `let`
 // singletons (currentSceneId / currentSceneFile / sceneList / currentSceneGuid /
-// currentSceneRoot / asyncOpResult / isDirty) into ONE explicit
+// currentSceneEntities / asyncOpResult / isDirty) into ONE explicit
 // `ScenePersistenceContext` object reached via a single `ctx` handle. The two
 // cross-module reverse-writes disk-watch used to make through the exported
 // `_setCurrentSceneGuid` / `_setDirty` setter pair (over `export let`
@@ -50,7 +50,7 @@ describe('ScenePersistenceContext — single-instance state convergence (M1 / D-
     expect(fresh.currentSceneFile).toBeNull();
     expect(fresh.sceneList).toEqual([]);
     expect(fresh.currentSceneGuid).toBeNull();
-    expect(fresh.currentSceneRoot).toBeNull();
+    expect(fresh.currentSceneEntities).toEqual([]);
     expect(fresh.asyncOpResult).toBeNull();
     expect(fresh.isDirty).toBe(false);
   });
