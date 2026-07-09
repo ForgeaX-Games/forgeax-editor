@@ -245,7 +245,7 @@ export async function initSceneList(): Promise<void> {
     //      multiple editor windows edit different levels side by side)
     //   2. per-game localStorage — what this game last had open (survives the
     //      Studio Edit iframe being rebuilt without URL params)
-    //   3. forge.json defaultScene → first level → legacy single top-level scene
+    //   3. forge.json defaultScene → (NOTHING) — no alphabetical fallback
     let urlWant: string | null = null;
     try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
     let want: string | null = null;
@@ -261,13 +261,29 @@ export async function initSceneList(): Promise<void> {
     const defId = defPack
       ? (sceneList.find((s) => s.pack === defPack)?.id ?? null)
       : null;
-    const firstScene = sceneList[0];
+    // NO alphabetical `firstScene` fallback: binding must come from an EXPLICIT,
+    // authoritative signal (URL ?sceneFile= / per-game localStorage / defaultScene
+    // GUID). `kind:"scene"` packs are discovered by kind alone — with no marker
+    // separating an authored MAIN scene from a runtime PREFAB (e.g. shoot-opt's
+    // enemy ships under assets/enemies/*.pack.json, instantiated via
+    // assets.instantiate). Auto-binding the alphabetically-first pack loaded an
+    // enemy prefab AS the editable scene, and the first dirty-flush then
+    // serialized the live world back over that prefab file, corrupting it. When
+    // nothing binds, stay null (legacy/seed path — same as a code-driven game with
+    // zero scene packs, e.g. fps) and tell the author how to pick a scene.
     currentSceneFile =
       (urlWant && sceneList.some((s) => s.id === urlWant)) ? urlWant
       : (want && sceneList.some((s) => s.id === want)) ? want
       : defId ? defId
-      : firstScene ? firstScene.id
-      : null;  // no scene packs found → legacy: keep editing the single top-level scene
+      : null;
+    if (currentSceneFile === null) {
+      console.warn(
+        `[editor-core] ${sceneList.length} scene pack(s) found but none bound for edit: `
+        + `set forge.json "defaultScene" to a scene GUID, or open a scene from the Assets panel `
+        + `(?sceneFile=<id>). Not auto-opening one — an unmarked pack may be a runtime prefab, `
+        + `and editing+saving it would overwrite the authored asset.`,
+      );
+    }
   }
   emitSceneList();
 }
