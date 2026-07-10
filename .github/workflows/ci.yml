@@ -148,8 +148,12 @@ jobs:
       #     `bun install` of a clean clone (succeeds only on re-run). Skipping
       #     scripts makes the single-run install deterministic. None of the
       #     skipped scripts are needed to reach B2.
-      - name: Install (bun, no scripts)
-        run: bun install --ignore-scripts
+      - name: Install (bun, no scripts, frozen lockfile)
+        # --frozen-lockfile: fail CI if bun.lock is out of sync with any
+        # package.json (i.e. a manifest change committed without regenerating
+        # the lockfile). Keeps `clone 即跑` honest and stops bun.lock drifting
+        # dirty in every contributor's working tree.
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Gate 1 — the reused back-L1 backend's confinement contract (whitelist +
       # single-game slug-strip / traversal). Runs against the platform-io this
@@ -262,8 +266,12 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install (bun, no scripts)
-        run: bun install --ignore-scripts
+      - name: Install (bun, no scripts, frozen lockfile)
+        # --frozen-lockfile: fail CI if bun.lock is out of sync with any
+        # package.json (i.e. a manifest change committed without regenerating
+        # the lockfile). Keeps `clone 即跑` honest and stops bun.lock drifting
+        # dirty in every contributor's working tree.
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Structural gates: sync-channel drift, the engine-shim
       # guard (no bodyless `declare module '@forgeax/engine-*'` that would blind
@@ -391,8 +399,12 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install (bun, no scripts)
-        run: bun install --ignore-scripts
+      - name: Install (bun, no scripts, frozen lockfile)
+        # --frozen-lockfile: fail CI if bun.lock is out of sync with any
+        # package.json (i.e. a manifest change committed without regenerating
+        # the lockfile). Keeps `clone 即跑` honest and stops bun.lock drifting
+        # dirty in every contributor's working tree.
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Chromium + its OS deps for headless (SwiftShader) WebGPU.
       - name: Install Playwright chromium
