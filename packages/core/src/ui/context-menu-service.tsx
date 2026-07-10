@@ -2,16 +2,10 @@ import { useEffect, useState } from 'react';
 import { CtxMenu } from './ctx-menu';
 
 // Single context-menu entry point for ALL editor panels (Hierarchy / Assets /
-// Inspector / …). Architecture: an editor panel lives in an iframe and can't
-// paint a menu outside its own rect, so when embedded in the interface we POST
-// the menu to the parent window, which renders it at the top layer of the WHOLE
-// window through the same menu host as main-window right-clicks (no clipping,
-// one renderer). When this editor doc is a POP-OUT window (no interface parent)
-// we render the menu locally (full window, clamped by CtxMenu).
-//
-// Wire protocol (must match interface/src/components/ContextMenu/ContextMenu.tsx):
-//   iframe → parent : { type:'VAG_CONTEXT_MENU', menuId, x, y, items:[{id,label,disabled,danger,sep}] }
-//   parent → iframe : { type:'VAG_CONTEXT_MENU_ACTION', menuId, actionId }
+// Inspector / …). Single-realm hosts inject their app-wide menu renderer through
+// setContextMenuRenderer; handlers stay as closures in this realm, so no VAG
+// postMessage protocol duplicates a UI capability. A standalone/pop-out host can
+// instead mount ContextMenuHost for the same local renderer.
 
 export interface MenuItemDef {
   label?: string;
@@ -21,12 +15,22 @@ export interface MenuItemDef {
   sep?: boolean;
 }
 
-type LocalMenu = { x: number; y: number; items: MenuItemDef[] };
-let renderLocal: ((m: LocalMenu | null) => void) | null = null;
-let menuSeq = 0;
+export type ContextMenuRequest = { x: number; y: number; items: MenuItemDef[] };
+export type ContextMenuRenderer = (menu: ContextMenuRequest | null) => void;
+
+let renderMenu: ContextMenuRenderer | null = null;
+
+/** Install the one host-level context-menu renderer. Single-realm hosts call this
+ * once from their own top-layer menu component; it returns an idempotent disposer. */
+export function setContextMenuRenderer(renderer: ContextMenuRenderer): () => void {
+  renderMenu = renderer;
+  return () => {
+    if (renderMenu === renderer) renderMenu = null;
+  };
+}
 
 /** Open a context menu at the event position with the given items. Call from a
- *  panel's onContextMenu (it calls preventDefault for you). */
+ * panel's onContextMenu (it calls preventDefault for you). */
 export function showContextMenu(
   e: { clientX: number; clientY: number; preventDefault: () => void },
   items: MenuItemDef[],
@@ -34,42 +38,19 @@ export function showContextMenu(
   e.preventDefault();
   const usable = items.filter((it) => it.sep || it.label);
   if (usable.length === 0) return;
-
-  const host = window.parent && window.parent !== window ? window.parent : window;
-  const useInterfaceHost = window.parent !== window || renderLocal === null;
-  if (useInterfaceHost) {
-    const menuId = `em-${++menuSeq}`;
-    const handlers = new Map<string, () => void>();
-    const wire = usable.map((it, idx) => {
-      if (it.sep) return { sep: true as const };
-      const id = `i${idx}`;
-      if (it.onClick && !it.disabled) handlers.set(id, it.onClick);
-      return { id, label: it.label, disabled: it.disabled, danger: it.danger };
-    });
-    const onAction = (ev: MessageEvent) => {
-      const d = ev.data as { type?: string; menuId?: string; actionId?: string } | null;
-      if (!d || d.type !== 'VAG_CONTEXT_MENU_ACTION' || d.menuId !== menuId) return;
-      window.removeEventListener('message', onAction);
-      handlers.get(d.actionId ?? '')?.();
-    };
-    window.addEventListener('message', onAction);
-    setTimeout(() => window.removeEventListener('message', onAction), 30000);
-    host.postMessage({ type: 'VAG_CONTEXT_MENU', menuId, x: e.clientX, y: e.clientY, items: wire }, '*');
-  } else {
-    renderLocal?.({ x: e.clientX, y: e.clientY, items: usable });
-  }
+  renderMenu?.({ x: e.clientX, y: e.clientY, items: usable });
 }
 
-/** Mounted once at the editor root. Renders the LOCAL menu for pop-out windows
- *  (embedded mode renders in the interface parent instead). */
+/** Mounted by a standalone/pop-out editor root when it supplies the local menu
+ * renderer itself instead of the interface's app-wide host. */
 export function ContextMenuHost() {
-  const [menu, setMenu] = useState<LocalMenu | null>(null);
+  const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
   useEffect(() => {
-    renderLocal = setMenu;
+    const dispose = setContextMenuRenderer(setMenu);
     const close = () => setMenu(null);
     window.addEventListener('click', close);
     window.addEventListener('blur', close);
-    return () => { renderLocal = null; window.removeEventListener('click', close); window.removeEventListener('blur', close); };
+    return () => { dispose(); window.removeEventListener('click', close); window.removeEventListener('blur', close); };
   }, []);
   if (!menu) return null;
   return (

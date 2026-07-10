@@ -202,11 +202,10 @@ export interface HostSessionDeps {
   /** Subscribe to asset-selection changes (mesh-stats republish trigger). */
   readonly onAssetSelectionChange: (fn: () => void) => () => void;
   /**
-   * Install the unload-time save-beacon listeners (window pagehide/visibilitychange
-   * + the VAG_EDITOR_FLUSH handler), each calling the provided flush fn. Returns a
-   * dispose that removes them all. This is the ONE DOM/VAG boundary of the boot
-   * tail — lifted behind deps so the tail is headless (production wires window;
-   * the test injects a no-op recorder).
+   * Install the unload-time save-beacon listeners (window pagehide/visibilitychange),
+   * each calling the provided flush fn. Returns a disposer. This is the ONE DOM
+   * boundary of the boot tail — lifted behind deps so the tail is headless
+   * (production wires window; the test injects a no-op recorder).
    */
   readonly installSaveBeaconListeners: (flush: () => void) => () => void;
 }
@@ -487,9 +486,9 @@ export function createHostSession(deps: HostSessionDeps): {
     // Capture each teardown handle so a multi-game host (studio single-realm) can
     // dispose this session on a cross-game switch — otherwise the previous game's
     // disk-watch socket + flush beacons keep firing against the new game's world.
-    // The window pagehide/visibilitychange + VAG_EDITOR_FLUSH wiring is lifted
-    // behind deps.installSaveBeaconListeners (the boot tail's one DOM boundary), so
-    // this path is headless-testable; the flush target is deps.flushPendingSaveBeacon.
+    // The window pagehide/visibilitychange wiring is lifted behind
+    // deps.installSaveBeaconListeners (the boot tail's one DOM boundary), so this
+    // path is headless-testable; the flush target is deps.flushPendingSaveBeacon.
     const stopDiskWatch = initDiskWatch();
     const disposeSaveBeacons = installSaveBeaconListeners(() => flushPendingSaveBeacon());
 

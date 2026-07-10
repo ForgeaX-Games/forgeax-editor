@@ -6,11 +6,11 @@
  * point for state-changing operations (those go through gateway.dispatch).
  *
  * Two categories of events flow through this bridge:
- *  1. Coordination signals (drag, chat ref): lightweight cross-component wiring
- *     that does NOT change ledger-visible state.
- *  2. Applier notifications (focusPanel, openSource): emitted BY a session
- *     applier (after gateway.dispatch) so the interface package (which cannot
- *     import editor-core) can react via the compat bridge.
+ *  1. Coordination signals (drag, chat ref, asset catalog): lightweight
+ *     cross-component wiring that does NOT change ledger-visible state.
+ *  2. Applier notifications are emitted only when a live host callback consumes
+ *     them. Do not add a postMessage compatibility copy: interface receives its
+ *     structural bridge injection through PanelRenderers.
  *
  * Feedback: 2026-07-07-content-browser-drag-import-overlay-and-postmessage-legacy
  */
@@ -28,12 +28,8 @@ export interface PanelBridgeEvents {
   addAssetToScene: DragAssetRef;
   /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
   assetsChanged: { hint?: 'directory-only' | 'pack-changed' };
-  /** Notification emitted by focusPanel session applier (not an entry point). */
-  focusPanel: { panel: string };
   editorRef: EditorRefPayload;
   addAssetToChat: AssetChatRef[];
-  /** Notification emitted by openSource session applier (not an entry point). */
-  openSource: { plugin: string; docId: string };
 }
 
 export type EditorRefPayload =

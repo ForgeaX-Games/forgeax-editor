@@ -178,11 +178,8 @@ export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
 // ── Panel bridge (typed event bus, replaces legacy postMessage self-posting) ──
 export { panelBridge, editorBus } from './io/panel-bridge';
 export type { PanelBridgeEvents, EditorBusEvents, EditorRefPayload } from './io/panel-bridge';
-export { installEditorBusCompat } from './io/editor-bus-compat';
-
-// ── Panel ops (session domain: focusPanel, openSource) ──
-// Side-effect import: registers appliers into sessionAppliers at module eval.
-import './store/panel-ops';
+export { installInterfaceBridge } from './io/interface-bridge';
+export type { InterfaceBridgeHandlers } from './io/interface-bridge';
 
 // ── CB nav (session domain: setCBPath, cbGoBack, cbGoForward) ──
 // Side-effect import: registers cb-nav appliers into sessionAppliers at module eval.
@@ -336,14 +333,13 @@ export {
 } from './session/ops';
 
 // ── Context menu service ──
-export { ContextMenuHost, showContextMenu } from './ui/context-menu-service';
-export type { MenuItemDef } from './ui/context-menu-service';
+export { ContextMenuHost, setContextMenuRenderer, showContextMenu } from './ui/context-menu-service';
+export type { ContextMenuRenderer, ContextMenuRequest, MenuItemDef } from './ui/context-menu-service';
 
 // ── Resize primitive (shared splitter: drag handle + persisted size hook) ──
 export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 
 // ── Dock bridge helpers ──
-export { focusPanel, openSourcePanel } from './io/dock-bridge';
 
 // ── Project authoring (M3) ──
 export { openProject, type OpenProjectResult } from './session/open-project';

@@ -12,7 +12,7 @@
 //
 // Why a relative import instead of `from '@forgeax/editor-core'`:
 //   editor-shared's barrel re-exports `./store` / `./ops` /
-//   `./context-menu-service` / `./dock-bridge` which transitively load
+//   UI service modules which transitively load
 //   `@forgeax/engine-runtime` (via editor-core/assets.ts). bun's module
 //   resolver eagerly walks `export … from` re-exports at module load,
 //   so the barrel pulls the entire engine chain into scope and AC-04
