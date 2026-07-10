@@ -26,6 +26,8 @@ export interface PanelBridgeEvents {
   dragAssetStart: DragAssetRef;
   dragAssetEnd: void;
   addAssetToScene: DragAssetRef;
+  /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
+  assetsChanged: { hint?: 'directory-only' | 'pack-changed' };
   /** Notification emitted by focusPanel session applier (not an entry point). */
   focusPanel: { panel: string };
   editorRef: EditorRefPayload;

@@ -41,13 +41,11 @@
 
 import {
   sendVagMessage,
-  onVagMessage,
-  allowedParentOrigins,
   VagConsoleSchema,
   VagNetworkSchema,
   VagFpsStatsSchema,
 } from '@forgeax/editor-core/protocol';
-import { gateway, broadcastAssetsChanged } from '@forgeax/editor-core';
+import { gateway, panelBridge, broadcastAssetsChanged } from '@forgeax/editor-core';
 import { setFps } from '../fps-store';
 
 // ── FPS report ────────────────────────────────────────────────────────────────
@@ -164,57 +162,35 @@ export function installNetworkBridge(): void {
   }
 }
 
-// Re-entrancy guard for the VAG_ASSETS_CHANGED → refreshCatalog → re-broadcast
-// cycle: the post-refresh re-broadcast is itself a VAG_ASSETS_CHANGED that
-// reaches this same handler (self-origin is allowed). A plain boolean that is
-// cleared BEFORE the re-broadcast fails — the self-post arrives after the flag
-// is already down and re-triggers refreshCatalog → re-broadcast → infinite loop
-// (each turn also fires the panel's /api/files/tree fetch, exhausting the vite
-// proxy's ephemeral ports → EADDRNOTAVAIL flood). Instead we COUNT the self-fires
-// we still owe: every started refresh emits exactly one re-broadcast on
-// completion (++), and every receipt that finds the counter positive is that
-// echo (── and return, no refresh). Refreshes and echoes stay paired 1:1, so the
-// cycle can never self-sustain even if a genuine change lands mid-refresh.
+// Re-entrancy guard for the assetsChanged → refreshCatalog → re-broadcast cycle.
+// The post-refresh broadcast reaches this same PanelBridge listener synchronously.
+// A plain boolean would be cleared before emission and recurse forever; instead we
+// count the self-echoes we owe. Every refresh emits exactly one echo and every
+// receipt with a positive counter consumes one, so refreshes and echoes stay 1:1.
 let pendingCatalogRefires = 0;
 
+/** Refresh the engine catalog after a pack change, then notify panels once the
+ * refreshed view is ready. This is an in-process PanelBridge listener: asset
+ * mutation already happened through gateway operations; this is notification-only. */
 export function installAssetCatalogRefresh(): () => void {
-  return onVagMessage(window, {
-    allowedOrigins: allowedParentOrigins(),
-    handlers: {
-      VAG_ASSETS_CHANGED: (msg) => {
-        // A newly imported asset wrote a fresh pack-index on disk, but the
-        // registry cached the pre-import index at boot and only re-fetches on a
-        // per-GUID miss — so the new scene/mesh GUIDs are absent from listCatalog
-        // (Content Browser shows nothing new until reload) AND unresolvable by
-        // loadByGuid (Add to Scene silently no-ops per spawn-asset-ref.ts:162).
-        // refreshCatalog() re-fetches the whole index NOW so the panel's next
-        // synchronous listCatalog() and the subsequent Add-to-Scene loadByGuid
-        // both see the new asset — no page reload needed. The panel is a separate
-        // VAG_ASSETS_CHANGED listener that reloads from listCatalog; to hand it
-        // fresh data we re-fire the event AFTER the refresh lands (self-posts
-        // reach here because allowedParentOrigins includes self.origin).
-        //
-        // Swallow our own post-refresh echo (see pendingCatalogRefires above):
-        // if we owe an echo, THIS is it — consume it and stop, or we'd loop.
-        if (pendingCatalogRefires > 0) {
-          pendingCatalogRefires -= 1;
-          return;
-        }
-        // D5 (O2): directory-only hint means no pack files changed — skip the
-        // expensive refreshCatalog() and the echo broadcast entirely.
-        const m = msg as { hint?: string } | undefined;
-        if (m?.hint === 'directory-only') return;
-        const reg = gateway.doc.registry;
-        if (reg?.refreshCatalog) {
-          void reg.refreshCatalog().finally(() => {
-            // Owe exactly one echo, then fire it: panels reload from the now-
-            // fresh catalog; the echo returns to us above and is consumed.
-            pendingCatalogRefires += 1;
-            broadcastAssetsChanged();
-          });
-        }
-      },
-    },
+  return panelBridge.on('assetsChanged', ({ hint }) => {
+    // D5 (O2): directory-only hint means no pack files changed — skip the
+    // expensive refreshCatalog() and the echo broadcast entirely.
+    if (hint === 'directory-only') return;
+    if (pendingCatalogRefires > 0) {
+      pendingCatalogRefires -= 1;
+      return;
+    }
+    // A newly imported asset wrote a fresh pack-index on disk, but the registry
+    // cached the pre-import index at boot and only re-fetches on a per-GUID miss.
+    // Refresh now so Content Browser listCatalog + later loadByGuid see it.
+    const reg = gateway.doc.registry;
+    if (reg?.refreshCatalog) {
+      void reg.refreshCatalog().finally(() => {
+        pendingCatalogRefires += 1;
+        broadcastAssetsChanged();
+      });
+    }
   });
 }
 

@@ -1,21 +1,21 @@
 // @forgeax/editor/protocol — VAG_* postMessage schema SSOT.
 //
-// 14 zod schemas covering every VAG_* message type observed in the
-// editor / preview wire (research F-6 grep evidence). Three panel-action
-// invocation schemas were retired in feat-20260708 (no on-wire consumer
-// survived the single-realm merge; registry projection now derives from
-// gateway.listOps()). VAG_SPAWN_ENTITY was retired in the EditSurface
-// removal (its only producer was the deleted editor iframe host; the live
-// spawn path is core/scene/spawn-asset-ref.ts → gateway.dispatch, single
-// realm, no postMessage). Naming is strictly paired:
+// 13 zod schemas covering every VAG_* message type observed on a real
+// cross-realm wire (research F-6 grep evidence). Three panel-action invocation
+// schemas were retired in feat-20260708 (no on-wire consumer survived the
+// single-realm merge; registry projection now derives from gateway.listOps()).
+// VAG_ASSETS_CHANGED and VAG_SPAWN_ENTITY were retired in the EditSurface
+// cleanup: assetsChanged is an in-process PanelBridge notification, and the live
+// spawn path is core/scene/spawn-asset-ref.ts → gateway.dispatch. Naming is
+// strictly paired:
 //
 //   Vag<Name>Schema  — runtime z.object validator (consumer side)
 //   Vag<Name>Message — TypeScript type derived via z.infer<typeof ...>
 //
 // Two shape families exist in the wire:
 //   1. payload-wrapped:  { type, payload: { ... } }
-//      ASSETS_CHANGED, CONSOLE, EDITOR_OPEN_SOURCE, EDITOR_POPOUT,
-//      EDITOR_REDOCK, EDITOR_REF, FPS_STATS
+//      CONSOLE, EDITOR_OPEN_SOURCE, EDITOR_POPOUT, EDITOR_REDOCK, EDITOR_REF,
+//      FPS_STATS
 //   2. type-only / flat: { type } or { type, ...fields }
 //      DEVICE_LOST, EDITOR_FLUSH, PREVIEW_DISPOSE, PREVIEW_PAUSE,
 //      PREVIEW_PLAY, PREVIEW_RELOAD (type-only)
@@ -27,36 +27,16 @@
 // "no try-catch silent swallow" — schemas surface real divergence).
 //
 // Anchors:
-//   requirements §AC-03 (14 schemas; was 15 before VAG_SPAWN_ENTITY retirement)
+//   requirements §AC-03 (13 schemas; VAG_ASSETS_CHANGED + VAG_SPAWN_ENTITY retired)
 //   requirements §AC-05 (safeParse error.issues structured failure)
 //   plan-strategy §2 D-3 (single physical location)
 //   plan-strategy §2 D-4 (no silent type assertion)
 //   plan-strategy §8.1 (Vag<Name>Schema + Vag<Name>Message naming pair)
-//   research F-6 (14 type literals enumerated by grep; panel-action + spawn-entity removed)
+//   research F-6 (13 type literals enumerated by grep; panel-action + asset-change + spawn removed)
 
 import { z } from 'zod';
 
-// ── 1. VAG_ASSETS_CHANGED ────────────────────────────────────────────────────
-// Producer: EditMode.tsx:186 / 230 (interface, slug-bearing) and
-// editor-runtime/store.ts (BroadcastChannel relay, payload-less ping).
-// Two real shapes coexist on the wire today: a with-payload form carrying
-// the slug whose pack changed, and a payload-less ping used by the relay
-// path inside editor-runtime where no slug context is available.
-// `payload` is therefore optional and `payload.slug` likewise — the
-// schema accepts both shapes. Consumers that need the slug should narrow
-// after safeParse.
-export const VagAssetsChangedSchema = z.object({
-  type: z.literal('VAG_ASSETS_CHANGED'),
-  payload: z
-    .object({
-      slug: z.string().optional(),
-    })
-    .optional(),
-  hint: z.enum(['directory-only', 'pack-changed']).optional(),
-});
-export type VagAssetsChangedMessage = z.infer<typeof VagAssetsChangedSchema>;
-
-// ── 2. VAG_CONSOLE ───────────────────────────────────────────────────────────
+// ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:267,272,275 (console proxy + global error).
 // Carries a single console line + level + ts. Consumer pushes to the in-UI
 // Console panel.
@@ -261,7 +241,7 @@ export type VagSchemaTypes = z.infer<ReturnType<typeof vagSchemaUnion>>;
 
 function vagSchemaUnion() {
   return z.union([
-    VagAssetsChangedSchema, VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
+    VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
     VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema,
     VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
     VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema,
@@ -356,7 +336,6 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
 
 /** type-literal → schema map. Includes VAG_NETWORK (absent from vagSchemaUnion). */
 const VAG_SCHEMA_BY_TYPE = {
-  VAG_ASSETS_CHANGED: VagAssetsChangedSchema,
   VAG_CONSOLE: VagConsoleSchema,
   VAG_NETWORK: VagNetworkSchema,
   VAG_CONTEXT_MENU: VagContextMenuSchema,

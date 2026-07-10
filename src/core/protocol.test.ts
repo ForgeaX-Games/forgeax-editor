@@ -1,12 +1,12 @@
 // @forgeax/editor/protocol — VAG_* schema unit tests (M1 w1, TDD red phase)
 //
-// 13 zod schemas, 1 pass + 1 fail per type. Each fail case asserts
+// 12 zod schemas, 1 pass + 1 fail per type. Each fail case asserts
 // `error.issues[0].path` hits a specific field name so the downstream
 // consumer can present a structured error (plan-strategy §8).
 //
 // Anchors:
-//   requirements §AC-03 (14 runtime schema exports; VAG_SPAWN_ENTITY retired
-//     with the EditSurface removal — its only producer was the deleted iframe host)
+//   requirements §AC-03 (13 runtime schema exports; VAG_SPAWN_ENTITY retired
+//     with EditSurface, VAG_ASSETS_CHANGED with the single-realm PanelBridge)
 //   requirements §AC-05 (fail emits issues[].path)
 //   plan-strategy §2 D-3 (single physical location: this file's sibling protocol.ts)
 //   plan-strategy §8.1 (naming pair Vag<Name>Schema + Vag<Name>Message)
@@ -15,7 +15,6 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  VagAssetsChangedSchema,
   VagConsoleSchema,
   VagContextMenuSchema,
   VagContextMenuActionSchema,
@@ -29,26 +28,6 @@ import {
   VagPreviewPlaySchema,
   VagPreviewReloadSchema,
 } from '../protocol';
-
-describe('VAG_ASSETS_CHANGED', () => {
-  test('pass: { type, payload: { slug } } accepted (slug-bearing form)', () => {
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED', payload: { slug: 'demo' } });
-    expect(r.success).toBe(true);
-  });
-  test('pass: { type } only accepted (relay-ping form, no payload)', () => {
-    // editor-runtime/store.ts emits a payload-less ping when relaying
-    // BroadcastChannel asset-changed events. Schema must accept this too.
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED' });
-    expect(r.success).toBe(true);
-  });
-  test('fail: wrong type literal → path includes "type"', () => {
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_REPLACED' });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('type'))).toBe(true);
-    }
-  });
-});
 
 describe('VAG_CONSOLE', () => {
   test('pass: payload { level, text, ts } accepted', () => {
@@ -255,11 +234,12 @@ describe('VAG_PREVIEW_RELOAD', () => {
 });
 
 describe('schema completeness — all runtime schema exports present', () => {
-  test('Object.keys(...).filter(endsWith("Schema")).length === 14', async () => {
-    // 14 runtime `const *Schema` exports (13 in the union + VagNetworkSchema,
-    // which is map-only). VAG_SPAWN_ENTITY was retired with EditSurface.
+  test('Object.keys(...).filter(endsWith("Schema")).length === 13', async () => {
+    // 13 runtime `const *Schema` exports (12 in the union + VagNetworkSchema,
+    // which is map-only). VAG_ASSETS_CHANGED and VAG_SPAWN_ENTITY retired with
+    // the single-realm PanelBridge / EditSurface cleanup respectively.
     const mod = await import('../protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
-    expect(schemaKeys).toHaveLength(14);
+    expect(schemaKeys).toHaveLength(13);
   });
 });
