@@ -2,26 +2,25 @@
 // <game>/play-config.json read/write (UE-style "play this level"). Read by the
 // GAME at boot: { mode: 'campaign' } or { mode: 'level', level: '<sceneId>' }.
 //
-// M2 (w7): a `createPlayConfig(deps)` DI factory. This is the CLEAN apiFetch
-// injection proof (D-3 / R-6): readPlayConfig / writePlayConfig reach the backend
-// ONLY through deps.apiFetch, so a headless test injects a fake that records calls
+// M2 (w7): a `createPlayConfig(deps)` DI factory. This is the CLEAN fetch
+// injection proof (D-2 / R-P1): readPlayConfig / writePlayConfig reach the backend
+// ONLY through deps.fetch, so a headless test injects a fake that records calls
 // and never touches the network (AC-02). The seam is import->deps (structural,
-// allowed by plan-strategy §2 D-3); the transport body (io/api-client.ts) is
-// untouched (OOS-4), and the injected value is still getApiClient().fetch in
-// production, so lint-no-direct-api-fetch stays satisfied.
+// allowed by plan-strategy §2 D-2); the transport body is the platform fetch
+// (OOS-5), and the injected value is arrow-wrapped in production.
 //
 // D-8 (fan_in avoidance): lands under store/persistence/, NOT re-exported from the
 // core index.ts top-level barrel — only scene-persistence.ts composes + forwards
 // it (plan-strategy §2 D-8 / R-4).
 //
 // OOS-1 (zero behavior change): readPlayConfig / writePlayConfig / playConfigPath
-// are verbatim from scene-persistence.ts; the only edits are apiFetch /
+// are verbatim from scene-persistence.ts; the only edits are fetch /
 // resolveGamePath reads re-pointed at deps.
 //
 // Anchors:
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
 //     plan-id; AC-02 (headless-injectable, no singleton read) + AC-07;
-//     plan-strategy §7 M2 (play-config cluster split) + §2 D-3 (apiFetch via deps)
+//     plan-strategy §7 M2 (play-config cluster split) + §2 D-2 (fetch via deps)
 //     + D-8 (subdir landing).
 //   (backward) extracted from store/scene-persistence.ts (this loop's target),
 //     itself split out of store.ts by historical feat
@@ -32,11 +31,11 @@ import type { ScenePersistenceContext } from '../scene-persistence';
  *  read by the game at boot). */
 export interface PlayConfig { mode: 'campaign' | 'level'; level?: string; endAfter?: boolean }
 
-/** All createPlayConfig needs: the state handle, the injected ApiClient fetch
- *  (D-3 / R-6), and the host path resolver. */
+/** All createPlayConfig needs: the state handle, the injected fetch
+ *  (D-2 / R-P1), and the host path resolver. */
 export interface PlayConfigDeps {
   readonly ctx: ScenePersistenceContext;
-  readonly apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
   readonly resolveGamePath: (rel: string) => string;
 }
 
@@ -60,7 +59,7 @@ export function createPlayConfig(deps: PlayConfigDeps): PlayConfigStore {
       // optional=1: play-config.json is per-developer launcher state that may not
       // exist yet (default = campaign) — the flag returns 200 { exists:false }
       // instead of 404, so an absent config logs no red error.
-      const r = await deps.apiFetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
+      const r = await deps.fetch(`/api/files?path=${encodeURIComponent(p)}&optional=1`);
       if (r.ok) {
         const j = (await r.json()) as { content?: string };
         if (j.content) {
@@ -76,7 +75,7 @@ export function createPlayConfig(deps: PlayConfigDeps): PlayConfigStore {
     const p = playConfigPath();
     if (!p) return false;
     try {
-      const r = await deps.apiFetch('/api/files', {
+      const r = await deps.fetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: p, content: JSON.stringify(cfg, null, 2) + '\n' }),

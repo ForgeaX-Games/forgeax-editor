@@ -67,6 +67,9 @@
       "newTitle": "新建空项目",
       "newDesc": "在当前 workspace 下新建一个空项目（默认游戏模板）。",
       "newCta": "新建",
+      "existingTitle": "打开已有项目",
+      "existingDesc": "当前 workspace 已有 {{count}} 个项目——直接选择一个进入，无需新建。",
+      "existingOpen": "打开",
       "openTitle": "打开目录",
       "openDesc": "把磁盘上任意一个已有游戏目录挂进当前 workspace（保留其自身路径）。",
       "openCta": "选择目录",
@@ -1234,6 +1237,17 @@
   "forgeCard": {
     "thinking": "{{displayName}} 正在思考",
     "emptyResponse": "(空响应 — 上游 cli 这次没产出内容；再发一次试试)"
+  },
+  "agentStatus": {
+    "expectant": ["正在待命中", "摸鱼中", "搓手手准备开工", "整装待发"],
+    "focused": ["正在烧脑中", "脑内开会中", "齿轮疯狂转动", "闭关思考"],
+    "cheerful": ["正在叭叭中", "键盘冒火中", "碎碎念中", "飞速码字"],
+    "diligent": ["正在烧烤中", "叮叮当当施工中", "正在开炉", "埋头苦干"],
+    "delegating": ["正在派活中", "喊人来帮忙", "指挥小队", "当甩手掌柜"],
+    "proud": ["新鲜出炉啦", "成品出锅", "叮~搞定", "骄傲交付"],
+    "weary": ["正在回血中", "喝口水歇会儿", "电量告急", "瘫一会儿"],
+    "sad": ["不小心翻车了", "撞墙中", "emo 一下", "正在擦眼泪"],
+    "curious": ["正在围观中", "好奇张望", "东瞅瞅西看看", "探头探脑"]
   },
   "markdownView": {
     "taskDoneReadonly": "已完成（只读）",

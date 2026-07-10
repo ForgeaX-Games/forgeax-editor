@@ -1,7 +1,12 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/global.css';
-import { applyTheme } from '@forgeax/design/theme';
+// Relative import (not the '@forgeax/design' workspace alias): design lives
+// INSIDE this package (packages/design), and a workspace member depending on
+// its own nested member trips bun 1.3.14's --frozen-lockfile graph check
+// (install/frozen disagree → CI frozen gate永远红). Same precedent as
+// tailwind.config.ts. Root-workspace consumers (studio) keep the alias.
+import { applyTheme } from '../packages/design/theme';
 import { initI18n } from './i18n';
 import { App } from './App';
 

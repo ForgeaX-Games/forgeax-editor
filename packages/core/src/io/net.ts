@@ -18,8 +18,8 @@
 // from assets.ts, and the boot path runs through assets.ts too.
 //
 // M4 (AC-08 / plan-strategy D-5): the timeout-race body is now SELF-CONTAINED
-// here. It previously lived in the injected ApiClient's `fetchSafe`
-// (api-client.ts:45-62), which this module delegated to. The DIP seam is gone
+// here. It previously lived in the injected client's `fetchSafe`
+// method, which this module delegated to. The DIP seam is gone
 // (the client never actually switched), so the race — AbortController +
 // Promise.race([fetch, timer-reject]) + finally clearTimeout — moves back in
 // beside the WKWebView rationale above. `url` is the path (e.g. `/api/files?...`)

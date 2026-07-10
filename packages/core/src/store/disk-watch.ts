@@ -35,7 +35,6 @@ import {
   ctx,
 } from './scene-persistence';
 import { isScenePack } from '../scene/scene-pack';
-import { apiFetch } from '../io/api-client';
 
 // ── Disk watch: live-reload the scene when an EXTERNAL writer (an AI agent
 //    editing scene.json on disk) changes the active game's scene.json ──────────
@@ -72,7 +71,7 @@ export function initDiskWatch(): () => void {
     const p = scenePath();
     if (!p) return;
     try {
-      const r = await apiFetch(`/api/files?path=${encodeURIComponent(p)}`);
+      const r = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
       if (!r.ok) return;
       const j = (await r.json()) as { content?: string };
       if (!j.content) return;

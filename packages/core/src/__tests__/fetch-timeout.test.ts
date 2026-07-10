@@ -8,8 +8,8 @@
 //     logic becomes self-contained in fetchWithTimeout, no ApiClient delegation)
 //   net.ts:1-23 (WKWebView wedged-fetch rationale — retained through M4)
 //
-// This pins the OBSERVABLE contract of fetchWithTimeout so the M4 inlining
-// (api-client.ts:45-62 fetchSafe race → net.ts fetchWithTimeout) preserves it:
+// This pins the OBSERVABLE contract of fetchWithTimeout so the M3 inlining
+// (fetchSafe timeout race → net.ts fetchWithTimeout) preserves it:
 //   - a resolving fetch flows through unchanged (returns the Response);
 //   - a fetch that NEVER settles is abandoned and the call rejects within `ms`
 //     (bounded), so a boot behind top-level await can fall back instead of

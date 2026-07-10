@@ -1,13 +1,13 @@
 // persistence-state-clusters — M2 (w5) headless fake-deps safety net for the
 // STATE-type persistence clusters extracted in w7:
 //   - scene-list / switch  (createSceneList)
-//   - play-config          (createPlayConfig)   ← the clean apiFetch-injection proof
+//   - play-config          (createPlayConfig)   ← the clean fetch-injection proof
 //   - storage / hidden-key (createStorage)
 //
 // Each cluster is a `create<Thing>(deps)` factory that reaches all state THROUGH
 // deps (deps.ctx) — a fresh fake ctx fully controls behavior, so nothing reads a
-// module-level singleton (AC-02). play-config additionally takes apiFetch as a
-// dep (R-6 / D-3 structural injection); this suite injects a fake apiFetch and
+// module-level singleton (AC-02). play-config additionally takes fetch as a
+// dep (R-P1 / D-2 structural injection); this suite injects a fake fetch and
 // asserts read/write route through it with NO network — the positive proof that
 // the seam is import→deps, not a change to the transport body (OOS-4).
 //
@@ -42,34 +42,34 @@ function fakeGateway(): PersistenceGateway {
   };
 }
 
-// ── play-config: apiFetch is a dep (R-6) ──────────────────────────────────────
-describe('createPlayConfig — apiFetch injected, no network (AC-02 / R-6)', () => {
+// ── play-config: fetch is a dep (R-P1) ─────────────────────────────────────
+describe('createPlayConfig — fetch injected, no network (AC-02 / R-P1)', () => {
   function deps(over?: Partial<PlayConfigDeps>): { deps: PlayConfigDeps; ctx: ScenePersistenceContext } {
     const ctx = over?.ctx ?? createScenePersistenceContext();
     return {
       ctx,
       deps: {
         ctx,
-        apiFetch: () => Promise.reject(new Error('apiFetch must not be called here')),
+        fetch: () => Promise.reject(new Error('fetch must not be called here')),
         resolveGamePath: (rel) => `/games/g1/${rel}`,
         ...over,
       },
     };
   }
 
-  it('readPlayConfig returns campaign for the default slug WITHOUT calling apiFetch', async () => {
+  it('readPlayConfig returns campaign for the default slug WITHOUT calling fetch', async () => {
     let calls = 0;
-    const { deps: d, ctx } = deps({ apiFetch: () => { calls++; return Promise.reject(new Error('no')); } });
+    const { deps: d, ctx } = deps({ fetch: () => { calls++; return Promise.reject(new Error('no')); } });
     ctx.currentSceneId = 'default';
     const pc = createPlayConfig(d);
     expect(await pc.readPlayConfig()).toEqual({ mode: 'campaign' });
     expect(calls).toBe(0);
   });
 
-  it('readPlayConfig parses the config returned by the INJECTED apiFetch', async () => {
+  it('readPlayConfig parses the config returned by the INJECTED fetch', async () => {
     const calls: string[] = [];
     const { deps: d, ctx } = deps({
-      apiFetch: (path) => {
+      fetch: (path) => {
         calls.push(path);
         return Promise.resolve(new Response(JSON.stringify({ content: JSON.stringify({ mode: 'level', level: 'lvl2' }) }), { status: 200 }));
       },
@@ -82,10 +82,10 @@ describe('createPlayConfig — apiFetch injected, no network (AC-02 / R-6)', () 
     expect(calls[0]).toContain('optional=1');
   });
 
-  it('writePlayConfig POSTs through the injected apiFetch and returns its ok', async () => {
+  it('writePlayConfig POSTs through the injected fetch and returns its ok', async () => {
     const posts: Array<{ path: string; init?: RequestInit }> = [];
     const { deps: d, ctx } = deps({
-      apiFetch: (path, init) => { posts.push({ path, init }); return Promise.resolve(new Response('', { status: 200 })); },
+      fetch: (path, init) => { posts.push({ path, init }); return Promise.resolve(new Response('', { status: 200 })); },
     });
     ctx.currentSceneId = 'shoot';
     const pc = createPlayConfig(d);
@@ -96,7 +96,7 @@ describe('createPlayConfig — apiFetch injected, no network (AC-02 / R-6)', () 
 
   it('writePlayConfig returns false for the default slug without any network', async () => {
     let calls = 0;
-    const { deps: d, ctx } = deps({ apiFetch: () => { calls++; return Promise.reject(new Error('no')); } });
+    const { deps: d, ctx } = deps({ fetch: () => { calls++; return Promise.reject(new Error('no')); } });
     ctx.currentSceneId = 'default';
     const pc = createPlayConfig(d);
     expect(await pc.writePlayConfig({ mode: 'campaign' })).toBe(false);

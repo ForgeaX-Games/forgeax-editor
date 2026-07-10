@@ -3,7 +3,6 @@
  * Single-realm: panels and viewport share the same host window.
  */
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
-import { apiFetch } from '../io/api-client';
 import { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
@@ -46,7 +45,7 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
 }
 
 async function readMetaSubAssets(metaPath: string): Promise<Array<{ guid: string; kind: string; name?: string }>> {
-  const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+  const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
   if (!r.ok) return [];
   const meta = JSON.parse(await r.text()) as { subAssets?: Array<{ guid: string; kind: string; name?: string }> };
   return (meta.subAssets ?? []).filter((s) => s?.guid && s?.kind);

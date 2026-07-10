@@ -37,7 +37,9 @@ const allowedApiPatterns: RegExp[] = [
   /^\/api\/bus\/plugins(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/,
   /^\/api\/bus\/ui\/surfaces(?:\/\$\{[^}]+\}\/(?:ack|pending|snapshot)|\/\$\{[^}]+\})?$/,
   /^\/api\/cli\/health$/,
-  /^\/api\/commands\/\$\{[^}]+\}\/(?:execute|query)$/,
+  // literal 'upload' — UploadPanel (SettingsPrimitives) drives the two-phase
+  // /upload command straight from the settings page, no template variable.
+  /^\/api\/commands\/(?:\$\{[^}]+\}|upload)\/(?:execute|query)$/,
   /^\/api\/events\/stream\?topic=(?:plugin\.reloaded|tool\.confirm-\*|tool\.confirm-required)$/,
   /^\/api\/files\/tree\?root=.forgeax\/games\/\$\{[^}]+\}$/,
   /^\/api\/fs\/browse\?dir=\$\{[^}]+\}$/,
@@ -47,13 +49,24 @@ const allowedApiPatterns: RegExp[] = [
   /^\/api\/prefs\/(?:browser-localStorage|workbench-layout\/\$\{[^}]+\})$/,
   /^\/api\/projects$/,
   /^\/api\/projects\/(?:registered\?path=\$\{[^}]+\}|\$\{[^}]+\})$/,
-  /^\/api\/sessions\/\$\{[^}]+\}(?:\/(?:abort\$\{[^}]+\}|checkpoints|file-activity\?limit=100|rewind(?:\/(?:cancel|overwrite-dirty|preview|undo-overwrite))?))?$/,
+  /^\/api\/sessions\/\$\{[^}]+\}(?:\/(?:abort\$\{[^}]+\}|checkpoints|file-activity\?limit=100|perception-reply|rewind(?:\/(?:cancel|overwrite-dirty|preview|undo-overwrite))?|ui-lease|ui-manifest))?$/,
   /^\/api\/settings(?:\/env)?$/,
   /^\/api\/telemetry$/,
   /^\/api\/threads\/\$\{[^}]+\}$/,
   /^\/api\/tools(?:\/call|\/confirm)?$/,
   /^\/api\/version$/,
+  // builtin-actions game-list lookup (main feature merged 2026-07-09).
+  /^\/api\/workbench\/games$/,
+  // Onboarding first-run flow: link sample game + template catalog (main
+  // feature merged 2026-07-09).
+  /^\/api\/workbench\/games\/link$/,
+  /^\/api\/workbench\/templates$/,
+  // TopBar "reveal in Finder/Explorer" for packaged workbench artifacts (main
+  // feature merged 2026-07-09).
+  /^\/api\/workbench\/package\/reveal$/,
   /^\/api\/workspaces\/activate$/,
+  // Onboarding reads the currently-active workspace (main feature 2026-07-09).
+  /^\/api\/workspaces\/active$/,
 ];
 
 const sourceFiles: string[] = [];

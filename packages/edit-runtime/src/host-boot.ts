@@ -16,7 +16,7 @@
 //   the run-lifecycle `create<Thing>(deps)` pattern). This file is now the thin
 //   COMPOSITION ROOT: it (a) keeps configureHostSession (URL-param pre-boot
 //   config, no network) and (b) builds ONE createHostSession with the REAL core
-//   singletons + the real same-origin apiFetch + a real window/VAG beacon-listener
+//   singletons + the real arrow-wrapped fetch + a real window/VAG beacon-listener
 //   installer, then re-exports the two entry points so ViewportComponent's import
 //   surface is unchanged (consumers zero-change). The heavy, network-touching,
 //   world-mutating logic is now headless-testable through the injected deps
@@ -34,10 +34,10 @@
 //   createApp (it feeds createApp's `plugins`). So it is exposed on its own for
 //   ViewportComponent to await pre-boot; the rest of the session tail runs after.
 //
-// D-3 apiFetch-as-dep (R-6): the session tail's 4 apiFetch call sites moved into
-// host-session.ts as `deps.apiFetch`. This file injects the REAL same-origin
-// apiFetch (core io/api-client.ts, untouched — OOS-4). lint-no-direct-api-fetch
-// stays green: no raw same-origin /api call anywhere — every read is injected apiFetch.
+// D-2 fetch-as-dep (R-P1): the session tail's 4 fetch call sites moved into
+// host-session.ts as `deps.fetch`. This file injects the REAL arrow-wrapped
+// platform fetch (OOS-5).
+// Every read is injected via deps.fetch.
 //
 // Anchors: plan-strategy S2 D8 (host-boot = seed/scene-load/preload/play) + D-4
 // (M4 host-boot DI split), S4 R8 (edit-runtime independent dev still green after
@@ -63,7 +63,6 @@ import {
   broadcastAssetsChanged,
   worldEntityHandles,
   resolveGamePath,
-  apiFetch,
 } from '@forgeax/editor-core';
 import {
   onVagMessage,
@@ -136,12 +135,12 @@ function installSaveBeaconListeners(flush: () => void): () => void {
 
 // ── The composition root: ONE createHostSession with the REAL singletons ───────
 // Every dep is the production carrier — the real gateway, the real same-origin
-// apiFetch (D-3 injection point; transport body untouched, OOS-4), the real core
+// fetch (D-2 injection point; arrow-wrapped platform fetch, OOS-5), the real core
 // persistence/selection singletons, and the real window/VAG beacon installer. The
 // headless test (host-boot-di.test.ts) builds a PARALLEL createHostSession with
 // fakes for all of these, so this one line is the only place the real edges bind.
 const hostSession = createHostSession({
-  apiFetch,
+  fetch: (path, init) => fetch(path, init),
   gateway: gateway as never,
   getSceneId,
   resolveGamePath,
@@ -164,7 +163,7 @@ const hostSession = createHostSession({
 /**
  * The physics gate — reads forge.json "physics" → rapier backend (or undefined).
  * MUST be awaited BEFORE createApp (feeds its `plugins`). Composed over the real
- * apiFetch here; see host-session.ts for the body.
+ * fetch here; see host-session.ts for the body.
  */
 export const resolveEditPhysics = hostSession.resolveEditPhysics;
 

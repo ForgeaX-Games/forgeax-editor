@@ -15,7 +15,7 @@
 // (src/edit.ts re-exports EditorImportError + EditorImportErrorCode from it).
 //
 // This module is convention-free and side-effect-free at import time: it touches
-// the backend only through editor-core's same-origin `apiFetch`, so it is unit-
+// the backend only through same-origin `fetch`, so it is unit-
 // testable headlessly by overriding globalThis.fetch (see
 // __tests__/editor-import-error.test.ts).
 //
@@ -30,10 +30,9 @@
 // BACKWARD → EditSurface.tsx origin: the probe + EditorImportError landed in the
 //            data/backend-seam hardening batch A (#44, feat "data/backend-seam
 //            hardening batch A — pack schema validation + ApiClient downgraded to
-//            apiFetch"), where serverBase was retired for same-origin apiFetch (D-7).
+//            fetch"), where serverBase was retired for same-origin fetch (D-7).
 // charter P3 (explicit structured failure — code/hint/expected).
 
-import { apiFetch } from '@forgeax/editor-core';
 
 // ── EditorImportError ────────────────────────────────────────────────────────
 
@@ -75,7 +74,7 @@ export interface ProbeResult {
 
 export async function probeServer(): Promise<ProbeResult> {
   try {
-    const r = await apiFetch('/api/workbench/active-slug');
+    const r = await fetch('/api/workbench/active-slug');
     if (!r.ok) {
       return {
         available: false,

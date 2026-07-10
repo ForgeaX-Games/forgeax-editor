@@ -7,17 +7,17 @@
 //   slug           — the game slug to edit (required, drives iframe src)
 //   viewportOnly?  — if true, appends &viewportOnly=1 to the iframe src
 //
-// Backend calls go through the same-origin `apiFetch` helper (editor-core). The
+// Backend calls go through the same-origin `fetch` helper (editor-core). The
 // former `serverBase` prop is retired (M4 / plan-strategy D-7): it never carried
 // a non-empty value in production — every call was already same-origin `/api`.
 //
 // Anchors:
 //   plan-strategy §2 D-2 (probe + EditorImportError)
 //   plan-strategy §2 D-5 (side-effect-free leaf module, no import of main.tsx)
-//   plan-strategy §2 D-7 (serverBase retirement — same-origin apiFetch)
+//   plan-strategy §2 D-7 (serverBase retirement — same-origin fetch)
 //   requirements §5 AC-04 (IMPORT_FORMATS / importAsset / FloatingMenu / VAG_SPAWN_ENTITY)
 //   requirements §8 E-1 (standalone explicit failure)
-//   requirements AC-07 (createDefaultApiClient converged to apiFetch)
+//   requirements AC-07 (createDefaultApiClient converged to fetch)
 //   charter P3 (structured errors)
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -31,7 +31,7 @@ import {
   VagAssetsChangedSchema,
   VagSpawnEntitySchema,
 } from '@forgeax/editor-core/protocol';
-import { apiFetch, buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, recoverMeshOriginalMaterialGuids, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
+import { buildSpawnEntityFromDragRef, cookFbxMeta, cookGltfMeta, recoverMeshOriginalMaterialGuids, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
 
 // ── Health forwarding ────────────────────────────────────────────────────────
 // Forward structured health signals from this surface to the studio shell's
@@ -134,7 +134,7 @@ async function importAssetFile(
   try {
     const buf = await file.arrayBuffer();
     const data = arrayBufferToBase64(buf);
-    const r = await apiFetch('/api/files/upload', {
+    const r = await fetch('/api/files/upload', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: dest, data }),
@@ -176,7 +176,7 @@ async function resolveSingleMeshSceneRef(ref: DragAssetRef): Promise<DragAssetRe
   // Only the canonical `*.meta.json` sidecar carries the sub-asset table.
   if (typeof metaPath !== 'string' || !/\.meta\.json$/i.test(metaPath)) return null;
   try {
-    const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+    const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
     if (!r.ok) return null;
     const guid = singleMeshGuidFromMeta(await r.text());
     if (!guid) return null; // 0 or many meshes → leave to the GltfRef path
@@ -346,7 +346,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
       const metaPath = `${dest}.meta.json`;
       let existing: unknown;
       try {
-        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
         if (r.ok) existing = JSON.parse(await r.text());
       } catch { /* first import — no existing meta to reuse */ }
       const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
@@ -356,7 +356,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
         setImportMsg(cooked.error ?? 'glTF processing failed');
         return;
       }
-      const wrote = await apiFetch('/api/files', {
+      const wrote = await fetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
@@ -396,7 +396,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
       // single Material component can't carry a multi-submesh mesh's N materials,
       // tripping the engine's mesh-renderer-material-count-mismatch (materials=1 vs
       // submeshes=N). Mirrors spawnSceneFromGlb (the drag path).
-      const sceneRes = await apiFetch('/api/assets/import-scene', {
+      const sceneRes = await fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: dest, mode: 'reference' }),
@@ -435,7 +435,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
       const metaPath = `${dest}.meta.json`;
       let existing: unknown;
       try {
-        const r = await apiFetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+        const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
         if (r.ok) existing = JSON.parse(await r.text());
       } catch { /* first import */ }
       const sourceName = dest.slice(dest.lastIndexOf('/') + 1);
@@ -445,7 +445,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
         setImportMsg(cooked.error ?? 'FBX processing failed');
         return;
       }
-      const wrote = await apiFetch('/api/files', {
+      const wrote = await fetch('/api/files', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: metaPath, content: cooked.metaJson }),
@@ -524,7 +524,7 @@ export function EditSurface({ slug, gameRoot, viewportOnly }: EditSurfaceProps) 
   // engine's mesh-renderer-material-count-mismatch (materials=1 vs submeshes=N).
   const spawnSceneFromGlb = useCallback(async (path: string, name: string): Promise<void> => {
     try {
-      const sceneRes = await apiFetch('/api/assets/import-scene', {
+      const sceneRes = await fetch('/api/assets/import-scene', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path, mode: 'reference' }),

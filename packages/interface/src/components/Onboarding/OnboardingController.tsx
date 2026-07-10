@@ -34,6 +34,12 @@ type CliId = string;
 /** A built-in game usable as a first-run template (GET /api/workbench/templates). */
 interface TemplateInfo { slug: string; name: string }
 
+/** A game already present in the active workspace (GET /api/workbench/games).
+ *  Non-empty ⇒ the project step ALSO offers "open an existing project" — a
+ *  returning user (or a freshly-pulled repo that ships games) enters home
+ *  directly instead of being forced through create. */
+interface ExistingGame { slug: string; name: string }
+
 /** Turn a free-typed project name into a game slug (GAME_SLUG_RE: lowercase
  *  ascii/digits/hyphens, 2-41). Underscores are NOT allowed for game slugs. */
 function toGameSlug(name: string): string {
@@ -372,6 +378,21 @@ export function OnboardingController() {
     return () => { cancelled = true; };
   }, [tmplOpen, templates]);
 
+  // Games already in the ACTIVE workspace root (mtime-sorted server-side).
+  // Fetched once on mount; drives the "open an existing project" section so a
+  // workspace that already has games never forces a create (§14 amendment:
+  // opening an existing game IS a valid init — enterHomeWith reuses the same
+  // pin + enter path as create/link).
+  const [existingGames, setExistingGames] = useState<ExistingGame[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workbench/games')
+      .then((r) => r.json() as Promise<{ games?: ExistingGame[] }>)
+      .then((j) => { if (!cancelled) setExistingGames(j.games ?? []); })
+      .catch(() => { if (!cancelled) setExistingGames([]); });
+    return () => { cancelled = true; };
+  }, []);
+
   // After create/link the game is server-side active; switchGame pins it
   // client-side + auto-creates a first session, then we enter home (shell mounts
   // fresh and reads the active game — no full reload needed for the game step).
@@ -379,6 +400,21 @@ export function OnboardingController() {
     if (slug) { try { await switchGame(slug); } catch { /* pin best-effort */ } }
     setPhase('home');
   }, [switchGame, setPhase]);
+
+  // Open a game that already exists in the active root: no create, no link —
+  // just pin + enter home. Reuses the 'open' busy label ("opening…").
+  const openExisting = useCallback(async (slug: string) => {
+    setProjBusy(true);
+    setProjBusyKind('open');
+    setProjErr(null);
+    try {
+      await enterHomeWith(slug);
+    } catch (e) {
+      setProjErr((e as Error).message);
+      setProjBusy(false);
+      setProjBusyKind(null);
+    }
+  }, [enterHomeWith]);
 
   // Do the actual game create/link. Assumes the workspace root is ALREADY correct
   // (either it matched projRoot, or we've activated + reloaded into it). Throws on
@@ -562,6 +598,8 @@ export function OnboardingController() {
                 onNew={() => void startAction({ kind: 'new', root: projRoot, name: projName })}
                 onTemplate={() => { setTmplSlug(null); setTmplOpen(true); }}
                 onOpen={() => setFsOpen(true)}
+                existingGames={existingGames}
+                onOpenExisting={(slug) => void openExisting(slug)}
               />
             )}
           </div>
@@ -767,6 +805,7 @@ function ProjectView(props: {
   projName: string; setProjName: (v: string) => void;
   busy: boolean; busyKind: PendingIntent['kind'] | null; err: string | null;
   onNew: () => void; onTemplate: () => void; onOpen: () => void;
+  existingGames: ExistingGame[] | null; onOpenExisting: (slug: string) => void;
 }) {
   const { t } = props;
   const slug = toGameSlug(props.projName);
@@ -786,6 +825,37 @@ function ProjectView(props: {
         <div className="fx-ob-callout info fx-ob-busy" role="status" aria-live="polite">
           <span className="fx-ob-spinner" aria-hidden="true" />
           <span>{busyMsg}</span>
+        </div>
+      )}
+      {/* Workspace already has games (returning user / pulled repo) → offer
+          direct entry FIRST: pick one and go, creation below stays optional. */}
+      {props.existingGames && props.existingGames.length > 0 && (
+        <div className="fx-ob-panel">
+          <div className="fx-ob-row"><span className="fx-ob-small fx-ob-sec" style={{ fontWeight: 500 }}>{t('onboarding.project.existingTitle')}</span></div>
+          <div className="fx-ob-tiny" style={{ color: 'var(--ob-text-4)', marginTop: 4 }}>
+            {t('onboarding.project.existingDesc', { count: String(props.existingGames.length) })}
+          </div>
+          <div className="fx-ob-stack fx-ob-gap8" style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto' }}>
+            {props.existingGames.map((g) => (
+              <div
+                key={g.slug}
+                className="fx-ob-card"
+                // flexShrink 0: .fx-ob-card has overflow:hidden → flex min-size 0,
+                // so the maxHeight'd column would crush rows to ~0 instead of scrolling.
+                style={{ cursor: props.busy ? 'default' : 'pointer', flexShrink: 0 }}
+                onClick={() => { if (!props.busy) props.onOpenExisting(g.slug); }}
+              >
+                <div className="fx-ob-card-cb">
+                  <div className="fx-ob-row">
+                    <span className="fx-ob-small">{g.name}</span>
+                    <span className="fx-ob-tiny fx-ob-muted" style={{ marginLeft: 8 }}>{g.slug}</span>
+                    <div className="fx-ob-grow" />
+                    <span className="fx-ob-pill sm static">{t('onboarding.project.existingOpen')}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       <div className="fx-ob-panel">

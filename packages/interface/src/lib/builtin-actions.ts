@@ -153,6 +153,106 @@ export function registerBuiltinActions(): void {
     },
   });
 
+  // 角色桥(插件桥的「角色版」:人和 AI 同一条路造/用/看角色)。role.create 是**唯一**创建
+  // 路径 —— AI 经 ui_act_role_create / ui_invoke 调,人经 ⌘K / 按钮 pill 调;背后是 server
+  // 执行器 team:create_role(对 AI 隐藏),经 /api/tools/call(caller:user)落 agent-pack 到
+  // L1/L2 插件层、reloadPlugins,新角色 ~5s 内自动进名单(roster 轮询 +1)。治理靠 trust-gate
+  // 的 delegate 闸(capability 如实声明)。role.list 让 AI 能告诉用户「有哪些角色」并防重名;
+  // role.open 打开角色页 / 把某角色绑到当前会话展示其详情。
+  registerAction({
+    id: 'role.create',
+    title: '创建新角色',
+    description:
+      'Mint a NEW teammate/agent role when no existing role in the roster fits. Args: id (single segment [a-zA-Z0-9_-]) + persona (markdown: who they are / what they are good at / when to delegate to them / what they produce) + optional displayName / role / avatar / color / scope("global"|"project") / tools(host-tool allow globs). The new role persists and joins the roster (delegate_to_subagent can then dispatch it). Duplicate ids are rejected, never overwritten. Discover existing roles first via role.list.',
+    schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '单段 [a-zA-Z0-9_-];如 "level-designer"' },
+        persona: { type: 'string', description: '角色 markdown:是谁 / 擅长什么 / 何时被派 / 产出什么' },
+        displayName: {
+          type: 'object',
+          properties: { zh: { type: 'string' }, en: { type: 'string' } },
+        },
+        role: { type: 'string', description: "定位,如 'pillar' / 'artist' / 'peer'" },
+        avatar: { type: 'string', description: 'emoji / 单字符' },
+        color: { type: 'string', description: '#hex' },
+        scope: { type: 'string', enum: ['global', 'project'] },
+        tools: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['id', 'persona'],
+    },
+    capability: 'delegate',
+    firstClass: true,
+    surface: 'both',
+    timeoutMs: 15000,
+    run: async (args) => {
+      const r = await fetch('/api/tools/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ toolId: 'team:create_role', caller: { kind: 'user' }, args }),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        result?: { id?: string; scope?: string };
+      };
+      if (!r.ok || data.ok === false) {
+        return { status: 'rejected', reason: data.error ?? `create role failed (HTTP ${r.status})` };
+      }
+      const res = data.result ?? {};
+      return { status: 'completed', stateDigest: { id: res.id ?? args.id, scope: res.scope } };
+    },
+  });
+
+  registerAction({
+    id: 'role.list',
+    title: '列出角色',
+    description:
+      'List all currently dispatchable roles (plugin agents + built-ins). Use this to tell the user which roles exist / check for duplicates before role.create. Returns { count, roles:[{id,role,displayName,source}] }.',
+    capability: 'read',
+    firstClass: true,
+    surface: 'both',
+    run: async () => {
+      const r = await fetch('/api/tools/call', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ toolId: 'team:list_roles', caller: { kind: 'user' }, args: {} }),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        result?: { count?: number; roles?: unknown[] };
+      };
+      if (!r.ok || data.ok === false) {
+        return { status: 'rejected', reason: data.error ?? `list roles failed (HTTP ${r.status})` };
+      }
+      const res = data.result ?? {};
+      return { status: 'completed', stateDigest: { count: res.count ?? 0, roles: res.roles ?? [] } };
+    },
+  });
+
+  registerAction({
+    id: 'role.open',
+    title: '打开角色页',
+    description:
+      "Open the roles/team surface. With no args it switches to the AI workspace (where the roster lives). With { id } it also binds that role to the current chat session so its persona detail is shown. Use this to show the user the team or a specific teammate.",
+    schema: { type: 'object', properties: { id: { type: 'string' } } },
+    capability: 'read',
+    firstClass: true,
+    surface: 'ui',
+    run: (args) => {
+      const id = typeof args.id === 'string' && args.id.trim() ? args.id.trim() : '';
+      setActiveWorkbench('ai');
+      st().openWorkbench({});
+      if (id) {
+        const sid = st().activeSid;
+        if (sid) st().setTabAgent(sid, id); // 绑角色到当前会话 → 聊天区展示其 persona 详情条
+        return { status: 'completed', stateDigest: { opened: id, activeWorkspace: 'ai' } };
+      }
+      return { status: 'completed', stateDigest: { activeWorkspace: 'ai' } };
+    },
+  });
+
   registerAction({
     id: 'overlay.open',
     title: '打开浮层',
@@ -387,6 +487,56 @@ export function registerBuiltinActions(): void {
     run: async (args) => {
       await st().switchGame(args.slug as string);
       return { status: 'completed', stateDigest: { pinnedSlug: st().pinnedSlug } };
+    },
+  });
+
+  registerAction({
+    id: 'game.create',
+    title: '新建游戏',
+    description:
+      'Create a NEW game (project) from the template and give it its own dedicated chat session. Args: slug (required, 2-41 chars lowercase ASCII/digits/hyphens, must start with a letter/digit — e.g. "neon-runner") + optional name (display name) + optional brief (one line describing what game to make, recorded in FORGE.md for later). Fails with 409 if the slug already exists — use game.switch for existing games; list existing slugs to avoid collisions. NOTE: this does NOT switch the UI to the new game (switching mid-turn would break the active chat channel). Tell the user the game is ready and to open it from the top-bar game switcher; game.switch will land on its dedicated session.',
+    schema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: '2-41 位小写字母/数字/连字符,首位字母或数字;如 "neon-runner"' },
+        name: { type: 'string', description: '显示名(可选,缺省用 slug)' },
+        brief: { type: 'string', description: '一句话说明要做什么游戏(可选,写进 FORGE.md)' },
+      },
+      required: ['slug'],
+    },
+    capability: 'write',
+    firstClass: true,
+    surface: 'both',
+    timeoutMs: 20_000,
+    run: async (args) => {
+      const slug = String(args.slug ?? '').trim();
+      const r = await fetch('/api/workbench/games', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          slug,
+          ...(typeof args.name === 'string' ? { name: args.name } : {}),
+          ...(typeof args.brief === 'string' ? { brief: args.brief } : {}),
+        }),
+      });
+      const data = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; slug?: string };
+      if (!r.ok || data.ok === false) {
+        return { status: 'rejected', reason: data.error ?? `create game failed (HTTP ${r.status})` };
+      }
+      // 「一 session 一游戏」:给新游戏建**它自己**的一条 session(defaultDir=slug),但
+      // **不切前端 WS/会话**。⚠️ 关键:本 action 常由 AI 在其会话内经 ui_invoke 触发;若
+      // 当场 switchGame(切走 WS)会掐断 AI 自己的 ui_invoke 通道 → AI 反复重试 → UI 反复
+      // 乱切 + 历史错乱(实测)。createSession 只 POST /api/sessions、不连 WS,所以安全:
+      // 新游戏拥有独立会话,用户从顶栏 GameSwitcher 一键切过去(那是干净的非-AI-turn 切换,
+      // switchGame 会落到这条已存在的会话)。
+      let newSid: string | null = null;
+      try {
+        newSid = (await getSessionClient().createSession({ defaultDir: slug, autoStart: true })).sid;
+      } catch { /* 建会话失败不影响游戏已创建;切换时 switchGame 会兜底建一条 */ }
+      return {
+        status: 'completed',
+        stateDigest: { slug, session: newSid, hint: '新游戏已建好并配了独立会话;从顶栏游戏切换器切过去即可开始做' },
+      };
     },
   });
 

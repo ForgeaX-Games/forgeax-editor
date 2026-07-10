@@ -67,6 +67,9 @@
       "newTitle": "New empty project",
       "newDesc": "Create an empty project under the current workspace (default game template).",
       "newCta": "Create",
+      "existingTitle": "Open an existing project",
+      "existingDesc": "This workspace already has {{count}} project(s) — pick one to enter directly, no need to create a new one.",
+      "existingOpen": "Open",
       "openTitle": "Open a directory",
       "openDesc": "Adopt an existing game directory on disk into this workspace (keeps its own path).",
       "openCta": "Choose directory",
@@ -1234,6 +1237,17 @@
   "forgeCard": {
     "thinking": "{{displayName}} is thinking",
     "emptyResponse": "(Empty response — the upstream cli produced nothing this time; try sending again)"
+  },
+  "agentStatus": {
+    "expectant": ["On standby", "Slacking off", "Rubbing hands, ready to go", "Geared up and ready"],
+    "focused": ["Brain on fire", "Holding a mental meeting", "Gears spinning like crazy", "Deep in thought"],
+    "cheerful": ["Yapping away", "Keyboard's on fire", "Muttering along", "Typing at warp speed"],
+    "diligent": ["Firing up the grill", "Clang-clang, under construction", "Firing up the furnace", "Heads down, grinding"],
+    "delegating": ["Handing out tasks", "Calling in backup", "Commanding the squad", "Playing hands-off boss"],
+    "proud": ["Fresh out of the oven", "Dish is served", "Ding~ all done", "Delivered with pride"],
+    "weary": ["Recovering HP", "Grabbing a water break", "Battery running low", "Flopping for a bit"],
+    "sad": ["Oops, crashed", "Hitting a wall", "Having an emo moment", "Wiping away tears"],
+    "curious": ["Gathering to watch", "Peeking curiously", "Looking around", "Poking around"]
   },
   "markdownView": {
     "taskDoneReadonly": "Done (read-only)",
