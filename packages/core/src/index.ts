@@ -332,6 +332,8 @@ export {
   groupSelected,
   ungroupEntity,
   reparentEntity,
+  reparentMany,
+  reparentAt,
 } from './session/ops';
 
 // ── Context menu service ──

@@ -56,7 +56,18 @@
 .tn:hover { background: var(--bg2); }
 .tn.sel { background: rgba(212, 255, 72, 0.16); color: var(--fg); }
 .tn.drop { box-shadow: inset 0 0 0 1px var(--lime); background: rgba(212, 255, 72, 0.08); }
+/* Sibling insertion indicators (P0-6): a lime line at the top/bottom edge shows
+   the dragged node will land before/after this row rather than inside it. */
+.tn.drop-before { box-shadow: inset 0 2px 0 0 var(--lime); }
+.tn.drop-after { box-shadow: inset 0 -2px 0 0 var(--lime); }
 .tn.hov { background: rgba(212, 255, 72, 0.08); }
+/* "Move to root" drop bar (P0-5) — a slim, always-present target at the tree top. */
+.hier-root-bar {
+  margin: 2px 8px 4px; padding: 2px 8px; font-family: var(--mono); font-size: 10px;
+  color: var(--fg3); text-align: center; border: 1px dashed var(--line); border-radius: 4px;
+  user-select: none;
+}
+.hier-root-bar.over { color: var(--fg); border-color: var(--lime); background: rgba(212, 255, 72, 0.1); }
 .tn .dot { color: var(--fg3); }
 .tn .vis { margin-left: auto; color: var(--fg3); font-size: 11px; padding: 0 2px; }
 .tn .vis:hover { color: var(--lime); }

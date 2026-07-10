@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, ungroupEntity } from '@forgeax/editor-core';
+import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
 // setters (setSelection/setHoverEntity/toggleSelection) or the origin-less
@@ -24,6 +24,43 @@ interface Menu {
 // in-app drag source — more reliable than DataTransfer.getData, which is in
 // "protected" mode (and empty) outside a real user drag.
 let draggingId: EntityHandle | null = null;
+
+// Where within a row the pointer is → the drop intent (P0-6). top/bottom quarter
+// = insert as a SIBLING before/after; middle = drop INSIDE (become a child).
+type DropPos = 'before' | 'inside' | 'after';
+function computeDropPos(clientY: number, el: HTMLElement, flat: boolean): DropPos {
+  if (flat) return 'inside'; // filtered flat list has no sibling order to honor
+  const rect = el.getBoundingClientRect();
+  const y = clientY - rect.top;
+  if (y < rect.height * 0.25) return 'before';
+  if (y > rect.height * 0.75) return 'after';
+  return 'inside';
+}
+
+// The nodes a drop should move: the whole selection when the dragged node is
+// part of it (multi-drag), else just the dragged node (P0-3).
+function draggedIds(): EntityHandle[] {
+  if (draggingId === null) return [];
+  const sel = getSelectionList();
+  return sel.has(draggingId) ? [...sel] : [draggingId];
+}
+
+// Apply a drop of the dragged node(s) relative to `target` at position `pos`.
+// `pos` resolves the TARGET PARENT: 'inside' → become a child of `target`;
+// 'before'/'after' → become a SIBLING of `target` (i.e. under target's parent,
+// which is the root level when `target` is a root — P0-5). Nodes are appended
+// under that parent (precise sibling index is deferred, see reparentAt / plan
+// P0-6). `before` is forwarded so a future engine-ordered insert can honor it.
+function applyDrop(target: EntityHandle, pos: DropPos): void {
+  const ids = draggedIds();
+  if (ids.length === 0) return;
+  const parent = pos === 'inside' ? target : entParent(gateway.activeWorld, target);
+  if (ids.length > 1) {
+    reparentMany(ids, parent);
+    return;
+  }
+  reparentAt(ids[0]!, parent, pos === 'before' ? target : null);
+}
 
 // Shift+range selection anchor — the last explicitly clicked node (plain click
 // or Ctrl+click). Purely a Hierarchy UI concept; not stored in the selection
@@ -103,6 +140,7 @@ function Row({
   collapsed,
   toggleCollapse,
   highlight,
+  readOnly,
 }: {
   id: EntityHandle;
   depth: number;
@@ -111,10 +149,11 @@ function Row({
   collapsed?: Set<EntityHandle> | undefined;
   toggleCollapse?: ((id: EntityHandle) => void) | undefined;
   highlight?: string | undefined;
+  readOnly?: boolean | undefined;
 }) {
   const selList = useSelectionList();
   const hoverId = useHoverEntity();
-  const [over, setOver] = useState(false);
+  const [dropPos, setDropPos] = useState<DropPos | null>(null);
   const [editing, setEditing] = useState(false);
   // F2 (or any panel) can request this row to enter inline-rename mode.
   useEffect(() => onRenameRequest((rid) => rid === id && setEditing(true)), [id]);
@@ -135,7 +174,7 @@ function Row({
   return (
     <>
       <div
-        className={`tn${selList.has(id) ? ' sel' : ''}${over ? ' drop' : ''}${hoverId === id ? ' hov' : ''}`}
+        className={`tn${selList.has(id) ? ' sel' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
         style={{ paddingLeft: 10 + depth * 14 }}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}`}
@@ -158,25 +197,37 @@ function Row({
           if (!getSelectionList().has(id)) gateway.dispatch({ kind: 'setSelection', id });
           onMenu({ id, x: e.clientX, y: e.clientY });
         }}
-        draggable
+        draggable={!readOnly}
         onDragStart={(e) => {
+          if (readOnly) { e.preventDefault(); return; }
           draggingId = id;
           e.dataTransfer.setData('application/x-entity', String(id));
           e.dataTransfer.effectAllowed = 'move';
         }}
         onDragOver={(e) => {
-          if (draggingId === null) return;
+          if (draggingId === null || readOnly) return;
+          // Don't allow dropping a node onto itself (into/around itself).
+          const dragging = draggedIds();
+          if (dragging.includes(id) && dragging.length === 1) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
-          if (!over) setOver(true);
+          const pos = computeDropPos(e.clientY, e.currentTarget, !!flat);
+          if (pos !== dropPos) setDropPos(pos);
         }}
-        onDragLeave={() => setOver(false)}
+        onDragLeave={() => setDropPos(null)}
         onDrop={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setOver(false);
-          if (draggingId !== null) reparent(draggingId, id);
+          const pos = computeDropPos(e.clientY, e.currentTarget, !!flat);
+          setDropPos(null);
+          if (draggingId !== null && !readOnly) applyDrop(id, pos);
           draggingId = null;
+        }}
+        onDragEnd={() => {
+          // Fallback cleanup when the drop lands outside any drop zone (P0-2):
+          // without this, draggingId lingers and later hovers show a stale line.
+          draggingId = null;
+          setDropPos(null);
         }}
       >
         <span
@@ -210,7 +261,7 @@ function Row({
             style={nodeHidden ? { opacity: 0.45 } : undefined}
             onDoubleClick={(e) => {
               e.stopPropagation();
-              setEditing(true);
+              if (!readOnly) setEditing(true);
             }}
           >
             {highlight ? highlightName(nodeName, highlight) : nodeName}
@@ -238,6 +289,7 @@ function Row({
           title={nodeHidden ? 'show in viewport' : 'hide in viewport'}
           onClick={(e) => {
             e.stopPropagation();
+            if (readOnly) return;
             const newHidden = !nodeHidden;
             gateway.dispatch({ kind: 'setHidden', entity: id, hidden: newHidden });
             if (selList.has(id)) {
@@ -254,7 +306,7 @@ function Row({
       </div>
       {!isCollapsed &&
         kids.map((k) => (
-          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} />
+          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} />
         ))}
     </>
   );
@@ -286,6 +338,40 @@ function DeleteScopeRing({ active, domain }: { active: boolean; domain: 'entity'
   );
 }
 
+// An always-present drop target at the top of the tree for "move to root"
+// (P0-5). Dragging a node onto it makes the node a sibling of the top-level
+// nodes — the reliable path when the tree is full and there is no reachable
+// empty area to drop into. Highlights only while a drag is in progress.
+function RootDropBar({ readOnly }: { readOnly: boolean }) {
+  const [over, setOver] = useState(false);
+  if (readOnly) return null;
+  return (
+    <div
+      className={`hier-root-bar${over ? ' over' : ''}`}
+      data-testid="hier-root-bar"
+      title="拖到这里：移动到根层"
+      onDragOver={(e) => {
+        if (draggingId === null) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!over) setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setOver(false);
+        const ids = draggedIds();
+        if (ids.length > 1) reparentMany(ids, null);
+        else if (ids[0] !== undefined) reparent(ids[0], null);
+        draggingId = null;
+      }}
+    >
+      — Root —
+    </div>
+  );
+}
+
 export function HierarchyPanel() {
   const { t } = useTranslation();
   useDocVersion();
@@ -294,6 +380,11 @@ export function HierarchyPanel() {
   // T5-1 / C4-4: show the current Delete-jurisdiction domain as a visual
   // clue (no implicit rule). Lights when this panel's domain (entity) is active.
   const delDomain = useLastSelectionDomain();
+  // Play mode makes the active world a read-only simulation view: document ops
+  // are rejected at the gateway (`edit-rejected-in-play`). Disable the editing
+  // controls so they don't silently no-op (P0-4). enterPlay/exitPlay emit, so
+  // useDocVersion re-renders this on mode change.
+  const readOnly = gateway.mode === 'play';
   const roots = childrenOf(gateway.activeWorld, null);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
@@ -369,6 +460,7 @@ export function HierarchyPanel() {
           type="button"
           className="tbtn"
           data-testid="btn-add-entity"
+          disabled={readOnly}
           onClick={() => gateway.dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } } })}
         >
           + Entity
@@ -377,6 +469,7 @@ export function HierarchyPanel() {
           className="sel"
           data-testid="add-preset-select"
           value=""
+          disabled={readOnly}
           title="create a typed entity from a schema-default preset (Light / Camera / …)"
           onChange={(e) => {
             const preset = getPreset(e.target.value);
@@ -391,10 +484,10 @@ export function HierarchyPanel() {
             </option>
           ))}
         </select>
-        <button type="button" className="tbtn" data-testid="btn-duplicate" disabled={sel === null} onClick={() => sel !== null && duplicateEntity(sel)}>
+        <button type="button" className="tbtn" data-testid="btn-duplicate" disabled={readOnly || sel === null} onClick={() => sel !== null && duplicateEntity(sel)}>
           Duplicate
         </button>
-        <button type="button" className="tbtn" data-testid="btn-group" disabled={selList.size < 2} onClick={() => groupSelected([...getSelectionList()])} title="Group selected under a new parent (Ctrl+G)">
+        <button type="button" className="tbtn" data-testid="btn-group" disabled={readOnly || selList.size < 2} onClick={() => groupSelected([...getSelectionList()])} title="Group selected under a new parent (Ctrl+G)">
           Group
         </button>
         <button
@@ -416,7 +509,7 @@ export function HierarchyPanel() {
           type="button"
           className="tbtn"
           data-testid="btn-delete"
-          disabled={sel === null}
+          disabled={readOnly || sel === null}
           onClick={() => {
             const cur = [...getSelectionList()];
             if (cur.length > 1) deleteManyCascade(cur);
@@ -442,7 +535,7 @@ export function HierarchyPanel() {
               no match
             </div>
           ) : (
-            matches.map((id) => <Row key={id} id={id} depth={0} onMenu={openMenu} flat highlight={query.trim()} />)
+            matches.map((id) => <Row key={id} id={id} depth={0} onMenu={openMenu} flat highlight={query.trim()} readOnly={readOnly} />)
           )}
         </div>
       ) : (
@@ -451,16 +544,22 @@ export function HierarchyPanel() {
           data-testid="hier-root-dropzone"
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
           onDragOver={(e) => {
-            if (draggingId !== null) e.preventDefault();
+            if (draggingId !== null && !readOnly) e.preventDefault();
           }}
           onDrop={(e) => {
             e.preventDefault();
-            if (draggingId !== null) reparent(draggingId, null);
+            // Empty area below the rows = move to root (parent = null).
+            if (draggingId !== null && !readOnly) {
+              const ids = draggedIds();
+              if (ids.length > 1) reparentMany(ids, null);
+              else if (ids[0] !== undefined) reparent(ids[0], null);
+            }
             draggingId = null;
           }}
         >
+          <RootDropBar readOnly={readOnly} />
           {roots.map((id) => (
-            <Row key={id} id={id} depth={0} onMenu={openMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} />
+            <Row key={id} id={id} depth={0} onMenu={openMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} />
           ))}
         </div>
       )}
