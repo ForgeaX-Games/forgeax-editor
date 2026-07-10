@@ -106,12 +106,11 @@ function EditorPanelBody({ id }: { id: string }): ReactNode {
   );
 }
 
-// Tab labels for the dock panels. Keep in sync with studio's editorRenderers
-// EDITOR_PANEL_TITLES (display-only; ids stay the EDITOR_PANELS SSOT).
+// Tab labels for the dock panels. The id list remains EDITOR_PANELS; this map
+// is host-owned display metadata used to fill PanelDescriptor.title.
 const EDITOR_PANEL_TITLES: Record<string, string> = {
   hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
   history: 'History', capabilities: 'Capabilities',
-  timeline: 'Timeline', matgraph: 'Mat Graph',
   launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
 };
 
@@ -122,6 +121,69 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
     render: () => <EditorPanelBody id={id} />,
   }]),
 );
+
+// The editor host owns the business layout. Interface receives this through
+// PanelRenderers and only handles generic dockview mechanics. Keep this data
+// structurally aligned with a persisted SerializedDockview layout.
+const STANDALONE_SCENE_LAYOUT: NonNullable<PanelRenderers['builtinWorkbenchLayouts']>[string] = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as NonNullable<PanelRenderers['builtinWorkbenchLayouts']>[string]['grid']['orientation'],
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 340,
+          data: {
+            views: [
+              'ep:hierarchy', 'ep:assets', 'ep:inspector', 'ep:launcher',
+              'ep:asset-inspector',
+            ],
+            activeView: 'ep:hierarchy',
+            id: 'g-left-tabs',
+          },
+        },
+        {
+          type: 'branch',
+          size: 620,
+          data: [
+            { type: 'leaf', size: 612, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
+            {
+              type: 'leaf',
+              size: 200,
+              data: {
+                views: ['ep:history', 'ep:capabilities', 'info'],
+                activeView: 'ep:history',
+                id: 'g-history',
+              },
+            },
+          ],
+        },
+        {
+          type: 'leaf',
+          size: 240,
+          data: { views: ['chat'], activeView: 'chat', id: 'g-chat' },
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
+    'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
+    'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
+    'ep:launcher': { id: 'ep:launcher', contentComponent: 'ep:launcher', title: 'Launcher' },
+    'ep:asset-inspector': { id: 'ep:asset-inspector', contentComponent: 'ep:asset-inspector', title: 'Asset Inspector' },
+    viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
+    'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
+    'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
+    info: { id: 'info', contentComponent: 'info', title: 'Info' },
+    chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
+  },
+  activeGroup: 'g-chat',
+};
 
 // Module-scope named component (stable identity across renders — no re-mounts).
 // viewportOnly is accepted for slot-signature parity; the in-process component
@@ -137,6 +199,7 @@ function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
 const standaloneRenderers: PanelRenderers = {
   ...DEFAULT_PANEL_RENDERERS,
   editorPanelIds: [...EDITOR_PANELS],
+  builtinWorkbenchLayouts: { scene: STANDALONE_SCENE_LAYOUT },
   panels: standalonePanels,
   surfaces: { SceneEditor: StandaloneSceneEditor },
 };
