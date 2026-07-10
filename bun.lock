@@ -33,6 +33,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@forgeax/editor-core": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
         "@tanstack/react-virtual": "^3.14.3",
         "@tanstack/virtual-core": "^3.17.1",
         "react": "^19.0.0",
@@ -427,8 +428,11 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-physics-rapier2d": "workspace:*",
         "@forgeax/engine-physics-rapier3d": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
       },
     },
     "packages/engine/packages/physics-rapier2d": {

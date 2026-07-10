@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",
     "react": "^19.0.0",

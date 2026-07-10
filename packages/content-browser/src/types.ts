@@ -3,22 +3,12 @@
  *
  * Aligned with engine `pack.schema.json`:
  *   - guid: RFC 4122 36-char dash-form UUID (UUIDv7 for new assets)
- *   - kind: open string at schema level; closed union at browser filter level
+ *   - kind: open string; built-in filter metadata is constrained by engine Asset['kind']
  *   - payload: free-form object (validated by engine at load time)
  *   - refs: GUID cross-references array
  *
  * These types are browser-internal and do NOT modify engine types.
  */
-
-// ── Asset Kinds (mirrors engine Asset union discriminants) ────────────────────
-
-export const ASSET_KINDS = [
-  'mesh', 'texture', 'image', 'cube-texture', 'sampler', 'material', 'scene',
-  'shader', 'skeleton', 'skin', 'animation-clip', 'audio', 'font',
-  'render-pipeline', 'tileset',
-] as const;
-
-export type AssetKind = (typeof ASSET_KINDS)[number];
 
 // ── Core data models ─────────────────────────────────────────────────────────
 
