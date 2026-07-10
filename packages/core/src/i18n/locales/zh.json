@@ -51,28 +51,6 @@
       "configHint": "写入 play-config.json（本地启动器状态，不进版本库）；▶ Play 启动时读取。",
       "saved": "✓ 已保存"
     },
-    "matgraph": {
-      "empty": "选中一个实体以编辑材质图。",
-      "addNode": "添加 {{label}} 节点",
-      "evalResult": "图求值结果",
-      "outputPin": "输出 — 单击后再点输入",
-      "deleteNode": "删除节点",
-      "pinDisconnect": " — 单击断开",
-      "pinConnect": " — 单击连接",
-      "hint": "单击输出 pin → 再单击输入 pin 连线;单击已连输入 pin 断开。图变化即应用到 Material。"
-    },
-    "timeline": {
-      "waitingViewport": "等待 Edit 视口… 打开「Edit」面板后，选中实体即可编辑动画。",
-      "selectEntity": "选中一个实体以编辑动画。",
-      "pause": "暂停",
-      "playPreview": "播放预览",
-      "captureKey": "在播放头记录当前 Transform 关键帧",
-      "removeKey": "删除播放头处的关键帧",
-      "interpMode": "新关键帧的插值方式",
-      "duration": "时长",
-      "hint": "移动实体到某帧 → 按「● K」记录关键帧；多帧之间自动插值。",
-      "keyTooltip": "t={{t}}s v={{v}} ({{interp}}) — 单击跳到此帧"
-    },
     "assets": {
       "newLevelPrompt": "新关卡 id（小写字母/数字/连字符，如 level3；即文件名 scenes/<id>.pack.json）：",
       "newLevelFailed": "创建关卡失败：id 重复 / 写盘失败",

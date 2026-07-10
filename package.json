@@ -17,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./app-kit": "./src/app-kit.ts",
+    "./default-dock-layout": "./src/default-dock-layout.ts",
     "./edit": "./src/edit.ts",
     "./panels": "./packages/panels/src/manifest.ts",
     "./play": "./src/play.ts",

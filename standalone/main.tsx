@@ -28,6 +28,7 @@ import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
 import { DEFAULT_PANEL_RENDERERS, type PanelRenderers, type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
 import { useAppStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
@@ -106,12 +107,11 @@ function EditorPanelBody({ id }: { id: string }): ReactNode {
   );
 }
 
-// Tab labels for the dock panels. Keep in sync with studio's editorRenderers
-// EDITOR_PANEL_TITLES (display-only; ids stay the EDITOR_PANELS SSOT).
+// Tab labels for the dock panels. The id list remains EDITOR_PANELS; this map
+// is host-owned display metadata used to fill PanelDescriptor.title.
 const EDITOR_PANEL_TITLES: Record<string, string> = {
   hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
   history: 'History', capabilities: 'Capabilities',
-  timeline: 'Timeline', matgraph: 'Mat Graph',
   launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
 };
 
@@ -137,6 +137,7 @@ function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
 const standaloneRenderers: PanelRenderers = {
   ...DEFAULT_PANEL_RENDERERS,
   editorPanelIds: [...EDITOR_PANELS],
+  builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
   panels: standalonePanels,
   surfaces: { SceneEditor: StandaloneSceneEditor },
 };
