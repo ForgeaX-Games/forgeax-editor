@@ -59,7 +59,7 @@ async function main() {
 
   // Fire the shell "Add to Scene" bridge inside the viewport iframe: this routes
   // to spawnAssetRefToScene(ref), whose whole-scene GLB branch creates a native
-  // SceneInstance mount (no legacy /api/assets/import-scene parser).
+  // SceneInstance mount.
   await vp.evaluate((city) => {
     window.postMessage(
       {
