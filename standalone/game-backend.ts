@@ -22,7 +22,7 @@
 // NO `hono` import (hono isn't a direct editor dep — it lives only inside
 // platform-io's own node_modules; bun resolves @forgeax/platform-io natively).
 //
-// Run (cli.mjs wires this): FORGEAX_GAME_DIR=<dir> bun standalone/game-backend.ts
+// Run (fx.ts wires this): FORGEAX_GAME_DIR=<dir> bun standalone/game-backend.ts
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
 import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';

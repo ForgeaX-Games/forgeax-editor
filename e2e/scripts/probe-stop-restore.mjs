@@ -10,7 +10,7 @@
 //
 // Run directly (not part of the Playwright suite):
 //   node e2e/scripts/probe-stop-restore.mjs
-// Expects the stack up: node scripts/cli.mjs run --game <dir>
+// Expects the stack up: bun fx start --game <dir>
 
 import { chromium } from '@playwright/test';
 

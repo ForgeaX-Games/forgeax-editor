@@ -119,7 +119,7 @@ jobs:
 
       # wgpu-wasm MUST build before the engine dist step below: the engine `app`
       # package inlines wgpu-wasm/dist → ../pkg/wgpu_wasm.js at bundle time. Same
-      # invariant is statically gated in scripts/cli.mjs by
+      # invariant is statically gated in scripts/fx.ts by
       # scripts/lint-wasm-before-dist.mjs (bun run lint). Keep the two in sync.
       - name: Build wgpu-wasm (Rust → wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
@@ -233,7 +233,7 @@ jobs:
 
       # wgpu-wasm MUST build before the engine dist step below: the engine `app`
       # package inlines wgpu-wasm/dist → ../pkg/wgpu_wasm.js at bundle time. Same
-      # invariant is statically gated in scripts/cli.mjs by
+      # invariant is statically gated in scripts/fx.ts by
       # scripts/lint-wasm-before-dist.mjs (bun run lint). Keep the two in sync.
       - name: Build wgpu-wasm (Rust → wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
@@ -372,7 +372,7 @@ jobs:
         with:
           node-version: 22.13.0
 
-      # wgpu-wasm before engine dist (see the b2/typecheck jobs + cli.mjs gate).
+      # wgpu-wasm before engine dist (see the b2/typecheck jobs + fx.ts gate).
       - name: Build wgpu-wasm (Rust → wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: cd packages/engine && bash packages/wgpu-wasm/build.sh

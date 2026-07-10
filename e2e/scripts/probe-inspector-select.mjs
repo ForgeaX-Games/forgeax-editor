@@ -10,7 +10,7 @@
 // viewport iframe's bus, then asserts NO frame logged the null-get crash.
 //
 // Run directly:  node e2e/scripts/probe-inspector-select.mjs
-// Expects the stack up: node scripts/cli.mjs run --game <dir>
+// Expects the stack up: bun fx start --game <dir>
 
 import { chromium } from '@playwright/test';
 

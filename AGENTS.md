@@ -16,11 +16,11 @@ git submodule update --init --recursive   # REQUIRED first — fetch engine/inte
 bun install                               # if it fails with simple-git-hooks ENOENT, just re-run once
 ```
 
-For the **full standalone stack** (`bun run setup` → `bun run start --game <dir>`), `setup` also builds the engine's two gitignored wasm artefacts (zero-binary invariant):
+For the **full standalone stack** (`bun fx setup` → `bun fx start --game <dir>`), `setup` also builds the engine's two gitignored wasm artefacts (zero-binary invariant):
 - **wgpu-wasm** (`pkg/wgpu_wasm_bg.wasm`) — needs Rust + `wasm-pack`.
 - **fbx-wasm** (`pkg/fbx-wasm.{mjs,wasm}`) — needs **Emscripten `emcc`** (`brew install emscripten`, or emsdk). Without it `setup` errors with the install command; the editor's browser FBX import stays unavailable until built (glTF unaffected).
 
-Both are rebuilt on demand — never committed. A bare `bun install` alone does NOT build them; use `bun run setup` (or `bun -F @forgeax/engine-fbx build:wasm` — the collapse-fbx-to-ufbx refactor folded the old `engine-fbx-wasm` package into `engine-fbx`).
+Both are rebuilt on demand — never committed. A bare `bun install` alone does NOT build them; use `bun fx setup` (or `bun -F @forgeax/engine-fbx build:wasm` — the collapse-fbx-to-ufbx refactor folded the old `engine-fbx-wasm` package into `engine-fbx`).
 
 ## Commands
 
@@ -37,7 +37,7 @@ Both are rebuilt on demand — never committed. A bare `bun install` alone does 
 | E2E (Playwright) | `bun run test:e2e` (install browser once: `bun run test:e2e:install`) |
 | Single E2E spec | `bun run test:e2e e2e/<name>.spec.ts` (or `-g "<test name>"`) |
 | Unit test one package | `bun -F @forgeax/<pkg> test` (e.g. `bun -F @forgeax/platform-io test`) |
-| CLI dev-stack | `bun run setup` (install) · `bun run start` (run) · `bun run stop` |
+| CLI dev-stack (`bun fx`) | `bun fx setup` · `bun fx start [--play\|--game DIR\|--bg\|--rhi-debug]` · `bun fx stop` · `bun fx update [--dry-run\|--no-stash]` (pull root + sync submodules to pins + ff `.forgeax-harness`) · `bun fx clean [--deep\|--dry-run]` (restore clean git status across root + submodules) · `bun fx help`. Entry is TypeScript `scripts/fx.ts` (run by bun), mirroring forgeax-studio's `bun fx` vocabulary; `setup`/`start`/`stop`/`update`/`clean` are also reachable as `bun run <verb>`. Typechecked in CI via `scripts/tsconfig.json` (`bun run typecheck:scripts`). |
 
 > **Port map:** `15290` standalone chrome host · `15280` edit-runtime · `15173` play-runtime · `18920` studio-embed host · `18900` forgeax-server (studio-only). Standalone wiring **requires** `FORGEAX_INTERFACE_PORT=15290` so edit-runtime HMR doesn't hammer the dead studio port `:18920` — `dev:standalone` sets it for you; a bare `bun -F …edit-runtime dev` will flood the console with `ERR_CONNECTION_REFUSED`.
 

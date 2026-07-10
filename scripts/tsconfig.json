@@ -1,0 +1,20 @@
+{
+  "// note": "Typechecks the Node/Bun-side dev scripts (fx.ts, dev-standalone.ts, lib/*.ts). Kept separate from the root tsconfig, which targets browser src/ (DOM libs, react-jsx). CI runs this via `bun run typecheck:scripts` (part of `bun run typecheck`).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["fx.ts", "dev-standalone.ts", "lib/dev-stack.ts"]
+}

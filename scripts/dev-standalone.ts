@@ -1,5 +1,5 @@
-#!/usr/bin/env node
-// dev-standalone.mjs — one-command standalone editor dev stack.
+#!/usr/bin/env bun
+// dev-standalone.ts — one-command standalone editor dev stack.
 //
 // Starts the two servers the standalone editor needs, wired correctly:
 //   :15290  standalone chrome host (vite, root=standalone/) — proxies /editor → :15280
@@ -11,16 +11,17 @@
 // and floods the console with ERR_CONNECTION_REFUSED. See edit-runtime
 // vite.config.ts `hmr.clientPort` and playwright.config.ts webServer env.
 //
-// Cross-platform: pure Node (no Git-Bash) — runs on Windows too.
+// Cross-platform: pure Node APIs (no Git-Bash) — runs on Windows too.
 
+import { type ChildProcess } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { installCleanup, spawnService } from './lib/dev-stack.mjs';
+import { installCleanup, spawnService } from './lib/dev-stack.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PORTS = [15290, 15280];
 
-const children = [];
+const children: ChildProcess[] = [];
 installCleanup(children, PORTS);
 
 console.log('[dev-standalone] starting edit-runtime :15280 (HMR→15290) ...');
@@ -39,6 +40,6 @@ console.log('[dev-standalone] starting standalone host :15290 ...');
 children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env: { ...process.env } }));
 
 // Keep alive until a child exits (then cleanup trap tears the rest down).
-await new Promise((resolvePromise) => {
-  for (const ch of children) ch.on('exit', resolvePromise);
+await new Promise<void>((resolvePromise) => {
+  for (const ch of children) ch.on('exit', () => resolvePromise());
 });
