@@ -44,12 +44,25 @@ import {
 } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
+import {
+  validateHandlePair,
+  type HandlePair,
+  type HandlePairBinding,
+  type HandlePairStaleReason,
+  type WorldMismatchError,
+} from './handle-pair';
 
 // ── Structured error types (D-4 / AC-14) ───────────────────────────────────
 
 /** The stale-entity-handle error returned when an EntityHandle is no longer
  *  valid in the target World (despawned, from a previous play session, etc.).
- *  plan-strategy D-4 / AC-14: structured error with self-rescue hint. */
+ *  plan-strategy D-4 / AC-14: structured error with self-rescue hint.
+ *
+ *  M5 (w27, D-8): when the read went through the super handle-pair three-layer
+ *  check, `detail.reason` narrows WHY the handle is stale so an AI/human picks the
+ *  right self-rescue — 'world-epoch-mismatch' (whole-world reload; rebuild
+ *  selection) vs 'stale-entity' (this entity despawned; re-query). The field is
+ *  OPTIONAL: the legacy fallback path (no binding, e.g. play mode) omits it. */
 export interface StaleEntityHandleError {
   readonly code: 'stale-entity-handle';
   /** Self-rescue path for AI and human consumers — re-query the active world
@@ -57,6 +70,9 @@ export interface StaleEntityHandleError {
   readonly hint: string;
   /** The stale entity handle that triggered the error. */
   readonly entity: EntityHandle;
+  /** Present when the super handle-pair check produced this error — narrows the
+   *  stale cause (D-8). Absent on the legacy isStale fallback path. */
+  readonly detail?: { readonly reason: HandlePairStaleReason; readonly engineCode?: string };
 }
 
 /** The component-not-present error returned when the handle is LIVE but the
@@ -71,10 +87,12 @@ export interface ComponentAbsentError {
 }
 
 /** Result shape for entity read operations: ok with value, or a structured
- *  error. Consistent with gateway.dispatch() return type (charter P4). */
+ *  error. Consistent with gateway.dispatch() return type (charter P4).
+ *  M5 (w27): may also carry a WorldMismatchError when the read went through the
+ *  super handle-pair check and the handle belonged to the wrong world (D-8). */
 export type StaleHandleResult<T> =
   | { ok: true; value: T }
-  | { ok: false; error: StaleEntityHandleError | ComponentAbsentError };
+  | { ok: false; error: StaleEntityHandleError | ComponentAbsentError | WorldMismatchError };
 
 /** The edit-rejected-in-play error returned when a document-domain dispatch is
  *  attempted while gateway.mode === 'play'. plan-strategy D-5: play-mode write
@@ -96,6 +114,76 @@ const STALE_HINT =
 function isStale(world: World, handle: EntityHandle): boolean {
   const r = world.get(handle, Name);
   return !r.ok;
+}
+
+// ── Active read-binding provider (IoC seam — world-manager fills it) ──────────
+//
+// feat-20260709-editor-world-partition VERIFY finding-3 (defense-in-depth):
+// production READ points (Inspector) call entComponent(activeWorld, id) without
+// opts, so they fell back to the legacy `isStale` liveness probe and never ran
+// the three-layer validateHandlePair check (world-mismatch / epoch / generation).
+// This seam lets a DAG-downstream package (edit-runtime's WorldManager) publish
+// the live (worldRef, epoch, world) binding of the ACTIVE read world, so a read
+// point can build HandleCheckOpts and run the structured check at the read seam —
+// not only inside the reload collar's revalidateSelection.
+//
+// Same IoC direction as registerSelectionBindingProvider / the ApiClient seam
+// (core defines the seam; edit-runtime satisfies it — DAG-legal, RD4). Headless
+// core / play mode leave it unset, so reads keep the legacy fallback unchanged.
+//
+// Scope note (VERIFY finding-3): wired into the Inspector primary read only; other
+// read points (Hierarchy, viewport, host-session) stay on the legacy path as a
+// documented follow-up — editorWorld is unreachable via gateway.dispatch, so this
+// is hardening, not a bug fix (see verify.md finding 2/B1 adjudication).
+let activeReadBindingProvider: (() => HandlePairBinding | undefined) | null = null;
+
+/** Register the active read-world binding provider (world-manager, at boot).
+ *  Returns an idempotent unregister fn. The provider supplies the live
+ *  (worldRef, epoch, world) binding a read point validates a selection pair
+ *  against — so entComponent reads can run the three-layer check (D-4). */
+export function registerActiveReadBinding(
+  fn: () => HandlePairBinding | undefined,
+): () => void {
+  activeReadBindingProvider = fn;
+  return () => {
+    if (activeReadBindingProvider === fn) activeReadBindingProvider = null;
+  };
+}
+
+/** The live binding of the active read world, or undefined when no provider is
+ *  registered (headless core / play mode) — callers then omit opts and read via
+ *  the legacy liveness fallback. */
+export function getActiveReadBinding(): HandlePairBinding | undefined {
+  return activeReadBindingProvider?.();
+}
+
+/** Check `handle`'s liveness, preferring the super handle-pair three-layer check
+ *  when a binding is available (D-4). Returns `null` when the handle is valid;
+ *  otherwise the structured error (world-mismatch or stale-entity-handle with a
+ *  narrowed `.detail.reason`).
+ *
+ *  Contract (w27): callers pass a `binding` — the live (worldRef, epoch, world)
+ *  target — AND the pair epoch/worldRef the handle was minted with. When no
+ *  binding is available (headless / play mode), it falls back to the plain
+ *  `isStale` liveness probe and returns a reason-less stale error (compat). */
+function checkHandle(
+  world: World,
+  handle: EntityHandle,
+  binding: HandlePairBinding | undefined,
+  pairMeta: { worldRef: number; epoch: number } | undefined,
+): StaleEntityHandleError | WorldMismatchError | null {
+  if (binding !== undefined && pairMeta !== undefined) {
+    const pair: HandlePair = { worldRef: pairMeta.worldRef, epoch: pairMeta.epoch, entity: handle };
+    const v = validateHandlePair(pair, binding);
+    if (v.ok) return null;
+    // Pass the structured error through verbatim: world-mismatch stays
+    // world-mismatch; stale-entity-handle keeps its narrowed detail.reason.
+    return v.error;
+  }
+  // Legacy fallback (no binding): plain liveness, reason-less stale error.
+  return isStale(world, handle)
+    ? { code: 'stale-entity-handle', hint: STALE_HINT, entity: handle }
+    : null;
 }
 
 // ── Entity enumeration (replaces entIds / entHandles / entRootHandles) ──────
@@ -172,20 +260,31 @@ export function entParent(world: World, handle: EntityHandle): EntityHandle | nu
   return world.get(parent, Name).ok ? parent : null;
 }
 
+/** Optional super handle-pair inputs (w27). When BOTH are supplied, entComponent /
+ *  entComponents run the three-layer check (D-4) instead of the plain isStale
+ *  probe, so the returned error carries a narrowed `.detail.reason` (epoch vs
+ *  generation) or a `world-mismatch` code. Omit both for the legacy path. */
+export interface HandleCheckOpts {
+  readonly binding: HandlePairBinding;
+  readonly pair: { worldRef: number; epoch: number };
+}
+
 /** Get a specific component's value dict as a StaleHandleResult (D-4 / AC-14).
  *  - live handle + component present -> { ok:true, value };
  *  - stale/despawned handle          -> { ok:false, error: stale-entity-handle };
+ *  - wrong world (super check)        -> { ok:false, error: world-mismatch };
  *  - live handle + component absent   -> { ok:false, error: component-absent }.
- *  The two error codes are distinct so callers can tell "wrong handle" from
- *  "no such component" (Finding 13 P3 fix). */
+ *  The codes are distinct so callers can tell "wrong handle" from "wrong world"
+ *  from "no such component" (Finding 13 P3 fix + D-8). When `opts` is supplied the
+ *  stale path carries `.detail.reason` narrowing epoch vs generation. */
 export function entComponent(
   world: World,
   handle: EntityHandle,
   compName: string,
+  opts?: HandleCheckOpts,
 ): StaleHandleResult<Record<string, unknown>> {
-  if (isStale(world, handle)) {
-    return { ok: false, error: { code: 'stale-entity-handle', hint: STALE_HINT, entity: handle } };
-  }
+  const bad = checkHandle(world, handle, opts?.binding, opts?.pair);
+  if (bad !== null) return { ok: false, error: bad };
   const token = resolveReadToken(compName);
   if (token !== undefined) {
     const r = world.get(handle, token as Parameters<typeof world.get>[1]);
@@ -203,10 +302,16 @@ export function entComponent(
 }
 
 /** Component dict by walking the engine component registry against the world.
- *  Returns {} for a stale handle (entExists is the stale probe for callers that
- *  must distinguish). M3: reads the passed world (activeWorld), no legacy map. */
-export function entComponents(world: World, handle: EntityHandle): Record<string, unknown> {
-  if (isStale(world, handle)) return {};
+ *  Returns {} for a stale/invalid handle (entExists is the stale probe for
+ *  callers that must distinguish). M3: reads the passed world (activeWorld), no
+ *  legacy map. w27: when `opts` is supplied, an invalid pair (wrong world / stale
+ *  epoch / despawned) yields {} via the three-layer check. */
+export function entComponents(
+  world: World,
+  handle: EntityHandle,
+  opts?: HandleCheckOpts,
+): Record<string, unknown> {
+  if (checkHandle(world, handle, opts?.binding, opts?.pair) !== null) return {};
   const out: Record<string, unknown> = {};
   for (const [name, token] of getRegisteredComponents()) {
     const r = world.get(handle, token as Parameters<typeof world.get>[1]);

@@ -30,6 +30,15 @@ export interface ArgsSchema {
    * while still rejecting the wrong-type / missing-required cases.
    */
   nullable?: boolean;
+  /**
+   * Human/AI-readable semantic note for a field, surfaced verbatim through
+   * gateway.listOps() so a caller learns non-obvious contracts by SELF-INTROSPECTION
+   * rather than from a runtime error (charter P1/F1 progressive disclosure). The
+   * validator (io/args-schema.ts) ignores it — it is documentation, not a
+   * constraint. Example: the selection ops' entity id is a WORLD-BOUND handle
+   * (feat-20260709 world split); this field says so at the id property.
+   */
+  description?: string;
 }
 
 // ── OpDescriptor (listOps return shape) ────────────────────────────────────
@@ -227,19 +236,63 @@ const builtinOps: ReadonlyArray<{
   },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
+  // ── selection ops: the entity id is a WORLD-BOUND handle ─────────────────────
+  // feat-20260709-editor-world-partition: after the editorWorld/sceneWorld split
+  // the selection store no longer holds a bare EntityHandle — every selected id is
+  // minted into a world-bound HandlePair (worldRef + epoch) against the CURRENT
+  // sceneWorld binding (store/selection.ts, store/handle-pair.ts). The id you pass
+  // here belongs to the ACTIVE scene world; a scene reload bumps the world epoch
+  // and batch-invalidates every prior selection (revalidateSelection, AC-05). The
+  // `.description` below states this at the id property so an AI reading listOps()
+  // learns the world-bound contract + the reload self-rescue by INTROSPECTION, not
+  // from a runtime stale-entity-handle error (charter P1/F1).
   { id: 'setSelection', domain: 'session',
     // id is nullable: setSelection({id:null}) is the documented "clear selection"
     // signal (store/selection.ts applySetSelection). required so a missing id is
     // still rejected (F-4), but null passes.
-    argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true } }, required: ['id'] },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          nullable: true,
+          description:
+            'entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for a fresh handle. null clears the selection.',
+        },
+      },
+      required: ['id'],
+    },
     title: 'Set Selection',
   },
   { id: 'toggleSelection', domain: 'session',
-    argsSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          description:
+            'entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for a fresh handle.',
+        },
+      },
+      required: ['id'],
+    },
     title: 'Toggle Selection',
   },
   { id: 'setSelectionMany', domain: 'session',
-    argsSchema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'number' } } }, required: ['ids'] },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: {
+            type: 'number',
+            description:
+              'entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for fresh handles.',
+          },
+        },
+      },
+      required: ['ids'],
+    },
     title: 'Select Many',
   },
   { id: 'setGizmoMode', domain: 'session',

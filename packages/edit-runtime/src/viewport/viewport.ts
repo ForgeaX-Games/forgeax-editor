@@ -117,8 +117,16 @@ export interface ViewportDeps {
    *  same-shape methods (set/spawn/despawn/allocSharedRef) mean call sites change
    *  only their receiver, not their shape (AC-06 no-regression). */
   engine: EngineFacade;
+  /** M4 (w19/w20, plan-strategy §2 D-2/D-5): the DEDICATED EngineFacade for the
+   *  editorWorld — camera + gizmo/param-gizmo writes go through THIS, not `engine`
+   *  (which binds to the sceneWorld / doc.world). The two-facade split is the
+   *  structural guarantee of AC-01: editor entities only ever land in editorWorld.
+   *  Reads of the SELECTED sceneWorld entity (updateGizmo / pick / param-gizmo)
+   *  still go through `engine` / gateway.activeWorld — super moves VALUES across
+   *  worlds, never entity identity (requirements S5 "只搬值不搬身份"). */
+  editorEngine: EngineFacade;
   assets?: AssetsLike;   // legacy slot — gizmo handle materials now mint via engine.allocSharedRef
-  camera: EntityHandle;  // the editor camera entity (engine.spawn().unwrap() handle)
+  camera: EntityHandle;  // the editor camera entity (editorEngine.spawn().unwrap() handle in editorWorld)
   /** Optional initial orbit framing — asset-edit mode opens close-up on the
    *  origin instead of the arena-scale default. */
   initialOrbit?: { target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number };
@@ -141,7 +149,7 @@ export interface Viewport {
 
 const FOV = Math.PI / 3;
 
-export function createViewport({ canvas, engine, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+export function createViewport({ canvas, engine, editorEngine, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
   // M3 t19: all view-scaffold writes (camera t17 / gizmo per-frame t18 / gizmo
   // pool + param gizmo + drag fallback t19) now call the injected `engine`
   // (EngineFacade) directly — the migration bridge alias is gone, so no raw
@@ -165,24 +173,24 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     const r = computeOrbitCamera(target, yaw, pitch, dist);
     camPos = r.camPos;
     fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-    // M3 t17 (S4 / AC-05): the orbit camera's per-frame Transform write goes
-    // through the injected EngineFacade (ctx.engine proxy), not the raw world.
-    // This is the ONE surgery point that touches the render path — same-name shape
-    // method so the pose write is byte-identical, only now trace-visible (AC-06
-    // no visual regression; facade is a pure forwarding layer).
-    engine.set(camera, Transform, {
+    // M4 (w19, S4 / AC-01): the orbit camera lives in the editorWorld, so its
+    // per-frame Transform write goes through editorEngine (the editorWorld facade),
+    // not `engine` (sceneWorld). Same-name same-shape method — the pose write is
+    // byte-identical, only the target world changed (D-2 camera migration).
+    // feat-20260709 array-TRS: pos[3]/quat[4]/scale[3] array columns.
+    editorEngine.set(camera, Transform, {
       pos: [camPos[0], camPos[1], camPos[2]],
       quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
       scale: [1, 1, 1],
     });
     // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
     // replaces the Camera component each frame, so tonemap must be re-applied).
-    // clearR/G/B too: on WebKit/WKWebView (the desktop app) the cubemap skybox
+    // clearColor too: on WebKit/WKWebView (the desktop app) the cubemap skybox
     // can't render, so without a clear color the Edit viewport is pure black —
-    // a neutral studio blue reads as sky. perspective() carries clearR/G/B=0, so
-    // it MUST be re-applied here (this set replaces the whole Camera each frame),
+    // a neutral studio blue reads as sky. perspective() carries clearColor=[0,0,0,1],
+    // so it MUST be re-applied here (this set replaces the whole Camera each frame),
     // not just at spawn. On Chromium the cubemap skybox draws over it.
-    engine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 });
+    editorEngine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] });
     updateGizmo();
     updateParamGizmo();
   }
@@ -200,21 +208,22 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   // occupy the _activeOp lifecycle slot (so orbit-while-dragging-a-gizmo cannot
   // implicitly cancel a document begin — D-12 slot-safety). Mid-frame orbit stays
   // on the facade direct write (applyCamera), out of the ledger (OOS-4).
+  //
+  // M4 (w19): the camera lives in the editorWorld, so this applier writes through
+  // the closure-captured `editorEngine` (editorWorld facade) — NOT ctx.engine,
+  // which binds to the sceneWorld (doc.world). ctx.engine would move a nonexistent
+  // sceneWorld entity and silently no-op the orbit. editorEngine still records
+  // trace leaves onto the active span (the facade's _recordLeaf reads the ambient
+  // active span, not a per-world binding), so ledger/trace semantics are preserved.
   const unregCameraOrbit = registerSessionApplier(
     'cameraOrbit',
-    (op, ctx): { ok: true } | { ok: false; error: { code: 'SET_FAILED'; hint: string } } => {
+    (op, _ctx): { ok: true } => {
       const o = op as unknown as {
         target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
       };
-      const eng = ctx?.engine;
-      if (!eng) {
-        // No ctx.engine means the executor did not hand us the proxy — fail loud
-        // rather than silently no-op (charter P3). Should never happen post-t20d.
-        return { ok: false, error: { code: 'SET_FAILED', hint: 'cameraOrbit applier received no ctx.engine' } };
-      }
       const tgt: Vec3 = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
       const r = computeOrbitCamera(tgt, o.yaw ?? yaw, o.pitch ?? pitch, o.dist ?? dist);
-      eng.set(camera, Transform, {
+      editorEngine.set(camera, Transform, {
         pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
         quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
         scale: [1, 1, 1],
@@ -270,9 +279,12 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   function ensureCone(): Handle<'MeshAsset', 'shared'> {
     if (coneMesh) return coneMesh;
     // Cone vertex/index geometry is pure (viewport-gizmo-geometry.ts); only the
-    // engine.allocSharedRef upload stays here (the one side-effecting edge).
+    // allocSharedRef upload stays here (the one side-effecting edge).
+    // M4 (w20): gizmo mesh asset is alloc'd on the editorWorld (editorEngine) —
+    // gizmo entities live there and the renderer resolves material/mesh handles
+    // per-world (D-2), so the shared ref must be minted on the same world.
     const { vertices, indices } = buildConeMeshData();
-    coneMesh = engine.allocSharedRef('MeshAsset', meshFromInterleaved(vertices, indices));
+    coneMesh = editorEngine.allocSharedRef('MeshAsset', meshFromInterleaved(vertices, indices));
     return coneMesh;
   }
 
@@ -292,7 +304,10 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
           renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
         })),
       };
-      return engine.allocSharedRef('MaterialAsset', mat);
+      // M4 (w20): gizmo material minted on editorWorld (editorEngine). Overlay
+      // queue=4000 + depthCompare:'always' + depthWriteEnabled:false mechanism is
+      // unchanged (AC-03 topmost) — only the target world moved.
+      return editorEngine.allocSharedRef('MaterialAsset', mat);
     });
     return gizmoMats;
   }
@@ -300,7 +315,9 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     mesh: Handle<'MeshAsset', 'shared'>,
     material: Handle<'MaterialAsset', 'shared'>,
   ): EntityHandle {
-    return engine.spawn(
+    // M4 (w20): gizmo entities spawn into the editorWorld (editorEngine) — the
+    // structural half of AC-01 (gizmo can never land in the sceneWorld).
+    return editorEngine.spawn(
       { component: Transform, data: {} },
       { component: MeshFilter, data: { assetHandle: mesh } },
       // engine #317: MeshRenderer.material (single) -> materials[]. Passing the
@@ -311,10 +328,11 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   const spawnHandleCube = (material: Handle<'MaterialAsset', 'shared'>): EntityHandle =>
     spawnHandleMesh(HANDLE_CUBE, material);
   function despawnHandles(): void {
-    for (const e of barEnts) { try { engine.despawn(e); } catch { /* gone */ } }
-    for (const e of tipEnts) { try { engine.despawn(e); } catch { /* gone */ } }
-    for (const e of planeEnts) { try { engine.despawn(e); } catch { /* gone */ } }
-    for (const e of ringEnts) { try { engine.despawn(e); } catch { /* gone */ } }
+    // M4 (w20): gizmo entities live in editorWorld → despawn through editorEngine.
+    for (const e of barEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
+    for (const e of tipEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
+    for (const e of planeEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
+    for (const e of ringEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
     barEnts = []; bars = []; tipEnts = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
   }
   function buildShape(want: Shape): void {
@@ -341,14 +359,14 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     AXES.forEach((a, i) => {
       const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
       const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      engine.set(barEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [sx, sy, sz] });
+      editorEngine.set(barEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [sx, sy, sz] });
       if (hasTips) {
         // Cone base sits at the bar's outer end, apex pointing further out along
         // the axis. scaleY is the cone's local height (→ length after the +Y→axis
         // rotation); scaleX/Z are the base radius.
         const base: Vec3 = [center[0] + a.axis[0] * len, center[1] + a.axis[1] * len, center[2] + a.axis[2] * len];
         const q = TIP_QUAT[i]!;
-        engine.set(tipEnts[i]!, Transform, {
+        editorEngine.set(tipEnts[i]!, Transform, {
           pos: [base[0], base[1], base[2]],
           scale: [tipRad, tipLen, tipRad],
           quat: [q[0], q[1], q[2], q[3]],
@@ -375,7 +393,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
       const s: Vec3 = [
         p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
       ];
-      engine.set(planeEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [s[0], s[1], s[2]] });
+      editorEngine.set(planeEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [s[0], s[1], s[2]] });
       planes[i]!.center = hc;
       planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
     });
@@ -389,7 +407,7 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
         const th = (j / RING_SEG) * Math.PI * 2;
         const c = Math.cos(th) * len, s = Math.sin(th) * len;
         const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
-        engine.set(ringEnts[i * RING_SEG + j]!, Transform, { pos: [p[0], p[1], p[2]], scale: [seg, seg, seg] });
+        editorEngine.set(ringEnts[i * RING_SEG + j]!, Transform, { pos: [p[0], p[1], p[2]], scale: [seg, seg, seg] });
       }
     }
   }
@@ -452,19 +470,21 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
   let paramEnts: EntityHandle[] = [];
   let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
   function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
-    if (!paramMat) paramMat = engine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
+    // M4 (w20): param-gizmo material minted on editorWorld (editorEngine).
+    if (!paramMat) paramMat = editorEngine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
     return paramMat;
   }
   function despawnParam(): void {
-    for (const e of paramEnts) { try { engine.despawn(e); } catch { /* gone */ } }
+    // M4 (w20): param-gizmo entities live in editorWorld → despawn via editorEngine.
+    for (const e of paramEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
     paramEnts = [];
   }
   function placeDots(points: Vec3[], size: number): void {
     if (points.length === 0) { despawnParam(); return; }
     const mat = ensureParamMat();
     while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
-    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { engine.despawn(e); } catch { /* gone */ } }
-    points.forEach((p, i) => engine.set(paramEnts[i]!, Transform, { pos: [p[0], p[1], p[2]], scale: [size, size, size] }));
+    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { editorEngine.despawn(e); } catch { /* gone */ } }
+    points.forEach((p, i) => editorEngine.set(paramEnts[i]!, Transform, { pos: [p[0], p[1], p[2]], scale: [size, size, size] }));
   }
   /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
   function updateParamGizmo(): void {
@@ -531,18 +551,32 @@ export function createViewport({ canvas, engine, camera, initialOrbit, getInputT
     const w = engine._rawWorld();
     const activeWorld = gateway.activeWorld;
 
-    // 1) Engine pick (precise, mesh-level AABB + world matrix)
-    try {
-      const hit = enginePick(w, camera as unknown as EntityHandle, sx, sy, r.width, r.height);
-      if (hit) {
-        const resolved = resolveEditorEntity(activeWorld, hit.entity as EntityHandle);
-        if (resolved !== null) return resolved;
+    // 1) Engine pick (precise, mesh-level AABB + world matrix). SUPER GUARD (w29,
+    //    S5/RD3): engine `pick(world, cameraEntity)` reads BOTH the camera AND the
+    //    geometry from ONE world. Post-split the camera lives in editorWorld and
+    //    the authored geometry in sceneWorld — feeding the editorWorld camera
+    //    HANDLE into a sceneWorld pick would MOVE IDENTITY across worlds (the exact
+    //    anti-pattern: the (index,gen) could resolve to a coincidental sceneWorld
+    //    entity → wrong Camera → wrong ray, silently). So only take the engine fast
+    //    path when the camera actually co-resides in the pick world; otherwise fall
+    //    through to the CPU sweep, which is the super VALUE-move (camera basis is
+    //    computed in the editorWorld orbit state, applied to a sceneWorld geometry
+    //    walk — values cross, identity does not). Restoring mesh-precision picking
+    //    across the split needs an engine pick that separates camera-source-world
+    //    from geometry-world (engine-repo change, out of scope for editor-only M5).
+    if (w.get(camera as unknown as EntityHandle, Camera).ok) {
+      try {
+        const hit = enginePick(w, camera as unknown as EntityHandle, sx, sy, r.width, r.height);
+        if (hit) {
+          const resolved = resolveEditorEntity(activeWorld, hit.entity as EntityHandle);
+          if (resolved !== null) return resolved;
+        }
+      } catch (e) {
+        if (!(e instanceof PickError)) throw e;
       }
-    } catch (e) {
-      if (!(e instanceof PickError)) throw e;
     }
 
-    // 2) Fallback: editor-level Transform-scale AABB sweep.
+    // 2) Super value-move pick: editor-camera-basis ray vs sceneWorld Transform-AABB.
     //    Only test entities that carry MeshFilter + MeshRenderer — lights,
     //    cameras, and empty group nodes have no visual representation and
     //    must not be selectable via the fallback (matches engine pick's

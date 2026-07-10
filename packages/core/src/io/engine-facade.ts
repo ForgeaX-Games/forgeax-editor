@@ -198,3 +198,22 @@ export class EngineFacade {
     return this._world;
   }
 }
+
+/**
+ * Mint an EngineFacade bound to an arbitrary World.
+ *
+ * feat-20260709-editor-world-partition-editorworld-super-composite / M4 (w18):
+ * world-manager owns the editorWorld and needs its OWN controlled write proxy —
+ * the gateway's `engineFacade()` binds to `doc.world` (= sceneWorld) and must not
+ * be repurposed for the editorWorld (D-5: dual-track writes — editorWorld through
+ * a DEDICATED facade instance, sceneWorld still through gateway dispatch). Raw
+ * `new EngineFacade(...)` stays inside this file so lint-unique-mutator's "raw
+ * world writes live only in engine-facade.ts" invariant holds: world-manager
+ * calls this factory instead of touching the World directly. The number of
+ * facade INSTANCES is unbounded by the gate — the gate only forbids raw
+ * world.set/spawn/despawn outside this file, and every facade write is still
+ * routed through EngineFacade's own methods here.
+ */
+export function createEngineFacade(world: World): EngineFacade {
+  return new EngineFacade(world);
+}

@@ -50,6 +50,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-fbx": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
@@ -82,6 +83,7 @@
         "@forgeax/editor-core": "workspace:*",
         "@forgeax/editor-panels": "workspace:*",
         "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
@@ -95,6 +97,7 @@
         "@forgeax/engine-physics": "workspace:*",
         "@forgeax/engine-physics-rapier2d": "workspace:*",
         "@forgeax/engine-physics-rapier3d": "workspace:*",
+        "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
@@ -162,6 +165,7 @@
       "name": "@forgeax/engine-app",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-debug-draw": "workspace:*",
@@ -183,6 +187,20 @@
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@webgpu/types": "^0.1.71",
+      },
+    },
+    "packages/engine/packages/assets-runtime": {
+      "name": "@forgeax/engine-assets-runtime",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-graphics-extras": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
     },
     "packages/engine/packages/audio": {
@@ -268,6 +286,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@types/node": "^20.14.0",
       },
@@ -305,6 +324,7 @@
         "forgeax-engine-remote-gltf": "./dist/cli-gltf.mjs",
       },
       "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
@@ -312,7 +332,20 @@
       },
       "devDependencies": {
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@types/node": "^20.14.0",
+      },
+    },
+    "packages/engine/packages/graphics-extras": {
+      "name": "@forgeax/engine-graphics-extras",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
         "@types/node": "^20.14.0",
       },
     },
@@ -427,6 +460,21 @@
         "@forgeax/engine-runtime": "workspace:*",
       },
     },
+    "packages/engine/packages/picking": {
+      "name": "@forgeax/engine-picking",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+      },
+    },
     "packages/engine/packages/plugin": {
       "name": "@forgeax/engine-plugin",
       "version": "0.0.0",
@@ -521,10 +569,12 @@
       "name": "@forgeax/engine-runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-graphics-extras": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:^",
@@ -1017,6 +1067,8 @@
 
     "@forgeax/engine-app": ["@forgeax/engine-app@workspace:packages/engine/packages/app"],
 
+    "@forgeax/engine-assets-runtime": ["@forgeax/engine-assets-runtime@workspace:packages/engine/packages/assets-runtime"],
+
     "@forgeax/engine-audio": ["@forgeax/engine-audio@workspace:packages/engine/packages/audio"],
 
     "@forgeax/engine-audio-webaudio": ["@forgeax/engine-audio-webaudio@workspace:packages/engine/packages/audio-webaudio"],
@@ -1035,6 +1087,8 @@
 
     "@forgeax/engine-gltf": ["@forgeax/engine-gltf@workspace:packages/engine/packages/gltf"],
 
+    "@forgeax/engine-graphics-extras": ["@forgeax/engine-graphics-extras@workspace:packages/engine/packages/graphics-extras"],
+
     "@forgeax/engine-image": ["@forgeax/engine-image@workspace:packages/engine/packages/image"],
 
     "@forgeax/engine-import": ["@forgeax/engine-import@workspace:packages/engine/packages/import"],
@@ -1052,6 +1106,8 @@
     "@forgeax/engine-physics-rapier2d": ["@forgeax/engine-physics-rapier2d@workspace:packages/engine/packages/physics-rapier2d"],
 
     "@forgeax/engine-physics-rapier3d": ["@forgeax/engine-physics-rapier3d@workspace:packages/engine/packages/physics-rapier3d"],
+
+    "@forgeax/engine-picking": ["@forgeax/engine-picking@workspace:packages/engine/packages/picking"],
 
     "@forgeax/engine-plugin": ["@forgeax/engine-plugin@workspace:packages/engine/packages/plugin"],
 

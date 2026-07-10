@@ -115,6 +115,13 @@ export class EditGateway {
   private undoStack: StackEntry[] = [];
   private redoStack: StackEntry[] = [];
   private listeners = new Set<BusListener>();
+  // Scene-reload listeners (M5 / D-4). Fired by replaceDoc — the SSOT collar every
+  // scene reload funnels through (scene switch, disk/storage load). The super
+  // (world-manager) subscribes to bump the sceneWorld epoch + revalidate the
+  // selection, so every handle-pair minted before the reload is batch-invalidated
+  // (AC-05). Distinct from `listeners`: those fire on every mutation (rev bump);
+  // this fires ONLY on a whole-document swap, which is exactly a world reload.
+  private sceneReloadListeners = new Set<() => void>();
   // Monotonic revision — bumped on EVERY mutation that notifies subscribers
   // (dispatch/undo/redo via emit, and replaceDoc). Lets consumers (e.g. the
   // engine sync) detect "did the doc change since I last looked?" in O(1) instead
@@ -520,6 +527,15 @@ export class EditGateway {
     return { ok: true };
   }
 
+  /** Subscribe to scene reloads (whole-document swaps via replaceDoc). Returns an
+   *  unregister fn. M5 / D-4: the super (world-manager) uses this to bump the
+   *  sceneWorld epoch + revalidate the selection so pre-reload handle-pairs are
+   *  batch-invalidated (AC-05). */
+  onSceneReload(fn: () => void): () => void {
+    this.sceneReloadListeners.add(fn);
+    return () => this.sceneReloadListeners.delete(fn);
+  }
+
   /** Swap in a new authored session (scene load). Clears history — old
    * inverses target the previous session and must not be replayed. */
   replaceDoc(doc: EditSession): void {
@@ -534,6 +550,10 @@ export class EditGateway {
     this.ledger.length = 0;
     this.origins.length = 0;
     this._rev++;
+    // Fire scene-reload listeners BEFORE the general subscribers: the super bumps
+    // the epoch + revalidates selection first, so any subscriber that reads the
+    // selection (panels) already sees the post-reload (cleared) state (D-4/AC-05).
+    for (const fn of this.sceneReloadListeners) fn();
     for (const fn of this.listeners) fn(this.doc, null);
   }
 
