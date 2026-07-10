@@ -61,6 +61,7 @@ import {
   installConsoleBridge,
   installNetworkBridge,
   installPreviewControls,
+  installVisibilityPause,
   installErrorOverlay,
   paintDiagnosticMessage,
 } from './viewport-vag-bridges';
@@ -74,7 +75,7 @@ import {
   deriveActiveCameraEntity,
 } from './viewport-quadrant';
 import { _syncDisplayMode } from './display-bus';
-import { installAssetSpawnBridge } from '../asset-spawn-bridge';
+import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
 import { CommandPalette } from '../panels/command-palette';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
@@ -696,6 +697,11 @@ async function bootViewport(
   });
   installFpsReport(editorApp, onFps);
   registerTeardown(installAssetSpawnBridge());
+  // Single-realm drag-to-viewport + pause-when-hidden: both were owned by the
+  // deleted EditSurface iframe host. Re-attached in-process to the viewport's own
+  // container (drop → gateway spawn; visibility → editorApp.pause/resume).
+  registerTeardown(installViewportDropZone(container));
+  registerTeardown(installVisibilityPause(container, editorApp));
   registerTeardown(installPreviewControls(editorApp));
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

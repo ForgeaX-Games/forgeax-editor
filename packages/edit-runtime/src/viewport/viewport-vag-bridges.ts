@@ -23,8 +23,8 @@
 // OOS-1 / OOS-3 (zero behavior change, no semantic rewrite)
 //   Every body here is moved VERBATIM from ViewportComponent.tsx (installFpsReport,
 //   installConsoleBridge, installNetworkBridge, installPreviewControls,
-//   installErrorOverlay, paintDiagnosticMessage, and the isSpawnRef/isSpawnDoc
-//   shape guards + the install-once module flags). Only the location changed; the
+//   installErrorOverlay, paintDiagnosticMessage + the install-once module flags).
+//   Only the location changed; the
 //   camera pose write, the createApp wiring, and the pick path (the three
 //   world-partition rewrite points) stay in viewport.ts / ViewportComponent.tsx.
 //
@@ -36,7 +36,7 @@
 //     rewrite); plan-strategy §2 D-5 (M6 tail) + §8 naming (install<Thing>).
 //   (backward) these bridges were split out of main.tsx bootEditor into
 //     ViewportComponent.tsx during the REPLAN D8 in-process viewport landing; the
-//     VAG protocol seam itself is the editor-core protocol.ts SSOT (16 VAG_* schemas).
+//     VAG protocol seam itself is the editor-core protocol.ts SSOT.
 
 import {
   sendVagMessage,
@@ -163,24 +163,6 @@ export function installNetworkBridge(): void {
   }
 }
 
-// Shape guards for VAG_SPAWN_ENTITY (schema declares entity/doc as z.unknown()).
-type SpawnRef = { name: string; components: Record<string, unknown> };
-type SpawnDoc = {
-  order: number[];
-  entities: Record<number, { name: string; parent: number | null; components: Record<string, unknown> }>;
-};
-function isSpawnRef(x: unknown): x is SpawnRef {
-  const r = x as SpawnRef | null;
-  return !!r && typeof r === 'object' && typeof r.name === 'string'
-    && typeof r.components === 'object' && r.components !== null;
-}
-function isSpawnDoc(x: unknown): x is SpawnDoc {
-  const d = x as SpawnDoc | null;
-  return !!d && typeof d === 'object'
-    && Array.isArray(d.order) && d.order.every((n) => typeof n === 'number')
-    && typeof d.entities === 'object' && d.entities !== null;
-}
-
 // Re-entrancy guard for the VAG_ASSETS_CHANGED → refreshCatalog → re-broadcast
 // cycle: the post-refresh re-broadcast is itself a VAG_ASSETS_CHANGED that
 // reaches this same handler (self-origin is allowed). A plain boolean that is
@@ -201,24 +183,6 @@ export function installPreviewControls(editorApp: { pause(): void; resume(): voi
       VAG_PREVIEW_PAUSE: () => editorApp.pause(),
       VAG_PREVIEW_PLAY: () => editorApp.resume(),
       VAG_PREVIEW_RELOAD: () => location.reload(),
-      VAG_SPAWN_ENTITY: (msg) => {
-        const p = msg.payload;
-        if (p.mode === 'reference' && isSpawnRef(p.entity)) {
-          gateway.dispatch({ kind: 'spawnEntity', name: p.entity.name, components: p.entity.components });
-        } else if (p.mode === 'full' && isSpawnDoc(p.doc)) {
-          const spawnDoc = p.doc;
-          const spawnEnts = spawnDoc.entities;
-          const cmds = spawnDoc.order.map((id) => {
-            const ent = spawnEnts[id]!;
-            return { kind: 'spawnEntity' as const, name: ent.name, parent: ent.parent ?? undefined, components: ent.components };
-          });
-          gateway.dispatch({ kind: 'transaction', label: `Import: ${p.name ?? 'GLB'}`, commands: cmds });
-        } else {
-          console.warn('[edit] VAG_SPAWN_ENTITY: malformed entity/doc payload — ignored');
-          return;
-        }
-        broadcastAssetsChanged();
-      },
       VAG_ASSETS_CHANGED: (msg) => {
         // A newly imported asset wrote a fresh pack-index on disk, but the
         // registry cached the pre-import index at boot and only re-fetches on a
@@ -254,6 +218,56 @@ export function installPreviewControls(editorApp: { pause(): void; resume(): voi
       },
     },
   });
+}
+
+// ── Visibility-driven pause (single-realm) ──────────────────────────────────
+// In-process replacement for the pause path the deleted EditSurface iframe host
+// used to drive. Under the old arch EditSurface owned an IntersectionObserver on
+// the iframe and posted VAG_PREVIEW_PAUSE/PLAY when the dock tab hid/showed it.
+// Single realm has no iframe: the host (studio SurfaceKeepAliveLayer) parks the
+// viewport off-screen + visibility:hidden, so nothing posts those messages and
+// the render loop kept running while hidden. This observer restores the pause by
+// watching the viewport's OWN container directly — no cross-realm message.
+//
+//   - IntersectionObserver: fires when the container leaves/enters the viewport
+//     (off-screen parking trips it).
+//   - document visibilitychange: covers tab/window backgrounding (the observer
+//     alone doesn't fire when the whole document is hidden).
+//
+// Guards against IntersectionObserver being absent (jsdom/older runtimes): the
+// visibilitychange listener still installs. Returns a disposer for cross-game
+// teardown (registered via registerTeardown at boot).
+export function installVisibilityPause(
+  container: HTMLElement,
+  editorApp: { pause(): void; resume(): void },
+): () => void {
+  let hiddenByViewport = false;
+  let hiddenByDocument = false;
+  const apply = (): void => {
+    if (hiddenByViewport || hiddenByDocument) editorApp.pause();
+    else editorApp.resume();
+  };
+
+  let io: IntersectionObserver | null = null;
+  if (typeof IntersectionObserver !== 'undefined') {
+    io = new IntersectionObserver((entries) => {
+      const visible = entries.some((e) => e.isIntersecting);
+      hiddenByViewport = !visible;
+      apply();
+    });
+    io.observe(container);
+  }
+
+  const onVisibility = (): void => {
+    hiddenByDocument = document.visibilityState === 'hidden';
+    apply();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
+  return () => {
+    try { io?.disconnect(); } catch { /* already gone */ }
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
 }
 
 /** Returns a disposer that restores console.error, removes the window listeners,

@@ -1,10 +1,13 @@
 // @forgeax/editor/protocol — VAG_* postMessage schema SSOT.
 //
-// 15 zod schemas covering every VAG_* message type observed in the
+// 14 zod schemas covering every VAG_* message type observed in the
 // editor / preview wire (research F-6 grep evidence). Three panel-action
 // invocation schemas were retired in feat-20260708 (no on-wire consumer
 // survived the single-realm merge; registry projection now derives from
-// gateway.listOps()). Naming is strictly paired:
+// gateway.listOps()). VAG_SPAWN_ENTITY was retired in the EditSurface
+// removal (its only producer was the deleted editor iframe host; the live
+// spawn path is core/scene/spawn-asset-ref.ts → gateway.dispatch, single
+// realm, no postMessage). Naming is strictly paired:
 //
 //   Vag<Name>Schema  — runtime z.object validator (consumer side)
 //   Vag<Name>Message — TypeScript type derived via z.infer<typeof ...>
@@ -12,7 +15,7 @@
 // Two shape families exist in the wire:
 //   1. payload-wrapped:  { type, payload: { ... } }
 //      ASSETS_CHANGED, CONSOLE, EDITOR_OPEN_SOURCE, EDITOR_POPOUT,
-//      EDITOR_REDOCK, EDITOR_REF, FPS_STATS, SPAWN_ENTITY
+//      EDITOR_REDOCK, EDITOR_REF, FPS_STATS
 //   2. type-only / flat: { type } or { type, ...fields }
 //      DEVICE_LOST, EDITOR_FLUSH, PREVIEW_DISPOSE, PREVIEW_PAUSE,
 //      PREVIEW_PLAY, PREVIEW_RELOAD (type-only)
@@ -24,12 +27,12 @@
 // "no try-catch silent swallow" — schemas surface real divergence).
 //
 // Anchors:
-//   requirements §AC-03 (15 schemas; was 16 before panel-action retirement)
+//   requirements §AC-03 (14 schemas; was 15 before VAG_SPAWN_ENTITY retirement)
 //   requirements §AC-05 (safeParse error.issues structured failure)
 //   plan-strategy §2 D-3 (single physical location)
 //   plan-strategy §2 D-4 (no silent type assertion)
 //   plan-strategy §8.1 (Vag<Name>Schema + Vag<Name>Message naming pair)
-//   research F-6 (15 type literals enumerated by grep; panel-action schemas removed)
+//   research F-6 (14 type literals enumerated by grep; panel-action + spawn-entity removed)
 
 import { z } from 'zod';
 
@@ -228,24 +231,6 @@ export const VagPreviewReloadSchema = z.object({
 });
 export type VagPreviewReloadMessage = z.infer<typeof VagPreviewReloadSchema>;
 
-// ── 16. VAG_SPAWN_ENTITY ─────────────────────────────────────────────────────
-// Producer: EditMode.tsx:226 (after import-scene). Two modes:
-//   mode='reference' — payload.entity carries a single ECS spawn cmd seed
-//   mode='full'      — payload.doc carries an entire EditSession tree
-// entity / doc / name are kept loosely shaped (z.unknown / z.string?) since
-// the engine-side ECS schemas evolve independently — this schema asserts
-// the message envelope, not the engine doc structure.
-export const VagSpawnEntitySchema = z.object({
-  type: z.literal('VAG_SPAWN_ENTITY'),
-  payload: z.object({
-    mode: z.enum(['reference', 'full']),
-    entity: z.unknown().optional(),
-    doc: z.unknown().optional(),
-    name: z.string().optional(),
-  }),
-});
-export type VagSpawnEntityMessage = z.infer<typeof VagSpawnEntitySchema>;
-
 // ── sendVagMessage — generic typed postMessage helper ───────────────────────────
 //
 // Replaces every bare `postMessage({ type: 'VAG_*', ... })` call site with
@@ -279,7 +264,7 @@ function vagSchemaUnion() {
     VagAssetsChangedSchema, VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
     VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema,
     VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
-    VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema, VagSpawnEntitySchema,
+    VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema,
   ]);
 }
 
@@ -364,7 +349,7 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
 // `addEventListener('message')` + `switch` + ad-hoc `safeParse` (or a raw
 // `e.data as T` cast with NO validation, and usually NO origin check). That
 // scattering is the robustness/security hole: foreign-origin pages could drive
-// `VAG_PREVIEW_*` / `VAG_SPAWN_ENTITY` straight into the engine bus, and
+// `VAG_PREVIEW_*` straight into the engine bus, and
 // malformed payloads reached handlers untyped. `onVagMessage` centralizes the
 // trust boundary: source gate → origin allowlist → known-type → schema parse →
 // typed dispatch, with rejected messages reported (never silently dropped).
@@ -385,7 +370,6 @@ const VAG_SCHEMA_BY_TYPE = {
   VAG_PREVIEW_PAUSE: VagPreviewPauseSchema,
   VAG_PREVIEW_PLAY: VagPreviewPlaySchema,
   VAG_PREVIEW_RELOAD: VagPreviewReloadSchema,
-  VAG_SPAWN_ENTITY: VagSpawnEntitySchema,
 } as const;
 
 export type VagType = keyof typeof VAG_SCHEMA_BY_TYPE;

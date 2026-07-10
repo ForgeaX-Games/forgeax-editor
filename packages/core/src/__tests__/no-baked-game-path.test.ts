@@ -3,8 +3,8 @@
 //
 // HARD REQUIREMENT: the ENTIRE editor holds ZERO host disk-layout convention.
 // The games-directory layout is each HOST's concern (standalone / studio),
-// injected via setPathResolver (`?gameRoot=`), the EditSurface `gameRoot` prop,
-// and the play-runtime FORGEAX_PREVIEW_GAMES_DIR / FORGEAX_GAMES_URL_PREFIX env —
+// injected via setPathResolver (`?gameRoot=`), the ViewportComponent `gameRoot`
+// prop, and the play-runtime FORGEAX_PREVIEW_GAMES_DIR / FORGEAX_GAMES_URL_PREFIX env —
 // never baked into a string literal (or comment) in editor source. dependency-
 // cruiser guards the package DAG but cannot see string literals; this red-line
 // fills that gap (the feedback's Layer 3 ②).

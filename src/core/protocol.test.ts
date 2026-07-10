@@ -1,15 +1,16 @@
 // @forgeax/editor/protocol — VAG_* schema unit tests (M1 w1, TDD red phase)
 //
-// 14 zod schemas, 1 pass + 1 fail per type (≥ 28 assertions). Each fail
-// case asserts `error.issues[0].path` hits a specific field name so the
-// downstream consumer can present a structured error (plan-strategy §8).
+// 13 zod schemas, 1 pass + 1 fail per type. Each fail case asserts
+// `error.issues[0].path` hits a specific field name so the downstream
+// consumer can present a structured error (plan-strategy §8).
 //
 // Anchors:
-//   requirements §AC-03 (16 schemas exist)
+//   requirements §AC-03 (14 runtime schema exports; VAG_SPAWN_ENTITY retired
+//     with the EditSurface removal — its only producer was the deleted iframe host)
 //   requirements §AC-05 (fail emits issues[].path)
 //   plan-strategy §2 D-3 (single physical location: this file's sibling protocol.ts)
 //   plan-strategy §8.1 (naming pair Vag<Name>Schema + Vag<Name>Message)
-//   research F-6 (16 type literals real-world grep evidence)
+//   research F-6 (type literals real-world grep evidence)
 
 import { describe, expect, test } from 'bun:test';
 
@@ -27,7 +28,6 @@ import {
   VagPreviewPauseSchema,
   VagPreviewPlaySchema,
   VagPreviewReloadSchema,
-  VagSpawnEntitySchema,
 } from '../protocol';
 
 describe('VAG_ASSETS_CHANGED', () => {
@@ -254,28 +254,10 @@ describe('VAG_PREVIEW_RELOAD', () => {
   });
 });
 
-describe('VAG_SPAWN_ENTITY', () => {
-  test('pass: payload { mode, entity?, doc?, name? } accepted', () => {
-    const r = VagSpawnEntitySchema.safeParse({
-      type: 'VAG_SPAWN_ENTITY',
-      payload: { mode: 'reference', entity: { name: 'Cube', components: {} }, name: 'Cube' },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: payload.mode invalid literal → path includes "mode"', () => {
-    const r = VagSpawnEntitySchema.safeParse({
-      type: 'VAG_SPAWN_ENTITY',
-      payload: { mode: 'partial' },
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('mode'))).toBe(true);
-    }
-  });
-});
-
-describe('schema completeness — all 14 exports present', () => {
+describe('schema completeness — all runtime schema exports present', () => {
   test('Object.keys(...).filter(endsWith("Schema")).length === 14', async () => {
+    // 14 runtime `const *Schema` exports (13 in the union + VagNetworkSchema,
+    // which is map-only). VAG_SPAWN_ENTITY was retired with EditSurface.
     const mod = await import('../protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
     expect(schemaKeys).toHaveLength(14);
