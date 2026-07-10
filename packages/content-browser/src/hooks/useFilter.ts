@@ -1,30 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
-import { ASSET_KINDS, type AssetKind, type CBAsset, type CBFilter } from '../types';
-
-const KIND_ICONS: Record<AssetKind, string> = {
-  mesh: '◫', texture: '🖼', image: '🖼', 'cube-texture': '🧊', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
-};
-
-const KIND_LABELS: Record<AssetKind, string> = {
-  mesh: 'Mesh', texture: 'Texture', image: 'Image', 'cube-texture': 'Cube Texture',
-  sampler: 'Sampler', material: 'Material', scene: 'Scene',
-  shader: 'Shader', skeleton: 'Skeleton', skin: 'Skin',
-  'animation-clip': 'Animation Clip', audio: 'Audio', font: 'Font',
-  'render-pipeline': 'Render Pipeline', tileset: 'Tileset',
-};
-
-function buildKindFilters(): CBFilter[] {
-  return ASSET_KINDS.map(kind => ({
-    id: `kind:${kind}`,
-    label: KIND_LABELS[kind],
-    icon: KIND_ICONS[kind],
-    predicate: (item: CBAsset) => item.kind === kind,
-    active: false,
-  }));
-}
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { buildKindFilters } from '../asset-kind-filters';
+import type { CBAsset, CBFilter } from '../types';
 
 export interface FilterAPI {
   filters: CBFilter[];
@@ -36,20 +12,41 @@ export interface FilterAPI {
   applyFilters: (items: CBAsset[]) => CBAsset[];
 }
 
-export function useFilter(): FilterAPI {
-  const [filters, setFilters] = useState<CBFilter[]>(buildKindFilters);
+export function useFilter(observedKinds: readonly string[] = []): FilterAPI {
+  const filterDefinitions = useMemo(() => buildKindFilters(observedKinds), [observedKinds]);
+  const [activeFilterIds, setActiveFilterIds] = useState<ReadonlySet<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
 
   const toggleFilter = useCallback((filterId: string) => {
-    setFilters(prev => prev.map(f =>
-      f.id === filterId ? { ...f, active: !f.active } : f
-    ));
+    setActiveFilterIds(prev => {
+      const next = new Set(prev);
+      if (next.has(filterId)) next.delete(filterId);
+      else next.add(filterId);
+      return next;
+    });
   }, []);
 
   const clearFilters = useCallback(() => {
-    setFilters(prev => prev.map(f => ({ ...f, active: false })));
+    setActiveFilterIds(new Set());
     setSearchQuery('');
   }, []);
+
+  // Remove hidden active state when a catalog-only kind disappears.
+  useEffect(() => {
+    const availableIds = new Set(filterDefinitions.map(filter => filter.id));
+    setActiveFilterIds(prev => {
+      const next = new Set([...prev].filter(id => availableIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filterDefinitions]);
+
+  const filters = useMemo(
+    () => filterDefinitions.map(filter => ({
+      ...filter,
+      active: activeFilterIds.has(filter.id),
+    })),
+    [filterDefinitions, activeFilterIds],
+  );
 
   const activeFilterCount = useMemo(() => filters.filter(f => f.active).length, [filters]);
 

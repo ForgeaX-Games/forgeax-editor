@@ -82,8 +82,12 @@ export function ContentBrowser() {
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const observedAssetKinds = useMemo(
+    () => [...new Set(allAssets.map(asset => asset.kind))],
+    [allAssets],
+  );
   const nav = useNavHistory();
-  const filter = useFilter();
+  const filter = useFilter(observedAssetKinds);
   const sort = useSort();
   const favorites = useFavorites();
   // The Asset panel's folder tree is scoped to the game's DECLARED asset roots

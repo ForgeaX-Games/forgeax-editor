@@ -18,7 +18,7 @@
   gap: 14px;
   margin-bottom: 14px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--color-border-default));
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .ba-title {
@@ -229,7 +229,7 @@
 
 .ba-kind {
   background: var(--bg-1);
-  border: 1px solid var(--color-border-default));
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
   overflow: hidden;
 }
