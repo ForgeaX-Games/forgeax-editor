@@ -6,18 +6,28 @@
       "guid": "2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071",
       "kind": "scene",
       "payload": {
-        "kind": "scene",
         "entities": [
           {
             "localId": 0,
             "components": {
+              "Entity": {
+                "self": 0
+              },
+              "MeshFilter": {
+                "assetHandle": 0
+              },
+              "MeshRenderer": {
+                "materials": [
+                  1
+                ]
+              },
               "Name": {
                 "value": "Ground"
               },
               "Transform": {
                 "pos": [
                   0,
-                  -0.1,
+                  -0.10000000149011612,
                   0
                 ],
                 "quat": [
@@ -28,9 +38,17 @@
                 ],
                 "scale": [
                   20,
-                  0.2,
+                  0.20000000298023224,
                   20
                 ]
+              }
+            }
+          },
+          {
+            "localId": 1,
+            "components": {
+              "Entity": {
+                "self": 1
               },
               "MeshFilter": {
                 "assetHandle": 0
@@ -39,56 +57,7 @@
                 "materials": [
                   2
                 ]
-              }
-            }
-          },
-          {
-            "localId": 1,
-            "components": {
-              "Name": {
-                "value": "Sun"
               },
-              "Transform": {
-                "pos": [
-                  0,
-                  6,
-                  0
-                ],
-                "quat": [
-                  0,
-                  0,
-                  0,
-                  1
-                ],
-                "scale": [
-                  1,
-                  1,
-                  1
-                ]
-              },
-              "DirectionalLight": {
-                "directionX": -0.4,
-                "directionY": -1,
-                "directionZ": -0.3,
-                "colorR": 1,
-                "colorG": 0.96,
-                "colorB": 0.88,
-                "intensity": 3.2,
-                "castShadow": true,
-                "mapSize": 2048,
-                "shadowDistance": 60
-              },
-              "Skylight": {
-                "colorR": 0.7,
-                "colorG": 0.8,
-                "colorB": 1,
-                "intensity": 1
-              }
-            }
-          },
-          {
-            "localId": 2,
-            "components": {
               "Name": {
                 "value": "RedBox"
               },
@@ -109,27 +78,30 @@
                   1,
                   1
                 ]
-              },
-              "MeshFilter": {
-                "assetHandle": 0
-              },
-              "MeshRenderer": {
-                "materials": [
-                  3
-                ]
               }
             }
           },
           {
-            "localId": 3,
+            "localId": 2,
             "components": {
+              "Entity": {
+                "self": 2
+              },
+              "MeshFilter": {
+                "assetHandle": 3
+              },
+              "MeshRenderer": {
+                "materials": [
+                  4
+                ]
+              },
               "Name": {
                 "value": "BlueBall"
               },
               "Transform": {
                 "pos": [
                   2,
-                  0.6,
+                  0.6000000238418579,
                   1
                 ],
                 "quat": [
@@ -139,17 +111,68 @@
                   1
                 ],
                 "scale": [
-                  1.2,
-                  1.2,
-                  1.2
+                  1.2000000476837158,
+                  1.2000000476837158,
+                  1.2000000476837158
                 ]
+              }
+            }
+          },
+          {
+            "localId": 3,
+            "components": {
+              "Entity": {
+                "self": 3
               },
-              "MeshFilter": {
-                "assetHandle": 1
+              "DirectionalLight": {
+                "direction": [
+                  -0.4000000059604645,
+                  -1,
+                  -0.30000001192092896
+                ],
+                "color": [
+                  1,
+                  0.9599999785423279,
+                  0.8799999952316284
+                ],
+                "intensity": 3.200000047683716,
+                "castShadow": true,
+                "cascadeCount": 4,
+                "splitLambda": 0.75,
+                "cascadeBlend": 0.20000000298023224,
+                "mapSize": 2048,
+                "depthBias": 0.004999999888241291,
+                "normalBias": 0.05000000074505806,
+                "shadowDistance": 60,
+                "pcfKernelSize": 3
               },
-              "MeshRenderer": {
-                "materials": [
-                  4
+              "Name": {
+                "value": "Sun"
+              },
+              "Skylight": {
+                "color": [
+                  0.699999988079071,
+                  0.800000011920929,
+                  1
+                ],
+                "intensity": 1
+              },
+              "Transform": {
+                "pos": [
+                  0,
+                  6,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
                 ]
               }
             }
@@ -157,6 +180,9 @@
           {
             "localId": 4,
             "components": {
+              "Entity": {
+                "self": 4
+              },
               "Name": {
                 "value": "Player"
               },
@@ -184,9 +210,9 @@
       },
       "refs": [
         "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
-        "95730fd2-9846-5f84-8658-0b3c971eb263",
         "3a000001-0000-5000-8000-000000000001",
         "3a000002-0000-5000-8000-000000000002",
+        "95730fd2-9846-5f84-8658-0b3c971eb263",
         "3a000003-0000-5000-8000-000000000003"
       ]
     },
