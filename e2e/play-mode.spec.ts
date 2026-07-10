@@ -85,6 +85,23 @@ test.describe('play-mode — standalone ▶ Play / FPS / canvas / ■ Stop chain
     expect(nonBlack, 'canvas should render non-black frames during Play').toBe(true);
   });
 
+  test('Escape releases Play input to editor controls without stopping simulation', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+
+    await page.locator('[data-testid="vp-play"]').click();
+    await expect(page.locator('[data-testid="game-overlay-fps"]'))
+      .toBeAttached({ timeout: 10_000 });
+
+    // Escape must un-possess play·game → play·scene. The restored ■ control (not
+    // ▶) proves the simulation continues while editor controls are available.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="vp-stop"]'))
+      .toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="vp-play"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="game-overlay-fps"]')).toHaveCount(0);
+  });
+
   test('■ Stop returns to Edit mode', async ({ page }) => {
     await page.goto(STANDALONE_URL);
     await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
