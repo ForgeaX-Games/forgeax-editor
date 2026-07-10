@@ -196,8 +196,6 @@ import './store/folder-selection';
 export {
   loadRawAssets,
   materialSwatch,
-  makeMaterialResolver,
-  makeMeshResolver,
   extractPackDirs,
 } from './assets/assets';
 export type { PackAsset, RawAsset } from './assets/assets';
