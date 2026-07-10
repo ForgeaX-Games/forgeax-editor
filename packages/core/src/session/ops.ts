@@ -11,11 +11,12 @@ import { childrenOf, isSelfOrDescendant } from './document';
 import { gateway } from '../store/store';
 import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+import type { SceneAsset } from '@forgeax/engine-types';
+import { rootsToSceneAsset } from '@forgeax/engine-runtime';
 import {
   entExists,
   entParent,
   entName,
-  entComponents,
 } from '../store/entity-state';
 import { Transform } from '@forgeax/engine-runtime';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
@@ -232,11 +233,59 @@ export function ungroupEntity(handle: EntityHandle): void {
   gateway.dispatch({ kind: 'setSelectionMany', ids: kids });
 }
 
-// Module-level clipboard (flat copy of {name, components}; hierarchy is dropped
-// for now). Paste spawns clones at a small offset and selects them.
+// ── Scene-asset collect (read side) ─────────────────────────────────────────
+// Collect an entity's subtree into a self-contained SceneAsset POD via the
+// engine's rootsToSceneAsset. This is a READ (registry + world), so it lives
+// here — outside the gateway — while the WRITE (re-instantiate) goes through the
+// instantiateSceneAsset document op / EngineFacade (invariant 7). Materials come
+// back as GUID strings, so the POD is time/scene-safe: a clipboard entry copied
+// now pastes correctly later (or into another scene) without dangling handles.
+// This is the fidelity fix — the old entComponents→spawnComponentData path
+// dropped the source MeshRenderer (invisible duplicate) and flattened the
+// subtree; rootsToSceneAsset BFS-collects the whole subtree with materials.
+function collectSubtree(handle: EntityHandle): SceneAsset | null {
+  const world = gateway.activeWorld;
+  const registry = gateway.doc.registry;
+  if (registry === undefined) return null; // headless / pre-boot: no registry
+  if (!entExists(world, handle)) return null;
+  // rootsToSceneAsset takes the engine World type; activeWorld already IS it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = rootsToSceneAsset(registry as any, world as any, [handle]);
+  if (!r.ok) {
+    // charter P3 / Fail Fast: never let duplicate/copy become a MYSTERIOUS no-op.
+    // A collect failure means a shared asset (material/mesh) on the subtree has no
+    // catalogued GUID for the reverse-lookup — surface it at author time instead of
+    // silently doing nothing (mirrors spawnComponentData's dropped-component warn).
+    console.warn(
+      `[editor] duplicate/copy: scene-asset collect failed for entity ${handle} — ` +
+      `${JSON.stringify(r.error)}. The entity was not duplicated. This usually means a ` +
+      `material/mesh handle on the subtree is not catalogued in the AssetRegistry.`,
+    );
+    return null;
+  }
+  return r.value;
+}
+
+// Pull a root entity's Transform.pos from a freshly-collected SceneAsset so paste
+// offsets can preserve the clipboard's relative layout. The root is the entity
+// with no ChildOf (rootsToSceneAsset strips ChildOf on roots).
+function assetRootPos(asset: SceneAsset): [number, number, number] {
+  for (const e of asset.entities) {
+    const comps = e.components as Record<string, Record<string, unknown>> | undefined;
+    if (comps && !comps.ChildOf) {
+      const pos = (comps.Transform?.pos as number[] | undefined) ?? [0, 0, 0];
+      return [pos[0] ?? 0, pos[1] ?? 0, pos[2] ?? 0];
+    }
+  }
+  return [0, 0, 0];
+}
+
+// Module-level clipboard: each entry is a self-contained SceneAsset POD (materials
+// as GUID strings) + the source name. Paste re-instantiates via the scene-asset
+// round-trip (preserving materials + subtree) at a small offset and selects them.
 interface ClipEntry {
   name: string;
-  components: Record<string, unknown>;
+  asset: SceneAsset;
 }
 let clipboard: ClipEntry[] = [];
 
@@ -245,11 +294,9 @@ export function copySelected(handles: EntityHandle[]): number {
     .map((handle) => {
       const world = gateway.activeWorld;
       if (!entExists(world, handle)) return null;
-      // name + components read from the active world (SSOT) via entity-state.
-      // spawnComponentData skips Name/Transform/ChildOf baseline keys, so carrying
-      // them here is harmless.
-      const name = entName(world, handle);
-      return { name, components: structuredClone(entComponents(world, handle)) };
+      const asset = collectSubtree(handle);
+      if (asset === null) return null;
+      return { name: entName(world, handle), asset };
     })
     .filter((c): c is ClipEntry => c !== null);
   return clipboard.length;
@@ -259,29 +306,31 @@ export function hasClipboard(): boolean {
   return clipboard.length > 0;
 }
 
-// shared spawn-from-clipboard helper. `translate` maps a clip entry's original
-// Transform (x,z) → the desired spawn position.
+// shared paste helper. `translate` maps a clip entry's original root Transform
+// (x,z) → the desired paste position; the delta becomes the op's posOffset so
+// EVERY root in the subtree shifts together (relative layout preserved). One
+// transaction → one undo; hierarchy is preserved (each entry round-trips its own
+// subtree via instantiateSceneAsset).
 function spawnClipboard(label: string, translate: (t: { x: number; z: number }) => { x: number; z: number }): void {
-  const commands: EditorOp[] = [];
-  const refs: number[] = [];
-  for (const c of clipboard) {
-    const comps = structuredClone(c.components);
-    const t = comps.Transform as { pos?: number[] } | undefined;
-    if (t) {
-      const pos = t.pos ?? [0, 0, 0];
-      const moved = translate({ x: pos[0] ?? 0, z: pos[2] ?? 0 });
-      t.pos = [moved.x, pos[1] ?? 0, moved.z];
-    }
-    const ref = nextPlaceholder();
-    refs.push(ref);
-    commands.push({ kind: 'spawnEntity', name: c.name, parent: null, components: comps, _id: ref });
-  }
+  if (clipboard.length === 0) return;
+  const commands: EditorOp[] = clipboard.map((c) => {
+    const [ox, , oz] = assetRootPos(c.asset);
+    const moved = translate({ x: ox, z: oz });
+    return {
+      kind: 'instantiateSceneAsset',
+      asset: c.asset,
+      parent: null,
+      posOffset: [moved.x - ox, 0, moved.z - oz],
+      label: `paste ${c.name}`,
+    } as EditorOp;
+  });
   gateway.dispatch({ kind: 'transaction', label, commands });
-  // Each spawn applier rewrote its _id to the real handle; collect them.
+  // Each instantiate applier rewrote _newRoots in place; collect the primary
+  // root of each entry for post-paste selection.
   const handles: EntityHandle[] = [];
-  for (let i = 0; i < commands.length; i++) {
-    const c = commands[i] as { _id?: number };
-    if (typeof c._id === 'number' && c._id >= 0) handles.push(c._id as EntityHandle);
+  for (const c of commands) {
+    const roots = (c as { _newRoots?: number[] })._newRoots;
+    if (roots && roots.length > 0) handles.push(roots[0] as EntityHandle);
   }
   gateway.dispatch({ kind: 'setSelectionMany', ids: handles });
 }
@@ -294,20 +343,32 @@ export function pasteClipboard(): void {
 // Paste so the clipboard's centroid lands at (wx,wz), preserving relative layout.
 export function pasteClipboardAt(wx: number, wz: number): void {
   if (clipboard.length === 0) return;
-  const pts = clipboard.map((c) => (c.components.Transform as { pos?: number[] } | undefined)?.pos ?? [0, 0, 0]);
+  const pts = clipboard.map((c) => assetRootPos(c.asset));
   const cx = pts.reduce((s, p) => s + (p[0] ?? 0), 0) / pts.length;
   const cz = pts.reduce((s, p) => s + (p[2] ?? 0), 0) / pts.length;
   spawnClipboard(`paste@ x${clipboard.length}`, (t) => ({ x: wx + (t.x - cx), z: wz + (t.z - cz) }));
 }
 
+// Duplicate an entity (Hierarchy Duplicate / Ctrl+D): collect its subtree to a
+// SceneAsset and re-instantiate it under the SAME parent as "{name} copy" (in
+// place, no offset). Routing through the scene-asset round-trip preserves the
+// entity's materials (the fixed bug: the old entComponents path lost MeshRenderer
+// → invisible copy) AND its child subtree (the old single-entity path dropped it).
 export function duplicateEntity(handle: EntityHandle): void {
   const world = gateway.activeWorld;
   if (!entExists(world, handle)) return;
-  // name/parent/components read from the active world (SSOT) via entity-state.
-  gateway.dispatch({
-    kind: 'spawnEntity',
-    name: `${entName(world, handle)} copy`,
+  const asset = collectSubtree(handle);
+  if (asset === null) return;
+  const cmd: EditorOp = {
+    kind: 'instantiateSceneAsset',
+    asset,
     parent: entParent(world, handle),
-    components: structuredClone(entComponents(world, handle)),
-  });
+    name: `${entName(world, handle)} copy`,
+    label: `duplicate ${entName(world, handle)}`,
+  };
+  gateway.dispatch(cmd);
+  const roots = (cmd as { _newRoots?: number[] })._newRoots;
+  if (roots && roots.length > 0) {
+    gateway.dispatch({ kind: 'setSelection', id: roots[0] as EntityHandle });
+  }
 }

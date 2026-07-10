@@ -13,6 +13,7 @@ export type {
   EditSession,
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
+import type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
 
@@ -44,6 +45,18 @@ export type BuiltinEditorOp =
   | { kind: 'addComponent'; entity: EntityId; component: string; value: unknown }
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
+  // instantiateSceneAsset — re-instantiate a collected SceneAsset POD (from the
+  // engine's rootsToSceneAsset) as live world entities, materials round-tripped
+  // by GUID. This is the ONE document op both "copy an existing entity" callers
+  // project onto: duplicateEntity (Hierarchy Duplicate / Ctrl+D — same parent,
+  // "{name} copy") and clipboard paste (root, positional offset). Routing both
+  // through the engine scene-asset round-trip fixes the material-loss bug where
+  // the old entComponents→spawnComponentData path dropped the source MeshRenderer
+  // (BASELINE_NAMES skip + fallback-suppressed), and preserves the child subtree
+  // the old single-entity duplicate dropped. `asset` is self-contained so redo
+  // replays deterministically (no re-collect). `parent`/`name` retarget the
+  // PRIMARY new root; `posOffset` shifts every new root's Transform.pos.
+  | { kind: 'instantiateSceneAsset'; asset: SceneAsset; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
@@ -124,6 +137,9 @@ export interface CommandError {
     | 'REMOVE_FAILED'
     | 'HIDE_FAILED'
     | 'UNHIDE_FAILED'
+    // instantiateSceneAsset: the engine scene-asset round-trip (collect →
+    // registry.instantiateFlat) or a post-instantiate retarget step failed.
+    | 'INSTANTIATE_FAILED'
     | 'NO_NAME_COMPONENT'
     | 'PROTECTED_COMPONENT'
     // ── New gateway-layer codes (plan-strategy §2 D-7) ──

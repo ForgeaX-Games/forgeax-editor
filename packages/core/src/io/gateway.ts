@@ -212,7 +212,12 @@ export class EditGateway {
   private _getEngineFacade(): EngineFacade {
     const world = this.doc.world;
     if (!this._engineFacade || this._facadeWorld !== world) {
-      this._engineFacade = new EngineFacade(world!);
+      // Pass doc.registry so the facade's instantiateSceneAssetFlat can run
+      // GUID→live-handle resolution (registry.instantiateFlat). registry is
+      // injected by edit-runtime at boot; a rebuild on world swap re-reads the
+      // then-current registry. Read side (worldToPack) uses doc.registry the
+      // same way (disk-io.ts:236).
+      this._engineFacade = new EngineFacade(world!, this.doc.registry);
       this._facadeWorld = world;
     }
     return this._engineFacade;

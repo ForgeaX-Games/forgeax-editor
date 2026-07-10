@@ -201,6 +201,25 @@ const builtinOps: ReadonlyArray<{
     title: 'Set Hidden',
   },
   {
+    id: 'instantiateSceneAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        asset: {
+          type: 'object',
+          description:
+            'a collected SceneAsset POD (from the engine rootsToSceneAsset) — materials are GUID strings, so it is time/scene-safe. Duplicate/paste collect it on the read side; an AI caller collects via the engine round-trip before dispatching.',
+        },
+        parent: { type: 'number', nullable: true, description: 'retarget the PRIMARY new root under this parent handle (ChildOf); omit/null keeps it a root.' },
+        name: { type: 'string', description: 'rename the PRIMARY new root (e.g. "{name} copy").' },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos (paste offset).' },
+        label: { type: 'string' },
+      },
+      required: ['asset'],
+    },
+    title: 'Instantiate Scene Asset',
+  },
+  {
     id: 'transaction', domain: 'document',
     argsSchema: {
       type: 'object',
