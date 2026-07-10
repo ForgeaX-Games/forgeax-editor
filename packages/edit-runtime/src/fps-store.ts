@@ -2,10 +2,8 @@
 // by the frame-loop accumulator (installFpsReport in main.tsx). The GameOverlay
 // (w24) and ViewportBar (w25) read this to display a live FPS counter.
 //
-// This is the sole SSOT for the editor's FPS readout — the VagFpsStatsSchema
-// message to the parent frame is a separate reporting channel for the Studio UI.
-// The in-viewport counter reads directly from this store, not from the postMessage
-// bridge, because the overlay renders inside the edit iframe.
+// This is the sole SSOT for the editor's FPS readout. The in-viewport counter
+// reads directly from this store because the viewport and overlay share one realm.
 
 type FpsListener = (fps: number) => void;
 const listeners = new Set<FpsListener>();

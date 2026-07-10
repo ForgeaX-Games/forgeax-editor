@@ -28,6 +28,10 @@ export interface PanelBridgeEvents {
   addAssetToScene: DragAssetRef;
   /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
   assetsChanged: { hint?: 'directory-only' | 'pack-changed' };
+  /** In-process edit-runtime diagnostics; play keeps its real iframe VAG wire. */
+  editorHealth: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number };
+  editorConsole: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number };
+  editorNetwork: { kind: 'fetch' | 'xhr' | 'ws'; method: string; url: string; status: number; ms: number; ok: boolean; ts: number };
   editorRef: EditorRefPayload;
   addAssetToChat: AssetChatRef[];
 }

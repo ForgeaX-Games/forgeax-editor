@@ -8,9 +8,8 @@
 // of the clean view. The overlay auto-hides when the cursor leaves the trigger zone.
 //
 // The overlay shows current run + display state via the quadrant SSOT read on
-// every render. FPS is passed as a prop from the frame-loop accumulator (main.tsx
-// FPS report already writes to the VagFpsStatsSchema; we repurpose that frame
-// budget count as an in-component FPS value so the overlay is self-contained).
+// every render. FPS is passed as a prop from the frame-loop accumulator so the
+// overlay stays self-contained.
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { getViewportQuadrant, onViewportQuadrantChange, type ViewportQuadrant } from './viewport/viewport-quadrant';

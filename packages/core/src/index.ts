@@ -333,7 +333,7 @@ export {
 } from './session/ops';
 
 // ── Context menu service ──
-export { ContextMenuHost, setContextMenuRenderer, showContextMenu } from './ui/context-menu-service';
+export { setContextMenuRenderer, showContextMenu } from './ui/context-menu-service';
 export type { ContextMenuRenderer, ContextMenuRequest, MenuItemDef } from './ui/context-menu-service';
 
 // ── Resize primitive (shared splitter: drag handle + persisted size hook) ──

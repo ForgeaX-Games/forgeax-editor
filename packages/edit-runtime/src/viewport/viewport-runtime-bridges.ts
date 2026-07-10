@@ -1,11 +1,11 @@
-// viewport-vag-bridges.ts — the VAG / console / network / diagnostics bridges
+// viewport-runtime-bridges.ts — the console / network / diagnostics bridges
 // factored out of ViewportComponent.tsx (M6 / AC-08 / plan-strategy §2 D-5).
 //
 // WHAT THIS IS
 //   ViewportComponent.tsx had grown to ~800 lines because the whole set of
-//   process-global bridges — the FPS reporter, the console/network monkeypatch
-//   bridges that forward to the parent frame over VAG, the preview-control message
-//   handler, the render-error overlay, and the createApp-failure diagnostic panel —
+//   process-global bridges — the FPS reporter, in-process console/network
+//   diagnostics, visibility pause, the render-error overlay, and the createApp-
+//   failure diagnostic panel —
 //   lived inline below the boot sequence. This file lifts that cohesive cluster out;
 //   ViewportComponent.tsx keeps the React component + the engine boot sequence
 //   (bootViewport) and imports these installers.
@@ -14,9 +14,9 @@
 //   The sister loop world-partition semantically rewrites the createApp WIRING
 //   (ViewportComponent.tsx:269 — how the booted world is threaded into the editor
 //   session via a super world handle). None of the bridges below touch that wiring:
-//   they monkeypatch document-lifetime globals (console/fetch/XHR/WebSocket), post
-//   VAG frames to window.parent, and paint DOM overlays. Moving them OUT of
-//   ViewportComponent.tsx therefore REDUCES the controlled-intersection surface
+//   they monkeypatch document-lifetime globals (console/fetch/XHR/WebSocket),
+//   emit typed in-process diagnostics, and paint DOM overlays. Moving them OUT
+//   of ViewportComponent.tsx therefore REDUCES the controlled-intersection surface
 //   rather than adding to it — bootViewport keeps only the call sites (verbatim),
 //   and world-partition's rewrite stays confined to the world-handle seam it owns.
 //
@@ -37,14 +37,9 @@
 //     rewrite); plan-strategy §2 D-5 (M6 tail) + §8 naming (install<Thing>).
 //   (backward) these bridges were split out of main.tsx bootEditor into
 //     ViewportComponent.tsx during the REPLAN D8 in-process viewport landing; the
-//     VAG protocol seam itself is the editor-core protocol.ts SSOT.
+//     Cross-realm play telemetry remains in editor-core protocol.ts; this file is
+//     the in-process edit-runtime bridge set.
 
-import {
-  sendVagMessage,
-  VagConsoleSchema,
-  VagNetworkSchema,
-  VagFpsStatsSchema,
-} from '@forgeax/editor-core/protocol';
 import { gateway, panelBridge, broadcastAssetsChanged } from '@forgeax/editor-core';
 import { setFps } from '../fps-store';
 
@@ -58,7 +53,6 @@ export function installFpsReport(
     frames++; accum += dt;
     if (accum >= 1) {
       const fps = Math.round(frames / accum);
-      sendVagMessage(window.parent, VagFpsStatsSchema, { fps });
       setFps(fps);   // feed the shared fps-store (GameOverlay reads it too)
       onFps(fps);    // feed this component's local state (ViewportChrome prop)
       frames = 0; accum = 0;
@@ -70,7 +64,7 @@ export function installFpsReport(
 // window.fetch / XHR.prototype / WebSocket) that hold NO engine references, so
 // they survive a cross-game realm reset untouched. Guard them install-once — a
 // second install after resetEditRealm would double-wrap console.error (duplicate
-// VAG frames) and re-wrap an already-wrapped fetch. They intentionally do NOT
+// diagnostics) and re-wrap an already-wrapped fetch. They intentionally do NOT
 // register teardown; they are document-lifetime, not per-boot.
 let consoleBridgeInstalled = false;
 let networkBridgeInstalled = false;
@@ -84,19 +78,15 @@ export function installConsoleBridge(): void {
       original(...args);
       try {
         const text = args.map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
-        sendVagMessage(window.parent, VagConsoleSchema, { level, text, ts: Date.now() });
+        panelBridge.emit('editorConsole', { level, text, ts: Date.now() });
       } catch { /* cross-origin */ }
     };
   });
   window.addEventListener('error', (ev) => {
-    try {
-      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() });
-    } catch { /* cross-origin */ }
+    panelBridge.emit('editorConsole', { level: 'error', text: `${ev.message}\n  at ${ev.filename}:${ev.lineno}`, ts: Date.now() });
   });
   window.addEventListener('unhandledrejection', (ev) => {
-    try {
-      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
-    } catch { /* cross-origin */ }
+    panelBridge.emit('editorConsole', { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
   });
 }
 
@@ -104,9 +94,15 @@ export function installNetworkBridge(): void {
   if (networkBridgeInstalled) return;
   networkBridgeInstalled = true;
   const send = (kind: 'fetch' | 'xhr' | 'ws', method: string, url: string, status: number, ms: number, ok: boolean): void => {
-    try {
-      sendVagMessage(window.parent, VagNetworkSchema, { kind, method, url: String(url).slice(0, 2048), status, ms: Math.round(ms), ok, ts: Date.now() });
-    } catch { /* cross-origin */ }
+    panelBridge.emit('editorNetwork', {
+      kind,
+      method,
+      url: String(url).slice(0, 2048),
+      status,
+      ms: Math.round(ms),
+      ok,
+      ts: Date.now(),
+    });
   };
   const origFetch = window.fetch?.bind(window);
   if (origFetch) {

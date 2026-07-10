@@ -13,6 +13,8 @@ import { panelBridge, type EditorRefPayload } from './panel-bridge';
 import type { AssetChatRef } from './cross-panel-types';
 
 export interface InterfaceBridgeHandlers {
+  onEditorConsole(entry: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number }): void;
+  onEditorNetwork(entry: { kind: 'fetch' | 'xhr' | 'ws'; method: string; url: string; status: number; ms: number; ok: boolean; ts: number }): void;
   onEditorRef(payload: EditorRefPayload): void;
   onAddAssetToChat(refs: AssetChatRef[]): void;
 }
@@ -21,9 +23,13 @@ export interface InterfaceBridgeHandlers {
  * disposer is owned by the interface App effect, so hot reload/remount cannot
  * stack duplicate chat pills or panel-focus actions. */
 export function installInterfaceBridge(handlers: InterfaceBridgeHandlers): () => void {
+  const offEditorConsole = panelBridge.on('editorConsole', handlers.onEditorConsole);
+  const offEditorNetwork = panelBridge.on('editorNetwork', handlers.onEditorNetwork);
   const offEditorRef = panelBridge.on('editorRef', handlers.onEditorRef);
   const offAddAssetToChat = panelBridge.on('addAssetToChat', handlers.onAddAssetToChat);
   return () => {
+    offEditorConsole();
+    offEditorNetwork();
     offEditorRef();
     offAddAssetToChat();
   };

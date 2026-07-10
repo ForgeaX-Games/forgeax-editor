@@ -1,11 +1,7 @@
-import { useEffect, useState } from 'react';
-import { CtxMenu } from './ctx-menu';
-
 // Single context-menu entry point for ALL editor panels (Hierarchy / Assets /
 // Inspector / …). Single-realm hosts inject their app-wide menu renderer through
-// setContextMenuRenderer; handlers stay as closures in this realm, so no VAG
-// postMessage protocol duplicates a UI capability. A standalone/pop-out host can
-// instead mount ContextMenuHost for the same local renderer.
+// setContextMenuRenderer; handlers stay as closures in this realm, so no
+// postMessage protocol duplicates a UI capability.
 
 export interface MenuItemDef {
   label?: string;
@@ -41,33 +37,3 @@ export function showContextMenu(
   renderMenu?.({ x: e.clientX, y: e.clientY, items: usable });
 }
 
-/** Mounted by a standalone/pop-out editor root when it supplies the local menu
- * renderer itself instead of the interface's app-wide host. */
-export function ContextMenuHost() {
-  const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
-  useEffect(() => {
-    const dispose = setContextMenuRenderer(setMenu);
-    const close = () => setMenu(null);
-    window.addEventListener('click', close);
-    window.addEventListener('blur', close);
-    return () => { dispose(); window.removeEventListener('click', close); window.removeEventListener('blur', close); };
-  }, []);
-  if (!menu) return null;
-  return (
-    <CtxMenu x={menu.x} y={menu.y} onClickCapture={() => setMenu(null)}>
-      {menu.items.map((it, i) =>
-        it.sep ? (
-          <div className="ctxsep" key={`s${i}`} />
-        ) : (
-          <div
-            key={`i${i}`}
-            className={`ctxitem${it.disabled ? ' disabled' : ''}`}
-            onClick={() => { if (!it.disabled) it.onClick?.(); setMenu(null); }}
-          >
-            {it.label}
-          </div>
-        ),
-      )}
-    </CtxMenu>
-  );
-}
