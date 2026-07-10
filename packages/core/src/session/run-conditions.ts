@@ -24,20 +24,8 @@ export function and(...conds: RunCondition[]): RunCondition {
   return (world: EcsWorld) => conds.every((c) => c(world));
 }
 
-/**
- * notEditing — true when we are NOT in edit mode.
- *
- * Formula: !getResource('EditMode')?.active (plan-strategy D-5).
- *
- * - EditMode.active=true  → notEditing=false (systems frozen in edit mode)
- * - EditMode.active=false → notEditing=true  (systems run in play mode)
- * - EditMode absent       → notEditing=true  (default: systems run)
- */
-export function notEditing(world: EcsWorld): boolean {
-  // Use hasResource + getResource instead of try-catch for cleaner semantic matching.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = world as any;
-  if (!w.hasResource?.('EditMode')) return true; // absent → true
-  const state = w.getResource('EditMode') as { active?: boolean } | undefined;
-  return !(state?.active);
-}
+// D-7 (M6): `notEditing` was removed. After editorWorld was forked from
+// sceneWorld (M4), the editWorld is never frozen and game systems are
+// structurally absent from the edit-mode active schedule — so a "not editing"
+// run-condition gate has no consumer. `and` stays because it is a general
+// runIf combinator the engine does not provide (research Finding 6).

@@ -127,4 +127,67 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
       expect((entityState as Record<string, unknown>)[name]).toBeUndefined();
     }
   });
+
+  // ── (d) w27: super handle-pair opts → stale error carries .detail.reason ──
+  // feat-20260709 M5 (w27, D-8): when entComponent/entComponents run the
+  // three-layer check (opts = binding + pair), the stale case narrows WHY via
+  // .detail.reason (epoch vs generation), and a wrong-world handle yields
+  // world-mismatch instead of a stale error.
+  const WORLD_REF_SCENE = 1;
+  const WORLD_REF_EDITOR = 0;
+
+  it('(d) entComponent with a bumped-epoch pair returns detail.reason world-epoch-mismatch', () => {
+    const world = new World();
+    const h = spawn(world, 'Zeta');
+    // Pair minted at epoch 0; the live binding advanced to epoch 1 (a reload).
+    const r = entComponent(world, h, 'Transform', {
+      binding: { worldRef: WORLD_REF_SCENE, epoch: 1, world },
+      pair: { worldRef: WORLD_REF_SCENE, epoch: 0 },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok && r.error.code === 'stale-entity-handle') {
+      expect(r.error.detail?.reason).toBe('world-epoch-mismatch');
+      expect(r.error.entity).toBe(h);
+    } else {
+      throw new Error(`expected stale-entity-handle, got ${r.ok ? 'ok' : r.error.code}`);
+    }
+  });
+
+  it('(d) entComponent with a despawned entity (same epoch) returns detail.reason stale-entity', () => {
+    const world = new World();
+    const h = spawn(world, 'Eta');
+    world.despawn(h);
+    const r = entComponent(world, h, 'Transform', {
+      binding: { worldRef: WORLD_REF_SCENE, epoch: 0, world },
+      pair: { worldRef: WORLD_REF_SCENE, epoch: 0 },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok && r.error.code === 'stale-entity-handle') {
+      expect(r.error.detail?.reason).toBe('stale-entity');
+    } else {
+      throw new Error(`expected stale-entity-handle, got ${r.ok ? 'ok' : r.error.code}`);
+    }
+  });
+
+  it('(d) entComponent with a wrong-world pair returns world-mismatch', () => {
+    const world = new World();
+    const h = spawn(world, 'Theta');
+    // Pair claims the editor world; validated against the scene binding.
+    const r = entComponent(world, h, 'Transform', {
+      binding: { worldRef: WORLD_REF_SCENE, epoch: 0, world },
+      pair: { worldRef: WORLD_REF_EDITOR, epoch: 0 },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('world-mismatch');
+  });
+
+  it('(d) entComponents with an invalid pair returns {} (batch read guard)', () => {
+    const world = new World();
+    const h = spawn(world, 'Iota');
+    const comps = entComponents(world, h, {
+      binding: { worldRef: WORLD_REF_SCENE, epoch: 1, world },
+      pair: { worldRef: WORLD_REF_SCENE, epoch: 0 },
+    });
+    expect(Object.keys(comps).length).toBe(0);
+  });
 });

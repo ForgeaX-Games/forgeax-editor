@@ -60,6 +60,12 @@ export type {
 // against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only export — no
 // runtime symbol added to the barrel (index.ts fan-in budget unaffected, D-8).
 export type { EngineFacade } from './io/engine-facade';
+// M4 (w18, plan-strategy §2 D-5): world-manager mints a DEDICATED EngineFacade
+// bound to editorWorld through this factory — the gateway's engineFacade() binds
+// to sceneWorld (doc.world) and must not be repurposed. Runtime export (unlike
+// the type-only EngineFacade above): raw `new EngineFacade` stays inside
+// engine-facade.ts so lint-unique-mutator's single-write-gate-file invariant holds.
+export { createEngineFacade } from './io/engine-facade';
 
 // ── M5 eval channel (plan-strategy §2 D-4, D-8) ──
 // createEvalChannel is the single runtime export for the dev-accessible AI eval
@@ -103,8 +109,35 @@ export {
   entComponents,
   worldEntityHandles,
   worldRootHandles,
+  registerActiveReadBinding,
+  getActiveReadBinding,
 } from './store/entity-state';
-export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError } from './store/entity-state';
+export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError, HandleCheckOpts } from './store/entity-state';
+
+// ── Handle-pair (M5 / D-4: super's world-bound handle + three-layer validation) ──
+// The super (world-manager) layer holds HandlePairs (worldRef + epoch + entity)
+// instead of bare EntityHandles, and validates them through validateHandlePair
+// before any read/write — the one defence against the RD3 cross-world red line.
+export { validateHandlePair } from './store/handle-pair';
+export type {
+  HandlePair,
+  HandlePairBinding,
+  HandlePairResult,
+  HandlePairStaleReason,
+  WorldMismatchError,
+  HandlePairStaleError,
+} from './store/handle-pair';
+
+// Super (world-manager) selection door — NOT part of the 49-symbol ./store/store
+// barrel snapshot (exported directly from ./store/selection). world-manager mints
+// world-bound pairs (registerSelectionBindingProvider), reads them (getSelectionPair
+// / getSelectionPairs), and batch-invalidates on reload (revalidateSelection).
+export {
+  getSelectionPair,
+  getSelectionPairs,
+  registerSelectionBindingProvider,
+  revalidateSelection,
+} from './store/selection';
 
 // ── Hot-reload two-tier decision (D-8; consumed by edit-runtime orchestrator) ──
 export { schemaFingerprint, decideReloadTier } from './util/hot-reload';
@@ -324,13 +357,13 @@ export {
 } from './util/path-resolver';
 export type { PathResolver } from './util/path-resolver';
 
-// ── EditMode resource injection (▶/■ Simulate, feat-20260630-viewport w11) ──
-export { injectEditMode, EDIT_MODE_KEY } from './session/edit-mode';
-export type { EditModeState } from './session/edit-mode';
-// ── Run conditions (notEditing gate + and combinator, feat-20260630 w10) ──
-// Barrel-symmetric with injectEditMode: consumers wiring game systems need the
-// same gate the discoverer uses (verify V-3 affordances finding).
-export { notEditing, and } from './session/run-conditions';
+// ── Run conditions (and combinator — feat-20260630 w10) ──
+// D-7 (M6): injectEditMode / EDIT_MODE_KEY / EditModeState (edit-mode.ts, deleted)
+// and the notEditing gate were removed. After editorWorld was forked from
+// sceneWorld (M4), the editWorld is never frozen and game systems are
+// structurally absent from the edit-mode active schedule, so the freeze seam has
+// no consumer. `and` stays — a general runIf combinator the engine lacks.
+export { and } from './session/run-conditions';
 export type { RunCondition } from './session/run-conditions';
 // ── EditorHidden (editor-only component, plan-strategy §2 D-7 / AC-04/05) ──
 export { EditorHidden } from './components/EditorHidden';

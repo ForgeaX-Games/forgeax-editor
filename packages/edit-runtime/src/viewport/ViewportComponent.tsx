@@ -51,7 +51,7 @@ import {
   registerSessionApplier,
   createEvalChannel,
 } from '@forgeax/editor-core';
-import { injectEditMode } from '@forgeax/editor-core';
+import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 // M6 extraction (plan-strategy §2 D-5, AC-08): the VAG / console / network /
 // diagnostics bridges moved to viewport-vag-bridges.ts (decoupled from the
@@ -266,8 +266,32 @@ async function bootViewport(
   // physics gate (host-boot.resolveEditPhysics — must precede createApp).
   const editPhysics = await resolveEditPhysics();
 
+  // ── M4 (w18/w19/w21): world-manager — the super coordination layer ──────────
+  // Created BEFORE createApp so its composite drawSource can be handed to the
+  // engine frame-loop at boot. It owns the editorWorld (editor camera + gizmo) as
+  // a separate engine World from the sceneWorld (= createApp's `world`, doc.world).
+  // getSceneWorld reads gateway.doc.world LAZILY each frame (set below, before the
+  // frame loop starts) so a scene swap (replaceDoc) is tracked without a second
+  // reference to keep in sync (plan-strategy §2 D-5, Derive). editorWorld =
+  // new World() here is a LEGAL construction — lint-no-second-world scans the
+  // engine submodule diff only (AGENTS.md invariant 4 / research F3).
+  const worldManager = new WorldManager(
+    () => gateway.doc.world as unknown as import('@forgeax/engine-ecs').World | undefined,
+  );
+  // M5 (w29, D-4/AC-05): wire the two super seams — selection minting binds new
+  // selections to the live (sceneWorld, epoch) pair, and a scene reload bumps the
+  // sceneWorld epoch + revalidates the selection (batch invalidation). Registered
+  // here (once, at boot) and torn down on realm reset so a cross-game boot starts
+  // clean. Without this the handle-pair invalidation is dead — see w23.
+  registerTeardown(worldManager.attach());
+
   // ── Engine boot (was :318). createApp MOVED here (not copied) — net-zero world
   // construction across the M2 diff (lint-no-second-world). ─────────────────────
+  // M4 (w21, S6 / AC-07): the composite drawSource feeds [editorWorld, sceneWorld]
+  // with cameraOwner=editorWorld / resourceOwner=sceneWorld into the engine
+  // frame-loop's draw-source seam (D-3). This is the ONE composite-render wiring —
+  // NO self-hosted rAF, NO direct renderer.draw (AC-07): the engine's frame loop
+  // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
   const app = await createApp(canvas, {
     // Pointer-lock gate: the EDITOR's own backend must NEVER request pointer lock.
@@ -286,6 +310,8 @@ async function bootViewport(
     // play; after the world-fork split added a separate play backend it became
     // wrong. Always-deny is correct: the editor never consumes lock.
     pointerLockAllowed: () => false,
+    // Composite two-world render: editorWorld (camera) + sceneWorld (resources).
+    drawSource: worldManager.createDrawSource(),
     ...(editPhysics ? { plugins: [physicsPlugin(editPhysics)] } : {}),
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
@@ -324,10 +350,17 @@ async function bootViewport(
   renderer.assets.configurePackIndex(packIndexUrl);
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
-  // No new World() — single-world model (C-1).
+  // The createApp world IS the sceneWorld (authored content, save's only source —
+  // plan-strategy §2 D-2). doc.world lifecycle unchanged.
+  //
+  // D-7 (M6): no EditMode resource is injected here anymore. After M4 forked
+  // editorWorld from sceneWorld, the sceneWorld's authored data carries no game
+  // systems (game systems only exist in the transient playWorld built by
+  // play-assemble), so there is nothing to "freeze" in edit mode — the old
+  // injectEditMode(world, true) + notEditing gate was the "register + freeze"
+  // shape that D-7 replaces with structural registration-surface removal.
   gateway.doc.world = world;
   gateway.doc.registry = renderer.assets;
-  injectEditMode(world, true);
 
   void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
     if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
@@ -358,23 +391,30 @@ async function bootViewport(
   resizeObserver.observe(container);
   registerTeardown(() => resizeObserver.disconnect());
 
-  // editor orbit camera (was :531). Not part of the authored doc. M3 t21 (S4 /
-  // AC-04): the boot camera spawn is view scaffolding — it goes through the
-  // core-minted EngineFacade (the write gate), not the raw world. gateway.doc.world
-  // was injected just above, so engineFacade() binds to the live world.
+  // editor orbit camera (was :531). Not part of the authored doc. M4 (w19, S4 /
+  // AC-01): the editor camera now lives in the editorWorld — it is spawned through
+  // world-manager's DEDICATED EngineFacade (worldManager.editorFacade), NOT the
+  // gateway facade (which binds to the sceneWorld / doc.world). This is the
+  // structural half of AC-01: the camera can never land in the sceneWorld because
+  // the only write path onto editorWorld is this facade (plan-strategy §2 D-2/D-5).
   const aspect = canvas.width / canvas.height || 1;
-  const cameraEntity = gateway.engineFacade().spawn(
+  const cameraEntity = worldManager.editorFacade.spawn(
     { component: Transform, data: { pos: [0, 1.5, 9] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
 
   // viewport interaction: orbit/pan/zoom, click-to-select, drag-to-move (was :591).
-  // M3 t16 (S4 / AC-05): the viewport receives the core-minted EngineFacade (the
-  // sole controlled write proxy), NOT the raw world. gateway.doc.world was
-  // injected just above, so engineFacade() binds to the live world.
+  // M4 (w19/w20): the viewport receives TWO facades — `editorEngine`
+  // (worldManager.editorFacade, for camera + gizmo writes onto editorWorld) and
+  // `engine` (gateway facade, for sceneWorld reads via the drag/pick path). The
+  // camera entity handle belongs to the editorWorld.
   const viewport = createViewport({
-    canvas, engine: gateway.engineFacade(), assets: renderer.assets as never, camera: cameraEntity,
+    canvas,
+    engine: gateway.engineFacade(),
+    editorEngine: worldManager.editorFacade,
+    assets: renderer.assets as never,
+    camera: cameraEntity,
     getInputTarget,
   });
   // Wire viewport.refresh() into the container ResizeObserver created above so
@@ -521,6 +561,9 @@ async function bootViewport(
     playSimulation: () => actionsRef.current.playSimulation(),
     stopSimulation: () => actionsRef.current.stopSimulation(),
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
+    // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02
+    // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.
+    worldManager,
   };
 
   // start the live render loop + reporters (was :895).

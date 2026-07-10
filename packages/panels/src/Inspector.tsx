@@ -8,7 +8,15 @@ import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisi
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
 import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
-import type { EditorOp, EntityHandle } from '@forgeax/editor-core';
+// VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
+// active-read-world binding, so the primary Inspector reads run the three-layer
+// validateHandlePair check (world-mismatch / epoch / generation) at the read seam
+// instead of only the legacy isStale liveness fallback. Both come from core's IoC
+// seams — getSelectionPair (super door) + getActiveReadBinding (world-manager fills
+// it at boot). In headless / play mode (no binding) readOpts returns undefined and
+// the reads keep the legacy path unchanged.
+import { getSelectionPair, getActiveReadBinding } from '@forgeax/editor-core';
+import type { EditorOp, EntityHandle, HandleCheckOpts } from '@forgeax/editor-core';
 import { useNumberDraft } from './useNumberDraft';
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
@@ -327,6 +335,23 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
 // components and renders an editable field per scalar. Editing dispatches a
 // setComponent command (same path AI would use). Later this becomes
 // schema-driven (number→slider w/ min/max, color→swatch, asset→picker).
+/** Build the super handle-pair read opts for the primary selection, or undefined
+ *  when no active-read binding is registered (headless / play mode) or the primary
+ *  selection pair no longer matches `sel` (defensive). When defined, entComponent /
+ *  entComponents run the three-layer validateHandlePair check (D-4) so a cross-world
+ *  or stale-epoch handle is rejected with a structured error AT THE READ SEAM,
+ *  rather than relying solely on the reload collar's revalidateSelection (VERIFY
+ *  finding-3 defense-in-depth). Only the primary single-entity Inspector reads are
+ *  wired; other read points (BatchPanel, Hierarchy, viewport) remain on the legacy
+ *  liveness path as a documented follow-up. */
+function readOptsFor(sel: EntityHandle): HandleCheckOpts | undefined {
+  const binding = getActiveReadBinding();
+  if (binding === undefined) return undefined;
+  const pair = getSelectionPair();
+  if (pair === null || pair.entity !== sel) return undefined;
+  return { binding, pair: { worldRef: pair.worldRef, epoch: pair.epoch } };
+}
+
 export function InspectorPanel() {
   const { t } = useTranslation();
   useDocVersion();
@@ -342,8 +367,9 @@ export function InspectorPanel() {
     if (sel === null) return;
     // M3 (I1/AC-08): read Transform through entComponent against the active world
     // (edit->editWorld, play->playWorld). A stale handle returns a structured
-    // error (ok:false) — treat it as "nothing to show" and bail.
-    const tv = entComponent(gateway.activeWorld, sel, 'Transform');
+    // error (ok:false) — treat it as "nothing to show" and bail. VERIFY finding-3:
+    // pass the super handle-pair opts so the read runs the three-layer check.
+    const tv = entComponent(gateway.activeWorld, sel, 'Transform', readOptsFor(sel));
     if (!tv.ok) return;
     const q = readVec(fieldSchema('Transform', 'quat'), (tv.value as Record<string, unknown>).quat);
     setEuler(quatToEuler(q[0]!, q[1]!, q[2]!, q[3]!));
@@ -370,7 +396,9 @@ export function InspectorPanel() {
   // entity-state; doc.entities/doc.order/EntityNode.source deleted.
   const nodeName = entName(gateway.activeWorld, sel);
   const nodeParent = entParent(gateway.activeWorld, sel);
-  const nodeComponents = entComponents(gateway.activeWorld, sel);
+  // VERIFY finding-3: the primary component read runs the three-layer handle-pair
+  // check when the active-read binding is registered (edit mode).
+  const nodeComponents = entComponents(gateway.activeWorld, sel, readOptsFor(sel));
   const blocked = descendantsAndSelf(sel);
   const parentOptions = worldEntityHandles(gateway.activeWorld).filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);

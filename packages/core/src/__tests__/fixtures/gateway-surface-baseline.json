@@ -76,6 +76,10 @@
     "signature": "\"play\" | \"edit\""
   },
   {
+    "name": "onSceneReload",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
     "name": "origins",
     "signature": "CommandOrigin[]"
   },

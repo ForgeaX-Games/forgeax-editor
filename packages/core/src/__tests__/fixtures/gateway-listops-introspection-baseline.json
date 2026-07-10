@@ -436,7 +436,8 @@
       "properties": {
         "id": {
           "type": "number",
-          "nullable": true
+          "nullable": true,
+          "description": "entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for a fresh handle. null clears the selection."
         }
       },
       "required": [
@@ -455,7 +456,8 @@
         "ids": {
           "type": "array",
           "items": {
-            "type": "number"
+            "type": "number",
+            "description": "entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for fresh handles."
           }
         }
       },
@@ -520,7 +522,8 @@
       "type": "object",
       "properties": {
         "id": {
-          "type": "number"
+          "type": "number",
+          "description": "entity handle in the ACTIVE scene world (world-bound: minted into a HandlePair with worldRef+epoch). A scene reload invalidates prior selections; re-query then re-select for a fresh handle."
         }
       },
       "required": [

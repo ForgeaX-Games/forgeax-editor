@@ -4,7 +4,9 @@
 //   1. Receives script list from server manifest endpoint (w20).
 //   2. Per-script: dynamic import with cache-busting.
 //   3. Reads getRegisteredComponents() / getRegisteredSystems() registry delta.
-//   4. Registers systems into the edit-mode world.
+//   4. Registers systems verbatim into the caller-supplied world (D-7: no
+//      notEditing gate — game systems tick freely in the world they land in;
+//      edit mode simply never drives discovery against its active schedule).
 //
 // Error handling (w22):
 //   - Duplicate component/system name → fail-fast DiscoverError (.code/.expected/.hint).
@@ -22,7 +24,6 @@ import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
 // Re-export so consumers/tests can import the error type from the discoverer barrel.
 export type { DiscoverError } from './discoverer-errors';
-import { and, notEditing } from '../session/run-conditions';
 
 // Local alias for the engine `World` class type (imported type-only).
 type EcsWorld = World;
@@ -198,18 +199,24 @@ export async function discoverModules(
     }
 
     // ── Register systems into world ──
-    // Game systems are gated by `notEditing` so they freeze when EditMode.active
-    // (run=edit) and tick when EditMode is inactive (run=play). If a system
-    // already declares a runIf, compose it with AND so both conditions hold;
-    // otherwise gate it on notEditing alone. (plan-strategy D-1, requirements §8.)
+    // D-7 (M6): registration-surface removal replaces the old "register + freeze"
+    // shape. Game systems are registered verbatim (with their own runIf, if any)
+    // into the world the caller hands us. There is NO notEditing gate anymore:
+    // - In PLAY, this world is the transient playWorld (play-assemble.ts) whose
+    //   shape matches a standalone game runtime, so game systems tick freely —
+    //   the same-shape precedent play-assemble already documents ("no notEditing
+    //   gate").
+    // - In EDIT, discovered game systems are simply never registered into the
+    //   active-ticking editorWorld schedule: after M4 forked editorWorld from
+    //   sceneWorld, editor assembly does not drive discoverModules against the
+    //   edit-mode schedule, so game systems are structurally absent from what
+    //   ticks in edit mode — freezing them is unnecessary. Structure (not a
+    //   run-condition gate) enforces "game logic does not run while editing".
+    // (plan-strategy D-7, requirements C4 / S8 / AC-10.)
     for (const sysName of allSystems) {
       const handle = getRegisteredSystems().get(sysName);
       if (handle) {
-        const gated = {
-          ...handle,
-          runIf: handle.runIf ? and(handle.runIf, notEditing) : notEditing,
-        };
-        world.addSystem(gated);
+        world.addSystem(handle);
       }
     }
 
