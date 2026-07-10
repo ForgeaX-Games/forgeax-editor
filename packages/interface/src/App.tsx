@@ -48,8 +48,6 @@ export function App({ overrides, panelRenderers }: AppProps = {}): React.ReactEl
   // §14 three-state boot: during welcome/project (init) we render ONLY the
   // onboarding — no TopBar/DockShell/status bar — so the shell never binds to a
   // project the user hasn't picked yet. Full shell mounts at home/done.
-  // (main's inline VAG_EDITOR_REF listener is NOT ported here — that concern
-  // lives in core/plugins/iframe-message-adapter.ts in the AppHost world.)
   const onboardingPhase = useOnboardingPhase();
   const shellHidden = onboardingPhase === 'welcome' || onboardingPhase === 'project';
 

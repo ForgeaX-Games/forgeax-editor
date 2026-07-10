@@ -54,7 +54,7 @@ import './DockShell.css';
 // ./panelRegistry.tsx — add a panel THERE, not by editing constants here.
 //   CORE     — workbench / viewport / chat
 //   OPTIONAL — agents / files / console (布局 menu toggles)
-//   EDITOR   — ep:* editor sub-panels (iframe to /editor/?panel=<id>)
+//   EDITOR   — ep:* editor sub-panels (in-process React components, single-realm)
 //   PLUGINS  — wb:<pluginId> panels merged in at runtime (below)
 
 const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migration to workspace layouts
@@ -63,31 +63,21 @@ const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migra
 // buildDefault lives in builtinWorkbenches.ts.
 export { buildDefault };
 
-// Pop a dock panel OUT into a REAL OS window (Tauri WebviewWindow loading
-// Pop a dock panel OUT into a REAL OS window. Two paths:
-//   - ep:* panels  → /editor/?panel=<id>&scene=<slug>  (editor BroadcastChannel panel)
-//   - other panels → index.html?surface=panel&id=<id>  (DetachedSurface)
+// Pop a dock panel OUT into a REAL OS window (index.html?surface=panel&id=<id>
+// → DetachedSurface, which renders the panel's in-process React component).
 // No-op in the browser (canDetach() false) — web users tear off via drag-float.
+//
+// ep:* editor panels are in-process and intentionally stay docked: DetachedSurface
+// has no editor-panel body. Other detachable shell panels use the shared
+// DetachedSurface path.
 function popPanelToWindow(
   api: DockviewApi,
   id: string,
   titleFor: (id: string) => string,
   pos?: { x: number; y: number },
-  scene?: string,
-  onClosed?: () => void,
 ): void {
   const wm = getWindowManager();
   if (!wm.canDetach()) return;
-
-  if (id.startsWith('ep:')) {
-    const panelId = id.slice(3);
-    const sceneParam = scene && scene !== 'default' ? `&scene=${encodeURIComponent(scene)}` : '';
-    const url = `/editor/?panel=${encodeURIComponent(panelId)}${sceneParam}`;
-    void wm
-      .openLabeledWindow(`fx-ep-${panelId}`, url, { title: titleFor(id), width: 320, height: 560, ...(pos ?? {}) }, onClosed)
-      .then((ok) => { if (ok) api.getPanel(id)?.api.close(); });
-    return;
-  }
 
   if (!SURFACE_PANELS.has(id)) return;
   void wm
@@ -214,11 +204,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const draggedIdRef = useRef<string | null>(null);
   const dropHandledRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  // Keep the active scene slug + reopen callback accessible inside the drag-end
-  // closure without re-registering the event listener on every change.
-  const sceneSlugRef = useRef<string>('');
-  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
-  useEffect(() => { sceneSlugRef.current = pinnedSlug ?? ''; }, [pinnedSlug]);
+  // Keep the reopen callback accessible inside the drag-end closure without
+  // re-registering the event listener on every change.
   const reopenRef = useRef<(id: string) => void>(() => {});
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const sidebarCollapsed = useShellStore((s) => s.sidebarCollapsed);
@@ -711,7 +698,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         // In Tauri: ANY drop NOT handled by dockview (outside the window OR over
         // empty space) → pop the panel to a REAL OS window. This gives a consistent
         // UE/Blender feel: tear off = independent window, no intermediate in-app float.
-        if (getWindowManager().canDetach() && (SURFACE_PANELS.has(id) || id.startsWith('ep:'))) {
+        // ep:* editor panels are NOT tear-off targets: DetachedSurface has no editor-
+        // panel body, so they stay docked in the single realm.
+        if (getWindowManager().canDetach() && SURFACE_PANELS.has(id)) {
           const outside =
             e.screenX < window.screenX ||
             e.screenY < window.screenY ||
@@ -724,14 +713,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           const wy = outside
             ? Math.round(e.screenY - 16)
             : Math.round(window.screenY + y - 16);
-          popPanelToWindow(
-            api,
-            id,
-            titleFor,
-            { x: wx, y: wy },
-            sceneSlugRef.current,
-            () => reopenRef.current(id),
-          );
+          popPanelToWindow(api, id, titleFor, { x: wx, y: wy });
           return;
         }
         // Browser (no Tauri): do nothing — panel stays docked where it was.

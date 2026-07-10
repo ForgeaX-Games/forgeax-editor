@@ -1,6 +1,6 @@
 /** vag-action-bridge —— editor 等 iframe 内 action 的 host 侧接入(P1-12)。
  *
- *  协议(照 VAG_CONTEXT_MENU 的既定先例:**只传可序列化数据,handler 留 iframe 本地**,
+ *  协议（只传可序列化数据，handler 留 iframe 本地，
  *  interface 刻意不 import editor,inline 校验照 healthBridge 先例):
  *
  *    iframe → host  VAG_ACTION_MANIFEST { type, actions: [{ id, title, description?,

@@ -158,6 +158,42 @@ export interface PanelRenderers {
     SceneEditor?: ComponentType<{ viewportOnly?: boolean }>;
   };
 
+  /** Single-realm editor coordination callbacks. Interface declares only the
+   * structural contract; studio/standalone inject the editor-core implementation
+   * so L1 never imports editor-core. */
+  editor?: {
+    setContextMenuRenderer?: (renderer: (menu: {
+      x: number;
+      y: number;
+      items: Array<{
+        label?: string;
+        onClick?: () => void;
+        disabled?: boolean;
+        danger?: boolean;
+        sep?: boolean;
+      }>;
+    } | null) => void) => () => void;
+    installBridge?: (handlers: {
+      onEditorHealth(entry: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number }): void;
+      onEditorConsole(entry: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number }): void;
+      onEditorNetwork(entry: { kind: 'fetch' | 'xhr' | 'ws'; method: string; url: string; status: number; ms: number; ok: boolean; ts: number }): void;
+      onEditorRef(payload:
+        | { kind: 'entity'; id: number; name: string; components: string[]; source?: { plugin?: string; docId?: string } }
+        | { kind: 'component'; entityId: number; entityName: string; comp: string; value: unknown }
+        | { kind: 'asset'; guid: string; assetKind: string; name: string; packPath?: string }
+      ): void;
+      onAddAssetToChat(refs: Array<{
+        type: 'asset' | 'folder';
+        guid?: string;
+        kind?: string;
+        name: string;
+        path: string;
+        payload?: Record<string, unknown>;
+        summary?: { totalAssets: number; kinds: Record<string, number>; guids: string[] };
+      }>): void;
+    }) => () => void;
+  };
+
   /** Fixed shell chrome regions (outside dockview). */
   chrome?: {
     /** Items injected into the bottom StatusBar (pulse feeds, version badge). */

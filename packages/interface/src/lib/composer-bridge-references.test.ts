@@ -101,7 +101,7 @@ describe('buildReferenceFor — DOM units', () => {
   });
 });
 
-describe('editor-iframe pill builders', () => {
+describe('editor pill builders', () => {
   it('entity pill', () => {
     const p = buildEntityPill({ id: 62, name: 'Pillar 4', components: ['Transform', 'Light'] });
     expect(p.icon).toBe('🎯');

@@ -60,8 +60,8 @@ export function buildAssetContextMenu(
         const newName = window.prompt('Rename asset:', asset.name);
         if (newName && newName !== asset.name) {
           // D6: rename routes through the ONE gateway door (document op, undoable).
-          // The applier reaches pack IO via ctx.assetIO and fires
-          // broadcastAssetsChanged itself; the VAG_ASSETS_CHANGED listener reloads.
+          // The applier reaches pack IO via ctx.assetIO and fires the in-process
+          // assetsChanged notification itself; Content Browser reloads from it.
           gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
         }
       }

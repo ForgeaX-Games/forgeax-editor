@@ -369,12 +369,11 @@ export function buildPillFromTarget(target: Element | null): PillPayload | null 
   return buildReferenceFor(target)?.pill ?? null;
 }
 
-// ── Editor-iframe reference builders ─────────────────────────────────────────
-// The editor (✎ Edit) lives in an iframe; its units (entities/assets/components)
-// can't be reached by the DOM registry above, so the iframe posts a
-// VAG_EDITOR_REF message and App.tsx's listener turns it into a pill. Those builders
-// live HERE too so pill construction (icons/labels/detail format) has a single
-// home and can't drift from the DOM path.
+// ── Editor reference builders ───────────────────────────────────────────────
+// The editor is in-process but its ECS units (entities/assets/components) are
+// outside the shell DOM registry above. Its injected typed bridge calls these
+// builders, keeping pill construction (icons/labels/detail format) in one place
+// so it cannot drift from the DOM path.
 
 export function buildEntityPill(p: { id?: number | string; name: string; components?: unknown; source?: { plugin?: string; docId?: string } }): PillPayload {
   const comps = Array.isArray(p.components) ? (p.components as string[]).join(', ') : '';
@@ -434,8 +433,8 @@ export function buildComponentPill(p: { entityId?: number; entityName: string; c
 }
 
 // ── Cross-app pending-insert slot ────────────────────────────────────────────
-// Any surface (right-click "引用到 Chat", editor VAG_EDITOR_REF, Content Browser
-// batch) calls requestComposerInsert(pill); the Composer consumes it on its next
+// Any surface (right-click "引用到 Chat", injected editor reference bridge, Content
+// Browser batch) calls requestComposerInsert(pill); the Composer consumes it on its next
 // render tick via useComposerPendingInsert(), inserts the chip at the caret, then
 // clears. A queue lets batch "Add to AI Chat" (multi-select) insert all pills.
 //

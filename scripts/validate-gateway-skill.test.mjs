@@ -5,7 +5,7 @@
 // TDD: written BEFORE validate-gateway-skill.mjs exists.
 // Validates that the skill anchor checker correctly detects:
 //   (a) VALID fixture -- SKILL.md with frontmatter (name + description) +
-//       text covering dispatch/begin/commit/listOps/defineOp keywords -> exit 0
+//       text covering gateway API plus live-bridge safety anchors -> exit 0
 //   (b) MISSING frontmatter -- SKILL.md without frontmatter -> exit 1
 //   (c) MISSING name field -- SKILL.md with frontmatter but no name -> exit 1
 //   (d) MISSING keyword anchor -- SKILL.md without listOps in content -> exit 1
@@ -129,6 +129,7 @@ testFixture('(a) valid fixture', [
   'Use gateway.collectSceneAsset before an advanced instantiateSceneAsset call.',
   'Use gateway.dispatch({ kind: "duplicateEntity", entity }, "ai") for ordinary copies.',
   'Never mix live worlds with an engine `dist` import.',
+  'Use scripts/gateway-live.mjs through FORGEAX_BRIDGE on 127.0.0.1 only.',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------
@@ -222,6 +223,22 @@ testFixture('(g) wrong name', [
   '',
   'dispatch, begin, commit, listOps, defineOp',
 ].join('\n'), 1, ['name', 'forgeax-editor-gateway']);
+
+// ---------------------------------------------------------------------------
+// Scenario (h): MISSING live bridge anchor -> exit 1
+// ---------------------------------------------------------------------------
+console.log('Scenario (h): MISSING live bridge anchor -- expect exit 1');
+testFixture('(h) missing gateway-live anchor', [
+  '---',
+  'name: forgeax-editor-gateway',
+  'description: Gateway skill',
+  '---',
+  '',
+  '# forgeax-editor-gateway',
+  '',
+  'dispatch, begin, commit, listOps, defineOp, eval, scope, trace, querySnapshot',
+  'collectSceneAsset, duplicateEntity, and engine `dist` are documented.',
+].join('\n'), 1, ['gateway-live.mjs']);
 
 // ---------------------------------------------------------------------------
 // Cleanup

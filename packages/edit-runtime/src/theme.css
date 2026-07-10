@@ -71,16 +71,6 @@
 .tn .dot { color: var(--fg3); }
 .tn .vis { margin-left: auto; color: var(--fg3); font-size: 11px; padding: 0 2px; }
 .tn .vis:hover { color: var(--lime); }
-.ctxmenu {
-  position: fixed; z-index: 99999; min-width: 140px; padding: 4px;
-  background: var(--bg2); border: 1px solid var(--line); border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-.ctxitem { padding: 5px 10px; font-size: 12px; border-radius: 4px; cursor: pointer; color: var(--fg2); }
-.ctxitem:hover { background: var(--bg1); color: var(--fg); }
-.ctxitem.disabled { opacity: 0.4; cursor: default; }
-.ctxitem.disabled:hover { background: transparent; color: var(--fg2); }
-.ctxsep { height: 1px; background: var(--line); margin: 4px 2px; }
 .comp-badges { display: inline-flex; gap: 2px; margin-left: 6px; }
 .comp-badge { font-size: 9px; line-height: 13px; min-width: 13px; text-align: center; color: var(--fg3); background: var(--bg2); border: 1px solid var(--line); border-radius: 2px; font-family: var(--mono); }
 mark.hl { background: var(--lime); color: var(--bg0); border-radius: 2px; padding: 0 1px; }

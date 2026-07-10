@@ -37,6 +37,9 @@ children.push(
         // The page bridge is opt-in so standalone starts the relay and page
         // together, while CI / bare Vite hosts never attempt a dead websocket.
         VITE_FORGEAX_BRIDGE: process.env.FORGEAX_BRIDGE === '0' ? '0' : '1',
+        // Pass the relay port through Vite's compile-time environment too: the
+        // relay and live page must derive it from the same source of truth.
+        VITE_FORGEAX_BRIDGE_PORT: process.env.FORGEAX_BRIDGE_PORT ?? '15295',
       },
     },
   ),

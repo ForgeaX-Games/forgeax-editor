@@ -65,10 +65,6 @@ import {
 } from '@forgeax/editor-core';
 import { installScanHmrBridge } from '@forgeax/editor-core/scan/scan-hmr-bridge';
 import {
-  onVagMessage,
-  allowedParentOrigins,
-} from '@forgeax/editor-core/protocol';
-import {
   createHostSession,
   type HostSessionContext,
   type HostSession,
@@ -132,11 +128,9 @@ export async function configureHostSession(session: HostGameSession = { slug: nu
 }
 
 /**
- * Install the unload-time save-beacon listeners (the boot tail's one DOM/VAG
- * boundary, lifted out of host-session so the tail is headless — plan-strategy
- * §2 D-4 / AC-02). Wires window pagehide + visibilitychange + the VAG_EDITOR_FLUSH
- * handler, each calling `flush`; returns a dispose that removes all three. Was
- * inline in the pre-M4 initHostSession.
+ * Install unload-time save-beacon listeners. Native pagehide + visibilitychange
+ * are the complete single-realm lifecycle boundary. Kept here (rather than
+ * host-session) so the session tail stays headless.
  */
 function installSaveBeaconListeners(flush: () => void): () => void {
   const onPageHide = (): void => flush();
@@ -145,14 +139,9 @@ function installSaveBeaconListeners(flush: () => void): () => void {
   };
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('visibilitychange', onVisibilityChange);
-  const disposeVagFlush = onVagMessage(window, {
-    allowedOrigins: allowedParentOrigins(),
-    handlers: { VAG_EDITOR_FLUSH: () => flush() },
-  });
   return (): void => {
     window.removeEventListener('pagehide', onPageHide);
     window.removeEventListener('visibilitychange', onVisibilityChange);
-    if (typeof disposeVagFlush === 'function') disposeVagFlush();
   };
 }
 

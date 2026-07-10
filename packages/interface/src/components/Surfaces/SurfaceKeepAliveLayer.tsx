@@ -2,7 +2,7 @@
 //
 // THE FIX for the Viewport↔AI freeze. Viewport / AI are separate dockview
 // *workspaces*; switching tabs rebuilds the dock tree, which previously destroyed +
-// cold-rebooted the heavy viewport iframes on EVERY switch (full WebGPU init + the
+// cold-rebooted the heavy viewport on EVERY switch (full WebGPU init + the
 // editor's top-level-await boot → intermittent WKWebView wedge = the freeze).
 //
 // 2026-06-30: 'preview'/'edit' merged into single 'viewport'. Only the edit
@@ -10,17 +10,19 @@
 // is now a standalone fullscreen-only entry point (AC-14).
 //
 // This layer is a sibling of DockShell (App.tsx, inside `.studio-body`) that never
-// unmounts. It mounts each surface ONCE (lazily, on first visit) and keeps it alive
-// forever in a stable parent — the iframe is never re-parented, so it never reloads.
-// On a switch we only:
+// unmounts. It mounts the surface ONCE (lazily, on first visit) and keeps it alive
+// forever in a stable parent — never re-parented, so it never reloads. On a switch
+// we only:
 //   - position the ACTIVE surface (fixed) over its dockview anchor's rect, visible;
-//   - `display:none` the others, which trips the surfaces' own IntersectionObserver
-//     → VAG_PREVIEW_PAUSE → the engine pauses in the background (context preserved).
+//   - park the others off-screen + visibility:hidden, which trips the in-process
+//     viewport's OWN IntersectionObserver (installVisibilityPause in edit-runtime)
+//     → editorApp.pause() in the background (context preserved).
 // Switching back is a one-frame composite: zero reload, zero boot, FPS resumes.
 //
-// Same "render-but-hide, never re-parent" pattern as KeepAlivePluginIframes. Stays
-// editor-agnostic: the real surfaces come from PanelRenderers context (studio injects
-// @forgeax/editor's PlaySurface/EditSurface); interface keeps ZERO editor imports.
+// Single realm: the edit surface is an in-process React component (ViewportComponent),
+// not an iframe. Stays editor-agnostic: the real surface comes from PanelRenderers
+// context (studio injects @forgeax/editor's SceneEditor); interface keeps ZERO
+// editor imports.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
 import { useShellStore } from '../../store';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
@@ -180,7 +182,7 @@ export function SurfaceKeepAliveLayer(): ReactNode {
   return (
     <div className="fx-surface-keepalive-root" aria-hidden={activeKind ? undefined : true}>
       {[...visitedRef.current].map((kind) => (
-        // Stable key + stable parent → the surface (and its iframe) is reconciled in
+        // Stable key + stable parent → the in-process surface is reconciled in
         // place across every render: never remounted, never reloaded.
         <div
           key={kind}
@@ -189,7 +191,9 @@ export function SurfaceKeepAliveLayer(): ReactNode {
           data-surface-kind={kind}
           style={{ display: 'none' }}
         >
-          <FatalBanner source={kind === 'play' ? 'play' : 'edit'} />
+          {/* ALL_KINDS is ['edit'] today — the only kept-alive surface is the edit
+              viewport. FatalBanner is fixed to 'edit' accordingly. */}
+          <FatalBanner source="edit" />
           {renderSurface(kind)}
         </div>
       ))}

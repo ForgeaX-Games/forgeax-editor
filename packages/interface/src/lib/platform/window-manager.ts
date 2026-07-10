@@ -42,16 +42,6 @@ export interface WindowManager {
   /** Register a callback fired when ANY detached surface window is closed
    *  (by the user clicking its close button). Used by the store to redock. */
   onSurfaceWindowClosed(cb: (d: SurfaceDescriptor) => void): () => void;
-  /** Open (or focus) an arbitrary labeled OS window at `url`. Used by the editor
-   *  (✎ Edit) to pop a panel out to `/editor/?panel=<id>` — the editor mirrors
-   *  its own state over a BroadcastChannel, so no descriptor is needed. The
-   *  label MUST match the `fx-surface-*` capability glob. Returns false in the
-   *  browser (callers fall back to window.open).
-   *  `onClose` is called when the OS window is destroyed (so the caller can
-   *  redock the panel). */
-  openLabeledWindow(label: string, url: string, opts?: DetachWindowOptions, onClose?: () => void): Promise<boolean>;
-  /** Close a labeled window opened by openLabeledWindow, if any. */
-  closeLabeledWindow(label: string): Promise<void>;
 }
 
 const closeListeners = new Set<(d: SurfaceDescriptor) => void>();
@@ -152,64 +142,6 @@ function createTauriWindowManager(): WindowManager {
       closeListeners.add(cb);
       return () => closeListeners.delete(cb);
     },
-
-    async openLabeledWindow(label, url, opts, onClose) {
-      const mod = await loadWebviewWindowApi();
-      if (!mod) return false;
-
-      const existing = await mod.WebviewWindow.getByLabel(label);
-      if (existing) {
-        try {
-          await existing.show();
-          await existing.setFocus();
-        } catch {
-          /* window vanished between check and focus */
-        }
-        return true;
-      }
-
-      const hasPos = typeof opts?.x === 'number' && typeof opts?.y === 'number';
-      const win = new mod.WebviewWindow(label, {
-        url,
-        title: opts?.title ?? label,
-        width: opts?.width ?? 420,
-        height: opts?.height ?? 640,
-        ...(hasPos ? { x: opts!.x, y: opts!.y } : { center: true }),
-        resizable: true,
-        dragDropEnabled: false,
-      });
-
-      // Fire onClose when the window is actually destroyed (not on close-requested,
-      // which fires before the window is gone and would cause a double-call race).
-      if (onClose) {
-        win.once('tauri://destroyed', onClose);
-      }
-
-      return new Promise<boolean>((resolve) => {
-        const t = setTimeout(() => resolve(true), 2000);
-        win.once('tauri://created', () => {
-          clearTimeout(t);
-          resolve(true);
-        });
-        win.once('tauri://error', () => {
-          clearTimeout(t);
-          resolve(false);
-        });
-      });
-    },
-
-    async closeLabeledWindow(label) {
-      const mod = await loadWebviewWindowApi();
-      if (!mod) return;
-      const existing = await mod.WebviewWindow.getByLabel(label);
-      if (existing) {
-        try {
-          await existing.destroy();
-        } catch {
-          /* already gone */
-        }
-      }
-    },
   };
 }
 
@@ -226,9 +158,5 @@ function createNoopWindowManager(): WindowManager {
     onSurfaceWindowClosed() {
       return () => {};
     },
-    async openLabeledWindow() {
-      return false;
-    },
-    async closeLabeledWindow() {},
   };
 }

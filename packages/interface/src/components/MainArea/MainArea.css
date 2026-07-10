@@ -109,8 +109,8 @@
 
 /* Fatal banner — pinned to the top of a Play/Edit region when the engine reports
    device-lost / scene-instantiate / WebGPU init failure. Gives the user the
-   reason (not just a black viewport) + a one-click reload. Shared by PlaySurface
-   + EditSurface (same class). */
+   reason (not just a black viewport) + a one-click reload. Shared by the play
+   iframe (PlaySurface) + the in-process edit viewport (same class). */
 .preview-fatal-banner {
   position: absolute;
   top: 0; left: 0; right: 0;

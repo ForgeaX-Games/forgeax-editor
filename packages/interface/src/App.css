@@ -8,7 +8,7 @@
 
 /* forgeax-preview scene layer (.scene-fx) stays behind all shell chrome.
    Whitelist layout-flow children only — overlays (.dash-overlay, .sp-overlay,
-   .ctxmenu, .pulse-feeds) must keep their own `position: fixed`. */
+   .pulse-feeds) must keep their own `position: fixed`. */
 .studio-shell > .topbar,
 .studio-shell > .studio-body,
 .studio-shell > .health-status-bar,

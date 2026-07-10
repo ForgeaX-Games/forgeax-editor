@@ -4,8 +4,8 @@
 // Studio (which injects Dashboard / Settings / StatusFeeds / surfaces / slots /
 // detached / editor concrete plugins) calls this and passes them via
 // `overrides.plugins`. Interface-alone callers pass no overrides — no overlays,
-// no detached windows, no editor-specific panels show up (only the L1 base +
-// chat + iframe-adapter behave).
+// no detached windows, and no editor-specific panels show up (only the L1 base +
+// chat remain).
 //
 // Each manifest's setup is wrapped in a control.beginSetup(m) / try / finally
 // endSetup() bracket so host.extend(capability, api) — which requires an
@@ -25,7 +25,6 @@ import { foundationStoragePlugin } from './core/plugins/foundation-storage';
 import { foundationPanelsPlugin } from './core/plugins/foundation-panels';
 import { builtinCommandsPlugin } from './core/plugins/builtin-commands';
 import { panelsChatPlugin } from './core/plugins/panels-chat';
-import { iframeMessageAdapterPlugin } from './core/plugins/iframe-message-adapter';
 import './core/plugins/session-client.d'; // side-effect: AppHost.session type augmentation
 import { sessionClientPlugin } from './core/plugins/session-client';
 import './core/plugins/workbench-client.d'; // side-effect: AppHost.workbench type augmentation
@@ -89,7 +88,6 @@ export async function bootstrapAppHost(
     foundationPanelsPlugin,
     builtinCommandsPlugin,
     panelsChatPlugin,
-    iframeMessageAdapterPlugin,
     sessionClientPlugin,
     workbenchClientPlugin,
     observabilityPlugin,

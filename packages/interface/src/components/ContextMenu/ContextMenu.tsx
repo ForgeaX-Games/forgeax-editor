@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { buildMenu, type MenuItem } from './menuRegistry';
-import { isTrustedMessageOrigin } from '@/lib/trustedOrigins';
+import { buildAssetPill, buildComponentPill, buildEntityPill } from '../../lib/composer-bridge';
+import { pushHealth } from '../StatusBar/healthStore';
+import { useShellStore } from '../../store';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
+import { useHost } from '../../core/app-shell';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,25 +19,19 @@ interface MenuState {
   items: MenuItem[];
 }
 
-// Wire protocol for editor-iframe context menus (architecture review §unify).
-// Editor panels live in iframes (ep:*) and can't render a menu outside their
-// own rect, so they POST their items here and THIS host renders them at the top
-// layer of the whole window — same renderer as main-window right-clicks.
-//   iframe → parent : { type:'VAG_CONTEXT_MENU', menuId, x, y, items:[{id,label,disabled,danger,sep}] }
-//   parent → iframe : { type:'VAG_CONTEXT_MENU_ACTION', menuId, actionId }   (on click)
-interface WireMenuItem { id?: string; label?: string; disabled?: boolean; danger?: boolean; sep?: boolean }
-
 /**
  * App-wide context menu host. ONE controlled Radix DropdownMenu renders EVERY
- * context menu, fed by two sources:
+ * context menu, fed by two in-process sources:
  *   1. a capture-phase `contextmenu` listener over main-window DOM (via the
  *      `buildMenu` registry), and
- *   2. `VAG_CONTEXT_MENU` postMessages from editor-panel iframes (which can't
- *      render outside their own rect).
+ *   2. the editor's injected single-realm renderer callback, which carries the
+ *      real item closures (no cross-window protocol copy).
  * Radix owns focus / ↑↓ nav / Esc / outside-click / collision flipping.
  */
 export function ContextMenu() {
   const [state, setState] = useState<MenuState | null>(null);
+  const renderers = usePanelRenderers();
+  const host = useHost();
 
   useEffect(() => {
     const onCtx = (e: MouseEvent) => {
@@ -50,35 +48,82 @@ export function ContextMenu() {
     return () => document.removeEventListener('contextmenu', onCtx, { capture: true });
   }, []);
 
-  // Editor-iframe menus → render here at the top layer (no iframe clipping).
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      if (!isTrustedMessageOrigin(e.origin)) return; // foreign-origin guard
-      const d = e.data as { type?: string; menuId?: string; x?: number; y?: number; items?: WireMenuItem[] } | null;
-      if (!d || d.type !== 'VAG_CONTEXT_MENU' || !Array.isArray(d.items)) return;
-      // Find the iframe that sent this so we can map its client coords → ours.
-      const frame = [...document.querySelectorAll('iframe')].find((f) => f.contentWindow === e.source) as HTMLIFrameElement | undefined;
-      const rect = frame?.getBoundingClientRect();
-      const x = (rect?.left ?? 0) + (d.x ?? 0);
-      const y = (rect?.top ?? 0) + (d.y ?? 0);
-      const src = e.source as Window | null;
-      const menuId = d.menuId;
-      const items: MenuItem[] = d.items.map((it, idx) =>
-        it.sep
-          ? { kind: 'sep' as const }
-          : {
-              kind: 'item' as const,
-              label: it.label ?? '',
-              disabled: it.disabled,
-              danger: it.danger,
-              onClick: () => src?.postMessage({ type: 'VAG_CONTEXT_MENU_ACTION', menuId, actionId: it.id ?? `i${idx}` }, '*'),
-            },
-      );
-      if (items.length) setState({ x, y, items });
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, []);
+  // Editor menus are injected structurally by the single-realm host. Their
+  // onClick closures stay in-process, so the UI capability has one body instead
+  // of a serialised cross-window protocol mirror.
+  useEffect(() => renderers.editor?.setContextMenuRenderer?.((menu) => {
+    if (!menu) {
+      setState(null);
+      return;
+    }
+    const items: MenuItem[] = menu.items.map((item) =>
+      item.sep
+        ? { kind: 'sep' as const }
+        : {
+            kind: 'item' as const,
+            label: item.label ?? '',
+            disabled: item.disabled,
+            danger: item.danger,
+            onClick: item.onClick ?? (() => {}),
+          },
+    );
+    setState(items.length ? { x: menu.x, y: menu.y, items } : null);
+  }), [renderers.editor]);
+
+  // Project typed editor coordination into the host commands directly. This is
+  // the single-realm replacement for the iframe-message adapter's postMessage
+  // mirror; editor-core remains injected through PanelRenderers, not imported.
+  useEffect(() => renderers.editor?.installBridge?.({
+    onEditorHealth: ({ level, code, message }) => {
+      pushHealth({ level, source: 'edit', code, message });
+    },
+    onEditorConsole: (entry) => {
+      useShellStore.getState().pushConsole(entry);
+    },
+    onEditorNetwork: (entry) => {
+      useShellStore.getState().pushNetwork(entry);
+    },
+    onEditorRef: (p) => {
+      if (p.kind === 'component' && typeof p.entityName === 'string' && typeof p.comp === 'string') {
+        const pill = buildComponentPill({
+          entityId: p.entityId,
+          entityName: p.entityName,
+          comp: p.comp,
+          value: p.value,
+        });
+        void host.commands.execute('app.chat.insertPill', { pill }).catch(() => {});
+      } else if (p.kind === 'asset' && typeof p.guid === 'string') {
+        const pill = buildAssetPill({ guid: p.guid, name: p.name, assetKind: p.assetKind, packPath: p.packPath });
+        void host.commands.execute('app.chat.insertPill', { pill }).catch(() => {});
+      } else if (p.kind === 'entity' && typeof p.id === 'number' && typeof p.name === 'string') {
+        const pill = buildEntityPill({ id: p.id, name: p.name, components: p.components, source: p.source });
+        void host.commands.execute('app.chat.insertPill', { pill }).catch(() => {});
+      }
+    },
+    onAddAssetToChat: (refs) => {
+      for (const ref of refs) {
+        if (ref.type === 'asset' && typeof ref.guid === 'string') {
+          const pill = buildAssetPill({
+            guid: ref.guid,
+            name: ref.name,
+            assetKind: ref.kind,
+            packPath: ref.path,
+            payload: ref.payload,
+          });
+          void host.commands.execute('app.chat.insertPill', { pill }).catch(() => {});
+        } else if (ref.type === 'folder' && typeof ref.path === 'string') {
+          const pill = buildAssetPill({
+            guid: `folder:${ref.path}`,
+            name: ref.name ? `📁 ${ref.name}` : '📁 Folder',
+            assetKind: 'folder',
+            packPath: ref.path,
+            payload: ref.summary,
+          });
+          void host.commands.execute('app.chat.insertPill', { pill }).catch(() => {});
+        }
+      }
+    },
+  }), [host, renderers.editor]);
 
   return (
     <DropdownMenu

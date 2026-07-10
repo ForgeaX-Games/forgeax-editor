@@ -52,6 +52,10 @@ const REQUIRED_KEYWORDS = [
   'collectSceneAsset',
   'duplicateEntity',
   'engine `dist`',
+  // The DEV-only, loopback-only live-window CLI path.
+  'gateway-live.mjs',
+  'FORGEAX_BRIDGE',
+  '127.0.0.1',
 ];
 
 // ---------------------------------------------------------------------------

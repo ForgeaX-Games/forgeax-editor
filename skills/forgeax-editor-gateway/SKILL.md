@@ -5,7 +5,7 @@ description: >-
   (continuous op), listOps (self-introspect), defineOp (compose new ops), eval (AI channel), trace (read
   span trees). Three-domain model (document/session/transient) decided by applier registration table.
   Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds, driven
-  headlessly via scripts/gateway-eval.mjs.
+  headlessly via scripts/gateway-eval.mjs or in the already-open editor via scripts/gateway-live.mjs.
   Use when building editor tools, AI-driven editing, extending the editor with new operations, or
   driving/inspecting a running editor's gateway from a script.
 ---
@@ -333,6 +333,41 @@ node scripts/gateway-eval.mjs --file snippet.js --settle 0               # snipp
 | `--settle <ms>` | wait after channel-ready for the scene to finish loading (default 1500; `0` to skip) |
 | `--url <url>` / `$FORGEAX_GATEWAY_URL` | target (default `http://localhost:15290`) |
 | `$FORGEAX_PLAYWRIGHT` / `$FORGEAX_CHROMIUM` | point at a `playwright-core` index + chrome binary when the full `playwright` package is absent |
+
+### Live window bridge (DEV-only)
+
+`scripts/gateway-live.mjs` evaluates a snippet in the **already-open editor window**. Unlike
+`gateway-eval.mjs`, it does not create a headless browser: it routes the snippet through the
+loopback relay to that page's existing `__forgeaxEval` channel, so operations affect its current
+in-memory world immediately.
+
+```bash
+# Starts the relay and enables the page connection by default.
+bun run dev:standalone
+
+# In another terminal, after the editor page finishes booting:
+node scripts/gateway-live.mjs --health
+node scripts/gateway-live.mjs "gateway.listOps().length"
+node scripts/gateway-live.mjs --file snippet.js
+
+# Disable the relay/page connection for a standalone run:
+FORGEAX_BRIDGE=0 bun run dev:standalone
+
+# Use one custom port for relay, page, and CLI:
+FORGEAX_BRIDGE_PORT=15305 bun run dev:standalone
+FORGEAX_BRIDGE_PORT=15305 node scripts/gateway-live.mjs --health
+```
+
+`--health` exits nonzero until both the relay and page are connected. `--file <path>` reads the
+snippet from a file. `FORGEAX_BRIDGE=0` is the explicit opt-out; ordinary bare Vite hosts keep the
+bridge disabled. `VITE_FORGEAX_BRIDGE` and `VITE_FORGEAX_BRIDGE_PORT` are Vite build-time variables,
+so restart the edit-runtime dev server after changing them.
+
+> [!CAUTION]
+> The relay accepts arbitrary JavaScript for the connected editor page. It is **DEV-only**, binds
+> only to `127.0.0.1`, and must never be exposed through a public interface, port forward, or
+> production deployment. Use only on a trusted local development machine. The browser bridge does
+> not connect unless explicitly enabled by `dev-standalone` (or `VITE_FORGEAX_BRIDGE=1`).
 
 ## trace -- Read Span Trees (M5)
 

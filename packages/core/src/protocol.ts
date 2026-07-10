@@ -1,22 +1,23 @@
 // @forgeax/editor/protocol — VAG_* postMessage schema SSOT.
 //
-// 15 zod schemas covering every VAG_* message type observed in the
-// editor / preview wire (research F-6 grep evidence). Three panel-action
-// invocation schemas were retired in feat-20260708 (no on-wire consumer
-// survived the single-realm merge; registry projection now derives from
-// gateway.listOps()). Naming is strictly paired:
+// 8 zod schemas covering every VAG_* message type observed on a real
+// cross-realm wire (research F-6 grep evidence). Three panel-action invocation
+// schemas were retired in feat-20260708 (no on-wire consumer survived the
+// single-realm merge; registry projection now derives from gateway.listOps()).
+// The single-realm cleanup retired former asset-change, context-menu,
+// editor-control, and spawn projections: their callers now use typed in-process
+// callbacks/PanelBridge, while the spawn path is
+// core/scene/spawn-asset-ref.ts → gateway.dispatch. Naming is strictly paired:
 //
 //   Vag<Name>Schema  — runtime z.object validator (consumer side)
 //   Vag<Name>Message — TypeScript type derived via z.infer<typeof ...>
 //
 // Two shape families exist in the wire:
 //   1. payload-wrapped:  { type, payload: { ... } }
-//      ASSETS_CHANGED, CONSOLE, EDITOR_OPEN_SOURCE, EDITOR_POPOUT,
-//      EDITOR_REDOCK, EDITOR_REF, FPS_STATS, SPAWN_ENTITY
-//   2. type-only / flat: { type } or { type, ...fields }
-//      DEVICE_LOST, EDITOR_FLUSH, PREVIEW_DISPOSE, PREVIEW_PAUSE,
-//      PREVIEW_PLAY, PREVIEW_RELOAD (type-only)
-//      CONTEXT_MENU, CONTEXT_MENU_ACTION (flat extra fields)
+//      CONSOLE, NETWORK, FPS_STATS
+//   2. type-only: { type }
+//      DEVICE_LOST, PREVIEW_DISPOSE, PREVIEW_PAUSE, PREVIEW_PLAY,
+//      PREVIEW_RELOAD
 //
 // Schema contracts intentionally mirror the actual on-wire shape from
 // the producer call sites (see anchors per schema). Fields not present
@@ -24,36 +25,16 @@
 // "no try-catch silent swallow" — schemas surface real divergence).
 //
 // Anchors:
-//   requirements §AC-03 (15 schemas; was 16 before panel-action retirement)
+//   requirements §AC-03 (8 cross-realm schemas; editor-iframe projections retired)
 //   requirements §AC-05 (safeParse error.issues structured failure)
 //   plan-strategy §2 D-3 (single physical location)
 //   plan-strategy §2 D-4 (no silent type assertion)
 //   plan-strategy §8.1 (Vag<Name>Schema + Vag<Name>Message naming pair)
-//   research F-6 (15 type literals enumerated by grep; panel-action schemas removed)
+//   research F-6 (8 cross-realm type literals after single-realm projections retired)
 
 import { z } from 'zod';
 
-// ── 1. VAG_ASSETS_CHANGED ────────────────────────────────────────────────────
-// Producer: EditMode.tsx:186 / 230 (interface, slug-bearing) and
-// editor-runtime/store.ts (BroadcastChannel relay, payload-less ping).
-// Two real shapes coexist on the wire today: a with-payload form carrying
-// the slug whose pack changed, and a payload-less ping used by the relay
-// path inside editor-runtime where no slug context is available.
-// `payload` is therefore optional and `payload.slug` likewise — the
-// schema accepts both shapes. Consumers that need the slug should narrow
-// after safeParse.
-export const VagAssetsChangedSchema = z.object({
-  type: z.literal('VAG_ASSETS_CHANGED'),
-  payload: z
-    .object({
-      slug: z.string().optional(),
-    })
-    .optional(),
-  hint: z.enum(['directory-only', 'pack-changed']).optional(),
-});
-export type VagAssetsChangedMessage = z.infer<typeof VagAssetsChangedSchema>;
-
-// ── 2. VAG_CONSOLE ───────────────────────────────────────────────────────────
+// ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:267,272,275 (console proxy + global error).
 // Carries a single console line + level + ts. Consumer pushes to the in-UI
 // Console panel.
@@ -85,41 +66,7 @@ export const VagNetworkSchema = z.object({
 });
 export type VagNetworkMessage = z.infer<typeof VagNetworkSchema>;
 
-// ── 3. VAG_CONTEXT_MENU ──────────────────────────────────────────────────────
-// Producer: editor-runtime/ui/contextMenuService.tsx:57.
-// Flat shape — no payload wrapper. menuId pairs the open with the action.
-// items[] are wire-shaped menu rows (separator OR id+label+disabled+danger).
-export const VagContextMenuSchema = z.object({
-  type: z.literal('VAG_CONTEXT_MENU'),
-  menuId: z.string(),
-  x: z.number(),
-  y: z.number(),
-  items: z.array(
-    z.union([
-      z.object({ sep: z.literal(true) }),
-      z.object({
-        id: z.string(),
-        label: z.string().optional(),
-        disabled: z.boolean().optional(),
-        danger: z.boolean().optional(),
-      }),
-    ]),
-  ),
-});
-export type VagContextMenuMessage = z.infer<typeof VagContextMenuSchema>;
-
-// ── 4. VAG_CONTEXT_MENU_ACTION ───────────────────────────────────────────────
-// Producer: interface/components/ContextMenu/ContextMenu.tsx:72.
-// Flat shape (no payload wrapper). Pairs back to the open via menuId, picks
-// the chosen row via actionId.
-export const VagContextMenuActionSchema = z.object({
-  type: z.literal('VAG_CONTEXT_MENU_ACTION'),
-  menuId: z.string(),
-  actionId: z.string(),
-});
-export type VagContextMenuActionMessage = z.infer<typeof VagContextMenuActionSchema>;
-
-// ── 5. VAG_DEVICE_LOST ───────────────────────────────────────────────────────
+// ── 3. VAG_DEVICE_LOST ───────────────────────────────────────────────────────
 // Producer: engine surface (loss event broadcast); see PreviewMode.tsx:151.
 // Type-only ping — interface reacts by reloading the iframe.
 export const VagDeviceLostSchema = z.object({
@@ -127,67 +74,7 @@ export const VagDeviceLostSchema = z.object({
 });
 export type VagDeviceLostMessage = z.infer<typeof VagDeviceLostSchema>;
 
-// ── 6. VAG_EDITOR_FLUSH ──────────────────────────────────────────────────────
-// Producer: EditMode.tsx:135 (interface). Type-only command asking the editor
-// runtime to flush any pending save-debounce before unmount.
-export const VagEditorFlushSchema = z.object({
-  type: z.literal('VAG_EDITOR_FLUSH'),
-});
-export type VagEditorFlushMessage = z.infer<typeof VagEditorFlushSchema>;
-
-// ── 7. VAG_EDITOR_OPEN_SOURCE ────────────────────────────────────────────────
-// Producer: editor-runtime/dock.ts:17. Tells interface to switch to the
-// authoring plugin (workbench tab) for the entity's source provenance.
-// docId is best-effort target within the plugin (optional).
-export const VagEditorOpenSourceSchema = z.object({
-  type: z.literal('VAG_EDITOR_OPEN_SOURCE'),
-  payload: z.object({
-    plugin: z.string(),
-    docId: z.string().optional(),
-  }),
-});
-export type VagEditorOpenSourceMessage = z.infer<typeof VagEditorOpenSourceSchema>;
-
- // ── 8. VAG_EDITOR_REF
-//   kind='entity'    — id + name + components[] (+ source?)
-//   kind='component' — entityId + entityName + comp + value
-//   kind='asset'     — guid + assetKind + name (+ packPath?)
-// Schema accepts a discriminated union by kind so consumers (EditMode.tsx
-// composer) can narrow without a chain of `as` casts.
-export const VagEditorRefSchema = z.object({
-  type: z.literal('VAG_EDITOR_REF'),
-  payload: z.discriminatedUnion('kind', [
-    z.object({
-      kind: z.literal('entity'),
-      id: z.union([z.number(), z.string()]),
-      name: z.string(),
-      components: z.array(z.string()).optional(),
-      source: z
-        .object({
-          plugin: z.string().optional(),
-          docId: z.string().optional(),
-        })
-        .optional(),
-    }),
-    z.object({
-      kind: z.literal('component'),
-      entityId: z.number(),
-      entityName: z.string(),
-      comp: z.string(),
-      value: z.unknown().optional(),
-    }),
-    z.object({
-      kind: z.literal('asset'),
-      guid: z.string(),
-      assetKind: z.string(),
-      name: z.string(),
-      packPath: z.string().optional(),
-    }),
-  ]),
-});
-export type VagEditorRefMessage = z.infer<typeof VagEditorRefSchema>;
-
-// ── 11. VAG_FPS_STATS ────────────────────────────────────────────────────────
+// ── 4. VAG_FPS_STATS ────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:254. Carries a per-second fps integer.
 // Consumer: EditMode.tsx:245, PreviewMode.tsx:146.
 export const VagFpsStatsSchema = z.object({
@@ -228,24 +115,6 @@ export const VagPreviewReloadSchema = z.object({
 });
 export type VagPreviewReloadMessage = z.infer<typeof VagPreviewReloadSchema>;
 
-// ── 16. VAG_SPAWN_ENTITY ─────────────────────────────────────────────────────
-// Producer: EditMode.tsx:226 (after import-scene). Two modes:
-//   mode='reference' — payload.entity carries a single ECS spawn cmd seed
-//   mode='full'      — payload.doc carries an entire EditSession tree
-// entity / doc / name are kept loosely shaped (z.unknown / z.string?) since
-// the engine-side ECS schemas evolve independently — this schema asserts
-// the message envelope, not the engine doc structure.
-export const VagSpawnEntitySchema = z.object({
-  type: z.literal('VAG_SPAWN_ENTITY'),
-  payload: z.object({
-    mode: z.enum(['reference', 'full']),
-    entity: z.unknown().optional(),
-    doc: z.unknown().optional(),
-    name: z.string().optional(),
-  }),
-});
-export type VagSpawnEntityMessage = z.infer<typeof VagSpawnEntitySchema>;
-
 // ── sendVagMessage — generic typed postMessage helper ───────────────────────────
 //
 // Replaces every bare `postMessage({ type: 'VAG_*', ... })` call site with
@@ -269,17 +138,16 @@ export type VagSpawnEntityMessage = z.infer<typeof VagSpawnEntitySchema>;
 /**
  * Extract the inner payload type from a VAG schema.
  * For payload-wrapped schemas (most common), this is the `payload` field type.
- * For type-only schemas (VAG_EDITOR_FLUSH, VAG_PREVIEW_*), this is `Record<string, never>`.
+ * For type-only schemas (VAG_PREVIEW_*), this is `Record<string, never>`.
  */
 
 export type VagSchemaTypes = z.infer<ReturnType<typeof vagSchemaUnion>>;
 
 function vagSchemaUnion() {
   return z.union([
-    VagAssetsChangedSchema, VagConsoleSchema, VagContextMenuSchema, VagContextMenuActionSchema,
-    VagDeviceLostSchema, VagEditorFlushSchema, VagEditorOpenSourceSchema,
-    VagEditorRefSchema, VagFpsStatsSchema, VagPreviewDisposeSchema,
-    VagPreviewPauseSchema, VagPreviewPlaySchema, VagPreviewReloadSchema, VagSpawnEntitySchema,
+    VagConsoleSchema, VagDeviceLostSchema, VagFpsStatsSchema,
+    VagPreviewDisposeSchema, VagPreviewPauseSchema, VagPreviewPlaySchema,
+    VagPreviewReloadSchema,
   ]);
 }
 
@@ -364,28 +232,21 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
 // `addEventListener('message')` + `switch` + ad-hoc `safeParse` (or a raw
 // `e.data as T` cast with NO validation, and usually NO origin check). That
 // scattering is the robustness/security hole: foreign-origin pages could drive
-// `VAG_PREVIEW_*` / `VAG_SPAWN_ENTITY` straight into the engine bus, and
+// `VAG_PREVIEW_*` straight into the engine bus, and
 // malformed payloads reached handlers untyped. `onVagMessage` centralizes the
 // trust boundary: source gate → origin allowlist → known-type → schema parse →
 // typed dispatch, with rejected messages reported (never silently dropped).
 
 /** type-literal → schema map. Includes VAG_NETWORK (absent from vagSchemaUnion). */
 const VAG_SCHEMA_BY_TYPE = {
-  VAG_ASSETS_CHANGED: VagAssetsChangedSchema,
   VAG_CONSOLE: VagConsoleSchema,
   VAG_NETWORK: VagNetworkSchema,
-  VAG_CONTEXT_MENU: VagContextMenuSchema,
-  VAG_CONTEXT_MENU_ACTION: VagContextMenuActionSchema,
   VAG_DEVICE_LOST: VagDeviceLostSchema,
-  VAG_EDITOR_FLUSH: VagEditorFlushSchema,
-  VAG_EDITOR_OPEN_SOURCE: VagEditorOpenSourceSchema,
-  VAG_EDITOR_REF: VagEditorRefSchema,
   VAG_FPS_STATS: VagFpsStatsSchema,
   VAG_PREVIEW_DISPOSE: VagPreviewDisposeSchema,
   VAG_PREVIEW_PAUSE: VagPreviewPauseSchema,
   VAG_PREVIEW_PLAY: VagPreviewPlaySchema,
   VAG_PREVIEW_RELOAD: VagPreviewReloadSchema,
-  VAG_SPAWN_ENTITY: VagSpawnEntitySchema,
 } as const;
 
 export type VagType = keyof typeof VAG_SCHEMA_BY_TYPE;

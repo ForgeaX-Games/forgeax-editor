@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // M3 (AC-03): asset-selection is a transient op dispatched through the one
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
-import { gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
+import { gateway, getSceneId, panelBridge, resolveGamePath, showContextMenu, useDocVersion,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -206,25 +206,24 @@ export function ContentBrowser() {
   useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
 
   useEffect(() => {
-    // D5: 200ms debounce — merge consecutive VAG_ASSETS_CHANGED into one
-    // reload + fetchDiskDirs. directory-only hint skips reload (no pack change).
+    // D5: 200ms debounce — merge consecutive in-process assetsChanged signals
+    // into one reload + fetchDiskDirs. directory-only hint skips reload (no pack
+    // change). This is PanelBridge, not a same-window VAG postMessage copy: the
+    // editor is single realm and assetsChanged is a notification, not an op.
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const handler = (e: MessageEvent) => {
-      if (e.data?.type === 'VAG_ASSETS_CHANGED') {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = null;
-          // 'directory-only' means only folder CRUD — fetchDiskDirs is enough.
-          if (e.data?.hint !== 'directory-only') {
-            reload();
-          }
-          void fetchDiskDirs();
-        }, 200);
-      }
-    };
-    window.addEventListener('message', handler);
+    const off = panelBridge.on('assetsChanged', ({ hint }) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        // 'directory-only' means only folder CRUD — fetchDiskDirs is enough.
+        if (hint !== 'directory-only') {
+          reload();
+        }
+        void fetchDiskDirs();
+      }, 200);
+    });
     return () => {
-      window.removeEventListener('message', handler);
+      off();
       if (timer) clearTimeout(timer);
     };
   }, [reload, fetchDiskDirs]);
@@ -353,8 +352,8 @@ export function ContentBrowser() {
       const newName = window.prompt('Rename asset:', asset.name);
       if (newName && newName !== asset.name) {
         // D6: rename routes through the ONE gateway door (document op, undoable).
-        // The applier reaches pack IO via ctx.assetIO and fires
-        // broadcastAssetsChanged; the VAG_ASSETS_CHANGED listener triggers reload.
+        // The applier reaches pack IO via ctx.assetIO and fires the in-process
+        // assetsChanged notification; the Content Browser listener reloads.
         gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
       }
     },

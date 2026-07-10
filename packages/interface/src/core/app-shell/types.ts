@@ -16,9 +16,7 @@ export interface AppBusEventMap extends Record<string, unknown> {
   'dock:layout-toggle':  { workbenchId?: string; rect?: { top: number; bottom: number; left: number; right: number } };
   'anim:handoff':        { fromSurface: string; toSurface: string };
   'chat:pill':           { pill: PillPayload };
-  'editor:ref':          { kind: 'entity' | 'asset' | 'component'; payload: unknown };
   'iframe:navigate':     { pluginId: string; url?: string };
-  'iframe:add-asset':    { refs: readonly Record<string, unknown>[] };
   'capability:added':    { capability: string; provider: string };
   'capability:removed':  { capability: string; provider: string };
   // domain plugins may extend via .d.ts module augmentation

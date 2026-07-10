@@ -10,10 +10,6 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
-    "./surface": {
-      "types": "./src/EditSurface.tsx",
-      "import": "./src/EditSurface.tsx"
-    },
     "./host-boot": {
       "types": "./src/host-boot.ts",
       "import": "./src/host-boot.ts"

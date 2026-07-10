@@ -103,8 +103,10 @@ function sourceFromEvent(ev: MessageEvent): HealthSource {
       for (const f of Array.from(frames)) {
         if (f.contentWindow === win) {
           const src = f.getAttribute('src') ?? '';
+          // Only /preview (play-runtime) is still a real iframe. The edit surface
+          // is in-process (single realm) — its health forwards through the shared
+          // store directly, never an iframe message — so no '/editor' branch.
           if (src.includes('/preview')) return 'play';
-          if (src.includes('/editor')) return 'edit';
           return 'plugin';
         }
       }
@@ -199,9 +201,9 @@ export function installHealthBridge(): void {
     }
 
     // Legacy VAG wire fallback — only used for sources that DON'T yet ship the
-    // `forgeax:health` envelope (e.g. plugin iframes). Play/Edit surfaces forward
-    // their own forgeax:health (PlaySurface/EditSurface), so mapping VAG_CONSOLE
-    // for them would double-log; skip those, keep plugin/unknown frames.
+    // `forgeax:health` envelope (e.g. plugin iframes). The play iframe (PlaySurface)
+    // and the in-process edit viewport forward their own forgeax:health, so mapping
+    // VAG_CONSOLE for them would double-log; skip those, keep plugin/unknown frames.
     if (type === 'VAG_CONSOLE') {
       const payload = data?.payload as { level?: unknown; text?: unknown; ts?: unknown } | undefined;
       const text = typeof payload?.text === 'string' ? payload.text : '';
