@@ -8,12 +8,13 @@
 // SSOT (plan-strategy D-4, research Finding #9).
 
 import { fetchWithTimeout } from '../io/net';
-import { stableGuid, validatePackShell, type PackFile } from '../scene/scene-pack';
+import { validatePackShell, type PackFile } from '../scene/scene-pack';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import type { DocApplierCtx } from './document';
-import { deletedEntryCache, type PackAssetEntry } from '../io/asset-io-facade';
+import { deletedEntryCache, renamedNameCache, duplicatedGuidCache, type PackAssetEntry } from '../io/asset-io-facade';
 import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
 import type { SceneAsset } from '@forgeax/engine-types';
 
@@ -69,12 +70,13 @@ export async function deleteFile(filePath: string): Promise<boolean> {
 
 // ── GUID generation ──────────────────────────────────────────────────────────
 
-let guidCounter = 0;
-
-/** Generate a new asset GUID. Uses stableGuid with a timestamp + counter seed
- *  so GUIDs are deterministic within a session but unique across time. */
+/** Mint a fresh, unique asset GUID via the engine's authoritative generator
+ *  (dash-form string). Single minting seam — mirrors fbx-cook.ts. AGENTS.md #1
+ *  / architecture-principles §2: never hand-roll a second GUID generator, the
+ *  engine owns this. (Old stableGuid(timestamp+counter) seed was effectively
+ *  random anyway — it gained nothing from stableGuid's determinism.) */
 export function generateAssetGuid(): string {
-  return stableGuid(`editor-new|${Date.now()}|${guidCounter++}`);
+  return AssetGuid.format(AssetGuid.random());
 }
 
 // ── Dangling refs check ──────────────────────────────────────────────────────
@@ -321,7 +323,17 @@ function _cacheKey(packPath: string, guid: string): string {
 }
 
 export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { packPath, guid } = cmd as { packPath: string; guid: string };
+  const { packPath, guid: rawGuid, newGuidCacheKey } = cmd as {
+    packPath: string; guid: string; newGuidCacheKey?: string;
+  };
+  // async-guid resolution: when this destroyAsset is the INVERSE of a
+  // duplicateAsset (undo of a duplicate), the guid to destroy is the one the
+  // clone allocated INSIDE the gate — unknowable when the inverse skeleton was
+  // built. duplicateAsset stashed it in duplicatedGuidCache under newGuidCacheKey;
+  // resolve it here. If the cache miss (clone IO not yet landed), fall back to the
+  // op's own guid (best-effort, matching the fire-and-forget contract). The entry
+  // is left in the cache so a redo→undo cycle can resolve it again.
+  const guid = (newGuidCacheKey ? duplicatedGuidCache.get(newGuidCacheKey) : undefined) ?? rawGuid;
   const key = _cacheKey(packPath, guid);
   // Fire the async delete; stash the snapshot so undo can restore the full entry.
   // The document-applier contract is synchronous (returns inverse immediately);
@@ -386,3 +398,73 @@ function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
 }
 
 registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);
+
+// ── Document appliers: renameAsset / duplicateAsset (G-4) ─────────────────────
+// Two MORE DOCUMENT-domain ops (undoable) added by the keyboard-router/context-menu
+// gateway convergence — the last two asset mutations that still bypassed the door
+// (edit-runtime keyboard-router-deps + CBContextMenu called renameAssetInPack /
+// cloneAssetInPack directly). Both mirror the destroyAsset/restoreAsset shape:
+//   - synchronous applier returns { ok, inverse } immediately;
+//   - the pack IO is fire-and-forget through ctx.assetIO (the sole write gate);
+//   - the inverse's undoable payload (old name / new guid) is discovered ASYNC
+//     inside the gate, so it is stashed in a cache (renamedNameCache /
+//     duplicatedGuidCache) at apply time and read back by the inverse op — the
+//     exact same trick deletedEntryCache uses for restoreAsset (the document
+//     applier contract is synchronous, so we cannot await the read here).
+
+/** renameAsset — DOCUMENT op. The inverse is a renameAsset back to the OLD name.
+ *  Callers (human UI + AI) pass ONLY the newName: the old name is NOT required on
+ *  the op (an AI may not know it). The applier captures the replaced name from
+ *  renamePackEntry's return into renamedNameCache under a per-(pack,guid) key; the
+ *  inverse op carries that cacheKey and reads its target name back. (AI-parity:
+ *  the pack on disk is the SSOT for the current name, not the caller.) */
+export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid, newName } = cmd as { packPath: string; guid: string; newName: string };
+  const key = _cacheKey(packPath, guid);
+  // Fire the async rename; stash the replaced (old) name so the inverse can
+  // restore it synchronously. A .catch guards against an unhandled rejection —
+  // the op already landed in undo/ledger (D-1: the gateway is the only door).
+  void ctx.assetIO.renamePackEntry(packPath, guid, newName).then((r) => {
+    if (r.ok && r.oldName !== null) renamedNameCache.set(key, r.oldName);
+    broadcastAssetsChanged();
+  }).catch((e) => console.warn('[editor-core] renameAsset IO failed; old name not cached for undo:', e));
+  // The inverse renames back. Its newName is resolved from renamedNameCache via
+  // renameCacheKey; if the cache misses (IO not landed), it falls back to any
+  // oldName the op happened to carry (UI knows the current name; AI may not).
+  return {
+    ok: true,
+    inverse: {
+      kind: 'renameAsset', packPath, guid,
+      newName: (cmd as { oldName?: string }).oldName ?? newName,
+      renameCacheKey: key,
+    } as unknown as EditorOp,
+  };
+}
+
+/** duplicateAsset — DOCUMENT op. Clones an asset in-pack (new guid allocated
+ *  INSIDE the gate). Inverse is destroyAsset on the NEW guid — but that guid is
+ *  async (cloneAssetInPack returns it only after the pack read/write), so we stash
+ *  it in duplicatedGuidCache under the SOURCE key and hand destroyAsset a
+ *  newGuidCacheKey to resolve it at undo time (the async-guid wrinkle — same
+ *  fire-and-forget cache contract as destroyAsset's deletedEntryCache). */
+export function applyDuplicateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid } = cmd as { packPath: string; guid: string };
+  const key = _cacheKey(packPath, guid);
+  void ctx.assetIO.cloneAssetInPack(packPath, guid).then((r) => {
+    if (r.ok && r.newGuid) duplicatedGuidCache.set(key, r.newGuid);
+    broadcastAssetsChanged();
+  }).catch((e) => console.warn('[editor-core] duplicateAsset IO failed; new guid not cached for undo:', e));
+  // Inverse destroys the produced clone. The clone's guid is not known
+  // synchronously, so the inverse carries newGuidCacheKey; applyDestroyAsset reads
+  // the real guid back from duplicatedGuidCache. The `guid` field is a best-effort
+  // placeholder (the source guid) for the cache-miss fallback path.
+  return {
+    ok: true,
+    inverse: {
+      kind: 'destroyAsset', packPath, guid, newGuidCacheKey: key,
+    } as unknown as EditorOp,
+  };
+}
+
+registerApplier('document', 'renameAsset', applyRenameAsset as unknown as ApplierFn);
+registerApplier('document', 'duplicateAsset', applyDuplicateAsset as unknown as ApplierFn);

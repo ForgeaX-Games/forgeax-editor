@@ -281,7 +281,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   // on the env flag so the default (unset) run stays byte-identical to before:
   // no define -> the guard folds to dead code -> @forgeax/engine-rhi-debug is
   // tree-shaken, window.__forgeax stays undefined (README tree-shake invariant).
-  // `bun run start --rhi-debug` (scripts/cli.mjs) sets the env for the spawned
+  // `bun fx start --rhi-debug` (scripts/fx.ts) sets the env for the spawned
   // vite processes; both the :15290 host and :15280 edit-runtime configs share
   // this preset, so the host (where the engine actually boots + POSTs captured
   // tapes) gets the endpoints too.

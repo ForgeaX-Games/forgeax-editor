@@ -8,6 +8,13 @@
 // you arrange in the editor's ✎ Edit is exactly what runs here in ▶ Play. This
 // file adds only the DYNAMIC layer: a follow camera + WASD movement on "Player".
 //
+// Scene-load is ASSET-FIRST (mirrors packages/engine/templates/game-default): the
+// host (editor ▶ Play / preview) resolves + instantiates forge.json.defaultScene
+// BEFORE bootstrap runs and hands us the instance via ctx.defaultSceneRoot; we
+// ADOPT it instead of re-instantiating (re-instantiating loads the scene TWICE →
+// duplicate camera / sun → render-system-multi-camera / -multi-light). Only a
+// standalone module with no host pre-load falls back to loadByGuid ourselves.
+//
 // Trimmed from packages/engine/templates/game-default (no shooting / HUD /
 // physics props) to stay a *simple* sample. Every mesh the scene references is an
 // engine builtin (cube / sphere), pre-catalogued by GUID -- no runtime catalog
@@ -34,7 +41,8 @@ interface PackNode { localId: number; components: Record<string, Record<string, 
 
 // Load the authored scene the canonical way -> return the localId->Entity mapping
 // (so the caller can find the Player) + the nodes. Returns null on any failure
-// (caller falls back to no player, camera-only).
+// (caller falls back to no player, camera-only). Only used when the host did NOT
+// pre-instantiate the scene (standalone module path).
 async function loadScene(
   ctx: Ctx,
 ): Promise<{ mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null> {
@@ -71,10 +79,40 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   // ── load the authored scene (the SAME native asset ✎ Edit writes) ────────────
   let loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null = null;
-  try {
-    loaded = await loadScene({ world, assets: ctx?.assets });
-  } catch (err) {
-    console.warn('[game] scene asset unavailable:', err);
+
+  // Asset-first host (editor ▶ Play / preview): the host resolves + instantiates
+  // forge.json.defaultScene BEFORE bootstrap runs and hands us the synthetic root
+  // via ctx.defaultSceneRoot (+ the loaded SceneAsset via ctx.defaultScene). ADOPT
+  // that instance — re-instantiating here would load the scene TWICE (host copy +
+  // our copy), duplicating the sun (render-system-multi-light) and, once a camera
+  // is added, the camera. Recover { mapping, nodes } from the SceneInstance on the
+  // host root (localId->Entity) + the author-side entity list (carries Name).
+  const hostRoot = ctx?.defaultSceneRoot;
+  if (hostRoot !== undefined && ctx?.defaultScene !== undefined) {
+    const sceneInst = world.get(hostRoot, SceneInstance);
+    if (!sceneInst.ok) {
+      console.error('[game] SceneInstance lookup on host root failed:', sceneInst.error);
+    } else {
+      // mapping is a Uint32Array sized maxLocalId+1, indexed by localId; skip
+      // unspawned slots (ENTITY_NULL_RAW = 0xffffffff) and 0.
+      const mappingArr = sceneInst.value.mapping as unknown as { length: number; [i: number]: number };
+      const mapping = new Map<number, EntityHandle>();
+      for (let localId = 0; localId < mappingArr.length; localId++) {
+        const e = mappingArr[localId];
+        if (e !== undefined && e !== 0xffffffff && e !== 0) mapping.set(localId, e as EntityHandle);
+      }
+      loaded = { mapping, nodes: ctx.defaultScene.entities as unknown as PackNode[] };
+    }
+  }
+
+  // Fallback: no host-instantiated scene (standalone game module, or the host has
+  // no defaultScene) — load it ourselves the canonical loadByGuid -> instantiate path.
+  if (!loaded) {
+    try {
+      loaded = await loadScene({ world, assets: ctx?.assets });
+    } catch (err) {
+      console.warn('[game] scene asset unavailable:', err);
+    }
   }
 
   // Player + its initial XZ (from the authored "Player" node).
@@ -90,6 +128,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   }
 
   // ── camera: a high tilted follow cam (top-down 2.5D) ─────────────────────────
+  // The camera is spawned in code (same as templates/game-default): ▶ Play forks a
+  // fresh play world whose only camera is this one. clearColor = visible sky (the
+  // sample scene has no SkyboxBackground entity, so this quartet IS the background;
+  // the engine's Camera stores it as an `array<f32,4>` field named `clearColor`).
   const TOP_DY = 12, TOP_DZ = 9;
   const CAM_FOLLOW = 8;
   const topPitch = -Math.atan2(TOP_DY, TOP_DZ);
@@ -98,7 +140,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   let camX = initX, camZ = initZ + TOP_DZ;
   const camera = world.spawn(
     { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, antialias: ANTIALIAS_FXAA, clearR: 0.4, clearG: 0.6, clearB: 1.0 } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
   ).unwrap();
 
   // ── input: WASD / arrows move the Player on the ground plane ──────────────────

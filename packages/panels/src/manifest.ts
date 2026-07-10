@@ -16,8 +16,6 @@ import { CapabilitiesPanel } from './Capabilities';
 import { HierarchyPanel } from './Hierarchy';
 import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
-import { MaterialPanel } from './Material';
-import { MeshPanel } from './Mesh';
 import { LauncherPanel } from './Launcher';
 import { AssetInspectorPanel } from './AssetInspector';
 
@@ -37,8 +35,6 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   assets: AssetsPanel,
   history: HistoryPanel,
   capabilities: CapabilitiesPanel,
-  material: MaterialPanel,
-  mesh: MeshPanel,
   launcher: LauncherPanel,
   'asset-inspector': AssetInspectorPanel,
 };

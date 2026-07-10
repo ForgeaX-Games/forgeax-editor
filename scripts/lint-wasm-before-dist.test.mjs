@@ -4,7 +4,7 @@
 //   (a) correct order (wasm before dist)      → exit 0
 //   (b) reversed order (dist before wasm)      → exit 1  (the historical bug)
 //   (c) missing/renamed anchor                 → exit 2  (refuse to pass blind)
-//   (d) the REAL scripts/cli.mjs (no --file)   → exit 0  (installer stays correct)
+//   (d) the REAL scripts/fx.ts (no --file)     → exit 0  (installer stays correct)
 //
 // NOTE: colocated *.test.mjs are dev-time harnesses — they are NOT run in CI
 // (nothing in ci.yml / package.json invokes scripts/*.test.mjs). CI enforcement
@@ -76,7 +76,7 @@ function install() {
 }
 `;
 
-// Definition at top (as in real cli.mjs) but the CALL moved below the dist build.
+// Definition at top (as in real fx.ts) but the CALL moved below the dist build.
 // The gate must anchor on the call, not the definition, or this reversal passes.
 const DEF_TOP_CALL_BELOW = `
 function ensureWasm() {
@@ -113,15 +113,15 @@ assertEqual('(c) missing anchor → 2', runLint(renamedPath), 2);
 console.log('Scenario (e): definition at top, call moved below dist — expect exit 1');
 assertEqual('(e) def-top + call-below → 1', runLint(defTopPath), 1);
 
-console.log('Scenario (d): real scripts/cli.mjs (default target) — expect exit 0');
+console.log('Scenario (d): real scripts/fx.ts (default target) — expect exit 0');
 {
   total++;
   const r = spawnSync(process.execPath, [LINT_SCRIPT], { encoding: 'utf8', timeout: 5000 });
   if (r.status === 0) {
-    console.log('  PASS: (d) real cli.mjs → 0');
+    console.log('  PASS: (d) real fx.ts → 0');
   } else {
     failures++;
-    console.error(`  FAIL: (d) real cli.mjs → expected 0, got ${JSON.stringify(r.status)}\n${r.stderr}`);
+    console.error(`  FAIL: (d) real fx.ts → expected 0, got ${JSON.stringify(r.status)}\n${r.stderr}`);
   }
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // lint-wasm-before-dist.mjs — static gate: wgpu wasm must be built BEFORE the
-// engine library dist in scripts/cli.mjs `install()` (i.e. `bun run setup`).
+// engine library dist in scripts/fx.ts `install()` (i.e. `bun fx setup`).
 //
 // WHY THIS EXISTS (the SSOT defect it closes — architecture-principles.md §1/§2)
 //   The engine `app` package's tsup build inlines
@@ -13,7 +13,7 @@
 //   The ordering fact "wasm precedes engine dist" lived as TWO independent copies:
 //     1. .github/workflows/ci.yml — replays the build in YAML (build.sh → pnpm -r
 //        build). CI ACTUALLY RUNS this, so a wrong order fails the job: self-gated.
-//     2. scripts/cli.mjs install() — the same order in JS. CI never runs setup, so
+//     2. scripts/fx.ts install() — the same order in TS. CI never runs setup, so
 //        this copy was UNGATED and silently drifted (dist-before-wasm) undetected.
 //   This lint restores symmetry: it statically gates copy #2 so a reorder turns
 //   `bun run lint` (a required check in the typecheck job) red.
@@ -23,7 +23,7 @@
 //   ensureWasm(), not ensureFbxWasm().
 //
 // Usage:   node scripts/lint-wasm-before-dist.mjs [--file <path>]
-//          (--file defaults to scripts/cli.mjs; the self-test feeds synthetic copies)
+//          (--file defaults to scripts/fx.ts; the self-test feeds synthetic copies)
 // Exits    0 wasm-before-dist (correct) · 1 dist-before-wasm (regression)
 //          · 2 anchor missing/renamed (refuse to pass blind — re-point the gate).
 
@@ -34,12 +34,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 
-// --file <path> override (default: scripts/cli.mjs). Lets the self-test point the
+// --file <path> override (default: scripts/fx.ts). Lets the self-test point the
 // gate at synthetic copies without touching the real installer.
 function parseFileArg(argv) {
   const i = argv.indexOf('--file');
   if (i !== -1 && argv[i + 1]) return resolve(argv[i + 1]);
-  return resolve(REPO_ROOT, 'scripts', 'cli.mjs');
+  return resolve(REPO_ROOT, 'scripts', 'fx.ts');
 }
 
 const target = parseFileArg(process.argv.slice(2));

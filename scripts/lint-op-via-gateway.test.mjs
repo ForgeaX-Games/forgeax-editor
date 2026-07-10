@@ -17,7 +17,7 @@
 // Exits: 0 all pass, 1 at least one scenario failed
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -75,12 +75,12 @@ function makeDiff(hunks) {
   return parts.join('\n');
 }
 
-function runLint(diffPath) {
+function runLint(diffPath, extraArgs = []) {
   if (!existsSync(LINT_SCRIPT)) {
     // TDD red-phase: script not written yet
     return { status: null, stdout: '', stderr: 'lint-op-via-gateway.mjs not found (TDD: implement m5-w3 first)' };
   }
-  const result = spawnSync(process.execPath, [LINT_SCRIPT, '--diff-file', diffPath], {
+  const result = spawnSync(process.execPath, [LINT_SCRIPT, '--diff-file', diffPath, ...extraArgs], {
     encoding: 'utf8',
     timeout: 5000,
   });
@@ -382,6 +382,111 @@ assertEqual(
   cleanResult.status,
   0
 );
+
+// ---------------------------------------------------------------------------
+// Scenario (g): NAME-REUSE HOLE CLOSED -- a setter reusing a baselined NAME in a
+// DIFFERENT file is no longer auto-exempt (path-qualified baseline). We seed the
+// baseline identity `store/selection.ts:setSelected` and add a NEW setSelected in
+// a DIFFERENT file (store/hover.ts). Bare-name keying would have exempted it;
+// path-qualified keying must FLAG it → exit 1. We also confirm the SAME identity
+// (same file) IS still exempt.
+// ---------------------------------------------------------------------------
+console.log('Scenario (g): NAME-REUSE -- baselined name reused in a different file → exit 1');
+{
+  const reuseHunks = [{
+    file: 'packages/core/src/store/hover.ts',
+    lines: [
+      'export function setSelected(id: number): void {',
+      '  hovered = id;',
+      '}',
+    ],
+  }];
+  const reusePath = join(diffDir, 'name-reuse.diff');
+  writeFileSync(reusePath, makeDiff(reuseHunks));
+  // Baseline grandfathers setSelected ONLY in selection.ts.
+  const r = runLint(reusePath, ['--baseline-identities', 'packages/core/src/store/selection.ts:setSelected']);
+  assertEqual('(g) same-name-different-file setter is flagged', r.status, 1);
+}
+console.log('Scenario (g2): SAME identity (same file) still exempt → exit 0');
+{
+  const sameHunks = [{
+    file: 'packages/core/src/store/selection.ts',
+    lines: [
+      'export function setSelected(id: number): void {',
+      '  selected = id;',
+      '}',
+    ],
+  }];
+  const samePath = join(diffDir, 'same-identity.diff');
+  writeFileSync(samePath, makeDiff(sameHunks));
+  const r = runLint(samePath, ['--baseline-identities', 'packages/core/src/store/selection.ts:setSelected']);
+  assertEqual('(g2) same file+name identity stays exempt', r.status, 0);
+}
+
+// ---------------------------------------------------------------------------
+// RATCHET scenarios (shrinking baseline, full-tree). Point the gate at a scratch
+// baseline JSON + synthetic scan tree. The diff is CLEAN so only the full-tree
+// ratchet decides the exit code.
+// ---------------------------------------------------------------------------
+const cleanRatchetDiff = join(diffDir, 'ratchet-clean.diff');
+writeFileSync(cleanRatchetDiff, makeDiff([{
+  file: 'packages/core/src/io/catalog.ts',
+  lines: ['  // no store changes'],
+}]));
+
+function makeStoreTree(setters) {
+  const root = mkdtempSync(join(tmpDir, 'scan-'));
+  for (const { file, fnNames } of setters) {
+    const abs = join(root, 'packages/core/src/store', file);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, fnNames.map(n => `export function ${n}(): void {}`).join('\n'));
+  }
+  return root;
+}
+function writeBaseline(obj) {
+  const p = join(tmpDir, `baseline-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(p, JSON.stringify(obj, null, 2) + '\n');
+  return p;
+}
+function runRatchet(baselineFile, scanRoot) {
+  const r = spawnSync(process.execPath, [
+    LINT_SCRIPT, '--diff-file', cleanRatchetDiff,
+    '--baseline-file', baselineFile, '--scan-root', scanRoot,
+  ], { encoding: 'utf8', timeout: 5000 });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+// (h) RATCHET FAIL: full-tree population (2) EXCEEDS baseline (1) → exit 1
+console.log('Scenario (h): RATCHET FAIL -- full-tree setters > baseline → exit 1');
+{
+  const scanRoot = makeStoreTree([{ file: 'a.ts', fnNames: ['setFoo', 'saveBar'] }]);
+  const bl = writeBaseline({ rawWriteCount: 0, gatewayBaselineSetters: ['packages/core/src/store/a.ts:setFoo'] });
+  assertEqual('(h) exit 1', runRatchet(bl, scanRoot).status, 1);
+}
+
+// (i) RATCHET DOWN: full-tree population (1) BELOW baseline (3) → exit 0 + rewrite
+console.log('Scenario (i): RATCHET DOWN -- full-tree setters < baseline → exit 0 + baseline rewritten lower');
+{
+  const scanRoot = makeStoreTree([{ file: 'a.ts', fnNames: ['setFoo'] }]);
+  const bl = writeBaseline({ rawWriteCount: 0, gatewayBaselineSetters: [
+    'packages/core/src/store/a.ts:setFoo',
+    'packages/core/src/store/a.ts:setGone',
+    'packages/core/src/store/b.ts:saveGone',
+  ] });
+  const r = runRatchet(bl, scanRoot);
+  assertEqual('(i) exit 0', r.status, 0);
+  assertEqual('(i) baseline rewritten to [a.ts:setFoo]', JSON.stringify(JSON.parse(readFileSync(bl, 'utf8')).gatewayBaselineSetters), JSON.stringify(['packages/core/src/store/a.ts:setFoo']));
+}
+
+// (j) RATCHET EQUAL: full-tree population (1) == baseline (1) → exit 0, unchanged
+console.log('Scenario (j): RATCHET EQUAL -- full-tree setters == baseline → exit 0, unchanged');
+{
+  const scanRoot = makeStoreTree([{ file: 'a.ts', fnNames: ['setFoo'] }]);
+  const bl = writeBaseline({ rawWriteCount: 0, gatewayBaselineSetters: ['packages/core/src/store/a.ts:setFoo'] });
+  const r = runRatchet(bl, scanRoot);
+  assertEqual('(j) exit 0', r.status, 0);
+  assertEqual('(j) baseline unchanged', JSON.stringify(JSON.parse(readFileSync(bl, 'utf8')).gatewayBaselineSetters), JSON.stringify(['packages/core/src/store/a.ts:setFoo']));
+}
 
 // ---------------------------------------------------------------------------
 // Cleanup

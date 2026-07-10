@@ -4,8 +4,8 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // direct setAssetSelection setter and the origin-less `dispatch` wrapper.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  renameAssetInPack, deleteAsset, broadcastAssetsChanged,
-  gateway, getSelection, assetIO,
+  deleteAsset, broadcastAssetsChanged,
+  gateway, getSelection,
 } from '@forgeax/editor-core';
 
 /** Map an asset kind to the component patch that assigns it onto an entity. */
@@ -59,17 +59,18 @@ export function buildAssetContextMenu(
       } else {
         const newName = window.prompt('Rename asset:', asset.name);
         if (newName && newName !== asset.name) {
-          void renameAssetInPack(asset.packPath, asset.guid, newName).then(ok => {
-            if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
-          });
+          // D6: rename routes through the ONE gateway door (document op, undoable).
+          // The applier reaches pack IO via ctx.assetIO and fires
+          // broadcastAssetsChanged itself; the VAG_ASSETS_CHANGED listener reloads.
+          gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
         }
       }
     }},
     { id: 'duplicate', label: 'Duplicate', shortcut: 'Ctrl+D', action: () => {
       for (const a of targets) {
-        void assetIO.cloneAssetInPack(a.packPath, a.guid).then(({ ok }) => {
-          if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
-        });
+        // D6: duplicate routes through the gateway (document op, undoable). The new
+        // guid is allocated inside the applier's assetIO gate; no direct facade call.
+        gateway.dispatch({ kind: 'duplicateAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
     }},
     { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {

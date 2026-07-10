@@ -30,6 +30,30 @@ export type PackAssetEntry = PackFile['assets'][number];
 export const deletedEntryCache = new Map<string, PackAssetEntry>();
 
 /**
+ * Snapshot of the PRE-rename name, keyed by `${packPath}#${guid}`, captured in the
+ * `renameAsset` document applier's fire-and-forget `.then` (renamePackEntry returns
+ * the replaced name). Symmetric to `deletedEntryCache`: the document-applier
+ * contract is synchronous, so the applier cannot await the read to learn the old
+ * name — it stashes the old name here and the inverse `renameAsset` (carrying the
+ * same cacheKey) resolves its target name from this map. Chosen over an op-carried
+ * `oldName` for AI-parity: an AI caller dispatching `renameAsset` need not (and may
+ * not) know the current name — the applier discovers it (SSOT: the pack on disk).
+ */
+export const renamedNameCache = new Map<string, string>();
+
+/**
+ * Snapshot of the guid a `duplicateAsset` produced, keyed by the SOURCE
+ * `${packPath}#${guid}`, captured in the applier's fire-and-forget `.then`
+ * (cloneAssetInPack allocates the new guid INSIDE the gate — see line ~105, so it
+ * is unknowable synchronously). The inverse `destroyAsset` carries a
+ * `newGuidCacheKey` referencing this map; `applyDestroyAsset` resolves the real
+ * guid from here at undo time. This is the "async-guid wrinkle" the duplicate op
+ * has to route around — the same fire-and-forget cache contract destroyAsset /
+ * restoreAsset already rely on for their snapshots.
+ */
+export const duplicatedGuidCache = new Map<string, string>();
+
+/**
  * The sole legal path for asset/pack writes outside of document appliers
  * (gateway A for the asset axis, plan-strategy §2 D-6). `destroyAsset` /
  * `restoreAsset` document appliers call `deletePackEntry` / `writePackEntry`
@@ -91,6 +115,29 @@ export class AssetIOFacade {
     });
     const ok = await writePack(opts.packPath, pack);
     return { ok };
+  }
+
+  /** Rename one asset entry (change its `name` field), returning the REPLACED
+   *  (old) name so the `renameAsset` document op's inverse can restore it (the
+   *  asset-axis mirror of deletePackEntry returning the deleted snapshot). The
+   *  WRITE goes through this gate (writePack) — the sole legal pack-write path
+   *  (G-5 / AC-D1), replacing the pre-gateway bare `renameAssetInPack`. Returns
+   *  `ok:false` (with `oldName:null`) if the pack/entry is missing or the write
+   *  fails — the applier leaves the inverse cache untouched in that case. */
+  async renamePackEntry(
+    packPath: string,
+    guid: string,
+    newName: string,
+  ): Promise<{ ok: boolean; oldName: string | null }> {
+    recordAssetLeaf('assetIO.renamePackEntry');
+    const pack = await readPack(packPath);
+    if (!pack) return { ok: false, oldName: null };
+    const entry = pack.assets.find((a) => a.guid === guid);
+    if (!entry) return { ok: false, oldName: null };
+    const oldName = entry.name ?? null;
+    entry.name = newName;
+    const ok = await writePack(packPath, pack);
+    return { ok, oldName };
   }
 
   /** Clone an asset within the same pack (new GUID, same kind/payload).

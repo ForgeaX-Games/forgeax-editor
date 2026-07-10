@@ -475,6 +475,10 @@ export function createHostSession(deps: HostSessionDeps): {
           loadDefaultScene,
           resolveBootstrap,
           attachInput: attachPlayInput,
+          // ▶ Play mounts #game-ui-root inside the viewport container as ctx.uiRoot
+          // and removes it on ■ Stop (play-assemble detach()). Threaded here so the
+          // game HUD is clipped to the viewport and can never survive a stop.
+          viewportContainer: ctx.viewportContainer,
           ...(ctx.physics ? { physics: ctx.physics } : {}),
         }),
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },

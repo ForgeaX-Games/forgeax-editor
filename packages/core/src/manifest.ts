@@ -15,11 +15,8 @@ export const EDITOR_PANELS = [
   'assets',
   'history',
   'capabilities',
-  'material',
-  'mesh',
   'launcher',
   'asset-inspector',
-  'systems',
 ] as const;
 
 /** Union type of all editor panel IDs — derived from EDITOR_PANELS. */

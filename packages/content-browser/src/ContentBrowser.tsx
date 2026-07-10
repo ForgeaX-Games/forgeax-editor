@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
 import { gateway, getSceneId, resolveGamePath, showContextMenu, useDocVersion,
-  renameAssetInPack, broadcastAssetsChanged,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -324,13 +323,6 @@ export function ContentBrowser() {
       payload: asset.payload,
       packPath: asset.packPath,
     } });
-    // Double-clicking a mesh asset surfaces its data: ask the studio shell to
-    // bring the Mesh panel to front (focus-only — the shell never force-inserts a
-    // closed tab). Harmless in standalone/pop-out where no shell listens.
-    // Design: docs/design/editor-mesh-panel-ue58-parity.md §7.1.
-    if (asset.kind === 'mesh') {
-      gateway.dispatch({ kind: 'focusPanel', panel: 'mesh' });
-    }
     if (asset.kind === 'scene') {
       const rel = toGameRelative(asset.packPath, gameSlug);
       const entry = rel ? getSceneList().find(s => s.pack === rel) : undefined;
@@ -352,9 +344,10 @@ export function ContentBrowser() {
     onRename: (asset: CBAsset) => {
       const newName = window.prompt('Rename asset:', asset.name);
       if (newName && newName !== asset.name) {
-        void renameAssetInPack(asset.packPath, asset.guid, newName).then(ok => {
-          if (ok) { broadcastAssetsChanged(); reload(); }
-        });
+        // D6: rename routes through the ONE gateway door (document op, undoable).
+        // The applier reaches pack IO via ctx.assetIO and fires
+        // broadcastAssetsChanged; the VAG_ASSETS_CHANGED listener triggers reload.
+        gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
       }
     },
     onNewFolder: (parentPath: string) => {
