@@ -521,18 +521,12 @@ async function bootViewport(
     }
   }
 
-  // possess-exit key removed (keyboard-router convergence M4 T4-7 / AC-Cb1): G /
-  // Esc display-toggle now lives in the single global-shortcuts router
-  // (interface submodule global-shortcuts.ts). Dispatching setDisplay through the
-  // gateway makes display toggle ledger-visible + AI-equivalent (G-6), and the
-  // router's play·game guard yields G to the game (T0-10 / RK-10).
-  //
-  // MERGE NOTE (main #96): main added a local `onPossessKey` here as a hotfix for
-  // "no keyboard exit from edit·game (ViewportBar hidden → user stuck)". The
-  // convergence SUPERSEDES that local handler: the global-shortcuts router catches
-  // G/Esc for BOTH edit·game and play·game and dispatches setDisplay → the
-  // registerSessionApplier('setDisplay') below applies scene⇄game. Keeping the
-  // local handler too would double-handle the key, so it is intentionally dropped.
+  // Keyboard ownership lives in interface's single global-shortcuts router
+  // (keyboard-router convergence M4 T4-7 / AC-Cb1). Escape while play·game
+  // dispatches `setDisplay(scene)`, returning input to editor controls while the
+  // simulation keeps running; G remains game-owned in play·game (T0-10 / RK-10),
+  // so it cannot trigger that transition. Do not restore a local listener here:
+  // it would violate the one-keydown-router invariant and double-handle shortcuts.
 
   // play·scene non-commit (was :638). transientMode true exactly in play·scene.
   function syncTransientMode(q: { run: string; display: string }): void {
