@@ -9,8 +9,8 @@
 //   zero world construction so lint-no-second-world stays green), world/renderer
 //   unpack, gateway.doc.world/registry injection, pack-index configure, the editor
 //   orbit camera, createViewport (orbit/pan/zoom/pick/gizmo), resize +
-//   game-camera discovery + active-camera wiring, the VAG console/network/error/
-//   preview bridges, and the FPS report. The APPLICATION SESSION tail (seed,
+//   game-camera discovery + active-camera wiring, in-process diagnostics /
+//   visibility bridges, and the FPS report. The APPLICATION SESSION tail (seed,
 //   scene load, ▶ Play run-lifecycle, skylight, preloads, mesh-stats, preview-
 //   skin, sync, disk-watch) lives in host-boot.ts and runs on the world this
 //   component boots (initHostSession).
@@ -46,6 +46,7 @@ import { physicsPlugin } from '@forgeax/engine-physics';
 import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
 import {
   gateway,
+  panelBridge,
   getSceneId,
   switchSceneFile,
   registerSessionApplier,
@@ -53,17 +54,18 @@ import {
 } from '@forgeax/editor-core';
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
-// M6 extraction (plan-strategy §2 D-5, AC-08): the VAG / console / network /
-// diagnostics bridges moved to viewport-vag-bridges.ts (decoupled from the
-// createApp hotspot, AC-10). bootViewport keeps only the call sites.
+// M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
+// bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
+// hotspot, AC-10). bootViewport keeps only the call sites.
 import {
   installFpsReport,
   installConsoleBridge,
   installNetworkBridge,
-  installPreviewControls,
+  installAssetCatalogRefresh,
+  installVisibilityPause,
   installErrorOverlay,
   paintDiagnosticMessage,
-} from './viewport-vag-bridges';
+} from './viewport-runtime-bridges';
 import {
   getInputTarget,
   getViewportQuadrant,
@@ -74,7 +76,7 @@ import {
   deriveActiveCameraEntity,
 } from './viewport-quadrant';
 import { _syncDisplayMode } from './display-bus';
-import { installAssetSpawnBridge } from '../asset-spawn-bridge';
+import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
 import { CommandPalette } from '../panels/command-palette';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
@@ -124,12 +126,7 @@ export function resetEditRealm(): void {
 
 // ── boot breadcrumb + dead-boot watchdog (was main.tsx :56-108) ───────────────
 function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
-  try {
-    window.parent?.postMessage(
-      { type: 'forgeax:health', level, source: 'edit', code: 'boot', message, ts: Date.now() },
-      '*',
-    );
-  } catch { /* no parent / cross-origin — overlay still covers the user */ }
+  panelBridge.emit('editorHealth', { level, code: 'boot', message, ts: Date.now() });
 }
 
 interface BootFns {
@@ -590,7 +587,7 @@ async function bootViewport(
     console.error('[editor] host session init failed:', err);
     session = { playSimulation: () => {}, stopSimulation: () => {}, dispose: () => {} };
   }
-  // Tear the host session down (disk-watch socket, flush beacons, VAG flush) on a
+  // Tear the host session down (disk-watch socket, flush beacons) on a
   // cross-game realm reset, flushing any pending save first.
   registerTeardown(() => session.dispose());
 
@@ -696,7 +693,11 @@ async function bootViewport(
   });
   installFpsReport(editorApp, onFps);
   registerTeardown(installAssetSpawnBridge());
-  registerTeardown(installPreviewControls(editorApp));
+  // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
+  // container (drop → gateway spawn; visibility → editorApp.pause/resume).
+  registerTeardown(installViewportDropZone(container));
+  registerTeardown(installVisibilityPause(container, editorApp));
+  registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');
 

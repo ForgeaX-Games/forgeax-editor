@@ -1,4 +1,5 @@
-// Build VAG_SPAWN_ENTITY payloads from Content Browser drag refs.
+// Build spawn-entity commands from Content Browser drag refs. The result feeds
+// the single live spawn path: core/scene/spawn-asset-ref.ts → gateway.dispatch.
 //
 // feat-20260701-editor-world-container-doc-ecs-collapse review round 1 / F-1:
 // The former builder emitted editor-legacy components — `Mesh{kind,meshAsset}`,
@@ -97,8 +98,9 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
   const name = stemName(ref);
 
   if (!PLACEABLE_KINDS.has(kind)) {
-    // `scene` (whole-GLB, mode A) is routed through /api/assets/import-scene, not
-    // a single-entity spawn. Everything else is not directly placeable.
+    // `scene` (whole-GLB, mode A) spawns as a native SceneInstance mount via
+    // spawn-asset-ref.ts (engine loadByGuid<SceneAsset> → world.instantiateScene),
+    // not a single-entity spawn. Everything else is not directly placeable.
     return null;
   }
 
@@ -159,11 +161,10 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
 
 // feat-20260708 M1 (plan-strategy D-4, AC-02/AC-04): recover a mesh ref's original
 // per-submesh material GUIDs so they can ride the spawn command's
-// EditorPendingMeshMaterials marker. Shared by BOTH spawn paths — path 1
-// (core/scene/spawn-asset-ref.ts, gateway.dispatch) and path 2
-// (edit-runtime/EditSurface.tsx, VAG spawn) — which is why it lives here in core
-// (the DAG's floor) rather than being duplicated per path. Both callers import it
-// downward (`core <- edit-runtime`), the legal direction. Deps are core-internal
+// EditorPendingMeshMaterials marker. Used by the live spawn path
+// (core/scene/spawn-asset-ref.ts, gateway.dispatch); it lives here in core
+// (the DAG's floor) so any downward caller (`core <- edit-runtime`) can reuse it,
+// the legal direction. Deps are core-internal
 // (fetch + resolveMeshOriginalMaterials); no engine handle touched (core stays
 // UI-free, AC-03). Best-effort: any recovery miss returns undefined so the caller
 // keeps the single-material default.

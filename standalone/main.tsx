@@ -44,7 +44,7 @@ import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
-import { installEditorBusCompat } from '@forgeax/editor-core';
+import { installInterfaceBridge, setContextMenuRenderer } from '@forgeax/editor-core';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -140,6 +140,7 @@ const standaloneRenderers: PanelRenderers = {
   builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
   panels: standalonePanels,
   surfaces: { SceneEditor: StandaloneSceneEditor },
+  editor: { setContextMenuRenderer, installBridge: installInterfaceBridge },
 };
 
 function boot(): void {
@@ -178,11 +179,6 @@ function boot(): void {
   } catch {
     /* localStorage unavailable — worst case the wizard shows; not fatal */
   }
-
-  // Bridge typed editor bus events to postMessage so the interface package
-  // (which has zero editor-core imports) can continue using its existing
-  // message handlers. Temporary until interface accepts bus injection.
-  installEditorBusCompat();
 
   // Inject the editor-side keyboard-router callbacks (interface submodule stays
   // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks

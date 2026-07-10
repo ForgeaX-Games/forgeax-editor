@@ -1,54 +1,29 @@
 // @forgeax/editor/protocol — VAG_* schema unit tests (M1 w1, TDD red phase)
 //
-// 14 zod schemas, 1 pass + 1 fail per type (≥ 28 assertions). Each fail
-// case asserts `error.issues[0].path` hits a specific field name so the
-// downstream consumer can present a structured error (plan-strategy §8).
+// 8 cross-realm zod schemas, 1 pass + 1 fail per type. Each fail case asserts
+// `error.issues[0].path` hits a specific field name so the downstream consumer
+// can present a structured error (plan-strategy §8).
 //
 // Anchors:
-//   requirements §AC-03 (16 schemas exist)
+//   requirements §AC-03 (single-realm editor projection schemas retired in
+//     favor of typed PanelBridge callbacks)
 //   requirements §AC-05 (fail emits issues[].path)
 //   plan-strategy §2 D-3 (single physical location: this file's sibling protocol.ts)
 //   plan-strategy §8.1 (naming pair Vag<Name>Schema + Vag<Name>Message)
-//   research F-6 (16 type literals real-world grep evidence)
+//   research F-6 (type literals real-world grep evidence)
 
 import { describe, expect, test } from 'bun:test';
 
 import {
-  VagAssetsChangedSchema,
   VagConsoleSchema,
-  VagContextMenuSchema,
-  VagContextMenuActionSchema,
   VagDeviceLostSchema,
-  VagEditorFlushSchema,
-  VagEditorOpenSourceSchema,
-  VagEditorRefSchema,
   VagFpsStatsSchema,
+  VagNetworkSchema,
   VagPreviewDisposeSchema,
   VagPreviewPauseSchema,
   VagPreviewPlaySchema,
   VagPreviewReloadSchema,
-  VagSpawnEntitySchema,
 } from '../protocol';
-
-describe('VAG_ASSETS_CHANGED', () => {
-  test('pass: { type, payload: { slug } } accepted (slug-bearing form)', () => {
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED', payload: { slug: 'demo' } });
-    expect(r.success).toBe(true);
-  });
-  test('pass: { type } only accepted (relay-ping form, no payload)', () => {
-    // editor-runtime/store.ts emits a payload-less ping when relaying
-    // BroadcastChannel asset-changed events. Schema must accept this too.
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_CHANGED' });
-    expect(r.success).toBe(true);
-  });
-  test('fail: wrong type literal → path includes "type"', () => {
-    const r = VagAssetsChangedSchema.safeParse({ type: 'VAG_ASSETS_REPLACED' });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('type'))).toBe(true);
-    }
-  });
-});
 
 describe('VAG_CONSOLE', () => {
   test('pass: payload { level, text, ts } accepted', () => {
@@ -70,48 +45,22 @@ describe('VAG_CONSOLE', () => {
   });
 });
 
-describe('VAG_CONTEXT_MENU', () => {
-  test('pass: flat shape { type, menuId, x, y, items } accepted', () => {
-    const r = VagContextMenuSchema.safeParse({
-      type: 'VAG_CONTEXT_MENU',
-      menuId: 'em-1',
-      x: 10,
-      y: 20,
-      items: [{ id: 'i0', label: 'Copy' }, { sep: true }],
+describe('VAG_NETWORK', () => {
+  test('pass: payload request summary accepted', () => {
+    const r = VagNetworkSchema.safeParse({
+      type: 'VAG_NETWORK',
+      payload: { kind: 'fetch', method: 'GET', url: '/api/files', status: 200, ms: 12, ok: true, ts: 0 },
     });
     expect(r.success).toBe(true);
   });
-  test('fail: missing menuId → path includes "menuId"', () => {
-    const r = VagContextMenuSchema.safeParse({
-      type: 'VAG_CONTEXT_MENU',
-      x: 0,
-      y: 0,
-      items: [],
+  test('fail: payload.kind invalid literal → path includes "kind"', () => {
+    const r = VagNetworkSchema.safeParse({
+      type: 'VAG_NETWORK',
+      payload: { kind: 'worker', method: 'GET', url: '/', status: 200, ms: 0, ok: true, ts: 0 },
     });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('menuId'))).toBe(true);
-    }
-  });
-});
-
-describe('VAG_CONTEXT_MENU_ACTION', () => {
-  test('pass: flat shape { type, menuId, actionId } accepted', () => {
-    const r = VagContextMenuActionSchema.safeParse({
-      type: 'VAG_CONTEXT_MENU_ACTION',
-      menuId: 'em-1',
-      actionId: 'i0',
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: missing actionId → path includes "actionId"', () => {
-    const r = VagContextMenuActionSchema.safeParse({
-      type: 'VAG_CONTEXT_MENU_ACTION',
-      menuId: 'em-1',
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('actionId'))).toBe(true);
+      expect(r.error.issues.some((i) => i.path.includes('kind'))).toBe(true);
     }
   });
 });
@@ -126,60 +75,6 @@ describe('VAG_DEVICE_LOST', () => {
     expect(r.success).toBe(false);
     if (!r.success) {
       expect(r.error.issues.some((i) => i.path.includes('type'))).toBe(true);
-    }
-  });
-});
-
-describe('VAG_EDITOR_FLUSH', () => {
-  test('pass: { type } only', () => {
-    const r = VagEditorFlushSchema.safeParse({ type: 'VAG_EDITOR_FLUSH' });
-    expect(r.success).toBe(true);
-  });
-  test('fail: wrong type literal → path includes "type"', () => {
-    const r = VagEditorFlushSchema.safeParse({ type: 'VAG_EDITOR_FLUSHED' });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('type'))).toBe(true);
-    }
-  });
-});
-
-describe('VAG_EDITOR_OPEN_SOURCE', () => {
-  test('pass: payload { plugin, docId? } accepted', () => {
-    const r = VagEditorOpenSourceSchema.safeParse({
-      type: 'VAG_EDITOR_OPEN_SOURCE',
-      payload: { plugin: 'wb-narrative', docId: 'd-1' },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: payload.plugin wrong type → path includes "plugin"', () => {
-    const r = VagEditorOpenSourceSchema.safeParse({
-      type: 'VAG_EDITOR_OPEN_SOURCE',
-      payload: { plugin: 42 },
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('plugin'))).toBe(true);
-    }
-  });
-});
-
-describe('VAG_EDITOR_REF', () => {
-  test('pass: entity-kind payload accepted', () => {
-    const r = VagEditorRefSchema.safeParse({
-      type: 'VAG_EDITOR_REF',
-      payload: { kind: 'entity', id: 7, name: 'Player', components: ['Transform'] },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: payload.kind invalid literal → path includes "kind"', () => {
-    const r = VagEditorRefSchema.safeParse({
-      type: 'VAG_EDITOR_REF',
-      payload: { kind: 'unknown' },
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('kind'))).toBe(true);
     }
   });
 });
@@ -254,30 +149,12 @@ describe('VAG_PREVIEW_RELOAD', () => {
   });
 });
 
-describe('VAG_SPAWN_ENTITY', () => {
-  test('pass: payload { mode, entity?, doc?, name? } accepted', () => {
-    const r = VagSpawnEntitySchema.safeParse({
-      type: 'VAG_SPAWN_ENTITY',
-      payload: { mode: 'reference', entity: { name: 'Cube', components: {} }, name: 'Cube' },
-    });
-    expect(r.success).toBe(true);
-  });
-  test('fail: payload.mode invalid literal → path includes "mode"', () => {
-    const r = VagSpawnEntitySchema.safeParse({
-      type: 'VAG_SPAWN_ENTITY',
-      payload: { mode: 'partial' },
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      expect(r.error.issues.some((i) => i.path.includes('mode'))).toBe(true);
-    }
-  });
-});
-
-describe('schema completeness — all 14 exports present', () => {
-  test('Object.keys(...).filter(endsWith("Schema")).length === 14', async () => {
+describe('schema completeness — all runtime schema exports present', () => {
+  test('Object.keys(...).filter(endsWith("Schema")).length === 8', async () => {
+    // 8 actual cross-realm schemas (7 in the union + VagNetworkSchema, which is
+    // map-only). Single-realm editor projections live on typed PanelBridge.
     const mod = await import('../protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
-    expect(schemaKeys).toHaveLength(14);
+    expect(schemaKeys).toHaveLength(8);
   });
 });

@@ -83,8 +83,6 @@ export type BuiltinEditorOp =
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'deleteDirectory'; path: string }
   | { kind: 'setFolderSelection'; paths: string[] }
-  | { kind: 'focusPanel'; panel: string }
-  | { kind: 'openSource'; plugin: string; docId: string }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
   | { kind: 'cbGoForward' }

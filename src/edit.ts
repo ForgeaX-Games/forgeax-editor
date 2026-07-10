@@ -1,2 +1,0 @@
-// @forgeax/editor/edit — pass-through to EditSurface component.
-export { EditSurface, EditorImportError, type EditorImportErrorCode, type EditSurfaceProps } from '@forgeax/editor-edit-runtime/surface';

@@ -458,7 +458,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       return;
     }
     // Same material-drop guard as doSaveDocToDisk, applied SYNCHRONOUSLY (the beacon
-    // fires during pagehide/VAG_EDITOR_FLUSH and cannot await a disk read). Without
+    // fires during pagehide and cannot await a disk read). Without
     // it, an Edit→Play flip or tab-hide could beacon a stripped pack over a good
     // scene — the original hole through which materials were lost. Keep ctx.isDirty
     // set so a later real save can still persist legitimate edits.

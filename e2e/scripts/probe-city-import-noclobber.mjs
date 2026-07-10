@@ -58,7 +58,8 @@ async function main() {
   }
 
   // Fire the shell "Add to Scene" bridge inside the viewport iframe: this routes
-  // to spawnAssetRefToScene(ref) with the whole-scene GLB (import-scene path).
+  // to spawnAssetRefToScene(ref), whose whole-scene GLB branch creates a native
+  // SceneInstance mount.
   await vp.evaluate((city) => {
     window.postMessage(
       {
@@ -68,7 +69,7 @@ async function main() {
       '*',
     );
   }, CITY);
-  await sleep(3000); // let import-scene + any spawn + dirty-mark settle
+  await sleep(3000); // let the native scene mount + dirty-mark settle
 
   // Trigger the unload-time beacon flush (the silent clobber path) by dispatching
   // visibilitychange(hidden) + pagehide — mirrors switching away / reload.
@@ -84,7 +85,7 @@ async function main() {
   console.log(`[probe] serialize-guard fired: ${guardHit}`);
   // Dump import/spawn/save-relevant console for diagnosis.
   const relevant = logs.filter((l) =>
-    /CB:import|spawn|import-scene|worldToPack|serialize|beacon|dirty|reference|full/i.test(l) &&
+    /CB:import|spawn|SceneInstance|worldToPack|serialize|beacon|dirty|reference|full/i.test(l) &&
     !/pbr-view-bg|queue-submit|RhiError/.test(l),
   );
   console.log('[probe] --- import/save console ---');
