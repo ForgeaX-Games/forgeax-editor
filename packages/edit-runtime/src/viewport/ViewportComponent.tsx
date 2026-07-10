@@ -77,7 +77,7 @@ import { _syncDisplayMode } from './display-bus';
 import { installAssetSpawnBridge } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
 import { CommandPalette } from '../panels/command-palette';
-import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession } from '../host-boot';
+import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
@@ -138,13 +138,28 @@ interface BootFns {
 }
 
 /**
+ * The active game the host wants this viewport to boot. The host is the single
+ * source of truth for "which game" (editor standalone: CLI `--game`; studio: the
+ * server active-slug) and passes it as props — NOT via `?scene=`/`?gameRoot=` URL
+ * params. The single-realm collapse removed the editor iframe that URL params used
+ * to address, so hosts inject the game directly. Omitted / { slug: null } = no
+ * game (built-in demo seed).
+ */
+export interface ViewportComponentProps {
+  /** Scene/game pointer. null or 'default' = no on-disk game (demo seed). */
+  readonly gameSlug?: string | null;
+  /** Host game->disk layout root. Required when gameSlug names a real game. */
+  readonly gameRoot?: string;
+}
+
+/**
  * The in-process editor viewport. Boots the forgeax engine on a self-owned
  * canvas and drives the full editor session (via host-boot). Renders nothing
  * until mounted; all engine work runs in the mount effect behind the single-boot
  * latch. Standalone injects this as DockShell's renderEdit; edit-runtime's thin
- * main.tsx mounts it directly.
+ * main.tsx mounts it directly. The host passes the active game via props.
  */
-export function ViewportComponent(): React.ReactElement {
+export function ViewportComponent({ gameSlug = null, gameRoot }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [fps, setFpsState] = useState(0);
   // Deferred ▶/■ actions — wired once host-boot returns the run lifecycle. The
@@ -179,7 +194,7 @@ export function ViewportComponent(): React.ReactElement {
     const container = containerRef.current;
     if (!container) return;
 
-    void bootViewport(container, actionsRef, setFpsState);
+    void bootViewport(container, actionsRef, setFpsState, { slug: gameSlug, gameRoot });
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
     // Standalone teardown = page navigation. Multi-game host teardown =
     // resetEditRealm() which runs registerTeardown() handles (viewport.dispose
@@ -233,15 +248,16 @@ async function bootViewport(
   container: HTMLDivElement,
   actionsRef: React.MutableRefObject<BootFns>,
   onFps: (fps: number) => void,
+  gameSession: HostGameSession,
 ): Promise<Viewport | null> {
   const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 
-  // Configure the session from URL params (scene id + game->disk path resolver +
-  // scene manifest) BEFORE anything reads a game file. In the single-realm host
-  // this is the ONLY place it runs (no edit-runtime iframe did it first); shared
-  // with edit-runtime's thin main.tsx so the two hosts can't drift. Without this
-  // the Assets panel's ContentBrowser throws PATH_RESOLVER_NOT_SET.
-  await configureHostSession();
+  // Configure the session (scene id + game->disk path resolver + scene manifest)
+  // from the host-supplied game BEFORE anything reads a game file. In the single-
+  // realm host this is the ONLY place it runs; shared with edit-runtime's thin
+  // main.tsx so the two hosts can't drift. Without this the Assets panel's
+  // ContentBrowser throws PATH_RESOLVER_NOT_SET.
+  await configureHostSession(gameSession);
 
   // canvas (was :185-191) — owned by this component, full-size, behind the overlay.
   // single-realm (feat-20260703): id="app" so a game's bootstrap (which does

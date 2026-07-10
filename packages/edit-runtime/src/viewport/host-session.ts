@@ -180,9 +180,11 @@ export interface HostSessionDeps {
   readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
   /** The gateway single-pointer surface (active world + dispatch + engineFacade). */
   readonly gateway: HostGateway;
-  /** The active scene slug (`?scene=`), read by the physics gate + preview-skin. */
+  /** The active scene slug (host-supplied via configureHostSession), read by the
+   *  physics gate + preview-skin. */
   readonly getSceneId: () => string;
-  /** The host game→disk path resolver (`gameRoot`-bound). */
+  /** The host game→disk path resolver (gameRoot-bound, installed by
+   *  configureHostSession from the host-supplied game). */
   readonly resolveGamePath: (rel: string) => string;
   /** Load the authored scene from disk (session op). false → try storage. */
   readonly loadDocFromDisk: () => Promise<boolean>;
@@ -384,7 +386,11 @@ export function createHostSession(deps: HostSessionDeps): {
         return toFsUrl(__FORGEAX_GAME_DIR_ABS__);
       }
       const rootAbs = await getProjectRootAbs();
-      const gameRoot = new URLSearchParams(location.search).get('gameRoot') ?? '';
+      // gameRoot comes from the host-installed path resolver (configureHostSession
+      // always runs setPathResolver before boot; Play runs post-boot so it's set),
+      // NOT from `?gameRoot=` — the single realm passes the game as props, so the
+      // resolver is the one source of the host's game->disk layout root.
+      const gameRoot = resolveGamePath('');
       const fsBase = toFsUrl(rootAbs);
       return gameRoot ? `${fsBase}/${gameRoot}` : fsBase;
     };

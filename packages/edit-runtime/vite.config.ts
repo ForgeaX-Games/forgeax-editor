@@ -11,7 +11,7 @@
 // fs.allow for the injected --game dir. See plan-strategy S2 D7 / S4 R7.
 
 import { defineConfig } from 'vite';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { engineVitePreset } from './src/viewport/engine-vite-preset';
@@ -32,6 +32,10 @@ const BASE = '/editor/';
 const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
   ? resolve(process.env.FORGEAX_GAME_DIR)
   : null;
+// Game slug = basename of the --game dir (the game-backend addresses files by
+// <slug>/<rel>). The dev entry passes it to ViewportComponent as props; null
+// (no --game / embedded studio) -> demo seed path.
+const GAME_SLUG = GAME_DIR_ABS ? basename(GAME_DIR_ABS) : null;
 const SELF_HOST_PACK = GAME_DIR_ABS !== null;
 
 // D7: the shared engine-serve fragment (shader/pack serve + optimizeDeps.exclude
@@ -47,7 +51,10 @@ export default defineConfig({
   // Expose the standalone `--game DIR` abs path to the client so the Play
   // resolver builds its `@fs<abs>` game-entry URL without the studio-only
   // `/api/health` round-trip. null (embedded studio) -> resolver legacy branch.
-  define: { __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS) },
+  define: {
+    __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS),
+    __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
+  },
   plugins: [
     react(),
     ...enginePreset.plugins,

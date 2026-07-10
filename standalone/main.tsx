@@ -125,9 +125,13 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
 
 // Module-scope named component (stable identity across renders — no re-mounts).
 // viewportOnly is accepted for slot-signature parity; the in-process component
-// always renders the full engine surface.
+// always renders the full engine surface. The active game is the CLI `--game`
+// dir (its basename === slug), injected at build time as __FORGEAX_GAME_SLUG__.
+// game-backend addresses files by <slug>/<rel>, so gameRoot === slug here. Passed
+// as props (NOT `?scene=`/`?gameRoot=` URL params — the single realm removed the
+// iframe those addressed, so a stale URL can no longer override the CLI intent).
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
-  return <ViewportComponent />;
+  return <ViewportComponent gameSlug={__FORGEAX_GAME_SLUG__} gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined} />;
 }
 
 const standaloneRenderers: PanelRenderers = {
@@ -148,15 +152,13 @@ function boot(): void {
     });
   }
 
-  // Pin the active game BEFORE React mounts so the in-process engine boot
-  // (ViewportComponent / host-boot) reads the right scene. setPinnedSlug persists
-  // to localStorage; forgeax.gameRoot is the standalone-only game-root signal.
-  // Clearing when no --game guarantees a stale pin from a prior run can't make
-  // the boot request a now-unserved game.
+  // Pin the active game BEFORE React mounts so UI surfaces (GameSwitcher label,
+  // session scope) read the right slug. setPinnedSlug persists to localStorage.
+  // Clearing when no --game guarantees a stale pin from a prior run can't mislabel
+  // the shell. The engine boot itself gets the game via ViewportComponent props
+  // (StandaloneSceneEditor), not this pin.
   try {
     useAppStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
-    if (__FORGEAX_GAME_SLUG__) localStorage.setItem('forgeax.gameRoot', __FORGEAX_GAME_SLUG__);
-    else localStorage.removeItem('forgeax.gameRoot');
   } catch {
     /* store/localStorage unavailable — fine; demo seed path still works */
   }
@@ -174,26 +176,6 @@ function boot(): void {
     );
   } catch {
     /* localStorage unavailable — worst case the wizard shows; not fatal */
-  }
-
-  // single-realm (feat-20260703): bridge the --game slug into the URL query so
-  // configureHostSession() (host-boot) — which reads the active scene ONLY from
-  // location.search (?scene=<slug>&gameRoot=<slug>) — loads the on-disk scene
-  // instead of falling back to the built-in demo seed. Under the old iframe arch
-  // the host injected these params into the edit-runtime iframe's src; collapsing
-  // to a single realm removed that injector, so the standalone entry must now put
-  // them on its own URL. Only when --game is set AND the caller didn't already
-  // pass ?scene= (deep-link / studio-embed keep control). game-backend addresses
-  // files by <slug>/<rel>, so gameRoot === slug here.
-  try {
-    const qp = new URLSearchParams(location.search);
-    if (__FORGEAX_GAME_SLUG__ && !qp.get('scene')) {
-      qp.set('scene', __FORGEAX_GAME_SLUG__);
-      qp.set('gameRoot', __FORGEAX_GAME_SLUG__);
-      history.replaceState(null, '', `${location.pathname}?${qp.toString()}${location.hash}`);
-    }
-  } catch {
-    /* URL/History unavailable — fine; ?scene= deep-link still works if present */
   }
 
   // Bridge typed editor bus events to postMessage so the interface package

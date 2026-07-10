@@ -120,6 +120,19 @@ function main() {
   }
 
   // Existing clone: fast-forward to origin/main. Never clobber local divergence.
+  // Ensure the remote URL uses the best available auth strategy (SSH > PAT > HTTPS).
+  // The initial clone may have used SSH, but `git remote` always records the URL
+  // as passed; if the clone was done with HTTPS + PAT, later fetches without the
+  // token will fail silently. Normalise before every fetch so the harness stays
+  // up-to-date regardless of how it was originally cloned.
+  const bestUrl = resolveCloneUrl().url;
+  if (bestUrl) {
+    const currentUrl = git(['remote', 'get-url', 'origin'], { cwd: DIR }).stdout.trim();
+    if (currentUrl && currentUrl !== bestUrl) {
+      git(['remote', 'set-url', 'origin', bestUrl], { cwd: DIR });
+    }
+  }
+
   const fetch = git(['fetch', '--quiet', 'origin', 'main'], { cwd: DIR });
   if (fetch.status !== 0) {
     warnExit0(

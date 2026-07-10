@@ -31,9 +31,12 @@ installShortcutForwarder();
 // Default path: mount the in-process viewport surface.
 {
   const appRoot = document.getElementById('app') ?? document.body;
+  // The active game comes from the --game dir (basename === slug), injected at
+  // build time as __FORGEAX_GAME_SLUG__; game files are addressed by <slug>/<rel>
+  // so gameRoot === slug. Passed as props (NOT `?scene=`/`?gameRoot=` URL params).
   createRoot(appRoot).render(
     <StrictMode>
-      <ViewportComponent />
+      <ViewportComponent gameSlug={__FORGEAX_GAME_SLUG__} gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined} />
     </StrictMode>,
   );
 }

@@ -78,31 +78,48 @@ import {
 export type { HostSessionContext, HostSession, PhysicsBackend };
 
 /**
- * Configure the editor session from URL params BEFORE the engine boots
- * (plan-strategy D8; was main.tsx module-top-level in the pre-M2 iframe entry).
- * Binds the active scene id (`?scene=<slug>`) + the game->disk path resolver
- * (`?gameRoot=`), then discovers the multi-scene manifest. In the single-realm
- * host this MUST run in the host window (there is no edit-runtime iframe to run
- * it), and it is SHARED by edit-runtime's thin main.tsx so the two hosts can't
- * drift. FAIL FAST (charter S5): a real slug with no injected gameRoot throws —
- * the host owns the layout convention, never edit-runtime.
+ * The active game a host wants the engine to boot. The host is the single source
+ * of truth for "which game" — CLI `--game` (editor standalone), the server's
+ * active-slug (studio) — and passes it here EXPLICITLY. `slug` is the scene/game
+ * pointer (null / 'default' = no game, the built-in demo seed path); `gameRoot`
+ * is the host's game->disk layout root (editor-core is layout-agnostic and never
+ * infers it). Both are plain values, not URL params: pre-single-realm this config
+ * was smuggled through `location.search` because the editor ran in an iframe the
+ * host could only address by URL; the single realm removed that iframe, so hosts
+ * now pass the values directly (no self-write-then-read-back URL round-trip that
+ * could drift from the host's real intent).
+ */
+export interface HostGameSession {
+  /** Scene/game pointer. null or 'default' = no on-disk game (demo seed). */
+  readonly slug: string | null;
+  /** Host game->disk layout root. Required when slug names a real game. */
+  readonly gameRoot?: string;
+}
+
+/**
+ * Configure the editor session BEFORE the engine boots (plan-strategy D8). Binds
+ * the active scene id + the game->disk path resolver from the host-supplied
+ * {@link HostGameSession}, then discovers the multi-scene manifest. SHARED by
+ * every host (editor standalone, edit-runtime dev entry, studio) so the hosts
+ * can't drift (architecture-principles S1 SSOT). FAIL FAST (charter S5): a real
+ * slug with no gameRoot throws — the host owns the layout convention, never
+ * edit-runtime.
  *
  * Idempotent-safe to await once per document; call before ViewportComponent mounts.
  */
-export async function configureHostSession(): Promise<void> {
-  const qp = new URLSearchParams(location.search);
+export async function configureHostSession(session: HostGameSession = { slug: null }): Promise<void> {
+  const slug = (session.slug ?? '').trim();
   // M3 (AC-03): setSceneId is a session op — dispatch through the one gateway door.
-  gateway.dispatch({ kind: 'setSceneId', id: qp.get('scene') });
-  const slug = (qp.get('scene') ?? '').trim();
-  const injectedRoot = qp.get('gameRoot');
-  if (slug && slug !== 'default' && injectedRoot === null) {
+  gateway.dispatch({ kind: 'setSceneId', id: session.slug });
+  const gameRoot = session.gameRoot;
+  if (slug && slug !== 'default' && (gameRoot === undefined || gameRoot === null)) {
     throw new Error(
-      `[host-boot] no ?gameRoot= injected for scene="${slug}". The host owns the ` +
+      `[host-boot] no gameRoot supplied for scene="${slug}". The host owns the ` +
       `game->disk layout and must pass gameRoot; editor-core is layout-agnostic.`,
     );
   }
-  const gameRoot = injectedRoot ?? '';
-  setPathResolver((rel) => (rel ? `${gameRoot}/${rel}` : gameRoot));
+  const root = gameRoot ?? '';
+  setPathResolver((rel) => (rel ? `${root}/${rel}` : root));
   // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
   // load so paths/storage keys resolve to the active scene file (UE level model).
   await initSceneList();
