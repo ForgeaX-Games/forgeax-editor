@@ -18,7 +18,7 @@
 //     injects a fake that never touches the network. This is the injection seam
 //     plan-strategy §2 D-3 opens (import→deps), NOT a change to the transport body
 //     (OOS-4). lint-no-direct-api-fetch stays green: no raw fetch('/api').
-//   - AC-05: the boot ORDERING is preserved (loadDoc → seed-when-empty →
+//   - AC-05: the boot ORDERING is preserved (loadDoc →
 //     broadcastAssetsChanged → run-lifecycle → mesh-stats → preview-skin →
 //     disk-watch + beacon listeners), driven deterministically without a browser.
 //   - OOS-1: zero behavior change — the physics gate degrades to `undefined` on a
@@ -80,15 +80,10 @@ function makeFakeGateway(): {
 } {
   const dispatchCalls: unknown[] = [];
   let subscribers = 0;
-  const ledger: Array<{ _id: number }> = [];
-  let nextId = 1;
   const gateway: HostGateway = {
     get activeWorld() { return {} as never; },
-    get ledger() { return ledger as never; },
     dispatch(op: unknown): { ok: boolean } {
       dispatchCalls.push(op);
-      // seedDemoScene reads ledger.at(-1)._id after each spawnEntity dispatch.
-      ledger.push({ _id: nextId++ });
       return { ok: true };
     },
     subscribe(_fn: () => void): () => void { subscribers++; return () => {}; },
@@ -107,7 +102,6 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
   log: {
     loadDiskCalls: number;
     loadStorageCalls: number;
-    seedCancelCalls: number;
     broadcastCalls: number;
     diskWatchStarted: number;
     diskWatchStopped: number;
@@ -120,7 +114,6 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
   const log = {
     loadDiskCalls: 0,
     loadStorageCalls: 0,
-    seedCancelCalls: 0,
     broadcastCalls: 0,
     diskWatchStarted: 0,
     diskWatchStopped: 0,
@@ -136,12 +129,11 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     loadDocFromDisk: async () => { log.loadDiskCalls++; return false; },
     loadDocFromStorage: () => { log.loadStorageCalls++; return false; },
     getLoadedSceneEntities: () => [],
-    cancelPendingDiskSave: () => { log.seedCancelCalls++; },
     hasPendingDiskSave: () => false,
     flushPendingSaveBeacon: () => { log.flushCalls++; },
     initDiskWatch: () => { log.diskWatchStarted++; return () => { log.diskWatchStopped++; }; },
     broadcastAssetsChanged: () => { log.broadcastCalls++; },
-    worldEntityHandles: () => [], // empty world → seed path taken by default
+    worldEntityHandles: () => [], // empty world → scene-less game opens empty
     getSelection: () => null,
     getAssetSelection: () => null,
     onSelectionChange: () => () => {},
@@ -232,7 +224,7 @@ describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-0
 });
 
 describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {
-  it('loads the doc, seeds the empty world, broadcasts assets, and wires disk-watch', async () => {
+  it('loads the doc on an empty world (no demo seed), broadcasts assets, and wires disk-watch', async () => {
     const spy = makeFetchSpy();
     const { deps, log, gatewayCtl } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'default' });
     const host = createHostSession(deps);
@@ -242,9 +234,8 @@ describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {
     // doc load attempted (disk first, storage fallback on the false return).
     expect(log.loadDiskCalls).toBe(1);
     expect(log.loadStorageCalls).toBe(1);
-    // empty world → demo seed dispatched + the bare seed NOT auto-persisted.
-    expect(gatewayCtl.dispatchCalls.length).toBeGreaterThan(0);
-    expect(log.seedCancelCalls).toBe(1);
+    // scene-less game → NO demo seed: an empty world opens empty, nothing dispatched.
+    expect(gatewayCtl.dispatchCalls.length).toBe(0);
     // panels re-read signal + disk-watch + beacon listeners installed.
     expect(log.broadcastCalls).toBe(1);
     expect(log.diskWatchStarted).toBe(1);
@@ -255,19 +246,6 @@ describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {
     expect(typeof session.dispose).toBe('function');
     // default slug: resolveEditPhysics was never invoked here, so no forge read.
     expect(spy.calls.length).toBe(0);
-  });
-
-  it('skips the demo seed when the world already has entities (OOS-1 branch)', async () => {
-    const { deps, log, gatewayCtl } = makeDeps({
-      getSceneId: () => 'default',
-      worldEntityHandles: () => [1 as never], // non-empty → seed path skipped
-    });
-    const host = createHostSession(deps);
-    await host.initHostSession(makeCtx());
-    // no spawnEntity dispatched, no seed-cancel.
-    expect(gatewayCtl.dispatchCalls.length).toBe(0);
-    expect(log.seedCancelCalls).toBe(0);
-    expect(log.broadcastCalls).toBe(1);
   });
 
   it('dispose() flushes once, stops disk-watch, and disposes the beacon listeners', async () => {

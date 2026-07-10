@@ -11,5 +11,5 @@ declare const __FORGEAX_GAME_DIR_ABS__: string | null;
 
 // Injected from FORGEAX_GAME_DIR's basename (the game slug). The dev entry passes
 // it to ViewportComponent as props so the engine boots the right game. null when
-// no --game (demo seed) or embedded in studio (studio supplies its own slug).
+// no --game (empty scene) or embedded in studio (studio supplies its own slug).
 declare const __FORGEAX_GAME_SLUG__: string | null;

@@ -143,10 +143,10 @@ interface BootFns {
  * server active-slug) and passes it as props — NOT via `?scene=`/`?gameRoot=` URL
  * params. The single-realm collapse removed the editor iframe that URL params used
  * to address, so hosts inject the game directly. Omitted / { slug: null } = no
- * game (built-in demo seed).
+ * game (opens on an empty scene).
  */
 export interface ViewportComponentProps {
-  /** Scene/game pointer. null or 'default' = no on-disk game (demo seed). */
+  /** Scene/game pointer. null or 'default' = no on-disk game (empty scene). */
   readonly gameSlug?: string | null;
   /** Host game->disk layout root. Required when gameSlug names a real game. */
   readonly gameRoot?: string;

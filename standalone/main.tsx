@@ -82,7 +82,7 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
 // null when the stack was started without `cli.mjs run --game <dir>` — in that
-// case no game is served and the editor shows its built-in demo seed.
+// case no game is served and the editor opens on an empty scene.
 declare const __FORGEAX_GAME_SLUG__: string | null;
 
 // ── panel renderer injection (single realm, PanelRenderers v9 shape) ──────────
@@ -160,7 +160,7 @@ function boot(): void {
   try {
     useAppStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
   } catch {
-    /* store/localStorage unavailable — fine; demo seed path still works */
+    /* store/localStorage unavailable — fine; empty-scene path still works */
   }
 
   // Studio's first-run onboarding (welcome→project wizard: language pick +

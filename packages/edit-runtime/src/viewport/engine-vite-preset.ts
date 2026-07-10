@@ -221,8 +221,8 @@ export interface EngineVitePresetOptions {
    * pluginPack self-hosting the game's asset roots (from package.json
    * forgeax.assets.roots) + shared template roots so Play's loadByGuid + Edit
    * sub-asset previews resolve WITHOUT proxying to play-runtime (:15173).
-   * null (no --game / demo seed) -> no pluginPack; the shader plugin alone
-   * still serves /shaders/manifest.json for the demo scene.
+   * null (no --game / empty scene) -> no pluginPack; the shader plugin alone
+   * still serves /shaders/manifest.json for the empty scene.
    */
   gameDirAbs: string | null;
 }
