@@ -45,9 +45,11 @@ export type BuiltinEditorOp =
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
-  | { kind: 'destroyAsset'; packPath: string; guid: string }
+  | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
   | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
+  | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
+  | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }

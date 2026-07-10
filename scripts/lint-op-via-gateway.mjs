@@ -12,7 +12,29 @@
 //   Legacy store/ files already contain `export function set*` (the pre-gateway
 //   setters that were modified during M1-M4 migration but are now sealed).
 //   An absolute count would be a stale literal. We build a BASELINE of setter
-//   function names from origin/main, and only flag names NOT in that baseline.
+//   IDENTITIES from origin/main, and only flag identities NOT in that baseline.
+//
+// WHY THE BASELINE IS PATH-QUALIFIED (`file:name`, not bare `name`):
+//   A bare-name baseline had a reachable escape hole: a NEW setter that REUSES a
+//   baselined name in a DIFFERENT file was silently exempt (baselineNames.has
+//   matched on name alone). Keying by `file:fnName` closes it — a name is
+//   grandfathered only in the exact file it was grandfathered in; the same name
+//   born in a new file is caught. The init*/bootstrap/DI-factory/exempt-file
+//   carve-outs are unchanged.
+//
+// WHY ALSO A SHRINKING-BASELINE RATCHET (scripts/.mutator-baseline.json):
+//   The diff-scope + name-baseline still can't answer "how many bypassing setters
+//   remain?" and a file rename can move a sealed setter to a new path (a new
+//   `file:name` identity the diff-scope, keyed on `+`-added lines, may not flag as
+//   net-new against the moved-from identity). So ON TOP of the diff-scope we do a
+//   FULL-TREE scan of the SAME violation class (every store/ setter that would be
+//   flagged were it net-new) and assert `currentFullTreeCount <= recorded`:
+//     - current  > recorded -> FAIL (new debt / a rename created a new identity).
+//     - current  < recorded -> PASS + AUTO-REWRITE the baseline list DOWN to the
+//                               current sorted set (ratchet). Never rewrites up.
+//     - current == recorded -> PASS silently.
+//   The full-scan and diff-scan share ONE setter classifier (classifySetter,
+//   SSOT) so the two views agree on what a bypassing setter is.
 //
 // TWO RULES (plan-strategy D-5):
 //   Rule (a): diff-added lines in `packages/core/src/store/**` matching
@@ -46,8 +68,8 @@
 // Exits: 0 | 1 | 2
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -197,6 +219,23 @@ const DI_FACTORY_RE = /^export\s+function\s+create\w+\(\s*deps\s*:/;
 // Test hunk exemption pattern
 const TEST_HUNK_RE = /(__tests__|\.test\.|\.test-d\.)/;
 
+// SSOT CLASSIFIER: "is this line a gateway-bypassing store setter?", shared by
+// the diff-scan (rule a) and the full-tree ratchet scan. Returns the setter's
+// function name if it is a bypassing setter (matches STORE_SETTER_RE and is NOT
+// an init*/bootstrap infra fn, a create*Context factory, or a create<Thing>(deps:)
+// DI factory); otherwise null. Note: this does NOT apply the origin/main
+// name/identity baseline — that grandfathering is layered on top by each caller,
+// because the ratchet wants the TOTAL bypassing-setter population (baselined ones
+// included) while the diff-scan wants only NET-NEW identities.
+function classifySetter(text) {
+  const m = text.match(STORE_SETTER_RE);
+  if (!m) return null;
+  if (INIT_BOOTSTRAP_RE.test(text)) return null;   // infra init
+  if (CONTEXT_FACTORY_RE.test(text)) return null;  // create*Context DI factory
+  if (DI_FACTORY_RE.test(text)) return null;       // create<Thing>(deps:) DI factory
+  return m[1];
+}
+
 // Store path pattern (rule a only applies to store/**)
 const STORE_PATH_RE = /packages\/core\/src\/store\//;
 
@@ -211,7 +250,10 @@ const UI_PACKAGE_RE = /packages\/(panels|content-browser|edit-runtime)\/src\//;
 // exactly the tree the diff range is measured against.
 // ---------------------------------------------------------------------------
 function buildBaseline(base) {
-  const baseNames = new Set();
+  // PATH-QUALIFIED identities: `file:fnName`. Keying by file closes the
+  // name-reuse hole — a name is grandfathered only in the file it lived in on
+  // the base, so the same name reborn in a DIFFERENT file is NOT auto-exempt.
+  const baseIdentities = new Set();
   // Collect function names that exist on the base tree in store/ files.
   // Matches BOTH `export function name(` and `export async function name(`
   // because some base functions were async and got refactored to non-async
@@ -222,7 +264,7 @@ function buildBaseline(base) {
     'ls-tree', '--name-only', '-r', base,
     'packages/core/src/store',
   ]);
-  if (!storeFiles) return baseNames;
+  if (!storeFiles) return baseIdentities;
 
   for (const file of storeFiles.split('\n').map(s => s.trim()).filter(Boolean)) {
     if (!file.endsWith('.ts')) continue;
@@ -231,20 +273,30 @@ function buildBaseline(base) {
     for (const line of content.split('\n')) {
       const m = line.match(BASE_FN_RE);
       if (m) {
-        baseNames.add(m[1]);
+        baseIdentities.add(`${file}:${m[1]}`);
       }
     }
   }
-  return baseNames;
+  return baseIdentities;
 }
 
-let baselineNames = new Set();
+let baselineIdentities = new Set();
 // For synthetic diffs, we want a simpler baseline: just the setter names
 // that appear in the diff itself as modified (not new) lines. But for
 // fake diffs the test creates entirely fake store files with new names,
-// so we skip baseline and let the test control the outcome.
+// so we skip baseline and let the test control the outcome — UNLESS the test
+// explicitly seeds path-qualified identities via --baseline-identities
+// (comma-separated `file:name`), which lets the falsification test exercise the
+// exact grandfathering `buildBaseline` produces for the live path.
 if (diffFileIdx < 0) {
-  baselineNames = buildBaseline(baseRef);
+  baselineIdentities = buildBaseline(baseRef);
+} else {
+  const seedIdx = process.argv.indexOf('--baseline-identities');
+  if (seedIdx >= 0 && process.argv[seedIdx + 1]) {
+    for (const id of process.argv[seedIdx + 1].split(',').map(s => s.trim()).filter(Boolean)) {
+      baselineIdentities.add(id);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -277,17 +329,12 @@ for (const line of diffText.split('\n')) {
 
   // Rule (a): new bare setter in store/
   if (curFileInStore && !curFileIsExempt) {
-    const m = added.match(STORE_SETTER_RE);
-    if (m) {
-      const fnName = m[1];
-      // Exempt: init*/bootstrap functions
-      if (INIT_BOOTSTRAP_RE.test(added)) continue;
-      // Exempt: create*Context DI-context factories (plan-strategy D-2 + §8)
-      if (CONTEXT_FACTORY_RE.test(added)) continue;
-      // Exempt: create<Thing>(deps: ...) DI factories (plan-strategy D-3 + §8)
-      if (DI_FACTORY_RE.test(added)) continue;
-      // Exempt: function names already on origin/main baseline
-      if (baselineNames.has(fnName)) continue;
+    // Shared classifier applies STORE_SETTER_RE + init/bootstrap/Context/DI carve-outs.
+    const fnName = classifySetter(added);
+    if (fnName) {
+      // Exempt: identity already on origin/main baseline. PATH-QUALIFIED
+      // (`file:name`) — a baselined name reused in a DIFFERENT file is NOT exempt.
+      if (baselineIdentities.has(`${curFile}:${fnName}`)) continue;
       offenders.push(`[rule-a] ${curFile}: ${added.trim()}`);
     }
   }
@@ -313,5 +360,91 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
-console.log(`${LABEL} AC-07 OK -- no new operations bypassing gateway in diff (${sourceDesc})`);
+// ---------------------------------------------------------------------------
+// FULL-TREE RATCHET (shrinking baseline) — see the "WHY ALSO A ... RATCHET"
+// header note. Runs AFTER the diff-scope check so a net-new bypassing setter is
+// reported with its exact line first; this pass catches debt the diff-scope
+// structurally cannot see and ratchets the recorded population strictly down.
+// ---------------------------------------------------------------------------
+function argVal(flag) {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 ? process.argv[i + 1] : null;
+}
+const BASELINE_FILE = argVal('--baseline-file') || join(__dirname, '.mutator-baseline.json');
+const SCAN_ROOT = argVal('--scan-root') || REPO_ROOT;
+
+// Recursively collect *.ts files under <root>/packages/core/src/store, returning
+// paths RELATIVE to <root> so the `file:name` identity matches buildBaseline().
+function collectStoreFiles(baseDir) {
+  const out = [];
+  const storeRel = 'packages/core/src/store';
+  function walk(absDir, relDir) {
+    let entries;
+    try { entries = readdirSync(absDir); } catch { return; }
+    for (const name of entries) {
+      if (name === 'node_modules' || name === '.git') continue;
+      const abs = join(absDir, name);
+      const rel = `${relDir}/${name}`;
+      let st;
+      try { st = statSync(abs); } catch { continue; }
+      if (st.isDirectory()) walk(abs, rel);
+      else if (rel.endsWith('.ts')) out.push({ abs, rel });
+    }
+  }
+  walk(join(baseDir, storeRel), storeRel);
+  return out;
+}
+
+// The TOTAL population of gateway-bypassing store setters across the tree, as
+// sorted `file:name` identities, reusing classifySetter (SSOT) + the SAME
+// exempt-file / test-hunk carve-outs the diff-scan uses.
+function fullTreeBypassingSetters(baseDir) {
+  const ids = [];
+  for (const { abs, rel } of collectStoreFiles(baseDir)) {
+    if (TEST_HUNK_RE.test(rel)) continue;
+    const basename = rel.split('/').pop();
+    if (EXEMPT_FILES.has(basename)) continue;
+    let content;
+    try { content = readFileSync(abs, 'utf8'); } catch { continue; }
+    for (const line of content.split('\n')) {
+      const fnName = classifySetter(line);
+      if (fnName) ids.push(`${rel}:${fnName}`);
+    }
+  }
+  ids.sort();
+  return ids;
+}
+
+let baseline;
+try {
+  baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf8'));
+} catch (e) {
+  console.error(`${LABEL} cannot read ratchet baseline ${BASELINE_FILE}: ${e.message} -- refusing to pass blind`);
+  process.exit(2);
+}
+const recorded = baseline.gatewayBaselineSetters;
+if (!Array.isArray(recorded)) {
+  console.error(`${LABEL} baseline ${BASELINE_FILE} missing array "gatewayBaselineSetters" -- refusing to pass blind`);
+  process.exit(2);
+}
+
+const current = fullTreeBypassingSetters(SCAN_ROOT);
+
+if (current.length > recorded.length) {
+  const recordedSet = new Set(recorded);
+  const added = current.filter(id => !recordedSet.has(id));
+  console.error(`${LABEL} RATCHET VIOLATION -- full-tree bypassing store setters = ${current.length}, baseline = ${recorded.length} (debt grew ${current.length - recorded.length}).`);
+  console.error(`${LABEL} The diff-scope missed this (identity moved via rename, or a new bypassing setter slipped in). New identities:`);
+  for (const id of added.length ? added : current) console.error(`  ${id}`);
+  console.error(`${LABEL} Route it through gateway.dispatch() / registerSessionApplier. The baseline never rises.`);
+  process.exit(1);
+}
+
+if (current.length < recorded.length) {
+  baseline.gatewayBaselineSetters = current; // already sorted -> deterministic
+  writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2) + '\n');
+  console.log(`${LABEL} RATCHET DOWN -- full-tree bypassing store setters dropped ${recorded.length} -> ${current.length}; baseline rewritten (${BASELINE_FILE}). Commit the shrink.`);
+}
+
+console.log(`${LABEL} AC-07 OK -- no new operations bypassing gateway in diff (${sourceDesc}); full-tree bypassing setters ${current.length} <= baseline ${recorded.length}`);
 process.exit(0);

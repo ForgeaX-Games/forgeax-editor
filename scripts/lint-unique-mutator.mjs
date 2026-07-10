@@ -19,6 +19,22 @@
 //   NET-NEW raw writes the diff introduces (added `+` lines), so the gate holds
 //   the line going forward without demanding a whole-repo sweep first.
 //
+// WHY ALSO A SHRINKING-BASELINE RATCHET (scripts/.mutator-baseline.json):
+//   The diff-scope alone has two blind spots. (1) Pre-existing raw writes are
+//   PERMANENTLY invisible — legacy debt can sit forever and is never counted, so
+//   "how much debt is left?" is unanswerable. (2) A path rename/move can carry a
+//   raw write into a new location without ever appearing as a `+`-added
+//   `world.set(` line the diff-scope would flag. To fix both, on TOP of the
+//   diff-scope we do a FULL-TREE scan of the exact same violation class and
+//   assert `currentFullTreeCount <= recordedBaselineCount`:
+//     - current  > recorded -> FAIL (new debt the diff-scope missed / a rename).
+//     - current  < recorded -> PASS, and AUTO-REWRITE the baseline DOWN (ratchet),
+//                               so the commit captures the shrink and debt can
+//                               only monotonically decrease. Never rewrites up.
+//     - current == recorded -> PASS silently.
+//   The full-scan and the diff-scan share ONE matcher (rawWriteMatch, SSOT) so
+//   the two views can never diverge on what "a raw write" is.
+//
 // THE RULE:
 //   A diff-added line in editor source (packages/**/src/**, src/**) that adds a
 //   raw `world.set(` / `world.spawn(` / `world.despawn(` / `world.allocSharedRef(`
@@ -41,8 +57,8 @@
 //        node scripts/lint-unique-mutator.mjs --diff-file <path>  (synthetic diff)
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -124,6 +140,18 @@ const DIRECT_RE = new RegExp(`\\b[\\w.]*[Ww]orld(?:\\(\\))?\\.(${MUTATORS})\\s*\
 const CAST_RE = new RegExp(`\\)\\.(${MUTATORS})\\s*\\(`);
 const WORLD_TOKEN_RE = /\b[Ww]orld\b/;
 
+// SSOT MATCHER: the single decision "is this line a raw world write?", shared by
+// BOTH the diff-scan (added `+` lines) and the full-tree ratchet scan. Factoring
+// it here guarantees the two views can never disagree on the violation class.
+// Returns true for a direct (`world.set(`) or cast-receiver (`).set(` near a
+// world token) raw write; comment-only lines are never a write.
+function rawWriteMatch(text) {
+  if (isCommentLine(text)) return false;
+  const direct = DIRECT_RE.test(text);
+  const cast = CAST_RE.test(text) && WORLD_TOKEN_RE.test(text);
+  return direct || cast;
+}
+
 // The single legal gate file (D-6): the EngineFacade implementation itself.
 const FACADE_FILE = 'packages/core/src/io/engine-facade.ts';
 
@@ -178,11 +206,7 @@ for (const line of diffText.split('\n')) {
   if (curFileExcluded || !curFileInScope) continue;
 
   const added = line.slice(1);
-  if (isCommentLine(added)) continue;
-
-  const direct = DIRECT_RE.test(added);
-  const cast = CAST_RE.test(added) && WORLD_TOKEN_RE.test(added);
-  if (direct || cast) {
+  if (rawWriteMatch(added)) {
     offenders.push(`${curFile}: ${added.trim()}`);
   }
 }
@@ -198,5 +222,95 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
-console.log(`${LABEL} AC-04 OK -- no raw world writes outside the EngineFacade gate in diff (${sourceDesc})`);
+// ---------------------------------------------------------------------------
+// FULL-TREE RATCHET (shrinking baseline) — see the "WHY ALSO A ... RATCHET"
+// header note. Runs AFTER the diff-scope check so a fresh `+`-added violation
+// is reported with its exact line first; this second pass catches debt the
+// diff-scope structurally cannot see (pre-existing writes, path renames) and
+// ratchets the recorded count strictly downward.
+// ---------------------------------------------------------------------------
+
+// Test/override hooks: --baseline-file lets a test point at a scratch baseline
+// JSON; --scan-root lets a test point the full-tree scan at a synthetic tree
+// laid out as <root>/packages/<pkg>/src/... so the same EDITOR_SRC_RE +
+// exclusions apply. Both default to the real repo for production runs.
+function argVal(flag) {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 ? process.argv[i + 1] : null;
+}
+const BASELINE_FILE = argVal('--baseline-file') || join(__dirname, '.mutator-baseline.json');
+const SCAN_ROOT = argVal('--scan-root') || REPO_ROOT;
+
+// Recursively collect *.ts/*.tsx files under a base dir, returning paths
+// RELATIVE to that base (so the existing EDITOR_SRC_RE / exclusion regexes,
+// which key off `packages/<pkg>/src/` fragments, apply unchanged).
+function collectSourceFiles(baseDir) {
+  const out = [];
+  function walk(absDir, relDir) {
+    let entries;
+    try { entries = readdirSync(absDir); } catch { return; }
+    for (const name of entries) {
+      if (name === 'node_modules' || name === '.git') continue;
+      const abs = join(absDir, name);
+      const rel = relDir ? `${relDir}/${name}` : name;
+      let st;
+      try { st = statSync(abs); } catch { continue; }
+      if (st.isDirectory()) walk(abs, rel);
+      else if (/\.tsx?$/.test(rel)) out.push({ abs, rel });
+    }
+  }
+  for (const root of ['packages', 'src']) {
+    walk(join(baseDir, root), root);
+  }
+  return out;
+}
+
+// Count raw world writes across the whole tree, reusing rawWriteMatch (SSOT) and
+// the SAME file exclusions the diff-scan uses. Returns { count, hits } sorted.
+function fullTreeRawWriteScan(baseDir) {
+  const hits = [];
+  for (const { abs, rel } of collectSourceFiles(baseDir)) {
+    if (isExcludedFile(rel)) continue;
+    if (!EDITOR_SRC_RE.test(rel)) continue;
+    let content;
+    try { content = readFileSync(abs, 'utf8'); } catch { continue; }
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (rawWriteMatch(lines[i])) hits.push(`${rel}:${i + 1}: ${lines[i].trim()}`);
+    }
+  }
+  hits.sort();
+  return { count: hits.length, hits };
+}
+
+let baseline;
+try {
+  baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf8'));
+} catch (e) {
+  console.error(`${LABEL} cannot read ratchet baseline ${BASELINE_FILE}: ${e.message} -- refusing to pass blind`);
+  process.exit(2);
+}
+const recorded = baseline.rawWriteCount;
+if (typeof recorded !== 'number') {
+  console.error(`${LABEL} baseline ${BASELINE_FILE} missing numeric "rawWriteCount" -- refusing to pass blind`);
+  process.exit(2);
+}
+
+const { count: currentCount, hits: currentHits } = fullTreeRawWriteScan(SCAN_ROOT);
+
+if (currentCount > recorded) {
+  console.error(`${LABEL} RATCHET VIOLATION -- full-tree raw world writes = ${currentCount}, baseline = ${recorded} (debt grew ${currentCount - recorded}).`);
+  console.error(`${LABEL} The diff-scope missed this (pre-existing write moved, or path renamed). Current raw writes:`);
+  for (const h of currentHits) console.error(`  ${h}`);
+  console.error(`${LABEL} Route the new write through ${FACADE_FILE} (or ctx.engine / gateway.dispatch). The baseline never rises.`);
+  process.exit(1);
+}
+
+if (currentCount < recorded) {
+  baseline.rawWriteCount = currentCount;
+  writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2) + '\n');
+  console.log(`${LABEL} RATCHET DOWN -- full-tree raw world writes dropped ${recorded} -> ${currentCount}; baseline rewritten (${BASELINE_FILE}). Commit the shrink.`);
+}
+
+console.log(`${LABEL} AC-04 OK -- no raw world writes outside the EngineFacade gate in diff (${sourceDesc}); full-tree count ${currentCount} <= baseline ${recorded === currentCount ? recorded : `(ratcheted to ${currentCount})`}`);
 process.exit(0);

@@ -20,8 +20,6 @@ export { CapabilitiesPanel } from './Capabilities';
 export { HierarchyPanel } from './Hierarchy';
 export { HistoryPanel } from './History';
 export { InspectorPanel } from './Inspector';
-export { MaterialPanel } from './Material';
-export { MeshPanel } from './Mesh';
 // M6/M7 collapse: MaterialGraphPanel + TimelinePanel deleted (engine has no
 // MatGraph/Anim equivalent). See plan-strategy S2 D-3, requirements AC-13.
 export { LauncherPanel } from './Launcher';

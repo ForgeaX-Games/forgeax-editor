@@ -19,7 +19,7 @@ import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor-panels';
 
 | 入口 | 导出 | 说明 |
 |:--|:--|:--|
-| `.` | `HierarchyPanel`, `InspectorPanel`, `AssetsPanel`, `HistoryPanel`, `CapabilitiesPanel`, `MaterialPanel`, `EDITOR_PANELS`, `EditorPanelId`, `EDITOR_PANEL_COMPONENTS` | 面板组件 + manifest re-export + 组件查找表 |
+| `.` | `HierarchyPanel`, `InspectorPanel`, `AssetsPanel`, `HistoryPanel`, `CapabilitiesPanel`, `EDITOR_PANELS`, `EditorPanelId`, `EDITOR_PANEL_COMPONENTS` | 面板组件 + manifest re-export + 组件查找表 |
 | `./panels` | `EDITOR_PANELS`（常量数组）, `EditorPanelId`（联合类型） | 面板 manifest（re-export from `@forgeax/editor-shared`） |
 
 ### `EDITOR_PANELS` 常量
@@ -31,7 +31,6 @@ export const EDITOR_PANELS = [
   'assets',
   'history',
   'capabilities',
-  'material',
   'timeline',
   'matgraph',
 ] as const;  // SSOT in @forgeax/editor-shared, re-exported here
@@ -42,7 +41,7 @@ export const EDITOR_PANELS = [
 ```ts
 export type EditorPanelId = (typeof EDITOR_PANELS)[number];
 // = 'hierarchy' | 'inspector' | 'assets' | 'history'
-//   | 'capabilities' | 'material' | 'timeline' | 'matgraph'
+//   | 'capabilities' | 'timeline' | 'matgraph'
 ```
 
 ## troubleshooting

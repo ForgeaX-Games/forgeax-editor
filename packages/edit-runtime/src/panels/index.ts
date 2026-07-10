@@ -3,8 +3,6 @@
 // Each panel is rendered as an in-process React component via the
 // renderEditorPanel injection slot (single-realm M2).
 
-export { SystemsPanel } from './systems-panel';
-export type { SystemsPanelProps } from './systems-panel';
 export { InspectorWithAddComponent } from './inspector';
 export { AddComponentMenu } from './add-component-menu';
 export type { AddComponentMenuProps } from './add-component-menu';

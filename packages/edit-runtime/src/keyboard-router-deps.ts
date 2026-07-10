@@ -31,9 +31,6 @@ import {
   getFolderSelectionList,
   deleteManyCascade,
   duplicateEntity,
-  renameAssetInPack,
-  assetIO,
-  broadcastAssetsChanged,
   worldRootHandles,
   childrenOf,
   triggerAssetSelectAll,
@@ -139,13 +136,17 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
         gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
       }
     },
+    // Both asset mutations route through the ONE gateway door (G-4): duplicate and
+    // rename are DOCUMENT ops (undoable) — the applier reaches pack IO through
+    // ctx.assetIO and fires broadcastAssetsChanged itself, so no direct facade call
+    // nor manual broadcast here (AI-equal: an AI dispatches the same op).
     duplicateAsset: (guid: string, packPath: string) => {
-      void assetIO.cloneAssetInPack(packPath, guid).then(({ ok }) => { if (ok) broadcastAssetsChanged(); });
+      gateway.dispatch({ kind: 'duplicateAsset', packPath, guid } as never, 'human');
     },
     renameAsset: (guid: string, packPath: string) => {
       const newName = window.prompt('Rename asset:', packPath.split('/').pop() ?? guid);
       if (newName && newName.trim()) {
-        void renameAssetInPack(packPath, guid, newName.trim()).then((ok) => { if (ok) broadcastAssetsChanged(); });
+        gateway.dispatch({ kind: 'renameAsset', packPath, guid, newName: newName.trim() } as never, 'human');
       }
     },
     selectAllAssets: () => triggerAssetSelectAll(),

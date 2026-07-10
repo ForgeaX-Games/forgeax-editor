@@ -216,7 +216,9 @@ const builtinOps: ReadonlyArray<{
     id: 'destroyAsset', domain: 'document',
     argsSchema: {
       type: 'object',
-      properties: { packPath: { type: 'string' }, guid: { type: 'string' } },
+      // newGuidCacheKey is inverse-only (set when destroyAsset is the inverse of
+      // duplicateAsset) — optional, so direct destroyAsset callers omit it.
+      properties: { packPath: { type: 'string' }, guid: { type: 'string' }, newGuidCacheKey: { type: 'string' } },
       required: ['packPath', 'guid'],
     },
     title: 'Destroy Asset',
@@ -233,6 +235,33 @@ const builtinOps: ReadonlyArray<{
       required: ['packPath', 'guid'],
     },
     title: 'Restore Asset',
+  },
+  {
+    id: 'renameAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      // oldName / renameCacheKey are inverse-plumbing — optional. Callers (human
+      // UI + AI) pass only packPath/guid/newName; the applier discovers the old
+      // name from the pack (SSOT) for the inverse (AI need not know it).
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        newName: { type: 'string' },
+        oldName: { type: 'string' },
+        renameCacheKey: { type: 'string' },
+      },
+      required: ['packPath', 'guid', 'newName'],
+    },
+    title: 'Rename Asset',
+  },
+  {
+    id: 'duplicateAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: { packPath: { type: 'string' }, guid: { type: 'string' } },
+      required: ['packPath', 'guid'],
+    },
+    title: 'Duplicate Asset',
   },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════

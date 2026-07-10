@@ -40,7 +40,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   setActiveCamera,
 } from '@forgeax/engine-runtime';
-import { Entity } from '@forgeax/engine-ecs';
+import { Entity, getRegisteredSystems } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
@@ -550,6 +550,46 @@ async function bootViewport(
     return { ok: true };
   });
   registerTeardown(() => { unregSetDisplay(); });
+
+  // addSystem·removeSystem are SESSION-domain ops — enabling/disabling an engine
+  // system is ledger-visible + AI-equivalent but NOT undoable, exactly like
+  // play/stop/setDisplay (D-1: domain = registration site). The ep:systems PANEL
+  // (systems-panel.tsx) was REMOVED as orphan dead code — it lived in the
+  // EDITOR_PANELS SSOT but had no EDITOR_PANEL_COMPONENTS entry, so it could
+  // never render. These add/remove-system ops stay gateway-registered here, so
+  // the capability remains reachable via gateway.dispatch (human/AI parity) even
+  // without a UI surface. Route the MUTATION through the one gateway door. The
+  // mutation lives in edit-runtime (DAG downstream — core stays headless and must
+  // not import @forgeax/engine-ecs, RK-11). We use the same `world` closure
+  // play/stop/setDisplay use — the live edit world (gateway.doc.world, line ~328).
+  // System toggles happen only in edit mode, so this is never a stale cross-play handle.
+  const unregRemoveSystem = registerSessionApplier(
+    'removeSystem',
+    (op) => {
+      const { name } = op as { name: string };
+      world.removeSystem(name);
+      return { ok: true };
+    },
+    {
+      argsSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+      title: 'Disable system',
+    },
+  );
+  const unregAddSystem = registerSessionApplier(
+    'addSystem',
+    (op) => {
+      const { name } = op as { name: string };
+      const handle = getRegisteredSystems().get(name);
+      if (!handle) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'unknown system: ' + name } };
+      world.addSystem(handle);
+      return { ok: true };
+    },
+    {
+      argsSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+      title: 'Enable system',
+    },
+  );
+  registerTeardown(() => { unregAddSystem(); unregRemoveSystem(); });
 
   // game camera discovery now that the scene is loaded (was :695).
   discoverGameCameraFromWorld();

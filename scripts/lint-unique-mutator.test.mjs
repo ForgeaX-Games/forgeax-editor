@@ -14,7 +14,7 @@
 // Exits: 0 all pass, 1 at least one scenario failed
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -121,6 +121,79 @@ assertEqual('(h) exit 0', runLint(write('comment.diff', [{
   file: 'packages/edit-runtime/src/viewport/skylight.ts',
   lines: ['  // column handle via world.allocSharedRef(brand, pod).'],
 }])).status, 0);
+
+// ---------------------------------------------------------------------------
+// RATCHET scenarios (shrinking baseline, full-tree). We build a synthetic scan
+// tree with a known number of raw writes and point the gate at a scratch
+// baseline JSON via --baseline-file + --scan-root. The diff is always CLEAN so
+// only the full-tree ratchet decides the exit code.
+// ---------------------------------------------------------------------------
+const cleanDiffForRatchet = write('ratchet-clean.diff', [{
+  file: 'packages/core/src/io/catalog.ts',
+  lines: ['  const x = 1;'],
+}]);
+
+// Build a synthetic scan tree: <root>/packages/<pkg>/src/<file>.
+function makeScanTree(rawWriteFiles) {
+  const root = mkdtempSync(join(tmpDir, 'scan-'));
+  for (const { rel, lines } of rawWriteFiles) {
+    const abs = join(root, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, lines.join('\n'));
+  }
+  return root;
+}
+
+function writeBaseline(obj) {
+  const p = join(tmpDir, `baseline-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(p, JSON.stringify(obj, null, 2) + '\n');
+  return p;
+}
+
+function runRatchet(diffPath, baselineFile, scanRoot) {
+  const r = spawnSync(process.execPath, [
+    LINT_SCRIPT, '--diff-file', diffPath,
+    '--baseline-file', baselineFile, '--scan-root', scanRoot,
+  ], { encoding: 'utf8', timeout: 5000 });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+// (i) RATCHET FAIL: full-tree count (2) EXCEEDS baseline (1) → exit 1
+console.log('Scenario (i): RATCHET FAIL -- full-tree writes > baseline → exit 1');
+{
+  const scanRoot = makeScanTree([{
+    rel: 'packages/core/src/assets/a.ts',
+    lines: ["world.allocSharedRef('X', d);", "world.spawn(y);"],
+  }]);
+  const bl = writeBaseline({ rawWriteCount: 1, gatewayBaselineSetters: [] });
+  assertEqual('(i) exit 1', runRatchet(cleanDiffForRatchet, bl, scanRoot).status, 1);
+}
+
+// (j) RATCHET DOWN: full-tree count (1) BELOW baseline (3) → exit 0 + rewrite
+console.log('Scenario (j): RATCHET DOWN -- full-tree writes < baseline → exit 0 + baseline rewritten lower');
+{
+  const scanRoot = makeScanTree([{
+    rel: 'packages/core/src/assets/a.ts',
+    lines: ["world.allocSharedRef('X', d);"],
+  }]);
+  const bl = writeBaseline({ rawWriteCount: 3, gatewayBaselineSetters: [] });
+  const r = runRatchet(cleanDiffForRatchet, bl, scanRoot);
+  assertEqual('(j) exit 0', r.status, 0);
+  assertEqual('(j) baseline rewritten to 1', JSON.parse(readFileSync(bl, 'utf8')).rawWriteCount, 1);
+}
+
+// (k) RATCHET EQUAL: full-tree count (2) == baseline (2) → exit 0, no rewrite
+console.log('Scenario (k): RATCHET EQUAL -- full-tree writes == baseline → exit 0, unchanged');
+{
+  const scanRoot = makeScanTree([{
+    rel: 'packages/core/src/assets/a.ts',
+    lines: ["world.allocSharedRef('X', d);", "world.set(e, C, {});"],
+  }]);
+  const bl = writeBaseline({ rawWriteCount: 2, gatewayBaselineSetters: [] });
+  const r = runRatchet(cleanDiffForRatchet, bl, scanRoot);
+  assertEqual('(k) exit 0', r.status, 0);
+  assertEqual('(k) baseline unchanged at 2', JSON.parse(readFileSync(bl, 'utf8')).rawWriteCount, 2);
+}
 
 rmSync(tmpDir, { recursive: true, force: true });
 

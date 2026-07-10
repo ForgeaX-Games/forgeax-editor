@@ -67,6 +67,9 @@
         },
         "guid": {
           "type": "string"
+        },
+        "newGuidCacheKey": {
+          "type": "string"
         }
       },
       "required": [
@@ -92,6 +95,27 @@
       ]
     },
     "title": "Destroy Entity"
+  },
+  {
+    "id": "duplicateAsset",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "packPath": {
+          "type": "string"
+        },
+        "guid": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packPath",
+        "guid"
+      ]
+    },
+    "title": "Duplicate Asset"
   },
   {
     "id": "loadDocFromDisk",
@@ -148,6 +172,37 @@
       ]
     },
     "title": "Rename"
+  },
+  {
+    "id": "renameAsset",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "packPath": {
+          "type": "string"
+        },
+        "guid": {
+          "type": "string"
+        },
+        "newName": {
+          "type": "string"
+        },
+        "oldName": {
+          "type": "string"
+        },
+        "renameCacheKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packPath",
+        "guid",
+        "newName"
+      ]
+    },
+    "title": "Rename Asset"
   },
   {
     "id": "reparent",
