@@ -343,7 +343,7 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   void ctx.assetIO.deletePackEntry(packPath, guid).then((entry) => {
     deletedEntryCache.set(key, entry);
   }).catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e));
-  return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp };
+  return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
 }
 
 export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
@@ -354,7 +354,7 @@ export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
     void ctx.assetIO.writePackEntry(packPath, entry).catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
     deletedEntryCache.delete(key);
   }
-  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp };
+  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
 }
 
 // Seed the two document appliers (symmetric inverse pair). Registered into the
@@ -394,7 +394,7 @@ function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   void ctx.assetIO.createAssetInPack({ packPath, asset: { guid, kind: assetKind, name, payload, refs } })
     .then(() => broadcastAssetsChanged())
     .catch((e) => console.warn('[editor-core] createAsset IO failed:', e));
-  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp };
+  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
 }
 
 registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);
@@ -438,6 +438,7 @@ export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
       newName: (cmd as { oldName?: string }).oldName ?? newName,
       renameCacheKey: key,
     } as unknown as EditorOp,
+    created: [],
   };
 }
 
@@ -463,6 +464,7 @@ export function applyDuplicateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     inverse: {
       kind: 'destroyAsset', packPath, guid, newGuidCacheKey: key,
     } as unknown as EditorOp,
+    created: [],
   };
 }
 

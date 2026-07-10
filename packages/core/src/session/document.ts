@@ -237,11 +237,13 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   const r = engine.spawn(...(compData as any));
   if (!r.ok) return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } };
   const eH = r.value as EntityHandle;
-  // Rewrite _id in place to the real handle so the committed ledger op + any
-  // post-dispatch reader (spawnClipboard selection) sees the concrete handle.
+  // Rewrite _id in place to the real handle: the committed ledger op keeps the
+  // concrete handle, and a NEGATIVE placeholder must resolve for later sub-ops in
+  // the same transaction (alias forward-reference). Post-dispatch readers use the
+  // returned `created` channel instead of reading this back.
   cmd._id = eH;
   if (placeholder !== undefined) alias.set(placeholder, eH);
-  return { ok: true, inverse: { kind: 'destroyEntity', entity: eH } };
+  return { ok: true, inverse: { kind: 'destroyEntity', entity: eH }, created: [eH] };
 }
 
 // ── destroyEntity applier ────────────────────────────────────────────────────
@@ -289,7 +291,7 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     name: e.name, parent: null, components: e.comps,
   }));
   const rootName = entries[0]?.name ?? `Entity ${cmd.entity}`;
-  return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds } };
+  return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds }, created: [] };
 }
 
 // ── rename applier ────────────────────────────────────────────────────────────
@@ -304,7 +306,7 @@ export function applyRename(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   const before = nameR.value.value;
   const r = engine.set(eH, Name, { value: cmd.name });
   if (!r.ok) return { ok: false, error: { code: 'RENAME_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'rename', entity: cmd.entity, name: before } };
+  return { ok: true, inverse: { kind: 'rename', entity: cmd.entity, name: before }, created: [] };
 }
 
 // ── reparent applier ──────────────────────────────────────────────────────────
@@ -340,7 +342,7 @@ export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
     const r = engine.removeComponent(eH, ChildOf);
     if (!r.ok) return { ok: false, error: { code: 'REPARENT_FAILED', hint: String(r.error) } };
   }
-  return { ok: true, inverse: { kind: 'reparent', entity: cmd.entity, parent: before } };
+  return { ok: true, inverse: { kind: 'reparent', entity: cmd.entity, parent: before }, created: [] };
 }
 
 // ── setComponent applier ──────────────────────────────────────────────────────
@@ -360,7 +362,7 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   for (const k of Object.keys(cmd.patch)) restore[k] = before[k];
   const r = engine.set(eH, tok, cmd.patch as Parameters<typeof engine.set>[2]);
   if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore } };
+  return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore }, created: [] };
 }
 
 // ── addComponent applier ──────────────────────────────────────────────────────
@@ -376,7 +378,7 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   if (engine.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
   const r = engine.addComponent(eH, { component: tok, data: (cmd.value ?? {}) as never });
   if (!r.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component } };
+  return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component }, created: [] };
 }
 
 // ── removeComponent applier ───────────────────────────────────────────────────
@@ -397,7 +399,7 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
   const value = clone(cur.value);
   const r = engine.removeComponent(eH, tok);
   if (!r.ok) return { ok: false, error: { code: 'REMOVE_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value } };
+  return { ok: true, inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value }, created: [] };
 }
 
 // ── setHidden applier ─────────────────────────────────────────────────────────
@@ -416,7 +418,7 @@ export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult 
     const r = engine.removeComponent(eH, EditorHidden);
     if (!r.ok) return { ok: false, error: { code: 'UNHIDE_FAILED', hint: String(r.error) } };
   }
-  return { ok: true, inverse: { kind: 'setHidden', entity: cmd.entity, hidden: isHidden } };
+  return { ok: true, inverse: { kind: 'setHidden', entity: cmd.entity, hidden: isHidden }, created: [] };
 }
 
 // ── transaction applier ───────────────────────────────────────────────────────
@@ -426,6 +428,10 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   const cmd = _cmd as any;
   if (cmd.commands.length === 0) return { ok: false, error: { code: 'EMPTY_TRANSACTION', hint: 'transaction has no commands' } };
   const inverses: EditorOp[] = [];
+  // Flatten every sub-op's created roots into one array (D-2: top-level created =
+  // all sub-ops' roots). A caller needing per-sub-op roots (e.g. spawnClipboard's
+  // "primary root of each paste") reads each sub-op's own dispatch result instead.
+  const created: EntityHandle[] = [];
   for (const sub of cmd.commands) {
     const r = ctx.dispatchSub(ctx, sub);
     if (!r.ok) {
@@ -433,9 +439,10 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
       return r;
     }
     inverses.push(r.inverse);
+    created.push(...r.created);
   }
   inverses.reverse();
-  return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses } };
+  return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses }, created };
 }
 
 // ── instantiateSceneAsset applier ─────────────────────────────────────────────
@@ -475,11 +482,9 @@ export function applyDuplicateEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
     posOffset: cmd.posOffset,
     label: cmd.label,
   };
-  const result = applyInstantiateSceneAsset(ctx, instantiate);
-  if (result.ok) {
-    cmd._newRoots = (instantiate as Extract<EditorOp, { kind: 'instantiateSceneAsset' }>)._newRoots;
-  }
-  return result;
+  // Delegate to the instantiate applier; its result already carries `created`
+  // (the new roots), so duplicate forwards it verbatim.
+  return applyInstantiateSceneAsset(ctx, instantiate);
 }
 
 export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
@@ -530,10 +535,6 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
     }
   }
 
-  // Expose the concrete new roots for post-dispatch selection (same in-place
-  // rewrite contract as spawnEntity's _id).
-  cmd._newRoots = newRoots;
-
   // Inverse: destroy every new root. destroyEntity cascades the subtree
   // (applyDestroyEntity), so one op per root restores the pre-instantiate state.
   const destroys: EditorOp[] = newRoots.map((e) => ({ kind: 'destroyEntity' as const, entity: e }));
@@ -541,6 +542,9 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
   return {
     ok: true,
     inverse: destroys.length === 1 ? destroys[0]! : { kind: 'transaction', label: `undo ${label}`, commands: destroys },
+    // The new roots are the created channel (replaces the old cmd._newRoots
+    // in-place rewrite, which JSON couldn't carry back over the eval bridge).
+    created: newRoots,
   };
 }
 

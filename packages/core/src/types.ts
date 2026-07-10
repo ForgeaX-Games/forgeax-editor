@@ -14,7 +14,7 @@ export type {
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
 import type { SceneAsset } from '@forgeax/engine-types';
-import type { EntityId, EntitySource } from './scene/scene-types';
+import type { EntityHandle, EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
 
 // ── Operations ──────────────────────────────────────────────────────────────
@@ -56,11 +56,11 @@ export type BuiltinEditorOp =
   // the old single-entity duplicate dropped. `asset` is self-contained so redo
   // replays deterministically (no re-collect). `parent`/`name` retarget the
   // PRIMARY new root; `posOffset` shifts every new root's Transform.pos.
-  | { kind: 'instantiateSceneAsset'; asset: SceneAsset; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
+  | { kind: 'instantiateSceneAsset'; asset: SceneAsset; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string }
   // duplicateEntity — public convenience document op. Gateway collects `_asset`
   // exactly once from the live source, so redo re-instantiates the same GUID-backed
   // POD even if the original later changes or disappears.
-  | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
+  | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
@@ -163,6 +163,9 @@ export interface CommandError {
     | 'PLAN_STEP_FAILED'
     | 'UNKNOWN_COMPONENT'
     | 'OP_INTERRUPTED'
+    // Asset read surface (Part 4): resolveAsset/describeAsset given a handle that
+    // resolves to no asset (slot 0 unset, stale, or not a shared<T> handle).
+    | 'ASSET_NOT_FOUND'
     // ── M5 eval channel codes (plan-strategy §2 D-4) ──
     | 'SCOPE_LOCKED'
     | 'SCRIPT_SYNTAX_ERROR'
@@ -179,5 +182,12 @@ export interface CommandError {
 }
 
 export type ApplyResult =
-  | { ok: true; inverse: EditorOp }
+  // `created` — the new entity roots this op produced (spawn: [handle];
+  // instantiate/duplicate: the new roots; transaction: all sub-ops' roots
+  // flattened). Empty [] for non-creating ops (setComponent/rename/…) so
+  // consumers read result.created without an undefined check. This is the ONE
+  // out-channel for post-dispatch reads (selection, AI "what did I just make?")
+  // — replaces the old in-place cmd._id / cmd._newRoots rewrite (which JSON
+  // couldn't carry back over the eval bridge).
+  | { ok: true; inverse: EditorOp; created: EntityHandle[] }
   | { ok: false; error: CommandError };

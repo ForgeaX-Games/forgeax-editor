@@ -12,7 +12,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import {
@@ -144,7 +144,10 @@ describe('Gateway public capability matrix', () => {
     };
     const created = gateway.dispatch(command, 'ai');
     expect(created.ok).toBe(true);
-    const entity = (command as { _id?: EntityHandle })._id;
+    if (!created.ok) return;
+    // The new handle comes back on result.created (length 1 for a single spawn).
+    expect(created.result?.created).toHaveLength(1);
+    const entity = created.result?.created[0];
     expect(entity).toBeDefined();
     expect(gateway.origins.at(-1)).toBe('ai');
     expect(gateway.trace.last()?.name).toBe('spawnEntity');
@@ -190,10 +193,10 @@ describe('Gateway public capability matrix', () => {
     expect(JSON.stringify(collected.asset)).toContain(MATERIAL_GUID);
     expect(gateway.ledger).toHaveLength(0); // read API does not leave an audit write
 
-    const command: EditorOp = { kind: 'duplicateEntity', entity: ball };
-    const duplicated = gateway.dispatch(command, 'ai');
+    const duplicated = gateway.dispatch({ kind: 'duplicateEntity', entity: ball }, 'ai');
     expect(duplicated.ok).toBe(true);
-    const copy = (command as { _newRoots?: EntityHandle[] })._newRoots?.[0];
+    if (!duplicated.ok) return;
+    const copy = duplicated.result?.created[0];
     expect(copy).toBeDefined();
     expect(materialCount(world, copy!)).toBe(1);
     expect(childrenOf(world, copy!)).toHaveLength(1);
@@ -257,5 +260,145 @@ describe('Gateway public capability matrix', () => {
     const blocked = gateway.dispatch({ kind: 'duplicateEntity', entity: ball }, 'ai');
     expect(blocked.ok).toBe(false);
     if (!blocked.ok) expect(blocked.error.code).toBe('edit-rejected-in-play');
+  });
+});
+
+// Part 1 — the created channel: creating ops return their new roots on
+// result.created (single spawn = [handle]; transaction = all sub-ops' roots
+// flattened in op order; non-creating ops = []).
+describe('Gateway created channel', () => {
+  let gateway: EditGateway;
+  let ball: EntityHandle;
+
+  beforeEach(() => {
+    ({ gateway, ball } = setupBall());
+  });
+
+  it('spawnEntity returns the new handle on result.created', () => {
+    const r = gateway.dispatch({ kind: 'spawnEntity', name: 'X', components: {} }, 'ai');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result?.created).toHaveLength(1);
+  });
+
+  it('duplicateEntity returns the copy roots on result.created', () => {
+    const r = gateway.dispatch({ kind: 'duplicateEntity', entity: ball }, 'ai');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result?.created).toHaveLength(1);
+    expect(r.result?.created[0]).not.toBe(ball);
+  });
+
+  it('transaction flattens every sub-op root; reparent contributes none', () => {
+    const r = gateway.dispatch({
+      kind: 'transaction',
+      label: 'two spawns + a rename',
+      commands: [
+        { kind: 'spawnEntity', name: 'A', components: {} },
+        { kind: 'rename', entity: ball, name: 'Renamed' },
+        { kind: 'spawnEntity', name: 'B', components: {} },
+      ],
+    }, 'ai');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Two spawns → two roots; the rename adds nothing.
+    expect(r.result?.created).toHaveLength(2);
+  });
+
+  it('non-creating document op returns an empty created array', () => {
+    const r = gateway.dispatch({ kind: 'rename', entity: ball, name: 'Renamed' }, 'ai');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result?.created).toEqual([]);
+  });
+});
+
+// Part 4 — asset read surface: resolve a shared<T> handle (query's opaque-handle
+// .raw) into payload / human-readable identity, plus catalog reads. Builds its own
+// world so it can set MeshFilter.assetHandle to a builtin mesh (scalar shared<T>,
+// which query returns cleanly as opaque-handle.raw — no array decoding).
+describe('Gateway asset read surface', () => {
+  // A gateway whose ball carries a builtin cube mesh + a catalogued material,
+  // with both handles captured directly (== what query's opaque-handle.raw is).
+  function setup(): { gateway: EditGateway; ball: EntityHandle; meshHandle: number; matHandle: number } {
+    const world = new World();
+    const registry = new AssetRegistry(makeShaderRegistry());
+    const mat = material();
+    const guid = AssetGuid.parse(MATERIAL_GUID);
+    if (!guid.ok) throw new Error('bad material test GUID');
+    const catalogued = registry.catalog(guid.value, mat);
+    if (!catalogued.ok) throw new Error(`material catalog failed: ${String(catalogued.error)}`);
+    const matHandle = world.allocSharedRef('MaterialAsset', mat);
+    const spawned = world.spawn(
+      { component: Name, data: { value: 'Cube' } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [matHandle as unknown as Handle<'MaterialAsset', 'shared'>] } },
+    );
+    if (!spawned.ok) throw new Error(`spawn failed: ${String(spawned.error)}`);
+    const session = createEditSession();
+    session.world = world as unknown as EditSession['world'];
+    session.registry = registry;
+    return {
+      gateway: new EditGateway(session),
+      ball: spawned.value,
+      meshHandle: HANDLE_CUBE as unknown as number,
+      matHandle: matHandle as unknown as number,
+    };
+  }
+
+  it('resolveAsset resolves a catalogued material handle to its payload', () => {
+    const { gateway, matHandle } = setup();
+    const r = gateway.resolveAsset(matHandle);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.asset.kind).toBe('material');
+  });
+
+  it('describeAsset gives GUID + name for a catalogued asset', () => {
+    const { gateway, matHandle } = setup();
+    const d = gateway.describeAsset(matHandle);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.kind).toBe('material');
+      expect(d.guid).toBe(MATERIAL_GUID);
+    }
+  });
+
+  it('describeAsset marks a builtin mesh (HANDLE_CUBE) as builtin with no GUID', () => {
+    const { gateway, meshHandle } = setup();
+    const d = gateway.describeAsset(meshHandle);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.kind).toBe('mesh');
+      expect(d.builtin).toBe(true);
+      expect(d.guid).toBeUndefined();
+    }
+  });
+
+  it('query MeshFilter.assetHandle.raw feeds resolveAsset (the end-to-end path)', () => {
+    const { gateway, ball } = setup();
+    const snap = gateway.buildQueryFn()({ with: ['MeshFilter'] });
+    expect(snap.ok).toBe(true);
+    if (!snap.ok) return;
+    const row = snap.rows.find((r) => r.entity === ball);
+    const raw = (row?.MeshFilter as { assetHandle?: { raw?: number } }).assetHandle?.raw;
+    expect(typeof raw).toBe('number');
+    const d = gateway.describeAsset(raw!);
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.kind).toBe('mesh');
+  });
+
+  it('resolveAsset returns a structured miss for slot 0 (unset)', () => {
+    const { gateway } = setup();
+    const r = gateway.resolveAsset(0);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('ASSET_NOT_FOUND');
+  });
+
+  it('assetCatalog + lookupAsset project the registry catalog', () => {
+    const { gateway } = setup();
+    expect(gateway.assetCatalog().some((e) => e.guid === MATERIAL_GUID)).toBe(true);
+    const payload = gateway.lookupAsset(MATERIAL_GUID);
+    expect((payload as { kind?: string } | undefined)?.kind).toBe('material');
   });
 });

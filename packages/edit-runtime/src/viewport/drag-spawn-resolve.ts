@@ -171,7 +171,9 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
 
   bus.subscribe((_doc, lastCommand) => {
     if (lastCommand === null || lastCommand.kind !== 'spawnEntity') return;
-    // lastCommand is a spawnEntity here; applyCommand fills _id (document.ts).
+    // This is the BUS path — it sees only lastCommand, not the DispatchResult, so
+    // it reads the handle off the applier-filled cmd._id (still written in place;
+    // result.created is the return-value channel for direct dispatch callers).
     const entity = (lastCommand as Extract<EditorOp, { kind: 'spawnEntity' }>)._id;
     if (typeof entity !== 'number') return;
 

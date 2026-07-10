@@ -27,11 +27,23 @@ import {
 } from './scene-asset-collect';
 import { entName, entParent } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
+// Asset read surface (Part 4): resolveAssetHandle turns a shared<T> handle
+// (what query returns as opaque-handle.raw) into its live payload — covering
+// BOTH builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets,
+// O(1). The registry side (lookup/resolveName/_guidForAsset) adds the
+// human-readable identity that only catalog assets have.
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
 export type DispatchResult =
-  | { ok: true }
+  // `result.created` — new entity roots a document dispatch produced (see
+  // ApplyResult.created). Optional: document ops carry it (possibly []); session/
+  // transient ops and the lifecycle methods (update/commit/cancel) omit it. This
+  // is how a caller (UI selection, AI over the eval bridge) learns what it just
+  // made without re-reading the mutated op or diffing a query snapshot.
+  | { ok: true; result?: { created: EntityHandle[] } }
   | { ok: false; error: CommandError };
 
 // CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
@@ -425,7 +437,9 @@ export class EditGateway {
       // emit() fires the bus subscribers (docVersion re-render + _isDirty tracker
       // + engine sync repaint) — the World changed, so panels/disk must react.
       this.emit(cmd);
-      return { ok: true };
+      // Surface the new roots the applier produced (spawn/instantiate/duplicate/
+      // transaction) so the caller learns what it just made without re-reading cmd.
+      return { ok: true, result: { created: r.created } };
     }
 
     // F-4: entry args validation (boundary #8 / D-7 Fail Fast). Document ops are
@@ -735,6 +749,65 @@ export class EditGateway {
    */
   collectSceneAsset(entity: EntityHandle): CollectSceneAssetResult {
     return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
+  }
+
+  // ── Asset read surface (Part 4) ────────────────────────────────────────────
+  // query() returns a shared<T> field as { kind:'opaque-handle', type, raw },
+  // where `raw` is the engine handle value. These read methods turn that handle —
+  // or a catalog GUID — into meaning. They are pure reads: no world/undo/ledger
+  // mutation. This is the read half of the "write=dispatch, read=gateway" symmetry
+  // an AI needs (previously reads had to bypass the gateway to doc.registry).
+
+  /**
+   * Resolve a shared<T> asset handle (query's opaque-handle.raw) to its live
+   * payload. Covers BOTH builtin meshes (HANDLE_CUBE via BuiltinAssetRegistry)
+   * and catalog assets (world.sharedRefs), O(1). Returns a structured miss
+   * instead of throwing (charter P3) — a stale/unregistered handle is data.
+   */
+  resolveAsset(handle: number): { ok: true; asset: Asset } | { ok: false; error: CommandError } {
+    const r = resolveAssetHandle(this.activeWorld, handle as unknown as Handle<string, 'shared'>);
+    if (!r.ok) {
+      return { ok: false, error: { code: 'ASSET_NOT_FOUND', hint: `no asset for handle ${handle}; it may be slot 0 (unset), stale, or not a shared<T> handle` } };
+    }
+    return { ok: true, asset: r.value };
+  }
+
+  /**
+   * Describe an asset handle as a human-readable identity (best-effort): its
+   * `kind`, plus a catalog GUID + name when the payload is a registered asset.
+   * Builtin/procedural payloads have no GUID (not in the catalog) — those come
+   * back with just `kind` (and `builtin:true`). This is the "what mesh is this
+   * entity using?" answer: query MeshFilter.assetHandle.raw → describeAsset(raw).
+   */
+  describeAsset(
+    handle: number,
+  ): { ok: true; kind: string; guid?: string; name?: string; builtin?: boolean } | { ok: false; error: CommandError } {
+    const r = this.resolveAsset(handle);
+    if (!r.ok) return r;
+    const registry = this.doc.registry;
+    const guid = registry?._guidForAsset(r.asset);
+    if (guid === undefined) {
+      // Payload isn't in the catalog → builtin/procedural. No GUID/name to give.
+      return { ok: true, kind: r.asset.kind, builtin: true };
+    }
+    return { ok: true, kind: r.asset.kind, guid, name: registry!.resolveName(guid) };
+  }
+
+  /**
+   * List the asset catalog (GUID + kind + optional name + url). Projects the
+   * registry's own listCatalog() so an AI can enumerate assets without bypassing
+   * the gateway to doc.registry. Empty array when no registry is bound.
+   */
+  assetCatalog(): readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] {
+    return this.doc.registry?.listCatalog() ?? [];
+  }
+
+  /**
+   * Look up a catalogued asset payload by GUID (no fetch — catalog only).
+   * undefined when the GUID is unknown or no registry is bound.
+   */
+  lookupAsset(guid: AssetGuid | string): Asset | undefined {
+    return this.doc.registry?.lookup(guid);
   }
 
   /** Build a query-snapshot function for defineOp plan(). Public entry face is

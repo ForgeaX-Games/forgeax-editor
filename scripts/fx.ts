@@ -60,8 +60,15 @@ const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx');
 const FBX_WASM_MJS = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.mjs');
 const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
-const PORTS = [15290, 15280, 15281, 15173];
+// 15295 = DEV-only live gateway bridge relay (on by default; FORGEAX_BRIDGE=0
+// opts out). Listed so `stop`/startup-preflight free a stale relay too.
+const PORTS = [15290, 15280, 15281, 15173, 15295];
 const GAME_API_PORT = 15281;
+// The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
+// the AI tools and their harness ship together). ROOT-relative because
+// spawnService runs with cwd=ROOT. `ws` still resolves — bun walks up to the
+// root node_modules from any depth.
+const GATEWAY_RELAY_SCRIPT = 'skills/forgeax-editor-gateway/scripts/gateway-bridge-server.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -429,13 +436,31 @@ async function run(argv: string[]): Promise<void> {
   // (which injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG=1 + the dev-server
   // /__forgeax-debug endpoints), flipping createApp's guard so the browser gets
   // window.__forgeax.captureFrame(n). Unset by default → zero injection, tree-shaken.
+  // DEV-only live gateway bridge: on by default so `fx start` matches
+  // `dev:standalone`. It takes both a relay process (:15295) AND a compile-time
+  // flag so the editor page dials the relay — mirrors dev-standalone.ts. Opt out
+  // with FORGEAX_BRIDGE=0. CRITICAL: the two Vite vars must reach the HOST vite
+  // (`bun run dev`, :15290) — the standalone shell imports ViewportComponent
+  // IN-PROCESS (standalone/main.tsx, no iframe / no /editor proxy), so the host
+  // vite is what inlines `import.meta.env.VITE_FORGEAX_BRIDGE` into the page's
+  // bridge-dial code. Giving it only to edit-runtime (:15280) leaves the page's
+  // bridgeEnabled=false and connectBridge() never runs. So they go into the base
+  // `env` shared by every spawn; the relay reads the runtime FORGEAX_BRIDGE_PORT.
+  const bridge = process.env.FORGEAX_BRIDGE !== '0';
+  const bridgePort = process.env.FORGEAX_BRIDGE_PORT ?? '15295';
+  const bridgeEnv: NodeJS.ProcessEnv = bridge
+    ? { VITE_FORGEAX_BRIDGE: '1', VITE_FORGEAX_BRIDGE_PORT: bridgePort }
+    : { VITE_FORGEAX_BRIDGE: '0' };
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
     ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
   };
   if (rhiDebug) ok('RHI-debug capture enabled → window.__forgeax.captureFrame(n) in the :15290 console');
+  if (bridge) ok(`live gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway-live.mjs). Opt out: FORGEAX_BRIDGE=0`);
 
   // preflight — point at setup if the engine build is missing.
   if (
@@ -448,6 +473,7 @@ async function run(argv: string[]): Promise<void> {
   // always start from a clean slate (clears a stale :15290/:15280 from a prior run)
   await stop();
 
+  // bridgeEnv already folded into `env`; edit-runtime just adds the HMR port.
   const editRuntimeEnv: NodeJS.ProcessEnv = { ...env, FORGEAX_INTERFACE_PORT: '15290' };
   const editRuntimeArgs = ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', '15280', '--strictPort'];
 
@@ -471,6 +497,15 @@ async function run(argv: string[]): Promise<void> {
       logFd: log('edit-runtime'),
     });
     spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log('host') });
+    if (bridge)
+      // Spawn with `bun`, not `node`: `ws` lives only in bun's isolated store
+      // (node_modules/.bun/ws@*), unhoisted, so bare node ERR_MODULE_NOT_FOUNDs.
+      spawnService('bun', [GATEWAY_RELAY_SCRIPT], {
+        cwd: ROOT,
+        env: { ...env, FORGEAX_BRIDGE_PORT: bridgePort },
+        detach: true,
+        logFd: log('bridge'),
+      });
     if (play)
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
@@ -497,6 +532,17 @@ async function run(argv: string[]): Promise<void> {
 
   step('starting standalone host :15290 ...');
   children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env }));
+
+  if (bridge) {
+    step(`starting gateway bridge relay :${bridgePort} (live editing; FORGEAX_BRIDGE=0 to disable) ...`);
+    children.push(
+      // `bun` not `node`: `ws` is only in bun's isolated store, unhoisted.
+      spawnService('bun', [GATEWAY_RELAY_SCRIPT], {
+        cwd: ROOT,
+        env: { ...env, FORGEAX_BRIDGE_PORT: bridgePort },
+      }),
+    );
+  }
 
   if (play) {
     step('starting play-runtime :15173 ...');
@@ -529,6 +575,10 @@ Lifecycle:
   start --bg                    start in background, returns immediately
   start --rhi-debug            enable engine RHI frame capture (window.__forgeax.captureFrame)
   stop                          stop everything the CLI started (by port)
+
+  Live gateway bridge (:15295) is ON by default so the forgeax-editor-gateway
+  skill's gateway-live.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
+  disable, FORGEAX_BRIDGE_PORT to move it.
 
 Repo maintenance:
   update [--dry-run] [--no-stash]

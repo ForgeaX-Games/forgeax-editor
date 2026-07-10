@@ -5,7 +5,7 @@ description: >-
   (continuous op), listOps (self-introspect), defineOp (compose new ops), eval (AI channel), trace (read
   span trees). Three-domain model (document/session/transient) decided by applier registration table.
   Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds, driven
-  headlessly via scripts/gateway-eval.mjs or in the already-open editor via scripts/gateway-live.mjs.
+  headlessly via skills/forgeax-editor-gateway/scripts/gateway-eval.mjs or in the already-open editor via skills/forgeax-editor-gateway/scripts/gateway-live.mjs.
   Use when building editor tools, AI-driven editing, extending the editor with new operations, or
   driving/inspecting a running editor's gateway from a script.
 ---
@@ -63,6 +63,10 @@ readable `droppedTraces` counter.
 | `gateway.cancel(handle)` | `(OpHandle) => DispatchResult` | Roll back to pre-begin state, no trace, release slot |
 | `gateway.listOps()` | `() => readonly OpDescriptor[]` | Self-introspect all registered ops (builtin + seam-registered + defineOp-composed) |
 | `gateway.collectSceneAsset(entity)` | `(EntityHandle) => {ok:true, asset} \| {ok:false, error}` | Read one live subtree as a GUID-backed SceneAsset POD; no world/ledger mutation |
+| `gateway.resolveAsset(handle)` | `(number) => {ok:true, asset} \| {ok:false, error}` | Resolve a shared<T> handle (query's opaque-handle.raw) to its live asset payload; covers builtin + catalog, O(1) |
+| `gateway.describeAsset(handle)` | `(number) => {ok:true, kind, guid?, name?, builtin?} \| {ok:false, error}` | Human-readable identity of an asset handle: kind + (catalog assets) guid+name, or builtin:true |
+| `gateway.assetCatalog()` | `() => readonly {guid, kind, name?, relativeUrl}[]` | List the asset catalog (projects registry.listCatalog); [] if no registry |
+| `gateway.lookupAsset(guid)` | `(AssetGuid\|string) => Asset \| undefined` | Look up a catalogued asset payload by GUID (catalog only, no fetch) |
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
@@ -88,6 +92,17 @@ gateway.dispatch({ kind: 'setSelection', id: entityId }, 'ai');
 const r = gateway.dispatch({ kind: 'spawnEntity', name: 'Light', components: {} }, 'ai');
 if (!r.ok) console.error(r.error.code, r.error.hint);
 // Errors do not throw — property-access branching
+
+// New-entity handle: creating ops (spawnEntity / instantiateSceneAsset /
+// duplicateEntity / a transaction of them) return the new roots on
+// r.result.created — a stable EntityHandle[] you can immediately act on. Single
+// spawn → length 1; a transaction flattens every sub-op's roots in op order.
+// Non-creating document ops return created: []. session/transient ops omit
+// result entirely. This replaces the old "dispatch then diff a query" dance.
+if (r.ok) {
+  const [handle] = r.result?.created ?? [];
+  if (handle !== undefined) gateway.dispatch({ kind: 'setSelection', id: handle }, 'ai');
+}
 ```
 
 ## begin -> update -> commit -- Continuous Operation
@@ -154,7 +169,10 @@ if (!ball) throw new Error('BouncyBall not found');
 // One document op: collects source subtree → GUID-backed SceneAsset → instantiate.
 // It appears in listOps() and records AI origin, undo, redo, and trace normally.
 const result = gateway.dispatch({ kind: 'duplicateEntity', entity: ball.entity }, 'ai');
-if (!result.ok) console.error(result.error.code, result.error.hint);
+if (!result.ok) throw new Error(result.error.code);
+// The new copy's roots are on result.result.created — no query diff needed.
+const copy = result.result?.created[0];
+if (copy !== undefined) gateway.dispatch({ kind: 'setSelection', id: copy }, 'ai');
 
 // Advanced composition only: collect the portable POD, then instantiate elsewhere.
 const collected = gateway.collectSceneAsset(ball.entity);
@@ -166,6 +184,41 @@ if (collected.ok) {
 `duplicateEntity` is preferred for ordinary copies. `collectSceneAsset` is read-only:
 it neither mutates the world nor adds an undo/ledger entry. Both use the live app's
 registry/module graph, preserving material GUID resolution and child hierarchy.
+
+### Read what asset an entity references (mesh / material)
+
+`query` returns an asset-reference field (`shared<T>`, e.g. `MeshFilter.assetHandle`)
+as `{kind:'opaque-handle', type, raw}` where `raw` is the engine handle VALUE — a
+stable machine id, not the asset's meaning. To turn it into meaning, feed `raw` to
+the gateway's asset-read surface (pure reads: no world/undo/ledger mutation):
+
+```ts
+const r = query({ with: ['MeshFilter'] });
+if (!r.ok) throw new Error(r.error.code);
+const row = r.rows[0];
+const handle = row.MeshFilter.assetHandle.raw as number;   // the shared<MeshAsset> handle
+
+// "What mesh is this?" — human-readable identity (best-effort):
+const d = gateway.describeAsset(handle);
+// catalog asset → { ok:true, kind:'mesh', guid:'…', name:'rock' }
+// builtin mesh  → { ok:true, kind:'mesh', builtin:true }   (HANDLE_CUBE etc. — no GUID)
+
+// Need the payload (geometry / material params)? resolveAsset gives the live POD:
+const a = gateway.resolveAsset(handle);           // { ok:true, asset:{ kind:'mesh', vertices, … } }
+
+// Enumerate / look up the catalog directly:
+const catalog = gateway.assetCatalog();           // [{ guid, kind, name?, relativeUrl }]
+const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only)
+```
+
+> [!IMPORTANT]
+> `shared<T>` is the engine's general shared-ref store — "asset" is its common use,
+> not its definition. Not every `shared<T>` has a GUID: **builtin** meshes
+> (`HANDLE_CUBE`/`HANDLE_TRIANGLE`) live in a process-static registry, not the
+> asset catalog, so `describeAsset` returns `{builtin:true}` with no `guid`/`name`.
+> `resolveAsset` still returns their payload (it covers builtin + catalog). `raw`
+> of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`.
+> `unique<T>`/`ref`/`buffer` stay opaque (no catalog GUID; not resolved here).
 
 
 > [!NOTE]
@@ -237,8 +290,11 @@ gateway.defineOp({
 > return a structured error `{ok:false, error:{code:'UNKNOWN_COMPONENT', hint}}` instead of
 > silently ignoring (AC-16). `string` fields resolve to JSON-safe authored strings (for example,
 > `row.Name.value === 'BouncyBall'`). Live-resource fields (`unique<T>` / `shared<T>` / `ref<T>` /
-> buffers) remain `{kind:'opaque-handle', type, raw}`. TypedArray fields (`array<T,N>`) are
-> snap-copied into plain `number[]` — safe, JSON-serializable, no live column-buffer references.
+> buffers) remain `{kind:'opaque-handle', type, raw}` — `raw` is the engine handle VALUE. For a
+> `shared<T>` asset handle, feed `raw` to `gateway.describeAsset(raw)` (identity) or
+> `gateway.resolveAsset(raw)` (payload) — see "Read what asset an entity references". TypedArray
+> fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
+> column-buffer references.
 
 ## eval -- AI Entry Channel (M5, DEV-only)
 
@@ -300,18 +356,18 @@ __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in s
 > const r = __forgeaxEval.eval('(async()=>{ const m = await _import("…"); return … })()');
 > const out = r.ok && typeof r.value?.then === 'function' ? await r.value : r;
 > ```
-> `scripts/gateway-eval.mjs` does this unwrap automatically.
+> `skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` does this unwrap automatically.
 
 > [!IMPORTANT]
 > **The channel mounts BEFORE the scene finishes loading.** `waitForFunction(() => !!__forgeaxEval)`
 > resolves while the async `loadByGuid → instantiate` is still in flight, so an entity/hierarchy
 > query fired right at readiness sees a partial (or empty) world. Settle briefly first
-> (`scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
+> (`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
 > (`listOps`, `defineOp`) need no settle — pass `--settle 0`.
 
 ## Scripts
 
-`scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
+`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
 (+ scene settle), evaluate one snippet, await it if async, print `{ok,value|error}` JSON. Reuse this
 instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runtime), 0 otherwise
 (domain errors like `UNKNOWN_COMPONENT` ride in `value`/`error`, exit 0).
@@ -320,10 +376,10 @@ instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runt
 # prereq: a running editor with a scene open, and playwright available:
 #   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
 #   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
-node scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
-node scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first
-node scripts/gateway-eval.mjs --raw "typeof world"                       # unlock scope② then eval
-node scripts/gateway-eval.mjs --file snippet.js --settle 0               # snippet from file, no settle
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --raw "typeof world"                       # unlock scope② then eval
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --settle 0               # snippet from file, no settle
 ```
 
 | Flag / env | Effect |
@@ -336,26 +392,38 @@ node scripts/gateway-eval.mjs --file snippet.js --settle 0               # snipp
 
 ### Live window bridge (DEV-only)
 
-`scripts/gateway-live.mjs` evaluates a snippet in the **already-open editor window**. Unlike
+`skills/forgeax-editor-gateway/scripts/gateway-live.mjs` evaluates a snippet in the **already-open editor window**. Unlike
 `gateway-eval.mjs`, it does not create a headless browser: it routes the snippet through the
 loopback relay to that page's existing `__forgeaxEval` channel, so operations affect its current
-in-memory world immediately.
+in-memory world.
+
+> [!IMPORTANT]
+> **Bridge evals run at frame start, not the instant they arrive.** A WebSocket
+> message can land at any phase of the engine's rAF tick, so the page ENQUEUES
+> each bridge eval and drains the queue from `app.registerUpdate` — which runs at
+> frame start, before `world.update()`. Every bridge write is therefore guaranteed
+> to pass through that frame's systems (deterministic, reproducible across runs).
+> The reply is deferred to that drain (sub-millisecond; imperceptible). Consequence:
+> if the window is not rendering (backgrounded tab → rAF paused), the queue does
+> not drain and evals time out after 30s — keep the editor window in the foreground.
+> This applies ONLY to the bridge; in-window UI dispatch runs synchronously.
 
 ```bash
 # Starts the relay and enables the page connection by default.
 bun run dev:standalone
+# `bun fx start [--game DIR]` enables the bridge by default too (same relay :15295).
 
 # In another terminal, after the editor page finishes booting:
-node scripts/gateway-live.mjs --health
-node scripts/gateway-live.mjs "gateway.listOps().length"
-node scripts/gateway-live.mjs --file snippet.js
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --health
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs "gateway.listOps().length"
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file snippet.js
 
 # Disable the relay/page connection for a standalone run:
 FORGEAX_BRIDGE=0 bun run dev:standalone
 
 # Use one custom port for relay, page, and CLI:
 FORGEAX_BRIDGE_PORT=15305 bun run dev:standalone
-FORGEAX_BRIDGE_PORT=15305 node scripts/gateway-live.mjs --health
+FORGEAX_BRIDGE_PORT=15305 node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --health
 ```
 
 `--health` exits nonzero until both the relay and page are connected. `--file <path>` reads the
@@ -412,6 +480,7 @@ AI branches on `error.code` by property access; hint carries actionable recovery
 | `PLAN_FAILED` | plan throws / returns empty or non-array | `plan threw: <message>` / `plan returned empty or non-array` |
 | `PLAN_STEP_FAILED` | session-plan sub-op fails mid-sequence (M5) | failed op kind + index; already-emitted ops remain in ledger |
 | `UNKNOWN_COMPONENT` | querySnapshot component name not found (M5) | lists registered component names in hint |
+| `ASSET_NOT_FOUND` | resolveAsset/describeAsset given a handle resolving to no asset (slot 0 unset, stale, or not a shared<T> handle) | `no asset for handle <n>; it may be slot 0 (unset), stale, or not a shared<T> handle` |
 | `OP_INTERRUPTED` | stale handle on lifecycle method (implicitly cancelled) | `operation was interrupted; begin a new one` |
 | `SCOPE_LOCKED` | unlockRawScope() in production (M5) | `scope② is dev-only — run in DEV mode or request rawScope injection` |
 | `SCRIPT_SYNTAX_ERROR` | eval code parse failure (M5) | `syntax error near: <msg>; fix and resubmit` |

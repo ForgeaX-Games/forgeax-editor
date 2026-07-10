@@ -468,27 +468,41 @@ async function bootViewport(
       let bridgeWs: WebSocket | null = null;
       let bridgeBackoff = 1000;
       let bridgeStopped = false;
-      const connectBridge = (): void => {
-        if (bridgeStopped) return;
-        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
-        catch { return; }
-        bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
-        bridgeWs.addEventListener('message', (ev) => {
-          let msg: { type?: string; id?: number; code?: string };
-          try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
-          catch { return; }
-          if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
+
+      // Frame-start eval queue (Part 5 — phase stability). A WebSocket `message`
+      // fires at an arbitrary point relative to the engine's rAF tick, so running
+      // channel.eval → gateway.dispatch inline would land the world write at an
+      // unpredictable phase (before/after world.update() this frame). Instead we
+      // ENQUEUE each eval and drain the queue from editorApp.registerUpdate, which
+      // runs at frame start (between Time injection and world.update()) — so every
+      // bridge write is guaranteed to pass through this frame's systems, making
+      // the outcome deterministic and reproducible across runs. The reply is
+      // deferred to that drain (sub-millisecond; imperceptible for live editing).
+      // UI dispatch is unaffected: it goes through React's event loop directly,
+      // not this queue.
+      const evalQueue: Array<{ id: number; code: string }> = [];
+      const drainEvalQueue = (): void => {
+        if (evalQueue.length === 0) return;
+        // Snapshot + clear so an eval that itself enqueues runs next frame, not
+        // in an unbounded same-frame loop.
+        const jobs = evalQueue.splice(0, evalQueue.length);
+        for (const job of jobs) {
           const reply = (payload: unknown): void => {
-            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: msg.id, payload })); }
+            // Reply on the CURRENT socket, not the one captured at enqueue time.
+            // Between enqueue and this frame-start drain the bridge socket may have
+            // reconnected (a fresh WebSocket instance); the relay keys replies by
+            // request id, so sending on the live socket still resolves the pending
+            // request. Capturing the enqueue-time socket would send on a closed one.
+            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: job.id, payload })); }
             catch { /* socket gone; relay will time the request out */ }
           };
-          // eval returns {ok, value|error}; value may be a Promise (async IIFE
-          // / _import). Await it, then send a JSON-safe envelope back. Non-
+          // eval returns {ok, value|error}; value may be a Promise (async IIFE /
+          // _import). Await it, then send a JSON-safe envelope back. Non-
           // serializable values (opaque engine handles) degrade to a marker so
           // one bad field never wedges the channel.
           void (async () => {
             let res: unknown;
-            try { res = channel.eval(msg.code!); } catch (e) {
+            try { res = channel.eval(job.code); } catch (e) {
               return reply({ ok: false, error: { code: 'BRIDGE_EVAL_THREW', hint: String((e as Error)?.message ?? e) } });
             }
             const r = res as { ok?: boolean; value?: unknown };
@@ -499,6 +513,23 @@ async function bootViewport(
             try { JSON.stringify(res); reply(res); }
             catch { reply({ ok: true, value: '[unserializable value — check the live window]' }); }
           })();
+        }
+      };
+      editorApp.registerUpdate(drainEvalQueue);
+
+      const connectBridge = (): void => {
+        if (bridgeStopped) return;
+        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
+        catch { return; }
+        bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
+        bridgeWs.addEventListener('message', (ev) => {
+          let msg: { type?: string; id?: number; code?: string };
+          try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
+          catch { return; }
+          if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
+          // Enqueue — the drain (editorApp.registerUpdate) runs it at frame start
+          // and replies on whatever socket is live then (see reply() above).
+          evalQueue.push({ id: msg.id, code: msg.code });
         });
         const retryBridge = (): void => {
           bridgeWs = null;
