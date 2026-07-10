@@ -69,12 +69,12 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@playwright/test": "^1.45.0",
-    "@types/node": "^22",
-    "@vitejs/plugin-react": "^4.3.0",
+"@types/node": "^22",
+    "@vitejs/plugin-react": "^6.0.3",
     "dependency-cruiser": "^17.4.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.6.3",
-    "vite": "*"
+    "vite": "^8.0.0"
   }
 }
