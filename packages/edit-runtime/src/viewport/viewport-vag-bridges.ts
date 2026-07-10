@@ -21,10 +21,11 @@
 //   and world-partition's rewrite stays confined to the world-handle seam it owns.
 //
 // OOS-1 / OOS-3 (zero behavior change, no semantic rewrite)
-//   Every body here is moved VERBATIM from ViewportComponent.tsx (installFpsReport,
-//   installConsoleBridge, installNetworkBridge, installPreviewControls,
-//   installErrorOverlay, paintDiagnosticMessage + the install-once module flags).
-//   Only the location changed; the
+//   The original bridge bodies were moved VERBATIM from ViewportComponent.tsx
+//   (installFpsReport, installConsoleBridge, installNetworkBridge,
+//   installAssetCatalogRefresh, installErrorOverlay, paintDiagnosticMessage + the
+//   install-once module flags). The later single-realm visibility helper also lives
+//   here. Only the location changed; the
 //   camera pose write, the createApp wiring, and the pick path (the three
 //   world-partition rewrite points) stay in viewport.ts / ViewportComponent.tsx.
 //
@@ -176,13 +177,10 @@ export function installNetworkBridge(): void {
 // cycle can never self-sustain even if a genuine change lands mid-refresh.
 let pendingCatalogRefires = 0;
 
-export function installPreviewControls(editorApp: { pause(): void; resume(): void }): () => void {
+export function installAssetCatalogRefresh(): () => void {
   return onVagMessage(window, {
     allowedOrigins: allowedParentOrigins(),
     handlers: {
-      VAG_PREVIEW_PAUSE: () => editorApp.pause(),
-      VAG_PREVIEW_PLAY: () => editorApp.resume(),
-      VAG_PREVIEW_RELOAD: () => location.reload(),
       VAG_ASSETS_CHANGED: (msg) => {
         // A newly imported asset wrote a fresh pack-index on disk, but the
         // registry cached the pre-import index at boot and only re-fetches on a
@@ -223,9 +221,9 @@ export function installPreviewControls(editorApp: { pause(): void; resume(): voi
 // ── Visibility-driven pause (single-realm) ──────────────────────────────────
 // In-process replacement for the pause path the deleted EditSurface iframe host
 // used to drive. Under the old arch EditSurface owned an IntersectionObserver on
-// the iframe and posted VAG_PREVIEW_PAUSE/PLAY when the dock tab hid/showed it.
-// Single realm has no iframe: the host (studio SurfaceKeepAliveLayer) parks the
-// viewport off-screen + visibility:hidden, so nothing posts those messages and
+// the iframe and sent dedicated preview-control messages when the dock tab
+// hid/showed it. Single realm has no iframe: the host (studio
+// SurfaceKeepAliveLayer) parks the viewport off-screen + visibility:hidden, so
 // the render loop kept running while hidden. This observer restores the pause by
 // watching the viewport's OWN container directly — no cross-realm message.
 //

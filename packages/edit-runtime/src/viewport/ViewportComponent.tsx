@@ -60,7 +60,7 @@ import {
   installFpsReport,
   installConsoleBridge,
   installNetworkBridge,
-  installPreviewControls,
+  installAssetCatalogRefresh,
   installVisibilityPause,
   installErrorOverlay,
   paintDiagnosticMessage,
@@ -702,7 +702,7 @@ async function bootViewport(
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).
   registerTeardown(installViewportDropZone(container));
   registerTeardown(installVisibilityPause(container, editorApp));
-  registerTeardown(installPreviewControls(editorApp));
+  registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');
 
