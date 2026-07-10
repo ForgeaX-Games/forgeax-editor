@@ -12,7 +12,6 @@ import { useState, useEffect } from 'react';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
 import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
-import { ViewportClipScrubber } from './ViewportClipScrubber';
 import { GameOverlay } from './GameOverlay';
 
 interface ViewportChromeProps {
@@ -46,7 +45,6 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onFullscr
     <>
       <ViewportBar onPlay={onPlay} onStop={onStop} onToggleDisplay={onToggleDisplay} onFullscreen={onFullscreen} />
       <ViewportHints />
-      <ViewportClipScrubber />
     </>
   );
 }

@@ -385,23 +385,6 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
   white-space: nowrap;
 }
 
-/* ViewportClipScrubber — animation playhead, bottom-center of the scene viewport */
-.vp-clip {
-  /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
-  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
-  display: flex; align-items: center; gap: 4px; padding: 3px 8px;
-  background: rgba(21, 22, 24, 0.85); border-radius: 8px;
-  border: 1px solid var(--line, #2a2d30);
-  backdrop-filter: blur(8px); pointer-events: auto;
-}
-.vp-clip-range { width: 140px; cursor: pointer; accent-color: var(--lime, #d4ff48); }
-.vp-clip-range.vp-clip-speed { width: 72px; }
-.vp-clip-lbl { font-size: 11px; color: var(--fg3, #6b7177); white-space: nowrap; }
-.vp-clip-val {
-  font-size: 11px; color: var(--fg3, #6b7177); min-width: 34px; text-align: right;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; white-space: nowrap;
-}
-
 /* SceneSwitcher — level/scene-file picker (multi-scene games) */
 .vp-scene-select {
   background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed);
