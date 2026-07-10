@@ -400,7 +400,7 @@ async function bootViewport(
   const aspect = canvas.width / canvas.height || 1;
   const cameraEntity = worldManager.editorFacade.spawn(
     { component: Transform, data: { pos: [0, 1.5, 9] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
 

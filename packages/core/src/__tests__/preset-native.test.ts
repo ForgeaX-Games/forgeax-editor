@@ -153,9 +153,9 @@ describe('preset — Point Light', () => {
     const pl = s.world.get(eH, PointLight);
     expect(pl.ok).toBe(true);
     if (pl.ok) {
-      expect(pl.value.colorR).toBeCloseTo(1, 5);
-      expect(pl.value.colorG).toBeCloseTo(1, 5);
-      expect(pl.value.colorB).toBeCloseTo(1, 5);
+      expect(pl.value.color[0]).toBeCloseTo(1, 5);
+      expect(pl.value.color[1]).toBeCloseTo(1, 5);
+      expect(pl.value.color[2]).toBeCloseTo(1, 5);
     }
   });
 });
@@ -179,9 +179,9 @@ describe('preset — Spot Light', () => {
     const sl = s.world.get(eH, SpotLight);
     expect(sl.ok).toBe(true);
     if (sl.ok) {
-      expect(sl.value.colorR).toBeCloseTo(1, 5);
-      expect(sl.value.colorG).toBeCloseTo(1, 5);
-      expect(sl.value.colorB).toBeCloseTo(1, 5);
+      expect(sl.value.color[0]).toBeCloseTo(1, 5);
+      expect(sl.value.color[1]).toBeCloseTo(1, 5);
+      expect(sl.value.color[2]).toBeCloseTo(1, 5);
     }
   });
 });
@@ -205,9 +205,9 @@ describe('preset — Directional Light', () => {
     const dl = s.world.get(eH, DirectionalLight);
     expect(dl.ok).toBe(true);
     if (dl.ok) {
-      expect(dl.value.colorR).toBeCloseTo(1, 5);
-      expect(dl.value.colorG).toBeCloseTo(1, 5);
-      expect(dl.value.colorB).toBeCloseTo(1, 5);
+      expect(dl.value.color[0]).toBeCloseTo(1, 5);
+      expect(dl.value.color[1]).toBeCloseTo(1, 5);
+      expect(dl.value.color[2]).toBeCloseTo(1, 5);
     }
   });
 });

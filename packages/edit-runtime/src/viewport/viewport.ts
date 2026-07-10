@@ -185,12 +185,12 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     });
     // tonemap must stay active so the HDR SkyboxBackground pass draws (this set
     // replaces the Camera component each frame, so tonemap must be re-applied).
-    // clearR/G/B too: on WebKit/WKWebView (the desktop app) the cubemap skybox
+    // clearColor too: on WebKit/WKWebView (the desktop app) the cubemap skybox
     // can't render, so without a clear color the Edit viewport is pure black —
-    // a neutral studio blue reads as sky. perspective() carries clearR/G/B=0, so
-    // it MUST be re-applied here (this set replaces the whole Camera each frame),
+    // a neutral studio blue reads as sky. perspective() carries clearColor=[0,0,0,1],
+    // so it MUST be re-applied here (this set replaces the whole Camera each frame),
     // not just at spawn. On Chromium the cubemap skybox draws over it.
-    editorEngine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearR: 0.42, clearG: 0.55, clearB: 0.78 });
+    editorEngine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] });
     updateGizmo();
     updateParamGizmo();
   }
