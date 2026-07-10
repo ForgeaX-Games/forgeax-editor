@@ -154,6 +154,21 @@ export class EditGateway {
    */
   transientMode = false;
 
+  // ── Scan-phase lock (north-star §8 infrastructure, not an op) ──────────────
+  // During startup asset scan, dispatch() rejects ALL ops so the catalog stays
+  // consistent. The UI shows a blocking overlay. This is NOT an op — it's a
+  // precondition guard (like engine init), and doesn't appear in the ledger.
+  private _scanLocked = false;
+
+  /** Whether the gateway is currently locked for a scan. */
+  get scanLocked(): boolean { return this._scanLocked; }
+
+  /** Lock the gateway: all dispatch() calls will be rejected. */
+  lockForScan(): void { this._scanLocked = true; }
+
+  /** Unlock the gateway: dispatch() resumes normal operation. */
+  unlockAfterScan(): void { this._scanLocked = false; }
+
   // ── activeWorld / play-bookmark (plan-strategy D-3, M1) ──────────────────
   //
   // Single pointer model: _playWorld is null in edit mode, set to a play
@@ -321,6 +336,13 @@ export class EditGateway {
 
   dispatch(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
     const kind = cmd.kind;
+
+    // Scan-lock guard: during startup scan, reject all dispatch until catalog is ready.
+    // This is an infrastructure guard (not an op), matching the north-star §8 principle
+    // that scan is a pre-condition phase before the editor is usable.
+    if (this._scanLocked) {
+      return { ok: false, error: { code: 'scan-in-progress', hint: 'Asset scan is in progress; edits are blocked until catalog is ready.' } };
+    }
 
     // Three-tier routing: the DOMAIN of an op = which applier table registers its
     // kind (plan-strategy §2 D-1, structural, no bypassable label). Unregistered

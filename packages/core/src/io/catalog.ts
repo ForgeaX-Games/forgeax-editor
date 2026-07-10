@@ -425,6 +425,55 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Set Viewport Display',
   },
+  // ── scan pipeline ops (session domain, ledger-only, no undo) ──────────
+  { id: 'assetCatalogRefreshed', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        added: { type: 'array', items: { type: 'string' } },
+        removed: { type: 'array', items: { type: 'string' } },
+        reimported: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['added', 'removed', 'reimported'],
+    },
+    title: 'Asset Catalog Refreshed',
+  },
+  { id: 'assetReimported', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        guid: { type: 'string' },
+        reason: { type: 'string', enum: ['content-changed', 'importer-upgraded', 'ddc-missing'] },
+      },
+      required: ['path', 'guid', 'reason'],
+    },
+    title: 'Asset Reimported',
+  },
+  { id: 'assetOrphanDetected', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { sourcePath: { type: 'string' }, metaPath: { type: 'string' } },
+      required: ['sourcePath', 'metaPath'],
+    },
+    title: 'Asset Orphan Detected',
+  },
+  { id: 'assetValidationFailed', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { diagnostics: { type: 'array' } },
+      required: ['diagnostics'],
+    },
+    title: 'Asset Validation Failed',
+  },
+  { id: 'requestReimport', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { paths: { type: 'array', items: { type: 'string' } } },
+      required: ['paths'],
+    },
+    title: 'Request Reimport',
+  },
 ];
 
 for (const op of builtinOps) {

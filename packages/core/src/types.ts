@@ -92,6 +92,12 @@ export type BuiltinEditorOp =
   | { kind: 'play' }
   | { kind: 'stop' }
   | { kind: 'setDisplay'; display: 'scene' | 'game' }
+  // scan pipeline ops (north-star §6/§8) — SESSION-domain, ledger-only, no undo
+  | { kind: 'assetCatalogRefreshed'; added: string[]; removed: string[]; reimported: string[] }
+  | { kind: 'assetReimported'; path: string; guid: string; reason: 'content-changed' | 'importer-upgraded' | 'ddc-missing' }
+  | { kind: 'assetOrphanDetected'; sourcePath: string; metaPath: string }
+  | { kind: 'assetValidationFailed'; diagnostics: import('./scan/scan-diagnostic').ScanDiagnostic[] }
+  | { kind: 'requestReimport'; paths: string[] }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
@@ -159,7 +165,9 @@ export interface CommandError {
     // gateway.mode === 'play'. play data is a read-only simulation view; editing
     // must not write the (frozen) edit world nor the play world (Edit != Play).
     // kebab-case to match the M1 error-shape convention (stale-entity-handle).
-    | 'edit-rejected-in-play';
+    | 'edit-rejected-in-play'
+    // ── Scan infrastructure codes (startup scan lock) ──
+    | 'scan-in-progress';
   hint: string;
 }
 

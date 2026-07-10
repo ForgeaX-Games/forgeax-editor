@@ -72,6 +72,10 @@
     "signature": "() => readonly OpDescriptor[]"
   },
   {
+    "name": "lockForScan",
+    "signature": "() => void"
+  },
+  {
     "name": "mode",
     "signature": "\"play\" | \"edit\""
   },
@@ -100,6 +104,10 @@
     "signature": "number"
   },
   {
+    "name": "scanLocked",
+    "signature": "boolean"
+  },
+  {
     "name": "static registerBuiltinOp",
     "signature": "(op: Readonly<OpDescriptor>) => void"
   },
@@ -118,6 +126,10 @@
   {
     "name": "undo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "unlockAfterScan",
+    "signature": "() => void"
   },
   {
     "name": "update",

@@ -22,6 +22,108 @@
     "title": "Add Component"
   },
   {
+    "id": "assetCatalogRefreshed",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reimported": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "reimported"
+      ]
+    },
+    "title": "Asset Catalog Refreshed"
+  },
+  {
+    "id": "assetOrphanDetected",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "sourcePath": {
+          "type": "string"
+        },
+        "metaPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "metaPath"
+      ]
+    },
+    "title": "Asset Orphan Detected"
+  },
+  {
+    "id": "assetReimported",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "guid": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "content-changed",
+            "importer-upgraded",
+            "ddc-missing"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "guid",
+        "reason"
+      ]
+    },
+    "title": "Asset Reimported"
+  },
+  {
+    "id": "assetValidationFailed",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "diagnostics"
+      ]
+    },
+    "title": "Asset Validation Failed"
+  },
+  {
     "id": "cbGoBack",
     "domain": "session",
     "source": "builtin",
@@ -267,6 +369,26 @@
     "source": "builtin",
     "argsSchema": null,
     "title": "Request Frame"
+  },
+  {
+    "id": "requestReimport",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "paths"
+      ]
+    },
+    "title": "Request Reimport"
   },
   {
     "id": "requestRename",

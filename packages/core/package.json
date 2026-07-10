@@ -19,6 +19,14 @@
       "types": "./src/shortcut-forwarder.ts",
       "import": "./src/shortcut-forwarder.ts"
     },
+    "./scan": {
+      "types": "./src/scan/index.ts",
+      "import": "./src/scan/index.ts"
+    },
+    "./scan/scan-hmr-bridge": {
+      "types": "./src/scan/scan-hmr-bridge.ts",
+      "import": "./src/scan/scan-hmr-bridge.ts"
+    },
     "./manifest": {
       "types": "./src/manifest.ts",
       "import": "./src/manifest.ts"
