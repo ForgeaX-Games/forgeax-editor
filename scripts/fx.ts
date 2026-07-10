@@ -78,6 +78,17 @@ function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
   if (r.status !== 0) die(`command failed: ${cmd} ${args.join(' ')}`);
 }
 
+/** Run a command synchronously with inherited stdio; return false on failure. */
+function trySh(cmd: string, args: string[], opts: ShOptions = {}): boolean {
+  const r = spawnSync(cmd, args, {
+    stdio: 'inherit',
+    shell: IS_WIN,
+    cwd: opts.cwd ?? ROOT,
+    env: opts.env ?? process.env,
+  });
+  return r.status === 0;
+}
+
 // ── git helpers (update / clean) ─────────────────────────────────────────────
 // Mirrors forgeax-studio's `bun fx update`/`clean`. Pure Node so the standalone
 // editor's cross-platform invariant holds (no bash/lsof/kill dependency).
@@ -309,10 +320,18 @@ function ensureFbxWasm(): void {
     ok('fbx wasm present (skip build): packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
     return;
   }
-  step('fbx wasm missing — building from ufbx (engine-fbx build:wasm, needs emcc) ...');
+
+  step('fbx wasm missing — fetching pre-built release bundle ...');
+  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-fbx', 'fetch-wasm'], { cwd: ENGINE_DIR });
+  if (fetched && existsSync(FBX_WASM_MJS) && existsSync(FBX_WASM_FILE)) {
+    ok('fbx wasm fetched: packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
+    return;
+  }
+
+  warn('pre-built fbx wasm unavailable — falling back to local Emscripten build.');
   requireCmd(
     'emcc',
-    'fbx wasm build needs Emscripten. install: brew install emscripten  (or emsdk: https://emscripten.org/docs/getting_started/downloads.html, then `emsdk activate latest`)',
+    'pre-built fbx wasm fetch failed and local build needs Emscripten. Authenticate GitHub with GH_TOKEN/GITHUB_TOKEN or `gh auth login`; otherwise install: brew install emscripten (or activate emsdk)',
   );
   // build:wasm = fetch-ufbx (idempotent, downloads ufbx.c) + emcc. Invoke via
   // the package script so the emcc flag set stays owned by @forgeax/engine-fbx.
