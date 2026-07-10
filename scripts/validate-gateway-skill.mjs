@@ -48,6 +48,10 @@ const REQUIRED_KEYWORDS = [
   'scope',
   'trace',
   'querySnapshot',
+  // Gateway public collection/duplicate contract and the engine-dist red line.
+  'collectSceneAsset',
+  'duplicateEntity',
+  'engine `dist`',
 ];
 
 // ---------------------------------------------------------------------------

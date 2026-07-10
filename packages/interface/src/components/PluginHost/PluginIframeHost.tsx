@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import type { PluginPort } from '@forgeax/host-sdk';
 import { getLocale, subscribeLocale } from '@/i18n';
 import { requestComposerInsert } from '../../lib/composer-bridge';
 import { removePluginSurfaces, upsertSurface } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { usePanelRenderers } from '../DockShell/panelRenderers';
+import { usePanelRenderers, type PluginPort } from '../DockShell/panelRenderers';
 
 export interface PluginIframeHostProps {
   pluginId: string;

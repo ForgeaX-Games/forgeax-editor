@@ -49,15 +49,26 @@ function leafPanelIds(layout: { grid: { root: unknown } }): string[] {
 }
 
 describe('BUILTIN_WORKBENCHES — declarative layout table', () => {
-  it("'scene' layout mirrors the pre-refactor full editor (many ep:* panels + chat)", () => {
+  it("'scene' fallback stays interface-neutral", () => {
     const ids = leafPanelIds(BUILTIN_WORKBENCHES.scene.layout);
-    expect(ids).toContain('viewport');
-    expect(ids).toContain('ep:hierarchy');
-    expect(ids).toContain('ep:inspector');
-    expect(ids).toContain('ep:history');
-    expect(ids).toContain('chat');
-    // Full editor layout adds more than the AI three-panel default.
-    expect(ids.length).toBeGreaterThan(5);
+    expect(new Set(ids)).toEqual(new Set(['viewport', 'chat']));
+    expect(ids.some((id) => id.startsWith('ep:'))).toBe(false);
+  });
+
+  it("buildDefault('scene') prefers a host-provided editor layout", () => {
+    const { api, captured } = makeFakeApi();
+    const hostLayout = {
+      grid: {
+        width: 320,
+        height: 240,
+        root: { type: 'leaf', data: { views: ['ep:hierarchy'], activeView: 'ep:hierarchy', id: 'g-editor' } },
+      },
+      panels: {
+        'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
+      },
+    } as unknown as import('dockview').SerializedDockview;
+    buildDefault(api, 'scene', () => true, hostLayout);
+    expect(leafPanelIds(captured[0] as { grid: { root: unknown } })).toEqual(['ep:hierarchy']);
   });
 
   it("'ai' layout is exactly [tools, main, chat]", () => {

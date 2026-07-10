@@ -12,13 +12,81 @@
 // This is the same shape as the existing `wb:*` plugin merge: DockShell owns
 // the docking mechanics, the host supplies the panel bodies.
 import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
-// Type-only — erased at build. The runtime factories are INJECTED via
-// PanelRenderers below so interface never statically pulls @forgeax/host-sdk
-// into its module graph (it's a studio-only package; the standalone editor
-// shell has no host-sdk and must still bundle interface). See B in the
-// dependency-inversion refactor.
-import type { createPluginPort, createWindowTransport } from '@forgeax/host-sdk';
+import type { SerializedDockview } from 'dockview';
 import type { DockRegion } from './regions';
+
+// Structural host-SDK boundary. Interface receives these factories from the
+// aggregation host but must neither import nor type-resolve @forgeax/host-sdk:
+// standalone editor intentionally has no such workspace dependency.
+export interface PluginTransport {
+  post(envelope: unknown): void;
+  onMessage(handler: (envelope: unknown) => void): () => void;
+  close(): void;
+}
+
+export interface PluginToolCall {
+  toolId: string;
+  args?: unknown;
+  caller: {
+    kind: 'user' | 'ai' | 'skill' | 'workbench' | 'cli';
+    sessionId?: string;
+    threadId?: string;
+    agentId?: string;
+  };
+}
+
+export type PluginToolResult =
+  | { ok: true; result?: unknown }
+  | { ok: false; error: string; code?: string };
+
+export interface PluginPort {
+  onChat(handler: (event: { text: string; attachments?: string[] }) => void): () => void;
+  onToolCall(handler: (call: PluginToolCall) => Promise<PluginToolResult> | PluginToolResult): () => void;
+  surface: {
+    subscribe(handler: (event: {
+      surfaceId: string;
+      actions: Array<{ id: string; label?: string; args?: unknown; enabled: boolean; hotkey?: string }>;
+      snapshot: unknown;
+    }) => void): () => void;
+  };
+  setTheme(event: { locale?: 'zh' | 'en' | 'ja'; theme?: 'light' | 'dark' }): void;
+  setVisibility(visible: boolean): void;
+  onNavigate(handler: (event: { targetPluginId: string; payload?: Record<string, unknown> }) => void): () => void;
+  close(): void;
+}
+
+export interface CreatePluginPortOptions {
+  pluginId: string;
+  transport: PluginTransport;
+  initial?: {
+    locale?: 'zh' | 'en' | 'ja';
+    theme?: 'light' | 'dark';
+    sessionId?: string;
+    threadId?: string;
+    pane?: 'left' | 'center';
+  };
+  defaultTimeoutMs?: number;
+  onInvalid?: (raw: unknown, reason: string) => void;
+}
+
+// Factories are passed by an application host. Bivariant arguments retain the
+// structural boundary while allowing a host to use narrower protocol-envelope
+// types than interface needs to name.
+type HostFactory<Options, Result> = {
+  call(options: Options): Result;
+}['call'];
+
+export type CreatePluginPort = HostFactory<CreatePluginPortOptions, PluginPort>;
+
+export interface WindowTransportOptions {
+  target: Window;
+  targetOrigin: string;
+  expectedOrigin?: string;
+  expectedSource?: () => Window | null;
+  listenOn?: Window;
+}
+
+export type CreateWindowTransport = (options: WindowTransportOptions) => PluginTransport;
 
 /**
  * A dock panel descriptor. Carries everything the DockRegion needs to know
@@ -120,37 +188,31 @@ export interface PanelRenderers {
     CornerAgentPicker?: ComponentType<{ preferredAgentPluginId?: string }>;
   };
 
-  /** Host-SDK factories for wb:* plugin iframe RPC (studio-only). Injected as
-   *  types-only from interface (no runtime host-sdk import in L1). */
+  /** Host-SDK factories for wb:* plugin iframe RPC (studio-only). The contract
+   *  is structural so interface stays runnable without host-sdk installed. */
   hostSDK?: {
-    createPluginPort?: typeof createPluginPort;
-    createWindowTransport?: typeof createWindowTransport;
+    createPluginPort?: CreatePluginPort;
+    createWindowTransport?: CreateWindowTransport;
   };
 
-  /** Editor sub-panel ids (ep:*). Empty when no editor is wired. Stays at the
-   *  top level because it's a plain data list, not a component slot. */
+  /** Live editor sub-panel ids (ep:*). The host derives this from its editor
+   *  manifest; DockShell uses it to register panel renderers and menu entries.
+   *  Empty means no editor is wired. */
   editorPanelIds: readonly string[];
+
+  /** Optional host-owned layouts for built-in workbenches. Interface owns the
+   *  docking mechanics but must not encode an editor application's panel
+   *  arrangement, so editor hosts inject their Scene layout here. */
+  builtinWorkbenchLayouts?: Readonly<Record<string, SerializedDockview>>;
 
   /** Inline (non-iframe) workbench panels, keyed by bus plugin id. Not a
    *  fixed slot — plugins register themselves here. Stays at top level. */
   workbenchPanels?: Record<string, () => ReactNode>;
 }
 
-// Default editor panel ids + titles. These are plain strings (NOT an import
-// from any editor package) so interface stays self-contained and runnable on
-// its own; studio overrides them with the real SSOT list via injection.
-export const DEFAULT_EDITOR_PANEL_IDS: readonly string[] = [
-  'hierarchy', 'assets', 'inspector', 'history',
-  'capabilities', 'material', 'mesh', 'timeline', 'matgraph', 'launcher',
-  'asset-inspector',
-];
-
-export const DEFAULT_EDITOR_PANEL_TITLES: Record<string, string> = {
-  hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
-  history: 'History', capabilities: 'Capabilities',
-  material: 'Material', mesh: 'Mesh', timeline: 'Timeline', matgraph: 'Mat Graph',
-  launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
-};
+// Interface-alone hosts do not expose editor panels. Editor hosts inject their
+// own manifest through PanelRenderers.editorPanelIds.
+export const DEFAULT_EDITOR_PANEL_IDS: readonly string[] = [];
 
 export const DEFAULT_PANEL_RENDERERS: PanelRenderers = {
   editorPanelIds: DEFAULT_EDITOR_PANEL_IDS,

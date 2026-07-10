@@ -29,9 +29,29 @@ children.push(
   spawnService(
     'bun',
     ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', '15280', '--strictPort'],
-    { cwd: ROOT, env: { ...process.env, FORGEAX_INTERFACE_PORT: '15290' } },
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        FORGEAX_INTERFACE_PORT: '15290',
+        // The page bridge is opt-in so standalone starts the relay and page
+        // together, while CI / bare Vite hosts never attempt a dead websocket.
+        VITE_FORGEAX_BRIDGE: process.env.FORGEAX_BRIDGE === '0' ? '0' : '1',
+      },
+    },
   ),
 );
+
+// DEV-only live gateway bridge relay (:15295). Lets a CLI drive THIS open
+// window in real time (scripts/gateway-live.mjs) instead of a headless
+// playwright instance. Loopback-only; the page bridge (ViewportComponent, DEV
+// build) dials it. Opt out with FORGEAX_BRIDGE=0.
+if (process.env.FORGEAX_BRIDGE !== '0') {
+  console.log('[dev-standalone] starting gateway bridge relay :15295 ...');
+  children.push(
+    spawnService('node', ['scripts/gateway-bridge-server.mjs'], { cwd: ROOT, env: { ...process.env } }),
+  );
+}
 
 console.log('[dev-standalone] starting standalone host :15290 ...');
 // Forward env (not just the default process.env fallback) so an exported

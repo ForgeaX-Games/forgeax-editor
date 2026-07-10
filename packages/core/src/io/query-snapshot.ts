@@ -9,8 +9,9 @@
 //
 // Three-layer value safety (t26, plan-strategy §2 D-5 / RD-7):
 // 1. Scalar (11 types) → native number/bool (existing behavior kept)
-// 2. Managed handle (unique<T>/shared<T>/string) → {kind:'opaque-handle', type, raw}
-//    — never leak live handle references (AC-15)
+// 2. Managed handle (unique<T>/shared<T>/ref/buffer) → {kind:'opaque-handle', type, raw}
+//    — never leak live handle references (AC-15). `string` is the deliberate
+//    exception: it is immutable JSON-safe authored data, resolved through World.
 // 3. array<T,N> TypedArray → snap-copy to plain number[] via Array.from()
 //    — never leak column buffer live references (AC-15)
 // 4. Unsnapnable fields → explicit skip marker in result row (P3 boundary promise)
@@ -35,7 +36,7 @@ import {
   isManagedArrayField,
   isEntityField,
 } from '@forgeax/engine-ecs';
-import type { World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { EntityId } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -94,10 +95,9 @@ function snapFieldValue(
   // Null/undefined → pass through (not a value)
   if (rawValue === null || rawValue === undefined) return rawValue;
 
-  // (1) Managed handle fields (unique<T>/shared<T>/string/buffer) → opaque marker
-  //     The raw value from ManagedColumnReader.get(i) is typically a number (handle
-  //     ID) or a string (for the 'string' managed field). We wrap it in an
-  //     OpaqueHandle to prevent callers from treating it as a live reference.
+  // (1) Managed handle fields (unique<T>/shared<T>/ref/buffer) → opaque marker.
+  //     The raw value from ManagedColumnReader.get(i) is a slot/handle ID. Wrap it
+  //     so callers cannot treat it as a live reference.
   if (isManagedField(fieldType)) {
     return {
       kind: 'opaque-handle',
@@ -227,6 +227,23 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
               if (!fieldType) {
                 // No schema info — return raw value as-is (best effort)
                 fields[fieldName] = rawValue;
+              } else if (fieldType === 'string') {
+                // Query bundles intentionally expose managed string slot IDs, not
+                // payloads. Re-read this one field through the SAME live component
+                // token + World to obtain the immutable authored string without
+                // leaking the slot. This applies to every registered string field,
+                // not only Name.value.
+                const componentToken = resolveComponent(compName);
+                const componentValue = componentToken
+                  ? _world.get(
+                    entityIds[i]! as unknown as EntityHandle,
+                    componentToken,
+                  )
+                  : undefined;
+                const resolved = componentValue?.ok
+                  ? (componentValue.value as Record<string, unknown>)[fieldName]
+                  : '';
+                fields[fieldName] = typeof resolved === 'string' ? resolved : '';
               } else {
                 const snapped = snapFieldValue(fieldType, rawValue);
                 fields[fieldName] = snapped;

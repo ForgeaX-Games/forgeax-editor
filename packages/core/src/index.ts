@@ -55,6 +55,7 @@ export type {
   OpHandle,
   ApplierCtx,
 } from './io/gateway';
+export type { CollectSceneAssetResult } from './io/scene-asset-collect';
 // M3 t16 (plan-strategy §2 D-2 / research F-3): the EngineFacade TYPE is the
 // controlled-write-proxy contract edit-runtime types its view-scaffold signatures
 // against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only export — no
@@ -196,8 +197,6 @@ import './store/folder-selection';
 export {
   loadRawAssets,
   materialSwatch,
-  makeMaterialResolver,
-  makeMeshResolver,
   extractPackDirs,
 } from './assets/assets';
 export type { PackAsset, RawAsset } from './assets/assets';
@@ -332,6 +331,8 @@ export {
   groupSelected,
   ungroupEntity,
   reparentEntity,
+  reparentMany,
+  reparentAt,
 } from './session/ops';
 
 // ── Context menu service ──
@@ -387,3 +388,55 @@ export type { ClipControl, ViewCmd } from './io/clip-control';
 // @forgeax/editor-core (no deep import into store/cb-nav internals — §C4).
 // Dispatch mutations via gateway.dispatch({ kind: 'setCBPath'/'cbGoBack'/'cbGoForward' }).
 export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-nav';
+
+// ── Asset scan pipeline (feat-20260709-startup-asset-scan) ──
+//
+// After review (2026-07-10): scan fs/stat/hash/IO runs in Node side
+// (vite-plugin-pack + platform-io). Core keeps: types, pure functions,
+// progress state, session ops, WS signal consumption.
+//
+// Session appliers are registered at module eval time via scan-ops.ts.
+import './scan/scan-ops';
+export type {
+  ScanState,
+  DirEntry,
+  ScanEntry,
+  ScanEntryStatus,
+  ScanDiagnostic,
+  DiagnosticSeverity,
+  ScanDiff,
+  DirStat,
+  FileStat,
+  ScanProgressState,
+  ScanPhase,
+  ImportFormat,
+  ImporterKey,
+  SubAssetKind,
+} from './scan/index';
+export {
+  createEmptyScanState,
+  fullScanDiff,
+  diffDirs,
+  diffFilesL1,
+  diffFilesL2,
+  computeContentHash,
+  computeContentHashFromBytes,
+  xxh64,
+  IMPORT_FORMATS,
+  getImportFormat,
+  isImportable,
+  getAllExtensions,
+  validateSource,
+  validateSourceQuick,
+  getScanProgress,
+  onScanProgress,
+  updateScanProgress,
+  resetScanProgress,
+  broadcastCatalogRefreshed,
+  broadcastAssetReimported,
+  broadcastAssetOrphanDetected,
+  broadcastAssetValidationFailed,
+  installScanHmrBridge,
+  registerScanDiagnosticsConsumer,
+  registerBrowserImportConsumer,
+} from './scan/index';

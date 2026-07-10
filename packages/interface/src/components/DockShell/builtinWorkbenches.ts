@@ -54,84 +54,28 @@ const AI_DEFAULT_LAYOUT: SerializedDockview = {
   activeGroup: 'g-main',
 };
 
-// Full editor workspace layout: the pre-redesign 'scene' default — hierarchy +
-// viewport + inspector/material/mesh/matgraph + assets + history/timeline/
-// capabilities/info + chat + launcher. The viewport panel carries the 2x2
-// run x display model (▶/■/G). Extracted from the former imperative
-// `buildFullEditorLayout(api, isMember)`.
-//
-// Structure (HORIZONTAL root branch, three columns):
-//   column-left  (240w):  hierarchy [552h] / assets [260h]
-//   column-mid   (620w):  viewport  [612h] / history+timeline+capabilities+info [200h]
-//   column-right (340w):  inspector+material+mesh+matgraph [472h] / chat+launcher [340h]
+// Interface-alone Scene fallback. An editor host supplies the complete Scene
+// arrangement through PanelRenderers.builtinWorkbenchLayouts; this neutral
+// shell deliberately contains no editor-business (`ep:*`) panel ids.
 const SCENE_DEFAULT_LAYOUT: SerializedDockview = {
   grid: {
-    height: 812,
+    height: 800,
     width: 1200,
     orientation: Orientation.HORIZONTAL,
     root: {
       type: 'branch',
-      size: 812,
+      size: 800,
       data: [
-        // Column 1 — Hierarchy + Assets + Inspector-group + Launcher ALL as
-        // tab-siblings in ONE leaf, full-height. Everything the user
-        // NAVIGATES / INSPECTS / CONFIGURES lives here; Chat stays separate
-        // (Col 3) because it's high-frequency conversation.
-        {
-          type: 'leaf',
-          size: 340,
-          data: {
-            views: [
-              'ep:hierarchy', 'ep:assets',
-              'ep:inspector', 'ep:material', 'ep:mesh', 'ep:matgraph',
-              'ep:launcher',
-            ],
-            activeView: 'ep:hierarchy',
-            id: 'g-left-tabs',
-          },
-        },
-        // Column 2 — Viewport (top) + History-group (bottom).
-        {
-          type: 'branch',
-          size: 620,
-          data: [
-            { type: 'leaf', size: 612, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
-            {
-              type: 'leaf',
-              size: 200,
-              data: {
-                views: ['ep:history', 'ep:timeline', 'ep:capabilities', 'info'],
-                activeView: 'ep:history',
-                id: 'g-history',
-              },
-            },
-          ],
-        },
-        // Column 3 — ForgeaX CLI only, full-height.
-        {
-          type: 'leaf',
-          size: 240,
-          data: { views: ['chat'], activeView: 'chat', id: 'g-chat' },
-        },
+        { type: 'leaf', size: 900, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
+        { type: 'leaf', size: 300, data: { views: ['chat'], activeView: 'chat', id: 'g-chat' } },
       ],
     },
   },
   panels: {
-    'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
-    'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
-    'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
-    'ep:timeline': { id: 'ep:timeline', contentComponent: 'ep:timeline', title: 'Timeline' },
-    'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
-    info: { id: 'info', contentComponent: 'info', title: 'Info' },
-    'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
-    'ep:material': { id: 'ep:material', contentComponent: 'ep:material', title: 'Material' },
-    'ep:mesh': { id: 'ep:mesh', contentComponent: 'ep:mesh', title: 'Mesh' },
-    'ep:matgraph': { id: 'ep:matgraph', contentComponent: 'ep:matgraph', title: 'Mat Graph' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
-    'ep:launcher': { id: 'ep:launcher', contentComponent: 'ep:launcher', title: 'Launcher' },
   },
-  activeGroup: 'g-chat',
+  activeGroup: 'g-viewport',
 };
 
 export const BUILTIN_WORKBENCHES: Record<string, BuiltinWorkbenchSpec> = {
@@ -250,9 +194,10 @@ export function buildDefault(
   api: DockviewApi,
   workbenchId: string = 'scene',
   isMember: (id: string) => boolean = ACCEPT_ALL,
+  layoutOverride?: SerializedDockview,
 ): void {
   const spec = BUILTIN_WORKBENCHES[workbenchId] ?? BUILTIN_WORKBENCHES.ai;
-  const filtered = filterLayoutByMembership(spec.layout, isMember);
+  const filtered = filterLayoutByMembership(layoutOverride ?? spec.layout, isMember);
   if (!filtered) return; // no panels survive filter → leave dockview empty
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -42,6 +42,7 @@ export type EngineInterfaceName =
   | 'world.allocSharedRef'
   | 'world.addComponent'
   | 'world.removeComponent'
+  | 'registry.instantiateFlat'
   | 'assetIO.readPackEntry'
   | 'assetIO.writePackEntry'
   | 'assetIO.deletePackEntry'

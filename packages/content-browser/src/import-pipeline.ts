@@ -153,6 +153,7 @@ async function processFbx(file: File, destPath: string): Promise<{ ok: boolean; 
 export async function importSingleFile(
   file: File,
   currentPath: string,
+  opts?: { skipUpload?: boolean },
 ): Promise<ImportFileResult> {
   const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
   const format = getImportFormat(ext);
@@ -162,9 +163,11 @@ export async function importSingleFile(
     ext,
     importer: format?.importer ?? null,
     currentPath,
+    skipUpload: opts?.skipUpload === true,
   });
 
   if (!format) {
+    console.warn(`[import-pipeline] ✗ unsupported format: ${file.name} (ext=${ext})`);
     return { filename: file.name, status: 'error', error: `Unsupported format: ${ext}` };
   }
 
@@ -175,26 +178,29 @@ export async function importSingleFile(
   const guid = generateAssetGuid();
 
   try {
-    const uploaded = await uploadFile(destPath, file);
-    if (!uploaded) {
-      return { filename: file.name, status: 'error', error: 'Upload failed' };
+    // H5 startup import: source already on disk — re-upload only changes mtime
+    // and trips vite-plugin-pack into full-reload mid-import UI.
+    if (!opts?.skipUpload) {
+      const uploaded = await uploadFile(destPath, file);
+      if (!uploaded) {
+        console.warn(`[import-pipeline] ✗ upload failed: ${file.name} → ${destPath}`);
+        return { filename: file.name, status: 'error', error: 'Upload failed' };
+      }
     }
 
     if (format.importer === 'gltf') {
-      // GLB/GLTF: cook the canonical meta (external-asset-package incl. the
-      // `scene` sub-asset + stable GUIDs) on the frontend via the engine SSOT,
-      // then write it. No per-guid cook trigger needed.
       const result = await processGltf(file, destPath);
       if (!result.ok) {
+        console.warn(`[import-pipeline] ✗ glTF cook failed: ${file.name}`, result.error);
         return { filename: file.name, status: 'error', error: result.error ?? 'glTF import failed' };
       }
       return { filename: file.name, status: 'done', guid };
     }
 
     if (format.importer === 'fbx') {
-      // FBX: browser-side ufbx WASM cook → same external-asset-package meta shape.
       const result = await processFbx(file, destPath);
       if (!result.ok) {
+        console.warn(`[import-pipeline] ✗ FBX cook failed: ${file.name}`, result.error);
         return { filename: file.name, status: 'error', error: result.error ?? 'FBX import failed' };
       }
       return { filename: file.name, status: 'done', guid };
@@ -203,6 +209,7 @@ export async function importSingleFile(
     const metaPath = `${destPath}.meta.json`;
     const wrote = await writeMetaSidecar(metaPath, file.name, format, guid);
     if (!wrote) {
+      console.warn(`[import-pipeline] ✗ meta sidecar write failed: ${file.name} → ${metaPath}`);
       return { filename: file.name, status: 'error', error: 'Failed to create .meta.json sidecar' };
     }
 
@@ -215,10 +222,12 @@ export async function importSingleFile(
       error: cookError,
     };
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[import-pipeline] ✗ unexpected error importing ${file.name}:`, err);
     return {
       filename: file.name,
       status: 'error',
-      error: err instanceof Error ? err.message : String(err),
+      error: msg,
     };
   }
 }
@@ -234,11 +243,13 @@ export async function importFiles(
   currentPath: string,
   onProgress?: ImportProgressCallback,
   onReload?: () => void,
+  opts?: { skipUpload?: boolean },
 ): Promise<ImportFileResult[]> {
   logImport('pipeline.importFiles.start', {
     total: files.length,
     names: files.map(f => f.name),
     currentPath,
+    skipUpload: opts?.skipUpload === true,
   });
 
   const importable = files.filter(f => isImportable(f.name));
@@ -267,7 +278,7 @@ export async function importFiles(
     progress.current = file.name;
     onProgress?.(structuredClone(progress));
 
-    const result = await importSingleFile(file, currentPath);
+    const result = await importSingleFile(file, currentPath, opts);
     results.push(result);
     progress.completed++;
     onProgress?.(structuredClone(progress));

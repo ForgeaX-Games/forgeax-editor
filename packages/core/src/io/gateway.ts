@@ -21,6 +21,12 @@ import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCoun
 import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
 import type { CommandOrigin, HistoryStep } from './gateway-history';
 import { makeQueryFn } from './gateway-query';
+import {
+  collectSceneAsset as collectLiveSceneAsset,
+  type CollectSceneAssetResult,
+} from './scene-asset-collect';
+import { entName, entParent } from '../store/entity-state';
+import type { EntityHandle } from '../scene/scene-types';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -154,6 +160,21 @@ export class EditGateway {
    */
   transientMode = false;
 
+  // ── Scan-phase lock (north-star §8 infrastructure, not an op) ──────────────
+  // During startup asset scan, dispatch() rejects ALL ops so the catalog stays
+  // consistent. The UI shows a blocking overlay. This is NOT an op — it's a
+  // precondition guard (like engine init), and doesn't appear in the ledger.
+  private _scanLocked = false;
+
+  /** Whether the gateway is currently locked for a scan. */
+  get scanLocked(): boolean { return this._scanLocked; }
+
+  /** Lock the gateway: all dispatch() calls will be rejected. */
+  lockForScan(): void { this._scanLocked = true; }
+
+  /** Unlock the gateway: dispatch() resumes normal operation. */
+  unlockAfterScan(): void { this._scanLocked = false; }
+
   // ── activeWorld / play-bookmark (plan-strategy D-3, M1) ──────────────────
   //
   // Single pointer model: _playWorld is null in edit mode, set to a play
@@ -212,7 +233,12 @@ export class EditGateway {
   private _getEngineFacade(): EngineFacade {
     const world = this.doc.world;
     if (!this._engineFacade || this._facadeWorld !== world) {
-      this._engineFacade = new EngineFacade(world!);
+      // Pass doc.registry so the facade's instantiateSceneAssetFlat can run
+      // GUID→live-handle resolution (registry.instantiateFlat). registry is
+      // injected by edit-runtime at boot; a rebuild on world swap re-reads the
+      // then-current registry. Read side (worldToPack) uses doc.registry the
+      // same way (disk-io.ts:236).
+      this._engineFacade = new EngineFacade(world!, this.doc.registry);
       this._facadeWorld = world;
     }
     return this._engineFacade;
@@ -317,6 +343,13 @@ export class EditGateway {
   dispatch(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
     const kind = cmd.kind;
 
+    // Scan-lock guard: during startup scan, reject all dispatch until catalog is ready.
+    // This is an infrastructure guard (not an op), matching the north-star §8 principle
+    // that scan is a pre-condition phase before the editor is usable.
+    if (this._scanLocked) {
+      return { ok: false, error: { code: 'scan-in-progress', hint: 'Asset scan is in progress; edits are blocked until catalog is ready.' } };
+    }
+
     // Three-tier routing: the DOMAIN of an op = which applier table registers its
     // kind (plan-strategy §2 D-1, structural, no bypassable label). Unregistered
     // kind → UNKNOWN_OP (Fail Fast; headless play/stop lands here — D-11).
@@ -353,6 +386,31 @@ export class EditGateway {
           },
         };
       }
+      // duplicateEntity is the public convenience operation. Capture its
+      // SceneAsset exactly once before the document applier writes so redo uses
+      // the same GUID-backed POD rather than re-reading a changed source entity.
+      if (kind === 'duplicateEntity') {
+        const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+        if (typeof duplicate.entity !== 'number') {
+          return {
+            ok: false,
+            error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
+          };
+        }
+        if (duplicate._asset === undefined) {
+          const source = duplicate.entity as EntityHandle;
+          const collected = this.collectSceneAsset(source);
+          if (!collected.ok) return collected;
+          duplicate._asset = collected.asset;
+          if (duplicate.parent === undefined) {
+            duplicate.parent = entParent(this.activeWorld, source);
+          }
+          const sourceName = entName(this.activeWorld, source);
+          if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
+          if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
+        }
+      }
+
       // Document ops: executor wraps applier → ctx created → span pushed.
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
@@ -667,6 +725,16 @@ export class EditGateway {
   /** Register a builtin op at catalog build time. */
   static registerBuiltinOp(op: Readonly<OpDescriptor>): void {
     registerBuiltinOp(op);
+  }
+
+  /**
+   * Collect one active-world entity subtree into a material-safe SceneAsset POD.
+   * Read-only: collection never mutates the world, undo stack, or ledger. The
+   * result can be supplied to instantiateSceneAsset for advanced composition;
+   * ordinary copies should dispatch duplicateEntity instead.
+   */
+  collectSceneAsset(entity: EntityHandle): CollectSceneAssetResult {
+    return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
   }
 
   /** Build a query-snapshot function for defineOp plan(). Public entry face is

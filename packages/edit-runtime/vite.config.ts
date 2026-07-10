@@ -34,7 +34,7 @@ const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
   : null;
 // Game slug = basename of the --game dir (the game-backend addresses files by
 // <slug>/<rel>). The dev entry passes it to ViewportComponent as props; null
-// (no --game / embedded studio) -> demo seed path.
+// (no --game / embedded studio) -> empty scene.
 const GAME_SLUG = GAME_DIR_ABS ? basename(GAME_DIR_ABS) : null;
 const SELF_HOST_PACK = GAME_DIR_ABS !== null;
 

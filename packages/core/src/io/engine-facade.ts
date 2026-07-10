@@ -34,6 +34,10 @@ import type {
   ShapeOf,
   World,
 } from '@forgeax/engine-ecs';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { PackError } from '@forgeax/engine-pack/errors';
+import type { AssetError, SceneAsset } from '@forgeax/engine-types';
+import { err } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
@@ -67,6 +71,8 @@ const ENGINE_SIDE_EFFECT_HINTS: Partial<Record<EngineInterfaceName, string>> = {
     'by contract may migrate the entity to a new archetype and mark dependent systems dirty',
   'world.removeComponent':
     'by contract may migrate the entity to a new archetype and mark dependent systems dirty',
+  'registry.instantiateFlat':
+    'by contract may spawn a collected SceneAsset subtree as live world entities, re-acquiring shared asset (material/mesh) handles from their GUIDs',
 };
 
 // M3 t16 (CI-typecheck fix feat-20260707): the facade's write methods forward the
@@ -117,8 +123,16 @@ export class EngineFacade {
   /** The underlying engine world. Read-only access through the facade only. */
   private _world: World;
 
-  constructor(world: World) {
+  /** The engine AssetRegistry, injected at boot alongside the world (doc.registry).
+   *  Needed by instantiateSceneAssetFlat to run GUID→live-handle resolution
+   *  (registry.instantiateFlat). Optional: headless / pre-boot facades (e.g. the
+   *  world-manager editorWorld facade) have no registry and cannot instantiate
+   *  scene assets — the method returns a structured NO_REGISTRY error there. */
+  private _registry: AssetRegistry | undefined;
+
+  constructor(world: World, registry?: AssetRegistry) {
     this._world = world;
+    this._registry = registry;
   }
 
   /** Read a component value from an entity. Does NOT record a leaf — reads
@@ -174,6 +188,36 @@ export class EngineFacade {
     return this._world.allocSharedRef(target, payload, onLastRelease);
   }
 
+  /** Instantiate a collected `SceneAsset` (from `rootsToSceneAsset`) as live
+   *  world entities, preserving authored `ChildOf` (flat — no synthetic
+   *  SceneInstance root). This is the write-gated re-instantiate half of the
+   *  scene-asset round-trip used by the `duplicateEntity` / paste appliers.
+   *
+   *  Why it MUST live here (not in an applier): the sequence touches the raw
+   *  world (`allocSharedRef`) and needs the AssetRegistry to run GUID→live-handle
+   *  resolution (`registry.instantiateFlat` calls `_resolveSceneGuids`). Passing
+   *  a raw SceneAsset to `world.instantiateScene` directly skips that resolution
+   *  and crashes with `SharedRefReleasedError` on the material handles — the
+   *  registry entrypoint is the ONLY path that re-acquires them. Records a
+   *  'registry.instantiateFlat' leaf. Returns the new top-level roots. */
+  instantiateSceneAssetFlat(
+    asset: SceneAsset,
+  ): Result<EntityHandle[], AssetError | PackError | EcsError | { code: 'NO_REGISTRY'; hint: string }> {
+    if (!this._registry) {
+      return err({
+        code: 'NO_REGISTRY' as const,
+        hint: 'this facade has no AssetRegistry (headless / pre-boot world); scene-asset instantiate is unavailable',
+      });
+    }
+    _recordLeaf('world.allocSharedRef');
+    const handle = this._world.allocSharedRef('SceneAsset', asset);
+    _recordLeaf('registry.instantiateFlat');
+    return this._registry.instantiateFlat(
+      handle as Handle<'SceneAsset', 'shared'>,
+      this._world,
+    );
+  }
+
   /** Add a component to an entity. Records 'world.addComponent' leaf. */
   addComponent<S extends ComponentSchema>(
     entity: EntityHandle,
@@ -214,6 +258,6 @@ export class EngineFacade {
  * world.set/spawn/despawn outside this file, and every facade write is still
  * routed through EngineFacade's own methods here.
  */
-export function createEngineFacade(world: World): EngineFacade {
-  return new EngineFacade(world);
+export function createEngineFacade(world: World, registry?: AssetRegistry): EngineFacade {
+  return new EngineFacade(world, registry);
 }

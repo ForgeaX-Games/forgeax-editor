@@ -16,16 +16,20 @@
     "signature": "() => QuerySnapshotFn"
   },
   {
-    "name": "cancel",
-    "signature": "(handle: OpHandle) => DispatchResult"
-  },
-  {
     "name": "canRedo",
     "signature": "() => boolean"
   },
   {
     "name": "canUndo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
+    "name": "collectSceneAsset",
+    "signature": "(entity: EntityHandle) => CollectSceneAssetResult"
   },
   {
     "name": "commit",
@@ -72,6 +76,10 @@
     "signature": "() => readonly OpDescriptor[]"
   },
   {
+    "name": "lockForScan",
+    "signature": "() => void"
+  },
+  {
     "name": "mode",
     "signature": "\"play\" | \"edit\""
   },
@@ -100,6 +108,10 @@
     "signature": "number"
   },
   {
+    "name": "scanLocked",
+    "signature": "boolean"
+  },
+  {
     "name": "static registerBuiltinOp",
     "signature": "(op: Readonly<OpDescriptor>) => void"
   },
@@ -118,6 +130,10 @@
   {
     "name": "undo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "unlockAfterScan",
+    "signature": "() => void"
   },
   {
     "name": "update",

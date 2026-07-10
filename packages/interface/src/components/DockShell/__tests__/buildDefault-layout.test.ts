@@ -52,18 +52,10 @@ describe('BUILTIN_WORKBENCHES layout data integrity', () => {
     });
   }
 
-  it("full editor ('scene') seeds the 2x2 viewport panel + core editor panels", () => {
+  it("'scene' fallback stays neutral; editor hosts inject their own layout", () => {
     const ids = leafPanelIds(BUILTIN_WORKBENCHES.scene.layout);
-    // The 2x2 run x display viewport lives inside the 'scene' workbench.
-    expect(ids).toContain('viewport');
-    expect(ids).toContain('ep:hierarchy');
-    expect(ids).toContain('ep:inspector');
-    expect(ids).toContain('ep:history');
-    expect(ids).toContain('chat');
-    // Regression: 'ep:history' used to reference a nonexistent 'edit' panel
-    // when the pre-2x2 code renamed the central panel. The new data shape
-    // makes this impossible to encode incorrectly (integrity test above),
-    // but keep the sentinel as a cheap sanity assertion.
+    expect(new Set(ids)).toEqual(new Set(['viewport', 'chat']));
+    expect(ids.some((id) => id.startsWith('ep:'))).toBe(false);
     expect(ids).not.toContain('edit');
   });
 
@@ -105,38 +97,50 @@ describe('filterLayoutByMembership', () => {
     expect(filtered!.panels).toHaveProperty('main');
   });
 
-  it("keeps sibling tabs — dropping 'ep:material' preserves ep:inspector/mesh/matgraph", () => {
-    const filtered = filterLayoutByMembership(BUILTIN_WORKBENCHES.scene.layout, (id) => id !== 'ep:material');
+  it('keeps sibling tabs when a host-injected editor view is filtered out', () => {
+    const hostLayout = {
+      grid: {
+        width: 320,
+        height: 240,
+        root: {
+          type: 'leaf',
+          data: {
+            views: ['ep:hierarchy', 'ep:inspector', 'ep:assets'],
+            activeView: 'ep:hierarchy',
+            id: 'g-editor',
+          },
+        },
+      },
+      panels: {
+        'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
+        'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
+        'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
+      },
+    } as unknown as import('dockview').SerializedDockview;
+    const filtered = filterLayoutByMembership(hostLayout, (id) => id !== 'ep:inspector');
     expect(filtered).not.toBeNull();
-    const survivingIds = new Set(leafPanelIds(filtered!));
-    expect(survivingIds.has('ep:material')).toBe(false);
-    expect(survivingIds.has('ep:inspector')).toBe(true);
-    expect(survivingIds.has('ep:mesh')).toBe(true);
-    expect(survivingIds.has('ep:matgraph')).toBe(true);
+    expect(new Set(leafPanelIds(filtered!))).toEqual(new Set(['ep:hierarchy', 'ep:assets']));
   });
 
-  it('falls back activeView when the original active is dropped', () => {
-    // Drop ep:history — the sibling leaf's activeView was 'ep:history'.
-    const filtered = filterLayoutByMembership(BUILTIN_WORKBENCHES.scene.layout, (id) => id !== 'ep:history');
+  it('falls back activeView when the original host-injected active view is dropped', () => {
+    const hostLayout = {
+      grid: {
+        width: 320,
+        height: 240,
+        root: {
+          type: 'leaf',
+          data: { views: ['ep:history', 'ep:capabilities'], activeView: 'ep:history', id: 'g-history' },
+        },
+      },
+      panels: {
+        'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
+        'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
+      },
+    } as unknown as import('dockview').SerializedDockview;
+    const filtered = filterLayoutByMembership(hostLayout, (id) => id !== 'ep:history');
     expect(filtered).not.toBeNull();
-    // Find the leaf that had ep:history as active.
-    let found: { views: string[]; activeView?: string } | null = null;
-    const walk = (n: unknown): void => {
-      if (!n || typeof n !== 'object') return;
-      const node = n as { type?: string; data?: unknown };
-      if (node.type === 'leaf') {
-        const d = node.data as { views: string[]; activeView?: string };
-        if (d.views.includes('ep:timeline')) found = d;
-      } else if (node.type === 'branch') {
-        (node.data as unknown[]).forEach(walk);
-      }
-    };
-    walk(filtered!.grid.root);
-    expect(found).not.toBeNull();
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const leaf = found! as { views: string[]; activeView?: string };
-    expect(leaf.views).not.toContain('ep:history');
-    // activeView should have been swapped to a surviving view.
-    expect(leaf.views).toContain(leaf.activeView!);
+    const leaf = filtered!.grid.root as unknown as { data: { views: string[]; activeView?: string } };
+    expect(leaf.data.views).toEqual(['ep:capabilities']);
+    expect(leaf.data.activeView).toBe('ep:capabilities');
   });
 });

@@ -18,11 +18,9 @@ import { ConsolePanel } from '../MainArea/ConsolePanel';
 import { TelemetryViewer } from '../MainArea/TelemetryViewer';
 import { InfoPanel } from '../StatusBar/InfoPanel';
 import { RecoveryBoundary } from '../ErrorBoundary';
-// Editor panel ids (ep:*) are injected at runtime via PanelRenderers context
-// so interface stays editor-agnostic (no `@forgeax/editor*` import). The
-// DEFAULT_* list here is the neutral fallback for interface-alone; studio
-// overrides it with the editor-shared SSOT through the context provider.
-import { DEFAULT_EDITOR_PANEL_IDS, DEFAULT_EDITOR_PANEL_TITLES, usePanelRenderers } from './panelRenderers';
+// Editor panel bodies resolve through the runtime PanelRenderers context so
+// interface stays editor-agnostic (no `@forgeax/editor*` import).
+import { usePanelRenderers } from './panelRenderers';
 import { DockPanelHost } from './DockPanelHost';
 
 // Agents panel body — injected by studio from `@forgeax/ai-workbench`.
@@ -85,16 +83,6 @@ export const OPTIONAL_PANELS: PanelDef[] = [
   { id: 'info', title: 'Info', group: 'optional', canPopOut: true, render: () => <InfoPanel /> },
 ];
 
-// ── editor panel family (ep:*) ───────────────────────────────────────────────
-// Each panel renders as an in-process React component via the panels
-// registry (single-realm M2). The default id list lives in
-// ./panelRenderers (a plain string list, NOT an editor-package import) so
-// interface is self-contained; studio injects the real editor SSOT through
-// PanelRenderers context. These module-level exports are the interface-alone
-// fallback used by buildDefault.
-export const EDITOR_PANEL_IDS: string[] = [...DEFAULT_EDITOR_PANEL_IDS] as string[];
-export const EDITOR_PANEL_TITLE: Record<string, string> = DEFAULT_EDITOR_PANEL_TITLES;
-
 // ── derived lookup maps (DockShell consumes these; never edit by hand) ────────
 const ALL_PANELS = [...CORE_PANELS, ...OPTIONAL_PANELS];
 
@@ -134,22 +122,28 @@ function tourWrap(tourId: string | undefined, render: () => ReactNode): () => Re
 }
 
 
-/** dockview component map: id → renderer (incl. ep:* editor panels). The
- *  wb:<pluginId> dynamic plugin renderers are merged in by DockShell at runtime.
- *  Editor panel bodies (ep:*) resolve through the panels registry via
- *  DockPanelHost — the same seam used by chat/agents. When no body is
- *  registered (interface-alone / drift ids), DockPanelHost renders the
- *  "Panel not mounted" placeholder. */
-export const PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> = {
-  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, withBoundary(`panel:${p.id}`, tourWrap(p.tourId, p.render))])),
-  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, withBoundary(`ep:${id}`, tourWrap(EP_TOUR_IDS[id], () => <DockPanelHost id={id} />))])),
-};
+/** Static, interface-owned dockview component map. Host-owned editor panels
+ *  are added at runtime by buildEditorPanelComponents(). */
+export const BASE_PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> =
+  Object.fromEntries(ALL_PANELS.map((p) => [
+    p.id,
+    withBoundary(`panel:${p.id}`, tourWrap(p.tourId, p.render)),
+  ]));
 
-/** id → title (incl. ep:* editor panels). */
-export const PANEL_TITLE: Record<string, string> = {
-  ...Object.fromEntries(ALL_PANELS.map((p) => [p.id, p.title])),
-  ...Object.fromEntries(EDITOR_PANEL_IDS.map((id) => [`ep:${id}`, EDITOR_PANEL_TITLE[id]])),
-};
+/** Static titles for interface-owned panels only. */
+export const BASE_PANEL_TITLE: Record<string, string> =
+  Object.fromEntries(ALL_PANELS.map((p) => [p.id, p.title]));
+
+/** Runtime editor panel component map. The host injects the bare ids from its
+ *  editor manifest, so the interface never owns a business panel list. */
+export function buildEditorPanelComponents(
+  editorPanelIds: readonly string[],
+): Record<string, (props: IDockviewPanelProps) => ReactNode> {
+  return Object.fromEntries(editorPanelIds.map((id) => [
+    `ep:${id}`,
+    withBoundary(`ep:${id}`, tourWrap(EP_TOUR_IDS[id], () => <DockPanelHost id={id} />)),
+  ]));
+}
 
 /** Core panel ids offered in the layout menu's main-panels section (excludes 'main' alias). */
 export const CORE_PANEL_IDS = ['tools', 'viewport', 'chat'] as const;

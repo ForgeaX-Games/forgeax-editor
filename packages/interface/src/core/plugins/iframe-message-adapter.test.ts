@@ -51,9 +51,9 @@ describe('iframe-message-adapter', () => {
 
     const seen = mock((_: unknown) => {});
     host.commands.register({ id: 'app.panel.focus', execute: (a) => { seen(a); return 'ok'; } });
-    fireMessage('FORGEAX_FOCUS_PANEL', { panel: 'mesh' });
+    fireMessage('FORGEAX_FOCUS_PANEL', { panel: 'hierarchy' });
     await new Promise((r) => setTimeout(r, 0));
-    expect(seen).toHaveBeenCalledWith({ id: 'ep:mesh' });
+    expect(seen).toHaveBeenCalledWith({ id: 'ep:hierarchy' });
     cleanup();
   });
 

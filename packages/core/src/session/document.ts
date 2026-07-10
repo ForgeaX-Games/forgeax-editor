@@ -28,9 +28,11 @@
 
 import type {
   ApplyResult,
+  CommandError,
   EditorOp,
   EditSession,
 } from '../types';
+import type { SceneAsset } from '@forgeax/engine-types';
 
 import {
   ChildOf,
@@ -57,12 +59,18 @@ export { createEditSession } from './edit-session';
 // ctx-world-negative guard test proves this).
 
 /** Typed engine-write proxy handed to document appliers via `ctx.engine`.
- *  Structurally it IS the EngineFacade instance (cast at the executor / applyCommand
- *  boundary), but typed as the World read/write surface so appliers keep full type
- *  safety on reads WITHOUT ever holding a raw `world` handle (AC-01). Every write
- *  routes through EngineFacade and records its engine interface leaf onto the
- *  active span (AC-09). Reads (`get`) record nothing. */
-export type EngineWriteProxy = Pick<World, 'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent'>;
+ *  Structurally it IS the EngineFacade instance, and is now typed as a `Pick<>`
+ *  of the facade's own method surface (not the raw `World`) so appliers keep full
+ *  type safety on reads WITHOUT ever holding a raw `world` handle (AC-01) — the
+ *  proxy is exactly the facade-method subset appliers may call, and facade-only
+ *  methods (e.g. `instantiateSceneAssetFlat`, which needs the registry) are
+ *  reachable while a raw `world` remains inaccessible. Every write routes through
+ *  EngineFacade and records its engine interface leaf onto the active span
+ *  (AC-09). Reads (`get`) record nothing. */
+export type EngineWriteProxy = Pick<
+  EngineFacade,
+  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat'
+>;
 
 /** Transaction-scoped spawn-placeholder alias (replaces the deleted legacy
  *  id-to-handle map). A spawnEntity op may carry a NEGATIVE placeholder `_id` so a
@@ -430,6 +438,124 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses } };
 }
 
+// ── instantiateSceneAsset applier ─────────────────────────────────────────────
+// Re-instantiate a collected SceneAsset POD (produced OUT of this applier by
+// EditGateway.collectSceneAsset, the one read-side collection seam) as live world
+// entities. This is the ONE document op both "copy an existing entity" paths
+// project onto — duplicateEntity (Ctrl+D) and clipboard
+// paste — so material fidelity (materials round-trip by GUID) and subtree survival
+// come from the engine's own round-trip, not a hand-rolled component copy that
+// dropped the source MeshRenderer (the fixed bug).
+//
+// invariant 7: the raw allocSharedRef + registry.instantiateFlat live inside
+// EngineFacade.instantiateSceneAssetFlat (the sole raw-world file); this applier
+// only calls that facade method + facade set/addComponent — never a raw world.
+
+/**
+ * Apply a prepared public duplicate. Gateway owns the source read and freezes the
+ * collected POD on the command before this document applier runs; this body only
+ * projects that POD onto the established instantiateSceneAsset write path.
+ */
+export function applyDuplicateEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+  if (cmd._asset === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'SCENE_COLLECT_FAILED',
+        hint: 'duplicateEntity requires a Gateway-collected SceneAsset; dispatch through EditGateway',
+      },
+    };
+  }
+  const instantiate: EditorOp = {
+    kind: 'instantiateSceneAsset',
+    asset: cmd._asset,
+    parent: cmd.parent,
+    name: cmd.name,
+    posOffset: cmd.posOffset,
+    label: cmd.label,
+  };
+  const result = applyInstantiateSceneAsset(ctx, instantiate);
+  if (result.ok) {
+    cmd._newRoots = (instantiate as Extract<EditorOp, { kind: 'instantiateSceneAsset' }>)._newRoots;
+  }
+  return result;
+}
+
+export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cmd = _cmd as any;
+  const { engine, alias } = ctx;
+  const asset = cmd.asset as SceneAsset | undefined;
+  if (!asset) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'instantiateSceneAsset requires a collected `asset` (SceneAsset POD)' } };
+
+  const r = engine.instantiateSceneAssetFlat(asset);
+  if (!r.ok) {
+    // instantiateSceneAssetFlat returns AssetError | PackError | EcsError |
+    // {NO_REGISTRY} — all opaque here; surface as a single structured code so the
+    // failure never flows downstream silently (Fail Fast / charter P3).
+    return { ok: false, error: { code: 'INSTANTIATE_FAILED', hint: `scene-asset instantiate failed: ${JSON.stringify(r.error)}` } };
+  }
+  const newRoots = r.value as EntityHandle[];
+  if (newRoots.length === 0) {
+    return { ok: false, error: { code: 'INSTANTIATE_FAILED', hint: 'scene-asset instantiate produced no roots' } };
+  }
+
+  // Retarget the PRIMARY root: parent + name. rootsToSceneAsset strips ChildOf on
+  // roots (they collect parentless), so a parent must be re-attached via ChildOf
+  // addComponent — the same relationship-hook path applyReparent uses so the
+  // Children mirror stays in sync.
+  const primary = newRoots[0]!;
+  if (cmd.parent !== undefined && cmd.parent !== null) {
+    const parentEng = toEntity(alias, cmd.parent);
+    if (engine.get(parentEng, Name).ok) {
+      const pr = engine.addComponent(primary, { component: ChildOf, data: { parent: parentEng } });
+      if (!pr.ok) return cascadeInstantiateFailure(engine, newRoots, 'REPARENT_FAILED', String(pr.error));
+    }
+  }
+  if (typeof cmd.name === 'string') {
+    const nr = engine.set(primary, Name, { value: cmd.name });
+    if (!nr.ok) return cascadeInstantiateFailure(engine, newRoots, 'RENAME_FAILED', String(nr.error));
+  }
+
+  // Positional offset (paste): shift every new root's Transform.pos so a paste
+  // lands beside the source rather than exactly on top of it.
+  if (Array.isArray(cmd.posOffset)) {
+    const [dx, dy, dz] = cmd.posOffset as [number, number, number];
+    for (const root of newRoots) {
+      const tr = engine.get(root, Transform);
+      if (!tr.ok) continue;
+      const cur = ((tr.value as unknown as { pos?: ArrayLike<number> }).pos) ?? [0, 0, 0];
+      engine.set(root, Transform, { pos: [(cur[0] ?? 0) + (dx ?? 0), (cur[1] ?? 0) + (dy ?? 0), (cur[2] ?? 0) + (dz ?? 0)] } as Parameters<typeof engine.set>[2]);
+    }
+  }
+
+  // Expose the concrete new roots for post-dispatch selection (same in-place
+  // rewrite contract as spawnEntity's _id).
+  cmd._newRoots = newRoots;
+
+  // Inverse: destroy every new root. destroyEntity cascades the subtree
+  // (applyDestroyEntity), so one op per root restores the pre-instantiate state.
+  const destroys: EditorOp[] = newRoots.map((e) => ({ kind: 'destroyEntity' as const, entity: e }));
+  const label = typeof cmd.label === 'string' ? cmd.label : 'instantiate';
+  return {
+    ok: true,
+    inverse: destroys.length === 1 ? destroys[0]! : { kind: 'transaction', label: `undo ${label}`, commands: destroys },
+  };
+}
+
+/** Best-effort rollback when a post-instantiate retarget step fails: despawn the
+ *  already-spawned roots so a half-built duplicate never survives (Fail Fast). */
+function cascadeInstantiateFailure(
+  engine: EngineWriteProxy,
+  roots: EntityHandle[],
+  code: CommandError['code'],
+  hint: string,
+): ApplyResult {
+  for (const root of roots) engine.despawn(root);
+  return { ok: false, error: { code, hint } };
+}
+
 // ── applyCommand dispatch ───────────────────────────────────────────────────
 
 /** Dispatch a single document op through the ctx-based appliers. Shared by both
@@ -453,6 +579,10 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       return applyRemoveComponent(ctx, cmd);
     case 'setHidden':
       return applySetHidden(ctx, cmd);
+    case 'instantiateSceneAsset':
+      return applyInstantiateSceneAsset(ctx, cmd);
+    case 'duplicateEntity':
+      return applyDuplicateEntity(ctx, cmd);
     case 'transaction':
       return applyTransaction(ctx, cmd);
     // A non-document kind reaching here means the gateway routed a session/
@@ -470,7 +600,12 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
  *  The alias map is created fresh here so a transaction's forward-references
  *  resolve; it is discarded when this ctx goes out of scope. */
 export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
-  const engine = new EngineFacade(session.world as World) as unknown as EngineWriteProxy;
+  // Pass session.registry so this compat-path facade can also run the scene-asset
+  // round-trip (instantiateSceneAssetFlat needs the registry for GUID→handle
+  // resolution). This path drives undo/redo (gateway.undo/redo → applyCommand),
+  // so an instantiateSceneAsset REDO would fail here without the registry — same
+  // wiring the gateway executor's _getEngineFacade does with doc.registry.
+  const engine = new EngineFacade(session.world as World, session.registry) as unknown as EngineWriteProxy;
   const alias: DocAliasMap = new Map();
   const ctx: DocApplierCtx = {
     engine,

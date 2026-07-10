@@ -145,7 +145,7 @@ function shaderBaseStrip(base: string): PluginOption {
 //   <base>/__forgeax-ddc/<guid>...    -> /__forgeax-ddc/...        (meta pack body)
 // Asset URLs pluginPack emits already carry the base (relativeUrl prefixed at
 // build), so they resolve as-is. Only needed when base !== '/'.
-const PACK_ROUTE_PREFIXES = ['/pack-index.json', '/__import/', '/__forgeax-ddc/'];
+const PACK_ROUTE_PREFIXES = ['/pack-index.json', '/__import/', '/__forgeax-ddc/', '/__pack/'];
 function packBaseStrip(base: string): PluginOption {
   const prefix = base.replace(/\/$/, ''); // '/editor'
   return {
@@ -221,8 +221,8 @@ export interface EngineVitePresetOptions {
    * pluginPack self-hosting the game's asset roots (from package.json
    * forgeax.assets.roots) + shared template roots so Play's loadByGuid + Edit
    * sub-asset previews resolve WITHOUT proxying to play-runtime (:15173).
-   * null (no --game / demo seed) -> no pluginPack; the shader plugin alone
-   * still serves /shaders/manifest.json for the demo scene.
+   * null (no --game / empty scene) -> no pluginPack; the shader plugin alone
+   * still serves /shaders/manifest.json for the empty scene.
    */
   gameDirAbs: string | null;
 }

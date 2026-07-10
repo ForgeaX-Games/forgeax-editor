@@ -53,7 +53,6 @@ import {
   initSceneList,
   initDiskWatch,
   flushPendingSaveBeacon,
-  cancelPendingDiskSave,
   hasPendingDiskSave,
   setPathResolver,
   getAssetSelection,
@@ -64,6 +63,7 @@ import {
   worldEntityHandles,
   resolveGamePath,
 } from '@forgeax/editor-core';
+import { installScanHmrBridge } from '@forgeax/editor-core/scan/scan-hmr-bridge';
 import {
   onVagMessage,
   allowedParentOrigins,
@@ -81,7 +81,7 @@ export type { HostSessionContext, HostSession, PhysicsBackend };
  * The active game a host wants the engine to boot. The host is the single source
  * of truth for "which game" — CLI `--game` (editor standalone), the server's
  * active-slug (studio) — and passes it here EXPLICITLY. `slug` is the scene/game
- * pointer (null / 'default' = no game, the built-in demo seed path); `gameRoot`
+ * pointer (null / 'default' = no game, opens on an empty scene); `gameRoot`
  * is the host's game->disk layout root (editor-core is layout-agnostic and never
  * infers it). Both are plain values, not URL params: pre-single-realm this config
  * was smuggled through `location.search` because the editor ran in an iframe the
@@ -90,7 +90,7 @@ export type { HostSessionContext, HostSession, PhysicsBackend };
  * could drift from the host's real intent).
  */
 export interface HostGameSession {
-  /** Scene/game pointer. null or 'default' = no on-disk game (demo seed). */
+  /** Scene/game pointer. null or 'default' = no on-disk game (empty scene). */
   readonly slug: string | null;
   /** Host game->disk layout root. Required when slug names a real game. */
   readonly gameRoot?: string;
@@ -123,6 +123,12 @@ export async function configureHostSession(session: HostGameSession = { slug: nu
   // Discover the game's multi-scene manifest (forge.json `scenes`) BEFORE any doc
   // load so paths/storage keys resolve to the active scene file (UE level model).
   await initSceneList();
+
+  // G6: install HMR bridge for runtime asset change events.
+  // When vite-plugin-pack detects source file changes at dev time, it emits
+  // custom WebSocket events. The HMR bridge listens and dispatches session ops
+  // so the ledger reflects live asset state changes.
+  installScanHmrBridge();
 }
 
 /**
@@ -164,7 +170,6 @@ const hostSession = createHostSession({
   loadDocFromDisk,
   loadDocFromStorage,
   getLoadedSceneEntities,
-  cancelPendingDiskSave,
   hasPendingDiskSave,
   flushPendingSaveBeacon,
   initDiskWatch,

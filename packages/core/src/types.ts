@@ -13,6 +13,7 @@ export type {
   EditSession,
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
+import type { SceneAsset } from '@forgeax/engine-types';
 import type { EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
 
@@ -44,6 +45,22 @@ export type BuiltinEditorOp =
   | { kind: 'addComponent'; entity: EntityId; component: string; value: unknown }
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
+  // instantiateSceneAsset — re-instantiate a collected SceneAsset POD (from the
+  // engine's rootsToSceneAsset) as live world entities, materials round-tripped
+  // by GUID. This is the ONE document op both "copy an existing entity" callers
+  // project onto: duplicateEntity (Hierarchy Duplicate / Ctrl+D — same parent,
+  // "{name} copy") and clipboard paste (root, positional offset). Routing both
+  // through the engine scene-asset round-trip fixes the material-loss bug where
+  // the old entComponents→spawnComponentData path dropped the source MeshRenderer
+  // (BASELINE_NAMES skip + fallback-suppressed), and preserves the child subtree
+  // the old single-entity duplicate dropped. `asset` is self-contained so redo
+  // replays deterministically (no re-collect). `parent`/`name` retarget the
+  // PRIMARY new root; `posOffset` shifts every new root's Transform.pos.
+  | { kind: 'instantiateSceneAsset'; asset: SceneAsset; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
+  // duplicateEntity — public convenience document op. Gateway collects `_asset`
+  // exactly once from the live source, so redo re-instantiates the same GUID-backed
+  // POD even if the original later changes or disappears.
+  | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
@@ -79,6 +96,12 @@ export type BuiltinEditorOp =
   | { kind: 'play' }
   | { kind: 'stop' }
   | { kind: 'setDisplay'; display: 'scene' | 'game' }
+  // scan pipeline ops (north-star §6/§8) — SESSION-domain, ledger-only, no undo
+  | { kind: 'assetCatalogRefreshed'; added: string[]; removed: string[]; reimported: string[] }
+  | { kind: 'assetReimported'; path: string; guid: string; reason: 'content-changed' | 'importer-upgraded' | 'ddc-missing' }
+  | { kind: 'assetOrphanDetected'; sourcePath: string; metaPath: string }
+  | { kind: 'assetValidationFailed'; diagnostics: import('./scan/scan-diagnostic').ScanDiagnostic[] }
+  | { kind: 'requestReimport'; paths: string[] }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
@@ -124,6 +147,14 @@ export interface CommandError {
     | 'REMOVE_FAILED'
     | 'HIDE_FAILED'
     | 'UNHIDE_FAILED'
+    // instantiateSceneAsset: the engine scene-asset round-trip (collect →
+    // registry.instantiateFlat) or a post-instantiate retarget step failed.
+    | 'INSTANTIATE_FAILED'
+    // Gateway-owned scene-asset collection failures. These are distinct from
+    // INSTANTIATE_FAILED so callers know the source read failed before any write.
+    | 'NO_REGISTRY'
+    | 'WORLD_UNAVAILABLE'
+    | 'SCENE_COLLECT_FAILED'
     | 'NO_NAME_COMPONENT'
     | 'PROTECTED_COMPONENT'
     // ── New gateway-layer codes (plan-strategy §2 D-7) ──
@@ -143,7 +174,9 @@ export interface CommandError {
     // gateway.mode === 'play'. play data is a read-only simulation view; editing
     // must not write the (frozen) edit world nor the play world (Edit != Play).
     // kebab-case to match the M1 error-shape convention (stale-entity-handle).
-    | 'edit-rejected-in-play';
+    | 'edit-rejected-in-play'
+    // ── Scan infrastructure codes (startup scan lock) ──
+    | 'scan-in-progress';
   hint: string;
 }
 

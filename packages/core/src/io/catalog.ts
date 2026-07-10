@@ -201,6 +201,47 @@ const builtinOps: ReadonlyArray<{
     title: 'Set Hidden',
   },
   {
+    id: 'instantiateSceneAsset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        asset: {
+          type: 'object',
+          description:
+            'a collected SceneAsset POD. Obtain it through gateway.collectSceneAsset(entity); materials are GUID strings, so it is time/scene-safe. For ordinary copies dispatch duplicateEntity instead of importing engine internals.',
+        },
+        parent: { type: 'number', nullable: true, description: 'retarget the PRIMARY new root under this parent handle (ChildOf); omit/null keeps it a root.' },
+        name: { type: 'string', description: 'rename the PRIMARY new root (e.g. "{name} copy").' },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos (paste offset).' },
+        label: { type: 'string' },
+      },
+      required: ['asset'],
+    },
+    title: 'Instantiate Scene Asset',
+  },
+  {
+    id: 'duplicateEntity', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: {
+          type: 'number',
+          description: 'source entity handle in the active edit world; Gateway collects its full subtree before writing.',
+        },
+        parent: {
+          type: 'number',
+          nullable: true,
+          description: 'optional parent override for the primary copied root; omit to retain the source parent.',
+        },
+        name: { type: 'string', description: 'optional primary-root name; omit for "{source name} copy".' },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos.' },
+        label: { type: 'string' },
+      },
+      required: ['entity'],
+    },
+    title: 'Duplicate Entity',
+  },
+  {
     id: 'transaction', domain: 'document',
     argsSchema: {
       type: 'object',
@@ -405,6 +446,55 @@ const builtinOps: ReadonlyArray<{
       required: ['display'],
     },
     title: 'Set Viewport Display',
+  },
+  // ── scan pipeline ops (session domain, ledger-only, no undo) ──────────
+  { id: 'assetCatalogRefreshed', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        added: { type: 'array', items: { type: 'string' } },
+        removed: { type: 'array', items: { type: 'string' } },
+        reimported: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['added', 'removed', 'reimported'],
+    },
+    title: 'Asset Catalog Refreshed',
+  },
+  { id: 'assetReimported', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        guid: { type: 'string' },
+        reason: { type: 'string', enum: ['content-changed', 'importer-upgraded', 'ddc-missing'] },
+      },
+      required: ['path', 'guid', 'reason'],
+    },
+    title: 'Asset Reimported',
+  },
+  { id: 'assetOrphanDetected', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { sourcePath: { type: 'string' }, metaPath: { type: 'string' } },
+      required: ['sourcePath', 'metaPath'],
+    },
+    title: 'Asset Orphan Detected',
+  },
+  { id: 'assetValidationFailed', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { diagnostics: { type: 'array' } },
+      required: ['diagnostics'],
+    },
+    title: 'Asset Validation Failed',
+  },
+  { id: 'requestReimport', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { paths: { type: 'array', items: { type: 'string' } } },
+      required: ['paths'],
+    },
+    title: 'Request Reimport',
   },
 ];
 

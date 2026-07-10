@@ -116,6 +116,24 @@ describe('keyboard router — dual-domain Delete (AC-C2)', () => {
   });
 });
 
+describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
+  it('play·game → releases input to editor controls without stopping simulation', () => {
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'game' });
+    registerKeyboardRouterDeps(deps);
+    const esc = findByCombo(buildShortcuts(), 'Esc');
+    expect(esc.run()).toBe(true);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
+  });
+
+  it('outside play·game does not dispatch a viewport transition', () => {
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'scene' });
+    registerKeyboardRouterDeps(deps);
+    const esc = findByCombo(buildShortcuts(), 'Esc');
+    esc.run();
+    expect(deps.calls.dispatch).toEqual([]);
+  });
+});
+
 describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', () => {
   it('edit·scene → toggle to game (dispatch setDisplay game, human)', () => {
     const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'scene' });
@@ -141,8 +159,12 @@ describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', ()
     expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'game' }, 'human']]);
   });
 
-  it('play·game (inputTarget=game) → does NOT intercept (yields G to the game, T0-10)', () => {
-    const deps = mockDeps({ getDisplay: () => 'game', getInputTarget: () => 'game' });
+  it('play·game (inputTarget=game) → does NOT intercept or exit Play (yields G to the game, T0-10)', () => {
+    const deps = mockDeps({
+      getDisplay: () => 'game',
+      getInputTarget: () => 'game',
+      isPlayMode: () => true,
+    });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'G');
     expect(g.run()).toBe(false);

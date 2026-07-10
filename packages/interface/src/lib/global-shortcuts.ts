@@ -13,7 +13,8 @@
  *                 relocated so 1..9 are free for workbench switching)
  *   Ctrl+/        focus chat composer
  *   Ctrl+H        open Settings → Changelog
- *   Esc           close current overlay (Settings → Dashboard → Fullscreen)
+ *   Esc           exit viewport Play game input → editor controls; otherwise
+ *                 close current overlay (Settings → Dashboard → Fullscreen)
  *
  * IME 安全:
  *   - 总是用 Ctrl+Shift 复合,避开浏览器原生 (Ctrl+1/2/3 切 tab · Ctrl+J 下载 · Ctrl+B 收藏栏 · Ctrl+W/T 关/开 tab)
@@ -321,6 +322,13 @@ export function buildShortcuts(): ShortcutDef[] {
       allowInInput: true,
       match: (e) => e.key === 'Escape' && !mod(e) && !e.shiftKey && !e.altKey,
       run: () => {
+        // Escape releases Play's game input to the editor controls without
+        // stopping the simulation: play·game → play·scene. G intentionally stays
+        // game-owned in play·game (routeG), so it cannot trigger this transition.
+        if (routerDeps?.isPlayMode() && routerDeps.getInputTarget() === 'game') {
+          routerDeps.dispatch({ kind: 'setDisplay', display: 'scene' }, 'human');
+          return true;
+        }
         const s = store();
         // Browser fullscreen exits automatically on Esc — but be defensive
         // in case some browser swallows the event before reaching the native

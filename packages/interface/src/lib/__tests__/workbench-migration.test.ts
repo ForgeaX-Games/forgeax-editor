@@ -1,5 +1,5 @@
 /**
- * T7 · Workbench schema migration (v7 → v8 → v9).
+ * T7 · Workbench schema migration (v7 → v8 → v9 → v10).
  *
  * v8 (2026-07-07) introduces project-scoped keys under `forgeax:project:${projId}:*` and
  * rewrites two deprecated ids inside every persisted layout:
@@ -29,7 +29,7 @@ const LEGACY_VERSION_KEY = 'forgeax:ws-layout-version';
 const V8_WB = 'forgeax:project:default:workbenches';
 const V8_LAYOUT_PREFIX = 'forgeax:project:default:workbench-layout:';
 const V8_VERSION_KEY = 'forgeax:workbench-schema-version';
-const CURRENT_VERSION = '9';
+const CURRENT_VERSION = '10';
 
 async function reload() {
   return await import('../workbenches');
@@ -46,7 +46,7 @@ function clearAll(): void {
   } catch { /* noop */ }
 }
 
-describe('T7 workbench v7 → v8 → v9 migration', () => {
+describe('T7 workbench v7 → v8 → v9 → v10 migration', () => {
   let registered = false;
   beforeEach(async () => {
     try { GlobalRegistrator.register(); registered = true; } catch { registered = false; }
@@ -212,11 +212,10 @@ describe('T7 workbench v7 → v8 → v9 migration', () => {
     const sceneEntry = state.list.find((w: { id: string }) => w.id === 'scene');
     expect(sceneEntry.name).toBe('Scene');
 
-    // Layout key renamed.
+    // v9 first renames the key; v10 then intentionally discards the cached
+    // Scene layout so the host can reseed its injected authoritative layout.
     expect(localStorage.getItem(`${V8_LAYOUT_PREFIX}edit`)).toBeNull();
-    const renamed = localStorage.getItem(`${V8_LAYOUT_PREFIX}scene`);
-    expect(renamed).not.toBeNull();
-    expect(JSON.parse(renamed!)).toEqual({ marker: 'edit-layout' });
+    expect(localStorage.getItem(`${V8_LAYOUT_PREFIX}scene`)).toBeNull();
 
     expect(localStorage.getItem(V8_VERSION_KEY)).toBe(CURRENT_VERSION);
   });
@@ -272,8 +271,9 @@ describe('T7 workbench v7 → v8 → v9 migration', () => {
 
     expect(localStorage.getItem('forgeax:project:proj-a:workbench-layout:edit')).toBeNull();
     expect(localStorage.getItem('forgeax:project:proj-b:workbench-layout:edit')).toBeNull();
-    expect(JSON.parse(localStorage.getItem('forgeax:project:proj-a:workbench-layout:scene')!)).toEqual({ m: 'a' });
-    expect(JSON.parse(localStorage.getItem('forgeax:project:proj-b:workbench-layout:scene')!)).toEqual({ m: 'b' });
+    // v10 clears the renamed Scene caches so each host can seed its injected layout.
+    expect(localStorage.getItem('forgeax:project:proj-a:workbench-layout:scene')).toBeNull();
+    expect(localStorage.getItem('forgeax:project:proj-b:workbench-layout:scene')).toBeNull();
   });
 
   // ── carry-overs from the pre-T7 workspace-migration suite ────────────────
@@ -449,6 +449,37 @@ describe('T7 workbench v7 → v8 → v9 migration', () => {
     // is a no-op.
     expect(localStorage.getItem(V8_WB)).toBeNull();
     expect(localStorage.getItem(`${V8_LAYOUT_PREFIX}ai`)).toBeNull();
+  });
+
+  it('v9 → v10 discards cached Scene layouts so the host reseeds them', async () => {
+    localStorage.setItem(V8_VERSION_KEY, '9');
+    localStorage.setItem(`${V8_LAYOUT_PREFIX}scene`, JSON.stringify({
+      panels: {
+        'ep:material': { id: 'ep:material' },
+        viewport: { id: 'viewport' },
+      },
+    }));
+    localStorage.setItem(`${V8_LAYOUT_PREFIX}ai`, JSON.stringify({ marker: 'keep-ai' }));
+
+    const { migrateWorkbenchSchema } = await reload();
+    migrateWorkbenchSchema();
+
+    expect(localStorage.getItem(`${V8_LAYOUT_PREFIX}scene`)).toBeNull();
+    expect(JSON.parse(localStorage.getItem(`${V8_LAYOUT_PREFIX}ai`)!)).toEqual({ marker: 'keep-ai' });
+    expect(localStorage.getItem(V8_VERSION_KEY)).toBe(CURRENT_VERSION);
+  });
+
+  it('treats a built-in unknown ep:* panel as stale against the injected manifest', async () => {
+    const { isLayoutStale } = await reload();
+    const raw = JSON.stringify({
+      panels: {
+        viewport: { id: 'viewport' },
+        'ep:material': { id: 'ep:material' },
+      },
+      grid: { root: { type: 'leaf', data: { views: ['viewport', 'ep:material'] } } },
+    });
+    expect(isLayoutStale('scene', raw, new Set(['hierarchy']))).toBe(true);
+    expect(isLayoutStale('scene', raw, new Set(['hierarchy', 'material']))).toBe(false);
   });
 
   it("legacy workbench-id entry ('workbench') is rewritten to 'ai' by list normalisation", async () => {

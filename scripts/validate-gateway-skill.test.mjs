@@ -123,6 +123,12 @@ testFixture('(a) valid fixture', [
   '',
   'Use `gateway.defineOp({ id, domain, argsSchema, plan })` to register',
   'a new document-domain operation.',
+  '',
+  'Use eval in the AI scope and inspect trace output through gateway.trace.',
+  'querySnapshot results can be read safely.',
+  'Use gateway.collectSceneAsset before an advanced instantiateSceneAsset call.',
+  'Use gateway.dispatch({ kind: "duplicateEntity", entity }, "ai") for ordinary copies.',
+  'Never mix live worlds with an engine `dist` import.',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------

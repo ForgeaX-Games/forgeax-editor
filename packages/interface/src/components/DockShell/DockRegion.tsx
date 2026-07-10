@@ -11,13 +11,12 @@ import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api'
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
 import {
-  PANEL_COMPONENTS as BASE_COMPONENTS,
-  PANEL_TITLE,
+  BASE_PANEL_COMPONENTS,
+  BASE_PANEL_TITLE,
+  buildEditorPanelComponents,
   CORE_PANEL_IDS as PANEL_IDS,
   OPTIONAL_PANEL_IDS as OPTIONAL_IDS,
   SURFACE_PANEL_IDS as SURFACE_PANELS,
-  EDITOR_PANEL_IDS,
-  EDITOR_PANEL_TITLE,
 } from './panelRegistry';
 import { usePanelRenderers, type PanelDescriptor } from './panelRenderers';
 import type { DockRegion as DockRegionId } from './regions';
@@ -72,6 +71,7 @@ export { buildDefault };
 function popPanelToWindow(
   api: DockviewApi,
   id: string,
+  titleFor: (id: string) => string,
   pos?: { x: number; y: number },
   scene?: string,
   onClosed?: () => void,
@@ -83,9 +83,8 @@ function popPanelToWindow(
     const panelId = id.slice(3);
     const sceneParam = scene && scene !== 'default' ? `&scene=${encodeURIComponent(scene)}` : '';
     const url = `/editor/?panel=${encodeURIComponent(panelId)}${sceneParam}`;
-    const title = PANEL_TITLE[id] ?? panelId;
     void wm
-      .openLabeledWindow(`fx-ep-${panelId}`, url, { title, width: 320, height: 560, ...(pos ?? {}) }, onClosed)
+      .openLabeledWindow(`fx-ep-${panelId}`, url, { title: titleFor(id), width: 320, height: 560, ...(pos ?? {}) }, onClosed)
       .then((ok) => { if (ok) api.getPanel(id)?.api.close(); });
     return;
   }
@@ -94,7 +93,7 @@ function popPanelToWindow(
   void wm
     .openSurfaceWindow(
       { kind: 'panel', id },
-      { title: PANEL_TITLE[id] ?? id, width: 480, height: 680, ...(pos ?? {}) },
+      { title: titleFor(id), width: 480, height: 680, ...(pos ?? {}) },
     )
     .then((ok) => { if (ok) api.getPanel(id)?.api.close(); });
 }
@@ -111,7 +110,7 @@ function PanelPopoutAction(props: IDockviewHeaderActionsProps): React.ReactNode 
       type="button"
       className="fx-dock-popout"
       title={t('dockShell.popoutToWindow')}
-      onClick={() => popPanelToWindow(props.containerApi, id)}
+      onClick={() => popPanelToWindow(props.containerApi, id, () => id)}
     >
       ⧉
     </button>
@@ -121,6 +120,7 @@ function PanelPopoutAction(props: IDockviewHeaderActionsProps): React.ReactNode 
 export function DockRegion({ region }: { region: DockRegionId }) {
   const host = useHost();
   const renderers = usePanelRenderers();
+  const editorPanelIds = renderers.editorPanelIds;
   const hideChatPanel = !renderers.panels?.chat;
   // AuxBar's persisted width — applied as inline style below when region is
   // AuxBar. Hook called UNCONDITIONALLY (per rules-of-hooks) even for other
@@ -135,13 +135,16 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const panelLocations = activeWorkbench?.panelLocations ?? {};
   const { moveTo, resetPanelLocations } = useWorkbenchActions();
   const isMember = useCallback((id: string): boolean => {
-    // No descriptor registered → treat the panel as belonging to the DockShell
-    // region (matches the pre-refactor behavior that placed everything there).
+    // ep:* ids are host-owned: a persisted layout may not resurrect a panel
+    // which is absent from this host's injected editor manifest.
+    if (id.startsWith('ep:') && !editorPanelIds.includes(id.slice(3))) return false;
+    // No descriptor registered → treat non-editor panels as belonging to the
+    // DockShell region (matches the pre-refactor behavior).
     const desc = panels?.[id];
     if (!desc) return region === 'DockShell';
     if (!(desc.when?.() ?? true)) return false;
     return resolveRegion(id, desc, panelLocations) === region;
-  }, [panels, panelLocations, region]);
+  }, [editorPanelIds, panels, panelLocations, region]);
   // Mirror isMember into a ref so callbacks registered with [] deps (onReady,
   // subscribeWorkbenchList, reset, openPanel handler) can read the latest predicate
   // without re-binding — descriptor/override changes propagate through the ref.
@@ -164,11 +167,23 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // descriptor titles without re-binding.
   const panelsRef = useRef<Record<string, PanelDescriptor> | undefined>(panels);
   useEffect(() => { panelsRef.current = panels; }, [panels]);
-  const titleFor = useCallback((id: string): string => (
-    panelsRef.current?.[id]?.title
-      ?? PANEL_TITLE[id]
-      ?? (id.startsWith('wb:') || id.startsWith('ep:') ? id.slice(3) : id)
-  ), []);
+  // The injected editor id list is referenced by once-bound callbacks below;
+  // mirror it so workbench switching never uses the initial host snapshot.
+  const editorPanelIdsRef = useRef(editorPanelIds);
+  useEffect(() => { editorPanelIdsRef.current = editorPanelIds; }, [editorPanelIds]);
+  const builtinWorkbenchLayoutsRef = useRef(renderers.builtinWorkbenchLayouts);
+  useEffect(() => {
+    builtinWorkbenchLayoutsRef.current = renderers.builtinWorkbenchLayouts;
+  }, [renderers.builtinWorkbenchLayouts]);
+  const titleFor = useCallback((id: string): string => {
+    if (id.startsWith('ep:')) {
+      const panelId = id.slice(3);
+      return panelsRef.current?.[panelId]?.title ?? panelId;
+    }
+    return panelsRef.current?.[id]?.title
+      ?? BASE_PANEL_TITLE[id]
+      ?? (id.startsWith('wb:') ? id.slice(3) : id);
+  }, []);
   // localStorage layout-key namespacing. DockShell keeps the original key so
   // existing users' saved layouts survive the rename; other regions get an
   // additional `:${region}` suffix. workspaces.ts helpers (load/save/init) are
@@ -230,10 +245,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     return () => { cancelled = true; };
   }, [hideChatPanel]);
 
-  // Dynamic components map: extends the static map with wb:<pluginId> renderers
-  // so each plugin panel renders its own WbPluginDockPanel.
+  // Dynamic components map: interface-owned panels + host-injected editor
+  // panels + wb:* plugin renderers. The editor list is deliberately runtime
+  // data so interface never carries an editor-business registry.
   const components = useMemo(() => ({
-    ...BASE_COMPONENTS,
+    ...BASE_PANEL_COMPONENTS,
+    ...buildEditorPanelComponents(editorPanelIds),
     ...Object.fromEntries(busPlugins.map((p) => [
       `wb:${p.id}`,
       // Region-scoped recovery: a plugin panel crash shows a retry/reload
@@ -244,7 +261,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         </RecoveryBoundary>
       ),
     ])),
-  }), [busPlugins]);
+  }), [busPlugins, editorPanelIds]);
   const preFullscreen = useRef<{ tools: boolean; chat: boolean } | null>(null);
   // Track the workspace id that is currently rendered in the dock so we can
   // save its layout before switching. Lives outside onReady so useEffect cleanup
@@ -308,10 +325,15 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // Rejects it early so we never briefly flash the wrong layout on screen.
     const isValidLayout = (parsed: { panels?: Record<string, unknown> }, wsId: string): boolean => {
       const isCoreWs = wsId === 'scene' || wsId === 'ai';
-      if (!isCoreWs && parsed.panels) {
-        // Custom workspaces must not have ep:* editor panels — those come from the
-        // old buildDefault that used the 'scene' branch for all unknown workspaces.
-        if (Object.keys(parsed.panels).some((k) => k.startsWith('ep:'))) return false;
+      if (parsed.panels) {
+        const panelIds = Object.keys(parsed.panels);
+        // Custom workspaces must not have ep:* editor panels — those come from
+        // the old buildDefault that used the 'scene' branch for unknown ids.
+        if (!isCoreWs && panelIds.some((k) => k.startsWith('ep:'))) return false;
+        // A built-in layout may only restore editor panels declared by this host.
+        if (isCoreWs && panelIds.some((k) => (
+          k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
+        ))) return false;
       }
       if (wsId === 'ai' && !parsed.panels?.['main']) return false;
       return true;
@@ -344,14 +366,19 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         restored = tryRestore(localStorage.getItem(LS_KEY));
       }
     } catch { restored = false; }
-    if (!restored) buildDefault(api, activeId, isMemberRef.current);
+    if (!restored) {
+      buildDefault(
+        api,
+        activeId,
+        isMemberRef.current,
+        builtinWorkbenchLayoutsRef.current?.[activeId],
+      );
+    }
 
-    // Sync panel titles to canonical names (code rename doesn't need a key bump).
-    // Union PANEL_TITLE (static registry, includes ep:*) with descriptor-injected
-    // titles (panels[id].title) so studio-supplied panels get their tab labels
-    // refreshed too.
+    // Refresh interface-owned and host-injected panel titles after restoration.
     const titleIds = new Set([
-      ...Object.keys(PANEL_TITLE),
+      ...Object.keys(BASE_PANEL_TITLE),
+      ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
       ...Object.keys(panelsRef.current ?? {}),
     ]);
     for (const id of titleIds) {
@@ -436,7 +463,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       hiddenByToggleRef.current.clear();
       const syncTitles = (): void => {
         const titleIds = new Set([
-          ...Object.keys(PANEL_TITLE),
+          ...Object.keys(BASE_PANEL_TITLE),
+          ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
           ...Object.keys(panelsRef.current ?? {}),
         ]);
         for (const id of titleIds) {
@@ -449,7 +477,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           // Validate raw JSON before loading — avoids flashing the wrong layout.
           const isCoreWs = newId === 'scene' || newId === 'ai';
           const savedPanels = (saved as { panels?: Record<string, unknown> }).panels ?? {};
-          const hasStaleEpPanels = !isCoreWs && Object.keys(savedPanels).some((k) => k.startsWith('ep:'));
+          const savedPanelIds = Object.keys(savedPanels);
+          const hasStaleEpPanels = !isCoreWs
+            ? savedPanelIds.some((k) => k.startsWith('ep:'))
+            : savedPanelIds.some((k) => (
+              k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
+            ));
           const missingMain = newId === 'ai' && !savedPanels['main'];
           if (hasStaleEpPanels || missingMain) {
             try { localStorage.removeItem(layoutKey(newId)); } catch { /* noop */ }
@@ -465,7 +498,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         } catch { /* fall through */ }
       }
       try { api.clear(); } catch { /* noop */ }
-      buildDefault(api, newId, isMemberRef.current);
+      buildDefault(
+        api,
+        newId,
+        isMemberRef.current,
+        builtinWorkbenchLayoutsRef.current?.[newId],
+      );
       syncTitles();
       // No injected chat surface — re-apply chat closure on workspace switch
       // because buildDefault re-mounts a chat panel for several layouts.
@@ -482,7 +520,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       if (!api) return;
       try {
         api.clear();
-        buildDefault(api, loadWorkbenchList().activeId, isMemberRef.current);
+        const activeId = loadWorkbenchList().activeId;
+        buildDefault(
+          api,
+          activeId,
+          isMemberRef.current,
+          builtinWorkbenchLayoutsRef.current?.[activeId],
+        );
         // No injected chat surface — reset-layout rebuilds defaults that may
         // include a chat panel; close it again for standalone hosts.
         if (hideChatRef.current) {
@@ -530,7 +574,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   useEffect(() => {
     const { activeId } = loadWorkbenchList();
     const hadActiveLayout = !!localStorage.getItem(layoutKey(activeId));
-    void initWorkbenchLayouts().then(() => {
+    void initWorkbenchLayouts(new Set(editorPanelIds)).then(() => {
       if (hadActiveLayout) return; // localStorage already had data — nothing to apply
       const api = apiRef.current;
       if (!api) return;
@@ -542,7 +586,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         closeStrayPanels(api);
       } catch { /* fall through — keep current layout */ }
     });
-  }, [closeStrayPanels]);
+  }, [closeStrayPanels, editorPanelIds, layoutKey]);
 
   // Reopen a panel that was closed (× on its tab) so closing one is never a
   // dead end. Re-added to the right of whatever's there.
@@ -680,7 +724,14 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           const wy = outside
             ? Math.round(e.screenY - 16)
             : Math.round(window.screenY + y - 16);
-          popPanelToWindow(api, id, { x: wx, y: wy }, sceneSlugRef.current, () => reopenRef.current(id));
+          popPanelToWindow(
+            api,
+            id,
+            titleFor,
+            { x: wx, y: wy },
+            sceneSlugRef.current,
+            () => reopenRef.current(id),
+          );
           return;
         }
         // Browser (no Tauri): do nothing — panel stays docked where it was.
@@ -757,12 +808,33 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         // rendering inside the tab strip in a confusing position. Pop-out is
         // still available via drag-to-outside-window (Tauri) or the 布局 menu.
       />
-      <LayoutControl apiRef={apiRef} onReopen={reopen} busPlugins={busPlugins} isMember={isMember} />
+      <LayoutControl
+        apiRef={apiRef}
+        onReopen={reopen}
+        busPlugins={busPlugins}
+        isMember={isMember}
+        editorPanelIds={editorPanelIds}
+        titleFor={titleFor}
+      />
     </div>
   );
 }
 
-function LayoutControl({ apiRef, onReopen, busPlugins, isMember }: { apiRef: React.RefObject<DockviewApi | null>; onReopen: (id: string) => void; busPlugins: BusPluginInfo[]; isMember: (id: string) => boolean }) {
+function LayoutControl({
+  apiRef,
+  onReopen,
+  busPlugins,
+  isMember,
+  editorPanelIds,
+  titleFor,
+}: {
+  apiRef: React.RefObject<DockviewApi | null>;
+  onReopen: (id: string) => void;
+  busPlugins: BusPluginInfo[];
+  isMember: (id: string) => boolean;
+  editorPanelIds: readonly string[];
+  titleFor: (id: string) => string;
+}) {
   const host = useHost();
   const { t } = useTranslation();
   const { resetPanelLocations } = useWorkbenchActions();
@@ -790,12 +862,12 @@ function LayoutControl({ apiRef, onReopen, busPlugins, isMember }: { apiRef: Rea
           </button>
           <div className="fx-dl-sep" />
           <div className="fx-dl-head">{t('dockShell.editorPanels')}</div>
-          {EDITOR_PANEL_IDS.filter((id) => isMember(`ep:${id}`)).map((id) => {
+          {editorPanelIds.filter((id) => isMember(`ep:${id}`)).map((id) => {
             const panelId = `ep:${id}`;
             return (
               <button key={panelId} type="button" className={`fx-dl-item${isOpen(panelId) ? ' on' : ''}`}
                 onClick={() => { if (isOpen(panelId)) apiRef.current?.getPanel(panelId)?.api.close(); else onReopen(panelId); }}>
-                <span className="fx-dl-check">{isOpen(panelId) ? '✓' : '＋'}</span>{EDITOR_PANEL_TITLE[id]}
+                <span className="fx-dl-check">{isOpen(panelId) ? '✓' : '＋'}</span>{titleFor(panelId)}
               </button>
             );
           })}
@@ -803,14 +875,14 @@ function LayoutControl({ apiRef, onReopen, busPlugins, isMember }: { apiRef: Rea
           {PANEL_IDS.filter(isMember).map((id) => (
             <button key={id} type="button" className={`fx-dl-item${isOpen(id) ? ' on' : ''}`}
               onClick={() => { if (isOpen(id)) apiRef.current?.getPanel(id)?.api.close(); else onReopen(id); }}>
-              <span className="fx-dl-check">{isOpen(id) ? '✓' : ''}</span>{PANEL_TITLE[id]}
+              <span className="fx-dl-check">{isOpen(id) ? '✓' : ''}</span>{titleFor(id)}
             </button>
           ))}
           <div className="fx-dl-head">{t('dockShell.morePanels')}</div>
           {OPTIONAL_IDS.filter(isMember).map((id) => (
             <button key={id} type="button" className={`fx-dl-item${isOpen(id) ? ' on' : ''}`}
               onClick={() => { if (isOpen(id)) apiRef.current?.getPanel(id)?.api.close(); else onReopen(id); }}>
-              <span className="fx-dl-check">{isOpen(id) ? '✓' : '＋'}</span>{PANEL_TITLE[id]}
+              <span className="fx-dl-check">{isOpen(id) ? '✓' : '＋'}</span>{titleFor(id)}
             </button>
           ))}
           {busPlugins.length > 0 && (

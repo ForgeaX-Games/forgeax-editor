@@ -1034,22 +1034,6 @@
     "textReference": "Text reference",
     "selectedTextReference": "Selected text reference"
   },
-  "editorPanel": {
-    "label": {
-      "hierarchy": "Hierarchy",
-      "assets": "Assets",
-      "inspector": "Inspector",
-      "history": "History",
-      "capabilities": "Components",
-      "material": "Material",
-      "mesh": "Mesh",
-      "timeline": "Timeline",
-      "matgraph": "Material Graph",
-      "launcher": "Launcher"
-    },
-    "notLoaded": "{{label}} not loaded",
-    "unavailableDesc": "Editor runtime not started or missing engine wasm artifacts. Nested Studio page has been blocked."
-  },
   "shortcuts": {
     "gameFullscreen": "Game fullscreen · hide only Studio's own TopBar / Sidebar / ChatPanel / StatusBar (browser frame stays)",
     "browserFullscreen": "Browser fullscreen (presentation style) · native browser fullscreen API (tab bar / address bar disappear too)",

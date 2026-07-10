@@ -1,6 +1,6 @@
 // viewport/host-session — the DI unit for the editor's APPLICATION SESSION that
 // runs ON TOP of an already-booted world: the physics gate (resolveEditPhysics),
-// the boot-timing tail (initHostSession: seed / scene-load / run-lifecycle /
+// the boot-timing tail (initHostSession: scene-load / run-lifecycle /
 // asset-signal / mesh-stats / preview-skin / disk-watch), and the preview-skin
 // hook.
 //
@@ -26,10 +26,10 @@
 //
 // OOS-1 (zero behavior change): every body here is the verbatim logic previously
 // in host-boot.ts initHostSession / resolveEditPhysics / installPreviewSkinHook /
-// installMeshStatsPublisher / seedDemoScene; the only edits are singleton reads
+// installMeshStatsPublisher; the only edits are singleton reads
 // re-pointed at `deps` and the window/VAG beacon wiring lifted behind
 // deps.installSaveBeaconListeners (so the boot tail is DOM-free and headless).
-// The load order is preserved EXACTLY: loadDoc → seed-when-empty (+ cancel save) →
+// The load order is preserved EXACTLY: loadDoc →
 // broadcastAssetsChanged → run-lifecycle → drag-spawn resolver → mesh-stats →
 // preview-skin → disk-watch + beacon listeners.
 //
@@ -43,13 +43,6 @@
 //     into ViewportComponent + host-boot), with the ▶/■ run-lifecycle seam from
 //     historical feat feat-20260707-editor-world-fork-ssot-level-load-play-activeworld.
 
-// engine #650 (Tier-2 decomposition) moved builtin mesh handles into
-// @forgeax/engine-assets-runtime.
-import {
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
-  HANDLE_CYLINDER,
-} from '@forgeax/engine-assets-runtime';
 import { toShared } from '@forgeax/engine-ecs';
 import { attachBrowserInputBackend, INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
@@ -147,16 +140,14 @@ export interface HostSession {
 /**
  * The single-pointer gateway surface host-session needs — a structural mirror of
  * EditGateway (the same DI shape run-lifecycle's RunGateway uses, plus the boot
- * tail's ledger/subscribe/engineFacade reads). Headless tests supply a fake with
+ * tail's subscribe/engineFacade reads). Headless tests supply a fake with
  * an inert world; production passes the real gateway singleton.
  */
 export interface HostGateway {
   /** The live active world (edit world, or play world during ▶). Read by the
-   *  seed/scene-load emptiness probe + the mesh-stats publisher. */
+   *  scene-load emptiness probe + the mesh-stats publisher. */
   readonly activeWorld: unknown;
-  /** The command ledger — seedDemoScene reads `.at(-1)._id` after each spawn. */
-  readonly ledger: ReadonlyArray<unknown>;
-  /** The single authoritative mutable path (seed spawns + setSceneId). */
+  /** The single authoritative mutable path (scene-load spawns + setSceneId). */
   dispatch(op: unknown): { ok: boolean };
   /** Subscribe to doc changes (mesh-stats republish trigger). */
   subscribe(fn: () => void): () => void;
@@ -192,8 +183,6 @@ export interface HostSessionDeps {
   readonly loadDocFromStorage: () => boolean;
   /** Top-level entity handles of the last-loaded (flat) scene. */
   readonly getLoadedSceneEntities: () => number[];
-  /** Clear the dirty flag WITHOUT writing (bare seed must not auto-persist). */
-  readonly cancelPendingDiskSave: () => void;
   /** True while the in-memory scene has unsaved edits (play-uses-last-saved hint). */
   readonly hasPendingDiskSave: () => boolean;
   /** Flush any pending save immediately (unload beacon + session dispose). */
@@ -202,7 +191,7 @@ export interface HostSessionDeps {
   readonly initDiskWatch: () => () => void;
   /** Signal mounted ContentBrowsers to re-read the now-live asset catalog. */
   readonly broadcastAssetsChanged: () => void;
-  /** Entity handles present in the given world (seed emptiness probe). */
+  /** Entity handles present in the given world (loaded-scene count for boot log). */
   readonly worldEntityHandles: (world: unknown) => EntityHandle[];
   /** The selected entity handle (mesh-stats active-mesh derivation), or null. */
   readonly getSelection: () => EntityHandle | null;
@@ -239,7 +228,6 @@ export function createHostSession(deps: HostSessionDeps): {
     loadDocFromDisk,
     loadDocFromStorage,
     getLoadedSceneEntities,
-    cancelPendingDiskSave,
     hasPendingDiskSave,
     flushPendingSaveBeacon,
     initDiskWatch,
@@ -285,31 +273,9 @@ export function createHostSession(deps: HostSessionDeps): {
     return undefined;
   }
 
-  // ── seed / restore the authored document (was bootEditor :199) ────────────────
-  // A small demo scene so the editor opens with something to edit + render. These
-  // are ordinary commands -> they land in the ledger and are undoable.
-  function seedDemoScene(): void {
-    if (worldEntityHandles(gateway.activeWorld).length > 0) return;
-    // Mirrors the new-game template's scene.json: a lowpoly vignette + a movable
-    // Player. A scene-less game (or fresh workspace) opens on this same starter.
-    gateway.dispatch({ kind: 'spawnEntity', name: 'Level', components: {} });
-    const level = (gateway.ledger.at(-1) as { _id: number })._id;
-    const add = (name: string, components: Record<string, unknown>, source?: { plugin: string; docId: string }) =>
-      gateway.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
-
-    add('Ground', { Transform: { pos: [0, -0.1, 0], scale: [24, 0.2, 24] }, MeshFilter: { assetHandle: HANDLE_CUBE } });
-    add('Sun', { Transform: { pos: [0, 6, 0] }, DirectionalLight: { color: [1, 0.96, 0.88], intensity: 3.2, direction: [-0.4, -1, -0.3], castShadow: true } });
-    add('TreeTrunk', { Transform: { pos: [-4, 0.9, -3], scale: [0.4, 1.8, 0.4] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
-    add('TreeCanopy', { Transform: { pos: [-4, 2.4, -3], scale: [1.4, 1.4, 1.4] }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
-    add('RedBox', { Transform: { pos: [3, 0.5, -2], scale: [1, 1, 1] }, MeshFilter: { assetHandle: HANDLE_CUBE } }, { plugin: 'lowpoly', docId: 'crate-01' });
-    add('BlueBall', { Transform: { pos: [4.5, 0.8, 1.5], scale: [0.8, 0.8, 0.8] }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
-    add('YellowPillar', { Transform: { pos: [2, 0.75, 3.5], scale: [0.6, 1.5, 0.6] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
-    add('Player', { Transform: { pos: [0, 0.55, 0], scale: [0.7, 1.1, 0.7] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
-  }
-
   /**
    * Run the application session tail on an already-booted world (plan-strategy D8).
-   * Ordered exactly as the original bootEditor: authored-scene load (seed fallback)
+   * Ordered exactly as the original bootEditor: authored-scene load
    * -> run-lifecycle -> environment skylight -> asset/resolver preload -> mesh-stats
    * publish -> preview-skin -> cross-window sync -> disk-watch -> flush beacons.
    * Returns the ▶/■ pair so ViewportComponent can wire the ViewportChrome actions.
@@ -329,20 +295,14 @@ export function createHostSession(deps: HostSessionDeps): {
     // ── Load the authored scene (was bootEditor :433) ───────────────────────────
     // After the engine World + AssetRegistry are the renderer's and the pack-index
     // is configured (done by ViewportComponent before this call). Load order:
-    // on-disk authored scene -> localStorage mirror -> demo seed; seed only when
-    // the result is EMPTY. The opened scene is FLAT (loadSceneByGuid ->
+    // on-disk authored scene -> localStorage mirror; a scene-less game simply opens
+    // on an EMPTY world. The opened scene is FLAT (loadSceneByGuid ->
     // reg.instantiateFlat): no synthetic wrapper root. Play/Stop re-instantiate
     // the saved scene into a separate fresh playWorld (run-lifecycle), so the edit
     // world's loaded entities are never used for a ▶ snapshot / ■ restore.
     setBootStage('loadDoc');
     await renderer.ready.catch(() => null);
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-    if (worldEntityHandles(gateway.activeWorld).length === 0) {
-      seedDemoScene();
-      // The bare seed is a viewport convenience for a scene-less game — do NOT
-      // auto-persist it to the game dir. The user's first real edit re-schedules a save.
-      cancelPendingDiskSave();
-    }
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
 
     // single-realm (feat-20260703): the engine AssetRegistry catalog is populated

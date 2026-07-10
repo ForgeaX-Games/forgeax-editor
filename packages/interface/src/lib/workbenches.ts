@@ -58,7 +58,9 @@ export interface Workbench {
 //   (align id with user-visible name; the leftover 'edit' verb is retired).
 //   Rewrites Workbench.id, activeId, baselineOf, and the per-workbench layout
 //   storage key under every project namespace.
-export const CURRENT_WORKBENCH_SCHEMA_VERSION = 9;
+// Version 10: 2026-07-10 — editor panel registration and Scene layout became
+//   host-injected; discard cached layouts so dead ep:* panel ids cannot survive.
+export const CURRENT_WORKBENCH_SCHEMA_VERSION = 10;
 
 // Core workspace IDs — always present, cannot be deleted.
 // 2026-06-30: 'preview'/'play' removed; 'edit' retained as 2x2 viewport workspace.
@@ -258,8 +260,8 @@ function rewritePanelId(layout: unknown, oldId: string, newId: string): void {
 }
 
 /**
- * v7 → v8 → v9 workbench schema migration. Idempotent — the version stamp is
- * written LAST so any thrown error mid-flight causes the next boot to retry.
+ * v7 → v8 → v9 → v10 workbench schema migration. Idempotent — the version
+ * stamp is written LAST so any thrown error mid-flight causes the next boot to retry.
  *
  * v8 (2026-07-07): read legacy global keys (STORAGE_KEYS.workspaces,
  *   wsLayoutPrefix keys, panel-locations), rewrite deprecated ids
@@ -294,6 +296,11 @@ export function migrateWorkbenchSchema(): void {
     // Runs unconditionally when stored < 9 (both after a v7→v8 catch-up and
     // for users who were previously stamped at v8).
     migrateV8toV9();
+
+    // ── v9 → v10 ───────────────────────────────────────────────────────────
+    // Scene's layout ownership moved from interface to the editor host. Evict
+    // cached Scene layouts so the host can reseed its authoritative layout.
+    if (stored < 10) migrateV9toV10();
 
     // Stamp version LAST — if any step above throws, migration re-runs
     // on next boot.
@@ -491,6 +498,25 @@ function migrateV8toV9(): void {
     }
   } catch (e) {
     console.error('[workbench] v8→v9 migration failed:', e);
+  }
+}
+
+// ── v9 → v10 body ───────────────────────────────────────────────────────────
+// The old interface-owned Scene layout can include editor ids which no longer
+// exist. Layout content is now validated against the host manifest at runtime;
+// remove every cached Scene layout proactively so it reseeds immediately.
+function migrateV9toV10(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('forgeax:project:') && key.endsWith(':workbench-layout:scene')) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch (e) {
+    console.error('[workbench] v9→v10 migration failed:', e);
   }
 }
 
@@ -802,14 +828,24 @@ function hasEmptyLeaves(layout: unknown): boolean {
   return walk(root);
 }
 
-function isLayoutStale(id: string, raw: string): boolean {
+export function isLayoutStale(
+  id: string,
+  raw: string,
+  activeEditorPanelIds: ReadonlySet<string>,
+): boolean {
   try {
     const layout = JSON.parse(raw) as { panels?: Record<string, unknown> };
     const required = REQUIRED_PANELS[id];
     if (required?.some((p) => !layout.panels?.[p])) return true;
-    // Custom workspaces with ep:* panels have the old edit-style layout — stale.
-    if (!BUILTIN_WORKBENCH_IDS.has(id) && layout.panels) {
-      if (Object.keys(layout.panels).some((k) => k.startsWith('ep:'))) return true;
+    if (layout.panels) {
+      const panelIds = Object.keys(layout.panels);
+      // Custom workspaces with ep:* panels have the old edit-style layout.
+      if (!BUILTIN_WORKBENCH_IDS.has(id) && panelIds.some((k) => k.startsWith('ep:'))) return true;
+      // Built-in layouts are host-owned. Reject a persisted panel that is no
+      // longer declared by the host rather than reviving an unmounted tab.
+      if (BUILTIN_WORKBENCH_IDS.has(id)) {
+        if (panelIds.some((k) => k.startsWith('ep:') && !activeEditorPanelIds.has(k.slice(3)))) return true;
+      }
     }
     // Empty-leaf corruption from the T5 reactive-add bug (2026-07-07).
     if (hasEmptyLeaves(layout)) return true;
@@ -817,12 +853,14 @@ function isLayoutStale(id: string, raw: string): boolean {
   } catch { return true; }
 }
 
-export async function initWorkbenchLayouts(): Promise<void> {
+export async function initWorkbenchLayouts(
+  activeEditorPanelIds: ReadonlySet<string>,
+): Promise<void> {
   const { list } = loadWorkbenchList();
   await Promise.all(list.map(async ({ id }) => {
     const cacheKey = workbenchLayoutKeyForProject(currentProjectId, id);
     const cached = localStorage.getItem(cacheKey);
-    if (cached && !isLayoutStale(id, cached)) return;
+    if (cached && !isLayoutStale(id, cached, activeEditorPanelIds)) return;
     if (cached) localStorage.removeItem(cacheKey);
     try {
       const res = await fetch(`/api/prefs/workbench-layout/${id}`);
@@ -842,7 +880,7 @@ export async function initWorkbenchLayouts(): Promise<void> {
         // after migrateWorkbenchSchema() wiped it. Skip the save; the next
         // DockShell mount rebuilds from buildDefault().
         const raw = JSON.stringify(layout);
-        if (isLayoutStale(id, raw)) return;
+        if (isLayoutStale(id, raw, activeEditorPanelIds)) return;
         if (!localStorage.getItem(cacheKey)) {
           localStorage.setItem(cacheKey, raw);
         }

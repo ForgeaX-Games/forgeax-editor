@@ -51,28 +51,6 @@
       "configHint": "Writes play-config.json (local launcher state, not committed); read on ▶ Play startup.",
       "saved": "✓ Saved"
     },
-    "matgraph": {
-      "empty": "Select an entity to edit its material graph.",
-      "addNode": "Add {{label}} node",
-      "evalResult": "Graph evaluation result",
-      "outputPin": "Output — click, then click an input",
-      "deleteNode": "Delete node",
-      "pinDisconnect": " — click to disconnect",
-      "pinConnect": " — click to connect",
-      "hint": "Click an output pin → then click an input pin to wire; click a connected input pin to disconnect. Graph changes apply to the Material immediately."
-    },
-    "timeline": {
-      "waitingViewport": "Waiting for the Edit viewport… open the \"Edit\" panel, then select an entity to edit its animation.",
-      "selectEntity": "Select an entity to edit its animation.",
-      "pause": "Pause",
-      "playPreview": "Play preview",
-      "captureKey": "Capture the current Transform as a keyframe at the playhead",
-      "removeKey": "Delete the keyframe at the playhead",
-      "interpMode": "Interpolation mode for new keyframes",
-      "duration": "Duration",
-      "hint": "Move the entity to a frame → press \"● K\" to capture a keyframe; frames are interpolated automatically.",
-      "keyTooltip": "t={{t}}s v={{v}} ({{interp}}) — click to jump to this frame"
-    },
     "assets": {
       "newLevelPrompt": "New level id (lowercase letters/digits/hyphens, e.g. level3; i.e. file name scenes/<id>.pack.json):",
       "newLevelFailed": "Failed to create level: id already exists / disk write failed",

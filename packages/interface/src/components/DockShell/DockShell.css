@@ -1,17 +1,20 @@
 /* DockShell — flush, square, padding-free dock styling (design §0.2.4: 内嵌停靠
-   用平直方角、无 padding/缝隙、彼此贴合、仅 1px 分隔线;圆角只留给浮动窗). We map
-   dockview's theme variables to the studio tokens so it matches the shell skin.
-   The compound selector (.dockview-theme-abyss.fx-dockshell) beats the theme's
-   own variable declarations — otherwise the abyss theme re-declares them at equal
-   specificity and its blue (#007acc) wins in source order. */
-.dockview-theme-abyss.fx-dockshell,
+   用平直方角、无 padding/缝隙、彼此贴合、仅 1px 分隔线;圆角只留给浮动窗). */
 .fx-dockshell {
   flex: 1 1 auto;
   height: 100%;
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
 
+/* Map dockview's theme variables to the studio tokens so it matches the shell
+   skin. Dockview mounts overflow popovers beside .fx-dockshell under .dv-shell,
+   so the shell must receive the same variables as the main dockview element.
+   These compound selectors also beat the abyss theme's own declarations. */
+.fx-dockwrap .dv-shell.dockview-theme-abyss,
+.dockview-theme-abyss.fx-dockshell,
+.fx-dockshell {
   /* ── background / chrome ── */
   --dv-background-color:                             var(--color-background-base, #0d0d0f);
   --dv-group-view-background-color:                  var(--color-background-base, #0d0d0f);

@@ -1,11 +1,7 @@
 // Asset loading for the editor — reads the OPEN game's `.pack.json` files (the
 // asset system: material / texture / mesh assets, keyed by GUID) so the Assets
-// panel can browse + preview them, and so a Material.materialAsset GUID can be
-// resolved to a real engine material handle WITHOUT relying on a configured
-// pack-index (the editor's is empty): we register the material straight from the
-// pack payload's paramValues. Reached through the server's /api/files{,/tree}
+// panel can browse + preview them. Reached through the server's /api/files{,/tree}
 // (same-origin via the interface proxy).
-import { Materials } from '@forgeax/engine-runtime';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
 
@@ -173,12 +169,6 @@ export function extractPackDirs(assets: PackAsset[]): string[] {
   return [...dirs].sort();
 }
 
-/** Minimal slice of the engine World used for asset allocation. The engine
- *  removed AssetRegistry.register; shared assets are now minted via
- *  `world.allocSharedRef(brand, payload)` which returns a u32 column handle
- *  directly (no Result / no .unwrap()). */
-interface WorldLike { allocSharedRef(target: string, payload: unknown): unknown }
-
 /** CSS color for a material asset's base color (for the panel swatch), or null. */
 export function materialSwatch(a: PackAsset): string | null {
   if (a.kind !== 'material') return null;
@@ -189,64 +179,3 @@ export function materialSwatch(a: PackAsset): string | null {
   return `rgb(${u(c[0])}, ${u(c[1])}, ${u(c[2])})`;
 }
 
-/** Mint an engine material handle from a pack material payload. */
-function registerMaterial(world: WorldLike, payload: Record<string, unknown>): unknown {
-  const pv = (payload.paramValues as Record<string, unknown> | undefined) ?? {};
-  const base = Array.isArray(pv.baseColor) ? (pv.baseColor as number[]) : [0.8, 0.8, 0.8, 1];
-  const passes = payload.passes as { shader?: string }[] | undefined;
-  const shader = passes?.[0]?.shader ?? '';
-  const desc = /unlit/i.test(shader)
-    ? Materials.unlit(base as [number, number, number, number])
-    : Materials.standard({
-        baseColor: base as [number, number, number, number],
-        roughness: typeof pv.roughness === 'number' ? pv.roughness : 0.8,
-        metallic: typeof pv.metallic === 'number' ? pv.metallic : 0,
-        ...(Array.isArray(pv.emissive) ? { emissive: pv.emissive as [number, number, number], emissiveIntensity: typeof pv.emissiveIntensity === 'number' ? pv.emissiveIntensity : 1 } : {}),
-      });
-  return world.allocSharedRef('MaterialAsset', desc);
-}
-
-/** Build a sync GUID→material-handle resolver (for instantiateScene). Material
- *  handles are registered on first use + cached. GUIDs absent from the loaded
- *  packs return null → the instantiator falls back to the entity's inline PBR. */
-export function makeMaterialResolver(world: WorldLike, packAssets: PackAsset[]): (guid: string) => unknown | null {
-  const byGuid = new Map(packAssets.filter((a) => a.kind === 'material').map((a) => [a.guid, a]));
-  const cache = new Map<string, unknown>();
-  return (guid: string) => {
-    if (cache.has(guid)) return cache.get(guid)!;
-    const a = byGuid.get(guid);
-    if (!a) return null;
-    const h = registerMaterial(world, a.payload);
-    cache.set(guid, h);
-    return h;
-  };
-}
-
-/** Build a sync GUID→mesh-handle resolver (for instantiateScene's Mesh.meshAsset).
- *  Two sources, in priority order:
- *    1. `preloaded` — handles minted from imported mesh sub-assets that live in
- *       .meta.json/DDC (NOT *.pack.json), loaded async via the runtime asset
- *       registry (loadByGuid → allocSharedRef) and populated by the caller. This
- *       is how a dragged glTF mesh sub-asset renders.
- *    2. `packAssets` — mesh assets present in the game's loaded *.pack.json files.
- *  GUIDs absent from both return null → the instantiator falls back to the
- *  entity's builtin `kind` (placeholder cube). Mirrors makeMaterialResolver so the
- *  instantiator stays synchronous. */
-export function makeMeshResolver(
-  world: WorldLike,
-  packAssets: PackAsset[],
-  preloaded?: ReadonlyMap<string, unknown>,
-): (guid: string) => unknown | null {
-  const byGuid = new Map(packAssets.filter((a) => a.kind === 'mesh').map((a) => [a.guid, a]));
-  const cache = new Map<string, unknown>();
-  return (guid: string) => {
-    const pre = preloaded?.get(guid);
-    if (pre !== undefined) return pre;
-    if (cache.has(guid)) return cache.get(guid)!;
-    const a = byGuid.get(guid);
-    if (!a) return null;
-    const h = world.allocSharedRef('MeshAsset', a.payload);
-    cache.set(guid, h);
-    return h;
-  };
-}
