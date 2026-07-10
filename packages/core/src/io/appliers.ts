@@ -36,6 +36,7 @@ import {
   applyRemoveComponent,
   applySetHidden,
   applyInstantiateSceneAsset,
+  applyDuplicateEntity,
   applyTransaction,
 } from '../session/document';
 import { registerBuiltinOp as catalogRegisterBuiltinOp } from './catalog';
@@ -180,6 +181,7 @@ registerApplier('document', 'reparent', applyReparent as unknown as ApplierFn);
 	registerApplier('document', 'removeComponent', applyRemoveComponent as unknown as ApplierFn);
 	registerApplier('document', 'setHidden', applySetHidden as unknown as ApplierFn);
 	registerApplier('document', 'instantiateSceneAsset', applyInstantiateSceneAsset as unknown as ApplierFn);
+registerApplier('document', 'duplicateEntity', applyDuplicateEntity as unknown as ApplierFn);
 
 // ── transaction applier (M1 t4 → F-1 IoC: ctx-based recursion) ─────────────
 // The transaction applier recurses through `ctx.dispatchSub`, which the caller

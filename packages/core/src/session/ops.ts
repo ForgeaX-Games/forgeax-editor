@@ -12,7 +12,6 @@ import { gateway } from '../store/store';
 import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import type { SceneAsset } from '@forgeax/engine-types';
-import { rootsToSceneAsset } from '@forgeax/engine-runtime';
 import {
   entExists,
   entParent,
@@ -244,26 +243,16 @@ export function ungroupEntity(handle: EntityHandle): void {
 // dropped the source MeshRenderer (invisible duplicate) and flattened the
 // subtree; rootsToSceneAsset BFS-collects the whole subtree with materials.
 function collectSubtree(handle: EntityHandle): SceneAsset | null {
-  const world = gateway.activeWorld;
-  const registry = gateway.doc.registry;
-  if (registry === undefined) return null; // headless / pre-boot: no registry
-  if (!entExists(world, handle)) return null;
-  // rootsToSceneAsset takes the engine World type; activeWorld already IS it.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const r = rootsToSceneAsset(registry as any, world as any, [handle]);
-  if (!r.ok) {
-    // charter P3 / Fail Fast: never let duplicate/copy become a MYSTERIOUS no-op.
-    // A collect failure means a shared asset (material/mesh) on the subtree has no
-    // catalogued GUID for the reverse-lookup — surface it at author time instead of
-    // silently doing nothing (mirrors spawnComponentData's dropped-component warn).
-    console.warn(
-      `[editor] duplicate/copy: scene-asset collect failed for entity ${handle} — ` +
-      `${JSON.stringify(r.error)}. The entity was not duplicated. This usually means a ` +
-      `material/mesh handle on the subtree is not catalogued in the AssetRegistry.`,
-    );
-    return null;
-  }
-  return r.value;
+  const collected = gateway.collectSceneAsset(handle);
+  if (collected.ok) return collected.asset;
+  // UI helpers remain void-returning for compatibility, but collection itself is
+  // now public and structured through gateway.collectSceneAsset(). Keep the
+  // warning so a human duplicate/copy gesture never becomes a mysterious no-op.
+  console.warn(
+    `[editor] duplicate/copy: scene-asset collect failed for entity ${handle} — ` +
+    `${collected.error.code}: ${collected.error.hint}`,
+  );
+  return null;
 }
 
 // Pull a root entity's Transform.pos from a freshly-collected SceneAsset so paste
@@ -355,18 +344,12 @@ export function pasteClipboardAt(wx: number, wz: number): void {
 // entity's materials (the fixed bug: the old entComponents path lost MeshRenderer
 // → invisible copy) AND its child subtree (the old single-entity path dropped it).
 export function duplicateEntity(handle: EntityHandle): void {
-  const world = gateway.activeWorld;
-  if (!entExists(world, handle)) return;
-  const asset = collectSubtree(handle);
-  if (asset === null) return;
-  const cmd: EditorOp = {
-    kind: 'instantiateSceneAsset',
-    asset,
-    parent: entParent(world, handle),
-    name: `${entName(world, handle)} copy`,
-    label: `duplicate ${entName(world, handle)}`,
-  };
-  gateway.dispatch(cmd);
+  const cmd: EditorOp = { kind: 'duplicateEntity', entity: handle };
+  const result = gateway.dispatch(cmd);
+  if (!result.ok) {
+    console.warn(`[editor] duplicate failed for entity ${handle} — ${result.error.code}: ${result.error.hint}`);
+    return;
+  }
   const roots = (cmd as { _newRoots?: number[] })._newRoots;
   if (roots && roots.length > 0) {
     gateway.dispatch({ kind: 'setSelection', id: roots[0] as EntityHandle });

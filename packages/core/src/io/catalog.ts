@@ -208,7 +208,7 @@ const builtinOps: ReadonlyArray<{
         asset: {
           type: 'object',
           description:
-            'a collected SceneAsset POD (from the engine rootsToSceneAsset) — materials are GUID strings, so it is time/scene-safe. Duplicate/paste collect it on the read side; an AI caller collects via the engine round-trip before dispatching.',
+            'a collected SceneAsset POD. Obtain it through gateway.collectSceneAsset(entity); materials are GUID strings, so it is time/scene-safe. For ordinary copies dispatch duplicateEntity instead of importing engine internals.',
         },
         parent: { type: 'number', nullable: true, description: 'retarget the PRIMARY new root under this parent handle (ChildOf); omit/null keeps it a root.' },
         name: { type: 'string', description: 'rename the PRIMARY new root (e.g. "{name} copy").' },
@@ -218,6 +218,28 @@ const builtinOps: ReadonlyArray<{
       required: ['asset'],
     },
     title: 'Instantiate Scene Asset',
+  },
+  {
+    id: 'duplicateEntity', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: {
+          type: 'number',
+          description: 'source entity handle in the active edit world; Gateway collects its full subtree before writing.',
+        },
+        parent: {
+          type: 'number',
+          nullable: true,
+          description: 'optional parent override for the primary copied root; omit to retain the source parent.',
+        },
+        name: { type: 'string', description: 'optional primary-root name; omit for "{source name} copy".' },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos.' },
+        label: { type: 'string' },
+      },
+      required: ['entity'],
+    },
+    title: 'Duplicate Entity',
   },
   {
     id: 'transaction', domain: 'document',

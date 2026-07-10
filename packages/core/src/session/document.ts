@@ -439,10 +439,10 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
 }
 
 // ── instantiateSceneAsset applier ─────────────────────────────────────────────
-// Re-instantiate a collected SceneAsset POD (produced OUT of this applier, in the
-// plan step — collect is a read, so it stays in ops.ts where the registry+world
-// are read) as live world entities. This is the ONE document op both "copy an
-// existing entity" paths project onto — duplicateEntity (Ctrl+D) and clipboard
+// Re-instantiate a collected SceneAsset POD (produced OUT of this applier by
+// EditGateway.collectSceneAsset, the one read-side collection seam) as live world
+// entities. This is the ONE document op both "copy an existing entity" paths
+// project onto — duplicateEntity (Ctrl+D) and clipboard
 // paste — so material fidelity (materials round-trip by GUID) and subtree survival
 // come from the engine's own round-trip, not a hand-rolled component copy that
 // dropped the source MeshRenderer (the fixed bug).
@@ -450,6 +450,37 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
 // invariant 7: the raw allocSharedRef + registry.instantiateFlat live inside
 // EngineFacade.instantiateSceneAssetFlat (the sole raw-world file); this applier
 // only calls that facade method + facade set/addComponent — never a raw world.
+
+/**
+ * Apply a prepared public duplicate. Gateway owns the source read and freezes the
+ * collected POD on the command before this document applier runs; this body only
+ * projects that POD onto the established instantiateSceneAsset write path.
+ */
+export function applyDuplicateEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+  if (cmd._asset === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'SCENE_COLLECT_FAILED',
+        hint: 'duplicateEntity requires a Gateway-collected SceneAsset; dispatch through EditGateway',
+      },
+    };
+  }
+  const instantiate: EditorOp = {
+    kind: 'instantiateSceneAsset',
+    asset: cmd._asset,
+    parent: cmd.parent,
+    name: cmd.name,
+    posOffset: cmd.posOffset,
+    label: cmd.label,
+  };
+  const result = applyInstantiateSceneAsset(ctx, instantiate);
+  if (result.ok) {
+    cmd._newRoots = (instantiate as Extract<EditorOp, { kind: 'instantiateSceneAsset' }>)._newRoots;
+  }
+  return result;
+}
 
 export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -550,6 +581,8 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       return applySetHidden(ctx, cmd);
     case 'instantiateSceneAsset':
       return applyInstantiateSceneAsset(ctx, cmd);
+    case 'duplicateEntity':
+      return applyDuplicateEntity(ctx, cmd);
     case 'transaction':
       return applyTransaction(ctx, cmd);
     // A non-document kind reaching here means the gateway routed a session/

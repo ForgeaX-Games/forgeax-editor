@@ -55,6 +55,7 @@ export type {
   OpHandle,
   ApplierCtx,
 } from './io/gateway';
+export type { CollectSceneAssetResult } from './io/scene-asset-collect';
 // M3 t16 (plan-strategy §2 D-2 / research F-3): the EngineFacade TYPE is the
 // controlled-write-proxy contract edit-runtime types its view-scaffold signatures
 // against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only export — no

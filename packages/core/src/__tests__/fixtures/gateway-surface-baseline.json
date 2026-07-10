@@ -16,16 +16,20 @@
     "signature": "() => QuerySnapshotFn"
   },
   {
-    "name": "cancel",
-    "signature": "(handle: OpHandle) => DispatchResult"
-  },
-  {
     "name": "canRedo",
     "signature": "() => boolean"
   },
   {
     "name": "canUndo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
+    "name": "collectSceneAsset",
+    "signature": "(entity: EntityHandle) => CollectSceneAssetResult"
   },
   {
     "name": "commit",

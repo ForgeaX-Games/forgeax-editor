@@ -452,6 +452,73 @@ async function bootViewport(
       rawScope: { world, renderer, assets: renderer.assets },
     });
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
+
+    // ── live gateway bridge (DEV-only) ────────────────────────────────────
+    // Companion to __forgeaxEval: instead of a headless playwright instance
+    // page.evaluate-ing the channel (a SEPARATE browser sharing only the disk
+    // backend), this dials OUT to the loopback relay (scripts/gateway-bridge-
+    // server.mjs) so a CLI can drive THIS already-open window in real time —
+    // same in-memory world, changes visible instantly, no CDP debug port, no
+    // save-to-disk+refresh round-trip. The page can only dial out, so the relay
+    // is the shared meeting point. DEV-only + loopback + gated behind the same
+    // import.meta.env.DEV as the eval channel: production never opens this.
+    // Opt-in: CI and ordinary `bun run dev` do not start the loopback relay, so
+    // they must never emit browser-level ECONNREFUSED noise. dev-standalone turns
+    // this on explicitly alongside launching the relay.
+    const bridgeEnabled = import.meta.env.VITE_FORGEAX_BRIDGE === '1';
+    if (bridgeEnabled) {
+      const bridgePort = import.meta.env.VITE_FORGEAX_BRIDGE_PORT ?? '15295';
+      let bridgeWs: WebSocket | null = null;
+      let bridgeBackoff = 1000;
+      let bridgeStopped = false;
+      const connectBridge = (): void => {
+        if (bridgeStopped) return;
+        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
+        catch { return; }
+        bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
+        bridgeWs.addEventListener('message', (ev) => {
+          let msg: { type?: string; id?: number; code?: string };
+          try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
+          catch { return; }
+          if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
+          const reply = (payload: unknown): void => {
+            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: msg.id, payload })); }
+            catch { /* socket gone; relay will time the request out */ }
+          };
+          // eval returns {ok, value|error}; value may be a Promise (async IIFE
+          // / _import). Await it, then send a JSON-safe envelope back. Non-
+          // serializable values (opaque engine handles) degrade to a marker so
+          // one bad field never wedges the channel.
+          void (async () => {
+            let res: unknown;
+            try { res = channel.eval(msg.code!); } catch (e) {
+              return reply({ ok: false, error: { code: 'BRIDGE_EVAL_THREW', hint: String((e as Error)?.message ?? e) } });
+            }
+            const r = res as { ok?: boolean; value?: unknown };
+            if (r?.ok && r.value != null && typeof (r.value as { then?: unknown }).then === 'function') {
+              try { r.value = await (r.value as Promise<unknown>); }
+              catch (e) { return reply({ ok: false, error: { code: 'SCRIPT_RUNTIME_ERROR', hint: `async rejected: ${String((e as Error)?.message ?? e)}` } }); }
+            }
+            try { JSON.stringify(res); reply(res); }
+            catch { reply({ ok: true, value: '[unserializable value — check the live window]' }); }
+          })();
+        });
+        const retryBridge = (): void => {
+          bridgeWs = null;
+          if (bridgeStopped) return;
+          setTimeout(connectBridge, bridgeBackoff);
+          bridgeBackoff = Math.min(bridgeBackoff * 2, 15000);
+        };
+        bridgeWs.addEventListener('close', retryBridge);
+        bridgeWs.addEventListener('error', () => { try { bridgeWs?.close(); } catch { /* */ } });
+      };
+      connectBridge();
+      registerTeardown(() => {
+        bridgeStopped = true;
+        const s = bridgeWs; bridgeWs = null;
+        if (s) { try { s.onclose = null; s.close(); } catch { /* */ } }
+      });
+    }
   }
 
   // possess-exit key removed (keyboard-router convergence M4 T4-7 / AC-Cb1): G /

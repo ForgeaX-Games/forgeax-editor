@@ -57,6 +57,10 @@ export type BuiltinEditorOp =
   // replays deterministically (no re-collect). `parent`/`name` retarget the
   // PRIMARY new root; `posOffset` shifts every new root's Transform.pos.
   | { kind: 'instantiateSceneAsset'; asset: SceneAsset; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
+  // duplicateEntity — public convenience document op. Gateway collects `_asset`
+  // exactly once from the live source, so redo re-instantiates the same GUID-backed
+  // POD even if the original later changes or disappears.
+  | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset; /** filled by applier for post-dispatch selection */ _newRoots?: EntityId[] }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
@@ -146,6 +150,11 @@ export interface CommandError {
     // instantiateSceneAsset: the engine scene-asset round-trip (collect →
     // registry.instantiateFlat) or a post-instantiate retarget step failed.
     | 'INSTANTIATE_FAILED'
+    // Gateway-owned scene-asset collection failures. These are distinct from
+    // INSTANTIATE_FAILED so callers know the source read failed before any write.
+    | 'NO_REGISTRY'
+    | 'WORLD_UNAVAILABLE'
+    | 'SCENE_COLLECT_FAILED'
     | 'NO_NAME_COMPONENT'
     | 'PROTECTED_COMPONENT'
     // ── New gateway-layer codes (plan-strategy §2 D-7) ──

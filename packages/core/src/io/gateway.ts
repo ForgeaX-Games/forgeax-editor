@@ -21,6 +21,12 @@ import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCoun
 import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
 import type { CommandOrigin, HistoryStep } from './gateway-history';
 import { makeQueryFn } from './gateway-query';
+import {
+  collectSceneAsset as collectLiveSceneAsset,
+  type CollectSceneAssetResult,
+} from './scene-asset-collect';
+import { entName, entParent } from '../store/entity-state';
+import type { EntityHandle } from '../scene/scene-types';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -380,6 +386,31 @@ export class EditGateway {
           },
         };
       }
+      // duplicateEntity is the public convenience operation. Capture its
+      // SceneAsset exactly once before the document applier writes so redo uses
+      // the same GUID-backed POD rather than re-reading a changed source entity.
+      if (kind === 'duplicateEntity') {
+        const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+        if (typeof duplicate.entity !== 'number') {
+          return {
+            ok: false,
+            error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
+          };
+        }
+        if (duplicate._asset === undefined) {
+          const source = duplicate.entity as EntityHandle;
+          const collected = this.collectSceneAsset(source);
+          if (!collected.ok) return collected;
+          duplicate._asset = collected.asset;
+          if (duplicate.parent === undefined) {
+            duplicate.parent = entParent(this.activeWorld, source);
+          }
+          const sourceName = entName(this.activeWorld, source);
+          if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
+          if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
+        }
+      }
+
       // Document ops: executor wraps applier → ctx created → span pushed.
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
@@ -694,6 +725,16 @@ export class EditGateway {
   /** Register a builtin op at catalog build time. */
   static registerBuiltinOp(op: Readonly<OpDescriptor>): void {
     registerBuiltinOp(op);
+  }
+
+  /**
+   * Collect one active-world entity subtree into a material-safe SceneAsset POD.
+   * Read-only: collection never mutates the world, undo stack, or ledger. The
+   * result can be supplied to instantiateSceneAsset for advanced composition;
+   * ordinary copies should dispatch duplicateEntity instead.
+   */
+  collectSceneAsset(entity: EntityHandle): CollectSceneAssetResult {
+    return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
   }
 
   /** Build a query-snapshot function for defineOp plan(). Public entry face is

@@ -62,6 +62,7 @@ readable `droppedTraces` counter.
 | `gateway.commit(handle)` | `(OpHandle) => DispatchResult` | Finish continuous op: compute from->to inverse, settle per domain, release slot |
 | `gateway.cancel(handle)` | `(OpHandle) => DispatchResult` | Roll back to pre-begin state, no trace, release slot |
 | `gateway.listOps()` | `() => readonly OpDescriptor[]` | Self-introspect all registered ops (builtin + seam-registered + defineOp-composed) |
+| `gateway.collectSceneAsset(entity)` | `(EntityHandle) => {ok:true, asset} \| {ok:false, error}` | Read one live subtree as a GUID-backed SceneAsset POD; no world/ledger mutation |
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
@@ -141,6 +142,32 @@ const sessionOps = ops.filter(o => o.domain === 'session');
 const docOps = ops.filter(o => o.domain === 'document');
 ```
 
+### Duplicate an existing entity (public material-safe path)
+
+```ts
+// First identify the source without guessing interned string handles.
+const found = query({ with: ['Name'] });
+if (!found.ok) throw new Error(found.error.code);
+const ball = found.rows.find((row) => row.Name.value === 'BouncyBall');
+if (!ball) throw new Error('BouncyBall not found');
+
+// One document op: collects source subtree → GUID-backed SceneAsset → instantiate.
+// It appears in listOps() and records AI origin, undo, redo, and trace normally.
+const result = gateway.dispatch({ kind: 'duplicateEntity', entity: ball.entity }, 'ai');
+if (!result.ok) console.error(result.error.code, result.error.hint);
+
+// Advanced composition only: collect the portable POD, then instantiate elsewhere.
+const collected = gateway.collectSceneAsset(ball.entity);
+if (collected.ok) {
+  gateway.dispatch({ kind: 'instantiateSceneAsset', asset: collected.asset }, 'ai');
+}
+```
+
+`duplicateEntity` is preferred for ordinary copies. `collectSceneAsset` is read-only:
+it neither mutates the world nor adds an undo/ledger entry. Both use the live app's
+registry/module graph, preserving material GUID resolution and child hierarchy.
+
+
 > [!NOTE]
 > **`play` / `stop` / `cameraOrbit` / `requestFrame`** are only available after edit-runtime boots and registers
 > the seam (`registerSessionApplier`). In headless (no edit-runtime, e.g. pure core scripts / tests / CI),
@@ -208,10 +235,10 @@ gateway.defineOp({
 > **querySnapshot is now fully open (M5/M4)**. `query({ with: [...] })` accepts ANY registered
 > component name — no more whitelist of just `Transform` + `Entity`. Unknown component names now
 > return a structured error `{ok:false, error:{code:'UNKNOWN_COMPONENT', hint}}` instead of
-> silently ignoring (AC-16). Handle-type fields (`unique<T>` / `shared<T>` / `string`) are
-> marked as `{kind:'opaque-handle', type, raw}` — you cannot read their internals. TypedArray
-> fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
-> column-buffer references.
+> silently ignoring (AC-16). `string` fields resolve to JSON-safe authored strings (for example,
+> `row.Name.value === 'BouncyBall'`). Live-resource fields (`unique<T>` / `shared<T>` / `ref<T>` /
+> buffers) remain `{kind:'opaque-handle', type, raw}`. TypedArray fields (`array<T,N>`) are
+> snap-copied into plain `number[]` — safe, JSON-serializable, no live column-buffer references.
 
 ## eval -- AI Entry Channel (M5, DEV-only)
 
@@ -241,6 +268,14 @@ gateway.dispatch(…) // -> works (gateway is injected)
 query({ with: ['Transform'] })  // -> works (read-only query; descriptor key is `with`)
 await _import('@forgeax/engine-ecs')  // -> works (dynamic-import seam)
 ```
+
+> [!CAUTION]
+> **Never `_import` an engine `dist` or `/@fs/.../engine/...` module to collect from,
+> inspect, or mutate `gateway.activeWorld`.** Such imports may not share the live
+> application's component-token/module graph, yielding incomplete scene assets without a useful
+> error. For entity reads use `query`; for portable scene data use
+> `gateway.collectSceneAsset(entity)`; for mutation use `gateway.dispatch(...)`. `_import` remains
+> for application helpers that do not mix engine tokens with the live world.
 
 **scope②** = raw engine access, dev-only. Locked by default; requires explicit unlock:
 ```ts
