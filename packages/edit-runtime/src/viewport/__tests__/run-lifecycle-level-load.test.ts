@@ -530,3 +530,175 @@ describe('editor input backend never requests pointer lock (two-backend regressi
     expect(viewportComponentSrc).not.toContain("pointerLockAllowed: () => getInputTarget() === 'game'");
   });
 });
+
+// ── uiRoot + registerCleanup (▶ Play controlled UI container / ■ Stop teardown) ──
+// bun test has no DOM here (no jsdom/happy-dom), so the viewport container is a
+// minimal fake element: it records createElement children + supports .remove(),
+// enough to assert the #game-ui-root create-on-play / remove-on-stop lifecycle
+// and the ctx.uiRoot / ctx.registerCleanup contract play-assemble now implements.
+
+/** A fake DOM element tree standing in for the viewport panel container. Only the
+ *  surface play-assemble touches: ownerDocument.createElement, appendChild, and a
+ *  child .remove() that detaches from `children`. */
+function makeFakeViewportContainer() {
+  interface FakeEl {
+    id: string;
+    style: { cssText: string };
+    parentNode: FakeEl | null;
+    remove(): void;
+  }
+  const children: FakeEl[] = [];
+  const container = {
+    children,
+    appendChild(el: FakeEl): FakeEl {
+      children.push(el);
+      el.parentNode = container as unknown as FakeEl;
+      return el;
+    },
+    ownerDocument: {
+      createElement(_tag: string): FakeEl {
+        const el: FakeEl = {
+          id: '',
+          style: { cssText: '' },
+          parentNode: null,
+          remove(): void {
+            const i = children.indexOf(el);
+            if (i >= 0) children.splice(i, 1);
+            el.parentNode = null;
+          },
+        };
+        return el;
+      },
+    },
+  };
+  return container;
+}
+
+/** A bootstrap that captures the ctx it was handed so tests can assert uiRoot and
+ *  drive registerCleanup. `onCtx` runs inside the entry (e.g. to register cleanups). */
+function makeCtxCapturingBootstrap(onCtx?: (ctx: Record<string, unknown>) => void) {
+  let captured: Record<string, unknown> | null = null;
+  const entry = (_world: unknown, ctx?: unknown) => {
+    captured = (ctx ?? {}) as Record<string, unknown>;
+    onCtx?.(captured);
+  };
+  return {
+    entry,
+    get ctx() {
+      return captured;
+    },
+  };
+}
+
+/** Lifecycle whose assemble threads a fake viewportContainer + ctx-capturing
+ *  bootstrap, so uiRoot creation/removal + cleanup flush are observable. */
+function buildUiRootLifecycle(onCtx?: (ctx: Record<string, unknown>) => void) {
+  const fr = makeFakeRenderer();
+  const editorApp = makeFakeEditorApp();
+  const gateway = makeFakeGateway();
+  const boot = makeCtxCapturingBootstrap(onCtx);
+  const container = makeFakeViewportContainer();
+
+  const assemble = async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
+    assemblePlayWorld({
+      renderer: fr.renderer as never,
+      loadDefaultScene: async () => makeSceneAsset(),
+      resolveBootstrap: async () => boot.entry as never,
+      attachInput: () => undefined,
+      newWorld: () => new World() as never,
+      viewportContainer: container as never,
+    });
+
+  const lifecycle = createRunLifecycle({
+    editorApp: editorApp as never,
+    gateway: gateway as never,
+    assemble: assemble as never,
+  });
+
+  return { lifecycle, container, boot };
+}
+
+describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
+  it('creates #game-ui-root inside the viewport container on play, exposed as ctx.uiRoot', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildUiRootLifecycle();
+      await t.lifecycle.playSimulation();
+      expect(t.container.children.length).toBe(1);
+      const el = t.container.children[0]!;
+      expect(el.id).toBe('game-ui-root');
+      // The game received THAT element as ctx.uiRoot (the mount contract).
+      expect(t.boot.ctx?.uiRoot).toBe(el);
+      t.lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('removes #game-ui-root on stop (no UI remnant)', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildUiRootLifecycle();
+      await t.lifecycle.playSimulation();
+      expect(t.container.children.length).toBe(1);
+      t.lifecycle.stopSimulation();
+      expect(t.container.children.length).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('flushes registerCleanup callbacks in REVERSE registration order on stop', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const order: string[] = [];
+      const t = buildUiRootLifecycle((ctx) => {
+        const reg = ctx.registerCleanup as (fn: () => void) => void;
+        reg(() => order.push('a'));
+        reg(() => order.push('b'));
+        reg(() => order.push('c'));
+      });
+      await t.lifecycle.playSimulation();
+      expect(order).toEqual([]); // not flushed while playing
+      t.lifecycle.stopSimulation();
+      expect(order).toEqual(['c', 'b', 'a']); // LIFO
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('a throwing cleanup does not strand later cleanups or block uiRoot removal', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const order: string[] = [];
+      const t = buildUiRootLifecycle((ctx) => {
+        const reg = ctx.registerCleanup as (fn: () => void) => void;
+        reg(() => order.push('first')); // registered first → flushed LAST
+        reg(() => { throw new Error('boom'); }); // middle throws
+        reg(() => order.push('last')); // registered last → flushed FIRST
+      });
+      await t.lifecycle.playSimulation();
+      t.lifecycle.stopSimulation();
+      // both non-throwing cleanups ran despite the middle throw...
+      expect(order).toEqual(['last', 'first']);
+      // ...and the container was still removed (removal is after the flush loop).
+      expect(t.container.children.length).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('play->stop->play leaves zero leaked containers (per-run create+remove balance)', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildUiRootLifecycle();
+      await t.lifecycle.playSimulation();
+      t.lifecycle.stopSimulation();
+      await t.lifecycle.playSimulation();
+      t.lifecycle.stopSimulation();
+      expect(t.container.children.length).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});

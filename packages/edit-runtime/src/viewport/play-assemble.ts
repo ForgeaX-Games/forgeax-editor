@@ -109,9 +109,14 @@ export interface PlayAssembly {
   readonly playApp: PlayApp;
   /** The fresh play World (drawn by the shared renderer while play is active). */
   readonly playWorld: unknown;
-  /** Detach the play-side backends the host attached (input listeners etc.).
-   *  Called on ■ Stop AFTER playApp.stop() so the shared canvas is released back
-   *  to the edit session. No-op when nothing was attached (headless). */
+  /** Tear down this play run's host-owned side effects. Called on ■ Stop AFTER
+   *  playApp.stop() (run-lifecycle). Three things, in order:
+   *   1. detach the play-side input backends (release the shared canvas), then
+   *   2. flush the game's `ctx.registerCleanup` callbacks in REVERSE registration
+   *      order (removeEventListener / AudioContext.close / clearTimeout …), then
+   *   3. remove the `#game-ui-root` container whole (discards all game DOM/HUD).
+   *  Guarded + idempotent: a second call is a no-op. No-op for the input/DOM arms
+   *  when nothing was attached / no container was created (headless). */
   readonly detach: () => void;
 }
 
@@ -147,6 +152,16 @@ export interface AssemblePlayWorldDeps {
   /** Construct the fresh play World. Default `() => new World()`. Injectable so
    *  the headless test can supply its own World ctor without a second import. */
   readonly newWorld?: () => unknown;
+  /**
+   * The viewport panel's DOM container (HostSessionContext.viewportContainer —
+   * `.ep-viewport-root`, position:relative + overflow:hidden). ▶ Play creates a
+   * fresh `<div id="game-ui-root">` child here and hands it to the game as
+   * `ctx.uiRoot`; ■ Stop removes it whole (detach()), making a UI-remnant-after-
+   * stop structurally impossible (the ECS-surgical undo can't reach DOM).
+   * Optional: headless tests omit it (or inject a fake element) → `ctx.uiRoot` is
+   * absent and games fall back to `document.body`.
+   */
+  readonly viewportContainer?: HTMLElement;
 }
 
 /**
@@ -190,6 +205,26 @@ export async function assemblePlayWorld(
   // build() guards on hasResource(INPUT_BACKEND_KEY) and is a no-op otherwise).
   const detachInput = deps.attachInput(playWorld);
 
+  // Controlled UI root (game-context.ts BootstrapContext.uiRoot contract). A
+  // fresh child <div id="game-ui-root"> of the viewport container, overlaying the
+  // canvas without stealing input — children opt back in via pointer-events:auto
+  // (installHud does exactly this). Removed whole on ■ Stop (detach() below), so a
+  // game HUD can never survive a stop as a remnant. Absent viewportContainer
+  // (headless) → uiRoot stays undefined and games fall back to document.body.
+  // Use the container's ownerDocument (not the global `document`) so a fake
+  // element supplied by the headless test drives creation + removal too.
+  let uiRoot: HTMLElement | undefined;
+  if (deps.viewportContainer) {
+    uiRoot = deps.viewportContainer.ownerDocument.createElement('div');
+    uiRoot.id = 'game-ui-root';
+    uiRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    deps.viewportContainer.appendChild(uiRoot);
+  }
+
+  // registerCleanup accumulator (game-context.ts BootstrapContext.registerCleanup
+  // contract). Flushed in REVERSE registration order on ■ Stop (detach() below).
+  const cleanups: Array<() => void> = [];
+
   // D-7: the assemble form runs ONLY the plugins we list (defaultSet=[]), so
   // explicitly replicate the canvas-form default 5 plugins + physics (aligning
   // with the editor's own canvas-form assembly). D-8: no EditMode resource is
@@ -211,6 +246,10 @@ export async function assemblePlayWorld(
   });
   if (!appRes.ok) {
     detachInput?.();
+    // createApp failed AFTER the container was appended — the only exit between
+    // container creation and the success return. Remove it so ▶ Play's failure
+    // path (run-lifecycle resumes edit) never leaks a #game-ui-root.
+    uiRoot?.remove();
     return { ok: false, error: appRes.error };
   }
   const playApp = appRes.value as unknown as PlayApp & {
@@ -270,6 +309,13 @@ export async function assemblePlayWorld(
       // an independent fact and stays in place (D-3: AND-composition, not
       // double-write).
       setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
+      // BootstrapContext.uiRoot — the controlled UI container (removed on ■ Stop).
+      // Conditionally spread so it stays ABSENT in headless (games then fall back
+      // to document.body, matching the `ctx?.uiRoot ?? document.body` game idiom).
+      ...(uiRoot !== undefined ? { uiRoot } : {}),
+      // BootstrapContext.registerCleanup — the game registers non-DOM teardown
+      // (listeners / AudioContext / timers); flushed reverse-order on ■ Stop.
+      registerCleanup: (fn: () => void) => { cleanups.push(fn); },
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
@@ -278,6 +324,28 @@ export async function assemblePlayWorld(
 
   const detach = (): void => {
     detachInput?.();
+    // Flush the game's cleanup callbacks in REVERSE registration order (LIFO).
+    // pop() drains the array so a second detach() flushes nothing (idempotent);
+    // each is guarded so one throwing cleanup can't strand the rest or block the
+    // container removal below (mirrors run-lifecycle.ts's per-step try/catch).
+    while (cleanups.length > 0) {
+      const fn = cleanups.pop()!;
+      try {
+        fn();
+      } catch (err) {
+        console.warn('[editor] ■ Stop cleanup threw:', err);
+      }
+    }
+    // Remove the controlled UI root whole — discards all game DOM/HUD. Guarded +
+    // idempotent (null the ref so a second detach() is a no-op).
+    if (uiRoot) {
+      try {
+        uiRoot.remove();
+      } catch (err) {
+        console.warn('[editor] ■ Stop uiRoot.remove() threw:', err);
+      }
+      uiRoot = undefined;
+    }
   };
 
   return { ok: true, value: { playApp, playWorld, detach } };
