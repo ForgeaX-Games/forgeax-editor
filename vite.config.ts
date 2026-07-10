@@ -166,9 +166,14 @@ export default defineConfig({
       // vendored submodule when standalone, or the studio sibling when
       // embedded). Allow the editor root (covers packages/interface) and, when
       // embedded, the studio root so the shared interface copy is served too.
-      allow: existsSync(resolve(STUDIO_ROOT, 'package.json'))
-        ? [PACKAGE_DIR, STUDIO_ROOT]
-        : [PACKAGE_DIR],
+      // --game: the game dir is a SIBLING of the editor (outside PACKAGE_DIR),
+      // so it must be allowed explicitly or Play's @fs import of the game entry
+      // (main.ts) 403s ("outside of Vite serving allow list") and the bootstrap
+      // never runs (→ no camera spawned).
+      allow: [
+        ...(existsSync(resolve(STUDIO_ROOT, 'package.json')) ? [PACKAGE_DIR, STUDIO_ROOT] : [PACKAGE_DIR]),
+        ...(GAME_DIR ? [GAME_DIR] : []),
+      ],
     },
     proxy: {
       // D7: the `/editor` -> :15280 proxy is DELETED. The engine now boots
