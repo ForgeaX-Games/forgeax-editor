@@ -131,7 +131,8 @@ export function lightGizmoPoints(
   const pts: Vec3[] = [];
   const type = (light.type as string) ?? 'point';
   if (type === 'directional') {
-    vec3.normalize(_gv3, [num(light.directionX as number, -0.4), num(light.directionY as number, -1), num(light.directionZ as number, -0.3)]);
+    const d = (light.direction as number[] | undefined) ?? [];
+    vec3.normalize(_gv3, [num(d[0], -0.4), num(d[1], -1), num(d[2], -0.3)]);
     const dir: Vec3 = [_gv3[0]!, _gv3[1]!, _gv3[2]!];
     const len = Math.max(2, dist * 0.18);
     const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];

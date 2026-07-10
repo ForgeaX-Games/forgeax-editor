@@ -67,20 +67,20 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
   });
 
   // ── DirectionalLight: per-channel scalar fields, no type enum ──────────────
-  it('DirectionalLight schema has per-channel scalars, no type enum', () => {
+  it('DirectionalLight schema has vec direction/color, no type enum', () => {
     const schema = getComponentSchema('DirectionalLight');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
 
-    // Per-channel color scalars (verbatim engine field names)
-    expect(keys).toContain('colorR');
-    expect(keys).toContain('colorG');
-    expect(keys).toContain('colorB');
+    // vec direction/color (engine array<f32,3> columns, feat-20260709 M2)
+    expect(keys).toContain('direction');
+    expect(keys).toContain('color');
     expect(keys).toContain('intensity');
 
-    // Must NOT have editor-authored unified fields
+    // Must NOT have the retired per-channel scalars or a type enum
     expect(keys).not.toContain('type');
-    expect(keys).not.toContain('color'); // packed color, not per-channel
+    expect(keys).not.toContain('colorR');
+    expect(keys).not.toContain('directionX');
   });
 
   // ── PointLight exists ──────────────────────────────────────────────────────
@@ -88,9 +88,8 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     const schema = getComponentSchema('PointLight');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
-    expect(keys).toContain('colorR');
-    expect(keys).toContain('colorG');
-    expect(keys).toContain('colorB');
+    expect(keys).toContain('color');
+    expect(keys).not.toContain('colorR');
     expect(keys).toContain('intensity');
     expect(keys).toContain('range');
   });
@@ -100,9 +99,9 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     const schema = getComponentSchema('SpotLight');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
-    expect(keys).toContain('colorR');
-    expect(keys).toContain('colorG');
-    expect(keys).toContain('colorB');
+    expect(keys).toContain('direction');
+    expect(keys).toContain('color');
+    expect(keys).not.toContain('colorR');
     expect(keys).toContain('intensity');
     expect(keys).toContain('range');
     expect(keys).toContain('innerConeDeg');

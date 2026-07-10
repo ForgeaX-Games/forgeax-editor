@@ -296,7 +296,7 @@ export function createHostSession(deps: HostSessionDeps): {
       gateway.dispatch({ kind: 'spawnEntity', name, parent: level, components, ...(source ? { source } : {}) });
 
     add('Ground', { Transform: { pos: [0, -0.1, 0], scale: [24, 0.2, 24] }, MeshFilter: { assetHandle: HANDLE_CUBE } });
-    add('Sun', { Transform: { pos: [0, 6, 0] }, DirectionalLight: { colorR: 1, colorG: 0.96, colorB: 0.88, intensity: 3.2, directionX: -0.4, directionY: -1, directionZ: -0.3, castShadow: true } });
+    add('Sun', { Transform: { pos: [0, 6, 0] }, DirectionalLight: { color: [1, 0.96, 0.88], intensity: 3.2, direction: [-0.4, -1, -0.3], castShadow: true } });
     add('TreeTrunk', { Transform: { pos: [-4, 0.9, -3], scale: [0.4, 1.8, 0.4] }, MeshFilter: { assetHandle: HANDLE_CYLINDER } });
     add('TreeCanopy', { Transform: { pos: [-4, 2.4, -3], scale: [1.4, 1.4, 1.4] }, MeshFilter: { assetHandle: HANDLE_SPHERE } });
     add('RedBox', { Transform: { pos: [3, 0.5, -2], scale: [1, 1, 1] }, MeshFilter: { assetHandle: HANDLE_CUBE } }, { plugin: 'lowpoly', docId: 'crate-01' });

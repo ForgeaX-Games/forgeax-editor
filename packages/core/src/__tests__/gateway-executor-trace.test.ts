@@ -406,7 +406,7 @@ describe('t20a — skylight gateway ops (behavioral regression)', () => {
 
     const r1 = gw.dispatch({
       kind: 'spawnEntity', name: 'Skylight',
-      components: { Skylight: { colorR: 0.85, colorG: 0.9, colorB: 1.0, intensity: 0.35 } },
+      components: { Skylight: { color: [0.85, 0.9, 1.0], intensity: 0.35 } },
     } as EditorOp);
     expect(r1.ok).toBe(true);
     const skyId = (gw.ledger.at(-1) as { _id?: number })._id;
@@ -420,7 +420,7 @@ describe('t20a — skylight gateway ops (behavioral regression)', () => {
 
     const r3 = gw.dispatch({
       kind: 'setComponent', entity: skyId as number, component: 'Skylight',
-      patch: { colorR: 1, colorG: 1, colorB: 1, intensity: 0.2 },
+      patch: { color: [1, 1, 1], intensity: 0.2 },
     } as EditorOp);
     expect(r3.ok).toBe(true);
 

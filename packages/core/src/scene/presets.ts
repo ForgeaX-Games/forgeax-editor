@@ -41,7 +41,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
     components: {
       Transform: {},
       SpotLight: {
-        directionX: 0, directionY: -1, directionZ: 0,
+        direction: [0, -1, 0],
       },
     },
   },
@@ -50,7 +50,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
     components: {
       Transform: {},
       DirectionalLight: {
-        directionX: 0, directionY: -1, directionZ: 0.5,
+        direction: [0, -1, 0.5],
       },
     },
   },
@@ -67,7 +67,7 @@ export const ENTITY_PRESETS: EntityPreset[] = [
     components: {
       Transform: { pos: [0, 0, 0], scale: [24, 0.2, 24] },
       MeshFilter: { assetHandle: HANDLE_CUBE },
-      Collider: { shape: 0, halfExtentsX: 12, halfExtentsY: 0.1, halfExtentsZ: 12 },
+      Collider: { shape: 0, halfExtents: [12, 0.1, 12] },
     },
   },
   {

@@ -79,44 +79,34 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'materials', type: 'asset', tooltip: 'array of shared MaterialAsset handles' },
     ],
   },
-  // ── DirectionalLight: engine-native per-channel scalars ──────────────────────
-  // Engine: directional-light.ts:92 defineComponent (directionX/Y/Z, colorR/G/B, intensity, castShadow)
+  // ── DirectionalLight: engine-native vec (feat-20260709 M2 direction/color collapse)
+  // Engine: directional-light.ts defineComponent (direction[3], color[3], intensity, castShadow)
   DirectionalLight: {
     name: 'DirectionalLight',
     fields: [
-      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X' },
-      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y' },
-      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z' },
-      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
-      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
-      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
+      { key: 'direction', type: 'vec', arity: 3, step: 0.05, default: [-0.4, -1, -0.3], tooltip: 'direction [x, y, z]' },
+      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
       { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
       { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
     ],
   },
-  // ── PointLight: engine-native per-channel + range ────────────────────────────
-  // Engine: point-light.ts:56 defineComponent
+  // ── PointLight: engine-native vec color + range ──────────────────────────────
+  // Engine: point-light.ts defineComponent (color[3], intensity, range)
   PointLight: {
     name: 'PointLight',
     fields: [
-      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
-      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
-      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
+      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
       { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
       { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
     ],
   },
-  // ── SpotLight: engine-native cone + per-channel ─────────────────────────────
-  // Engine: spot-light.ts:102 defineComponent
+  // ── SpotLight: engine-native cone + vec direction/color ──────────────────────
+  // Engine: spot-light.ts defineComponent (direction[3], color[3], cone, ...)
   SpotLight: {
     name: 'SpotLight',
     fields: [
-      { key: 'directionX', type: 'number', step: 0.05, default: -0.4, tooltip: 'direction X' },
-      { key: 'directionY', type: 'number', step: 0.05, default: -1, tooltip: 'direction Y' },
-      { key: 'directionZ', type: 'number', step: 0.05, default: -0.3, tooltip: 'direction Z' },
-      { key: 'colorR', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'red channel (linear, HDR)' },
-      { key: 'colorG', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'green channel (linear, HDR)' },
-      { key: 'colorB', type: 'number', min: 0, step: 0.1, default: 1, tooltip: 'blue channel (linear, HDR)' },
+      { key: 'direction', type: 'vec', arity: 3, step: 0.05, default: [-0.4, -1, -0.3], tooltip: 'direction [x, y, z]' },
+      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
       { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
       { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
       { key: 'innerConeDeg', type: 'number', min: 0, max: 90, step: 1, default: 0, tooltip: 'inner cone half-angle (degrees)' },
@@ -125,7 +115,8 @@ const REGISTRY: Record<string, ComponentSchema> = {
     ],
   },
   // ── Camera: engine-native fields ─────────────────────────────────────────────
-  // Engine: camera.ts:295 defineComponent (fov, aspect, near, far, projection, ...)
+  // Engine: camera.ts defineComponent (fov, aspect, near, far, projection,
+  // clearColor[4] — feat-20260709 M3 clear-color array<f32,4> collapse).
   Camera: {
     name: 'Camera',
     fields: [
@@ -134,17 +125,16 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'aspect', type: 'number', min: 0.1, max: 10, step: 0.01, tooltip: 'aspect ratio (auto if autoAspect=1)' },
       { key: 'near', type: 'number', min: 0.001, max: 100, step: 0.001, default: 0.1, tooltip: 'near clip plane' },
       { key: 'far', type: 'number', min: 1, max: 100000, step: 1, default: 1000, tooltip: 'far clip plane' },
+      { key: 'clearColor', type: 'vec', arity: 4, min: 0, step: 0.05, default: [0, 0, 0, 1], tooltip: 'clear color [r, g, b, a] (linear)' },
     ],
   },
-  // ── Collider: engine-native fields ───────────────────────────────────────────
-  // Engine: physics/src/components.ts:150 defineComponent
+  // ── Collider: engine-native fields (halfExtents vec, feat-20260709) ──────────
+  // Engine: physics/src/components.ts defineComponent (halfExtents[3], ...)
   Collider: {
     name: 'Collider',
     fields: [
       { key: 'shape', type: 'number', min: 0, max: 2, step: 1, default: 0, tooltip: 'collision shape: 0=cuboid, 1=sphere, 2=capsule' },
-      { key: 'halfExtentsX', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
-      { key: 'halfExtentsY', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
-      { key: 'halfExtentsZ', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
+      { key: 'halfExtents', type: 'vec', arity: 3, min: 0, step: 0.1, default: [0.5, 0.5, 0.5], tooltip: 'cuboid half-extents [x, y, z]' },
       { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
       { key: 'halfHeight', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
       { key: 'friction', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5 },
