@@ -17,6 +17,9 @@ import {
   entName,
   entComponents,
 } from '../store/entity-state';
+import { Transform } from '@forgeax/engine-runtime';
+import { mat4, quat, vec3 } from '@forgeax/engine-math';
+import type { World } from '@forgeax/engine-ecs';
 
 // ── Transaction forward-reference placeholder allocator ─────────────────────
 // A negative counter mints unique placeholder handles for entities a transaction
@@ -27,12 +30,132 @@ import {
 let _placeholderSeq = -1;
 function nextPlaceholder(): number { return _placeholderSeq--; }
 
+// ── World-position-preserving reparent (P0-1) ───────────────────────────────
+// A reparent changes a node's PARENT but should keep its WORLD transform put
+// (UE/Godot "keep world transform"): local TRS is re-expressed under the new
+// parent so `parent.world × newLocal === childWorld`. Without this, dropping a
+// node under a moved/rotated/scaled parent makes it jump. We read the resolved
+// `Transform.world` mat4 (SSOT, written by propagate), compute
+// newLocal = inverse(newParentWorld) × childWorld, decompose to TRS, and write
+// it in the SAME transaction as the reparent (atomic, single undo).
+
+interface LocalTRS {
+  pos: number[];
+  quat: number[];
+  scale: number[];
+}
+
+/** Copy of the resolved world mat4 (column-major 16 floats), or null when the
+ *  handle has no Transform. Copied out because the engine view is transient. */
+function readWorldMatrix(world: World, handle: EntityHandle): Float32Array | null {
+  const r = world.get(handle, Transform);
+  if (!r.ok) return null;
+  const w = (r.value as { world?: ArrayLike<number> }).world;
+  if (!w || w.length < 16) return null;
+  const out = new Float32Array(16);
+  for (let i = 0; i < 16; i++) out[i] = w[i] as number;
+  return out;
+}
+
+/** Local TRS for `child` so its WORLD transform is preserved once parented under
+ *  `newParent` (null = root, parent world = identity). null when child has no
+ *  Transform (nothing to preserve — the caller just reparents). */
+function computePreservedLocal(
+  world: World,
+  child: EntityHandle,
+  newParent: EntityHandle | null,
+): LocalTRS | null {
+  const childWorld = readWorldMatrix(world, child);
+  if (!childWorld) return null;
+  let newLocal: Float32Array = childWorld;
+  if (newParent !== null) {
+    const parentWorld = readWorldMatrix(world, newParent);
+    if (parentWorld) {
+      const inv = mat4.create();
+      // invert() returns identity for a singular (zero-scale) parent — the
+      // node then inherits the parent's degenerate frame, an acceptable edge.
+      mat4.invert(inv, parentWorld);
+      const local = mat4.create();
+      mat4.multiply(local, inv, childWorld);
+      newLocal = local as unknown as Float32Array;
+    }
+  }
+  const t = vec3.create();
+  const s = vec3.create();
+  const r = quat.create();
+  mat4.decompose(t, r, s, newLocal);
+  return {
+    pos: [t[0] as number, t[1] as number, t[2] as number],
+    quat: [r[0] as number, r[1] as number, r[2] as number, r[3] as number],
+    scale: [s[0] as number, s[1] as number, s[2] as number],
+  };
+}
+
+/** The ops that reparent `child` under `parent` while preserving its world
+ *  transform: setComponent(Transform local) BEFORE the reparent, then the
+ *  reparent. Computed from the CURRENT world (call before the transaction runs;
+ *  the new parent is not moving, so its world is stable across the transaction). */
+function reparentPreserveOps(
+  world: World,
+  child: EntityHandle,
+  parent: EntityHandle | null,
+): EditorOp[] {
+  const local = computePreservedLocal(world, child, parent);
+  const ops: EditorOp[] = [];
+  if (local) ops.push({ kind: 'setComponent', entity: child, component: 'Transform', patch: local });
+  ops.push({ kind: 'reparent', entity: child, parent });
+  return ops;
+}
+
 export function reparentEntity(child: EntityHandle, parent: EntityHandle | null): void {
   const world = gateway.activeWorld;
   if (parent !== null && isSelfOrDescendant(world, child, parent)) return;
   const curParent = entParent(world, child);
   if (curParent === parent) return;
-  gateway.dispatch({ kind: 'reparent', entity: child, parent });
+  // World-preserving reparent = setComponent(local) + reparent in one undo step.
+  gateway.dispatch({ kind: 'transaction', label: `reparent ${child}`, commands: reparentPreserveOps(world, child, parent) });
+}
+
+// Reparent several nodes under `parent` in ONE undo step, each preserving its
+// world transform (P0-3 multi-select drag). Skips nodes that would create a
+// cycle (parent is self/descendant) or are already under `parent`. Locals are
+// all computed from the pre-transaction world (the target parent is stationary).
+export function reparentMany(children: EntityHandle[], parent: EntityHandle | null): void {
+  const world = gateway.activeWorld;
+  const commands: EditorOp[] = [];
+  for (const child of children) {
+    if (!entExists(world, child)) continue;
+    if (parent !== null && isSelfOrDescendant(world, child, parent)) continue;
+    if (entParent(world, child) === parent) continue;
+    commands.push(...reparentPreserveOps(world, child, parent));
+  }
+  if (commands.length === 0) return;
+  gateway.dispatch({ kind: 'transaction', label: `reparent x${children.length}`, commands });
+}
+
+// ── Drop-position reparent (P0-5 / P0-6) ────────────────────────────────────
+// `reparentAt` places `child` relative to a drop target. The Hierarchy drop
+// handler resolves the TARGET PARENT from the pointer position (drop inside a
+// row → that row is the parent; drop on a row's top/bottom edge → the row's
+// parent, i.e. become a sibling — including the root level when the row is a
+// root). This function moves `child` under `parent` (append), preserving world
+// transform, in a single undo step.
+//
+// PRECISE SIBLING INDEX IS DEFERRED (engine limitation): the `Children` mirror
+// prunes with a SWAP-REMOVE (unordered), and once the mirror empties, re-adding
+// `ChildOf` does not repopulate it — so the editor cannot rebuild an exact
+// sibling order. True "insert at index N" needs an engine-level ordered command
+// (a stable prune or a `reorderChild`/insert-index API). `before` is accepted
+// for a future engine-backed implementation but currently only distinguishes
+// "same parent (append)" from a cross-parent move.
+export function reparentAt(
+  child: EntityHandle,
+  parent: EntityHandle | null,
+  _before: EntityHandle | null,
+): void {
+  const world = gateway.activeWorld;
+  if (!entExists(world, child)) return;
+  reparentEntity(child, parent);
 }
 
 // post-order (children before parent) so the transaction's reversed inverse

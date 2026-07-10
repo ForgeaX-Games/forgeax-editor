@@ -196,8 +196,6 @@ import './store/folder-selection';
 export {
   loadRawAssets,
   materialSwatch,
-  makeMaterialResolver,
-  makeMeshResolver,
   extractPackDirs,
 } from './assets/assets';
 export type { PackAsset, RawAsset } from './assets/assets';
@@ -332,6 +330,8 @@ export {
   groupSelected,
   ungroupEntity,
   reparentEntity,
+  reparentMany,
+  reparentAt,
 } from './session/ops';
 
 // ── Context menu service ──
