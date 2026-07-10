@@ -5,8 +5,8 @@
 // can present a structured error (plan-strategy §8).
 //
 // Anchors:
-//   requirements §AC-03 (editor-iframe projection schemas retired with the
-//     single-realm PanelBridge / EditSurface cleanup)
+//   requirements §AC-03 (single-realm editor projection schemas retired in
+//     favor of typed PanelBridge callbacks)
 //   requirements §AC-05 (fail emits issues[].path)
 //   plan-strategy §2 D-3 (single physical location: this file's sibling protocol.ts)
 //   plan-strategy §8.1 (naming pair Vag<Name>Schema + Vag<Name>Message)

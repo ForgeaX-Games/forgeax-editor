@@ -693,8 +693,7 @@ async function bootViewport(
   });
   installFpsReport(editorApp, onFps);
   registerTeardown(installAssetSpawnBridge());
-  // Single-realm drag-to-viewport + pause-when-hidden: both were owned by the
-  // deleted EditSurface iframe host. Re-attached in-process to the viewport's own
+  // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).
   registerTeardown(installViewportDropZone(container));
   registerTeardown(installVisibilityPause(container, editorApp));

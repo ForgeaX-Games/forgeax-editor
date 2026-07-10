@@ -191,13 +191,10 @@ export function installAssetCatalogRefresh(): () => void {
 }
 
 // ── Visibility-driven pause (single-realm) ──────────────────────────────────
-// In-process replacement for the pause path the deleted EditSurface iframe host
-// used to drive. Under the old arch EditSurface owned an IntersectionObserver on
-// the iframe and sent dedicated preview-control messages when the dock tab
-// hid/showed it. Single realm has no iframe: the host (studio
-// SurfaceKeepAliveLayer) parks the viewport off-screen + visibility:hidden, so
-// the render loop kept running while hidden. This observer restores the pause by
-// watching the viewport's OWN container directly — no cross-realm message.
+// The host (studio SurfaceKeepAliveLayer) parks the viewport off-screen +
+// visibility:hidden when its dock tab is inactive. This observer watches the
+// viewport's OWN container and pauses the render loop directly — no cross-realm
+// control message.
 //
 //   - IntersectionObserver: fires when the container leaves/enters the viewport
 //     (off-screen parking trips it).

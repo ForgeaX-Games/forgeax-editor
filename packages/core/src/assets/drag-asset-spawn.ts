@@ -1,6 +1,5 @@
 // Build spawn-entity commands from Content Browser drag refs. The result feeds
-// the single live spawn path: core/scene/spawn-asset-ref.ts → gateway.dispatch
-// (single realm — the old VAG_SPAWN_ENTITY iframe path was retired with EditSurface).
+// the single live spawn path: core/scene/spawn-asset-ref.ts → gateway.dispatch.
 //
 // feat-20260701-editor-world-container-doc-ecs-collapse review round 1 / F-1:
 // The former builder emitted editor-legacy components — `Mesh{kind,meshAsset}`,

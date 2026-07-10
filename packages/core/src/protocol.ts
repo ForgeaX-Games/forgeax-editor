@@ -4,7 +4,7 @@
 // cross-realm wire (research F-6 grep evidence). Three panel-action invocation
 // schemas were retired in feat-20260708 (no on-wire consumer survived the
 // single-realm merge; registry projection now derives from gateway.listOps()).
-// The EditSurface cleanup retired the former asset-change, context-menu,
+// The single-realm cleanup retired former asset-change, context-menu,
 // editor-control, and spawn projections: their callers now use typed in-process
 // callbacks/PanelBridge, while the spawn path is
 // core/scene/spawn-asset-ref.ts → gateway.dispatch. Naming is strictly paired:
@@ -30,7 +30,7 @@
 //   plan-strategy §2 D-3 (single physical location)
 //   plan-strategy §2 D-4 (no silent type assertion)
 //   plan-strategy §8.1 (Vag<Name>Schema + Vag<Name>Message naming pair)
-//   research F-6 (13 type literals enumerated by grep; panel-action + asset-change + spawn removed)
+//   research F-6 (8 cross-realm type literals after single-realm projections retired)
 
 import { z } from 'zod';
 

@@ -17,12 +17,8 @@ export function installAssetSpawnBridge(): () => void {
 /**
  * Viewport drop zone — drag a Content Browser asset onto the viewport to spawn it.
  *
- * Single-realm replacement for the drag path the deleted EditSurface iframe host
- * used to own. Content Browser emits `dragAssetStart`/`dragAssetEnd` on the typed
- * bus (CBAssetItem); EditSurface was the only subscriber, so after its removal
- * drag-to-viewport silently did nothing (only right-click "Add to Scene" worked).
- * This re-attaches that gesture directly to the viewport container — no iframe, so
- * none of the old iframe `pointer-events` overlay hack is needed. The drop routes
+ * Content Browser emits `dragAssetStart`/`dragAssetEnd` on the typed bridge; this
+ * listener owns the matching viewport gesture in the same realm. The drop routes
  * through the SAME live gateway spawn path as Add-to-Scene (spawnAssetRefToScene →
  * gateway.dispatch), so both are one op (undo/ledger/AI-equal).
  *
