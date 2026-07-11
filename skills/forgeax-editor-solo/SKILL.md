@@ -40,6 +40,27 @@ flowchart LR
 
 L2 is the point: the skill improves *itself* by being used. A loop that only does L1 is plain iteration.
 
+## What you're improving — fix the deepest layer, not the nearest
+
+The target is a stack; a friction is fixed at the **deepest layer where its root cause lives**, in the
+**most systematic form**. Prefer code over docs — a doc that narrates a limitation is a band-aid, not a fix.
+
+| Priority | Layer | Land the fix here when… |
+|:--|:--|:--|
+| **1 — engine** | engine primitive | root cause is a missing/wrong engine capability (export, contract, primitive) |
+| **2 — editor** | authoring surface | engine is right but the editor doesn't project it (missing gateway op / read facade, wrong seam, async contract) |
+| **3 — skill/doc** | AI-facing projection | the code is **correct and complete**; the *only* gap is that the AI couldn't discover it |
+
+**Decision razor (run every candidate fix through it):** *"If I fixed the code, would this doc still need to
+exist?"* — **Yes** → the doc teaches a real capability, layer-3 is right. **No** → the doc only describes a
+code wart ("watch the viewport since you can't query it"; "poll because mode flips async") → that's a
+disguised code fix; land it at layer 1/2 instead. Why this matters: `DESIGN.md` §fix-priority ladder.
+
+> [!CAUTION]
+> An AI's default reflex is the doc — cheapest edit, always "closes" the friction on paper. That reflex is
+> the anti-pattern this ladder exists to break. "Too big for solo" routes **up** to `forgeax-closed-loop`,
+> never **down** to a doc band-aid to keep the diff small.
+
 ## When to run vs when to route to closed-loop
 
 | Signal | Route |
@@ -117,20 +138,39 @@ with implementation) outranks a cosmetic gap — it silently breaks correctness.
 
 ### 4 · Design fix
 
-For the top finding, investigate *why* it exists before proposing a fix. Prefer the **minimal, symmetric**
-change that fits existing patterns (mirror a sibling API) over a new parallel mechanism. Run it against the
-target repo's architecture razors (for forgeax: SSOT / Derive-don't-Duplicate / one-door). Widen the lens:
-don't only fix the literal friction — ask what *class* it belongs to (one missing introspection leg, not
-one missing method).
+For the top finding, investigate *why* it exists before proposing a fix. Then, in order:
 
-**Gate:** fix named, its SSOT identified, alternatives (incl. "don't fix, document instead") weighed in
-the report.
+1. **Pick the layer** (see "What you're improving" above). Trace the root cause down: is it an engine
+   primitive (layer 1), an editor authoring-surface gap (layer 2), or a pure discoverability gap over
+   correct code (layer 3)? Run the razor — *"if I fixed the code, would this doc still need to exist?"* — to
+   reject a doc band-aid masquerading as the fix. **Land at the deepest layer the root cause reaches.**
+2. **Pick the form, systematically.** Prefer the **symmetric** change that fits existing patterns (mirror a
+   sibling API, add the missing introspection leg) over a new parallel mechanism, and the change that makes
+   the friction *structurally impossible* (a type / invariant / single-door) over an instance-local patch.
+   Run it against the repo's architecture razors (for forgeax: SSOT / Derive-don't-Duplicate / one-door).
+3. **Widen the lens** — fix the *class*, not the literal instance (one missing introspection leg, not one
+   missing method).
+
+If the correct (deep + systematic) fix spans subsystems and exceeds one agent's reach, **escalate to
+`forgeax-closed-loop`** — do not down-scope to a doc to stay inside solo.
+
+**Gate:** fix named **with its layer and why that's the deepest correct one**; SSOT identified; alternatives
+weighed in the report — and if the chosen fix is a doc, the razor's "yes, code is already correct" answer is
+recorded (else the doc is a band-aid and a deeper fix is owed).
 
 ### 5 · Implement
 
-Land the change. Add a test that would have caught the friction. Match surrounding code density/anchors.
+**Enter a git worktree first** (`EnterWorktree`) — every fix lands in a worktree, never on the primary
+checkout, which stays pinned to `main`. The loop mutates a running tool and edits its source in one session;
+the worktree quarantines that blast radius and makes a wrong-direction attempt cheap to discard (why:
+`DESIGN.md` §6). A layer-1/2 code fix may live in the engine or editor submodule — make the change there,
+inside the worktree.
 
-**Gate:** code + test written; test file runs.
+Then land the change. Add a test that would have caught the friction — at the layer you fixed (an engine/unit
+test for layer-1/2 code; the skill's own validator anchor for a layer-3 doc). Match surrounding code
+density/anchors.
+
+**Gate:** working inside a worktree (primary checkout still on `main`); code + test written; test file runs.
 
 ### 6 · Verify by real execution
 
@@ -146,12 +186,16 @@ quoted. Evidence before assertion (see `verification-before-completion`).
 
 Two writes, both required:
 
-1. **L1** — update the tool's own docs (the doc gap that caused the friction is now closed).
+1. **L1** — the fix from steps 4-5 *is* the tool improvement (engine/editor code, or a doc when the razor
+   said the code was already correct). Additionally, whenever a **code** fix changes an AI-facing contract,
+   update the doc that projects it so the projection stays truthful — a fixed capability the docs still
+   describe as broken is a new friction.
 2. **L2** — if the loop surfaced a reusable *method* fact (a verify recipe, an environment gotcha, a new
    friction-pattern), write it: a durable one to **memory**, a loop-method one to **this skill's
    anti-pattern list** below.
 
-**Gate:** L1 doc updated; L2 fact written or an explicit "nothing reusable this round" noted.
+**Gate:** L1 landed (code fix + any doc-projection update, or the justified doc-only fix); L2 fact written
+or an explicit "nothing reusable this round" noted.
 
 ### 8 · Human gate
 
@@ -204,6 +248,17 @@ can re-run it, not just read about it:
 
 > Each entry was learned by running this loop. Append new ones in step 7.
 
+- **Documenting a code wart instead of fixing the code (the doc reflex).** The single most common failure of
+  this loop: a friction whose root cause is in the engine/editor gets "resolved" with a SKILL.md note that
+  *narrates the limitation* — "mode flips async, so poll it"; "you can't query the play world, so watch the
+  viewport." That doc is negative work: it adds a concept every future reader must carry instead of removing
+  it by fixing the code. Run the razor — *"if I fixed the code, would this doc still need to exist?"* If no,
+  the doc is a band-aid and a layer-1/2 fix is owed (make it observable; make the contract synchronous).
+  Docs are the *last* resort (layer 3), legitimate only when the code is already correct and the sole gap is
+  discoverability. See "What you're improving" + `DESIGN.md` §fix-priority ladder.
+- **Skipping the worktree — editing on the primary checkout.** Step 5 requires `EnterWorktree`; the loop
+  mutates a running tool *and* its source in one session, so an in-place edit can strand `main` dirty
+  mid-dogfood. Every fix lands in a worktree, primary checkout stays on `main`.
 - **Reading the tool's source to drive it.** You then can't see the doc gaps the real user hits — the
   whole experiment measures docs-vs-reality. Drive from public docs only; reading source is for the *fix*,
   not the *dogfood*.
@@ -226,9 +281,11 @@ can re-run it, not just read about it:
   the user writes `undo().ok` and it silently no-ops. The fix is doc-only (mirror the real signature +
   flag the shape difference); prove it by adding the family's name as a required anchor in the skill's
   own validator, so the gap can't recur. Ranks with contract errors, above cosmetics.
-- **Deferring a fix to "docs will cover it" and never writing the docs.** A prior loop can *decline* a
-  code fix for the right reason (SSOT) and hand the burden to documentation — then never write it, leaving
-  the gap fully open. When you defer to docs, the doc write IS the fix; it is not optional follow-up.
+- **Deferring a fix to "docs will cover it" and never writing the docs.** A loop can *legitimately* decline a
+  code fix (the razor confirms the code is already correct — SSOT-clean) and hand the burden to
+  documentation — then never write it, leaving the gap fully open. When a doc *is* the right fix, the doc
+  write IS the fix, not optional follow-up. (But first confirm it's the right layer — if the razor says a
+  code fix is owed, "defer to docs" is the doc-reflex anti-pattern above, not a legitimate deferral.)
 - **Unbounded loops inside an eval snippet.** `while(gateway.canRedo()) gateway.redo()` freezes the host
   page forever if the predicate misbehaves (eval has no timeout — SKILL.md "Dead loop no interrupt").
   Bound every eval loop (`&& steps<50`) even when you "know" it terminates.
