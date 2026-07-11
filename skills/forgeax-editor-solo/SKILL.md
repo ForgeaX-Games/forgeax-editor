@@ -186,6 +186,19 @@ One markdown file per loop, living beside the target (editor instance:
   Duplicate).
 - **Contract errors ranked below cosmetics.** When docs disagree with the implementation (a missing param
   in a documented signature), that silently breaks a docs-following user — it outranks any "nice to have".
+- **A whole method family missing from the reference is a contract error, not an omission.** When an
+  API doc table lists most of a surface but silently drops a related family (undo/redo/canUndo beside
+  dispatch/commit), a docs-only user assumes the missing calls follow the table's dominant convention.
+  If they don't — e.g. `undo()` returns a bare `boolean` while every tabled method returns `{ok,…}` —
+  the user writes `undo().ok` and it silently no-ops. The fix is doc-only (mirror the real signature +
+  flag the shape difference); prove it by adding the family's name as a required anchor in the skill's
+  own validator, so the gap can't recur. Ranks with contract errors, above cosmetics.
+- **Deferring a fix to "docs will cover it" and never writing the docs.** A prior loop can *decline* a
+  code fix for the right reason (SSOT) and hand the burden to documentation — then never write it, leaving
+  the gap fully open. When you defer to docs, the doc write IS the fix; it is not optional follow-up.
+- **Unbounded loops inside an eval snippet.** `while(gateway.canRedo()) gateway.redo()` freezes the host
+  page forever if the predicate misbehaves (eval has no timeout — SKILL.md "Dead loop no interrupt").
+  Bound every eval loop (`&& steps<50`) even when you "know" it terminates.
 - **Skipping the L2 write.** If the loop taught you a verify recipe or an env gotcha and you don't record
   it, the next loop re-derives it. The codify step is not optional.
 - **Growing this loop into a multi-agent one.** When a fix spans subsystems, escalate to

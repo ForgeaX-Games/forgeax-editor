@@ -56,6 +56,12 @@ const REQUIRED_KEYWORDS = [
   'gateway-live.mjs',
   'FORGEAX_BRIDGE',
   '127.0.0.1',
+  // Undo/redo timeline family — a docs-following AI that only reads the Core API
+  // table must find these. They return a bare boolean, not DispatchResult; a
+  // dropped row silently mis-teaches `gateway.undo().ok` (EXPERIMENT-REPORT
+  // round-2 friction #1).
+  'undo',
+  'canUndo',
 ];
 
 // ---------------------------------------------------------------------------

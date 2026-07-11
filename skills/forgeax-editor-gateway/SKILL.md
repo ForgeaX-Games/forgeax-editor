@@ -76,6 +76,10 @@ readable `droppedTraces` counter.
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
 | `gateway.auditLog()` | `() => ReadonlyArray<{op, origin}>` | "Who did what" — the append-only ledger zipped with its index-aligned origin ('human'\|'ai'), oldest→newest; includes irreversible session ops (setSelection/save/play), unlike undoStack-derived `historySteps()` |
+| `gateway.undo()` / `gateway.redo()` | `() => boolean` | Roll the document timeline back / forward one step. **Returns a bare `boolean`** (did-something), **NOT `DispatchResult`** — there is no `.ok`. `false` = nothing to undo/redo (empty stack). Gate with `canUndo()`/`canRedo()`, don't branch on `.ok`. Session ops (setSelection/save/play) are NOT on this stack — see "Session ops are irreversible" |
+| `gateway.canUndo()` / `gateway.canRedo()` | `() => boolean` | Whether the undo/redo stack is non-empty — the guard for undo/redo UI buttons and for a docs-following AI's loop condition |
+| `gateway.appliedCount()` | `() => number` | Number of currently-applied document steps (the timeline head position); pairs with `gotoStep(n)` |
+| `gateway.historySteps()` | `() => HistoryStep[]` | undoStack-derived timeline (applied oldest→newest, then redoable future), each with origin; **document ops only** (no session ops — use `auditLog()` for those) |
 | `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame appliers |
 | `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
 | `channel.eval(code)` | `(string) => EvaluateResult` | Evaluate JS code with scope①={gateway, query, _import} |
