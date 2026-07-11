@@ -223,6 +223,12 @@ export {
   deleteDirectory,
 } from './session/pack-ops';
 
+// ── Asset import (Invariant 7 convergence) — executor + importAsset session op.
+//   Importing this module also runs its side-effect: registering the importAsset
+//   session applier into the one-door table (mirrors pack-ops createDirectory). ──
+export { executeAssetImport } from './session/import-ops';
+export type { AssetImportSpec, ImportFileResult, ImportFileStatus } from './session/import-ops';
+
 // ── Scene types (extended, for games) ──
 export {
   ENTITY_PRESETS,

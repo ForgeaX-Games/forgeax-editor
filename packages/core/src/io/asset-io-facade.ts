@@ -140,6 +140,81 @@ export class AssetIOFacade {
     return { ok, oldName };
   }
 
+  // ── Import write-gate (source-file / cook axis) ─────────────────────────────
+  // The import pipeline used to make three raw `fetch` calls straight from
+  // content-browser (upload binary, write .meta.json, trigger cook), bypassing the
+  // one-door gateway entirely (no `import` op existed). These four methods pull
+  // those writes INSIDE the asset gate so the `importAsset` op (session domain) and
+  // the startup-scan bootstrap path share a single controlled surface — symmetric
+  // to how create/rename/duplicate route their pack writes here. `readSourceBytes`
+  // is the read side used by the executor when there is no in-memory File (AI /
+  // startup-scan callers whose source already lives on disk).
+
+  /** Upload raw source bytes (base64) to disk at destPath. `POST /api/files/upload`. */
+  async uploadSourceBytes(destPath: string, base64: string): Promise<boolean> {
+    recordAssetLeaf('assetIO.uploadSourceBytes');
+    const r = await fetch('/api/files/upload', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: destPath, data: base64 }),
+    });
+    return r.ok;
+  }
+
+  /** Write a pre-built `.meta.json` sidecar (text content) to disk. `POST /api/files`. */
+  async writeMetaSidecar(metaPath: string, content: string): Promise<boolean> {
+    recordAssetLeaf('assetIO.writeMetaSidecar');
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: metaPath, content }),
+    });
+    return r.ok;
+  }
+
+  /** Best-effort cook trigger for a freshly-written sidecar. `POST /__import/:guid`.
+   *  Returns undefined on success, or a human-readable reason string on failure
+   *  (matching the old triggerCook contract — a cook failure is surfaced, not thrown). */
+  async triggerCook(guid: string): Promise<string | undefined> {
+    recordAssetLeaf('assetIO.triggerCook');
+    try {
+      const res = await fetch(`/__import/${guid}`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string; reason?: string; hint?: string };
+        return body.reason ?? body.hint ?? `cook failed (${res.status})`;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Read raw source bytes from disk (for cook when no in-memory File exists).
+   *  `GET /api/files/raw`. Returns null on 404 / network error. */
+  async readSourceBytes(path: string): Promise<ArrayBuffer | null> {
+    recordAssetLeaf('assetIO.readSourceBytes');
+    try {
+      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`);
+      if (!r.ok) return null;
+      return await r.arrayBuffer();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Read an existing `.meta.json` (parsed) for reimport GUID reuse; null on first
+   *  import / missing / parse error. `GET /api/files/raw`. */
+  async readExistingMeta(metaPath: string): Promise<unknown> {
+    recordAssetLeaf('assetIO.readSourceBytes');
+    try {
+      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+      if (!r.ok) return undefined;
+      return JSON.parse(await r.text());
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Clone an asset within the same pack (new GUID, same kind/payload).
    *  Exposed via assetIO singleton for OOS-3 compliant external consumers
    *  (CBContextMenu etc.) — pack writes stay inside the gate. */

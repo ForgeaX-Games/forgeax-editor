@@ -257,6 +257,32 @@
     "title": "Duplicate Entity"
   },
   {
+    "id": "importAsset",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "destPath": {
+          "type": "string",
+          "description": "On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller."
+        },
+        "sourceName": {
+          "type": "string",
+          "description": "Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source."
+        },
+        "skipUpload": {
+          "type": "boolean",
+          "description": "Bytes already on disk — do not re-upload (default true for dispatched ops; the UI path uploads via the assetIO gate before dispatch)."
+        }
+      },
+      "required": [
+        "destPath"
+      ]
+    },
+    "title": "Import Asset"
+  },
+  {
     "id": "instantiateSceneAsset",
     "domain": "document",
     "source": "builtin",

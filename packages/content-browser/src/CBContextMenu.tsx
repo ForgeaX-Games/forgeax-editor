@@ -4,7 +4,6 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // direct setAssetSelection setter and the origin-less `dispatch` wrapper.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  deleteAsset, broadcastAssetsChanged,
   gateway, getSelection,
 } from '@forgeax/editor-core';
 
@@ -75,13 +74,14 @@ export function buildAssetContextMenu(
     }},
     { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
       if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
-      // Fallback for hosts without a delete guard wired in.
+      // Fallback for hosts without a delete guard wired in. Routes through the ONE
+      // gateway door (destroyAsset document op, undoable) — identical to the primary
+      // path in ContentBrowser.tsx. The applier reaches pack IO via ctx.assetIO and
+      // fires the assetsChanged notification itself; no raw deleteAsset primitive.
       const names = targets.map(a => a.name).join(', ');
       if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
       for (const a of targets) {
-        void deleteAsset(a.packPath, a.guid).then(ok => {
-          if (ok) { broadcastAssetsChanged(); callbacks?.onReload?.(); }
-        });
+        gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
     }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },

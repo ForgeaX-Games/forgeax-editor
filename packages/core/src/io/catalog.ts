@@ -402,6 +402,22 @@ const builtinOps: ReadonlyArray<{
   },
   { id: 'cbGoBack', domain: 'session', argsSchema: null, title: 'Go Back' },
   { id: 'cbGoForward', domain: 'session', argsSchema: null, title: 'Go Forward' },
+  // importAsset (Invariant 7 convergence): session-domain, ledger-only. Cataloged
+  // so AI can self-discover it via gateway.listOps() (registry razor — the human
+  // drag-drop capability is now equally AI-reachable). destPath is an on-disk
+  // (game-relative OK) source; the applier uploads-then-cooks through the assetIO gate.
+  { id: 'importAsset', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        destPath: { type: 'string', description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.' },
+        sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source.' },
+        skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for dispatched ops; the UI path uploads via the assetIO gate before dispatch).' },
+      },
+      required: ['destPath'],
+    },
+    title: 'Import Asset',
+  },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════
   { id: 'setHoverEntity', domain: 'transient',

@@ -21,8 +21,8 @@ import {
   resetScanProgress,
   installScanHmrBridge, registerBrowserImportConsumer,
   broadcastAssetsChanged, resolveGamePath,
+  executeAssetImport,
 } from '@forgeax/editor-core';
-import { importFiles, type ImportProgress, type ImportFileResult } from './import-pipeline';
 
 export interface UseStartupScanResult {
   /** Whether the scan is currently running (gateway locked). */
@@ -32,45 +32,23 @@ export interface UseStartupScanResult {
 }
 
 /**
- * Fetch a game-relative source file via platform-io and create a browser File.
- * Used to feed on-disk files into the browser import pipeline (H5).
- */
-async function fileFromPath(relPath: string): Promise<File | null> {
-  try {
-    const apiPath = resolveGamePath(relPath);
-    const baseName = relPath.slice(relPath.lastIndexOf('/') + 1);
-    const response = await fetch(`/api/files/raw?path=${encodeURIComponent(apiPath)}`);
-    if (!response.ok) {
-      console.warn(`[useStartupScan] fetch failed ${relPath} → ${apiPath} status=${response.status}`);
-      return null;
-    }
-    const blob = await response.blob();
-    return new File([blob], baseName);
-  } catch (err) {
-    console.warn(`[useStartupScan] fetch threw for ${relPath}:`, err);
-    return null;
-  }
-}
-
-/** Derive the directory part of a relative path (e.g., "assets/models/char.glb" → "assets/models"). */
-function dirname(relPath: string): string {
-  const idx = relPath.lastIndexOf('/');
-  return idx >= 0 ? relPath.slice(0, idx) : '';
-}
-
-/**
- * Import complex-format files from disk via the browser import pipeline.
- * Groups by parent directory so each file's meta is written next to the source
- * (importFiles uses currentPath + file.name as destPath).
+ * Import complex-format files (glb/gltf/fbx) from disk at startup.
+ *
+ * BOOTSTRAP CARVE-OUT (Invariant 7): this runs while the gateway is scan-locked
+ * (dispatch rejects every op), so it CANNOT route through gateway.dispatch. It
+ * calls the shared core executor `executeAssetImport` DIRECTLY — the same
+ * implementation the `importAsset` op wraps — with skipUpload:true (the source is
+ * already on disk). The executor reads the source bytes itself through the assetIO
+ * gate, so no browser File round-trip is needed. Awaiting each result preserves the
+ * FBX-WASM-unavailable detection + failure counting.
  */
 async function importComplexFilesFromDisk(paths: string[], _basePath: string): Promise<void> {
   console.info(`[useStartupScan] importComplexFilesFromDisk begin paths=${paths.length}`);
 
-  // Pre-flight filter: separate FBX (needs WASM) from non-FBX (always works).
-  // If the first FBX import fails with a WASM-unavailable error, all remaining
-  // FBX files are skipped to avoid N repeated errors in the viewport overlay.
+  // Pre-flight filter: FBX needs WASM. If the first FBX import fails with a
+  // WASM-unavailable error, all remaining FBX files are skipped to avoid N
+  // repeated errors in the viewport overlay.
   const fbxPaths = paths.filter(p => /\.fbx$/i.test(p));
-  const nonFbxPaths = paths.filter(p => !/\.fbx$/i.test(p));
 
   // Lock progress to 'importing' immediately so ScanOverlay stays visible
   // throughout the async import loop (no idle gap before first onProgress).
@@ -82,75 +60,57 @@ async function importComplexFilesFromDisk(paths: string[], _basePath: string): P
   });
 
   try {
-    const byDir = new Map<string, string[]>();
-    for (const relPath of paths) {
-      const dir = dirname(relPath) || 'assets';
-      const list = byDir.get(dir) ?? [];
-      list.push(relPath);
-      byDir.set(dir, list);
-    }
-
     let imported = 0;
-    let fetchFailed = 0;
     let cookFailed = 0;
     let fbxWasmUnavailable = false;
     const errors: Array<{ file: string; error: string }> = [];
 
-    for (const [dir, dirPaths] of byDir) {
-      // If WASM was detected as unavailable, skip remaining FBX-only dirs.
-      if (fbxWasmUnavailable && dirPaths.every(p => /\.fbx$/i.test(p))) continue;
+    for (const relPath of paths) {
+      // If WASM was detected as unavailable, skip remaining FBX files.
+      if (fbxWasmUnavailable && /\.fbx$/i.test(relPath)) continue;
 
-      const files: File[] = [];
-      for (const relPath of dirPaths) {
-        if (fbxWasmUnavailable && /\.fbx$/i.test(relPath)) continue;
-        const file = await fileFromPath(relPath);
-        if (file) {
-          files.push(file);
-        } else {
-          fetchFailed++;
-          errors.push({ file: relPath, error: 'fetch source failed (404 or network)' });
-        }
-      }
-      if (files.length === 0) continue;
+      const sourceName = relPath.slice(relPath.lastIndexOf('/') + 1);
+      updateScanProgress({
+        phase: 'importing',
+        current: imported,
+        total: paths.length,
+        currentFile: sourceName,
+      });
 
-      console.info(`[useStartupScan] importing ${files.length} file(s) → ${dir}`);
-      const onProgress = (p: ImportProgress): void => {
-        updateScanProgress({
-          phase: 'importing',
-          current: imported + p.completed,
-          total: paths.length,
-          currentFile: p.current,
-        });
-      };
-      const results: ImportFileResult[] = await importFiles(files, dir, onProgress, () => {
-        broadcastAssetsChanged();
-      }, { skipUpload: true });
+      // Direct executor call (bootstrap; gateway scan-locked). The executor reads
+      // the on-disk bytes via the assetIO gate — destPath must be the RESOLVED
+      // disk path (the executor does not resolve game-relative paths itself).
+      const r = await executeAssetImport({
+        destPath: resolveGamePath(relPath),
+        sourceName,
+        skipUpload: true,
+      });
 
-      for (const r of results) {
-        if (r.status === 'done') {
-          imported++;
-        } else {
-          cookFailed++;
-          errors.push({ file: r.filename, error: r.error ?? 'unknown cook error' });
+      if (r.status === 'done') {
+        imported++;
+      } else {
+        cookFailed++;
+        errors.push({ file: r.filename, error: r.error ?? 'unknown cook error' });
 
-          // Detect WASM-unavailable pattern on first FBX failure — skip remaining.
-          if (!fbxWasmUnavailable && r.error?.includes('Failed to fetch dynamically imported module')) {
-            fbxWasmUnavailable = true;
-            const remainingFbx = fbxPaths.length - 1;
-            console.warn(
-              `[useStartupScan] ⚠ FBX WASM unavailable — skipping remaining ${remainingFbx} FBX file(s). ` +
-              `Fix: run \`pnpm -F @forgeax/engine-fbx fetch-wasm\` or \`build:wasm\``,
-            );
-          }
+        // Detect WASM-unavailable pattern on first FBX failure — skip remaining.
+        if (!fbxWasmUnavailable && r.error?.includes('Failed to fetch dynamically imported module')) {
+          fbxWasmUnavailable = true;
+          const remainingFbx = fbxPaths.length - 1;
+          console.warn(
+            `[useStartupScan] ⚠ FBX WASM unavailable — skipping remaining ${remainingFbx} FBX file(s). ` +
+            `Fix: run \`pnpm -F @forgeax/engine-fbx fetch-wasm\` or \`build:wasm\``,
+          );
         }
       }
     }
+
+    broadcastAssetsChanged();
 
     // Report summary
     if (errors.length > 0) {
       console.warn(
         `[useStartupScan] ⚠ import completed with errors: ` +
-        `success=${imported} fetchFail=${fetchFailed} cookFail=${cookFailed} total=${paths.length}`,
+        `success=${imported} cookFail=${cookFailed} total=${paths.length}`,
       );
       for (const e of errors.slice(0, 10)) {
         console.warn(`[useStartupScan]   ✗ ${e.file}: ${e.error}`);

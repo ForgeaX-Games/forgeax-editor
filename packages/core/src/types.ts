@@ -82,6 +82,12 @@ export type BuiltinEditorOp =
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'deleteDirectory'; path: string }
+  // importAsset (Invariant 7 convergence): "the source at destPath is on disk;
+  // import it" — ledger-only (no undo; cook produces derived artefacts + refs, not
+  // cleanly reversible). Human callers upload bytes through the assetIO gate first
+  // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
+  // game-relative (the applier resolves it via resolveGamePath).
+  | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean }
   | { kind: 'setFolderSelection'; paths: string[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
