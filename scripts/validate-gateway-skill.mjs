@@ -62,6 +62,12 @@ const REQUIRED_KEYWORDS = [
   // round-2 friction #1).
   'undo',
   'canUndo',
+  // Asset-resident plugin authoring (`*.plugin.ts` under assets/) — the whole
+  // capability was invisible to a docs-only AI until round-3. These anchors keep
+  // the "Author asset-resident game logic" section from silently vanishing
+  // (EXPERIMENT-REPORT round-3 friction #1).
+  '.plugin.ts',
+  'defineSystem',
 ];
 
 // ---------------------------------------------------------------------------

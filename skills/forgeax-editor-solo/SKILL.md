@@ -71,12 +71,25 @@ flowchart TD
 
 ### 0 · Goal + env
 
-State a concrete end-to-end goal a real user would have (not "test the API" — *"an AI builds a small
-scene arrangement"*). Confirm the tool is running and reachable; note ports/health in the report's env
-line. Never assume — probe (`curl`, a health script) and record the result.
+**First read the experiments dir** (`<target>/experiments/*/report.md`) — the dated notebook of every prior
+run. Skim each report's goal + its still-open friction (findings logged but deferred, e.g. "left for a
+later round"); the run's `snippets/` show exactly how it drove the tool. The new goal must **advance the
+frontier**, not re-tread it:
+
+- **Different** from every prior goal — a fresh capability or user story, not a paraphrase.
+- **More meaningful** — climb the ladder (single-op probe → multi-step authoring → composed workflow →
+  a real end-user task that chains several capabilities). Don't keep circling the simplest goals once
+  they're proven; each run should exercise surface the notebook hasn't stressed yet.
+- **Building on prior findings** — prefer a goal that reaches a *deferred* friction from an earlier run
+  (the notebook literally hands you the next target) over one invented from nothing.
+
+Then state it as a concrete end-to-end goal a real user would have (not "test the API" — *"an AI builds a
+small scene arrangement"*). Confirm the tool is running and reachable; note ports/health in the report's
+env line. Never assume — probe (`curl`, a health script) and record the result.
 
 **Gate:** goal is a user story with an explicit success criterion ("each step doable by an AI that reads
-docs only, not source"); env probe recorded.
+docs only, not source"); env probe recorded; **the report's "Prior runs" line names the surveyed reports
+and states how this goal advances beyond them** (new surface and/or a deferred friction it now reaches).
 
 ### 1 · Dogfood
 
@@ -148,19 +161,39 @@ goal.
 
 **Gate:** human approves, or names the next friction to chase.
 
-## The rolling report
+## The run directory
 
-One markdown file per loop, living beside the target (editor instance:
-`skills/forgeax-editor-gateway/EXPERIMENT-REPORT.md`). Written *during* the loop.
+Each loop run is **one self-contained directory**, not a lone file, under the target's experiments dir
+(editor instance: `skills/forgeax-editor-gateway/experiments/`). Name it `<YYYY-MM-DD>-<goal-slug>/`
+(e.g. `2026-07-12-hierarchy-authoring/`) — **date + goal name, one dir per run; never overwrite a prior
+run's dir**, so the experiments dir accumulates a dated lab notebook of reproducible runs. The whole
+`experiments/` tree is a run artifact (gitignored) — don't stage it in the fix's PR.
+
+Everything a run touched lives in its dir — so a later reader (or the next round surveying the frontier)
+can re-run it, not just read about it:
+
+| Path in the run dir | Holds |
+|:--|:--|
+| `report.md` | the rolling report (sections below), written *during* the loop |
+| `snippets/*.mjs` (or `.js`) | every eval snippet you drove the tool with — the exact code, not a paraphrase in prose |
+| `out/*.json` / `*.log` | captured outputs the report's evidence quotes (redirect here, not to `/tmp` where it's lost) |
+
+> [!TIP]
+> Drive the tool by writing a snippet **into `snippets/` first**, then `gateway-eval.mjs --file <that>` →
+> redirect to `out/`. Don't paste inline throwaway code: a run whose driving code lives only in shell
+> history isn't reproducible, and the next round can't build on it.
+
+`report.md` sections:
 
 | Section | Holds |
 |:--|:--|
+| Prior runs | which run dirs were surveyed + how this goal advances the frontier (new surface / a deferred friction it now reaches) — the anti-circling record |
 | Goal + success criterion | the user story, the "docs-only AI can do each step" bar |
 | Env line | ports / health / driver, probed not assumed |
 | Friction table (rolling) | `# · step · class · severity · one-liner`, updated between steps |
 | Positives | what worked — the don't-break list |
 | Design | top finding → investigation → fix → alternatives → acceptance criteria |
-| Results | live end-to-end evidence + gate output, quoted |
+| Results | live end-to-end evidence + gate output, quoted (pointing at `snippets/` + `out/`) |
 
 > [!TIP]
 > The single most useful discipline: **log friction the instant you feel it.** By the end you've
@@ -199,6 +232,15 @@ One markdown file per loop, living beside the target (editor instance:
 - **Unbounded loops inside an eval snippet.** `while(gateway.canRedo()) gateway.redo()` freezes the host
   page forever if the predicate misbehaves (eval has no timeout — SKILL.md "Dead loop no interrupt").
   Bound every eval loop (`&& steps<50`) even when you "know" it terminates.
+- **Circling the easy goals — not surveying the notebook first.** Each run re-picks a goal near the
+  simplest proven one ("spawn + reparent again"), so the notebook fills with near-duplicates and the tool's
+  harder surface never gets stressed. Step 0 must *read the experiments dir first* and pick a goal that is
+  different from every prior run and climbs the ambition ladder — ideally one that reaches a friction an
+  earlier run explicitly deferred. The dated notebook exists to be built *on*, not beside.
+- **Throwaway driving code — a run that can't be re-run.** Pasting eval snippets inline and redirecting to
+  `/tmp` leaves the report's evidence unbacked: the code that produced it is gone, so the next round can't
+  reproduce or extend it. The run's driving snippets + captured output are part of the artifact — write
+  snippets into the run's `snippets/`, outputs into `out/`, and have the report point at them.
 - **Skipping the L2 write.** If the loop taught you a verify recipe or an env gotcha and you don't record
   it, the next loop re-derives it. The codify step is not optional.
 - **Growing this loop into a multi-agent one.** When a fix spans subsystems, escalate to
@@ -210,10 +252,18 @@ The target's driver scripts are owned by `forgeax-editor-gateway` — reuse, don
 
 | Need | Use |
 |:--|:--|
-| Editor already open (live window) | `node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file <snippet>` (needs the bridge; `--health` first) |
-| No editor / page disconnected | `node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file <snippet>` (boots its own headless browser at :15290) |
+| Editor already open + stable (warm) | `node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file <snippet>` (needs the bridge; `--health` first) |
+| No editor, OR a freshly cold-booted stack | `node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file <snippet>` (boots its own headless browser at :15290) |
 | Full playwright absent | point `FORGEAX_PLAYWRIGHT` at a `playwright-core` index + `FORGEAX_CHROMIUM` at a cached chromium binary (memory: `gateway-headless-verify-playwright-core`) |
 | Repo gates | `bun -F @forgeax/editor-core test` · `bun -F @forgeax/editor-core typecheck` (needs engine `.d.ts` — `tsc -b` first) · `bun run lint` · `bun run lint:dep` |
+
+> [!CAUTION]
+> **A cold-booted stack's live bridge flaps — don't dogfood through it.** Right after
+> `bun fx start`, vite re-optimizes deps and reloads the page repeatedly, so `gateway-live.mjs
+> --health` reports `pageConnected:true` (WS transport) while `eval` still 30s-times-out (the page
+> is mid-reload, not eval-ready). `--health` proves transport, not readiness. On a cold boot use
+> **headless `gateway-eval.mjs`** (it boots its own clean browser); reserve `gateway-live.mjs` for a
+> warm window you're actively watching. (round-3 friction #2)
 
 For any *other* tool instance, substitute its own driver + gates — the loop and report discipline are
 unchanged.

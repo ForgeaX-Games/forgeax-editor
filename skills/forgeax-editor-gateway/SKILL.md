@@ -293,6 +293,70 @@ const miss = gateway.describeComponent('Postion');   // typo
 > they are **unregistered** — `dispatch({ kind: 'play' })` returns `UNKNOWN_OP`. Probe with `listOps()`
 > before sending: if `play`/`stop` are absent, the environment does not support them. Do not blindly fire.
 
+## Author asset-resident game logic (plugins)
+
+A game can ship **custom components + systems** as `*.plugin.ts` files under its
+`assets/` root — no code in `main.ts`. The editor's plugin loader dynamically imports every
+`assets/**/*.plugin.ts` at boot; the `defineComponent` / `defineSystem` calls inside register
+into the one live engine registry as an **import side effect**. This is how a component like
+`Rotator` becomes attachable in the editor and a system like `rotate` runs in Play.
+
+**You (the AI) never call the loader** — you author the `*.plugin.ts` file, then use the SAME
+gateway surface as for builtin components. A plugin component is isomorphic to a builtin one:
+attach with `setComponent`, read with `query`, it round-trips through the scene pack.
+
+```ts
+// games/<game>/assets/rotator.plugin.ts  — registration is an IMPORT SIDE EFFECT,
+// export nothing that must be called.
+import { defineComponent, defineSystem, Entity } from '@forgeax/engine-ecs';
+import { Transform, quat } from '@forgeax/engine-runtime';
+
+export const Rotator = defineComponent('Rotator', {
+  axis:  { type: 'array<f32, 3>', default: new Float32Array([0, 1, 0]) }, // typed-array default REQUIRED
+  speed: { type: 'f32', default: 1 },                                     // radians/sec
+});
+
+export const rotate = defineSystem({
+  name: 'rotate',
+  queries: [{ with: [Rotator, Transform, Entity] }], // Entity REQUIRED for bundle.Entity.self
+  before: ['propagateTransforms'],
+  fn: (_world, [rows]) => { /* spin Transform.quat about Rotator.axis each tick */ },
+});
+```
+
+Once the file exists, the editor boots the component in and you drive it through the gateway:
+
+```ts
+// Attach a plugin component — identical to any builtin component:
+const found = query({ with: ['Name'] });
+const ball = found.ok && found.rows.find((r) => r.Name.value === 'BlueBall');
+gateway.dispatch(
+  { kind: 'setComponent', entity: ball.entity, component: 'Rotator', patch: { axis: [0, 1, 0], speed: 3 } },
+  'ai',
+);
+query({ with: ['Rotator'] });   // → rows[].Rotator = { axis:[0,1,0], speed:3 }  (reads back like a builtin)
+gateway.dispatch({ kind: 'saveDocToDisk' }, 'ai');   // persists into the scene pack — Edit == Play
+```
+
+> [!IMPORTANT]
+> **Edit registers the component; Play registers the system — asymmetric on purpose.** In ✎ Edit
+> the loader registers the plugin's **component only**, so you can attach/author `Rotator` but the
+> ball does **not** spin (`Transform.quat` stays `[0,0,0,1]` — you don't want authored props moving
+> under your cursor). Only ▶ Play's fresh world adds the plugin **systems**, so `rotate` ticks there.
+> Which systems a scene runs is **derived** from which `*.plugin.ts` exist under `assets/` — it is not
+> persisted per-scene, so there is no "systems" field to set.
+
+> [!CAUTION]
+> **Observing the rotation is a play-world read, and the gateway's read surface does not reach it.**
+> Two traps a docs-only AI hits:
+> 1. `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** `gateway.mode` flips to `'play'`
+>    (the world-fork is async, ~a frame later). Poll `gateway.mode`, don't read it synchronously.
+> 2. During play, `query(...)` still reads the **frozen edit `doc.world`** (see the play/stop
+>    world-fork rule in `docs/skills/forgeax-editor-gateway.md`), so it will **not** show the spinning
+>    quat — the rotation lives in `gateway.activeWorld` (the raw engine play World, which has **no
+>    `query` facade**). Confirm plugin behavior by **watching the viewport**, not by re-`query`-ing.
+>    Reading the play world's live component columns is not currently on the documented AI surface.
+
 ## defineOp -- Compose New Operations
 
 ```ts

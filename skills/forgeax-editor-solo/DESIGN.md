@@ -80,6 +80,17 @@ Two razors that recur:
   a passing unit. The loop's evidence is an end-to-end run, with repo gates as necessary-but-not-sufficient
   backup.
 
+### 5. The frontier is monotone — runs climb, they don't circle
+
+The dated experiments notebook is not just an archive; it's the **input to the next goal**. Left ungoverned,
+an AI re-picks a goal near the last easy success (it's the cheapest to reason about), so N runs produce N
+near-duplicates and the tool's harder surface — composed workflows, cross-boundary flows, the frictions a
+prior run *deferred* — never gets stressed. So step 0 makes surveying the notebook a gate: the new goal must
+differ from every prior one and move *up* the ambition ladder (probe → authoring → composed workflow → real
+end-user task), ideally reaching a deferred friction the notebook already named. This is the L2 axiom applied
+to *goal selection* itself — each run doesn't just leave a better tool and better method, it leaves a higher
+floor for the next run's ambition. Without it, self-evolution plateaus at the easy goals.
+
 ## SSOT topology (where each fact lives)
 
 | Fact | SSOT |
@@ -87,7 +98,7 @@ Two razors that recur:
 | The loop, its gates, report sections | `SKILL.md` |
 | Why solo / why L2 / the razors' rationale | this file |
 | Editor driver scripts (`gateway-live`/`gateway-eval`) | `forgeax-editor-gateway` skill (reused, never copied) |
-| Per-run findings, friction table, evidence | that run's experiment report |
+| Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir (`<target>/experiments/<YYYY-MM-DD>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
 | Reusable method facts (verify recipes, env gotchas) | project memory + SKILL.md anti-pattern list (L2 sink) |
 | Target-repo architecture razors | `forgeax-harness/rules/architecture-principles.md` |
 
