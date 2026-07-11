@@ -402,3 +402,59 @@ describe('Gateway asset read surface', () => {
     expect((payload as { kind?: string } | undefined)?.kind).toBe('material');
   });
 });
+
+// Part 5 — component read surface: discover component names + field schemas
+// BEFORE constructing a spawn/setComponent payload, instead of learning them
+// only from a SPAWN_FAILED. Parallel to the asset read surface above.
+describe('Gateway component read surface', () => {
+  function gw(): EditGateway {
+    return new EditGateway(createEditSession());
+  }
+
+  it('listComponents lists registered names, sorted, including Transform', () => {
+    const names = gw().listComponents();
+    expect(names).toContain('Transform');
+    expect(names).toContain('Name');
+    expect(names).toContain('MeshFilter');
+    // sorted
+    expect([...names]).toEqual([...names].sort());
+  });
+
+  it('listComponents is same-source as the UNKNOWN_COMPONENT hint (no drift)', () => {
+    const gateway = gw();
+    const names = gateway.listComponents();
+    const miss = gateway.describeComponent('DefinitelyNotAComponent');
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) {
+      // every listed name appears in the miss hint's enumeration
+      for (const n of names) expect(miss.error.hint).toContain(n);
+    }
+  });
+
+  it('describeComponent returns the field schema of a known component', () => {
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.name).toBe('Transform');
+      // Transform's engine schema fields — the exact knowledge an AI needs pre-spawn
+      expect(Object.keys(d.schema)).toEqual(expect.arrayContaining(['pos', 'quat', 'scale']));
+      // values are string type-keywords, JSON-safe
+      for (const t of Object.values(d.schema)) expect(typeof t).toBe('string');
+    }
+  });
+
+  it('describeComponent result round-trips through JSON (no live handles)', () => {
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+  });
+
+  it('describeComponent on an unknown name returns structured UNKNOWN_COMPONENT', () => {
+    const d = gw().describeComponent('Nope');
+    expect(d.ok).toBe(false);
+    if (!d.ok) {
+      expect(d.error.code).toBe('UNKNOWN_COMPONENT');
+      expect(d.error.hint).toContain('registered component names:');
+    }
+  });
+});

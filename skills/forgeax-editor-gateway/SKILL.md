@@ -60,7 +60,7 @@ readable `droppedTraces` counter.
 | Entry | Shape | Purpose |
 |:--|:--|:--|
 | `gateway.dispatch(op, origin?)` | `(EditorOp, 'human'\|'ai') => DispatchResult` | Immediate op: construct EditorOp -> dispatch, domain settled by applier table |
-| `gateway.begin(op)` | `(EditorOp) => {ok:true, handle} \| {ok:false, error}` | Start continuous op: pre-validate + snapshot, occupy slot, return handle |
+| `gateway.begin(op, origin?)` | `(EditorOp, 'human'\|'ai') => {ok:true, handle} \| {ok:false, error}` | Start continuous op: pre-validate + snapshot, occupy slot, return handle. **origin defaults to `'human'` and the WHOLE lifecycle carries it** — AI-driven gestures MUST pass `'ai'` here (commit has no origin param), else the ledger records the drag as human |
 | `gateway.update(handle, patch)` | `(OpHandle, Record<string,any>) => DispatchResult` | Accumulate patch into begin op, write-through state + repaint (no ledger, no inverse) |
 | `gateway.commit(handle)` | `(OpHandle) => DispatchResult` | Finish continuous op: compute from->to inverse, settle per domain, release slot |
 | `gateway.cancel(handle)` | `(OpHandle) => DispatchResult` | Roll back to pre-begin state, no trace, release slot |
@@ -70,6 +70,8 @@ readable `droppedTraces` counter.
 | `gateway.describeAsset(handle)` | `(number) => {ok:true, kind, guid?, name?, builtin?} \| {ok:false, error}` | Human-readable identity of an asset handle: kind + (catalog assets) guid+name, or builtin:true |
 | `gateway.assetCatalog()` | `() => readonly {guid, kind, name?, relativeUrl}[]` | List the asset catalog (projects registry.listCatalog); [] if no registry |
 | `gateway.lookupAsset(guid)` | `(AssetGuid\|string) => Asset \| undefined` | Look up a catalogued asset payload by GUID (catalog only, no fetch) |
+| `gateway.listComponents()` | `() => readonly string[]` | Self-introspect all registered component names (sorted). The "what components exist?" leg, parallel to listOps (ops) / assetCatalog (assets). Same source as the UNKNOWN_COMPONENT hint |
+| `gateway.describeComponent(name)` | `(string) => {ok:true, name, schema, defaults?} \| {ok:false, error}` | Field schema of one component (field→type-keyword map + JSON-safe defaults) — the answer to "what fields does Transform take?" BEFORE building a spawn/setComponent payload. Unknown name → UNKNOWN_COMPONENT listing registered names |
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
@@ -125,7 +127,7 @@ if (r.ok) {
 // gizmo drag: mousedown -> mousemove* -> mouseup
 // Transform fields are the ENGINE schema: pos/quat/scale/world (vectors), NOT posX/posY/posZ.
 // pos is [x,y,z]; quat is [x,y,z,w]; scale is [x,y,z]. Same names on read (query) and write.
-const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { pos: [0, 0, 0] } });
+const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { pos: [0, 0, 0] } }, 'ai');
 if (!b.ok) return; // begin failed (e.g. entity nonexistent) -> {ok:false, error}
 const handle = b.handle;
 
@@ -138,6 +140,16 @@ const result = gateway.commit(handle);
 // document domain -> undo + ledger (one undo rolls back entire drag)
 // session domain -> ledger only
 ```
+
+> [!IMPORTANT]
+> **Driving a continuous op across separate `gateway-live.mjs` / `gateway-eval.mjs` calls
+> (the natural AI pattern: one call per mousedown/move/up).** The `OpHandle` is a live object;
+> the bridge only round-trips JSON, and it serializes to `{ id: 'op-…' }`. So either (a) stash it
+> in the page — `window.__h = b.handle` in the begin call, then `gateway.update(window.__h, …)`
+> next call — or (b) reconstruct it: read `b.handle.id` from the begin result and pass a plain
+> `{ id }` object to `update`/`commit`. Only ONE op slot exists: any intervening `begin` (yours or a
+> human's) supersedes the prior handle, and the stale one returns `OP_INTERRUPTED`. For a
+> self-contained gesture, do begin+update+commit inside ONE snippet (no cross-call handle at all).
 
 ## cancel -- Interrupt Rollback
 
@@ -235,6 +247,40 @@ const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog 
 > `resolveAsset` still returns their payload (it covers builtin + catalog). `raw`
 > of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`.
 > `unique<T>`/`ref`/`buffer` stay opaque (no catalog GUID; not resolved here).
+
+### Discover component names + field schemas (before you spawn / setComponent)
+
+`spawnEntity`/`setComponent` take engine-schema components, but `listOps()`'s
+`argsSchema` only declares `components: {type:'object'}` — it can't tell you a component's
+field names (the set is the engine's dynamic registry, not a static schema). Use the component
+read surface to learn them at runtime instead of guessing and tripping `SPAWN_FAILED`:
+
+```ts
+// "What components exist?" — the self-introspection leg parallel to listOps()/assetCatalog()
+gateway.listComponents();
+// → ['AnimationPlayer', 'AudioListener', …, 'Transform', …]  (sorted; same source as the
+//   UNKNOWN_COMPONENT hint, so it never drifts)
+
+// "What fields does Transform take, and of what type?" — read BEFORE building a payload
+const d = gateway.describeComponent('Transform');
+// → { ok:true, name:'Transform',
+//     schema:   { pos:'array<f32, 3>', quat:'array<f32, 4>', scale:'array<f32, 3>', world:'array<f32, 16>' },
+//     defaults: { pos:[0,0,0], quat:[0,0,0,1], scale:[1,1,1], … } }   // JSON-safe (TypedArrays snap-copied)
+
+// Now the spawn payload writes itself — no posX/posY/posZ guesswork:
+if (d.ok) gateway.dispatch({ kind:'spawnEntity', name:'Cube', components:{ Transform:{ pos:[0,1,0] } } }, 'ai');
+
+// Unknown name → structured error listing the registered names (same shape as query's):
+const miss = gateway.describeComponent('Postion');   // typo
+// → { ok:false, error:{ code:'UNKNOWN_COMPONENT', hint:'component "Postion" is not registered. registered component names: …' } }
+```
+
+> [!NOTE]
+> `describeComponent` / `listComponents` are **read-only gateway methods, not ops** — they don't
+> appear in `listOps()` and never touch the ledger (same tier as `describeAsset`/`assetCatalog`).
+> `schema` values are the engine's type keywords as strings (`'array<f32, 3>'`, `'f32'`,
+> `'shared<MeshAsset>'`, `'entity'`, …). `defaults` is present only when the component declared
+> layer-2 defaults; its vector values are plain `number[]` (JSON-safe), not live TypedArrays.
 
 
 > [!NOTE]

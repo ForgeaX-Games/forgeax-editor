@@ -34,6 +34,13 @@ import type { EntityHandle } from '../scene/scene-types';
 // human-readable identity that only catalog assets have.
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
+// Component read surface: the same registry the query snapshot uses to resolve
+// component names (query-snapshot.ts) and the same source UNKNOWN_COMPONENT
+// enumerates its hint from — projected here so an AI can discover component
+// names + field schemas BEFORE a spawn/setComponent, instead of learning them
+// only by triggering a SPAWN_FAILED. Derive, don't duplicate: no static copy of
+// the component set lives in argsSchema. Parallel to describeAsset/assetCatalog.
+import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -823,6 +830,68 @@ export class EditGateway {
    */
   lookupAsset(guid: AssetGuid | string): Asset | undefined {
     return this.doc.registry?.lookup(guid);
+  }
+
+  /**
+   * List every registered component name (sorted). The "what components exist?"
+   * self-introspection leg, parallel to listOps() (ops) and assetCatalog()
+   * (assets). Same source as the UNKNOWN_COMPONENT hint (getRegisteredComponents),
+   * so the two never drift. An AI enumerates this before a spawn/setComponent
+   * instead of guessing a name and triggering an error.
+   */
+  listComponents(): readonly string[] {
+    return Array.from(getRegisteredComponents().keys()).sort();
+  }
+
+  /**
+   * Describe one component's field schema — the answer to "what fields does
+   * Transform take, and of what type?" BEFORE constructing a spawnEntity /
+   * setComponent payload. Projects the engine token's frozen `.schema`
+   * (field-name → type-keyword) and its layer-2 `.defaults`, the same data the
+   * engine uses to validate spawn data (so it can never disagree with the
+   * SPAWN_FAILED "Known fields" hint). Unknown name → structured
+   * UNKNOWN_COMPONENT whose hint lists the registered names (reused shape from
+   * query-snapshot). Read-only: no world/ledger mutation, not an op.
+   */
+  describeComponent(
+    name: string,
+  ):
+    | { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> }
+    | { ok: false; error: CommandError } {
+    const token = resolveComponent(name);
+    if (!token) {
+      const known = Array.from(getRegisteredComponents().keys()).sort();
+      return {
+        ok: false,
+        error: {
+          code: 'UNKNOWN_COMPONENT',
+          hint: `component "${name}" is not registered. registered component names: ${known.join(', ')}`,
+        },
+      };
+    }
+    // token.schema is a frozen field-name → type-keyword map; copy to a plain
+    // JSON-safe object (values are already string keywords like 'array<f32, 3>').
+    const schema: Record<string, string> = {};
+    for (const [field, type] of Object.entries(token.schema)) {
+      schema[field] = String(type);
+    }
+    const result: { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> } = {
+      ok: true,
+      name: token.name,
+      schema,
+    };
+    if (token.defaults !== undefined) {
+      // defaults values may be TypedArrays (e.g. Transform.pos is a Float32Array)
+      // — snap-copy those into plain number[] so the result is JSON-safe (mirrors
+      // query-snapshot's TypedArray handling; without this the object round-trips
+      // to indexed-key garbage). Scalars pass through untouched.
+      const defaults: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(token.defaults as Record<string, unknown>)) {
+        defaults[field] = ArrayBuffer.isView(value) ? Array.from(value as unknown as ArrayLike<number>) : value;
+      }
+      result.defaults = defaults;
+    }
+    return result;
   }
 
   /** Build a query-snapshot function for defineOp plan(). Public entry face is
