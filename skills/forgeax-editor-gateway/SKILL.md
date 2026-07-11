@@ -418,6 +418,63 @@ gateway.defineOp({
 //   Empty plan -> {ok:true} with zero ledger entries.
 ```
 
+### Scoped plan -- operate on a parent's children (enumerate via ChildOf)
+
+The most common composed op is not "scan the whole table" but "apply to a **scoped
+set**" — a group's members, a row to distribute, a stack to align. The scope is
+almost always **a parent's direct children**. Reading that set has one trap:
+
+```ts
+// A plan that distributes a parent's direct children evenly along an axis.
+gateway.defineOp({
+  id: 'distributeChildren',
+  domain: 'document',
+  argsSchema: {
+    type: 'object',
+    properties: {
+      parent:  { type: 'number', description: 'parent entity handle' },
+      axis:    { type: 'string', enum: ['x', 'y', 'z'] },
+      spacing: { type: 'number' },
+    },
+    required: ['parent', 'axis', 'spacing'],
+  },
+  plan: (query, args) => {
+    // ⚠️ DO NOT read the parent's `Children`: query({with:['Children']}) serializes
+    //    Children.entities to an opaque COUNT — { entities:<raw>, "entities:count":N } —
+    //    the member handles are NOT retrievable. (It's a managed entity-list field.)
+    // ✅ Reverse-scan the child side instead: ChildOf.parent is a plain entity id.
+    //    ChildOf is the SSOT; Children is the engine's derived reverse-mirror of it
+    //    (ChildOf declares relationship:{mirror:'Children'}), so scanning ChildOf
+    //    reads the source of truth, not a cache.
+    const r = query({ with: ['ChildOf', 'Transform'] });
+    if (!r.ok) return [];
+    const idx = { x: 0, y: 1, z: 2 }[args.axis];
+    return r.rows
+      .filter(row => row.ChildOf && row.ChildOf.parent === args.parent)
+      .sort((a, b) => a.entity - b.entity)   // stable order — plan must be deterministic
+      .map((row, i) => {
+        const pos = row.Transform.pos.slice();
+        pos[idx] = i * args.spacing;
+        return { kind: 'setComponent', entity: row.entity, component: 'Transform', patch: { pos } };
+      });
+  },
+});
+
+// Dispatch it like any op; the whole fan-out is ONE document transaction:
+gateway.dispatch({ kind: 'distributeChildren', parent: groupHandle, axis: 'x', spacing: 3 }, 'ai');
+//   → children land at x = 0, 3, 6, …
+//   → a single gateway.undo() reverts EVERY child move at once (composite = one undo)
+//   → auditLog() records ONE 'distributeChildren' entry (origin:'ai'), not the expanded setComponents
+```
+
+> [!NOTE]
+> **The plan gets only `query` — no selection, no `world`.** There is no
+> `gateway.getSelection()` inside a plan and `Selected` is not a queryable component
+> (`query({with:['Selected']})` → `UNKNOWN_COMPONENT`). Scope a composed op by a
+> parameter you pass in (a `parent` handle, an explicit entity list in `args`), not by
+> reading editor UI state. This keeps the op headless-replayable — the same reason it
+> takes a path, not a live selection.
+
 > [!IMPORTANT]
 > **querySnapshot is fully open**. `query({ with: [...] })` accepts ANY registered
 > component name — no more whitelist of just `Transform` + `Entity`. Unknown component names now

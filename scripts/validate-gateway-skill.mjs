@@ -68,6 +68,13 @@ const REQUIRED_KEYWORDS = [
   // (EXPERIMENT-REPORT round-3 friction #1).
   '.plugin.ts',
   'defineSystem',
+  // Scoped-plan authoring — the most common composed-op shape is "operate on a
+  // parent's children", but Children.entities serializes to an opaque count, so a
+  // plan MUST reverse-scan ChildOf (the SSOT; Children is its derived mirror).
+  // The defineOp section only showed a whole-table scan until round-4; this anchor
+  // keeps the "enumerate a parent's children" example from vanishing
+  // (EXPERIMENT-REPORT round-4 friction #1; round-2 deferred #3).
+  'ChildOf',
 ];
 
 // ---------------------------------------------------------------------------
