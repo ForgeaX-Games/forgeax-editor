@@ -310,6 +310,24 @@ can re-run it, not just read about it:
   it, the next loop re-derives it. The codify step is not optional.
 - **Growing this loop into a multi-agent one.** When a fix spans subsystems, escalate to
   `forgeax-closed-loop` — don't bolt reviewers/state onto the solo loop.
+- **A self-introspection surface that shows a contract it doesn't enforce is a bug, not a doc gap —
+  and it ranks above every doc friction.** When a runtime query advertises a constraint (an op's
+  `argsSchema`, a field's `nullable`, a declared `required`), a docs-only user *reasonably assumes it
+  is applied*. If it isn't, the failure is silent AND correct-looking — the worst kind (round-4:
+  defined document ops never validated their `argsSchema`, so a missing/wrong-typed arg flowed into the
+  plan and wrote `NaN`→`null` into the world with `{ok:true}` + trace `OK`). This is strictly worse than
+  a loud gap and worse than round-2's undo-returns-boolean (that only failed to act; this corrupts
+  persisted data). Fix by routing the offending path through the *same* validator its siblings already
+  use (SSOT — never hand-roll a parallel check), then prove the corruption→error flip end-to-end in the
+  live tool, not just in a unit.
+- **An anchor/gate test that isn't wired into CI can sit red for rounds.** Round-4 found
+  `validate-gateway-skill.test.mjs` had been `14/15` (exit 1) since round-2 — earlier loops added
+  keywords to the validator's `REQUIRED_KEYWORDS` but not to its VALID fixture, and because the test is
+  invoked by no CI job, nobody noticed. When you add a CI anchor, run its *own* test suite in the same
+  loop, and prefer wiring the anchor into `bun run lint`/CI over trusting a manually-run script.
+- **The op catalog is a module-global that persists across same-file tests.** A `defineOp` unit that
+  reuses an id across `it()` blocks silently gets `OP_ID_CONFLICT` on the 2nd call → `defineOp().ok===false`
+  → the test asserts on an op that was never registered. Use a per-call unique id (`foo_${seq++}`).
 
 ## Driving the editor instance
 

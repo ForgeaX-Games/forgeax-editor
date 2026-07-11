@@ -75,6 +75,11 @@ const REQUIRED_KEYWORDS = [
   // keeps the "enumerate a parent's children" example from vanishing
   // (EXPERIMENT-REPORT round-4 friction #1; round-2 deferred #3).
   'ChildOf',
+  // Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
+  // argsSchema is ENFORCED at dispatch for defined ops. Without this section a
+  // docs-only AI defines an op it cannot correctly call, and trusts a schema that
+  // used to be decorative (EXPERIMENT-REPORT round-4 friction #1/#2).
+  'Dispatch a composed op',
 ];
 
 // ---------------------------------------------------------------------------

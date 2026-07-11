@@ -405,6 +405,27 @@ export class EditGateway {
           },
         };
       }
+      // Entry args validation for defineOp-authored document ops (Fail Fast §5 /
+      // Schema-as-Contract §3). Builtin document ops are validated field-by-field
+      // inside applyCommand (entity/component/patch checks), so they fall through
+      // here untouched. A `source:'defined'` document op, however, hands its raw
+      // `{...args}` straight to the user plan(query,args) — nothing checks the
+      // declared argsSchema, so a missing/wrong-typed arg used to flow silently
+      // into the plan (e.g. `x + undefined = NaN`) and corrupt the world with a
+      // {ok:true} + trace OK. Validate the SAME way session/transient ops are
+      // validated below (reuse validateArgs + INVALID_ARGS — no new mechanism),
+      // turning the silent corruption into a loud, catchable error. Guarded on
+      // source==='defined' so this never double-validates a builtin. (Session
+      // defineOp ops already hit the shared validator further down.)
+      const docDescriptor = getOp(kind);
+      if (docDescriptor?.source === 'defined' && docDescriptor.argsSchema) {
+        const v = validateArgs(docDescriptor.argsSchema, cmd);
+        if (!v.ok) {
+          const first = v.errors[0];
+          const hint = `invalid args for "${kind}": ${first ? `${first.path}: ${first.message}` : 'schema validation failed'}`;
+          return { ok: false, error: { code: 'INVALID_ARGS', hint } };
+        }
+      }
       // duplicateEntity is the public convenience operation. Capture its
       // SceneAsset exactly once before the document applier writes so redo uses
       // the same GUID-backed POD rather than re-reading a changed source entity.

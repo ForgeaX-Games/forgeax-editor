@@ -340,3 +340,86 @@ describe('session defineOp edge cases (t29b, AC-18)', () => {
     expect(gw.ledger[gw.ledger.length - 1]!.kind).toBe('setSelectionMany');
   });
 });
+
+// ── (h) argsSchema is ENFORCED for defined document ops ──────────────────────
+// Regression: a defined document op's argsSchema used to be decorative — dispatch
+// never validated it, so a missing required arg or wrong-typed arg flowed straight
+// into plan(query,args) and corrupted the world silently ({ok:true}, trace OK,
+// e.g. `x + undefined = NaN` persisted as null). The fix validates a
+// source:'defined' document op's args against its catalog argsSchema at dispatch
+// entry (reusing the same validateArgs/INVALID_ARGS as session/transient ops).
+// (EXPERIMENT-REPORT 2026-07-12-defineop-authoring friction #1.)
+
+describe('defineOp document-op argsSchema enforcement (round-4 friction #1)', () => {
+  let gw: EditGateway;
+  let entity: number;
+  // The op catalog is module-global (registerDefinedOp), so ids persist ACROSS
+  // tests in this file even though beforeEach makes a fresh gateway. Use a unique
+  // id per definePushY() call to avoid OP_ID_CONFLICT with a prior test.
+  let opSeq = 0;
+
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+    entity = spawnEntity(gw, 'target');
+  });
+
+  // Returns the freshly-registered op id (or throws if defineOp unexpectedly fails).
+  function definePushY(): string {
+    const id = `pushYStrict_${opSeq++}`;
+    const r = gw.defineOp({
+      id,
+      domain: 'document',
+      argsSchema: { type: 'object', properties: { dy: { type: 'number' } }, required: ['dy'] },
+      // A plan that trusts argsSchema: it propagates args.dy unguarded.
+      plan: (_query, args) => {
+        const dy = (args as { dy: number }).dy;
+        return [{ kind: 'setComponent', entity, component: 'Transform', patch: { pos: [0, dy, 0] } }];
+      },
+    });
+    expect(r.ok).toBe(true);
+    return id;
+  }
+
+  it('missing required arg → INVALID_ARGS, world untouched (no silent NaN)', () => {
+    const id = definePushY();
+    const yBefore = readPosY(gw, entity);
+
+    const r = gw.dispatch({ kind: id } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('INVALID_ARGS');
+      expect(r.error.hint).toContain('dy');
+    }
+    // The plan never ran → the world is exactly as before (no NaN/null write).
+    expect(readPosY(gw, entity)).toBe(yBefore);
+  });
+
+  it('wrong-typed arg → INVALID_ARGS, world untouched', () => {
+    const id = definePushY();
+    const yBefore = readPosY(gw, entity);
+
+    const r = gw.dispatch({ kind: id, dy: 'BAD' } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
+    expect(readPosY(gw, entity)).toBe(yBefore);
+  });
+
+  it('valid arg → dispatch succeeds and the plan applies', () => {
+    const id = definePushY();
+
+    const r = gw.dispatch({ kind: id, dy: 7 } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(true);
+    expect(readPosY(gw, entity)).toBe(7);
+  });
+
+  it('builtin document op is unaffected (still validated by applyCommand, not double-checked)', () => {
+    // setComponent has a catalog argsSchema too, but it is source:'builtin' so it
+    // must NOT go through the new defined-op branch — applyCommand still governs it.
+    const r = gw.dispatch(
+      { kind: 'setComponent', entity, component: 'Transform', patch: { pos: [0, 3, 0] } },
+      'ai',
+    );
+    expect(r.ok).toBe(true);
+    expect(readPosY(gw, entity)).toBe(3);
+  });
+});

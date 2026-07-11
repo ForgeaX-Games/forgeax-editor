@@ -391,6 +391,36 @@ const result = gateway.defineOp({
 // Composed op is immediately visible: listOps() now shows { id:'alignToGrid', source:'defined' }
 ```
 
+### Dispatch a composed op (call the op you just defined)
+
+`defineOp` only *registers* the op — you invoke it with the SAME `gateway.dispatch`
+as any builtin. **Args are TOP-LEVEL fields on the op object, not nested under an
+`args` key** (the `plan(query, args)` signature reads them off the op minus `kind`):
+
+```ts
+// ✅ correct — args flat on the op:
+gateway.dispatch({ kind: 'alignToGrid', step: 1 }, 'ai');   // plan receives args = { step: 1 }
+
+// ❌ wrong — nested `args` is a silent no-op:
+gateway.dispatch({ kind: 'alignToGrid', args: { step: 1 } }, 'ai');
+//   plan receives args = { args: { step: 1 } }, so args.step is undefined.
+```
+
+> [!IMPORTANT]
+> **`argsSchema` IS enforced at dispatch for defined ops** — a missing `required`
+> field or a wrong-typed value returns `{ ok:false, error:{ code:'INVALID_ARGS' } }`
+> **before** your `plan` runs, so a bad arg can never reach the plan and corrupt the
+> world. Declare the schema honestly (it is a real contract, not decoration) and
+> branch on `r.ok` like any other dispatch.
+
+- **One undo for the whole op.** A `document` composed op records a **single**
+  `{ kind:'<id>' }` ledger entry (a `transaction` wrapping every sub-op) — one
+  `undo()` rolls back the entire plan. This is the mirror image of a **`session`**
+  composed op, whose sub-ops are flattened into the ledger as separate entries with
+  no composite (see below) and are not undoable at all.
+- **`listOps()` rows carry a `title`** too: a defined op shows
+  `{ id, domain, source:'defined', argsSchema, title }` (title defaults to the id).
+
 ### Session-domain defineOp
 
 ```ts
