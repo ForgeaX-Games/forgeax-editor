@@ -418,11 +418,11 @@ gateway.defineOp({
 //   Empty plan -> {ok:true} with zero ledger entries.
 ```
 
-### Scoped plan -- operate on a parent's children (enumerate via ChildOf)
+### Scoped plan -- operate on a parent's children
 
 The most common composed op is not "scan the whole table" but "apply to a **scoped
 set**" — a group's members, a row to distribute, a stack to align. The scope is
-almost always **a parent's direct children**. Reading that set has one trap:
+almost always **a parent's direct children**. Two equivalent ways to read that set:
 
 ```ts
 // A plan that distributes a parent's direct children evenly along an axis.
@@ -439,13 +439,13 @@ gateway.defineOp({
     required: ['parent', 'axis', 'spacing'],
   },
   plan: (query, args) => {
-    // ⚠️ DO NOT read the parent's `Children`: query({with:['Children']}) serializes
-    //    Children.entities to an opaque COUNT — { entities:<raw>, "entities:count":N } —
-    //    the member handles are NOT retrievable. (It's a managed entity-list field.)
-    // ✅ Reverse-scan the child side instead: ChildOf.parent is a plain entity id.
-    //    ChildOf is the SSOT; Children is the engine's derived reverse-mirror of it
-    //    (ChildOf declares relationship:{mirror:'Children'}), so scanning ChildOf
-    //    reads the source of truth, not a cache.
+    // Read the group's members. Both directions work; pick by what you already query:
+    //   • Parent side: query({with:['Children']}) → row.Children.entities is a real
+    //     entity[] (the child handles). Enumerable directly.
+    //   • Child side (used here): query({with:['ChildOf', ...]}) filtered by
+    //     ChildOf.parent gives the members AND their Transform in one pass — handy
+    //     when you need each child's data too. ChildOf is the SSOT; Children is the
+    //     engine's derived reverse-mirror (ChildOf declares relationship:{mirror:'Children'}).
     const r = query({ with: ['ChildOf', 'Transform'] });
     if (!r.ok) return [];
     const idx = { x: 0, y: 1, z: 2 }[args.axis];
@@ -485,7 +485,9 @@ gateway.dispatch({ kind: 'distributeChildren', parent: groupHandle, axis: 'x', s
 > `shared<T>` asset handle, feed `raw` to `gateway.describeAsset(raw)` (identity) or
 > `gateway.resolveAsset(raw)` (payload) — see "Read what asset an entity references". TypedArray
 > fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
-> column-buffer references.
+> column-buffer references. Variable-length `array<T>` fields (e.g. `Children.entities`, an
+> `array<entity>`) also serialize to a plain snap-copied array of their elements — the member
+> handles are directly enumerable, not an opaque count.
 
 ## eval -- AI Entry Channel (DEV-only)
 

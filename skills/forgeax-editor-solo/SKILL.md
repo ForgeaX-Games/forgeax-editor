@@ -259,6 +259,14 @@ can re-run it, not just read about it:
 - **Skipping the worktree — editing on the primary checkout.** Step 5 requires `EnterWorktree`; the loop
   mutates a running tool *and* its source in one session, so an in-place edit can strand `main` dirty
   mid-dogfood. Every fix lands in a worktree, primary checkout stays on `main`.
+- **Assuming the repo is frozen for the loop's duration.** A long loop can span a repo that keeps moving —
+  a prior round's PR merges, and a *new rule* can land that retroactively rejudges your in-flight design.
+  (Real case: round-4's doc-only fix merged as #157; then #156's fix-priority ladder landed *after* it and
+  reclassified that doc as a band-aid — the correct fix was now layer-2 code on top of #157, plus a doc
+  correction so #157 stayed truthful.) A background sync can also silently reset your uncommitted edits.
+  Before designing and again before verifying, `git log --oneline -5` + `git status` to re-anchor your base;
+  never assume the working tree you left is the one you return to. When a rule upgraded under you, re-run
+  your chosen fix through the *new* razor, don't defend the old plan.
 - **Reading the tool's source to drive it.** You then can't see the doc gaps the real user hits — the
   whole experiment measures docs-vs-reality. Drive from public docs only; reading source is for the *fix*,
   not the *dogfood*.
