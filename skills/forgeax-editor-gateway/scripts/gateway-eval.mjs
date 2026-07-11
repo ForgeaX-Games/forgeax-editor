@@ -18,13 +18,14 @@
 //   FORGEAX_GATEWAY_URL=http://localhost:18920 node gateway-eval.mjs "query({with:['Transform']})"
 //   node gateway-eval.mjs --raw "world.spawn(...)"        # unlock scope② (dev raw engine) first
 //
-// Flags:
+// Flags (parsed by gateway-cli-common.parseArgs — unknown flags fail loudly):
 //   --file <path>   read the snippet from a file instead of argv
 //   --raw           call __forgeaxEval.unlockRawScope() before eval (grants world/renderer/assets)
 //   --url <url>     override the target (else $FORGEAX_GATEWAY_URL, else :15290)
 //   --timeout <ms>  __forgeaxEval readiness wait (default 30000)
+//   --settle <ms>   wait after channel-ready for the scene to load (default 1500; 0 to skip)
 
-import { readFileSync } from 'node:fs';
+import { parseArgs, readSnippet, printResult, resolveGpuArgs } from './gateway-cli-common.mjs';
 
 // Resolve chromium from `playwright` (the editor's e2e devDep, present after
 // `bun run test:e2e:install`). If only `playwright-core` is available (e.g. a
@@ -45,29 +46,20 @@ try {
   process.exit(2);
 }
 
-function parseArgs(argv) {
-  const a = { raw: false, url: undefined, file: undefined, timeout: 30000, settle: 1500, code: undefined };
-  for (let i = 2; i < argv.length; i++) {
-    const t = argv[i];
-    if (t === '--raw') a.raw = true;
-    else if (t === '--file') a.file = argv[++i];
-    else if (t === '--url') a.url = argv[++i];
-    else if (t === '--timeout') a.timeout = Number(argv[++i]);
-    else if (t === '--settle') a.settle = Number(argv[++i]);
-    else if (!t.startsWith('--')) a.code = t;
-  }
-  return a;
-}
+// Strict spec-driven parse (shared SSOT). Unknown flags fail loudly (exit 2) so a
+// flag this script does not declare can never leak into the code snippet — the
+// gateway-live `--settle`-into-code trap that motivated gateway-cli-common.mjs.
+const { code: posCode, flags } = parseArgs(process.argv, {
+  boolean: ['raw'],
+  value: ['file', 'url', 'timeout', 'settle'],
+  number: ['timeout', 'settle'],
+});
+const url = flags.url ?? process.env.FORGEAX_GATEWAY_URL ?? 'http://localhost:15290';
+const timeout = flags.timeout ?? 30000;
+const settle = flags.settle ?? 1500;
+const code = readSnippet({ code: posCode, file: flags.file });
 
-const args = parseArgs(process.argv);
-const url = args.url ?? process.env.FORGEAX_GATEWAY_URL ?? 'http://localhost:15290';
-const code = args.file ? readFileSync(args.file, 'utf8') : args.code;
-if (!code) {
-  console.error('no snippet — pass code as an argument or --file <path>');
-  process.exit(2);
-}
-
-const launchOpts = { headless: true };
+const launchOpts = { headless: true, args: resolveGpuArgs() };
 if (process.env.FORGEAX_CHROMIUM) launchOpts.executablePath = process.env.FORGEAX_CHROMIUM;
 const browser = await chromium.launch(launchOpts);
 try {
@@ -79,11 +71,11 @@ try {
   });
   const page = await ctx.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!globalThis.__forgeaxEval, { timeout: args.timeout });
+  await page.waitForFunction(() => !!globalThis.__forgeaxEval, { timeout });
   // The channel mounts before the scene finishes async loadByGuid → instantiate,
   // so scene-dependent queries (entity counts, hierarchy) run too early right
   // after readiness. Settle briefly; --settle 0 for scene-independent calls.
-  if (args.settle > 0) await page.waitForTimeout(args.settle);
+  if (settle > 0) await page.waitForTimeout(settle);
 
   const result = await page.evaluate(
     async ({ snippet, raw }) => {
@@ -97,11 +89,10 @@ try {
       }
       return r;
     },
-    { snippet: code, raw: args.raw },
+    { snippet: code, raw: flags.raw ?? false },
   );
 
-  console.log(JSON.stringify(result, null, 2));
-  process.exitCode = result && result.ok === false ? 1 : 0;
+  printResult(result);
 } finally {
   await browser.close();
 }

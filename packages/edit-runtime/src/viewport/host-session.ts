@@ -121,6 +121,13 @@ export interface HostSessionContext {
    * plugin set mirrors the edit assembly (D-7).
    */
   readonly physics: PhysicsBackend | undefined;
+  /**
+   * Optional per-frame callback the run-lifecycle registers on the PLAY App so it
+   * keeps ticking while the edit App is paused during play. Production wires the
+   * DEV bridge's eval-queue drain here so a CLI eval submitted during play still
+   * drains; undefined in headless and in production builds (bridge is DEV-only).
+   */
+  readonly onPlayFrame?: (dt: number) => void;
 }
 
 export interface HostSession {
@@ -447,6 +454,11 @@ export function createHostSession(deps: HostSessionDeps): {
           ...(ctx.physics ? { physics: ctx.physics } : {}),
         }),
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
+      // DEV bridge follow-the-live-app: register the eval-queue drain on the play
+      // App so a CLI eval submitted during play still drains while the edit App is
+      // paused (undefined in production/headless — bridge is DEV-only). See
+      // run-lifecycle onPlayFrame + ViewportComponent bridge block.
+      ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
       onDirtyPlayHint: () => {
         // D-10: play re-instantiates the last-SAVED scene from disk; unsaved
         // in-memory edits are not reflected. Surface a structured hint (no auto-save

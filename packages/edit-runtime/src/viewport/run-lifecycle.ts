@@ -95,6 +95,16 @@ export interface RunLifecycleDeps {
    * disk, so unsaved in-memory edits are not reflected). Omitted in headless.
    */
   readonly onDirtyPlayHint?: () => void;
+  /**
+   * Optional: a per-frame callback to register on the PLAY App's frame loop right
+   * after it starts. The edit App is paused during play (editorApp.pause, AC-07),
+   * so anything bound to editorApp.registerUpdate stops ticking — most importantly
+   * the DEV bridge's eval-queue drain, which would otherwise leave a CLI eval
+   * submitted during play queued forever. Threading it here lets the drain follow
+   * the live app: it is registered on the play App on ▶ and dropped with that app
+   * on ■ (GC, no leak). Omitted in headless and in production (bridge is DEV-only).
+   */
+  readonly onPlayFrame?: (dt: number) => void;
 }
 
 /** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
@@ -147,6 +157,15 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     const startR = active.playApp.start();
     if (!startR.ok) {
       console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
+    }
+
+    // Follow-the-live-app: the edit App is now paused, so anything on
+    // editorApp.registerUpdate (the DEV bridge eval-queue drain) has gone quiet.
+    // Re-register that per-frame callback on the play App so a CLI eval submitted
+    // during play still drains. Registered AFTER start() so it joins the running
+    // loop; dropped with the play App on ■ Stop (assembly goes unreferenced, AC-05).
+    if (deps.onPlayFrame) {
+      active.playApp.registerUpdate(deps.onPlayFrame);
     }
 
     // D-3: switch the single active-world pointer to the play world (clears

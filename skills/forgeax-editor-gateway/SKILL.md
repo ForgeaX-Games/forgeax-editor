@@ -15,8 +15,11 @@ description: >-
 > **All editor operations go through a single EditGateway — `dispatch` / `begin…commit` / `listOps` / `defineOp` / `eval`.**
 >
 > Editor state mutation has exactly one door. Human UI handlers and AI code use the same gateway,
-> same op payload, same applier, same ledger — human-machine isomorphism. "When you've seen one op
-> walk through, you know how all warehouse state mutation walks."
+> same op payload, same applier, same ledger — human-machine isomorphism. See one op walk through
+> and you know how every editor state mutation walks.
+>
+> **Why it's shaped this way:** `DESIGN.md` (design decisions) · `AGENTS.md` §Design principles
+> (the single-door axioms) · `docs/skills/forgeax-editor-gateway.md` (play/stop world-fork).
 >
 > [!CAUTION]
 > **Reading/writing entities across a play/stop (`▶`/`■`) boundary?** First read
@@ -41,12 +44,12 @@ applier (structural, not a hand-pasted label):
 a second begin or scene switch/undo triggers implicit cancel of the prior op; stale handle returns
 `OP_INTERRUPTED`.
 
-**AI eval channel (NEW M5)**: in DEV builds, `globalThis.__forgeaxEval` exposes an in-process
+**AI eval channel**: in DEV builds, `globalThis.__forgeaxEval` exposes an in-process
 eval channel. AI CLI accesses it via `playwright page.evaluate` — zero new network surface (OOS-9).
 scope① = `{gateway, query, _import}` (no world/renderer/assets). scope② = raw engine access,
 gated behind explicit `unlockRawScope()` (dev-only; production always returns `SCOPE_LOCKED`).
 
-**Trace (NEW M5)**: every dispatch/undo/redo produces a span tree. Read them via
+**Trace**: every dispatch/undo/redo produces a span tree. Read them via
 `gateway.trace.last()` / `gateway.trace.recent(n)` — plain-object trees with OTel-aligned fields
 (traceId/spanId/parentSpanId/name/start/end/attributes/status). Nested dispatches auto-link
 parent->child spans. Ring buffer retains the last 256 root trees; eviction increments a
@@ -70,10 +73,11 @@ readable `droppedTraces` counter.
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
+| `gateway.auditLog()` | `() => ReadonlyArray<{op, origin}>` | "Who did what" — the append-only ledger zipped with its index-aligned origin ('human'\|'ai'), oldest→newest; includes irreversible session ops (setSelection/save/play), unlike undoStack-derived `historySteps()` |
 | `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame appliers |
-| `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | (M5) Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
-| `channel.eval(code)` | `(string) => EvaluateResult` | (M5) Evaluate JS code with scope①={gateway, query, _import} |
-| `channel.unlockRawScope()` | `() => RawScopeResult` | (M5) Attempt scope② unlock; returns SCOPE_LOCKED in production |
+| `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
+| `channel.eval(code)` | `(string) => EvaluateResult` | Evaluate JS code with scope①={gateway, query, _import} |
+| `channel.unlockRawScope()` | `() => RawScopeResult` | Attempt scope② unlock; returns SCOPE_LOCKED in production |
 
 ## dispatch -- Immediate Operation
 
@@ -86,12 +90,22 @@ gateway.dispatch({ kind: 'setSelection', id: entityId });
 
 // AI: code context
 gateway.dispatch({ kind: 'setSelection', id: entityId }, 'ai');
-// origin='ai' -> ledger entry carries origin marker, auditable
+// origin='ai' -> recorded for audit; read it back via gateway.auditLog() (see §auditLog).
 
 // Result check
 const r = gateway.dispatch({ kind: 'spawnEntity', name: 'Light', components: {} }, 'ai');
 if (!r.ok) console.error(r.error.code, r.error.hint);
 // Errors do not throw — property-access branching
+
+// Spawn WITH components: the `components` map is passed straight to engine.spawn,
+// so each component uses the ENGINE schema, not the editor's per-axis field names.
+// Transform = { pos:[x,y,z], quat:[x,y,z,w], scale:[x,y,z] } — NOT posX/posY/posZ.
+// A wrong field name fails fast with SPAWN_FAILED whose hint lists the real fields.
+gateway.dispatch({
+  kind: 'spawnEntity',
+  name: 'AI-Cube',
+  components: { Transform: { pos: [0, 1, 0] } },
+}, 'ai');
 
 // New-entity handle: creating ops (spawnEntity / instantiateSceneAsset /
 // duplicateEntity / a transaction of them) return the new roots on
@@ -109,13 +123,15 @@ if (r.ok) {
 
 ```ts
 // gizmo drag: mousedown -> mousemove* -> mouseup
-const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { posX: 0 } });
+// Transform fields are the ENGINE schema: pos/quat/scale/world (vectors), NOT posX/posY/posZ.
+// pos is [x,y,z]; quat is [x,y,z,w]; scale is [x,y,z]. Same names on read (query) and write.
+const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { pos: [0, 0, 0] } });
 if (!b.ok) return; // begin failed (e.g. entity nonexistent) -> {ok:false, error}
 const handle = b.handle;
 
 // Per-frame drag (write-through, no ledger); update's partial accumulates into begin's op
-gateway.update(handle, { patch: { posX: 1.0, posY: 0.5 } });
-gateway.update(handle, { patch: { posX: 1.2, posY: 0.7 } });
+gateway.update(handle, { patch: { pos: [1.0, 0.5, 0] } });
+gateway.update(handle, { patch: { pos: [1.2, 0.7, 0] } });
 
 // Mouse-up settle: compute from->to inverse, one undo
 const result = gateway.commit(handle);
@@ -126,10 +142,10 @@ const result = gateway.commit(handle);
 ## cancel -- Interrupt Rollback
 
 ```ts
-const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { posX: 0 } });
+const b = gateway.begin({ kind: 'setComponent', entity: 5, component: 'Transform', patch: { pos: [0, 0, 0] } });
 if (!b.ok) return;
 const handle = b.handle;
-gateway.update(handle, { patch: { posX: 5.0 } });
+gateway.update(handle, { patch: { pos: [5.0, 0, 0] } });
 
 // User presses undo or scene switch
 gateway.cancel(handle);
@@ -239,25 +255,29 @@ const result = gateway.defineOp({
     required: ['step'],
   },
   plan: (query, args) => {
-    // query({ with: [...] }) → { ok:true, rows:[{ entity, Transform:{posX,…} }] }
+    // query({ with: [...] }) → { ok:true, rows:[{ entity, Transform:{ pos:[x,y,z], quat:[x,y,z,w], scale:[x,y,z], world:[16] } }] }
     // (descriptor key is `with`, NOT `components`; result carries rows/ok).
+    // Transform fields are ENGINE-schema vectors — pos/quat/scale/world — NOT posX/posY/posZ.
     const r = query({ with: ['Transform'] });
     if (!r.ok) return [];
-    return r.rows.map(e => ({
-      kind: 'setComponent',
-      entity: e.entity,
-      component: 'Transform',
-      patch: { posX: snapToGrid(e.Transform.posX, args.step) },
-    }));
+    return r.rows.map(e => {
+      const [x, y, z] = e.Transform.pos;
+      return {
+        kind: 'setComponent',
+        entity: e.entity,
+        component: 'Transform',
+        patch: { pos: [snapToGrid(x, args.step), y, z] },
+      };
+    });
   },
 });
 
 // plan scope = querySnapshot + primitive constructors only, no world / EditSession
-// gateway wraps as one transaction -> one undo (reuses document.ts existing reverse inverse)
+// gateway wraps the plan as one transaction -> one undo
 // Composed op is immediately visible: listOps() now shows { id:'alignToGrid', source:'defined' }
 ```
 
-### Session-domain defineOp (M5)
+### Session-domain defineOp
 
 ```ts
 gateway.defineOp({
@@ -265,7 +285,7 @@ gateway.defineOp({
   domain: 'session',  // session plan: sub-ops emit to ledger, NEVER undo
   argsSchema: { type: 'object', properties: {}, required: [] },
   plan: (query, _args) => {
-    // query is fully open — any registered component name works (M5)
+    // query is fully open — any registered component name works
     const lights = query({ with: ['PointLight'] });
     if (!lights.ok) return [];
     return lights.rows.map(row => ({
@@ -285,7 +305,7 @@ gateway.defineOp({
 ```
 
 > [!IMPORTANT]
-> **querySnapshot is now fully open (M5/M4)**. `query({ with: [...] })` accepts ANY registered
+> **querySnapshot is fully open**. `query({ with: [...] })` accepts ANY registered
 > component name — no more whitelist of just `Transform` + `Entity`. Unknown component names now
 > return a structured error `{ok:false, error:{code:'UNKNOWN_COMPONENT', hint}}` instead of
 > silently ignoring (AC-16). `string` fields resolve to JSON-safe authored strings (for example,
@@ -296,7 +316,7 @@ gateway.defineOp({
 > fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
 > column-buffer references.
 
-## eval -- AI Entry Channel (M5, DEV-only)
+## eval -- AI Entry Channel (DEV-only)
 
 In DEV builds, an eval channel is mounted on `globalThis.__forgeaxEval`. Access it via
 `page.evaluate` in Playwright (zero network surface — OOS-9):
@@ -372,6 +392,13 @@ __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in s
 instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runtime), 0 otherwise
 (domain errors like `UNKNOWN_COMPONENT` ride in `value`/`error`, exit 0).
 
+> [!NOTE]
+> Both drivers share `scripts/gateway-cli-common.mjs` (SSOT for arg parsing / snippet reading /
+> `{ok,value|error}` print). Flags are **strict**: an undeclared flag exits 2 with the accepted
+> list — it can NEVER leak its value into the code string. Pass **only** each script's own flags:
+> `gateway-eval.mjs` takes `--file/--raw/--url/--timeout/--settle`; `gateway-live.mjs` takes
+> `--file/--health` (no `--settle`/`--raw`/`--url` — the live page is already booted).
+
 ```bash
 # prereq: a running editor with a scene open, and playwright available:
 #   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
@@ -437,7 +464,7 @@ so restart the edit-runtime dev server after changing them.
 > production deployment. Use only on a trusted local development machine. The browser bridge does
 > not connect unless explicitly enabled by `dev-standalone` (or `VITE_FORGEAX_BRIDGE=1`).
 
-## trace -- Read Span Trees (M5)
+## trace -- Read Span Trees
 
 Every dispatch (including undo/redo) leaves a span tree. Read them programmatically:
 
@@ -467,6 +494,30 @@ const r = __forgeaxEval.eval(`
 
 Ring buffer: 256 root trees. Eviction increments `droppedTraces` (detectable, never silently discard — charter P3).
 
+## auditLog -- "Who Did What" (ledger × origin)
+
+To answer *"what edits happened, and were they human or AI?"* use `gateway.auditLog()` — NOT
+`trace`. Three read surfaces exist and they are easy to confuse:
+
+| Surface | What it holds | Has origin? | Use it for |
+|:--|:--|:--|:--|
+| `gateway.trace` | span trees (timing, `engineCalls`, `sideEffects`) per dispatch | **NO** | perf / which engine calls a dispatch made |
+| `gateway.historySteps()` | undoStack-derived timeline | yes | undo/redo UI; document ops only (no session ops) |
+| `gateway.auditLog()` | append-only ledger zipped with origin | **yes** | "who did what", incl. session ops (setSelection/save/play) |
+
+```ts
+// "Did the human or the AI delete that entity?"
+const log = gateway.auditLog();       // [{ op: EditorOp, origin: 'human'|'ai' }], oldest→newest
+const del = log.filter(e => e.op.kind === 'transaction' && /delete/.test(e.op.label ?? ''));
+console.log(del.map(e => ({ label: e.op.label, who: e.origin })));
+```
+
+> [!IMPORTANT]
+> `origin` is **not** a field on the ledger entry — `gateway.ledger[i]` is the bare `EditorOp`,
+> its origin is `gateway.origins[i]` (index-aligned). Reading `ledger` alone makes origin look
+> lost; `auditLog()` zips the two for you — use it, don't hand-zip. `trace` carries no origin, so
+> it can NOT answer human-vs-AI questions. (Why two arrays: DESIGN.md §2.)
+
 ## Error Code Reference
 
 All errors use `{ ok: false, error: { code, hint } }` return values (no exceptions).
@@ -478,13 +529,13 @@ AI branches on `error.code` by property access; hint carries actionable recovery
 | `INVALID_ARGS` | session/transient args invalid (wrong type / missing required field); defineOp non-document/non-session domain | `invalid args for "<kind>": <path>: <message>` |
 | `OP_ID_CONFLICT` | defineOp duplicate id | `op "<id>" already exists in catalog` |
 | `PLAN_FAILED` | plan throws / returns empty or non-array | `plan threw: <message>` / `plan returned empty or non-array` |
-| `PLAN_STEP_FAILED` | session-plan sub-op fails mid-sequence (M5) | failed op kind + index; already-emitted ops remain in ledger |
-| `UNKNOWN_COMPONENT` | querySnapshot component name not found (M5) | lists registered component names in hint |
+| `PLAN_STEP_FAILED` | session-plan sub-op fails mid-sequence | failed op kind + index; already-emitted ops remain in ledger |
+| `UNKNOWN_COMPONENT` | querySnapshot component name not found | lists registered component names in hint |
 | `ASSET_NOT_FOUND` | resolveAsset/describeAsset given a handle resolving to no asset (slot 0 unset, stale, or not a shared<T> handle) | `no asset for handle <n>; it may be slot 0 (unset), stale, or not a shared<T> handle` |
 | `OP_INTERRUPTED` | stale handle on lifecycle method (implicitly cancelled) | `operation was interrupted; begin a new one` |
-| `SCOPE_LOCKED` | unlockRawScope() in production (M5) | `scope② is dev-only — run in DEV mode or request rawScope injection` |
-| `SCRIPT_SYNTAX_ERROR` | eval code parse failure (M5) | `syntax error near: <msg>; fix and resubmit` |
-| `SCRIPT_RUNTIME_ERROR` | eval code throws at runtime (M5) | `runtime error: <msg>; inspect error and retry` |
+| `SCOPE_LOCKED` | unlockRawScope() in production | `scope② is dev-only — run in DEV mode or request rawScope injection` |
+| `SCRIPT_SYNTAX_ERROR` | eval code parse failure | `syntax error near: <msg>; fix and resubmit` |
+| `SCRIPT_RUNTIME_ERROR` | eval code throws at runtime | `runtime error: <msg>; inspect error and retry` |
 
 ## Gate B Constraint
 
@@ -514,15 +565,6 @@ disk I/O after the applier returns synchronously. The span covers ONLY the synch
 the detached continuation is NOT inside any span interval. This is consistent with OOS-1 and is
 declared in the trace module header.
 
-**scope② is dev-only**: raw engine access (`world`/`renderer`/etc.) is NOT available in
-production builds. `unlockRawScope()` always returns `SCOPE_LOCKED` outside DEV. scope①
-(`{gateway, query, _import}`) is the production AI surface.
-
 **eval reentry creates nested spans**: calling `channel.eval()` from within eval code is allowed —
 stack-based span tracing naturally produces parent-child nesting. Trace trees will reflect the
 reentry structure.
-
-**querySnapshot typed-array safety**: `array<T,N>` fields (e.g. `posX/Y/Z` in a `float32x3`)
-are snap-copied to plain `number[]` — modifying the returned array does NOT write back to the engine
-world. `unique<T>` / `shared<T>` / `string` handle fields are opaque — you cannot read their
-internals; they carry their metadata as `{kind:'opaque-handle', type, raw}`.

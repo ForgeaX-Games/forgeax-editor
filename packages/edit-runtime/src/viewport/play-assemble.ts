@@ -101,6 +101,13 @@ interface SceneInstantiator {
 export interface PlayApp {
   start(): { ok: boolean; error?: unknown };
   stop(): { ok: boolean; error?: unknown };
+  /** Register a per-frame update on the play App's own frame loop (runs at play
+   *  frame start, same contract as editorApp.registerUpdate). The run-lifecycle
+   *  uses this to attach the DEV bridge eval-queue drain to the LIVE app while
+   *  play has paused the edit app (otherwise a bridge eval submitted during play
+   *  would queue forever — the drain is bound to editorApp.registerUpdate, which
+   *  does not tick while paused). Dropped with the play App on ■ Stop (no leak). */
+  registerUpdate(fn: (dt: number) => void): void;
 }
 
 /** What assemblePlayWorld hands back for the run-lifecycle to drive + drop. */

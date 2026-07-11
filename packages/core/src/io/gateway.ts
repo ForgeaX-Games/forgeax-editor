@@ -689,6 +689,21 @@ export class EditGateway {
     return [...applied, ...future];
   }
 
+  /**
+   * Read-only audit projection: the append-only ledger zipped with its
+   * index-aligned origin ("who issued it"), oldest→newest. Because `ledger` and
+   * `origins` are two parallel arrays (push-in-lockstep at dispatch/commit),
+   * "which command carried which origin" otherwise requires the caller to zip
+   * them by index by hand — the exact trap that makes `gateway.ledger` alone look
+   * like it lost the origin marker. This is the single-read "who did what" view:
+   * unlike `historySteps()` (undoStack-derived, undo/redo timeline, document ops
+   * only) it includes irreversible session ops (setSelection / save / play), so
+   * it is the honest record of every applied command including AI-vs-human.
+   */
+  auditLog(): ReadonlyArray<{ op: EditorOp; origin: CommandOrigin }> {
+    return this.ledger.map((op, i) => ({ op, origin: this.origins[i] ?? 'human' }));
+  }
+
   /** Inverse of the most recent applied step, if any (introspection / test helper). */
   peekUndoInverse(): EditorOp | undefined {
     return this.undoStack[this.undoStack.length - 1]?.inverse;

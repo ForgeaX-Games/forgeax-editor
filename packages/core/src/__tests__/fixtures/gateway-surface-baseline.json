@@ -12,6 +12,10 @@
     "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; relativeUrl: string; }[]"
   },
   {
+    "name": "auditLog",
+    "signature": "() => readonly { op: EditorOp; origin: CommandOrigin; }[]"
+  },
+  {
     "name": "begin",
     "signature": "(cmd: EditorOp, origin?: CommandOrigin) => { ok: true; handle: OpHandle; } | { ok: false; error: CommandError; }"
   },

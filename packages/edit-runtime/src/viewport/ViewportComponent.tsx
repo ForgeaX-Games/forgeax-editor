@@ -444,6 +444,13 @@ async function bootViewport(
   // can grant scope② raw engine access here; production omits rawScope entirely
   // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
   // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
+  //
+  // The bridge's eval-queue drain is bound to editorApp.registerUpdate, which
+  // stops ticking when ▶ Play pauses the edit App — so a CLI eval submitted during
+  // play would queue forever. We hoist the drain here and hand it to the host
+  // session so the run-lifecycle re-registers it on the PLAY App while playing
+  // (follow-the-live-app). Undefined unless the bridge block below assigns it.
+  let bridgeDrainForPlay: ((dt: number) => void) | undefined;
   if (import.meta.env.DEV) {
     const channel = createEvalChannel(gateway, {
       rawScope: { world, renderer, assets: renderer.assets },
@@ -516,6 +523,10 @@ async function bootViewport(
         }
       };
       editorApp.registerUpdate(drainEvalQueue);
+      // Follow-the-live-app: expose the drain so the host session registers it on
+      // the PLAY App too (the edit App is paused during play → its registerUpdate
+      // goes quiet, and a bridge eval submitted while playing would never drain).
+      bridgeDrainForPlay = drainEvalQueue;
 
       const connectBridge = (): void => {
         if (bridgeStopped) return;
@@ -613,6 +624,9 @@ async function bootViewport(
       // canvas and mirrors the edit assembly's physics plugin (D-1/D-7).
       canvas,
       physics: editPhysics,
+      // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
+      // play App while the edit App is paused during play (undefined in prod).
+      ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
