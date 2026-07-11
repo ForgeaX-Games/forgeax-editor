@@ -98,6 +98,14 @@
               "Name": {
                 "value": "BlueBall"
               },
+              "Rotator": {
+                "axis": [
+                  0,
+                  1,
+                  0
+                ],
+                "speed": 3
+              },
               "Transform": {
                 "pos": [
                   2,

@@ -51,6 +51,7 @@ import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-
 import { createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
+import { ensureGamePluginsLoaded, addGamePluginSystems, type GamePluginLoad } from './game-plugins';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -298,40 +299,12 @@ export function createHostSession(deps: HostSessionDeps): {
     // appliers via ctx.engine.
     const engine = gateway.engineFacade();
 
-    // ── Load the authored scene (was bootEditor :433) ───────────────────────────
-    // After the engine World + AssetRegistry are the renderer's and the pack-index
-    // is configured (done by ViewportComponent before this call). Load order:
-    // on-disk authored scene -> localStorage mirror; a scene-less game simply opens
-    // on an EMPTY world. The opened scene is FLAT (loadSceneByGuid ->
-    // reg.instantiateFlat): no synthetic wrapper root. Play/Stop re-instantiate
-    // the saved scene into a separate fresh playWorld (run-lifecycle), so the edit
-    // world's loaded entities are never used for a ▶ snapshot / ■ restore.
-    setBootStage('loadDoc');
-    await renderer.ready.catch(() => null);
-    await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
-    emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
-
-    // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
-    // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
-    // gated on renderer.ready). The Assets panel (ContentBrowser) mounts and reads
-    // registry.listCatalog() BEFORE that completes, so its first read is empty and
-    // nothing re-triggers it — the panel stayed blank until a manual page refresh.
-    // Fire the existing "assets changed" signal now that the catalog is live so any
-    // mounted ContentBrowser re-reads. Under the old iframe arch the editor iframe
-    // booted before the panel iframes, so the catalog was ready by panel mount; the
-    // single realm boots them concurrently, exposing this ordering.
-    broadcastAssetsChanged();
-
-    // ── ▶ Play / ■ Stop run-lifecycle (M2 rewrite — play=level-load, stop=drop) ──
-    // play forks a FRESH world assembled from the disk defaultScene; the edit world
-    // is frozen (editorApp.pause) and never touched (AC-04/06/07). host-boot's job
-    // here is to build the play-assemble dependency closures (defaultScene load /
-    // bootstrap resolve / input attach) and wire them into createRunLifecycle.
-    let runLifecycle: RunLifecycle | null = null;
-    const playSimulation = (): void => { void runLifecycle?.playSimulation(); };
-    const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
-
-    // ── forge.json → game fs base (bootstrap module URL resolution) ──────────────
+    // ── forge.json → game fs base (bootstrap + plugin module URL resolution) ─────
+    // Defined up here (not mid-function) because the plugin-component registration
+    // below must run BEFORE loadDocFromDisk, and the ▶ Play assemble closure reuses
+    // the same helpers. `resolveGameFsBase` yields the `/@fs/…` base under the game
+    // dir so a dynamically-imported game/plugin file's bare `@forgeax/*` imports
+    // resolve to the editor's single engine instance (gameEngineResolve plugin).
     let cachedProjectRootAbs: string | undefined;
     const getProjectRootAbs = async (): Promise<string> => {
       if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
@@ -360,6 +333,82 @@ export function createHostSession(deps: HostSessionDeps): {
       const fsBase = toFsUrl(rootAbs);
       return gameRoot ? `${fsBase}/${gameRoot}` : fsBase;
     };
+
+    // ── Asset-resident game plugins (game-plugins.ts) ───────────────────────────
+    // Import every `assets/**/*.plugin.ts` ONCE (memoized in game-plugins.ts by
+    // gameFsBase) so their defineComponent/defineSystem side effects register into
+    // the editor's single engine registry. EDIT uses this only to register the
+    // COMPONENTS (so they are attachable + round-trip through the scene pack);
+    // PLAY additionally `addSystem`s the plugin systems into the fresh playWorld
+    // (in the assemble closure below). One promise → edit + every ▶ Play share the
+    // SAME component/system tokens.
+    const EMPTY_PLUGIN_LOAD: GamePluginLoad = { plugins: [], systems: [], components: [], errors: [] };
+    const loadGamePlugins = (): Promise<GamePluginLoad> => {
+      // No real game (scene-less / demo default) → skip entirely, touching no fetch.
+      // Mirrors resolveEditPhysics's `'default'` early-out so the boot tail stays
+      // network-free on an empty world (host-boot-di AC-05 asserts zero fetches).
+      const slug = getSceneId();
+      if (!slug || slug === 'default') return Promise.resolve(EMPTY_PLUGIN_LOAD);
+      return ensureGamePluginsLoaded({
+        fetch: deps.fetch,
+        gameRoot: resolveGamePath(''),
+        resolveGameFsBase,
+      });
+    };
+
+    // ── Load the authored scene (was bootEditor :433) ───────────────────────────
+    // After the engine World + AssetRegistry are the renderer's and the pack-index
+    // is configured (done by ViewportComponent before this call). Load order:
+    // on-disk authored scene -> localStorage mirror; a scene-less game simply opens
+    // on an EMPTY world. The opened scene is FLAT (loadSceneByGuid ->
+    // reg.instantiateFlat): no synthetic wrapper root. Play/Stop re-instantiate
+    // the saved scene into a separate fresh playWorld (run-lifecycle), so the edit
+    // world's loaded entities are never used for a ▶ snapshot / ■ restore.
+    // ── Asset-resident game plugins: register COMPONENTS before scene load ───────
+    // Import `assets/**/*.plugin.ts` (memoized) so their defineComponent side
+    // effects register into the engine registry BEFORE loadDocFromDisk runs — a
+    // saved scene entity carrying a plugin component (e.g. BlueBall + Rotator) can
+    // only round-trip in if the component token already exists. EDIT registers the
+    // component only; the systems are NOT added to the edit world (nothing ticks
+    // while authoring — the ball stays still until ▶ Play). Graceful: a failed
+    // load leaves the editor fully functional minus plugin components.
+    setBootStage('gamePlugins');
+    try {
+      const pluginLoad = await loadGamePlugins();
+      if (pluginLoad.components.length > 0) {
+        emitBoot(`plugins ▸ components registered: ${pluginLoad.components.join(', ')}`);
+      }
+      for (const err of pluginLoad.errors) {
+        emitBoot(`plugins ▸ ${err.clientPath} failed: ${err.message}`, 'warn');
+      }
+    } catch (e) {
+      emitBoot(`plugins ▸ load failed: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+    }
+
+    setBootStage('loadDoc');
+    await renderer.ready.catch(() => null);
+    await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
+    emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
+
+    // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
+    // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
+    // gated on renderer.ready). The Assets panel (ContentBrowser) mounts and reads
+    // registry.listCatalog() BEFORE that completes, so its first read is empty and
+    // nothing re-triggers it — the panel stayed blank until a manual page refresh.
+    // Fire the existing "assets changed" signal now that the catalog is live so any
+    // mounted ContentBrowser re-reads. Under the old iframe arch the editor iframe
+    // booted before the panel iframes, so the catalog was ready by panel mount; the
+    // single realm boots them concurrently, exposing this ordering.
+    broadcastAssetsChanged();
+
+    // ── ▶ Play / ■ Stop run-lifecycle (M2 rewrite — play=level-load, stop=drop) ──
+    // play forks a FRESH world assembled from the disk defaultScene; the edit world
+    // is frozen (editorApp.pause) and never touched (AC-04/06/07). host-boot's job
+    // here is to build the play-assemble dependency closures (defaultScene load /
+    // bootstrap resolve / input attach) and wire them into createRunLifecycle.
+    let runLifecycle: RunLifecycle | null = null;
+    const playSimulation = (): void => { void runLifecycle?.playSimulation(); };
+    const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
 
     // Read forge.json once per ▶ Play so defaultScene + entry are consistent (both
     // come from the same GameProject read). Returns { entry?, defaultSceneGuid? }.
@@ -441,8 +490,12 @@ export function createHostSession(deps: HostSessionDeps): {
     runLifecycle = createRunLifecycle({
       editorApp: app,
       gateway,
-      assemble: (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
-        assemblePlayWorld({
+      assemble: async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> => {
+        // Load asset-resident plugins BEFORE assembling so every plugin component
+        // is registered when the defaultScene instantiates (a scene entity carrying
+        // a `Rotator` needs the component token to exist to round-trip in).
+        const pluginLoad = await loadGamePlugins();
+        const res = await assemblePlayWorld({
           renderer: renderer as never,
           loadDefaultScene,
           resolveBootstrap,
@@ -452,7 +505,19 @@ export function createHostSession(deps: HostSessionDeps): {
           // game HUD is clipped to the viewport and can never survive a stop.
           viewportContainer: ctx.viewportContainer,
           ...(ctx.physics ? { physics: ctx.physics } : {}),
-        }),
+        });
+        // PLAY-only: add the plugin systems into the fresh play world so game
+        // logic (e.g. `rotate`) actually ticks. The schedule marks dirty and
+        // re-runs its topological sort on the next update(), so `before:
+        // ['propagateTransforms']` is honored despite adding after createApp built
+        // the initial schedule. Systems are dropped with the playWorld on ■ Stop
+        // (GC) — the persistent edit world never gets them.
+        if (res.ok && pluginLoad.systems.length > 0) {
+          const added = addGamePluginSystems(res.value.playWorld as never, pluginLoad);
+          if (added.length > 0) emitBoot(`play ▸ game systems added: ${added.join(', ')}`);
+        }
+        return res;
+      },
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
       // DEV bridge follow-the-live-app: register the eval-queue drain on the play
       // App so a CLI eval submitted during play still drains while the edit App is
