@@ -184,8 +184,11 @@ function makeFakeEditorApp() {
 }
 
 // A fake gateway recording enterPlay/exitPlay + the world it was handed.
+// Also records the round-8 #3 play-attempt observability signals so a test can
+// assert playSimulation() marks 'starting' up front and 'failed' on a degraded
+// assemble (the front-door terminal signal the real EditGateway exposes).
 function makeFakeGateway() {
-  const events: Array<{ kind: string; world?: unknown }> = [];
+  const events: Array<{ kind: string; world?: unknown; error?: unknown }> = [];
   return {
     events,
     enterPlay(world: unknown) {
@@ -193,6 +196,12 @@ function makeFakeGateway() {
     },
     exitPlay() {
       events.push({ kind: 'exitPlay' });
+    },
+    beginPlayAttempt() {
+      events.push({ kind: 'beginPlayAttempt' });
+    },
+    failPlayAttempt(error: unknown) {
+      events.push({ kind: 'failPlayAttempt', error });
     },
   };
 }
@@ -697,6 +706,59 @@ describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
       await t.lifecycle.playSimulation();
       t.lifecycle.stopSimulation();
       expect(t.container.children.length).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
+// ── round-8 #3: play-attempt observability wiring ──────────────────────────────
+// playSimulation() must mark the attempt in flight (beginPlayAttempt) up front,
+// and on a DEGRADED assemble (ok:false) surface it through the front door
+// (failPlayAttempt) instead of only console.warn — so a poller sees a terminal
+// 'failed', not a mode flip that never comes (the round-3/5 trap). See
+// gateway-play-phase-observability.test.ts for the gateway-side derive contract.
+describe('▶ Play attempt observability (round-8 #3)', () => {
+  it('a failed assemble fires beginPlayAttempt then failPlayAttempt, resumes edit, stays not-playing', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      // assemble that always degrades (bad scene / createApp error path).
+      const assemble = async () => ({ ok: false as const, error: { code: 'play-assemble-failed', hint: 'bad scene' } });
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: assemble as never,
+      });
+
+      await lifecycle.playSimulation();
+
+      // The attempt was announced, then reported failed — in that order.
+      const kinds = gateway.events.map((e) => e.kind);
+      expect(kinds).toEqual(['beginPlayAttempt', 'failPlayAttempt']);
+      // The error rode the front door (not just console.warn).
+      const failEv = gateway.events.find((e) => e.kind === 'failPlayAttempt');
+      expect(failEv?.error).toEqual({ code: 'play-assemble-failed', hint: 'bad scene' });
+      // Never entered play; edit world was thawed (pause then resume).
+      expect(kinds).not.toContain('enterPlay');
+      expect(lifecycle.currentPlayWorld()).toBeNull();
+      expect(editorApp.calls).toEqual(['pause', 'resume']);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('a successful assemble fires beginPlayAttempt then enterPlay (no failPlayAttempt)', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildRealAssembleLifecycle();
+      await t.lifecycle.playSimulation();
+      const kinds = t.gateway.events.map((e) => e.kind);
+      expect(kinds[0]).toBe('beginPlayAttempt');
+      expect(kinds).toContain('enterPlay');
+      expect(kinds).not.toContain('failPlayAttempt');
+      t.lifecycle.stopSimulation();
     } finally {
       fakeRaf.restore();
     }

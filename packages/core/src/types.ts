@@ -197,7 +197,13 @@ export interface CommandError {
     // kebab-case to match the M1 error-shape convention (stale-entity-handle).
     | 'edit-rejected-in-play'
     // ── Scan infrastructure codes (startup scan lock) ──
-    | 'scan-in-progress';
+    | 'scan-in-progress'
+    // ── solo round-8 #3: ▶ Play async-assembly failure ──
+    // playSimulation()'s assemble() degraded back to edit (bad scene / createApp
+    // error). Surfaced through gateway.failPlayAttempt so playPhase reads 'failed'
+    // + lastPlayError carries this — instead of dispatch({kind:'play'}) returning
+    // {ok:true} while play silently never started (the round-3/5 misdiagnosis trap).
+    | 'play-assemble-failed';
   hint: string;
 }
 

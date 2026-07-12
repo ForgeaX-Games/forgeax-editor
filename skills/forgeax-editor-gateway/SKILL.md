@@ -399,10 +399,15 @@ gateway.dispatch({ kind: 'saveDocToDisk' }, 'ai');   // persists into the scene 
 > `gateway.activeWorld` (edit → `doc.world`, play → the live play world), the same pointer as
 > `gateway.mode`, so **during play `query({ with: ['Transform'] })` returns the *play* world's live
 > component columns** — re-`query` after ▶ and read the spinning `quat`; no viewport-watching needed.
-> One remaining trap: `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** `gateway.mode`
-> flips to `'play'` (the world-fork is async, ~a frame later) — **poll `gateway.mode`** until it reads
-> `'play'`, then query. Writes stay frozen during play (`dispatch` → `edit-rejected-in-play`); only the
-> read follows the active world ("play data is a read-only simulation view").
+> One remaining trap: `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** play actually
+> starts — the world-fork is async (~a frame later) and CAN fail (bad scene → it degrades back to edit).
+> `{ ok: true }` only means "the play request was accepted", not "play is running". **Poll
+> `gateway.playPhase`** — a terminal-aware view (`'edit'` → `'starting'` → `'play'` \| `'failed'`) — until
+> it reads a *terminal* value: `'play'` (assembled, query the live world) or `'failed'` (read
+> `gateway.lastPlayError` for why; `gateway.mode` stays `'edit'`). Do **not** blind-poll `gateway.mode`
+> alone: on a failed assemble it never flips, so a `mode`-only poller waits forever for a play that will
+> never come (the round-3/5 trap). Writes stay frozen during play (`dispatch` → `edit-rejected-in-play`);
+> only the read follows the active world ("play data is a read-only simulation view").
 
 ## defineOp -- Compose New Operations
 
@@ -708,6 +713,9 @@ instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runt
 ```bash
 # prereq: a running editor with a scene open, and playwright available:
 #   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
+#     ⚠ EMPTY scene: dev:standalone passes no --game, so no game backend / no entities. For real
+#       scene or Play dogfood: `bun fx start --game games/sample --bg` (spawns :15281 platform-io
+#       backend + /api proxy so the scene loads and ▶ Play actually assembles a play world).
 #   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
 node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
 node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first

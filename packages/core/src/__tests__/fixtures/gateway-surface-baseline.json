@@ -20,6 +20,10 @@
     "signature": "(cmd: EditorOp, origin?: CommandOrigin) => { ok: true; handle: OpHandle; } | { ok: false; error: CommandError; }"
   },
   {
+    "name": "beginPlayAttempt",
+    "signature": "() => void"
+  },
+  {
     "name": "buildQueryFn",
     "signature": "() => QuerySnapshotFn"
   },
@@ -76,12 +80,20 @@
     "signature": "() => void"
   },
   {
+    "name": "failPlayAttempt",
+    "signature": "(error: CommandError) => void"
+  },
+  {
     "name": "historySteps",
     "signature": "() => HistoryStep[]"
   },
   {
     "name": "jumpTo",
     "signature": "(target: number) => void"
+  },
+  {
+    "name": "lastPlayError",
+    "signature": "CommandError | null"
   },
   {
     "name": "ledger",
@@ -118,6 +130,10 @@
   {
     "name": "peekUndoInverse",
     "signature": "() => EditorOp | undefined"
+  },
+  {
+    "name": "playPhase",
+    "signature": "\"play\" | \"edit\" | \"starting\" | \"failed\""
   },
   {
     "name": "redo",

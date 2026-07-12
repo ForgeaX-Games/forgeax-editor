@@ -438,12 +438,28 @@ can re-run it, not just read about it:
   rhi-debug #5, same shape). Before trusting a live result, prove the port is serving your code: `curl`
   the worktree `/@fs<abs>/…` module and grep the fix marker, and `lsof -ti :port` should be only your pid.
   A revert-to-red check on the unit test is the cheap cross-check the live host can't fake.
-- **Assuming an empty scene can enter Play headless.** In a headless standalone with no viewport/renderer
-  and a scene that never finishes loading, `dispatch({kind:'play'})` returns `ok` but `gateway.mode` never
-  flips (assemble degrades back to edit) — so an observability probe that *needs* play state stalls. Don't
-  log "can't enter play" as the target friction; it's an environment limit. Use the public
-  `gateway.enterPlay(new World())` (the same method core tests use) to construct a play world
-  deterministically and probe the read surface without depending on the flaky async flip.
+- **A `{ok:true}` from a fire-and-forget dispatch can lie — don't diagnose off it; check the real terminal
+  state.** `dispatch({kind:'play'})` returns `{ok:true}` synchronously while the real work
+  (`run-lifecycle.playSimulation()`) runs detached and CAN fail + degrade back to edit, logging only a
+  `console.warn`. So on an empty/headless scene `play` reports `{ok:true}` and `trace.last()` reads
+  `play/OK` **even though play never started** — the door lied about an operation that didn't happen. This
+  single false-`ok` misled **two** rounds into diagnosing the wrong layer: round-3 blamed "async mode flip",
+  round-5 concluded "play world is unreadable" and *escalated a non-bug* to closed-loop. Both chased a
+  phantom because they trusted the dispatch result instead of confirming the terminal state. **Before
+  concluding "X is broken/unreachable", verify the operation actually reached its terminal state** — for
+  play, poll `gateway.playPhase` to `play`|`failed` (not blind-poll `mode`, which never flips on failure) and
+  read `lastPlayError`. Two compounding causes made the empty scene: (a) wrong stack — `dev:standalone` boots
+  a *game-less* shell, real Play dogfood needs `bun fx start --game <dir>` (see Driving section); (b) the
+  missing terminal signal, now fixed (round-8: `playPhase`/`lastPlayError`). The earlier round-5 advice
+  ("just use `enterPlay(new World())` to sidestep the flaky flip") treated the symptom — the correct move was
+  to make the failure observable *and* boot the right stack. (round-8 friction #1/#3, superseding round-5's
+  empty-scene note)
+- **A test you write for your own fix can catch a bug in that fix before it ships — write it to actually
+  exercise the path, not just assert the happy shape.** Round-8's edit-runtime wiring test (assemble-failure
+  → `failPlayAttempt` with a structured error) failed on first run because the fix's error-normalizer turned
+  a structured `{hint}` into `"[object Object]"`. The test caught it pre-ship only because it asserted the
+  *actual error payload* rode through, not merely that `failPlayAttempt` was called. Assert the data that
+  crosses the seam, not just that the seam fired.
 - **A capability that exists only as a UI-called closure (no gateway op) is a broken door, not a missing
   feature — and it ranks with contract errors.** A whole workflow can *work perfectly for humans* (the
   Content Browser "Add to Scene" orchestration) while being **structurally unreachable by an AI**, because
@@ -478,8 +494,24 @@ The target's driver scripts are owned by `forgeax-editor-gateway` — reuse, don
 |:--|:--|
 | Editor already open + stable (warm) | `node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file <snippet>` (needs the bridge; `--health` first) |
 | No editor, OR a freshly cold-booted stack | `node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file <snippet>` (boots its own headless browser at :15290) |
-| Full playwright absent | point `FORGEAX_PLAYWRIGHT` at a `playwright-core` index + `FORGEAX_CHROMIUM` at a cached chromium binary (memory: `gateway-headless-verify-playwright-core`) |
+| **Dogfood that needs a REAL scene** (Play / gameplay / asset / anything reading world entities) | **`bun fx start --game games/sample --bg`** FIRST (spawns the :15281 platform-io game backend + `/api` proxy so the scene loads), *then* drive with `gateway-eval.mjs`. See the CAUTION below — **`dev:standalone` and a bare `gateway-eval.mjs` open an EMPTY scene**. |
+| Full playwright absent | point `FORGEAX_PLAYWRIGHT` at a `playwright-core` **`index.js`** (NOT the package dir — a bare dir path errors `Directory import … not supported`) + `FORGEAX_CHROMIUM` at a cached chromium binary (memory: `gateway-headless-verify-playwright-core`) |
 | Repo gates | `bun -F @forgeax/editor-core test` · `bun -F @forgeax/editor-core typecheck` (needs engine `.d.ts` — `tsc -b` first) · `bun run lint` · `bun run lint:dep` |
+
+> [!CAUTION]
+> **No `--game` = empty scene. Any Play / gameplay / world-reading dogfood MUST boot with
+> `bun fx start --game <dir>`.** `bun run dev:standalone` (and therefore a bare `gateway-eval.mjs`
+> against it) starts a **game-less demo shell by design** — `standalone/main.tsx` opens on an *empty
+> scene* when no `--game` is passed, because the :15281 platform-io game backend and its `/api` proxy
+> are only wired under `--game` (`vite.config.ts`: "No --game → GAME_DIR null → no /api proxy"). An
+> empty scene has no entities, so `query()` returns `[]` **and** `dispatch({kind:'play'})` degrades
+> straight back to edit (nothing to assemble). Crucially, **`play` still returns `{ok:true}` and
+> `trace.last()` still reads `play/OK`** even though play never started — so an AI that trusts the
+> dispatch result concludes "play is broken / play-world unreadable" and chases a phantom. Rounds 3 &
+> 5 both hit exactly this: they read `{ok:true}` + `mode` never flipping and misdiagnosed it (blamed
+> async flip; escalated a non-bug). **The fix is the launch flag, not the gateway** — `bun fx start
+> --game games/sample --bg`, wait for :15290, *then* dogfood; with a real scene, `play` flips to
+> `play` and the #164 front-door `query()` reads the live spinning play world. (round-8 friction #1/#3)
 
 > [!CAUTION]
 > **A cold-booted stack's live bridge flaps — don't dogfood through it.** Right after

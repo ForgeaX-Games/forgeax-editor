@@ -204,6 +204,21 @@ export class EditGateway {
 
   private _playWorld: World | null = null;
 
+  // ── Play-attempt observability (solo round-8, friction #3) ────────────────
+  // ▶ Play assembly is ASYNC and fire-and-forget: `dispatch({kind:'play'})`
+  // returns {ok:true} synchronously while run-lifecycle.playSimulation() spins
+  // up a fresh world in a detached promise that CAN fail (bad scene / createApp
+  // error) and degrade back to edit (run-lifecycle.ts). Without a front-door
+  // terminal signal, an AI polling `mode` cannot tell "still assembling" from
+  // "already failed, will never flip" — rounds 3 & 5 both misdiagnosed exactly
+  // this (round 5 escalated a non-bug). These two fields are the failure
+  // COUNTERPART to enterPlay's success path: _playPending marks an in-flight
+  // attempt, _lastPlayError carries why the last one failed. playPhase is
+  // DERIVED from (_playWorld, _playPending, _lastPlayError) — no second `mode`
+  // field (architecture-principles §2 Derive).
+  private _playPending = false;
+  private _lastPlayError: CommandError | null = null;
+
   /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
   get activeWorld(): World {
     return (this._playWorld ?? this.doc.world) as unknown as World;
@@ -214,17 +229,70 @@ export class EditGateway {
     return this._playWorld !== null ? 'play' : 'edit';
   }
 
-  /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11). */
+  /**
+   * Terminal-aware play lifecycle phase (Derive from _playWorld/_playPending/
+   * _lastPlayError — no second state field). Unlike `mode` (a two-value edit/play
+   * pointer view), this distinguishes the async assembly's intermediate + failure
+   * states so a front-door caller polls a TERMINAL phase, not a value that may
+   * never change:
+   *   - `play`     — assembled, live play world active (_playWorld set)
+   *   - `starting` — ▶ dispatched, assembly in flight (poll again)
+   *   - `failed`   — last attempt failed + degraded to edit; read `lastPlayError`
+   *   - `edit`     — not playing, no failed attempt pending inspection
+   * `starting`/`failed` win over the bare edit pointer so a docs-only AI can wait
+   * for `play`|`failed` (both terminal) instead of blind-polling `mode` (round-8 #3).
+   */
+  get playPhase(): 'edit' | 'starting' | 'play' | 'failed' {
+    if (this._playWorld !== null) return 'play';
+    if (this._playPending) return 'starting';
+    if (this._lastPlayError !== null) return 'failed';
+    return 'edit';
+  }
+
+  /** The error from the last failed ▶ Play attempt, or null. Cleared when a new
+   *  attempt begins or play succeeds (see beginPlayAttempt/enterPlay). */
+  get lastPlayError(): CommandError | null {
+    return this._lastPlayError;
+  }
+
+  /** Mark a ▶ Play attempt as in flight (playPhase → 'starting'). Clears any prior
+   *  error so a retry starts clean. Called by run-lifecycle at the top of
+   *  playSimulation(), BEFORE the async assemble. Emits so panels/AI re-read. */
+  beginPlayAttempt(): void {
+    this._playPending = true;
+    this._lastPlayError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Record a failed ▶ Play attempt (playPhase → 'failed'; mode stays 'edit').
+   *  Called by run-lifecycle's assemble-failure branch after it thaws the edit
+   *  world. The error rides the front door so a poller reads WHY, not just that
+   *  the flip never came. Emits so subscribers re-read. */
+  failPlayAttempt(error: CommandError): void {
+    this._playPending = false;
+    this._lastPlayError = error;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11).
+   *  Success clears the pending flag + any stale error → playPhase 'play'. */
   enterPlay(playWorld: World): void {
     this._playWorld = playWorld;
+    this._playPending = false;
+    this._lastPlayError = null;
     clearSelection();
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);
   }
 
-  /** Return the pointer to the edit world. Clears selection + emits notification. */
+  /** Return the pointer to the edit world. Clears selection + emits notification.
+   *  Also clears the pending flag + last error → playPhase back to 'edit'. */
   exitPlay(): void {
     this._playWorld = null;
+    this._playPending = false;
+    this._lastPlayError = null;
     clearSelection();
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);

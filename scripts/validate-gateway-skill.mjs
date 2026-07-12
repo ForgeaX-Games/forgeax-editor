@@ -96,6 +96,19 @@ const REQUIRED_KEYWORDS = [
   // it" section from silently vanishing.
   'importAsset',
   'addSceneAssetToScene',
+  // Empty-scene launch trap — `dev:standalone` (no --game) opens an EMPTY scene, so
+  // Play degrades to a no-op while `dispatch({kind:'play'})` still returns {ok:true}.
+  // Rounds 3 & 5 both misdiagnosed this (blamed async flip / escalated a non-bug).
+  // The Scripts prereq must keep telling a docs-only AI to boot `fx start --game`
+  // for real Play dogfood (EXPERIMENT-REPORT round-8 friction #1/#3).
+  'fx start --game',
+  // Terminal-aware play lifecycle — `play` assembly is async + can fail; a
+  // `mode`-only poller waits forever on a degraded assemble. The doc MUST teach
+  // polling `playPhase` to a TERMINAL value (play|failed) + reading lastPlayError
+  // on failure. Keeps the round-8 #3 fix's projection from silently reverting to
+  // the old "poll mode" band-aid (EXPERIMENT-REPORT round-8 friction #3).
+  'playPhase',
+  'lastPlayError',
 ];
 
 // ---------------------------------------------------------------------------
