@@ -588,6 +588,55 @@ __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in s
 > (`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
 > (`listOps`, `defineOp`) need no settle — pass `--settle 0`.
 
+## Debug rendering -- capture an RHI frame (engine capability, OUTSIDE the gateway)
+
+> [!IMPORTANT]
+> **RHI frame capture is an ENGINE debug capability, not an editor op — it is NOT in `listOps()`
+> and never will be.** Black-screen / wrong-texture / wrong-binding symptoms are a rendering
+> concern, not an authored edit, so capture does not enter the ledger / undo / trace. Don't hunt
+> for a `captureFrame` op or add one — that would hand-roll an engine capability into the editor
+> door (AGENTS.md anti-pattern #1). The "one door" is for **authored editor state**; render-debug
+> is reached separately, documented here so a docs-only AI stops looking in the wrong place.
+
+**How to reach it.** When `FORGEAX_ENGINE_RHI_DEBUG=1`, the engine mounts `globalThis.__forgeax.captureFrame(n)`
+on the page. The eval channel's scope① can see `window`, so you drive it from the same
+`gateway-eval.mjs` door — no new transport:
+
+```ts
+// via gateway-eval.mjs (an async snippet — the driver awaits the Promise for you):
+(async () => {
+  if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
+    return { ok: false, why: 'FORGEAX_ENGINE_RHI_DEBUG!=1 or wrong server' };
+  }
+  gateway.dispatch({ kind: 'requestFrame' }, 'ai');       // ensure there IS a frame to record
+  const res = await globalThis.__forgeax.captureFrame(1); // records 1 frame to a tape on disk
+  return res;   // { runId, tapePath, reportPath }
+})()
+```
+
+Then inspect the tape **offline** (no live device) — the frame-model / per-draw inspect / dockview
+viewer all live in the engine skill, which is the SSOT (do not re-derive here):
+
+```bash
+node packages/engine/packages/rhi-debug/dist/cli.mjs summary <tapePath>   # structured FrameModel (passes/draws/bindings)
+```
+
+> **Deeper:** per-draw bindings + RT PNG inspect, the four-panel viewer, tape format, error codes
+> — engine skill `packages/engine/skills/forgeax-engine-rhi-debug/SKILL.md` (contract SSOT
+> `packages/engine/packages/rhi-debug/README.md`).
+
+> [!CAUTION]
+> **Two traps cost more than the capture itself (both are environment, not the API):**
+> - **Capture needs only the host vite.** Launch `FORGEAX_ENGINE_RHI_DEBUG=1 FORGEAX_BRIDGE=0 bun run dev`
+>   (single vite, :15290; the engine boots in-process there). The two-server `dev:standalone`
+>   (host :15290 + edit-runtime :15280) HMR-thrashes once rhi-debug's heavier deps (`pngjs`/`ws`)
+>   load, so a headless driver rarely catches a stable window.
+> - **Prove the flag actually reached the running server before blaming the API.** A leftover,
+>   *unflagged* dev server squatting on :15290 makes `window.__forgeax` `undefined` — it looks like
+>   "capability absent" but is "wrong server". Verify with `POST /__forgeax-debug/trigger` returning
+>   **non-404** (503/409 `no-browser-tab` is the proof the plugin is registered); `curl :15290 → 200`
+>   alone proves nothing.
+
 ## Scripts
 
 `skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`

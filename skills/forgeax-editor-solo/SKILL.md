@@ -306,6 +306,14 @@ can re-run it, not just read about it:
   `/tmp` leaves the report's evidence unbacked: the code that produced it is gone, so the next round can't
   reproduce or extend it. The run's driving snippets + captured output are part of the artifact — write
   snippets into the run's `snippets/`, outputs into `out/`, and have the report point at them.
+- **"Capability absent" when it's really "wrong server / flag never arrived."** Driving a flag-gated
+  capability (`FORGEAX_ENGINE_RHI_DEBUG=1` → `window.__forgeax`) and seeing the entry `undefined`, you're
+  tempted to log "the capability doesn't exist" — but a leftover *unflagged* server squatting on the port
+  (a `--strictPort` launch that died, an orphaned prior stack) produces the identical symptom. Before
+  recording a capability-absent friction, **prove the flag reached the running process** (`ps eww` its env)
+  and **probe the capability's own dedicated endpoint** (non-404 = the feature is wired) — `curl :port → 200`
+  only proves *a* server answers, not *your* server. Mis-recording env-misconfig as a missing feature sends
+  the whole fix down the wrong path. (round-4 rhi-debug friction #5/#6)
 - **Skipping the L2 write.** If the loop taught you a verify recipe or an env gotcha and you don't record
   it, the next loop re-derives it. The codify step is not optional.
 - **Growing this loop into a multi-agent one.** When a fix spans subsystems, escalate to

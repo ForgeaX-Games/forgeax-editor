@@ -75,11 +75,18 @@ const REQUIRED_KEYWORDS = [
   // keeps the "enumerate a parent's children" example from vanishing
   // (EXPERIMENT-REPORT round-4 friction #1; round-2 deferred #3).
   'ChildOf',
-  // Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
+// Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
   // argsSchema is ENFORCED at dispatch for defined ops. Without this section a
   // docs-only AI defines an op it cannot correctly call, and trusts a schema that
   // used to be decorative (EXPERIMENT-REPORT round-4 friction #1/#2).
   'Dispatch a composed op',
+  // RHI frame capture (render-debug) — an ENGINE capability reached via
+  // globalThis.__forgeax.captureFrame, deliberately OUTSIDE the gateway (not an
+  // op). A docs-only AI reading the "one door" narrative could not find how to
+  // capture a frame until round-4 (rhi-debug). These anchors keep the "Debug
+  // rendering" section (which also states WHY it's out-of-door) from vanishing.
+  'captureFrame',
+  '__forgeax',
 ];
 
 // ---------------------------------------------------------------------------
