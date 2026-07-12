@@ -394,16 +394,15 @@ gateway.dispatch({ kind: 'saveDocToDisk' }, 'ai');   // persists into the scene 
 > Which systems a scene runs is **derived** from which `*.plugin.ts` exist under `assets/` — it is not
 > persisted per-scene, so there is no "systems" field to set.
 
-> [!CAUTION]
-> **Observing the rotation is a play-world read, and the gateway's read surface does not reach it.**
-> Two traps a docs-only AI hits:
-> 1. `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** `gateway.mode` flips to `'play'`
->    (the world-fork is async, ~a frame later). Poll `gateway.mode`, don't read it synchronously.
-> 2. During play, `query(...)` still reads the **frozen edit `doc.world`** (see the play/stop
->    world-fork rule in `docs/skills/forgeax-editor-gateway.md`), so it will **not** show the spinning
->    quat — the rotation lives in `gateway.activeWorld` (the raw engine play World, which has **no
->    `query` facade**). Confirm plugin behavior by **watching the viewport**, not by re-`query`-ing.
->    Reading the play world's live component columns is not currently on the documented AI surface.
+> [!IMPORTANT]
+> **Observing the rotation is a play-world read — `query(...)` reaches it directly.** `query` follows
+> `gateway.activeWorld` (edit → `doc.world`, play → the live play world), the same pointer as
+> `gateway.mode`, so **during play `query({ with: ['Transform'] })` returns the *play* world's live
+> component columns** — re-`query` after ▶ and read the spinning `quat`; no viewport-watching needed.
+> One remaining trap: `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** `gateway.mode`
+> flips to `'play'` (the world-fork is async, ~a frame later) — **poll `gateway.mode`** until it reads
+> `'play'`, then query. Writes stay frozen during play (`dispatch` → `edit-rejected-in-play`); only the
+> read follows the active world ("play data is a read-only simulation view").
 
 ## defineOp -- Compose New Operations
 

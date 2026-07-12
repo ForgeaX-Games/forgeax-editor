@@ -88,7 +88,7 @@ flowchart TD
   IM --> VF["6 · Verify (real run)"]
   VF -->|"green"| CD["7 · Codify"]
   VF -->|"red"| IM
-  CD --> Ask["8 · Human gate"]
+  CD --> Ask["8 · Ship (PR→CI→merge→clean)"]
 ```
 
 ### 0 · Goal + env
@@ -206,13 +206,24 @@ Two writes, both required:
 **Gate:** L1 landed (code fix + any doc-projection update, or the justified doc-only fix); L2 fact written
 or an explicit "nothing reusable this round" noted.
 
-### 8 · Human gate
+### 8 · Ship (self-PR → CI-green → merge → clean up)
 
-Present the finished loop for verdict. AI completes all internal iterations first; the human sees mature
-output and holds veto (architecture-principles §8). Do not re-enter the loop after approval without a new
-goal.
+**Standing authorization: the human's veto is CI, not a per-round approval prompt.** The human is the
+final authority (architecture-principles §8), and they have exercised it *once, durably* by ruling that a
+green loop ships itself. So the loop does NOT block on a "please approve" message — it self-integrates:
 
-**Gate:** human approves, or names the next friction to chase.
+1. **Open the PR** from the worktree branch (`gh pr create`), body = the round's finding + verify evidence.
+2. **Wait for CI green** — this IS the human's delegated gate. Poll the checks; do not merge on red.
+3. **Merge** once green (`gh pr merge --squash --delete-branch`).
+4. **Clean up** — `ExitWorktree` (remove), stop any hosts the loop started, drop scratch state.
+
+The human still holds real veto: they can reject a merged change after the fact, or set a new goal — but
+the loop's *default* terminal state is "shipped", not "awaiting sign-off". Only stop and ask a human
+mid-ship if CI is red in a way the loop can't resolve, or the change turned out to need scope it can't
+carry alone (→ route to `forgeax-closed-loop`). Do not re-enter the loop for a new goal without one.
+
+**Gate:** PR opened, CI green, merged, worktree + hosts cleaned up — or an explicit blocker recorded for
+the human (red CI it can't fix / scope escalation).
 
 ## The run directory
 
@@ -353,6 +364,23 @@ can re-run it, not just read about it:
   makes the run "succeed" but measures a door the real AI user can't take — the friction you'd have felt
   vanishes and you log a false positive. Needing the back door *is* the finding: log it as a missing gateway
   op / read leg and fix it at layer 1/2. Drive only through the front door (step 1 gate).
+- **"Verified" against a live host that's actually running the *unfixed* code.** The step-6 gate is
+  live end-to-end evidence, but a worktree fix only counts if the running host serves *that worktree's*
+  source. Two ways the host silently runs old code: (1) a fresh worktree has no `node_modules`, and an
+  integral `worktree/node_modules → main/node_modules` symlink resolves `@forgeax/editor-*` back to the
+  **main checkout** — the host runs unfixed code and your proof shows the friction *still present*
+  (looks like "the fix didn't work"). Rebuild **per-package** `node_modules` so `editor-*`→worktree,
+  `engine-*`/deps→main, then clear `.vite` and restart. (2) A leftover host on the port `--strictPort`
+  survives; your new host exits "port in use" but `curl :port` is answered by the *old* process (round-4
+  rhi-debug #5, same shape). Before trusting a live result, prove the port is serving your code: `curl`
+  the worktree `/@fs<abs>/…` module and grep the fix marker, and `lsof -ti :port` should be only your pid.
+  A revert-to-red check on the unit test is the cheap cross-check the live host can't fake.
+- **Assuming an empty scene can enter Play headless.** In a headless standalone with no viewport/renderer
+  and a scene that never finishes loading, `dispatch({kind:'play'})` returns `ok` but `gateway.mode` never
+  flips (assemble degrades back to edit) — so an observability probe that *needs* play state stalls. Don't
+  log "can't enter play" as the target friction; it's an environment limit. Use the public
+  `gateway.enterPlay(new World())` (the same method core tests use) to construct a play world
+  deterministically and probe the read surface without depending on the flaky async flip.
 
 ## Driving the editor instance
 

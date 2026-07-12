@@ -39,11 +39,12 @@ import type { World } from '@forgeax/engine-ecs';
  *
  * `getWorld` is called PER query (not captured once) so the returned fn always
  * reads the gateway's CURRENT world — surviving world swaps (boot injection /
- * scene replaceDoc) exactly as the inline `this.doc.world!` closures did. The
- * non-null assertion parity: callers reach this only after a world is present;
- * a null world would throw inside `querySnapshot` the same way the inline
- * `this.doc.world!` did (behavior-identical, no new guard — OOS-1 zero behavior
- * change).
+ * scene replaceDoc) and the ▶/■ play-world fork: gateway callers pass
+ * `() => this.activeWorld`, so during play `query` reads the live play world and
+ * in edit reads `doc.world`. The non-null assertion parity: callers reach this
+ * only after a world is present (activeWorld falls back to doc.world when no play
+ * world is set); a null world would throw inside `querySnapshot` the same way the
+ * inline `this.doc.world!` did (behavior-identical, no new guard — OOS-1).
  */
 export function makeQueryFn(getWorld: () => World | undefined): QuerySnapshotFn {
   return (descriptor: QuerySnapshotDescriptor): QuerySnapshotResult =>

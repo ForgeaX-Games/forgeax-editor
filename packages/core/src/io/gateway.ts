@@ -283,9 +283,13 @@ export class EditGateway {
    *  ctx.engine / ctx.dispatchSub / ctx.query — NO world field (AC-01). */
   private _buildCtx(): ApplierCtx {
     const engine = this._getEngineFacade();
-    // Read-side reader bound to the LIVE world (makeQueryFn calls getWorld per
-    // query, so a world swap is reflected) — sunk assembly, w10.
-    const query: QuerySnapshotFn = makeQueryFn(() => this.doc.world);
+    // Read-side reader bound to the ACTIVE world (makeQueryFn calls getWorld per
+    // query, so a world swap is reflected) — sunk assembly, w10. activeWorld
+    // (not doc.world) so `query` reads the play world during ▶ Play, mirroring
+    // activeWorld/mode/childrenOf which already Derive from _playWorld (play-world
+    // observability: read-side must follow the active-world pointer, not the
+    // frozen edit doc — architecture-principles §2 Derive).
+    const query: QuerySnapshotFn = makeQueryFn(() => this.activeWorld);
     // dispatchSub: recursive dispatch through the executor — replaces M1's
     // module-level _dispatchDocumentSub for transaction/plan sub-ops.
     // Nested spans are automatically created via _execDocumentApplier.
@@ -324,7 +328,9 @@ export class EditGateway {
       // ctx shape and available for defined document ops that might. Sunk
       // assembly via makeQueryFn (w10); DocQueryFn's structural (desc:unknown)
       // shape widens the io QuerySnapshotFn — cast at the boundary as before.
-      query: makeQueryFn(() => this.doc.world) as unknown as DocApplierCtx['query'],
+      // activeWorld (not doc.world) so a defined document op's plan reads the
+      // active world consistently with the eval/session query (play-world read).
+      query: makeQueryFn(() => this.activeWorld) as unknown as DocApplierCtx['query'],
     };
     return ctx;
   }
@@ -915,11 +921,18 @@ export class EditGateway {
     return result;
   }
 
-  /** Build a query-snapshot function for defineOp plan(). Public entry face is
-   *  frozen (AC-03); the read-side assembly it returns is sunk into
-   *  io/gateway-query.ts (makeQueryFn, w10). */
+  /** Build a query-snapshot function for defineOp plan() and the eval channel's
+   *  scope① `query`. Public entry face is frozen (AC-03); the read-side assembly
+   *  it returns is sunk into io/gateway-query.ts (makeQueryFn, w10).
+   *
+   *  Bound to `activeWorld` (Derive from _playWorld), NOT the frozen edit
+   *  `doc.world`: during ▶ Play `query` reads the live play world, so an AI can
+   *  observe a running mechanic's component values through the documented door —
+   *  mirroring activeWorld/mode/childrenOf, which already follow the pointer.
+   *  Play writes stay blocked (dispatch → edit-rejected-in-play); only this
+   *  read follows the active world ("play data is a read-only simulation view"). */
   buildQueryFn(): QuerySnapshotFn {
-    return makeQueryFn(() => this.doc.world);
+    return makeQueryFn(() => this.activeWorld);
   }
 
   /**
@@ -972,7 +985,11 @@ export class EditGateway {
       documentAppliers.set(id, (_ctx: unknown, cmd: EditorOp) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
-        const query: unknown = makeQueryFn(() => this.doc.world);
+        // activeWorld (Derive) so plan reads the active world consistently with
+        // the eval/session query. Document dispatch is rejected in play
+        // (edit-rejected-in-play), so in practice this is always the edit world
+        // here — but binding to activeWorld keeps all five query sites uniform.
+        const query: unknown = makeQueryFn(() => this.activeWorld);
 
         let planCommands: EditorOp[];
         try {
@@ -1011,7 +1028,10 @@ export class EditGateway {
       sessionAppliers.set(id, ((op: EditorOp, _ctx?: SessionApplierCtx) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = op as { kind: string } & Record<string, unknown>;
-        const query: unknown = makeQueryFn(() => this.doc.world);
+        // activeWorld (Derive): session ops CAN run during play, so a defined
+        // session op's plan must read the live play world, not the frozen edit
+        // doc — same active-world pointer as the eval/scope① query.
+        const query: unknown = makeQueryFn(() => this.activeWorld);
 
         let planOps: EditorOp[];
         try {
