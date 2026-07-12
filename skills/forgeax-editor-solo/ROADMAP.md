@@ -48,10 +48,10 @@ Play → ship). The North Star is reached only when all are green. Status legend
 
 | # | Pillar | Status | Proven by / blocked by | The gap to "shippable" |
 |:--|:--|:--|:--|:--|
-| P1 | **Scene authoring** — spawn, hierarchy, transforms, reparent | 🟢 proven | `2026-07-12-hierarchy-authoring` | frame-derived `Transform.world` read (deferred #2) — ergonomic, not blocking |
-| P2 | **Command surface** — composed/reusable ops, undo, self-introspection | 🟢 proven | `2026-07-12-defineop-authoring`, `…-composed-op-authoring` | argsSchema now enforced (#158); broad op library still thin |
-| P3 | **Asset pipeline** — import (GLB/FBX) → catalog → instantiate | 🟡 partial | `2026-07-12-skinned-glb-asset-import` (import op + `addSceneAssetToScene` place-leg both landed; skinned Fox instantiates via the door) | material/texture round-trip at scale; large-asset streaming unproven; `AnimationPlayer` clip playback undriven (→ P6) |
-| P4 | **Gameplay logic** — plugin components, systems, Play behavior | 🟢 proven | `2026-07-12-play-logic-live-query` — full chain driven end-to-end: `Rotator` plugin → ▶ Play → front-door `query()` reads the live play world (#164) → BlueBall `Transform.quat` confirmed changing frame-over-frame → clean Stop. Also landed `playPhase`/`lastPlayError` so a failed async assemble is observable (was the round-3/5 misdiagnosis root) | proven for one plugin/system; broader gameplay (input-driven logic, inter-entity systems, save/restore of play-authored state) still thin — but Edit=Play for logic is now demonstrated |
+| P1 | **Scene authoring** — spawn, hierarchy, transforms, reparent | 🟢 proven | `20260712-010637-hierarchy-authoring` | frame-derived `Transform.world` read (deferred #2) — ergonomic, not blocking |
+| P2 | **Command surface** — composed/reusable ops, undo, self-introspection | 🟢 proven | `20260712-032908-defineop-authoring`, `20260712-032207-composed-op-authoring` | argsSchema now enforced (#158); broad op library still thin |
+| P3 | **Asset pipeline** — import (GLB/FBX) → catalog → instantiate → **persist round-trip** | 🟢 proven | `20260712-204914-material-texture-round-trip` (BoxTextured.glb import→place→save→**reopen**: material params + `baseColorTexture` binding survive byte-identical, `roundTripIdentical:true`; earlier: `20260712-153333-skinned-glb-asset-import` import+place legs) | large-asset streaming still unproven; `AnimationPlayer` clip playback undriven (→ P6). Material/texture round-trip now **proven** — plus a `describeAssetByGuid` read leg so an AI can inspect a bound texture without a multi-MB pixel dump |
+| P4 | **Gameplay logic** — plugin components, systems, Play behavior | 🟢 proven | `20260712-191320-play-logic-live-query` — full chain driven end-to-end: `Rotator` plugin → ▶ Play → front-door `query()` reads the live play world (#164) → BlueBall `Transform.quat` confirmed changing frame-over-frame → clean Stop. Also landed `playPhase`/`lastPlayError` so a failed async assemble is observable (was the round-3/5 misdiagnosis root) | proven for one plugin/system; broader gameplay (input-driven logic, inter-entity systems, save/restore of play-authored state) still thin — but Edit=Play for logic is now demonstrated |
 | P5 | **Production rendering** — PBR materials, lighting, shadows, post | ⚪ untouched | inspection proven only (`…-rhi-debug-capture`) | no run has *authored* a material/light/post chain end-to-end |
 | P6 | **Animation & skinning** — clip playback, blending, state | ⚪ untouched | skinned asset *imports* (P3) but playback undriven | drive an `AnimationPlayer` clip in Play and confirm it plays |
 | P7 | **Physics & interaction** — colliders, rigidbodies, triggers | ⚪ untouched | — | author a collider/body, confirm simulation in Play |
@@ -69,8 +69,8 @@ Run this in order; the first that yields a reachable goal is the round's target:
    exceeds solo's reach, the goal is "specify it for `forgeax-closed-loop`," not "pick something easier"
    (SKILL.md escalation).
 2. **Close a 🟡 to 🟢.** A partial pillar is one gap from proven — cheaper than opening a new pillar and it
-   raises the floor. *Today the only 🟡 is P3* (asset round-trip at scale: material/texture fidelity,
-   large-asset streaming, and — overlapping P6 — `AnimationPlayer` clip playback). P4 closed to 🟢 this round.
+   raises the floor. *No 🟡 today* — P3 closed to 🟢 this round (material/texture round-trip proven), P4 last
+   round. The floor is now P1–P4 all 🟢.
 3. **Open the most-blocking ⚪.** Among untouched pillars, prefer the one the most other pillars depend on
    (rendering P5 and animation P6 gate "looks/plays like a game" more than audio P8 or shipping P11 do this
    early). A playable slice needs P5–P7 long before P11.
@@ -78,13 +78,14 @@ Run this in order; the first that yields a reachable goal is the round's target:
    (SKILL.md). If steps 1–3 all point at something too big for solo, escalate; do not down-scope to stay busy.
 
 > [!TIP]
-> The honest next target is **P6 → P5 → P3**: P1/P2/P4 are 🟢 (author, command, and gameplay-logic all proven
-> end-to-end). The gap to "looks/plays like a game" is now **animation (P6)** — a skinned asset already
-> imports (P3), so drive an `AnimationPlayer` clip in Play and confirm it plays; then **production rendering
-> (P5)** — author a material/light chain, not just inspect one; P3's remaining material/streaming gap folds in
-> alongside. A "playable vertical slice" (one level + one mechanic + real materials + one animation) is the
-> first *composite* milestone that spans P1–P6 — the true half-way mark to the North Star, and now only
-> P5/P6 stand between here and it.
+> The honest next target is **P6 → P5**: P1–P4 are all 🟢 (author, command, asset-pipeline round-trip, and
+> gameplay-logic all proven end-to-end). With no 🟡 left, step 2 is exhausted — open the most-blocking ⚪.
+> The gap to "looks/plays like a game" is **animation (P6)** — a skinned asset already imports *and*
+> round-trips (P3), so drive an `AnimationPlayer` clip in Play and confirm it plays; then **production
+> rendering (P5)** — *author* a material/light chain, not just inspect one (round-4 only inspected; round-9
+> proved material *persistence* but not *authoring a new material from scratch*). A "playable vertical slice"
+> (one level + one mechanic + real materials + one animation) is the first *composite* milestone spanning
+> P1–P6 — the half-way mark to the North Star, and now only P5/P6 stand between here and it.
 
 ## Updating this file (step 7 discipline)
 

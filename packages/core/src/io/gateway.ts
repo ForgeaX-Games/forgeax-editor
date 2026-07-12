@@ -53,6 +53,33 @@ export type DispatchResult =
   | { ok: true; result?: { created: EntityHandle[] } }
   | { ok: false; error: CommandError };
 
+// Lightweight asset summary — the shared shape both describe legs (describeAsset
+// by-handle, describeAssetByGuid by-guid) return, so a caller reads one identity
+// contract regardless of how it addressed the asset. `kind` always; `guid`+`name`
+// when catalogued, else `builtin:true`. `meta` carries the POD's own lightweight
+// fields (a texture's width/height/format, a mesh's attributes, …) with the heavy
+// binary buffers stripped — so it is safe to read without dragging pixels/vertices
+// into scope. The FULL payload (incl. buffers) stays behind resolveAsset(handle) /
+// lookupAsset(guid). `meta` is an open bag on purpose: its keys are the engine
+// Asset POD's own field names (Derive — this type declares no per-kind field).
+export interface AssetSummary {
+  kind: string;
+  guid?: string;
+  name?: string;
+  builtin?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export type AssetSummaryResult = ({ ok: true } & AssetSummary) | { ok: false; error: CommandError };
+
+// A field is a "heavy buffer" iff it is a binary blob (TypedArray/DataView view of
+// an ArrayBuffer, or a raw ArrayBuffer). This is the structural test summarizeAsset
+// uses to drop pixel/vertex/index data — deliberately SHAPE-based, not a per-kind
+// field list, so no asset-kind business knowledge leaks into the gateway.
+function isHeavyBuffer(value: unknown): boolean {
+  return ArrayBuffer.isView(value) || value instanceof ArrayBuffer;
+}
+
 // CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
 // detail, w10). Re-exported here so the barrel (index.ts) surface stays byte-
 // identical — every consumer keeps importing them from editor-core unchanged
@@ -890,24 +917,71 @@ export class EditGateway {
   }
 
   /**
-   * Describe an asset handle as a human-readable identity (best-effort): its
-   * `kind`, plus a catalog GUID + name when the payload is a registered asset.
-   * Builtin/procedural payloads have no GUID (not in the catalog) — those come
-   * back with just `kind` (and `builtin:true`). This is the "what mesh is this
+   * Describe an asset handle as a lightweight summary (best-effort): its `kind`,
+   * a catalog GUID + name when registered, and — for heavy-data kinds — its
+   * SHAPE metadata (texture w/h/format, mesh vertex count) but NEVER the pixel /
+   * vertex buffer itself. Builtin/procedural payloads have no GUID (not in the
+   * catalog) → `builtin:true`, no GUID/name. This is the "what mesh is this
    * entity using?" answer: query MeshFilter.assetHandle.raw → describeAsset(raw).
+   * For the payload (geometry / pixels), use resolveAsset(handle).
    */
-  describeAsset(
-    handle: number,
-  ): { ok: true; kind: string; guid?: string; name?: string; builtin?: boolean } | { ok: false; error: CommandError } {
+  describeAsset(handle: number): AssetSummaryResult {
     const r = this.resolveAsset(handle);
     if (!r.ok) return r;
+    const guid = this.doc.registry?._guidForAsset(r.asset);
+    return { ok: true, ...this.summarizeAsset(r.asset, guid) };
+  }
+
+  /**
+   * Describe a CATALOGUED asset by GUID — the lightweight, by-GUID complement of
+   * describeAsset(handle). Completes the asset read-surface 2×2 matrix:
+   *   full payload → resolveAsset(handle) / lookupAsset(guid)
+   *   lightweight  → describeAsset(handle) / describeAssetByGuid(guid)
+   * A material POD exposes its texture bindings as GUID strings (e.g.
+   * `paramValues.baseColorTexture`); feed that GUID here to inspect the texture's
+   * kind + dimensions + format WITHOUT lookupAsset dragging the whole pixel
+   * buffer into scope. Same summary projection as describeAsset (SSOT — the
+   * summarizeAsset helper), so the two legs can never drift. Unknown GUID / no
+   * registry → structured ASSET_NOT_FOUND (charter P3), never a silent undefined.
+   */
+  describeAssetByGuid(guid: AssetGuid | string): AssetSummaryResult {
     const registry = this.doc.registry;
-    const guid = registry?._guidForAsset(r.asset);
-    if (guid === undefined) {
-      // Payload isn't in the catalog → builtin/procedural. No GUID/name to give.
-      return { ok: true, kind: r.asset.kind, builtin: true };
+    const asset = registry?.lookup(guid);
+    if (asset === undefined) {
+      return { ok: false, error: { code: 'ASSET_NOT_FOUND', hint: `no catalog asset for guid ${String(guid)}; it may be uncooked, a builtin (no GUID), or a scene sub-asset fetched by loadByGuid` } };
     }
-    return { ok: true, kind: r.asset.kind, guid, name: registry!.resolveName(guid) };
+    // Re-derive the canonical catalog string key from the payload (SSOT — same
+    // path describeAsset uses), so guid/name in the summary match exactly.
+    return { ok: true, ...this.summarizeAsset(asset, registry!._guidForAsset(asset)) };
+  }
+
+  /**
+   * Project an Asset POD to its lightweight summary — the SSOT both describe legs
+   * (by-handle, by-guid) share so their output can never diverge (Derive, don't
+   * Duplicate). Emits identity (`kind`/`guid`/`name`, or `builtin:true` when the
+   * payload isn't catalogued) plus a `meta` bag of the POD's own lightweight
+   * fields — every scalar/plain field (a texture's `width`/`height`/`format`, a
+   * mesh's `attributes`, …) EXCEPT the heavy binary buffers (`TextureAsset.data`,
+   * `MeshAsset.vertices`, …).
+   *
+   * Deliberately KIND-AGNOSTIC: it discriminates by a field's runtime SHAPE (is it
+   * a binary buffer?), not by `asset.kind`. So the gateway holds no per-asset-kind
+   * business knowledge — a new heavy-data asset kind in the engine needs zero edit
+   * here, and its lightweight fields flow through automatically (Derive; the engine
+   * `Asset` POD stays the single source of what fields exist).
+   */
+  private summarizeAsset(asset: Asset, guid: string | undefined): AssetSummary {
+    const identity: AssetSummary =
+      guid === undefined
+        ? { kind: asset.kind, builtin: true } // not in catalog → builtin/procedural
+        : { kind: asset.kind, guid, name: this.doc.registry!.resolveName(guid) };
+    const meta: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(asset)) {
+      if (key === 'kind') continue; // already in identity
+      if (isHeavyBuffer(value)) continue; // drop pixel/vertex/index buffers — the whole point
+      meta[key] = value;
+    }
+    return { ...identity, meta };
   }
 
   /**
@@ -920,7 +994,9 @@ export class EditGateway {
   }
 
   /**
-   * Look up a catalogued asset payload by GUID (no fetch — catalog only).
+   * Look up a catalogued asset payload by GUID (no fetch — catalog only). Returns
+   * the FULL payload (heavy: a texture's pixels, a mesh's vertices) — for a
+   * lightweight identity/shape summary use describeAssetByGuid(guid) instead.
    * undefined when the GUID is unknown or no registry is bound.
    */
   lookupAsset(guid: AssetGuid | string): Asset | undefined {

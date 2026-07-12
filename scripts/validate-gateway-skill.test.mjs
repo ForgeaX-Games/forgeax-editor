@@ -140,6 +140,7 @@ testFixture('(a) valid fixture', [
   'Use importAsset to cook a file, then addSceneAssetToScene to place a catalogued scene GUID.',
   'For real Play dogfood boot `bun fx start --game games/sample` — no --game opens an empty scene.',
   'Poll gateway.playPhase to a terminal value; on failed read gateway.lastPlayError.',
+  'Follow a material texture GUID with gateway.describeAssetByGuid — not lookupAsset (full buffer).',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------

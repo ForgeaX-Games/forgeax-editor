@@ -50,6 +50,8 @@ export { EditGateway } from './io/gateway';
 export type {
   BusListener,
   DispatchResult,
+  AssetSummary,
+  AssetSummaryResult,
   CommandOrigin,
   HistoryStep,
   OpHandle,

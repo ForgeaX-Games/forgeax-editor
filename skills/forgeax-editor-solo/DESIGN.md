@@ -202,7 +202,7 @@ around the door to drive.
 | Append-only history of every run vs the roadmap (register before / update after) | `.forgeax-harness/solo/roadmap-progress.md` (ledger, `§7`; row added step 0, closed step 7) |
 | Why solo / why L2 / the razors' rationale | this file |
 | Editor driver scripts (`gateway-live`/`gateway-eval`) | `forgeax-editor-gateway` skill (reused, never copied) |
-| Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir in the harness clone (`.forgeax-harness/solo/experiments/<YYYY-MM-DD>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
+| Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir in the harness clone (`.forgeax-harness/solo/experiments/<YYYYMMDD>-<HHMMSS>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
 | Reusable method facts (verify recipes, env gotchas) | project memory + SKILL.md anti-pattern list (L2 sink) |
 | Target-repo architecture razors | `forgeax-harness/rules/architecture-principles.md` |
 

@@ -281,12 +281,20 @@ the human (red CI it can't fix / scope escalation).
 ## The run directory
 
 Each loop run is **one self-contained directory**, not a lone file, under the harness clone's solo
-notebook: `.forgeax-harness/solo/experiments/<YYYY-MM-DD>-<goal-slug>/` (e.g.
-`.forgeax-harness/solo/experiments/2026-07-12-hierarchy-authoring/`) — **date + goal name, one dir per
-run; never overwrite a prior run's dir**, so the notebook accumulates dated, reproducible runs. It lives in
-the harness clone — not the target skill's dir — so the notebook survives a skill re-sync and never bleeds
-into the fix's PR. `.forgeax-harness` is a git repo of its own; commit the notebook there, never in the
-editor repo.
+notebook: `.forgeax-harness/solo/experiments/<YYYYMMDD>-<HHMMSS>-<goal-slug>/` (e.g.
+`.forgeax-harness/solo/experiments/20260712-204914-material-texture-round-trip/`) — **compact date +
+time + goal name, one dir per run; never overwrite a prior run's dir**. The `HHMMSS` timestamp makes two
+runs of the same goal on one day distinct, and the all-digits `<YYYYMMDD>-<HHMMSS>` prefix sorts
+lexicographically = chronologically, so `ls` alone reads as the run history. Don't hand-type the
+timestamp — mint the dir with the generator (it also scaffolds `snippets/` + `out/`):
+
+```bash
+RUN=$(node skills/forgeax-editor-solo/scripts/new-run-dir.mjs <goal-slug> | tail -1)   # $RUN = abs path
+```
+
+It lives in the harness clone — not the target skill's dir — so the notebook survives a skill re-sync and
+never bleeds into the fix's PR. `.forgeax-harness` is a git repo of its own; commit the notebook there,
+never in the editor repo.
 
 Everything a run touched lives in its dir — so a later reader (or the next round surveying the frontier)
 can re-run it, not just read about it:
@@ -485,6 +493,28 @@ can re-run it, not just read about it:
   submodule ships only `src`), then `bun -F @forgeax/editor-core test` passes. A *live host* end-to-end still
   needs the full per-package `node_modules` + port-ownership check (memory:
   `editor-worktree-unit-test-engine-dist-symlink`, `editor-worktree-live-host-resolution`). (round-6)
+- **The friction you set out to fix may already work — verify the *premise* before designing a fix.** Round-9
+  targeted P3's "material/texture round-trip" gap (deferred by round-7) and found the round-trip **already
+  worked** end-to-end (`roundTripIdentical:true`). The real, fixable friction was adjacent (a missing
+  lightweight read leg), surfaced only *because* dogfooding walked the whole chain. Lesson: a deferred-gap
+  goal is a **hypothesis**, not a known bug — prove it's actually broken (drive it, diff the result) before
+  building; if it works, say so (flip the pillar 🟢) and fix the *real* friction the walk exposed. Don't
+  manufacture a fix for a premise you never tested.
+- **A `switch (upstream.kind)` in a consumer is the doc-reflex's structural cousin — the human catches it,
+  so pre-empt it.** Round-9's first cut of `describeAssetByGuid` hard-coded `switch (asset.kind)` mapping each
+  engine asset kind to its shape fields. It passed all gates — and the human flagged it as "too specialized,
+  embeds too much business knowledge, do dependency-inversion." The AI default is to *enumerate the concrete
+  variants it knows*; the correct move is to depend on the value's **runtime shape** (strip fields where
+  `ArrayBuffer.isView(v)`), so a new upstream kind needs zero consumer edit. This is now
+  **`architecture-principles §2.5 Depend on Abstractions`** (added this round). Run every consumer-side
+  `switch`/`if (type===)` through §2.5's litmus *before* the human has to: "does an upstream variant addition
+  force an edit here? → invert." (round-9)
+- **A full-payload read leg wants a buffer-stripped lightweight sibling — the read surface is a 2×2, keep it
+  square.** Any `getX(handle)`/`getX(guid)` that returns a heavy POD (pixels, vertices, samples) strands a
+  docs-only AI: following a pointer to *inspect* an asset drags MBs into context. The symmetric fix is a
+  lightweight describe leg for the same address space (round-9: `describeAssetByGuid` completed
+  handle/guid × full/lightweight). When you add a full-payload getter, ask whether its lightweight peer
+  exists; a lone full getter is half a surface. (round-9)
 
 ## Driving the editor instance
 

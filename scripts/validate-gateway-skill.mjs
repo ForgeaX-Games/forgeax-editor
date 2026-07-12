@@ -109,6 +109,13 @@ const REQUIRED_KEYWORDS = [
   // the old "poll mode" band-aid (EXPERIMENT-REPORT round-8 friction #3).
   'playPhase',
   'lastPlayError',
+  // Lightweight by-GUID asset read leg — a material POD exposes its texture
+  // bindings as GUID strings; the only by-GUID path used to be lookupAsset, which
+  // returns the FULL payload (a texture's whole pixel buffer → multi-MB dump). The
+  // "Read what asset an entity references" section MUST keep teaching
+  // describeAssetByGuid (identity + buffer-stripped `meta`) as the way to follow a
+  // GUID pointer without a context-bomb (EXPERIMENT-REPORT round-9 friction #4).
+  'describeAssetByGuid',
 ];
 
 // ---------------------------------------------------------------------------

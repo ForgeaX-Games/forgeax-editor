@@ -240,7 +240,36 @@ const a = gateway.resolveAsset(handle);           // { ok:true, asset:{ kind:'me
 
 // Enumerate / look up the catalog directly:
 const catalog = gateway.assetCatalog();           // [{ guid, kind, name?, relativeUrl }]
-const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only)
+const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only) — FULL payload
+
+// Following a GUID pointer (e.g. a material's texture binding)? Use the LIGHTWEIGHT
+// by-GUID leg — NOT lookupAsset, which drags the whole binary buffer into scope:
+const t = gateway.describeAssetByGuid(someGuid);
+// → { ok:true, kind:'texture', guid, name, meta:{ width, height, format, colorSpace, mipmap } }
+//   `meta` = the POD's own fields with the heavy buffers (pixels/vertices) STRIPPED.
+```
+
+The asset read surface is a 2×2 matrix — pick the cell by *how you address it* × *how much you want*:
+
+| address ↓ / want → | full payload (heavy) | lightweight summary |
+|:--|:--|:--|
+| by **handle** (`query`'s `opaque-handle.raw`) | `resolveAsset(handle)` | `describeAsset(handle)` |
+| by **GUID** (a catalog / POD pointer) | `lookupAsset(guid)` | `describeAssetByGuid(guid)` |
+
+`describeAsset` / `describeAssetByGuid` return the **same** `AssetSummary` shape (one SSOT
+projection): `{ kind, guid?, name?, builtin?, meta? }`. `meta` carries the POD's own lightweight
+fields (a texture's `width`/`height`/`format`, a mesh's `attributes`, …) with binary buffers
+removed — so it is safe to log/inspect. Reach for `resolveAsset`/`lookupAsset` **only** when you
+actually need the pixels/vertices.
+
+```ts
+// Inspect what texture a material binds — WITHOUT a multi-MB pixel dump:
+const mr = query({ with: ['MeshRenderer'] });
+const matHandle = mr.rows[0].MeshRenderer.materials[0];        // shared<MaterialAsset> handle
+const mat = gateway.resolveAsset(matHandle as number);         // material POD is small
+const texGuid = mat.ok && mat.asset.paramValues?.baseColorTexture;  // → a GUID string
+if (texGuid) gateway.describeAssetByGuid(texGuid);            // { kind:'texture', meta:{width,height,format} }
+//                    ^ do NOT lookupAsset(texGuid) here — that returns every pixel.
 ```
 
 > [!IMPORTANT]
@@ -249,7 +278,8 @@ const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog 
 > (`HANDLE_CUBE`/`HANDLE_TRIANGLE`) live in a process-static registry, not the
 > asset catalog, so `describeAsset` returns `{builtin:true}` with no `guid`/`name`.
 > `resolveAsset` still returns their payload (it covers builtin + catalog). `raw`
-> of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`.
+> of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`;
+> `describeAssetByGuid` on an unknown/uncatalogued GUID → the same structured miss.
 > `unique<T>`/`ref`/`buffer` stay opaque (no catalog GUID; not resolved here).
 
 ### Import an external asset, then place it in the scene (the asset WRITE legs)
@@ -299,6 +329,17 @@ gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'F
 // 4) Confirm the skinned instance landed (poll query — the mount is async).
 const rigged = query({ with: ['Skin', 'AnimationPlayer'] });   // rows now include the Fox subtree
 ```
+
+> [!IMPORTANT]
+> **What lands is a wrapper + a subtree — query by the COMPONENT, not the wrapper name.**
+> `addSceneAssetToScene` mounts an identity-`Transform` **wrapper** entity (named by `name`)
+> whose CHILDREN carry the actual `MeshRenderer` / `Skin` / geometry. Filtering by the wrapper's
+> name and expecting a `MeshRenderer` on it sees nothing → a false "it didn't land". Query by the
+> component you want (`query({ with: ['MeshRenderer'] })`) to catch the mesh children.
+> Also: the mount is **async** and **each headless `gateway-eval.mjs` call is a fresh page load
+> (= a reopen from disk)** — a mount you placed but did NOT `saveDocToDisk` is gone on the next
+> eval. Place → inspect → **save** within one eval if you need it to persist; a *separate* eval is
+> already the reopen (that is exactly how you verify a save→reopen round-trip).
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 
