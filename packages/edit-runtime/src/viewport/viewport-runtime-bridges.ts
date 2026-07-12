@@ -241,6 +241,13 @@ export function installVisibilityPause(
  *  and drops the overlay box — so a cross-game realm reset doesn't stack another
  *  console.error wrapper (each stack layer duplicates output) or leak listeners. */
 export function installErrorOverlay(container: HTMLElement): () => void {
+  // Task 2 (render-system-no-camera timing race): 500 ms startup grace window.
+  // During boot the render loop may tick before the editorWorld camera entity
+  // is spawned — suppress the red error banner for render-system-no-camera
+  // during that window (console.warn is still emitted so the log is preserved).
+  const bootTime = Date.now();
+  const GRACE_MS = 500;
+
   const box = document.createElement('div');
   box.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
     + 'background:rgba(140,10,10,0.94);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:10px 12px;'
@@ -257,6 +264,13 @@ export function installErrorOverlay(container: HTMLElement): () => void {
   };
   const show = (text: string): void => {
     if (!/error|rhi|fail|exception|unsupported|invalid|adapter|gpu/i.test(text)) return;
+    // Grace-period suppression for render-system-no-camera: if a transient boot
+    // gap lets the renderer tick before camera spawn completes, skip the banner
+    // but keep the console.warn below so the event is still traceable.
+    if (/render-system-no-camera/.test(text) && Date.now() - bootTime < GRACE_MS) {
+      console.warn('[editor] suppressed startup transient: render-system-no-camera');
+      return;
+    }
     if (seen.has(text) || seen.size > 40) return;
     seen.add(text);
     box.style.display = 'block';
