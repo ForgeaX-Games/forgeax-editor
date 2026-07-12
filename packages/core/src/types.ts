@@ -88,6 +88,20 @@ export type BuiltinEditorOp =
   // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
   // game-relative (the applier resolves it via resolveGamePath).
   | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean }
+  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): "a scene
+  // sub-asset is in the catalog by GUID (e.g. just imported); add it to the live
+  // scene." SESSION-domain, ledger-only, fire-and-forget async — it must
+  // loadByGuid (async), so it cannot ride the SYNC document-domain
+  // instantiateSceneAsset applier (which takes a pre-collected POD). Mirrors
+  // importAsset's shape exactly: same session domain, same detached-promise
+  // completion, same "around the catalog" scope. The applier body is the SAME
+  // spawnGlbSceneAsMount the human "Add to Scene" UI runs — one door, human + AI
+  // are equal peers (registry razor: the UI capability is now AI-reachable, not a
+  // registered copy). The nested SceneInstance subtree is the engine's by-design
+  // derived cache (AGENTS.md invariant 7 escape hatch); the authored fact is the
+  // wrapper's SceneInstance ref, which the wrapper-spawn (a document op inside the
+  // body) round-trips as one mounts[] entry.
+  | { kind: 'addSceneAssetToScene'; sceneGuid: string; name?: string }
   | { kind: 'setFolderSelection'; paths: string[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }

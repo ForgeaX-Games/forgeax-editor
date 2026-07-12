@@ -87,6 +87,15 @@ const REQUIRED_KEYWORDS = [
   // rendering" section (which also states WHY it's out-of-door) from vanishing.
   'captureFrame',
   '__forgeax',
+  // Asset WRITE legs — import a file into the catalog + place a catalogued scene
+  // GUID into the world. The read legs were documented but the write legs (and the
+  // last-leg `addSceneAssetToScene`) were invisible to a docs-only AI: it could
+  // import (via listOps discovery) but had no documented path to PLACE the result,
+  // so the whole import→instantiate chain dead-ended (EXPERIMENT-REPORT round-6
+  // friction #1/#3). These anchors keep the "Import an external asset, then place
+  // it" section from silently vanishing.
+  'importAsset',
+  'addSceneAssetToScene',
 ];
 
 // ---------------------------------------------------------------------------

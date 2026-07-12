@@ -418,6 +418,24 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Import Asset',
   },
+  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): session-
+  // domain, ledger-only, fire-and-forget async. Cataloged so AI self-discovers it
+  // via gateway.listOps() (registry razor — the human "Add to Scene" capability is
+  // now equally AI-reachable). Instantiates a catalogued scene sub-asset (by GUID,
+  // e.g. just imported) into the live scene as a nested SceneInstance mount — the
+  // missing last leg of the import→place chain (importAsset gets it INTO the
+  // catalog; this gets it INTO the scene).
+  { id: 'addSceneAssetToScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin/Skeleton/AnimationPlayer for skinned assets), not a placeholder.' },
+        name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.' },
+      },
+      required: ['sceneGuid'],
+    },
+    title: 'Add Scene Asset to Scene',
+  },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════
   { id: 'setHoverEntity', domain: 'transient',

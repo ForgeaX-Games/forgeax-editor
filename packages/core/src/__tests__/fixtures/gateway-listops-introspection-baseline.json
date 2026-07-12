@@ -22,6 +22,28 @@
     "title": "Add Component"
   },
   {
+    "id": "addSceneAssetToScene",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "sceneGuid": {
+          "type": "string",
+          "description": "A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:\"scene\"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin/Skeleton/AnimationPlayer for skinned assets), not a placeholder."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional name for the wrapper root entity; defaults to \"Scene\". The wrapper is the mount ROOT and round-trips as one mounts[] entry."
+        }
+      },
+      "required": [
+        "sceneGuid"
+      ]
+    },
+    "title": "Add Scene Asset to Scene"
+  },
+  {
     "id": "assetCatalogRefreshed",
     "domain": "session",
     "source": "builtin",

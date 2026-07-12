@@ -137,6 +137,7 @@ testFixture('(a) valid fixture', [
   'Scoped plans reverse-scan ChildOf to enumerate a parent children.',
   'Dispatch a composed op with top-level args; argsSchema is enforced at dispatch.',
   'RHI frame capture is reached via globalThis.__forgeax.captureFrame — outside the gateway.',
+  'Use importAsset to cook a file, then addSceneAssetToScene to place a catalogued scene GUID.',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------

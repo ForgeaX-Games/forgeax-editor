@@ -4,6 +4,7 @@
  */
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, notifyDocChanged } from '../store/store';
 import { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { sessionAppliers } from '../io/appliers';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 
@@ -123,6 +124,35 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<bo
   return true;
 }
 
+// ── Session applier: addSceneAssetToScene (ledger-only, no undo) ───────────────
+// solo round-6 / skinning-pillar convergence. WHY THIS EXISTS (registry razor +
+// invariant 7): a scene sub-asset catalogued by GUID (e.g. just imported via the
+// `importAsset` op) had NO front-door path into the live scene — the whole
+// "Add to Scene" orchestration (spawnGlbSceneAsMount) lived only in this module's
+// UI-called closure, so an AI could NOT do what the human "Add to Scene" button
+// does. `instantiateSceneAsset` (document domain, SYNC) takes a pre-collected POD,
+// not a catalog GUID, and can't loadByGuid (async) — so it cannot serve this path.
+//
+// This registers a SESSION op that IS spawnGlbSceneAsMount, mirroring importAsset's
+// fire-and-forget shape (applier returns synchronously; the async body completes in
+// a detached promise, broadcastAssetsChanged() on completion). Now the human UI
+// (spawnAssetRefToScene, below) and any AI dispatch the SAME op → the SAME body →
+// one door, human + AI equal peers. The wrapper-spawn inside the body is a document
+// op (undoable, marks dirty); the nested SceneInstance subtree is the engine's
+// by-design derived cache (AGENTS.md invariant 7 escape hatch), round-tripping as
+// one mounts[] entry via the wrapper's SceneInstance ref.
+sessionAppliers.set('addSceneAssetToScene', (op) => {
+  const { sceneGuid, name } = op as { sceneGuid: string; name?: string };
+  if (typeof sceneGuid !== 'string' || sceneGuid.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'addSceneAssetToScene requires a non-empty `sceneGuid` (a catalogued scene sub-asset GUID)' } };
+  }
+  const label = typeof name === 'string' && name.length > 0 ? name : 'Scene';
+  void spawnGlbSceneAsMount(sceneGuid, label).catch((e) =>
+    console.warn('[editor-core] addSceneAssetToScene failed:', e),
+  );
+  return { ok: true };
+});
+
 export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Promise<void> {
   const drag = 'type' in ref && ref.type === 'asset' ? ref as DragAssetRef : toDragRef(ref as AssetChatRef);
   const kind = drag.kind ?? '';
@@ -141,11 +171,15 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
     // that produced one builtin cube per node.
     const sceneGuid = await resolveSceneSubAssetGuid(drag);
     if (sceneGuid) {
-      if (await spawnGlbSceneAsMount(sceneGuid, label)) return;
-      // Mount failed (e.g. GUID not yet in the catalog) — do NOT fall back to
-      // cubes. Warn and stop; a page-reload after import makes the GUID
-      // resolvable, and re-adding then succeeds.
-      console.warn('[spawn-asset] GLB scene mount failed — aborting Add to Scene (no cube fallback):', { sceneGuid, label });
+      // Route through the SAME session op an AI dispatches (single door): the op's
+      // applier body IS spawnGlbSceneAsMount. dispatch() returns synchronously
+      // ({ok:true}) while the mount completes in the applier's detached promise
+      // (fire-and-forget async session-op contract). On a mount failure the body
+      // warns + leaves the wrapper (no cube fallback); a post-import page-reload
+      // makes the GUID resolvable and re-adding then succeeds.
+      const r = gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid, name: label });
+      if (r.ok) return;
+      console.warn('[spawn-asset] addSceneAssetToScene dispatch rejected:', r.error?.code, r.error?.hint);
       return;
     }
 

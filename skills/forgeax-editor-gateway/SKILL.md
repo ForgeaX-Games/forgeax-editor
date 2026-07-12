@@ -252,6 +252,54 @@ const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog 
 > of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`.
 > `unique<T>`/`ref`/`buffer` stay opaque (no catalog GUID; not resolved here).
 
+### Import an external asset, then place it in the scene (the asset WRITE legs)
+
+The read legs above (`assetCatalog`/`describeAsset`/`resolveAsset`/`lookupAsset`) answer *"what
+assets exist?"*. The **write legs** are ordinary `dispatch` ops — the same door humans use from the
+Content Browser, so an AI is an equal peer (registry razor). They are **session-domain, ledger-only**
+(no undo — a cook/instantiate produces derived artefacts) and, because they do disk / `loadByGuid`
+I/O, **fire-and-forget async**: `dispatch` returns `{ok:true}` synchronously while the work completes
+in a detached promise. There is **no `created[]`** on a session op — confirm completion by **polling
+`assetCatalog()` / `query()`**, not by reading the dispatch result.
+
+| Op | Args | Does |
+|:--|:--|:--|
+| `importAsset` | `{ destPath, sourceName?, skipUpload? }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). |
+| `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin`/`AnimationPlayer` for skinned assets), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. |
+| `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
+| `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
+
+> [!IMPORTANT]
+> **Why `addSceneAssetToScene` and not `instantiateSceneAsset` for a catalogued GUID.**
+> `instantiateSceneAsset` is a **document** op that takes a *pre-collected POD* from
+> `collectSceneAsset(entity)` — it needs an entity **already in the world** (it's the copy/paste
+> path). A freshly-imported asset is only a **catalog GUID**, nothing in the world yet, and placing
+> it requires an async `loadByGuid` — which can't ride the synchronous document applier. So the two
+> are distinct legs: **`collectSceneAsset`→`instantiateSceneAsset`** duplicates a live subtree;
+> **`addSceneAssetToScene`** places a catalogued GUID. `lookupAsset(sceneGuid)` returns `undefined`
+> for a scene sub-asset (its payload is fetched by `loadByGuid`, not held in the catalog) — that's
+> expected, not an error; use `addSceneAssetToScene`, don't try to hand-feed the POD.
+
+End-to-end recipe — import a rigged GLB and place it (each step is one front-door call):
+
+```ts
+// 1) Cook the file on disk into the catalog (session op — fire-and-forget).
+gateway.dispatch({ kind: 'importAsset', destPath: 'assets/Fox.glb', sourceName: 'Fox.glb' }, 'ai');
+// → {ok:true}. NOTE: an import that writes the .meta sidecar can trigger a pack
+//   disk-watch page reload; drive import and the confirm-read in SEPARATE eval calls.
+
+// 2) Poll the catalog for the cooked scene sub-asset (no created[] on a session op).
+const scene = gateway.assetCatalog().find(
+  (c) => c.kind === 'scene' && (c.relativeUrl || '').toLowerCase().includes('fox'),
+);
+
+// 3) Place it — real geometry + skeleton/skin/animation, one mounts[] entry.
+gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox' }, 'ai');
+
+// 4) Confirm the skinned instance landed (poll query — the mount is async).
+const rigged = query({ with: ['Skin', 'AnimationPlayer'] });   // rows now include the Fox subtree
+```
+
 ### Discover component names + field schemas (before you spawn / setComponent)
 
 `spawnEntity`/`setComponent` take engine-schema components, but `listOps()`'s
