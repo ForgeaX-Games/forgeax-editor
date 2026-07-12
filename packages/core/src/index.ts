@@ -347,10 +347,6 @@ export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 
 // ── Dock bridge helpers ──
 
-// ── Project authoring (M3) ──
-export { openProject, type OpenProjectResult } from './session/open-project';
-export { createFetchReader } from './io/fetch-reader';
-
 // ── Host-injected game path resolver (layout decoupling) ──
 export {
   setPathResolver,

@@ -11,9 +11,8 @@
 //   This module is the explicit seam. editor-core code asks for game-INTERNAL
 //   relative paths ('forge.json', 'scenes/main.pack.json', 'assets/foo.glb') and
 //   the HOST-injected resolver maps them to wherever the game actually is. The
-//   slug is captured in the host's closure — editor-core never passes it (the
-//   same contract open-project.ts's reader(path) already got right; this just
-//   promotes it to the main store path).
+//   slug is captured in the host's closure — editor-core never passes it: this
+//   promotes the game-relative path contract to the main store path.
 //
 // CONTRACT (mirrors setSceneId/getSceneId singleton, store.ts):
 //   setPathResolver(r)      — host installs its <slug>→disk mapper

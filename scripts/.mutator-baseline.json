@@ -1,6 +1,6 @@
 {
   "$schema-note": "Ratchet baseline for lint-unique-mutator.mjs (rawWriteCount) and lint-op-via-gateway.mjs (gatewayBaselineSetters). Each gate does a FULL-TREE scan of its violation class and asserts current <= recorded; if current is lower it AUTO-REWRITES this file downward (ratchet). Never edit by hand to raise a number -- that is exactly the debt the ratchet forbids. Arrays are sorted for deterministic diffs.",
-  "rawWriteCount": 3,
+  "rawWriteCount": 2,
   "gatewayBaselineSetters": [
     "packages/core/src/store/scene-persistence.ts:createSceneFile",
     "packages/core/src/store/scene-persistence.ts:loadDocFromDisk",
