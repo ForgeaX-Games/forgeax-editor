@@ -291,6 +291,15 @@ async function bootViewport(
   const worldManager = new WorldManager(
     () => gateway.doc.world as unknown as import('@forgeax/engine-ecs').World | undefined,
   );
+  // Task 1 (render-system-no-camera timing race): clear gateway.doc.world
+  // on teardown so a new boot's WorldManager.getSceneWorld() returns undefined
+  // during the transition gap (preventing stale world references). Registered
+  // FIRST so it runs LAST (LIFO) — after editorApp.stop() releases the GPU
+  // device and all other teardown handles unwind.
+  registerTeardown(() => {
+    gateway.doc.world = undefined as any;
+  });
+
   // M5 (w29, D-4/AC-05): wire the two super seams — selection minting binds new
   // selections to the live (sceneWorld, epoch) pair, and a scene reload bumps the
   // sceneWorld epoch + revalidates the selection (batch invalidation). Registered
