@@ -429,7 +429,7 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin/Skeleton/AnimationPlayer for skinned assets), not a placeholder.' },
+        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill "Animate a skinned asset" note).' },
         name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.' },
       },
       required: ['sceneGuid'],

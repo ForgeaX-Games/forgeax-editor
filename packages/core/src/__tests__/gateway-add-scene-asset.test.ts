@@ -32,6 +32,24 @@ describe('addSceneAssetToScene op registration (catalog SSOT)', () => {
     // argsSchema drives AI self-discovery — sceneGuid is the one required field.
     expect(op?.argsSchema?.required).toContain('sceneGuid');
   });
+
+  // solo round-10 (P6 animation): the argsSchema description is the machine-readable
+  // contract an AI reads via listOps(). It previously CLAIMED the mount includes an
+  // "AnimationPlayer" for skinned assets — false: the gltf cook never bakes one (clip
+  // choice is authoring intent) and instantiation adds none, so a docs-following AI
+  // queried {with:['Skin','AnimationPlayer']}, got [], and concluded the tool was
+  // broken. This pins the corrected contract: the description must NOT promise an
+  // AnimationPlayer, and must state the Skin/Skeleton truth. A regression that
+  // re-adds the false claim (or drops the correction) fails here.
+  it('sceneGuid description tells the truth: Skin/Skeleton mounted, AnimationPlayer NOT created', () => {
+    const op = listOps().find((o) => o.id === 'addSceneAssetToScene');
+    const desc = op?.argsSchema?.properties?.sceneGuid?.description ?? '';
+    // Must NOT promise a playing/bound AnimationPlayer as part of the mount.
+    expect(desc).not.toMatch(/incl[^.]*AnimationPlayer/i);
+    // Must state the truthful rig contents + the explicit "does NOT create an AnimationPlayer".
+    expect(desc).toMatch(/Skin/);
+    expect(desc).toMatch(/does NOT create an AnimationPlayer/i);
+  });
 });
 
 describe('addSceneAssetToScene dispatch (session applier)', () => {

@@ -295,7 +295,7 @@ in a detached promise. There is **no `created[]`** on a session op — confirm c
 | Op | Args | Does |
 |:--|:--|:--|
 | `importAsset` | `{ destPath, sourceName?, skipUpload? }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). |
-| `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin`/`AnimationPlayer` for skinned assets), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. |
+| `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. |
 | `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
 | `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
 
@@ -323,11 +323,11 @@ const scene = gateway.assetCatalog().find(
   (c) => c.kind === 'scene' && (c.relativeUrl || '').toLowerCase().includes('fox'),
 );
 
-// 3) Place it — real geometry + skeleton/skin/animation, one mounts[] entry.
+// 3) Place it — real geometry + skeleton/skin, one mounts[] entry. (No AnimationPlayer — see below.)
 gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox' }, 'ai');
 
 // 4) Confirm the skinned instance landed (poll query — the mount is async).
-const rigged = query({ with: ['Skin', 'AnimationPlayer'] });   // rows now include the Fox subtree
+const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree (an entity carrying Skin)
 ```
 
 > [!IMPORTANT]
@@ -340,6 +340,27 @@ const rigged = query({ with: ['Skin', 'AnimationPlayer'] });   // rows now inclu
 > (= a reopen from disk)** — a mount you placed but did NOT `saveDocToDisk` is gone on the next
 > eval. Place → inspect → **save** within one eval if you need it to persist; a *separate* eval is
 > already the reopen (that is exactly how you verify a save→reopen round-trip).
+
+> [!CAUTION]
+> **Animate a skinned asset — the honest mental model + two current gaps (P6 not yet end-to-end).**
+> The mount gives you the `Skin` + skeleton joints, **not a playing animation**. That is correct by
+> design: the gltf cook emits the clips as separate `kind:'animation-clip'` catalog sub-assets and
+> deliberately does **not** bake an `AnimationPlayer` — *which* clip plays is authoring intent, so YOU
+> author it. The intended shape (mirrors `apps/hello/skin`): find the entity carrying `Skin`, then
+> `dispatch({ kind:'addComponent', entity, component:'AnimationPlayer', value:{ clips:[<clip>], weights:[1], looping:true } })`
+> (`addComponent`, **not** `setComponent` — `setComponent` only patches a component that already exists).
+> `describeComponent('AnimationPlayer')` gives the field schema (`clips/times/weights/speeds/paused/looping`).
+> **Two gaps currently block this end-to-end (do not expect it to work yet):**
+> 1. **No clip-binding leg.** `clips` is `array<shared<AnimationClip>,4>`; passing a clip **GUID** (in any
+>    shape) is silently coerced to handle `0` — `applyAddComponent`/`applySetComponent` pass component data
+>    raw with no GUID→handle resolution (mesh/material refs get one via `drag-spawn-resolve.ts`; clips have
+>    none). There is no front-door op to bind a clip by GUID.
+> 2. **Mount-member overrides don't round-trip.** A component authored on a *mounted* child (the fox is a
+>    SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's `collect-scene-asset` OOS-1
+>    does not fold `mount.overrides[]` back on collect, and Play reloads from disk, so the authored
+>    `AnimationPlayer` never reaches Play (Edit≠Play).
+> Closing both is tracked for `forgeax-closed-loop` (solo round-10, P6). Until then, treat skinned-asset
+> *playback* as unsupported through the front door; import + place + inspect the rig works today.
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 
