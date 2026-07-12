@@ -150,10 +150,34 @@ pinned to `main`. This buys three things the ladder needs:
 - **Cheap abandonment** — the ladder pushes toward the *correct* fix, which sometimes means discarding a
   first attempt. A worktree makes "throw it away" a one-liner, lowering the cost of aiming deep.
 - **Clean PR boundary** — each loop's fix is one branch/PR from its worktree; the dated experiments notebook
-  (gitignored) never bleeds into it, and `main` stays releasable throughout.
+  lives in a *separate* repo (the harness clone, §7) so it never bleeds into the fix's PR, and `main` stays
+  releasable throughout.
 
 This is *not* the closed-loop's per-milestone worktree machinery — it's one worktree per loop run, entered at
 implement time and exited (kept or removed) after the human gate.
+
+### 7. The notebook lives in the harness clone, not the target skill's dir
+
+Early runs wrote experiment dirs under the *target skill's* own tree
+(`skills/forgeax-editor-gateway/experiments/`). That conflates two things that must stay separate: the **tool
+being improved** and the **record of improving it**. Two failures follow — a skill re-sync (the editor
+mounts skills from the harness; `bun run harness:sync`) can clobber a dir sitting inside the skill, and the
+notebook risks leaking into the tool's own commits. So the notebook lives in the harness clone
+(`.forgeax-harness/solo/experiments/`), the same repo (`forgeax-editor-harness.git`) that already tracks the
+loop's other durable state (`forgeax-loop/`, `feedbacks/`, `todos/`). It is *committed* there, not gitignored
+— the dated notebook is durable state the loop reads back each run (§5), not throwaway scratch. The editor
+repo ignores `/.forgeax-harness/` wholesale, so the notebook never enters an editor PR regardless.
+
+### 8. Dogfood through the front door, or the measurement is fake
+
+The loop measures how well the tool's *documented public surface* serves its AI user. For the editor that
+surface is the gateway (`dispatch` / `begin…commit` / `eval` scope①). Reaching around it — raw
+`world`/`renderer` via `unlockRawScope`, a direct `store/` setter, a hand-rolled ECS write — silently
+compensates for exactly the friction the loop exists to find: the run "succeeds" through a door the real user
+can't take, and logs a false positive. So the back door is not a shortcut to complete a goal; needing it *is*
+the finding (a missing gateway op / read leg), logged as friction and fixed at layer 1/2. This is the
+docs-only rule (§1) applied to the *write* path: §1 forbids reading source to drive, §8 forbids writing
+around the door to drive.
 
 ## SSOT topology (where each fact lives)
 
@@ -162,7 +186,7 @@ implement time and exited (kept or removed) after the human gate.
 | The loop, its gates, report sections | `SKILL.md` |
 | Why solo / why L2 / the razors' rationale | this file |
 | Editor driver scripts (`gateway-live`/`gateway-eval`) | `forgeax-editor-gateway` skill (reused, never copied) |
-| Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir (`<target>/experiments/<YYYY-MM-DD>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
+| Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir in the harness clone (`.forgeax-harness/solo/experiments/<YYYY-MM-DD>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
 | Reusable method facts (verify recipes, env gotchas) | project memory + SKILL.md anti-pattern list (L2 sink) |
 | Target-repo architecture razors | `forgeax-harness/rules/architecture-principles.md` |
 

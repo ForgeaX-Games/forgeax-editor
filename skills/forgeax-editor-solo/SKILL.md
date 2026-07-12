@@ -12,9 +12,10 @@ description: >-
 > [!IMPORTANT]
 > **Read `DESIGN.md`** for *why* this loop exists (solo vs closed-loop, the self-evolution axiom) before
 > asking "why not just fix it directly". This SKILL.md is the *how* — the loop, its gates, the report
-> discipline. Load `rich-markdown` before writing the report. When the target is the editor gateway,
-> the driver scripts live in the sibling `forgeax-editor-gateway` skill — this skill orchestrates, it
-> does **not** re-derive the boot dance.
+> discipline. Load `rich-markdown` before writing the report. When the target is the editor, dogfood it
+> **through the `forgeax-editor-gateway` front door** (its documented `dispatch` / `begin…commit` / `eval`
+> scope① surface) — that skill owns the API and driver scripts; this one orchestrates the loop and never
+> re-derives the boot dance or routes around the gateway.
 
 ## What this is
 
@@ -92,8 +93,8 @@ flowchart TD
 
 ### 0 · Goal + env
 
-**First read the experiments dir** (`<target>/experiments/*/report.md`) — the dated notebook of every prior
-run. Skim each report's goal + its still-open friction (findings logged but deferred, e.g. "left for a
+**First read the experiments dir** (`.forgeax-harness/solo/experiments/*/report.md`) — the dated notebook of
+every prior run. Skim each report's goal + its still-open friction (findings logged but deferred, e.g. "left for a
 later round"); the run's `snippets/` show exactly how it drove the tool. The new goal must **advance the
 frontier**, not re-tread it:
 
@@ -117,7 +118,15 @@ and states how this goal advances beyond them** (new surface and/or a deferred f
 Walk the goal as the tool's *intended user* would — reading only the tool's public docs, not its source.
 Reading source to *drive* the tool defeats the experiment (you'd paper over doc gaps the real user hits).
 
-**Gate:** you invoked the real surface (script/API/CLI), not a mock.
+**Drive through the tool's own front door — for the editor, that is the `forgeax-editor-gateway` surface**
+(`dispatch` / `begin…commit` / `defineOp` / `eval` scope①). The point of dogfooding is to measure *that*
+surface; reaching around it (raw `world`/`renderer` via `unlockRawScope`/`--raw`, a hand-rolled ECS write,
+a direct `store/` setter) makes the friction you'd have felt disappear silently — you'd log "worked fine"
+about a door you never used. If the goal seems to *need* the back door, that gap **is** the finding: log it
+as friction (a missing gateway op / read leg) and fix it at layer 1/2, don't satisfy the goal by bypassing.
+
+**Gate:** you invoked the real front-door surface (gateway `dispatch`/`eval` for the editor), not a mock and
+not a raw-scope bypass; any use of the back door is logged as a friction, not used to complete the goal.
 
 ### 2 · Log friction (rolling)
 
@@ -207,11 +216,13 @@ goal.
 
 ## The run directory
 
-Each loop run is **one self-contained directory**, not a lone file, under the target's experiments dir
-(editor instance: `skills/forgeax-editor-gateway/experiments/`). Name it `<YYYY-MM-DD>-<goal-slug>/`
-(e.g. `2026-07-12-hierarchy-authoring/`) — **date + goal name, one dir per run; never overwrite a prior
-run's dir**, so the experiments dir accumulates a dated lab notebook of reproducible runs. The whole
-`experiments/` tree is a run artifact (gitignored) — don't stage it in the fix's PR.
+Each loop run is **one self-contained directory**, not a lone file, under the harness clone's solo
+notebook: `.forgeax-harness/solo/experiments/<YYYY-MM-DD>-<goal-slug>/` (e.g.
+`.forgeax-harness/solo/experiments/2026-07-12-hierarchy-authoring/`) — **date + goal name, one dir per
+run; never overwrite a prior run's dir**, so the notebook accumulates dated, reproducible runs. It lives in
+the harness clone — not the target skill's dir — so the notebook survives a skill re-sync and never bleeds
+into the fix's PR. `.forgeax-harness` is a git repo of its own; commit the notebook there, never in the
+editor repo.
 
 Everything a run touched lives in its dir — so a later reader (or the next round surveying the frontier)
 can re-run it, not just read about it:
@@ -336,6 +347,12 @@ can re-run it, not just read about it:
 - **The op catalog is a module-global that persists across same-file tests.** A `defineOp` unit that
   reuses an id across `it()` blocks silently gets `OP_ID_CONFLICT` on the 2nd call → `defineOp().ok===false`
   → the test asserts on an op that was never registered. Use a per-call unique id (`foo_${seq++}`).
+- **Completing a goal through the back door instead of logging the door as missing.** When a step is
+  awkward through the gateway (`dispatch`/`eval` scope①), the tempting shortcut is raw access
+  (`unlockRawScope`/`--raw` → `world`/`renderer`, a direct `store/` setter, a hand-rolled ECS write). That
+  makes the run "succeed" but measures a door the real AI user can't take — the friction you'd have felt
+  vanishes and you log a false positive. Needing the back door *is* the finding: log it as a missing gateway
+  op / read leg and fix it at layer 1/2. Drive only through the front door (step 1 gate).
 
 ## Driving the editor instance
 

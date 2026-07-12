@@ -567,6 +567,13 @@ __forgeaxEval.unlockRawScope()   // -> { ok: true }
 __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in scope
 ```
 
+> [!CAUTION]
+> **scope② is a debug escape hatch, not a shortcut around the door.** A raw `world.spawn`/`world.set`
+> skips the ledger, undo, trace, and origin — it authors state no collaborator or `auditLog()` can see, the
+> exact bypass invariant 7 forbids for humans (AGENTS.md). Author through `dispatch`/`begin…commit`; reach
+> for scope② only to *inspect* raw engine internals a query can't reach. A goal that seems to *need* raw
+> writes is a missing gateway op — add the op (`defineOp` / an applier), don't route around it.
+
 **Return value**: `{ok:true, value}` on success; `{ok:false, error:{code, hint}}` on failure.
 - Syntax errors -> `code: 'SCRIPT_SYNTAX_ERROR'`
 - Runtime throws -> `code: 'SCRIPT_RUNTIME_ERROR'`
