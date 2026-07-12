@@ -9,7 +9,8 @@
   "forgeax": {
     "assets": {
       "roots": [
-        "assets"
+        "assets",
+        "@shared/characters"
       ]
     }
   },

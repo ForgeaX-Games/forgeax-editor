@@ -33,12 +33,12 @@
 
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, existsSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
-import { loadAssetConfig } from '@forgeax/engine-pack/config';
+import { resolveGameAssetRoots } from '@forgeax/editor-core/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
@@ -103,21 +103,33 @@ function gameEngineResolve(gameDirAbs: string): PluginOption {
   };
 }
 
-// ── shared template assets (equirect sky.hdr etc.) folded into every catalog ───
-// The default game's environment sky.hdr equirect (GUID 81eec382) is a ~1.3MB
-// sidecar NOT duplicated into each game's assets/. play-runtime folds it into
-// every per-game catalog via sharedAssetRoots(); the in-process editor's
-// pluginPack must do the same or the scene's equirect GUID misses the catalog
-// and loadByGuid -> instantiate aborts the whole scene load. Absent (older
-// deploy) -> [] so catalogs degrade to game-only.
-function sharedTemplateRoots(): string[] {
-  const dir = resolve(EDIT_RUNTIME_DIR, '../../forgeax-editor-assets/template-game-default');
-  return existsSync(dir) ? [dir] : [];
-}
+// The shared/external asset submodule (forgeax-editor-assets) that a game's
+// `@shared/<sub>` roots resolve against. Two levels up from EDIT_RUNTIME_DIR
+// (packages/edit-runtime) = repo root.
+const SHARED_BASE = resolve(EDIT_RUNTIME_DIR, '../../forgeax-editor-assets');
+
+// A game's pack roots — LOCAL and `@shared/<sub>` external roots alike —
+// resolved from package.json#forgeax.assets.roots via the editor-core SSOT
+// helper (architecture-principles §1: one `roots` concept, no separate
+// hardcoded shared-roots appender). Unlike play-runtime, NO symlink farm is
+// needed here: the live standalone host runs with process.cwd() == repo root,
+// so an external abs path under repo-root yields a clean relativeUrl (no `../`
+// for withBase to clamp) that vite serves directly.
+//
+// Implicit `template-game-default`: the demo-seed default template's scene
+// references the shared sky.hdr equirect GUID (81eec382) but its own assets/
+// has no sky.hdr. Rather than edit the ENGINE submodule's template
+// package.json to declare `@shared/template-game-default` (which would leak the
+// editor's `@shared/` convention into the engine, whose own apps/preview reads
+// a different assets submodule), the editor injects that scope implicitly for
+// every game — faithfully reproducing the old sharedTemplateRoots() behavior
+// that folded the template sky into every catalog. existsSync-filtered, so an
+// absent submodule (older deploy) degrades to game-only.
 function gamePackRoots(gameDirAbs: string): string[] {
-  const config = loadAssetConfig(gameDirAbs);
-  const perGame = (config.roots as string[]).filter((p) => existsSync(p));
-  return [...perGame, ...sharedTemplateRoots()];
+  return resolveGameAssetRoots(gameDirAbs, {
+    sharedBase: SHARED_BASE,
+    implicitSharedSubs: ['template-game-default'],
+  }).map((r) => r.abs);
 }
 
 // forgeaxShader's configureServer middleware hardcodes `/shaders/manifest.json`;

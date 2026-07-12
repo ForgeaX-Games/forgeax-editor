@@ -84,4 +84,15 @@ test.describe('smoke — boot + ▶ Play produce no console errors', () => {
       'console/page errors after clicking ▶ Play (WebGPU-headless noise excluded)',
     ).toEqual([]);
   });
+
+  // NOTE on the external-asset-root (`@shared/…`) gate: this webServer boots the
+  // standalone host with GAME_DIR=null (demo-seed — see playwright.config.ts:60),
+  // so games/sample's scene (which references the shared @shared/characters Fox)
+  // is never loaded here. The airtight, GPU-free gate for the external-root fold
+  // lives in the unit tests instead:
+  //   - packages/core/src/__tests__/asset-roots.test.ts (@shared alias resolution)
+  //   - packages/play-runtime/src/__tests__/pack-catalog-external-root.test.ts
+  //     (a shared GLB folds into the catalog with a serveable /preview URL).
+  // Adding a Fox assertion here would require booting this shared webServer with
+  // --game games/sample, which the sibling console-error test deliberately avoids.
 });
