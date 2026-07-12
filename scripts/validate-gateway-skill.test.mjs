@@ -130,6 +130,15 @@ testFixture('(a) valid fixture', [
   'Use gateway.dispatch({ kind: "duplicateEntity", entity }, "ai") for ordinary copies.',
   'Never mix live worlds with an engine `dist` import.',
   'Use scripts/gateway-live.mjs through FORGEAX_BRIDGE on 127.0.0.1 only.',
+  // Keep this fixture in lockstep with REQUIRED_KEYWORDS in the validator — every
+  // anchor added there (undo/canUndo family, plugin authoring, composed-op dispatch)
+  // must appear here or the VALID scenario goes red. (Round-2/3 added the first
+  // group to the validator but forgot this fixture, leaving the test silently red
+  // until round-4; it is not wired into CI, so nobody caught it.)
+  'Gate undo/redo buttons with gateway.canUndo() — undo() returns a bare boolean.',
+  'Author asset-resident game logic in assets/*.plugin.ts with defineComponent/defineSystem.',
+  'A scoped plan enumerates a parent\'s children by reverse-scanning ChildOf.',
+  'Dispatch a composed op with top-level args; argsSchema is enforced at dispatch.',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------

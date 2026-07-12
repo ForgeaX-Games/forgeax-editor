@@ -88,6 +88,25 @@ function fixedArrayArity(fieldType: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+/** `true` for a VARIABLE-capacity `array<T>` field (no `,N` arity) — e.g.
+ *  `array<entity>` (Children.entities). These take two archetype columns: a u32
+ *  BufferPool slot-id column + a `<field>:count` sidecar (engine column.ts §D-3).
+ *  The per-column bundle loop can't reconstruct the logical list from either
+ *  column alone (the slot id reads as a scalar, the sidecar leaks as a fake
+ *  `<field>:count` field), so such fields are re-read whole via the public
+ *  `world.get` — the same escape hatch the `string` case already uses. */
+function isVariableArrayField(fieldType: string): boolean {
+  return isManagedArrayField(fieldType) && fixedArrayArity(fieldType) === undefined;
+}
+
+/** `true` for an internal array sidecar column name (`<field>:count`, engine
+ *  column.ts §D-3). The colon is forbidden in user-facing field names, so this
+ *  never hides a real field — it only suppresses the leaked count column that the
+ *  variable-array re-read (isVariableArrayField) already covers via the base field. */
+function isArrayCountSidecar(fieldName: string): boolean {
+  return fieldName.endsWith(':count');
+}
+
 function snapFieldValue(
   fieldType: string,
   rawValue: unknown,
@@ -203,10 +222,33 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
         const fields: Record<string, unknown> = {};
 
         for (const [fieldName, col] of Object.entries(compBundle)) {
+          // Internal `<field>:count` sidecar of a variable array<T> column — not a
+          // user field. Suppress it; the base field is re-read whole below.
+          if (isArrayCountSidecar(fieldName)) continue;
           if (col && typeof col === 'object') {
             // TypedArray / ManagedColumnReader access
             const colObj = col as { length?: number; subarray?: (a: number, b: number) => unknown; [index: number]: unknown; get?: (i: number) => unknown };
             const fieldType: string | undefined = schema?.[fieldName] as string | undefined;
+            // Variable `array<T>` (no arity) — e.g. array<entity> (Children.entities).
+            // The bundle exposes only a per-row slot id (reads as a scalar) + a leaked
+            // `:count` sidecar; neither reconstructs the logical list. Re-read the whole
+            // field via the public world.get (the SSOT), mirroring the `string` case.
+            // Elements are JSON-safe (entity handles / scalars); snap-copy to a plain array.
+            if (fieldType && isVariableArrayField(fieldType)) {
+              const componentToken = resolveComponent(compName);
+              const componentValue = componentToken
+                ? _world.get(entityIds[i]! as unknown as EntityHandle, componentToken)
+                : undefined;
+              const resolved = componentValue?.ok
+                ? (componentValue.value as Record<string, unknown>)[fieldName]
+                : undefined;
+              fields[fieldName] = Array.isArray(resolved)
+                ? Array.from(resolved as ArrayLike<unknown>)
+                : ArrayBuffer.isView(resolved)
+                  ? Array.from(resolved as unknown as ArrayLike<number>)
+                  : [];
+              continue;
+            }
             // Inline `array<T,N>` columns (feat-20260602) surface as a FLAT
             // stride-N TypedArray: row `i` lives at [i*N, (i+1)*N), not at [i]
             // (engine query.ts arity-aware slicing). Detect the fixed arity from

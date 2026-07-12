@@ -45,3 +45,7 @@ playwright-report/
 
 # local scratch games for manual editor testing (not tracked)
 .forgeax-scratch/
+
+# forgeax-editor-solo per-run experiment reports (dated lab notebook, run artifacts
+# — never committed with the fix PR; see skills/forgeax-editor-solo/SKILL.md).
+skills/*/experiments/

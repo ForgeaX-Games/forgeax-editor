@@ -271,6 +271,7 @@ describe('AC-26: custom op via registerApplier (no core switch)', () => {
         return {
           ok: true as const,
           inverse: { kind: 'alignToGrid', entity: c.entity, gridStep: 0 },
+          created: [],
         };
       },
     );

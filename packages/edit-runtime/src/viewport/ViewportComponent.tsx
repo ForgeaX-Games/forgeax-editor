@@ -291,6 +291,15 @@ async function bootViewport(
   const worldManager = new WorldManager(
     () => gateway.doc.world as unknown as import('@forgeax/engine-ecs').World | undefined,
   );
+  // Task 1 (render-system-no-camera timing race): clear gateway.doc.world
+  // on teardown so a new boot's WorldManager.getSceneWorld() returns undefined
+  // during the transition gap (preventing stale world references). Registered
+  // FIRST so it runs LAST (LIFO) — after editorApp.stop() releases the GPU
+  // device and all other teardown handles unwind.
+  registerTeardown(() => {
+    gateway.doc.world = undefined as any;
+  });
+
   // M5 (w29, D-4/AC-05): wire the two super seams — selection minting binds new
   // selections to the live (sceneWorld, epoch) pair, and a scene reload bumps the
   // sceneWorld epoch + revalidates the selection (batch invalidation). Registered
@@ -444,6 +453,13 @@ async function bootViewport(
   // can grant scope② raw engine access here; production omits rawScope entirely
   // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
   // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
+  //
+  // The bridge's eval-queue drain is bound to editorApp.registerUpdate, which
+  // stops ticking when ▶ Play pauses the edit App — so a CLI eval submitted during
+  // play would queue forever. We hoist the drain here and hand it to the host
+  // session so the run-lifecycle re-registers it on the PLAY App while playing
+  // (follow-the-live-app). Undefined unless the bridge block below assigns it.
+  let bridgeDrainForPlay: ((dt: number) => void) | undefined;
   if (import.meta.env.DEV) {
     const channel = createEvalChannel(gateway, {
       rawScope: { world, renderer, assets: renderer.assets },
@@ -468,27 +484,41 @@ async function bootViewport(
       let bridgeWs: WebSocket | null = null;
       let bridgeBackoff = 1000;
       let bridgeStopped = false;
-      const connectBridge = (): void => {
-        if (bridgeStopped) return;
-        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
-        catch { return; }
-        bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
-        bridgeWs.addEventListener('message', (ev) => {
-          let msg: { type?: string; id?: number; code?: string };
-          try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
-          catch { return; }
-          if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
+
+      // Frame-start eval queue (Part 5 — phase stability). A WebSocket `message`
+      // fires at an arbitrary point relative to the engine's rAF tick, so running
+      // channel.eval → gateway.dispatch inline would land the world write at an
+      // unpredictable phase (before/after world.update() this frame). Instead we
+      // ENQUEUE each eval and drain the queue from editorApp.registerUpdate, which
+      // runs at frame start (between Time injection and world.update()) — so every
+      // bridge write is guaranteed to pass through this frame's systems, making
+      // the outcome deterministic and reproducible across runs. The reply is
+      // deferred to that drain (sub-millisecond; imperceptible for live editing).
+      // UI dispatch is unaffected: it goes through React's event loop directly,
+      // not this queue.
+      const evalQueue: Array<{ id: number; code: string }> = [];
+      const drainEvalQueue = (): void => {
+        if (evalQueue.length === 0) return;
+        // Snapshot + clear so an eval that itself enqueues runs next frame, not
+        // in an unbounded same-frame loop.
+        const jobs = evalQueue.splice(0, evalQueue.length);
+        for (const job of jobs) {
           const reply = (payload: unknown): void => {
-            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: msg.id, payload })); }
+            // Reply on the CURRENT socket, not the one captured at enqueue time.
+            // Between enqueue and this frame-start drain the bridge socket may have
+            // reconnected (a fresh WebSocket instance); the relay keys replies by
+            // request id, so sending on the live socket still resolves the pending
+            // request. Capturing the enqueue-time socket would send on a closed one.
+            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: job.id, payload })); }
             catch { /* socket gone; relay will time the request out */ }
           };
-          // eval returns {ok, value|error}; value may be a Promise (async IIFE
-          // / _import). Await it, then send a JSON-safe envelope back. Non-
+          // eval returns {ok, value|error}; value may be a Promise (async IIFE /
+          // _import). Await it, then send a JSON-safe envelope back. Non-
           // serializable values (opaque engine handles) degrade to a marker so
           // one bad field never wedges the channel.
           void (async () => {
             let res: unknown;
-            try { res = channel.eval(msg.code!); } catch (e) {
+            try { res = channel.eval(job.code); } catch (e) {
               return reply({ ok: false, error: { code: 'BRIDGE_EVAL_THREW', hint: String((e as Error)?.message ?? e) } });
             }
             const r = res as { ok?: boolean; value?: unknown };
@@ -499,6 +529,27 @@ async function bootViewport(
             try { JSON.stringify(res); reply(res); }
             catch { reply({ ok: true, value: '[unserializable value — check the live window]' }); }
           })();
+        }
+      };
+      editorApp.registerUpdate(drainEvalQueue);
+      // Follow-the-live-app: expose the drain so the host session registers it on
+      // the PLAY App too (the edit App is paused during play → its registerUpdate
+      // goes quiet, and a bridge eval submitted while playing would never drain).
+      bridgeDrainForPlay = drainEvalQueue;
+
+      const connectBridge = (): void => {
+        if (bridgeStopped) return;
+        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
+        catch { return; }
+        bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
+        bridgeWs.addEventListener('message', (ev) => {
+          let msg: { type?: string; id?: number; code?: string };
+          try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
+          catch { return; }
+          if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
+          // Enqueue — the drain (editorApp.registerUpdate) runs it at frame start
+          // and replies on whatever socket is live then (see reply() above).
+          evalQueue.push({ id: msg.id, code: msg.code });
         });
         const retryBridge = (): void => {
           bridgeWs = null;
@@ -582,6 +633,9 @@ async function bootViewport(
       // canvas and mirrors the edit assembly's physics plugin (D-1/D-7).
       canvas,
       physics: editPhysics,
+      // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
+      // play App while the edit App is paused during play (undefined in prod).
+      ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);

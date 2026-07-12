@@ -27,11 +27,30 @@ import {
 } from './scene-asset-collect';
 import { entName, entParent } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
+// Asset read surface (Part 4): resolveAssetHandle turns a shared<T> handle
+// (what query returns as opaque-handle.raw) into its live payload — covering
+// BOTH builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets,
+// O(1). The registry side (lookup/resolveName/_guidForAsset) adds the
+// human-readable identity that only catalog assets have.
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
+// Component read surface: the same registry the query snapshot uses to resolve
+// component names (query-snapshot.ts) and the same source UNKNOWN_COMPONENT
+// enumerates its hint from — projected here so an AI can discover component
+// names + field schemas BEFORE a spawn/setComponent, instead of learning them
+// only by triggering a SPAWN_FAILED. Derive, don't duplicate: no static copy of
+// the component set lives in argsSchema. Parallel to describeAsset/assetCatalog.
+import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
 export type DispatchResult =
-  | { ok: true }
+  // `result.created` — new entity roots a document dispatch produced (see
+  // ApplyResult.created). Optional: document ops carry it (possibly []); session/
+  // transient ops and the lifecycle methods (update/commit/cancel) omit it. This
+  // is how a caller (UI selection, AI over the eval bridge) learns what it just
+  // made without re-reading the mutated op or diffing a query snapshot.
+  | { ok: true; result?: { created: EntityHandle[] } }
   | { ok: false; error: CommandError };
 
 // CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
@@ -386,6 +405,27 @@ export class EditGateway {
           },
         };
       }
+      // Entry args validation for defineOp-authored document ops (Fail Fast §5 /
+      // Schema-as-Contract §3). Builtin document ops are validated field-by-field
+      // inside applyCommand (entity/component/patch checks), so they fall through
+      // here untouched. A `source:'defined'` document op, however, hands its raw
+      // `{...args}` straight to the user plan(query,args) — nothing checks the
+      // declared argsSchema, so a missing/wrong-typed arg used to flow silently
+      // into the plan (e.g. `x + undefined = NaN`) and corrupt the world with a
+      // {ok:true} + trace OK. Validate the SAME way session/transient ops are
+      // validated below (reuse validateArgs + INVALID_ARGS — no new mechanism),
+      // turning the silent corruption into a loud, catchable error. Guarded on
+      // source==='defined' so this never double-validates a builtin. (Session
+      // defineOp ops already hit the shared validator further down.)
+      const docDescriptor = getOp(kind);
+      if (docDescriptor?.source === 'defined' && docDescriptor.argsSchema) {
+        const v = validateArgs(docDescriptor.argsSchema, cmd);
+        if (!v.ok) {
+          const first = v.errors[0];
+          const hint = `invalid args for "${kind}": ${first ? `${first.path}: ${first.message}` : 'schema validation failed'}`;
+          return { ok: false, error: { code: 'INVALID_ARGS', hint } };
+        }
+      }
       // duplicateEntity is the public convenience operation. Capture its
       // SceneAsset exactly once before the document applier writes so redo uses
       // the same GUID-backed POD rather than re-reading a changed source entity.
@@ -425,7 +465,9 @@ export class EditGateway {
       // emit() fires the bus subscribers (docVersion re-render + _isDirty tracker
       // + engine sync repaint) — the World changed, so panels/disk must react.
       this.emit(cmd);
-      return { ok: true };
+      // Surface the new roots the applier produced (spawn/instantiate/duplicate/
+      // transaction) so the caller learns what it just made without re-reading cmd.
+      return { ok: true, result: { created: r.created } };
     }
 
     // F-4: entry args validation (boundary #8 / D-7 Fail Fast). Document ops are
@@ -675,6 +717,21 @@ export class EditGateway {
     return [...applied, ...future];
   }
 
+  /**
+   * Read-only audit projection: the append-only ledger zipped with its
+   * index-aligned origin ("who issued it"), oldest→newest. Because `ledger` and
+   * `origins` are two parallel arrays (push-in-lockstep at dispatch/commit),
+   * "which command carried which origin" otherwise requires the caller to zip
+   * them by index by hand — the exact trap that makes `gateway.ledger` alone look
+   * like it lost the origin marker. This is the single-read "who did what" view:
+   * unlike `historySteps()` (undoStack-derived, undo/redo timeline, document ops
+   * only) it includes irreversible session ops (setSelection / save / play), so
+   * it is the honest record of every applied command including AI-vs-human.
+   */
+  auditLog(): ReadonlyArray<{ op: EditorOp; origin: CommandOrigin }> {
+    return this.ledger.map((op, i) => ({ op, origin: this.origins[i] ?? 'human' }));
+  }
+
   /** Inverse of the most recent applied step, if any (introspection / test helper). */
   peekUndoInverse(): EditorOp | undefined {
     return this.undoStack[this.undoStack.length - 1]?.inverse;
@@ -735,6 +792,127 @@ export class EditGateway {
    */
   collectSceneAsset(entity: EntityHandle): CollectSceneAssetResult {
     return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
+  }
+
+  // ── Asset read surface (Part 4) ────────────────────────────────────────────
+  // query() returns a shared<T> field as { kind:'opaque-handle', type, raw },
+  // where `raw` is the engine handle value. These read methods turn that handle —
+  // or a catalog GUID — into meaning. They are pure reads: no world/undo/ledger
+  // mutation. This is the read half of the "write=dispatch, read=gateway" symmetry
+  // an AI needs (previously reads had to bypass the gateway to doc.registry).
+
+  /**
+   * Resolve a shared<T> asset handle (query's opaque-handle.raw) to its live
+   * payload. Covers BOTH builtin meshes (HANDLE_CUBE via BuiltinAssetRegistry)
+   * and catalog assets (world.sharedRefs), O(1). Returns a structured miss
+   * instead of throwing (charter P3) — a stale/unregistered handle is data.
+   */
+  resolveAsset(handle: number): { ok: true; asset: Asset } | { ok: false; error: CommandError } {
+    const r = resolveAssetHandle(this.activeWorld, handle as unknown as Handle<string, 'shared'>);
+    if (!r.ok) {
+      return { ok: false, error: { code: 'ASSET_NOT_FOUND', hint: `no asset for handle ${handle}; it may be slot 0 (unset), stale, or not a shared<T> handle` } };
+    }
+    return { ok: true, asset: r.value };
+  }
+
+  /**
+   * Describe an asset handle as a human-readable identity (best-effort): its
+   * `kind`, plus a catalog GUID + name when the payload is a registered asset.
+   * Builtin/procedural payloads have no GUID (not in the catalog) — those come
+   * back with just `kind` (and `builtin:true`). This is the "what mesh is this
+   * entity using?" answer: query MeshFilter.assetHandle.raw → describeAsset(raw).
+   */
+  describeAsset(
+    handle: number,
+  ): { ok: true; kind: string; guid?: string; name?: string; builtin?: boolean } | { ok: false; error: CommandError } {
+    const r = this.resolveAsset(handle);
+    if (!r.ok) return r;
+    const registry = this.doc.registry;
+    const guid = registry?._guidForAsset(r.asset);
+    if (guid === undefined) {
+      // Payload isn't in the catalog → builtin/procedural. No GUID/name to give.
+      return { ok: true, kind: r.asset.kind, builtin: true };
+    }
+    return { ok: true, kind: r.asset.kind, guid, name: registry!.resolveName(guid) };
+  }
+
+  /**
+   * List the asset catalog (GUID + kind + optional name + url). Projects the
+   * registry's own listCatalog() so an AI can enumerate assets without bypassing
+   * the gateway to doc.registry. Empty array when no registry is bound.
+   */
+  assetCatalog(): readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] {
+    return this.doc.registry?.listCatalog() ?? [];
+  }
+
+  /**
+   * Look up a catalogued asset payload by GUID (no fetch — catalog only).
+   * undefined when the GUID is unknown or no registry is bound.
+   */
+  lookupAsset(guid: AssetGuid | string): Asset | undefined {
+    return this.doc.registry?.lookup(guid);
+  }
+
+  /**
+   * List every registered component name (sorted). The "what components exist?"
+   * self-introspection leg, parallel to listOps() (ops) and assetCatalog()
+   * (assets). Same source as the UNKNOWN_COMPONENT hint (getRegisteredComponents),
+   * so the two never drift. An AI enumerates this before a spawn/setComponent
+   * instead of guessing a name and triggering an error.
+   */
+  listComponents(): readonly string[] {
+    return Array.from(getRegisteredComponents().keys()).sort();
+  }
+
+  /**
+   * Describe one component's field schema — the answer to "what fields does
+   * Transform take, and of what type?" BEFORE constructing a spawnEntity /
+   * setComponent payload. Projects the engine token's frozen `.schema`
+   * (field-name → type-keyword) and its layer-2 `.defaults`, the same data the
+   * engine uses to validate spawn data (so it can never disagree with the
+   * SPAWN_FAILED "Known fields" hint). Unknown name → structured
+   * UNKNOWN_COMPONENT whose hint lists the registered names (reused shape from
+   * query-snapshot). Read-only: no world/ledger mutation, not an op.
+   */
+  describeComponent(
+    name: string,
+  ):
+    | { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> }
+    | { ok: false; error: CommandError } {
+    const token = resolveComponent(name);
+    if (!token) {
+      const known = Array.from(getRegisteredComponents().keys()).sort();
+      return {
+        ok: false,
+        error: {
+          code: 'UNKNOWN_COMPONENT',
+          hint: `component "${name}" is not registered. registered component names: ${known.join(', ')}`,
+        },
+      };
+    }
+    // token.schema is a frozen field-name → type-keyword map; copy to a plain
+    // JSON-safe object (values are already string keywords like 'array<f32, 3>').
+    const schema: Record<string, string> = {};
+    for (const [field, type] of Object.entries(token.schema)) {
+      schema[field] = String(type);
+    }
+    const result: { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> } = {
+      ok: true,
+      name: token.name,
+      schema,
+    };
+    if (token.defaults !== undefined) {
+      // defaults values may be TypedArrays (e.g. Transform.pos is a Float32Array)
+      // — snap-copy those into plain number[] so the result is JSON-safe (mirrors
+      // query-snapshot's TypedArray handling; without this the object round-trips
+      // to indexed-key garbage). Scalars pass through untouched.
+      const defaults: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(token.defaults as Record<string, unknown>)) {
+        defaults[field] = ArrayBuffer.isView(value) ? Array.from(value as unknown as ArrayLike<number>) : value;
+      }
+      result.defaults = defaults;
+    }
+    return result;
   }
 
   /** Build a query-snapshot function for defineOp plan(). Public entry face is

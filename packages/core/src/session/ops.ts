@@ -209,11 +209,12 @@ export function groupSelected(handles: EntityHandle[]): void {
     { kind: 'spawnEntity', name: 'Group', parent, components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }, _id: groupRef },
     ...handles.map((e): EditorOp => ({ kind: 'reparent', entity: e, parent: groupRef })),
   ];
-  gateway.dispatch({ kind: 'transaction', label: `group x${handles.length}`, commands });
-  // The spawn applier rewrote _id in place to the real handle; select it.
-  const groupCmd = commands[0] as { _id?: number };
-  if (typeof groupCmd._id === 'number' && groupCmd._id >= 0) {
-    gateway.dispatch({ kind: 'setSelection', id: groupCmd._id as EntityHandle });
+  const r = gateway.dispatch({ kind: 'transaction', label: `group x${handles.length}`, commands });
+  // Only the group's spawnEntity creates a root (the reparents create none), so
+  // result.created is [groupHandle] — select it.
+  const groupHandle = r.ok && r.result ? r.result.created[0] : undefined;
+  if (groupHandle !== undefined) {
+    gateway.dispatch({ kind: 'setSelection', id: groupHandle });
   }
 }
 
@@ -313,14 +314,11 @@ function spawnClipboard(label: string, translate: (t: { x: number; z: number }) 
       label: `paste ${c.name}`,
     } as EditorOp;
   });
-  gateway.dispatch({ kind: 'transaction', label, commands });
-  // Each instantiate applier rewrote _newRoots in place; collect the primary
-  // root of each entry for post-paste selection.
-  const handles: EntityHandle[] = [];
-  for (const c of commands) {
-    const roots = (c as { _newRoots?: number[] })._newRoots;
-    if (roots && roots.length > 0) handles.push(roots[0] as EntityHandle);
-  }
+  const r = gateway.dispatch({ kind: 'transaction', label, commands });
+  // The transaction's result.created flattens every sub-op's new roots. Each
+  // clipboard entry is one entity's subtree → exactly one root, so created is
+  // the per-entry primary roots in command order — select them all post-paste.
+  const handles: EntityHandle[] = r.ok && r.result ? (r.result.created as EntityHandle[]) : [];
   gateway.dispatch({ kind: 'setSelectionMany', ids: handles });
 }
 
@@ -344,14 +342,14 @@ export function pasteClipboardAt(wx: number, wz: number): void {
 // entity's materials (the fixed bug: the old entComponents path lost MeshRenderer
 // → invisible copy) AND its child subtree (the old single-entity path dropped it).
 export function duplicateEntity(handle: EntityHandle): void {
-  const cmd: EditorOp = { kind: 'duplicateEntity', entity: handle };
-  const result = gateway.dispatch(cmd);
+  const result = gateway.dispatch({ kind: 'duplicateEntity', entity: handle });
   if (!result.ok) {
     console.warn(`[editor] duplicate failed for entity ${handle} — ${result.error.code}: ${result.error.hint}`);
     return;
   }
-  const roots = (cmd as { _newRoots?: number[] })._newRoots;
-  if (roots && roots.length > 0) {
-    gateway.dispatch({ kind: 'setSelection', id: roots[0] as EntityHandle });
+  // result.created holds the duplicate's new roots; select the primary root.
+  const roots = result.result?.created ?? [];
+  if (roots.length > 0) {
+    gateway.dispatch({ kind: 'setSelection', id: roots[0]! });
   }
 }

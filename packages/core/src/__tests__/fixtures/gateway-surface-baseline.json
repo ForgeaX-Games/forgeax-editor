@@ -8,6 +8,14 @@
     "signature": "() => number"
   },
   {
+    "name": "assetCatalog",
+    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; relativeUrl: string; }[]"
+  },
+  {
+    "name": "auditLog",
+    "signature": "() => readonly { op: EditorOp; origin: CommandOrigin; }[]"
+  },
+  {
     "name": "begin",
     "signature": "(cmd: EditorOp, origin?: CommandOrigin) => { ok: true; handle: OpHandle; } | { ok: false; error: CommandError; }"
   },
@@ -16,16 +24,16 @@
     "signature": "() => QuerySnapshotFn"
   },
   {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
     "name": "canRedo",
     "signature": "() => boolean"
   },
   {
     "name": "canUndo",
     "signature": "() => boolean"
-  },
-  {
-    "name": "cancel",
-    "signature": "(handle: OpHandle) => DispatchResult"
   },
   {
     "name": "collectSceneAsset",
@@ -38,6 +46,14 @@
   {
     "name": "defineOp",
     "signature": "(spec: { id: string; domain: \"document\" | \"session\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
+  },
+  {
+    "name": "describeAsset",
+    "signature": "(handle: number) => { ok: true; kind: string; guid?: string | undefined; name?: string | undefined; builtin?: boolean | undefined; } | { ok: false; error: CommandError; }"
+  },
+  {
+    "name": "describeComponent",
+    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "dispatch",
@@ -72,12 +88,20 @@
     "signature": "EditorOp[]"
   },
   {
+    "name": "listComponents",
+    "signature": "() => readonly string[]"
+  },
+  {
     "name": "listOps",
     "signature": "() => readonly OpDescriptor[]"
   },
   {
     "name": "lockForScan",
     "signature": "() => void"
+  },
+  {
+    "name": "lookupAsset",
+    "signature": "(guid: string | AssetGuid) => Asset | undefined"
   },
   {
     "name": "mode",
@@ -102,6 +126,10 @@
   {
     "name": "replaceDoc",
     "signature": "(doc: EditSession) => void"
+  },
+  {
+    "name": "resolveAsset",
+    "signature": "(handle: number) => { ok: true; asset: Asset; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "rev",

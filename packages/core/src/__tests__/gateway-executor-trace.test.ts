@@ -74,11 +74,11 @@ describe('t12a — executor ApplierCtx dispatch (RED before t9, GREEN after t9)'
       capturedFirstArg = first;
       const cmd = _cmd as any;
       const w = (first as any).world;
-      if (!w) return { ok: true, inverse: { kind: 'destroyEntity' as const, entity: 0 } };
+      if (!w) return { ok: true, inverse: { kind: 'destroyEntity' as const, entity: 0 }, created: [] };
       const r = w.spawn();
       if (!r.ok) return { ok: false, error: { code: 'SPAWN_FAILED' as const, hint: String(r.error) } };
       const eH = r.value as any;
-      return { ok: true, inverse: { kind: 'destroyEntity' as const, entity: 0 } };
+      return { ok: true, inverse: { kind: 'destroyEntity' as const, entity: 0 }, created: [eH] };
     });
   });
 

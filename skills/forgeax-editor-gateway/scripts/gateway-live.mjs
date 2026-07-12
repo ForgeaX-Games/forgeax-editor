@@ -16,13 +16,14 @@
 //   node scripts/gateway-live.mjs --health
 //   FORGEAX_BRIDGE_PORT=15295 node scripts/gateway-live.mjs "<code>"
 
-import { readFileSync } from 'node:fs';
+import { parseArgs, readSnippet, printResult } from './gateway-cli-common.mjs';
 
 const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15295);
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const argv = process.argv.slice(2);
-if (argv.includes('--health')) {
+// --health is a distinct MODE (not a snippet run) — handle it before parseArgs so
+// the strict parser never sees it as an unknown flag.
+if (process.argv.slice(2).includes('--health')) {
   try {
     const r = await fetch(`${BASE}/health`);
     const j = await r.json();
@@ -34,17 +35,15 @@ if (argv.includes('--health')) {
   }
 }
 
-let code;
-const fileFlag = argv.indexOf('--file');
-if (fileFlag !== -1) {
-  code = readFileSync(argv[fileFlag + 1], 'utf8');
-} else {
-  code = argv.filter((a) => !a.startsWith('--')).join(' ');
-}
-if (!code) {
-  console.error('usage: gateway-live.mjs "<js code>" | --file <path> | --health');
-  process.exit(2);
-}
+// Strict spec-driven parse (shared SSOT). Live accepts ONLY --file (and the
+// special-cased --health above) — so eval-only flags like --settle/--raw now fail
+// loudly instead of leaking their bare value into the code string (the regression
+// that motivated gateway-cli-common.mjs).
+const { code: posCode, flags } = parseArgs(process.argv, { value: ['file'] });
+const code = readSnippet(
+  { code: posCode, file: flags.file },
+  'usage: gateway-live.mjs "<js code>" | --file <path> | --health',
+);
 
 let out;
 try {
@@ -59,5 +58,4 @@ try {
   process.exit(1);
 }
 
-console.log(JSON.stringify(out, null, 2));
-process.exit(out?.ok ? 0 : 1);
+printResult(out);

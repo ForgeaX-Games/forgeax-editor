@@ -99,17 +99,15 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
  *  MUST NOT fall back to cubes. */
 async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<boolean> {
   // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty).
-  // M3 (I1): the spawn applier rewrites cmd._id in place to the real engine
-  // handle — that handle IS the wrapper identity we parent the nested instance
-  // under (no id-to-handle lookup).
-  const cmd = {
-    kind: 'spawnEntity' as const,
+  // The spawn's created channel gives the real engine handle — that handle IS the
+  // wrapper identity we parent the nested instance under (no id-to-handle lookup).
+  const r = gateway.dispatch({
+    kind: 'spawnEntity',
     name,
     components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-  } as { kind: 'spawnEntity'; name: string; components: Record<string, unknown>; _id?: number };
-  gateway.dispatch(cmd);
+  });
   const wrapperHandle: EntityHandle | undefined =
-    typeof cmd._id === 'number' && cmd._id >= 0 ? (cmd._id as EntityHandle) : undefined;
+    r.ok && r.result ? r.result.created[0] : undefined;
   if (wrapperHandle === undefined) {
     console.warn('[spawn-asset] could not resolve wrapper handle for GLB mount');
     return false;

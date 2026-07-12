@@ -56,6 +56,30 @@ const REQUIRED_KEYWORDS = [
   'gateway-live.mjs',
   'FORGEAX_BRIDGE',
   '127.0.0.1',
+  // Undo/redo timeline family — a docs-following AI that only reads the Core API
+  // table must find these. They return a bare boolean, not DispatchResult; a
+  // dropped row silently mis-teaches `gateway.undo().ok` (EXPERIMENT-REPORT
+  // round-2 friction #1).
+  'undo',
+  'canUndo',
+  // Asset-resident plugin authoring (`*.plugin.ts` under assets/) — the whole
+  // capability was invisible to a docs-only AI until round-3. These anchors keep
+  // the "Author asset-resident game logic" section from silently vanishing
+  // (EXPERIMENT-REPORT round-3 friction #1).
+  '.plugin.ts',
+  'defineSystem',
+  // Scoped-plan authoring — the most common composed-op shape is "operate on a
+  // parent's children", but Children.entities serializes to an opaque count, so a
+  // plan MUST reverse-scan ChildOf (the SSOT; Children is its derived mirror).
+  // The defineOp section only showed a whole-table scan until round-4; this anchor
+  // keeps the "enumerate a parent's children" example from vanishing
+  // (EXPERIMENT-REPORT round-4 friction #1; round-2 deferred #3).
+  'ChildOf',
+  // Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
+  // argsSchema is ENFORCED at dispatch for defined ops. Without this section a
+  // docs-only AI defines an op it cannot correctly call, and trusts a schema that
+  // used to be decorative (EXPERIMENT-REPORT round-4 friction #1/#2).
+  'Dispatch a composed op',
 ];
 
 // ---------------------------------------------------------------------------
