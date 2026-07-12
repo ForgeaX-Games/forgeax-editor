@@ -93,25 +93,57 @@ flowchart TD
 
 ### 0 · Goal + env
 
+> [!IMPORTANT]
+> **The standing charter — the North Star every goal serves.** This loop does not polish an API for its own
+> sake; it exists to make the editor able to **author and ship a 3A-grade game**. That is the *fixed
+> destination*, not a round-local target — every run's goal is chosen as *the next capability the tool still
+> lacks on the path there*, and is justified against it. Be concrete about "3A-grade" so goals derive from
+> it, not from whatever is easiest to reason about: a real playable level (many interacting entities +
+> gameplay logic), production rendering (PBR materials, lighting, post), animation & skinning, physics &
+> interaction, audio, scene scale / streaming, HUD & UI, and a build that actually ships. Each round ask:
+> **which of these pillars can the tool not yet take end-to-end, and which is the deepest / most blocking one
+> I can reach now?** — then dogfood *that*. A goal that moves no pillar toward shippable is off-charter,
+> however novel it looks. Aim at the ceiling, not one inch above the floor.
+>
+> **Don't answer "which pillar next?" from memory — read `ROADMAP.md`.** It holds the current per-pillar
+> status (proven / partial / blocked / untouched) and a *choose-the-next-milestone* procedure (unblock the
+> deepest 🔴 → close a 🟡 → open the most-blocking ⚪). It is the living map from today's tool to the North
+> Star; step 0 consults it, step 7 updates it. Pick your goal *from* it.
+>
+> **Then register the task before you start.** Once the goal is chosen, append a row to
+> `.forgeax-harness/solo/roadmap-progress.md` (the append-only progress ledger) with status `registered` —
+> date, run-dir slug, target pillar id, one-line goal. Register *before* dogfooding, update the same row at
+> step 7 with the outcome. The ledger is the history of progress toward the North Star; `ROADMAP.md` is the
+> current-state map derived from it.
+
 **First read the experiments dir** (`.forgeax-harness/solo/experiments/*/report.md`) — the dated notebook of
 every prior run. Skim each report's goal + its still-open friction (findings logged but deferred, e.g. "left for a
 later round"); the run's `snippets/` show exactly how it drove the tool. The new goal must **advance the
-frontier**, not re-tread it:
+frontier toward the charter**, not re-tread it:
 
 - **Different** from every prior goal — a fresh capability or user story, not a paraphrase.
-- **More meaningful** — climb the ladder (single-op probe → multi-step authoring → composed workflow →
-  a real end-user task that chains several capabilities). Don't keep circling the simplest goals once
-  they're proven; each run should exercise surface the notebook hasn't stressed yet.
+- **More meaningful — measured against the charter, not just against last round.** Climb *toward the North
+  Star* (probe → authoring → composed workflow → a real slice of a shippable game), not merely "one rung
+  above the previous goal." The ambition ceiling is the 3A game itself, so a goal is *more meaningful* when
+  it closes more of the gap between what the tool does today and what shipping that game demands — not when
+  it is simply locally novel. Prefer the **most blocking missing pillar** over the **easiest novel probe**.
+  Don't circle the simplest proven goals; each run should stress a pillar the notebook hasn't taken
+  end-to-end.
 - **Building on prior findings** — prefer a goal that reaches a *deferred* friction from an earlier run
   (the notebook literally hands you the next target) over one invented from nothing.
 
 Then state it as a concrete end-to-end goal a real user would have (not "test the API" — *"an AI builds a
-small scene arrangement"*). Confirm the tool is running and reachable; note ports/health in the report's
-env line. Never assume — probe (`curl`, a health script) and record the result.
+small scene arrangement"*), and name **which 3A pillar it advances and why it's the most blocking one you
+can reach now**. Confirm the tool is running and reachable; note ports/health in the report's env line.
+Never assume — probe (`curl`, a health script) and record the result.
 
 **Gate:** goal is a user story with an explicit success criterion ("each step doable by an AI that reads
-docs only, not source"); env probe recorded; **the report's "Prior runs" line names the surveyed reports
-and states how this goal advances beyond them** (new surface and/or a deferred friction it now reaches).
+docs only, not source"); env probe recorded; **the report's "Charter" line names the 3A pillar this goal
+advances (by its `ROADMAP.md` id, e.g. P4) and argues it's the deepest/most-blocking one reachable now, per
+the ROADMAP's choose-the-next-milestone procedure**; **a `registered` row for this run exists in
+`roadmap-progress.md`**; **the "Prior runs" line names the surveyed reports and states how this goal advances
+beyond them** (new surface and/or a deferred friction it now reaches). A goal that is novel but moves no
+pillar toward shippable fails this gate — pick a more ambitious one.
 
 ### 1 · Dogfood
 
@@ -135,8 +167,17 @@ classifies: is this a **doc/contract** gap, an **API ergonomics** gap, an **envi
 **semantic trap**? and a severity. Also log *positives* (things that worked well) — they tell you what
 not to break.
 
+> **Practice checks the map — correct it the moment reality contradicts it (实践是检验真理的唯一标准).**
+> If dogfooding shows `ROADMAP.md` was wrong — a pillar marked 🟢 has a round-trip gap, a milestone is deeper
+> than it looked, a "blocker" is actually gone — **fix `ROADMAP.md` right then** (it's overwrite-in-place) and
+> note the correction in this run's `roadmap-progress.md` row (`practice-correction: …`). The trigger is a
+> real result you just observed, never a hunch; that's what keeps the map earned by evidence, not guessed.
+> This is a legitimate mid-run map edit — distinct from the step-7 status flip, which records what the *fix*
+> moved.
+
 **Gate:** report has a rolling friction table with ≥ {step, class, severity, one-liner} per entry, and it
-was updated between steps (check timestamps/order, not a final dump).
+was updated between steps (check timestamps/order, not a final dump); any map/reality contradiction found
+while dogfooding is reflected in `ROADMAP.md` + noted in the ledger row, not left stale.
 
 ### 3 · Prioritize
 
@@ -193,7 +234,7 @@ quoted. Evidence before assertion (see `verification-before-completion`).
 
 ### 7 · Codify (the self-evolution step)
 
-Two writes, both required:
+Three writes, all required:
 
 1. **L1** — the fix from steps 4-5 *is* the tool improvement (engine/editor code, or a doc when the razor
    said the code was already correct). Additionally, whenever a **code** fix changes an AI-facing contract,
@@ -202,9 +243,21 @@ Two writes, both required:
 2. **L2** — if the loop surfaced a reusable *method* fact (a verify recipe, an environment gotcha, a new
    friction-pattern), write it: a durable one to **memory**, a loop-method one to **this skill's
    anti-pattern list** below.
+3. **Roadmap + ledger** — two writes here:
+   - **`ROADMAP.md`** (current-state map, overwrite in place): if the run moved a pillar (proved a capability
+     end-to-end, closed a gap, unblocked or newly blocked one), flip the mark, point "proven by" at this run's
+     dir slug, rewrite the remaining gap — per its own "Updating this file" section.
+   - **`roadmap-progress.md`** (append-only ledger): update **this run's registered row** with its terminal
+     status (`landed` / `escalated` / `deferred` / `abandoned`) and a one-line result. This is the only
+     in-place edit the ledger allows — its own in-flight row; every prior row stays frozen.
+
+   Together these are what make the next run's step-0 aim sharper than this one's — the map current, the
+   history intact.
 
 **Gate:** L1 landed (code fix + any doc-projection update, or the justified doc-only fix); L2 fact written
-or an explicit "nothing reusable this round" noted.
+or an explicit "nothing reusable this round" noted; `ROADMAP.md` reflects any pillar this run moved (or an
+explicit "no pillar moved this round" noted); **this run's `roadmap-progress.md` row moved off `registered`
+to a terminal status**.
 
 ### 8 · Ship (self-PR → CI-green → merge → clean up)
 
@@ -253,6 +306,7 @@ can re-run it, not just read about it:
 
 | Section | Holds |
 |:--|:--|
+| Charter | which 3A pillar this goal advances + why it's the deepest/most-blocking one reachable now — the anti-timidity record |
 | Prior runs | which run dirs were surveyed + how this goal advances the frontier (new surface / a deferred friction it now reaches) — the anti-circling record |
 | Goal + success criterion | the user story, the "docs-only AI can do each step" bar |
 | Env line | ports / health / driver, probed not assumed |
@@ -322,8 +376,17 @@ can re-run it, not just read about it:
 - **Circling the easy goals — not surveying the notebook first.** Each run re-picks a goal near the
   simplest proven one ("spawn + reparent again"), so the notebook fills with near-duplicates and the tool's
   harder surface never gets stressed. Step 0 must *read the experiments dir first* and pick a goal that is
-  different from every prior run and climbs the ambition ladder — ideally one that reaches a friction an
+  different from every prior run and climbs toward the charter — ideally one that reaches a friction an
   earlier run explicitly deferred. The dated notebook exists to be built *on*, not beside.
+- **Timid goals — measuring "up" against last round instead of against the charter.** The subtler cousin of
+  circling: every goal *is* different and *is* one rung above the last, so the anti-circling gate passes —
+  yet the notebook is still a chain of small plumbing probes (import a GLB, capture a frame, define an op)
+  that never aims at anything a shipped game needs. Root cause: the ambition ladder is *relative* (up from
+  last round), so "up" drifts into "locally novel but small." The North Star charter (step 0) is the
+  *absolute* destination that fixes this — a goal is ambitious only if it moves a **3A pillar** (playable
+  level, production rendering, animation, physics, audio, UI, ship) toward shippable, not if it's merely new.
+  Each round, name the most-blocking missing pillar and aim there; reject a novel-but-off-charter goal even
+  though it would pass the anti-circling check. Aim at the ceiling, not one inch above the floor.
 - **Throwaway driving code — a run that can't be re-run.** Pasting eval snippets inline and redirecting to
   `/tmp` leaves the report's evidence unbacked: the code that produced it is gone, so the next round can't
   reproduce or extend it. The run's driving snippets + captured output are part of the artifact — write
@@ -381,6 +444,31 @@ can re-run it, not just read about it:
   log "can't enter play" as the target friction; it's an environment limit. Use the public
   `gateway.enterPlay(new World())` (the same method core tests use) to construct a play world
   deterministically and probe the read surface without depending on the flaky async flip.
+- **A capability that exists only as a UI-called closure (no gateway op) is a broken door, not a missing
+  feature — and it ranks with contract errors.** A whole workflow can *work perfectly for humans* (the
+  Content Browser "Add to Scene" orchestration) while being **structurally unreachable by an AI**, because
+  its body lives in a `panel`/`store`/`scene` function the gateway never projects. The tell: a docs-only run
+  completes step N-1 (import → catalog has the asset) then dead-ends at step N with *no op to call*, and
+  `listOps()` genuinely has none. This is the registry-razor anti-pattern (a UI-bound side-effect never
+  turned into a one-door op); it silently breaks human↔AI isomorphism. Fix by **extracting the closure's body
+  into a gateway op and routing the UI through that same op** (one door, equal peers) — mirror the nearest
+  sibling op's domain/shape (round-6: `addSceneAssetToScene` is a session/async op mirroring `importAsset`,
+  because placing a catalogued scene GUID needs an async `loadByGuid` the sync document applier can't host).
+  Prove it by driving the *whole* chain (import → place → query the result's components) on a live worktree
+  host, not just the unit. (round-6 friction #3)
+- **Pre-seeded roadmap rows are predictions — correct them from what you actually observed.** The ledger may
+  open your run's row (or the ROADMAP may state a pillar's gap) with a *guessed* outcome before you dogfood.
+  When practice contradicts it — round-6's row #7 predicted "import op landed," but the import op already
+  existed and the real gap was the *place* leg — update the row with a `practice-correction:` note and fix
+  the ROADMAP status in place (SKILL.md step 0's "practice corrects the map" / `ROADMAP.md`). A run that
+  quietly ships the predicted-but-wrong story leaves the map lying to the next run.
+- **A fresh worktree's unit tests need only main's engine dist symlinked, not a full engine build.** When the
+  engine submodule is unchanged (same commit as main), skip `pnpm -r build`: after `git submodule update
+  --init` + `bun install` (re-run once past the `simple-git-hooks` exit-1), symlink each
+  `packages/engine/packages/*/dist` from main (engine `exports` point at `dist/index.mjs`; the worktree
+  submodule ships only `src`), then `bun -F @forgeax/editor-core test` passes. A *live host* end-to-end still
+  needs the full per-package `node_modules` + port-ownership check (memory:
+  `editor-worktree-unit-test-engine-dist-symlink`, `editor-worktree-live-host-resolution`). (round-6)
 
 ## Driving the editor instance
 

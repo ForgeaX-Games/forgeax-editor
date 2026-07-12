@@ -126,16 +126,29 @@ apply these *within* it):
   a passing unit. The loop's evidence is an end-to-end run, with repo gates as necessary-but-not-sufficient
   backup.
 
-### 5. The frontier is monotone — runs climb, they don't circle
+### 5. The frontier climbs toward a fixed North Star — not just "up from last round"
 
 The dated experiments notebook is not just an archive; it's the **input to the next goal**. Left ungoverned,
 an AI re-picks a goal near the last easy success (it's the cheapest to reason about), so N runs produce N
 near-duplicates and the tool's harder surface — composed workflows, cross-boundary flows, the frictions a
 prior run *deferred* — never gets stressed. So step 0 makes surveying the notebook a gate: the new goal must
 differ from every prior one and move *up* the ambition ladder (probe → authoring → composed workflow → real
-end-user task), ideally reaching a deferred friction the notebook already named. This is the L2 axiom applied
-to *goal selection* itself — each run doesn't just leave a better tool and better method, it leaves a higher
-floor for the next run's ambition. Without it, self-evolution plateaus at the easy goals.
+end-user task), ideally reaching a deferred friction the notebook already named.
+
+But "differ + one rung up" is **necessary and not sufficient** — it's a *relative* rule, and a relative rule
+drifts. Observed failure: seven rounds each passed the anti-circling gate (every goal genuinely new, each a
+notch above the last) yet the whole notebook stayed a chain of small plumbing probes — import a GLB, capture
+a frame, define an op — none aimed at anything a shipped game actually needs. "Up from last round" collapses
+into "locally novel but small" because the *destination* was never pinned; only the *delta* was governed.
+
+The fix is an **absolute North Star**: the editor exists to **author and ship a 3A-grade game**, and every
+goal is chosen as the next missing capability on that path, justified against concrete pillars (playable
+level, production rendering, animation & skinning, physics, audio, scale/streaming, HUD/UI, a shipping
+build). An absolute destination gives every round a gradient to descend — "which pillar is most blocking,
+and how far is it from shippable?" — where a relative ladder only ever asks "is this a bit more than last
+time?" This is the L2 axiom applied to *goal selection* itself: each run leaves not just a better tool and
+better method but a higher floor **and a fixed ceiling to aim at**. Without the North Star, self-evolution
+plateaus at the easy goals even while dutifully "climbing." Aim at the ceiling, not one inch above the floor.
 
 ### 6. Every fix lands in a worktree, never on the primary checkout
 
@@ -184,6 +197,9 @@ around the door to drive.
 | Fact | SSOT |
 |:--|:--|
 | The loop, its gates, report sections | `SKILL.md` |
+| The North Star charter (what "3A-grade" means for goal selection) | `SKILL.md` step 0 |
+| Current route to the charter — per-pillar status + choose-next-milestone | `ROADMAP.md` (living map, overwritten in place; consulted step 0, updated step 7) |
+| Append-only history of every run vs the roadmap (register before / update after) | `.forgeax-harness/solo/roadmap-progress.md` (ledger, `§7`; row added step 0, closed step 7) |
 | Why solo / why L2 / the razors' rationale | this file |
 | Editor driver scripts (`gateway-live`/`gateway-eval`) | `forgeax-editor-gateway` skill (reused, never copied) |
 | Per-run findings, friction table, evidence, driving code, captured output | that run's self-contained dir in the harness clone (`.forgeax-harness/solo/experiments/<YYYY-MM-DD>-<goal-slug>/` — `report.md` + `snippets/` + `out/`) |
