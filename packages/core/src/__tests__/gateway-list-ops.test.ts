@@ -195,3 +195,31 @@ describe('argsSchema plain JSON safety (m4-w1, RED)', () => {
     }
   });
 });
+
+// ── (g) transaction forward-reference contract is PROJECTED to AI (solo round-23) ──
+// The transaction op promises "forward-references work"; the mechanism (a negative
+// `_id` on a spawn, referenced as a later sub-op's `parent`) must be discoverable in
+// the listOps() schema an AI reads — not a code-only secret. These lock the projection
+// so the contract can't silently rot back to "promised but undocumented".
+describe('transaction forward-reference contract is projected (solo round-23)', () => {
+  const byId = () => Object.fromEntries(gw.listOps().map((o) => [o.id, o]));
+
+  it('spawnEntity argsSchema declares the `_id` forward-reference placeholder', () => {
+    const spawn = byId()['spawnEntity'];
+    expect(spawn).toBeDefined();
+    const props = (spawn!.argsSchema as { properties?: Record<string, { description?: string }> }).properties;
+    expect(props).toBeDefined();
+    expect(props).toHaveProperty('_id');
+    // description mentions the negative-placeholder + transaction convention
+    expect(props!['_id']!.description ?? '').toMatch(/negative|forward-ref/i);
+  });
+
+  it('transaction.commands description names the concrete forward-ref mechanism (not just "it works")', () => {
+    const tx = byId()['transaction'];
+    expect(tx).toBeDefined();
+    const desc = (tx!.argsSchema as { properties: { commands: { description: string } } }).properties.commands.description;
+    expect(desc).toMatch(/_id/);            // names the field
+    expect(desc).toMatch(/negative/i);      // names the convention
+    expect(desc).toMatch(/created/);        // points at the result.created[] read-back
+  });
+});

@@ -113,9 +113,19 @@ const builtinOps: ReadonlyArray<{
         // parent is EntityId | null (types.ts) — null / omit spawns a root. Must
         // be `nullable` or the now-enforced door-validation (solo round-14) would
         // wrongly reject `spawnEntity{parent:null}`, a real caller shape.
-        parent: { type: 'number', nullable: true },
+        parent: { type: 'number', nullable: true, description: 'parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below.' },
         components: { type: 'object' },
         source: { type: 'string' },
+        // FORWARD-REFERENCE placeholder for use INSIDE a `transaction` (solo round-23):
+        // give a spawn a NEGATIVE `_id` (e.g. -1), then a LATER sub-op in the same
+        // commands array references that same negative value as its `parent` (or any
+        // handle field like `entity`) to attach to this not-yet-created entity. The
+        // transaction's alias map resolves the placeholder to the real handle at apply
+        // time (document.ts `toEntity`). A non-negative `_id` is a concrete handle from a
+        // prior apply (redo/inverse) and is NOT for authoring. Do NOT use `parent: 0` (a
+        // batch INDEX) — 0 is a real handle → `INVALID_PARENT`. Outside a transaction,
+        // read the created handle from `dispatch(...).result.created[]` instead.
+        _id: { type: 'number', description: 'transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction.' },
       },
     },
     title: 'Spawn Entity',
@@ -258,7 +268,7 @@ const builtinOps: ReadonlyArray<{
         },
         commands: {
           type: 'array',
-          description: 'array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). Forward-references work — spawn an entity then reparent under it within the same commands array.',
+          description: 'array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn\'s `parent` to that same negative value — the alias map resolves it to the root\'s real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index — 0 is a real handle and fails `INVALID_PARENT`. The whole batch\'s created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn).',
         },
       },
       required: ['label', 'commands'],

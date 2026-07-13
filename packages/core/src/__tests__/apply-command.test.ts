@@ -34,6 +34,7 @@ import {
 import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { EditorHidden } from '../components/EditorHidden';
+import { worldEntityHandles } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -189,5 +190,67 @@ describe('applyCommand world assertions (GREEN)', () => {
     const co = session.world.get(child.engineHandle, ChildOf);
     expect(co.ok).toBe(true);
     if (co.ok) expect(co.value.parent).toBe(parent.engineHandle);
+  });
+
+  // ── 10. transaction forward-reference (solo round-23) ─────────────────────────
+  // The transaction op description promises "forward-references work" and now the
+  // spawnEntity/transaction argsSchema document the mechanism: a spawn carries a
+  // NEGATIVE `_id`; a later sub-op references that negative value as `parent`. The
+  // alias map resolves it to the real handle at apply time. Before this contract was
+  // projected, a docs-only caller guessed `parent: 0` (a batch index) and hit
+  // INVALID_PARENT — these tests lock the working convention + the anti-pattern.
+  it('transaction: negative _id forward-reference parents children under the batch-created root', () => {
+    const session = createSession();
+    const r = applyCommand(session, {
+      kind: 'transaction',
+      label: 'stream-in chunk (root + 3 children)',
+      commands: [
+        { kind: 'spawnEntity', name: 'chunk-root', _id: -1 },
+        { kind: 'spawnEntity', name: 'chunk-child-0', parent: -1 },
+        { kind: 'spawnEntity', name: 'chunk-child-1', parent: -1 },
+        { kind: 'spawnEntity', name: 'chunk-child-2', parent: -1 },
+      ],
+    } as EditorOp);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // created[] carries all four spawned roots; created[0] is the chunk root.
+    const created = (r as any).created as EntityHandle[];
+    expect(created.length).toBe(4);
+    const rootH = created[0]!;
+    // Every child's ChildOf resolves to the batch-created root handle.
+    for (let i = 1; i < 4; i++) {
+      const co = session.world.get(created[i]!, ChildOf);
+      expect(co.ok).toBe(true);
+      if (co.ok) expect(co.value.parent).toBe(rootH);
+    }
+    // The root itself is a root (no ChildOf).
+    expect(session.world.get(rootH, ChildOf).ok).toBe(false);
+  });
+
+  it('transaction: a NON-NEGATIVE parent is a literal handle, not a batch index — a nonexistent one fails INVALID_PARENT and rolls back', () => {
+    const session = createSession();
+    // The anti-pattern the schema now warns against: a docs-only caller guessing
+    // "parent is the batch index of an earlier spawn". It is NOT — `toEntity`
+    // (document.ts) treats any ref >= 0 as a concrete engine handle. Index
+    // semantics would make a small positive int resolve to a batch member; literal
+    // semantics make a nonexistent handle fail. We use a clearly-absent handle so
+    // the assertion is environment-independent (unlike `parent: 0`, which in a fresh
+    // world coincidentally IS the first-spawned root's handle).
+    const r = applyCommand(session, {
+      kind: 'transaction',
+      label: 'wrong forward-ref via positive literal',
+      commands: [
+        { kind: 'spawnEntity', name: 'root', _id: -1 },
+        { kind: 'spawnEntity', name: 'child', parent: 987654 },
+      ],
+    } as EditorOp);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_PARENT');
+    // Atomicity: the root spawn rolled back too — the world has no 'root'.
+    const names = worldEntityHandles(session.world)
+      .map((h) => session.world.get(h, Name))
+      .filter((nr) => nr.ok)
+      .map((nr) => (nr as { ok: true; value: { value: string } }).value.value);
+    expect(names).not.toContain('root');
   });
 });
