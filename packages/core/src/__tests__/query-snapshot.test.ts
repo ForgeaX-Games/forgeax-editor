@@ -15,7 +15,7 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Transform, MeshFilter, PointLight, Skylight, Camera, Name } from '@forgeax/engine-runtime';
+import { Transform, MeshFilter, PointLight, Skylight, Camera, Name, DirectionalLight } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
@@ -304,6 +304,43 @@ describe('querySnapshot unknown component signal (t27c, AC-16)', () => {
       expect(r.error.code).toBe('UNKNOWN_COMPONENT');
       expect(r.error.hint).toContain('NonExistentComponent');
     }
+  });
+});
+
+// ── bool fields project to real JS booleans (contract: header "Scalar → native bool") ──
+//
+// solo round-13 (20260713-123535-author-shadow-round-trip): the engine stores `bool`
+// in a Uint8Array, so a raw column read is 1/0. The engine's canonical world.get coerces
+// (`raw === 1`) and the on-disk pack serializes `true`/`false`; querySnapshot must match
+// or a docs-following `if (x.castShadow === true)` gets a false negative on a set bool.
+// This suite reverts-to-red on the pre-fix projection (which returned the number 1).
+
+describe('querySnapshot bool coercion (contract: native boolean)', () => {
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+  });
+
+  it('a set bool field (DirectionalLight.castShadow=true) reads back as JS `true`, not 1', () => {
+    spawnEntityWithComponents(gw, 'Sun', {
+      DirectionalLight: { direction: [-0.4, -1, -0.3], castShadow: true },
+    });
+    const rows = snap(gw, ['DirectionalLight']);
+    expect(rows.length).toBe(1);
+    const dl = rows[0]!.DirectionalLight as Record<string, unknown>;
+    expect(dl.castShadow).toBe(true);
+    expect(typeof dl.castShadow).toBe('boolean');
+  });
+
+  it('a cleared bool field (castShadow=false) reads back as JS `false`, not 0', () => {
+    spawnEntityWithComponents(gw, 'Fill', {
+      DirectionalLight: { direction: [0, -1, 0], castShadow: false },
+    });
+    const rows = snap(gw, ['DirectionalLight']);
+    const dl = rows[0]!.DirectionalLight as Record<string, unknown>;
+    expect(dl.castShadow).toBe(false);
+    expect(typeof dl.castShadow).toBe('boolean');
   });
 });
 

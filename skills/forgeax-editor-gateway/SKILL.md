@@ -637,7 +637,10 @@ gateway.dispatch({ kind: 'distributeChildren', parent: groupHandle, axis: 'x', s
 > fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
 > column-buffer references. Variable-length `array<T>` fields (e.g. `Children.entities`, an
 > `array<entity>`) also serialize to a plain snap-copied array of their elements — the member
-> handles are directly enumerable, not an opaque count.
+> handles are directly enumerable, not an opaque count. **`bool` fields project to a real JS
+> `boolean`** (`true`/`false`), matching the engine `world.get` and the on-disk pack — so
+> `if (row.DirectionalLight.castShadow === true)` works; do NOT compare a bool against `1`. Other
+> scalars (`f32`/`i32`/`enum`/…) stay `number`.
 
 ## eval -- AI Entry Channel (DEV-only)
 

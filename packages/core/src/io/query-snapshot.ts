@@ -152,8 +152,18 @@ function snapFieldValue(
     return rawValue;
   }
 
-  // (4) Scalar fields (f32/f64/i32/u32/i16/u16/i8/u8/bool/enum/ref) →
-  //     return as-is (already a JS number/boolean from TypedArray[i])
+  // (4) bool fields → coerce the numeric column value to a real JS boolean.
+  //     The engine stores `bool` in a Uint8Array (component.ts: bool → Uint8Array),
+  //     so the raw column value is 1/0, NOT true/false. The header contract above
+  //     ("Scalar → native number/bool") and the canonical engine read
+  //     (world.ts: bool → `raw === 1`) both promise a boolean, and the on-disk pack
+  //     serializes `true`/`false`. Mirror the engine's predicate verbatim so the two
+  //     read paths can never drift — a docs-following `if (x.castShadow === true)`
+  //     must not get a false negative on a bool that IS set.
+  if (fieldType === 'bool') return rawValue === 1;
+
+  // (5) Other scalar fields (f32/f64/i32/u32/i16/u16/i8/u8/enum/ref) →
+  //     return as-is (already a JS number from TypedArray[i]).
   return rawValue;
 }
 
