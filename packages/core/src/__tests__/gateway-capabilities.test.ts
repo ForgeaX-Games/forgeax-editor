@@ -10,7 +10,7 @@
 // material round-trip required for Edit = reopen = Play.
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -546,5 +546,39 @@ describe('Gateway component read surface', () => {
       expect(d.error.code).toBe('UNKNOWN_COMPONENT');
       expect(d.error.hint).toContain('registered component names:');
     }
+  });
+
+  // solo round-24 (P7 residue): enum-field label→value maps are projected under
+  // `enums` so a docs-only AI learns the legal variants + integers from the
+  // schema alone (e.g. RigidBody.type → static=0/dynamic=1/kinematic=2) instead
+  // of reading engine source (the recurring friction #1, rounds 15/20/22).
+  // Register a synthetic labels-bearing component so the projection is tested
+  // generically (no physics dep, no registration-order coupling).
+  it('describeComponent projects an enum field label map under `enums`', () => {
+    // Uniquely-named to avoid clobbering the global component registry across runs.
+    const compName = `R24_DescribeEnum_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      motion: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
+      mass: { type: 'f32', default: 1 },
+    });
+
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      // the enum field is projected with its full label map
+      expect(d.enums).toBeDefined();
+      expect(d.enums?.motion).toEqual({ static: 0, dynamic: 1, kinematic: 2 });
+      // a non-enum field carries no entry (only labelled fields appear)
+      expect(d.enums?.mass).toBeUndefined();
+      // still JSON-safe (no live handles)
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent omits `enums` for a component with no labelled fields', () => {
+    // Transform has no enum-with-labels field → key absent (backward-compatible).
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.enums).toBeUndefined();
   });
 });

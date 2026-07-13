@@ -1031,7 +1031,13 @@ export class EditGateway {
   describeComponent(
     name: string,
   ):
-    | { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> }
+    | {
+        ok: true;
+        name: string;
+        schema: Record<string, string>;
+        defaults?: Record<string, unknown>;
+        enums?: Record<string, Record<string, number>>;
+      }
     | { ok: false; error: CommandError } {
     const token = resolveComponent(name);
     if (!token) {
@@ -1050,7 +1056,13 @@ export class EditGateway {
     for (const [field, type] of Object.entries(token.schema)) {
       schema[field] = String(type);
     }
-    const result: { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> } = {
+    const result: {
+      ok: true;
+      name: string;
+      schema: Record<string, string>;
+      defaults?: Record<string, unknown>;
+      enums?: Record<string, Record<string, number>>;
+    } = {
       ok: true,
       name: token.name,
       schema,
@@ -1066,6 +1078,21 @@ export class EditGateway {
       }
       result.defaults = defaults;
     }
+    // Enum-field label→value maps (engine solo round-24): an `enum` field stores
+    // a bare u32 variant index; its label map lives on the field descriptor
+    // (`token.fields[field].labels`), projected here so a docs-only AI learns the
+    // legal variants + their integers (e.g. RigidBody.type → static=0/dynamic=1/
+    // kinematic=2) from the schema alone, not from engine source. Only fields
+    // that declared labels appear; a JSON-safe plain-object copy. Absent when no
+    // field carries labels (backward-compatible: predates the engine change →
+    // token.fields[f].labels is undefined for every field → key omitted).
+    const enums: Record<string, Record<string, number>> = {};
+    const fields = token.fields as Record<string, { labels?: Readonly<Record<string, number>> } | undefined>;
+    for (const field of Object.keys(schema)) {
+      const labels = fields[field]?.labels;
+      if (labels !== undefined) enums[field] = { ...labels };
+    }
+    if (Object.keys(enums).length > 0) result.enums = enums;
     return result;
   }
 
