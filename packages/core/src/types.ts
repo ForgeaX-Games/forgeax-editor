@@ -65,6 +65,17 @@ export type BuiltinEditorOp =
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
   | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
+  // createMaterial (solo round-12 / P5 rendering-authoring): mint a NEW PBR
+  // MaterialAsset from params (baseColor/metallic/roughness) into a pack, so an AI
+  // can AUTHOR a look — not just BIND an existing catalogued GUID (bindAssetRef,
+  // round-11). DOCUMENT-domain like createAsset (undoable, inverse=destroyAsset),
+  // but param-driven (createAsset builds only blank payloads) and CATALOGUED (AI-
+  // discoverable — the wart createAsset never fixed). The POD is built by the
+  // engine's canonical Materials.standard() builder (§2.5 — no hand-rolled passes).
+  // `guid` is caller-minted (the dispatch contract has no channel to return one;
+  // the caller reuses the same guid for the follow-up bindAssetRef). `packPath`
+  // optional — defaults to the active game's scene.pack.json in the applier.
+  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; packPath?: string; refs?: string[] }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
@@ -88,6 +99,37 @@ export type BuiltinEditorOp =
   // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
   // game-relative (the applier resolves it via resolveGamePath).
   | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean }
+  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): "a scene
+  // sub-asset is in the catalog by GUID (e.g. just imported); add it to the live
+  // scene." SESSION-domain, ledger-only, fire-and-forget async — it must
+  // loadByGuid (async), so it cannot ride the SYNC document-domain
+  // instantiateSceneAsset applier (which takes a pre-collected POD). Mirrors
+  // importAsset's shape exactly: same session domain, same detached-promise
+  // completion, same "around the catalog" scope. The applier body is the SAME
+  // spawnGlbSceneAsMount the human "Add to Scene" UI runs — one door, human + AI
+  // are equal peers (registry razor: the UI capability is now AI-reachable, not a
+  // registered copy). The nested SceneInstance subtree is the engine's by-design
+  // derived cache (AGENTS.md invariant 7 escape hatch); the authored fact is the
+  // wrapper's SceneInstance ref, which the wrapper-spawn (a document op inside the
+  // body) round-trips as one mounts[] entry.
+  | { kind: 'addSceneAssetToScene'; sceneGuid: string; name?: string }
+  // bindAssetRef (solo round-11 / P5 rendering-authoring convergence): "resolve a
+  // catalogued asset GUID to a live shared<T> handle and write it into a component
+  // field." SESSION-domain, ledger-only, fire-and-forget async — it must
+  // loadByGuid (async), exactly like addSceneAssetToScene, so it cannot ride the
+  // SYNC document appliers. This is the ONE front-door projection of the engine's
+  // own GUID->handle resolution onto a component field: `addComponent`/
+  // `setComponent` pass their `value`/`patch` RAW (no shared<T> resolution), so a
+  // GUID string in a shared<T> field silently coerces to handle 0. This op closes
+  // the whole class at once — MeshRenderer.materials (array<shared<MaterialAsset>>),
+  // Skylight/SkyboxBackground.equirect (shared<EquirectAsset>), AnimationPlayer.clips
+  // (array<shared<AnimationClip>>) — by loadByGuid -> allocSharedRef -> writing the
+  // resolved handle via a document setComponent (so the authored bind is undoable +
+  // round-trips like any owned-entity component write). `assetType` is the engine
+  // asset-union tag allocSharedRef expects (e.g. 'MaterialAsset'); `field` is the
+  // shared<T> field on `component`; `slot` targets one element of an array field
+  // (omit to write the whole array from `guids`).
+  | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number }
   | { kind: 'setFolderSelection'; paths: string[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
@@ -183,7 +225,13 @@ export interface CommandError {
     // kebab-case to match the M1 error-shape convention (stale-entity-handle).
     | 'edit-rejected-in-play'
     // ── Scan infrastructure codes (startup scan lock) ──
-    | 'scan-in-progress';
+    | 'scan-in-progress'
+    // ── solo round-8 #3: ▶ Play async-assembly failure ──
+    // playSimulation()'s assemble() degraded back to edit (bad scene / createApp
+    // error). Surfaced through gateway.failPlayAttempt so playPhase reads 'failed'
+    // + lastPlayError carries this — instead of dispatch({kind:'play'}) returning
+    // {ok:true} while play silently never started (the round-3/5 misdiagnosis trap).
+    | 'play-assemble-failed';
   hint: string;
 }
 

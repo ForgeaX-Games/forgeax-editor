@@ -46,6 +46,8 @@ playwright-report/
 # local scratch games for manual editor testing (not tracked)
 .forgeax-scratch/
 
-# forgeax-editor-solo per-run experiment reports (dated lab notebook, run artifacts
-# — never committed with the fix PR; see skills/forgeax-editor-solo/SKILL.md).
-skills/*/experiments/
+# forgeax-solo per-run experiment reports live in the harness clone
+# (.forgeax-harness/solo/<north-star>/experiments/), already covered by /.forgeax-harness/
+# above — they are committed in forgeax-editor-harness.git, never in this repo.
+# The loop itself is the mounted forgeax-solo skill; its products live under
+# .forgeax-harness/solo/ (AGENTS.md, LESSONS.md, 3a-game/).

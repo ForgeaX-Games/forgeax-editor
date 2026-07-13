@@ -53,6 +53,33 @@ export type DispatchResult =
   | { ok: true; result?: { created: EntityHandle[] } }
   | { ok: false; error: CommandError };
 
+// Lightweight asset summary — the shared shape both describe legs (describeAsset
+// by-handle, describeAssetByGuid by-guid) return, so a caller reads one identity
+// contract regardless of how it addressed the asset. `kind` always; `guid`+`name`
+// when catalogued, else `builtin:true`. `meta` carries the POD's own lightweight
+// fields (a texture's width/height/format, a mesh's attributes, …) with the heavy
+// binary buffers stripped — so it is safe to read without dragging pixels/vertices
+// into scope. The FULL payload (incl. buffers) stays behind resolveAsset(handle) /
+// lookupAsset(guid). `meta` is an open bag on purpose: its keys are the engine
+// Asset POD's own field names (Derive — this type declares no per-kind field).
+export interface AssetSummary {
+  kind: string;
+  guid?: string;
+  name?: string;
+  builtin?: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export type AssetSummaryResult = ({ ok: true } & AssetSummary) | { ok: false; error: CommandError };
+
+// A field is a "heavy buffer" iff it is a binary blob (TypedArray/DataView view of
+// an ArrayBuffer, or a raw ArrayBuffer). This is the structural test summarizeAsset
+// uses to drop pixel/vertex/index data — deliberately SHAPE-based, not a per-kind
+// field list, so no asset-kind business knowledge leaks into the gateway.
+function isHeavyBuffer(value: unknown): boolean {
+  return ArrayBuffer.isView(value) || value instanceof ArrayBuffer;
+}
+
 // CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
 // detail, w10). Re-exported here so the barrel (index.ts) surface stays byte-
 // identical — every consumer keeps importing them from editor-core unchanged
@@ -204,6 +231,21 @@ export class EditGateway {
 
   private _playWorld: World | null = null;
 
+  // ── Play-attempt observability (solo round-8, friction #3) ────────────────
+  // ▶ Play assembly is ASYNC and fire-and-forget: `dispatch({kind:'play'})`
+  // returns {ok:true} synchronously while run-lifecycle.playSimulation() spins
+  // up a fresh world in a detached promise that CAN fail (bad scene / createApp
+  // error) and degrade back to edit (run-lifecycle.ts). Without a front-door
+  // terminal signal, an AI polling `mode` cannot tell "still assembling" from
+  // "already failed, will never flip" — rounds 3 & 5 both misdiagnosed exactly
+  // this (round 5 escalated a non-bug). These two fields are the failure
+  // COUNTERPART to enterPlay's success path: _playPending marks an in-flight
+  // attempt, _lastPlayError carries why the last one failed. playPhase is
+  // DERIVED from (_playWorld, _playPending, _lastPlayError) — no second `mode`
+  // field (architecture-principles §2 Derive).
+  private _playPending = false;
+  private _lastPlayError: CommandError | null = null;
+
   /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
   get activeWorld(): World {
     return (this._playWorld ?? this.doc.world) as unknown as World;
@@ -214,17 +256,70 @@ export class EditGateway {
     return this._playWorld !== null ? 'play' : 'edit';
   }
 
-  /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11). */
+  /**
+   * Terminal-aware play lifecycle phase (Derive from _playWorld/_playPending/
+   * _lastPlayError — no second state field). Unlike `mode` (a two-value edit/play
+   * pointer view), this distinguishes the async assembly's intermediate + failure
+   * states so a front-door caller polls a TERMINAL phase, not a value that may
+   * never change:
+   *   - `play`     — assembled, live play world active (_playWorld set)
+   *   - `starting` — ▶ dispatched, assembly in flight (poll again)
+   *   - `failed`   — last attempt failed + degraded to edit; read `lastPlayError`
+   *   - `edit`     — not playing, no failed attempt pending inspection
+   * `starting`/`failed` win over the bare edit pointer so a docs-only AI can wait
+   * for `play`|`failed` (both terminal) instead of blind-polling `mode` (round-8 #3).
+   */
+  get playPhase(): 'edit' | 'starting' | 'play' | 'failed' {
+    if (this._playWorld !== null) return 'play';
+    if (this._playPending) return 'starting';
+    if (this._lastPlayError !== null) return 'failed';
+    return 'edit';
+  }
+
+  /** The error from the last failed ▶ Play attempt, or null. Cleared when a new
+   *  attempt begins or play succeeds (see beginPlayAttempt/enterPlay). */
+  get lastPlayError(): CommandError | null {
+    return this._lastPlayError;
+  }
+
+  /** Mark a ▶ Play attempt as in flight (playPhase → 'starting'). Clears any prior
+   *  error so a retry starts clean. Called by run-lifecycle at the top of
+   *  playSimulation(), BEFORE the async assemble. Emits so panels/AI re-read. */
+  beginPlayAttempt(): void {
+    this._playPending = true;
+    this._lastPlayError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Record a failed ▶ Play attempt (playPhase → 'failed'; mode stays 'edit').
+   *  Called by run-lifecycle's assemble-failure branch after it thaws the edit
+   *  world. The error rides the front door so a poller reads WHY, not just that
+   *  the flip never came. Emits so subscribers re-read. */
+  failPlayAttempt(error: CommandError): void {
+    this._playPending = false;
+    this._lastPlayError = error;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11).
+   *  Success clears the pending flag + any stale error → playPhase 'play'. */
   enterPlay(playWorld: World): void {
     this._playWorld = playWorld;
+    this._playPending = false;
+    this._lastPlayError = null;
     clearSelection();
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);
   }
 
-  /** Return the pointer to the edit world. Clears selection + emits notification. */
+  /** Return the pointer to the edit world. Clears selection + emits notification.
+   *  Also clears the pending flag + last error → playPhase back to 'edit'. */
   exitPlay(): void {
     this._playWorld = null;
+    this._playPending = false;
+    this._lastPlayError = null;
     clearSelection();
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);
@@ -283,9 +378,13 @@ export class EditGateway {
    *  ctx.engine / ctx.dispatchSub / ctx.query — NO world field (AC-01). */
   private _buildCtx(): ApplierCtx {
     const engine = this._getEngineFacade();
-    // Read-side reader bound to the LIVE world (makeQueryFn calls getWorld per
-    // query, so a world swap is reflected) — sunk assembly, w10.
-    const query: QuerySnapshotFn = makeQueryFn(() => this.doc.world);
+    // Read-side reader bound to the ACTIVE world (makeQueryFn calls getWorld per
+    // query, so a world swap is reflected) — sunk assembly, w10. activeWorld
+    // (not doc.world) so `query` reads the play world during ▶ Play, mirroring
+    // activeWorld/mode/childrenOf which already Derive from _playWorld (play-world
+    // observability: read-side must follow the active-world pointer, not the
+    // frozen edit doc — architecture-principles §2 Derive).
+    const query: QuerySnapshotFn = makeQueryFn(() => this.activeWorld);
     // dispatchSub: recursive dispatch through the executor — replaces M1's
     // module-level _dispatchDocumentSub for transaction/plan sub-ops.
     // Nested spans are automatically created via _execDocumentApplier.
@@ -324,7 +423,9 @@ export class EditGateway {
       // ctx shape and available for defined document ops that might. Sunk
       // assembly via makeQueryFn (w10); DocQueryFn's structural (desc:unknown)
       // shape widens the io QuerySnapshotFn — cast at the boundary as before.
-      query: makeQueryFn(() => this.doc.world) as unknown as DocApplierCtx['query'],
+      // activeWorld (not doc.world) so a defined document op's plan reads the
+      // active world consistently with the eval/session query (play-world read).
+      query: makeQueryFn(() => this.activeWorld) as unknown as DocApplierCtx['query'],
     };
     return ctx;
   }
@@ -405,20 +506,24 @@ export class EditGateway {
           },
         };
       }
-      // Entry args validation for defineOp-authored document ops (Fail Fast §5 /
-      // Schema-as-Contract §3). Builtin document ops are validated field-by-field
-      // inside applyCommand (entity/component/patch checks), so they fall through
-      // here untouched. A `source:'defined'` document op, however, hands its raw
-      // `{...args}` straight to the user plan(query,args) — nothing checks the
-      // declared argsSchema, so a missing/wrong-typed arg used to flow silently
-      // into the plan (e.g. `x + undefined = NaN`) and corrupt the world with a
-      // {ok:true} + trace OK. Validate the SAME way session/transient ops are
-      // validated below (reuse validateArgs + INVALID_ARGS — no new mechanism),
-      // turning the silent corruption into a loud, catchable error. Guarded on
-      // source==='defined' so this never double-validates a builtin. (Session
-      // defineOp ops already hit the shared validator further down.)
+      // Entry args validation for ALL catalogued document ops (Fail Fast §5 /
+      // Schema-as-Contract §3), the SAME door-validation session/transient ops get
+      // below. Previously this was gated on `source==='defined'`, on the belief
+      // (stated in a since-deleted comment) that "builtin document ops are validated
+      // field-by-field inside applyCommand" — that was FALSE: e.g. applySetComponent
+      // does `Object.keys(cmd.patch)` with no guard, so a missing/null `patch`
+      // THREW a raw `TypeError: Cannot convert undefined or null to object` through
+      // the gateway, which promises a structured `{ok:false,error}` for all bad
+      // input (solo round-14). The catalog ALREADY declares each op's argsSchema
+      // (e.g. setComponent.required:['entity','component','patch']) and validateArgs
+      // ALREADY exists — only the wiring skipped builtins. Validating every doc op
+      // with an argsSchema here (defined + builtin, uniform with the other two
+      // domains) turns those crashes into a loud, catchable INVALID_ARGS and closes
+      // the whole class (every builtin doc op reading a required field unguarded).
+      // The applier stays defended too (applySetComponent guards `patch`) because
+      // ctx.dispatchSub (transaction sub-ops) and begin() bypass THIS door.
       const docDescriptor = getOp(kind);
-      if (docDescriptor?.source === 'defined' && docDescriptor.argsSchema) {
+      if (docDescriptor?.argsSchema) {
         const v = validateArgs(docDescriptor.argsSchema, cmd);
         if (!v.ok) {
           const first = v.errors[0];
@@ -816,24 +921,71 @@ export class EditGateway {
   }
 
   /**
-   * Describe an asset handle as a human-readable identity (best-effort): its
-   * `kind`, plus a catalog GUID + name when the payload is a registered asset.
-   * Builtin/procedural payloads have no GUID (not in the catalog) — those come
-   * back with just `kind` (and `builtin:true`). This is the "what mesh is this
+   * Describe an asset handle as a lightweight summary (best-effort): its `kind`,
+   * a catalog GUID + name when registered, and — for heavy-data kinds — its
+   * SHAPE metadata (texture w/h/format, mesh vertex count) but NEVER the pixel /
+   * vertex buffer itself. Builtin/procedural payloads have no GUID (not in the
+   * catalog) → `builtin:true`, no GUID/name. This is the "what mesh is this
    * entity using?" answer: query MeshFilter.assetHandle.raw → describeAsset(raw).
+   * For the payload (geometry / pixels), use resolveAsset(handle).
    */
-  describeAsset(
-    handle: number,
-  ): { ok: true; kind: string; guid?: string; name?: string; builtin?: boolean } | { ok: false; error: CommandError } {
+  describeAsset(handle: number): AssetSummaryResult {
     const r = this.resolveAsset(handle);
     if (!r.ok) return r;
+    const guid = this.doc.registry?._guidForAsset(r.asset);
+    return { ok: true, ...this.summarizeAsset(r.asset, guid) };
+  }
+
+  /**
+   * Describe a CATALOGUED asset by GUID — the lightweight, by-GUID complement of
+   * describeAsset(handle). Completes the asset read-surface 2×2 matrix:
+   *   full payload → resolveAsset(handle) / lookupAsset(guid)
+   *   lightweight  → describeAsset(handle) / describeAssetByGuid(guid)
+   * A material POD exposes its texture bindings as GUID strings (e.g.
+   * `paramValues.baseColorTexture`); feed that GUID here to inspect the texture's
+   * kind + dimensions + format WITHOUT lookupAsset dragging the whole pixel
+   * buffer into scope. Same summary projection as describeAsset (SSOT — the
+   * summarizeAsset helper), so the two legs can never drift. Unknown GUID / no
+   * registry → structured ASSET_NOT_FOUND (charter P3), never a silent undefined.
+   */
+  describeAssetByGuid(guid: AssetGuid | string): AssetSummaryResult {
     const registry = this.doc.registry;
-    const guid = registry?._guidForAsset(r.asset);
-    if (guid === undefined) {
-      // Payload isn't in the catalog → builtin/procedural. No GUID/name to give.
-      return { ok: true, kind: r.asset.kind, builtin: true };
+    const asset = registry?.lookup(guid);
+    if (asset === undefined) {
+      return { ok: false, error: { code: 'ASSET_NOT_FOUND', hint: `no catalog asset for guid ${String(guid)}; it may be uncooked, a builtin (no GUID), or a scene sub-asset fetched by loadByGuid` } };
     }
-    return { ok: true, kind: r.asset.kind, guid, name: registry!.resolveName(guid) };
+    // Re-derive the canonical catalog string key from the payload (SSOT — same
+    // path describeAsset uses), so guid/name in the summary match exactly.
+    return { ok: true, ...this.summarizeAsset(asset, registry!._guidForAsset(asset)) };
+  }
+
+  /**
+   * Project an Asset POD to its lightweight summary — the SSOT both describe legs
+   * (by-handle, by-guid) share so their output can never diverge (Derive, don't
+   * Duplicate). Emits identity (`kind`/`guid`/`name`, or `builtin:true` when the
+   * payload isn't catalogued) plus a `meta` bag of the POD's own lightweight
+   * fields — every scalar/plain field (a texture's `width`/`height`/`format`, a
+   * mesh's `attributes`, …) EXCEPT the heavy binary buffers (`TextureAsset.data`,
+   * `MeshAsset.vertices`, …).
+   *
+   * Deliberately KIND-AGNOSTIC: it discriminates by a field's runtime SHAPE (is it
+   * a binary buffer?), not by `asset.kind`. So the gateway holds no per-asset-kind
+   * business knowledge — a new heavy-data asset kind in the engine needs zero edit
+   * here, and its lightweight fields flow through automatically (Derive; the engine
+   * `Asset` POD stays the single source of what fields exist).
+   */
+  private summarizeAsset(asset: Asset, guid: string | undefined): AssetSummary {
+    const identity: AssetSummary =
+      guid === undefined
+        ? { kind: asset.kind, builtin: true } // not in catalog → builtin/procedural
+        : { kind: asset.kind, guid, name: this.doc.registry!.resolveName(guid) };
+    const meta: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(asset)) {
+      if (key === 'kind') continue; // already in identity
+      if (isHeavyBuffer(value)) continue; // drop pixel/vertex/index buffers — the whole point
+      meta[key] = value;
+    }
+    return { ...identity, meta };
   }
 
   /**
@@ -846,7 +998,9 @@ export class EditGateway {
   }
 
   /**
-   * Look up a catalogued asset payload by GUID (no fetch — catalog only).
+   * Look up a catalogued asset payload by GUID (no fetch — catalog only). Returns
+   * the FULL payload (heavy: a texture's pixels, a mesh's vertices) — for a
+   * lightweight identity/shape summary use describeAssetByGuid(guid) instead.
    * undefined when the GUID is unknown or no registry is bound.
    */
   lookupAsset(guid: AssetGuid | string): Asset | undefined {
@@ -915,11 +1069,18 @@ export class EditGateway {
     return result;
   }
 
-  /** Build a query-snapshot function for defineOp plan(). Public entry face is
-   *  frozen (AC-03); the read-side assembly it returns is sunk into
-   *  io/gateway-query.ts (makeQueryFn, w10). */
+  /** Build a query-snapshot function for defineOp plan() and the eval channel's
+   *  scope① `query`. Public entry face is frozen (AC-03); the read-side assembly
+   *  it returns is sunk into io/gateway-query.ts (makeQueryFn, w10).
+   *
+   *  Bound to `activeWorld` (Derive from _playWorld), NOT the frozen edit
+   *  `doc.world`: during ▶ Play `query` reads the live play world, so an AI can
+   *  observe a running mechanic's component values through the documented door —
+   *  mirroring activeWorld/mode/childrenOf, which already follow the pointer.
+   *  Play writes stay blocked (dispatch → edit-rejected-in-play); only this
+   *  read follows the active world ("play data is a read-only simulation view"). */
   buildQueryFn(): QuerySnapshotFn {
-    return makeQueryFn(() => this.doc.world);
+    return makeQueryFn(() => this.activeWorld);
   }
 
   /**
@@ -972,7 +1133,11 @@ export class EditGateway {
       documentAppliers.set(id, (_ctx: unknown, cmd: EditorOp) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
-        const query: unknown = makeQueryFn(() => this.doc.world);
+        // activeWorld (Derive) so plan reads the active world consistently with
+        // the eval/session query. Document dispatch is rejected in play
+        // (edit-rejected-in-play), so in practice this is always the edit world
+        // here — but binding to activeWorld keeps all five query sites uniform.
+        const query: unknown = makeQueryFn(() => this.activeWorld);
 
         let planCommands: EditorOp[];
         try {
@@ -1011,7 +1176,10 @@ export class EditGateway {
       sessionAppliers.set(id, ((op: EditorOp, _ctx?: SessionApplierCtx) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = op as { kind: string } & Record<string, unknown>;
-        const query: unknown = makeQueryFn(() => this.doc.world);
+        // activeWorld (Derive): session ops CAN run during play, so a defined
+        // session op's plan must read the live play world, not the frozen edit
+        // doc — same active-world pointer as the eval/scope① query.
+        const query: unknown = makeQueryFn(() => this.activeWorld);
 
         let planOps: EditorOp[];
         try {

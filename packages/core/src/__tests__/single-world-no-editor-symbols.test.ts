@@ -121,10 +121,10 @@ describe('AC-17 — no world split (one world, no EditorOnly, no editor-entity f
   });
 
   // NOTE on the "no second world" half of AC-17:
-  //   The net-new-world assertion is DIFF-SCOPED, not absolute. editor-core/
-  //   open-project.ts already builds a `new World()` on origin/main (an M3
-  //   proof-of-life sidecar), so an absolute `count == 0` would be the stale
-  //   literal the plan explicitly rejects. The canonical AC-17 world-split gate
+  //   The net-new-world assertion is DIFF-SCOPED, not absolute. Legitimate editor
+  //   `new World()` sites exist (play mode's transient playWorld; historically the
+  //   now-removed open-project.ts M3 proof-of-life sidecar), so an absolute
+  //   `count == 0` would be the stale literal the plan explicitly rejects. The canonical AC-17 world-split gate
   //   is the diff-scoped `git merge-base HEAD origin/main; $base...HEAD …` command
   //   in plan-tasks.json M2 milestoneCISweep (engine layer) — kept there because a
   //   diff against origin/main is unreliable inside a hermetic bun test on a

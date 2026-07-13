@@ -31,6 +31,10 @@
       "types": "./src/manifest.ts",
       "import": "./src/manifest.ts"
     },
+    "./asset-roots": {
+      "types": "./src/asset-roots.ts",
+      "import": "./src/asset-roots.ts"
+    },
     "./i18n": {
       "types": "./src/i18n/index.ts",
       "import": "./src/i18n/index.ts"

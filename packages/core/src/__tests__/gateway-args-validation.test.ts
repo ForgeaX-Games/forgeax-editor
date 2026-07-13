@@ -110,3 +110,71 @@ describe('F-4 gateway args validation — transient ops', () => {
     if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
   });
 });
+
+// ── (c) BUILTIN DOCUMENT ops validated too (solo round-14) ─────────────────────
+//
+// Before round-14, builtin document ops SKIPPED door-validation (the dispatch
+// check was gated on `source==='defined'`), resting on a false comment that
+// "builtin document ops are validated field-by-field inside applyCommand". They
+// were NOT: applySetComponent did `Object.keys(cmd.patch)` with no guard, so a
+// setComponent missing `patch` (or given addComponent's `value` field by mistake
+// — a natural docs-following error, since setComponent uses `patch` and
+// addComponent uses `value`) THREW a raw `TypeError: Cannot convert undefined or
+// null to object` through the gateway instead of a structured {ok:false,error}.
+// These tests are the revert-to-red guard: they FAIL on pre-round-14 main (throw),
+// pass now (structured INVALID_ARGS). Fixed at BOTH the door (this suite, top-level
+// dispatch) and the applier (document.ts guard, for the sub-op/begin bypass paths).
+
+describe('solo round-14 — builtin document op args validation', () => {
+  let gw: EditGateway;
+  let ent: number;
+  beforeEach(() => {
+    gw = new EditGateway(createSession());
+    // spawn a real entity carrying a Transform so setComponent has a live target.
+    const s = gw.dispatch({
+      kind: 'spawnEntity',
+      name: 'Target',
+      components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+    }, 'ai');
+    if (!s.ok) throw new Error('spawn failed in test setup');
+    ent = (s.result?.created?.[0] as number);
+  });
+
+  it('setComponent missing patch → INVALID_ARGS, NOT a thrown TypeError', () => {
+    const before = gw.ledger.length;
+    // On pre-round-14 main this THREW (Object.keys(undefined)); the gateway must
+    // instead return a structured error for all bad input.
+    const r = gw.dispatch({ kind: 'setComponent', entity: ent, component: 'Transform' } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
+    expect(gw.ledger.length).toBe(before); // Fail Fast: no ledger residue
+  });
+
+  it('setComponent given addComponent\'s `value` field (no patch) → INVALID_ARGS', () => {
+    // The exact docs-following mistake the round hit: setComponent uses `patch`,
+    // addComponent uses `value`; passing `value` used to crash, now guided.
+    const r = gw.dispatch({ kind: 'setComponent', entity: ent, component: 'Transform', value: { pos: [1, 2, 3] } } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
+  });
+
+  it('setComponent with a real patch still round-trips → ok (no false positive)', () => {
+    const r = gw.dispatch({ kind: 'setComponent', entity: ent, component: 'Transform', patch: { pos: [4, 5, 6] } }, 'ai');
+    expect(r.ok).toBe(true);
+  });
+
+  it('spawnEntity{parent:null} still succeeds (nullable regression guard)', () => {
+    // reparent-to-root / root-spawn use parent:null; the catalog schema gained
+    // nullable:true so the now-enforced door-validation must NOT reject it.
+    const r = gw.dispatch({ kind: 'spawnEntity', name: 'Root', parent: null, components: {} } as EditorOp, 'ai');
+    expect(r.ok).toBe(true);
+  });
+
+  it('reparent{parent:null} (reparent to root) still succeeds (nullable regression guard)', () => {
+    const child = gw.dispatch({ kind: 'spawnEntity', name: 'Child', parent: ent, components: {} } as EditorOp, 'ai');
+    expect(child.ok).toBe(true);
+    const childId = child.ok ? (child.result?.created?.[0] as number) : -1;
+    const r = gw.dispatch({ kind: 'reparent', entity: childId, parent: null }, 'ai');
+    expect(r.ok).toBe(true);
+  });
+});

@@ -146,7 +146,8 @@ export function createEvalChannel(
 // ── query factory (wraps gateway.buildQueryFn) ─────────────────────────────
 
 function makeQueryFn(gateway: EditGateway): unknown {
-  // Re-use gateway.buildQueryFn() which returns a QuerySnapshotFn
-  // that passes doc.world through _querySnapshot.
+  // Re-use gateway.buildQueryFn() which returns a QuerySnapshotFn bound to the
+  // ACTIVE world (edit → doc.world, play → play world), so scope①'s `query`
+  // reads the live play world during ▶ Play.
   return gateway.buildQueryFn();
 }

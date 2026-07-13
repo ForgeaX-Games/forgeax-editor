@@ -123,6 +123,18 @@ if (r.ok) {
   const [handle] = r.result?.created ?? [];
   if (handle !== undefined) gateway.dispatch({ kind: 'setSelection', id: handle }, 'ai');
 }
+
+// setComponent PATCHES an existing component; addComponent ATTACHES a new one —
+// and they use DIFFERENT field names: setComponent takes `patch`, addComponent
+// takes `value`. Mixing them is a common reflex; the gateway now rejects it with a
+// structured error (never a thrown TypeError) so a wrong field is self-correcting:
+//   setComponent{ entity, component, patch: {…} }   // patch an existing component
+//   addComponent{ entity, component, value: {…} }   // attach a new component
+// A missing/malformed required field on ANY builtin document op → {ok:false,
+// error:{code:'INVALID_ARGS', hint}} at the door (same Fail-Fast validation
+// session/transient ops always had). e.g. setComponent without `patch`:
+//   → { ok:false, error:{ code:'INVALID_ARGS',
+//        hint:'invalid args for "setComponent": patch: missing required field "patch"' } }
 ```
 
 ## begin -> update -> commit -- Continuous Operation
@@ -240,7 +252,36 @@ const a = gateway.resolveAsset(handle);           // { ok:true, asset:{ kind:'me
 
 // Enumerate / look up the catalog directly:
 const catalog = gateway.assetCatalog();           // [{ guid, kind, name?, relativeUrl }]
-const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only)
+const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only) — FULL payload
+
+// Following a GUID pointer (e.g. a material's texture binding)? Use the LIGHTWEIGHT
+// by-GUID leg — NOT lookupAsset, which drags the whole binary buffer into scope:
+const t = gateway.describeAssetByGuid(someGuid);
+// → { ok:true, kind:'texture', guid, name, meta:{ width, height, format, colorSpace, mipmap } }
+//   `meta` = the POD's own fields with the heavy buffers (pixels/vertices) STRIPPED.
+```
+
+The asset read surface is a 2×2 matrix — pick the cell by *how you address it* × *how much you want*:
+
+| address ↓ / want → | full payload (heavy) | lightweight summary |
+|:--|:--|:--|
+| by **handle** (`query`'s `opaque-handle.raw`) | `resolveAsset(handle)` | `describeAsset(handle)` |
+| by **GUID** (a catalog / POD pointer) | `lookupAsset(guid)` | `describeAssetByGuid(guid)` |
+
+`describeAsset` / `describeAssetByGuid` return the **same** `AssetSummary` shape (one SSOT
+projection): `{ kind, guid?, name?, builtin?, meta? }`. `meta` carries the POD's own lightweight
+fields (a texture's `width`/`height`/`format`, a mesh's `attributes`, …) with binary buffers
+removed — so it is safe to log/inspect. Reach for `resolveAsset`/`lookupAsset` **only** when you
+actually need the pixels/vertices.
+
+```ts
+// Inspect what texture a material binds — WITHOUT a multi-MB pixel dump:
+const mr = query({ with: ['MeshRenderer'] });
+const matHandle = mr.rows[0].MeshRenderer.materials[0];        // shared<MaterialAsset> handle
+const mat = gateway.resolveAsset(matHandle as number);         // material POD is small
+const texGuid = mat.ok && mat.asset.paramValues?.baseColorTexture;  // → a GUID string
+if (texGuid) gateway.describeAssetByGuid(texGuid);            // { kind:'texture', meta:{width,height,format} }
+//                    ^ do NOT lookupAsset(texGuid) here — that returns every pixel.
 ```
 
 > [!IMPORTANT]
@@ -249,8 +290,95 @@ const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog 
 > (`HANDLE_CUBE`/`HANDLE_TRIANGLE`) live in a process-static registry, not the
 > asset catalog, so `describeAsset` returns `{builtin:true}` with no `guid`/`name`.
 > `resolveAsset` still returns their payload (it covers builtin + catalog). `raw`
-> of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`.
+> of `0` = unset slot; a stale/unknown handle → `{ok:false, code:'ASSET_NOT_FOUND'}`;
+> `describeAssetByGuid` on an unknown/uncatalogued GUID → the same structured miss.
 > `unique<T>`/`ref`/`buffer` stay opaque (no catalog GUID; not resolved here).
+
+### Import an external asset, then place it in the scene (the asset WRITE legs)
+
+The read legs above (`assetCatalog`/`describeAsset`/`resolveAsset`/`lookupAsset`) answer *"what
+assets exist?"*. The **write legs** are ordinary `dispatch` ops — the same door humans use from the
+Content Browser, so an AI is an equal peer (registry razor). They are **session-domain, ledger-only**
+(no undo — a cook/instantiate produces derived artefacts) and, because they do disk / `loadByGuid`
+I/O, **fire-and-forget async**: `dispatch` returns `{ok:true}` synchronously while the work completes
+in a detached promise. There is **no `created[]`** on a session op — confirm completion by **polling
+`assetCatalog()` / `query()`**, not by reading the dispatch result.
+
+| Op | Args | Does |
+|:--|:--|:--|
+| `importAsset` | `{ destPath, sourceName?, skipUpload? }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). |
+| `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. |
+| `createMaterial` | `{ guid, name, baseColor:[r,g,b,a], metallic?, roughness?, packPath?, refs? }` | **AUTHOR a NEW PBR material from params** — the create-a-look counterpart to `bindAssetRef`'s bind-an-existing-look. Mints a `MaterialAsset` (POD built by the engine's canonical `Materials.standard()` — 3-pass GBuffer+Forward+ShadowCaster) into the pack; document-domain (undoable, inverse `destroyAsset`). **You mint `guid` yourself** (`crypto.randomUUID()`) — the op returns no minted value (the dispatch result carries only entity handles), so reuse the SAME guid for the follow-up `bindAssetRef`. **Omit `packPath`** — it defaults to the active scene's real pack (the same one the scene saves to, so it round-trips Edit=Play); only pass it (game-relative, e.g. `"sample/assets/scene.pack.json"`) to target another pack. Author-then-bind: `createMaterial{guid,name,baseColor,metallic,roughness}` → `bindAssetRef{entity, component:'MeshRenderer', field:'materials', assetType:'MaterialAsset', guids:[guid], slot}`. |
+| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot? }` | **Bind a catalogued asset GUID into a `shared<T>` component field** — the front-door GUID→handle binder. `addComponent`/`setComponent` pass values RAW (no resolution), so a GUID in a `shared<T>` field silently becomes handle `0`; this op resolves each GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle via an undoable `setComponent`. Closes the whole class: `MeshRenderer.materials` (`assetType:'MaterialAsset'`), `Skylight`/`SkyboxBackground.equirect` (`'EquirectAsset'`), `AnimationPlayer.clips` (`'AnimationClip'`). `slot` writes one array element; omit to write the whole field. **Owned entities only** — a `shared<T>` field on a mount MEMBER still needs the engine mount-override round-trip (P6, escalated). |
+| `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
+| `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
+
+> [!IMPORTANT]
+> **Why `addSceneAssetToScene` and not `instantiateSceneAsset` for a catalogued GUID.**
+> `instantiateSceneAsset` is a **document** op that takes a *pre-collected POD* from
+> `collectSceneAsset(entity)` — it needs an entity **already in the world** (it's the copy/paste
+> path). A freshly-imported asset is only a **catalog GUID**, nothing in the world yet, and placing
+> it requires an async `loadByGuid` — which can't ride the synchronous document applier. So the two
+> are distinct legs: **`collectSceneAsset`→`instantiateSceneAsset`** duplicates a live subtree;
+> **`addSceneAssetToScene`** places a catalogued GUID. `lookupAsset(sceneGuid)` returns `undefined`
+> for a scene sub-asset (its payload is fetched by `loadByGuid`, not held in the catalog) — that's
+> expected, not an error; use `addSceneAssetToScene`, don't try to hand-feed the POD.
+
+End-to-end recipe — import a rigged GLB and place it (each step is one front-door call):
+
+```ts
+// 1) Cook the file on disk into the catalog (session op — fire-and-forget).
+gateway.dispatch({ kind: 'importAsset', destPath: 'assets/Fox.glb', sourceName: 'Fox.glb' }, 'ai');
+// → {ok:true}. NOTE: an import that writes the .meta sidecar can trigger a pack
+//   disk-watch page reload; drive import and the confirm-read in SEPARATE eval calls.
+
+// 2) Poll the catalog for the cooked scene sub-asset (no created[] on a session op).
+const scene = gateway.assetCatalog().find(
+  (c) => c.kind === 'scene' && (c.relativeUrl || '').toLowerCase().includes('fox'),
+);
+
+// 3) Place it — real geometry + skeleton/skin, one mounts[] entry. (No AnimationPlayer — see below.)
+gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox' }, 'ai');
+
+// 4) Confirm the skinned instance landed (poll query — the mount is async).
+const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree (an entity carrying Skin)
+```
+
+> [!IMPORTANT]
+> **What lands is a wrapper + a subtree — query by the COMPONENT, not the wrapper name.**
+> `addSceneAssetToScene` mounts an identity-`Transform` **wrapper** entity (named by `name`)
+> whose CHILDREN carry the actual `MeshRenderer` / `Skin` / geometry. Filtering by the wrapper's
+> name and expecting a `MeshRenderer` on it sees nothing → a false "it didn't land". Query by the
+> component you want (`query({ with: ['MeshRenderer'] })`) to catch the mesh children.
+> Also: the mount is **async** and **each headless `gateway-eval.mjs` call is a fresh page load
+> (= a reopen from disk)** — a mount you placed but did NOT `saveDocToDisk` is gone on the next
+> eval. Place → inspect → **save** within one eval if you need it to persist; a *separate* eval is
+> already the reopen (that is exactly how you verify a save→reopen round-trip).
+
+> [!CAUTION]
+> **Animate a skinned asset — the honest mental model + two current gaps (P6 not yet end-to-end).**
+> The mount gives you the `Skin` + skeleton joints, **not a playing animation**. That is correct by
+> design: the gltf cook emits the clips as separate `kind:'animation-clip'` catalog sub-assets and
+> deliberately does **not** bake an `AnimationPlayer` — *which* clip plays is authoring intent, so YOU
+> author it. The intended shape (mirrors `apps/hello/skin`): find the entity carrying `Skin`, then
+> `dispatch({ kind:'addComponent', entity, component:'AnimationPlayer', value:{ clips:[<clip>], weights:[1], looping:true } })`
+> (`addComponent`, **not** `setComponent` — `setComponent` only patches a component that already exists).
+> `describeComponent('AnimationPlayer')` gives the field schema (`clips/times/weights/speeds/paused/looping`).
+> **Clip-binding leg (gap 1) — now solved by `bindAssetRef`; mount-member round-trip (gap 2) still open:**
+> 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` is
+>    `array<shared<AnimationClip>,4>`; passing a clip **GUID** to `addComponent`/`setComponent` is silently
+>    coerced to handle `0` (they pass component data raw). Use the front-door binder instead:
+>    `dispatch({ kind:'bindAssetRef', entity, component:'AnimationPlayer', field:'clips', assetType:'AnimationClip', guids:[clipGuid], slot:0 })`
+>    — it resolves the GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle. (First `addComponent`
+>    an `AnimationPlayer` with the scalar params — `weights/speeds/paused/looping` — then `bindAssetRef` the
+>    `clips`.) This closes the old "no clip-binding leg" gap for **owned** entities (solo round-11).
+> 2. **Mount-member overrides still don't round-trip.** A component authored on a *mounted* child (the fox
+>    from `addSceneAssetToScene` is a SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's
+>    `collect-scene-asset` OOS-1 does not fold `mount.overrides[]` back on collect, and Play reloads from disk,
+>    so the authored `AnimationPlayer` never reaches Play (Edit≠Play). This is the remaining P6 blocker,
+>    tracked for `forgeax-closed-loop` (solo round-10 ENGINE-FINDING). **Workaround today:** author animation
+>    on an **owned** skinned entity (e.g. one flat-instantiated, not a nested mount) — `bindAssetRef` +
+>    owned-entity round-trip both work. A mounted rig's playback waits on the engine mount-override fix.
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 
@@ -285,6 +413,18 @@ const miss = gateway.describeComponent('Postion');   // typo
 > `schema` values are the engine's type keywords as strings (`'array<f32, 3>'`, `'f32'`,
 > `'shared<MeshAsset>'`, `'entity'`, …). `defaults` is present only when the component declared
 > layer-2 defaults; its vector values are plain `number[]` (JSON-safe), not live TypedArrays.
+
+> [!IMPORTANT]
+> **Camera post-processing lives on the `Camera` component, NOT `PostProcessParams`.** The knobs you
+> reach for — `tonemap` / `exposure` / `whitePoint` / `bloom` / `bloomThreshold` / `bloomIntensity` /
+> `bloomBlurRadius` / `clearColor` — are scalar fields on `Camera` (`describeComponent('Camera')`), so you
+> author them exactly like light/shadow scalars: `spawnEntity{components:{Camera:{tonemap:1, bloom:1,
+> exposure:1.3, …}}}` (author) or `setComponent{entity, component:'Camera', patch:{exposure:0.9}}` (tune),
+> then `saveDocToDisk` — they round-trip byte-faithful to disk (Edit=Play). The separately-named
+> `PostProcessParams` component (`{shader:'string', data:'buffer'}`) is a DIFFERENT thing: a low-level
+> custom-fullscreen-shader escape hatch (register a shader id + raw params bytes for a bespoke pass), not
+> the home of production tonemapping/bloom. Don't reach for `PostProcessParams` to turn on bloom — the name
+> is a trap; use `Camera`. (solo round-14)
 
 
 > [!NOTE]
@@ -346,16 +486,20 @@ gateway.dispatch({ kind: 'saveDocToDisk' }, 'ai');   // persists into the scene 
 > Which systems a scene runs is **derived** from which `*.plugin.ts` exist under `assets/` — it is not
 > persisted per-scene, so there is no "systems" field to set.
 
-> [!CAUTION]
-> **Observing the rotation is a play-world read, and the gateway's read surface does not reach it.**
-> Two traps a docs-only AI hits:
-> 1. `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** `gateway.mode` flips to `'play'`
->    (the world-fork is async, ~a frame later). Poll `gateway.mode`, don't read it synchronously.
-> 2. During play, `query(...)` still reads the **frozen edit `doc.world`** (see the play/stop
->    world-fork rule in `docs/skills/forgeax-editor-gateway.md`), so it will **not** show the spinning
->    quat — the rotation lives in `gateway.activeWorld` (the raw engine play World, which has **no
->    `query` facade**). Confirm plugin behavior by **watching the viewport**, not by re-`query`-ing.
->    Reading the play world's live component columns is not currently on the documented AI surface.
+> [!IMPORTANT]
+> **Observing the rotation is a play-world read — `query(...)` reaches it directly.** `query` follows
+> `gateway.activeWorld` (edit → `doc.world`, play → the live play world), the same pointer as
+> `gateway.mode`, so **during play `query({ with: ['Transform'] })` returns the *play* world's live
+> component columns** — re-`query` after ▶ and read the spinning `quat`; no viewport-watching needed.
+> One remaining trap: `dispatch({ kind: 'play' })` returns `{ ok: true }` **before** play actually
+> starts — the world-fork is async (~a frame later) and CAN fail (bad scene → it degrades back to edit).
+> `{ ok: true }` only means "the play request was accepted", not "play is running". **Poll
+> `gateway.playPhase`** — a terminal-aware view (`'edit'` → `'starting'` → `'play'` \| `'failed'`) — until
+> it reads a *terminal* value: `'play'` (assembled, query the live world) or `'failed'` (read
+> `gateway.lastPlayError` for why; `gateway.mode` stays `'edit'`). Do **not** blind-poll `gateway.mode`
+> alone: on a failed assemble it never flips, so a `mode`-only poller waits forever for a play that will
+> never come (the round-3/5 trap). Writes stay frozen during play (`dispatch` → `edit-rejected-in-play`);
+> only the read follows the active world ("play data is a read-only simulation view").
 
 ## defineOp -- Compose New Operations
 
@@ -517,7 +661,10 @@ gateway.dispatch({ kind: 'distributeChildren', parent: groupHandle, axis: 'x', s
 > fields (`array<T,N>`) are snap-copied into plain `number[]` — safe, JSON-serializable, no live
 > column-buffer references. Variable-length `array<T>` fields (e.g. `Children.entities`, an
 > `array<entity>`) also serialize to a plain snap-copied array of their elements — the member
-> handles are directly enumerable, not an opaque count.
+> handles are directly enumerable, not an opaque count. **`bool` fields project to a real JS
+> `boolean`** (`true`/`false`), matching the engine `world.get` and the on-disk pack — so
+> `if (row.DirectionalLight.castShadow === true)` works; do NOT compare a bool against `1`. Other
+> scalars (`f32`/`i32`/`enum`/…) stay `number`.
 
 ## eval -- AI Entry Channel (DEV-only)
 
@@ -567,6 +714,13 @@ __forgeaxEval.unlockRawScope()   // -> { ok: true }
 __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in scope
 ```
 
+> [!CAUTION]
+> **scope② is a debug escape hatch, not a shortcut around the door.** A raw `world.spawn`/`world.set`
+> skips the ledger, undo, trace, and origin — it authors state no collaborator or `auditLog()` can see, the
+> exact bypass invariant 7 forbids for humans (AGENTS.md). Author through `dispatch`/`begin…commit`; reach
+> for scope② only to *inspect* raw engine internals a query can't reach. A goal that seems to *need* raw
+> writes is a missing gateway op — add the op (`defineOp` / an applier), don't route around it.
+
 **Return value**: `{ok:true, value}` on success; `{ok:false, error:{code, hint}}` on failure.
 - Syntax errors -> `code: 'SCRIPT_SYNTAX_ERROR'`
 - Runtime throws -> `code: 'SCRIPT_RUNTIME_ERROR'`
@@ -588,6 +742,55 @@ __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in s
 > (`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
 > (`listOps`, `defineOp`) need no settle — pass `--settle 0`.
 
+## Debug rendering -- capture an RHI frame (engine capability, OUTSIDE the gateway)
+
+> [!IMPORTANT]
+> **RHI frame capture is an ENGINE debug capability, not an editor op — it is NOT in `listOps()`
+> and never will be.** Black-screen / wrong-texture / wrong-binding symptoms are a rendering
+> concern, not an authored edit, so capture does not enter the ledger / undo / trace. Don't hunt
+> for a `captureFrame` op or add one — that would hand-roll an engine capability into the editor
+> door (AGENTS.md anti-pattern #1). The "one door" is for **authored editor state**; render-debug
+> is reached separately, documented here so a docs-only AI stops looking in the wrong place.
+
+**How to reach it.** When `FORGEAX_ENGINE_RHI_DEBUG=1`, the engine mounts `globalThis.__forgeax.captureFrame(n)`
+on the page. The eval channel's scope① can see `window`, so you drive it from the same
+`gateway-eval.mjs` door — no new transport:
+
+```ts
+// via gateway-eval.mjs (an async snippet — the driver awaits the Promise for you):
+(async () => {
+  if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
+    return { ok: false, why: 'FORGEAX_ENGINE_RHI_DEBUG!=1 or wrong server' };
+  }
+  gateway.dispatch({ kind: 'requestFrame' }, 'ai');       // ensure there IS a frame to record
+  const res = await globalThis.__forgeax.captureFrame(1); // records 1 frame to a tape on disk
+  return res;   // { runId, tapePath, reportPath }
+})()
+```
+
+Then inspect the tape **offline** (no live device) — the frame-model / per-draw inspect / dockview
+viewer all live in the engine skill, which is the SSOT (do not re-derive here):
+
+```bash
+node packages/engine/packages/rhi-debug/dist/cli.mjs summary <tapePath>   # structured FrameModel (passes/draws/bindings)
+```
+
+> **Deeper:** per-draw bindings + RT PNG inspect, the four-panel viewer, tape format, error codes
+> — engine skill `packages/engine/skills/forgeax-engine-rhi-debug/SKILL.md` (contract SSOT
+> `packages/engine/packages/rhi-debug/README.md`).
+
+> [!CAUTION]
+> **Two traps cost more than the capture itself (both are environment, not the API):**
+> - **Capture needs only the host vite.** Launch `FORGEAX_ENGINE_RHI_DEBUG=1 FORGEAX_BRIDGE=0 bun run dev`
+>   (single vite, :15290; the engine boots in-process there). The two-server `dev:standalone`
+>   (host :15290 + edit-runtime :15280) HMR-thrashes once rhi-debug's heavier deps (`pngjs`/`ws`)
+>   load, so a headless driver rarely catches a stable window.
+> - **Prove the flag actually reached the running server before blaming the API.** A leftover,
+>   *unflagged* dev server squatting on :15290 makes `window.__forgeax` `undefined` — it looks like
+>   "capability absent" but is "wrong server". Verify with `POST /__forgeax-debug/trigger` returning
+>   **non-404** (503/409 `no-browser-tab` is the proof the plugin is registered); `curl :15290 → 200`
+>   alone proves nothing.
+
 ## Scripts
 
 `skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
@@ -605,6 +808,9 @@ instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runt
 ```bash
 # prereq: a running editor with a scene open, and playwright available:
 #   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
+#     ⚠ EMPTY scene: dev:standalone passes no --game, so no game backend / no entities. For real
+#       scene or Play dogfood: `bun fx start --game games/sample --bg` (spawns :15281 platform-io
+#       backend + /api proxy so the scene loads and ▶ Play actually assembles a play world).
 #   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
 node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
 node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first

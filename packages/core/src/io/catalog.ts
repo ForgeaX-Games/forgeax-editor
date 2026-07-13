@@ -110,7 +110,10 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         name: { type: 'string' },
-        parent: { type: 'number' },
+        // parent is EntityId | null (types.ts) — null / omit spawns a root. Must
+        // be `nullable` or the now-enforced door-validation (solo round-14) would
+        // wrongly reject `spawnEntity{parent:null}`, a real caller shape.
+        parent: { type: 'number', nullable: true },
         components: { type: 'object' },
         source: { type: 'string' },
       },
@@ -144,7 +147,10 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         entity: { type: 'number' },
-        parent: { type: 'number' },
+        // parent is EntityId | null (types.ts) — null reparents to root. Must be
+        // `nullable` or the now-enforced door-validation (solo round-14) would
+        // wrongly reject `reparent{parent:null}` (reparent-to-root / ungroup).
+        parent: { type: 'number', nullable: true },
       },
       required: ['entity'],
     },
@@ -304,6 +310,29 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Duplicate Asset',
   },
+  // createMaterial (solo round-12 / P5 rendering-authoring): AUTHOR a new PBR
+  // MaterialAsset from params — the create-a-look counterpart to bindAssetRef's
+  // bind-an-existing-look. Cataloged (unlike createAsset) so an AI discovers it via
+  // listOps(). The applier builds the POD via the engine's Materials.standard()
+  // builder and writes it to the pack; the caller then binds the same guid onto a
+  // mesh's MeshRenderer.materials via bindAssetRef.
+  {
+    id: 'createMaterial', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', description: 'Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles).' },
+        name: { type: 'string', description: 'Human-readable material name shown in the asset catalog.' },
+        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color as [r,g,b,a], each 0..1 (a = opacity).' },
+        metallic: { type: 'number', description: 'PBR metallic 0..1 (default 0 = dielectric).' },
+        roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
+        packPath: { type: 'string', description: 'Optional target pack path; defaults to the active game scene.pack.json (the same pack the scene saves into). An AI over the eval bridge normally omits this.' },
+        refs: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['guid', 'name', 'baseColor'],
+    },
+    title: 'Create Material',
+  },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
   // ── selection ops: the entity id is a WORLD-BOUND handle ─────────────────────
@@ -417,6 +446,47 @@ const builtinOps: ReadonlyArray<{
       required: ['destPath'],
     },
     title: 'Import Asset',
+  },
+  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): session-
+  // domain, ledger-only, fire-and-forget async. Cataloged so AI self-discovers it
+  // via gateway.listOps() (registry razor — the human "Add to Scene" capability is
+  // now equally AI-reachable). Instantiates a catalogued scene sub-asset (by GUID,
+  // e.g. just imported) into the live scene as a nested SceneInstance mount — the
+  // missing last leg of the import→place chain (importAsset gets it INTO the
+  // catalog; this gets it INTO the scene).
+  { id: 'addSceneAssetToScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill "Animate a skinned asset" note).' },
+        name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.' },
+      },
+      required: ['sceneGuid'],
+    },
+    title: 'Add Scene Asset to Scene',
+  },
+  // bindAssetRef (solo round-11 / P5 rendering-authoring): session-domain, ledger-
+  // only, fire-and-forget async. Cataloged so AI self-discovers it via listOps().
+  // The missing front-door binder for shared<T> component fields: addComponent/
+  // setComponent pass value RAW (no GUID->handle resolution), so a GUID in a
+  // shared<T> field silently becomes handle 0. This op resolves each GUID
+  // (loadByGuid -> allocSharedRef) and writes the live handle(s) into the field via
+  // a document setComponent (undoable, round-trips). One op for the whole class:
+  // materials / equirect / animation-clips.
+  { id: 'bindAssetRef', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'number', description: 'Target entity handle (an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine mount-override round-trip, not this op).' },
+        component: { type: 'string', description: 'Component carrying the shared<T> field, e.g. "MeshRenderer", "Skylight", "AnimationPlayer". Must already be present on the entity (this patches it).' },
+        field: { type: 'string', description: 'The shared<T> field to bind, e.g. "materials", "equirect", "clips". Discover its type via gateway.describeComponent(component).' },
+        assetType: { type: 'string', description: 'Engine asset-union tag for allocSharedRef, e.g. "MaterialAsset", "EquirectAsset", "AnimationClip". Must match the field\'s shared<T> target type.' },
+        guids: { type: 'array', items: { type: 'string' }, description: 'Catalogued asset GUID(s) (from gateway.assetCatalog()). For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array.' },
+        slot: { type: 'number', description: 'For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`.' },
+      },
+      required: ['entity', 'component', 'field', 'assetType', 'guids'],
+    },
+    title: 'Bind Asset Ref (resolve GUID -> shared<T> handle)',
   },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════

@@ -130,15 +130,17 @@ testFixture('(a) valid fixture', [
   'Use gateway.dispatch({ kind: "duplicateEntity", entity }, "ai") for ordinary copies.',
   'Never mix live worlds with an engine `dist` import.',
   'Use scripts/gateway-live.mjs through FORGEAX_BRIDGE on 127.0.0.1 only.',
-  // Keep this fixture in lockstep with REQUIRED_KEYWORDS in the validator — every
-  // anchor added there (undo/canUndo family, plugin authoring, composed-op dispatch)
-  // must appear here or the VALID scenario goes red. (Round-2/3 added the first
-  // group to the validator but forgot this fixture, leaving the test silently red
-  // until round-4; it is not wired into CI, so nobody caught it.)
-  'Gate undo/redo buttons with gateway.canUndo() — undo() returns a bare boolean.',
-  'Author asset-resident game logic in assets/*.plugin.ts with defineComponent/defineSystem.',
-  'A scoped plan enumerates a parent\'s children by reverse-scanning ChildOf.',
+// Round-2/3/4 anchors — this fixture must carry every REQUIRED_KEYWORDS entry
+  // or scenario (a) fails (it drifted behind rounds 2-4 until round-4 rhi-debug).
+  'The undo / redo / canUndo timeline family returns a bare boolean.',
+  'Author asset-resident logic in `*.plugin.ts` via defineComponent / defineSystem.',
+  'Scoped plans reverse-scan ChildOf to enumerate a parent children.',
   'Dispatch a composed op with top-level args; argsSchema is enforced at dispatch.',
+  'RHI frame capture is reached via globalThis.__forgeax.captureFrame — outside the gateway.',
+  'Use importAsset to cook a file, then addSceneAssetToScene to place a catalogued scene GUID.',
+  'For real Play dogfood boot `bun fx start --game games/sample` — no --game opens an empty scene.',
+  'Poll gateway.playPhase to a terminal value; on failed read gateway.lastPlayError.',
+  'Follow a material texture GUID with gateway.describeAssetByGuid — not lookupAsset (full buffer).',
 ].join('\n'), 0, null);
 
 // ---------------------------------------------------------------------------

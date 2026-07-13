@@ -62,6 +62,14 @@ export interface EditorAppHandle {
 export interface RunGateway {
   enterPlay(playWorld: unknown): void;
   exitPlay(): void;
+  // Play-attempt observability (solo round-8 #3). Optional so the headless test's
+  // fake gateway (and any older caller) stays compatible — the real EditGateway
+  // implements both. beginPlayAttempt marks the async assemble in flight
+  // (playPhase → 'starting'); failPlayAttempt records a degraded attempt
+  // (playPhase → 'failed' + lastPlayError) so a front-door poller sees a TERMINAL
+  // state instead of a mode flip that never comes.
+  beginPlayAttempt?(): void;
+  failPlayAttempt?(error: { code: string; hint?: string }): void;
 }
 
 /** The assembly result the lifecycle drives (from play-assemble.ts). */
@@ -132,6 +140,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   async function playSimulation(): Promise<void> {
     if (active !== null) return; // already playing — ▶ is a no-op (idempotent)
 
+    // solo round-8 #3: mark the async assemble in flight so the gateway's
+    // playPhase reads 'starting' — a front-door poller can distinguish
+    // "still assembling" from "failed, will never flip". Cleared on success
+    // (enterPlay) or set to 'failed' below.
+    deps.gateway.beginPlayAttempt?.();
+
     // D-10: if the doc has unsaved edits, hint that play uses the last-saved
     // scene (disk re-instantiate does not see in-memory edits).
     deps.onDirtyPlayHint?.();
@@ -148,6 +162,20 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     if (!res.ok) {
       console.warn('[editor] ▶ Play assemble failed:', res.error);
       deps.editorApp.resume();
+      // solo round-8 #3: surface the failure through the front door so playPhase
+      // reads 'failed' + lastPlayError carries why — instead of silently degrading
+      // to edit while dispatch already returned {ok:true} (the round-3/5 trap).
+      // Normalize the loose assemble error into a hint string (CommandError.hint is
+      // required): a structured error contributes its own hint, an Error its message,
+      // anything else is stringified.
+      const err = res.error;
+      const structured = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : null;
+      const hint = structured && typeof structured.hint === 'string'
+        ? structured.hint
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      deps.gateway.failPlayAttempt?.({ code: 'play-assemble-failed', hint });
       return;
     }
     active = res.value;

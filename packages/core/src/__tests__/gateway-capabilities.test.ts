@@ -23,13 +23,29 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import type { Handle } from '@forgeax/engine-runtime';
-import type { MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { EditGateway } from '../io/gateway';
 import { childrenOf, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
+const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
+
+// A tiny 2×2 RGBA texture — small enough to keep the test cheap, but its `data`
+// buffer is exactly what describeAssetByGuid must NOT return (the friction that
+// motivated this leg: lookupAsset drags the full pixel buffer into scope).
+function texture(): TextureAsset {
+  return {
+    kind: 'texture',
+    width: 2,
+    height: 2,
+    format: 'rgba8unorm',
+    data: new Uint8Array(2 * 2 * 4),
+    colorSpace: 'srgb',
+    mipmap: false,
+  };
+}
 
 function makeShaderRegistry(): ShaderRegistry {
   const device: ShaderRegistryDevice = {
@@ -320,7 +336,15 @@ describe('Gateway created channel', () => {
 describe('Gateway asset read surface', () => {
   // A gateway whose ball carries a builtin cube mesh + a catalogued material,
   // with both handles captured directly (== what query's opaque-handle.raw is).
-  function setup(): { gateway: EditGateway; ball: EntityHandle; meshHandle: number; matHandle: number } {
+  // Also catalogs a TEXTURE (heavy-data kind) to exercise the lightweight
+  // describe-by-guid summary path (shape metadata, no pixel buffer).
+  function setup(): {
+    gateway: EditGateway;
+    ball: EntityHandle;
+    meshHandle: number;
+    matHandle: number;
+    texHandle: number;
+  } {
     const world = new World();
     const registry = new AssetRegistry(makeShaderRegistry());
     const mat = material();
@@ -328,6 +352,14 @@ describe('Gateway asset read surface', () => {
     if (!guid.ok) throw new Error('bad material test GUID');
     const catalogued = registry.catalog(guid.value, mat);
     if (!catalogued.ok) throw new Error(`material catalog failed: ${String(catalogued.error)}`);
+    // Catalog a small texture (heavy-data kind) so describeAssetByGuid's
+    // shape-metadata-not-pixels contract is testable.
+    const tex = texture();
+    const texGuid = AssetGuid.parse(TEXTURE_GUID);
+    if (!texGuid.ok) throw new Error('bad texture test GUID');
+    const texCatalogued = registry.catalog(texGuid.value, tex);
+    if (!texCatalogued.ok) throw new Error(`texture catalog failed: ${String(texCatalogued.error)}`);
+    const texHandle = world.allocSharedRef('TextureAsset', tex);
     const matHandle = world.allocSharedRef('MaterialAsset', mat);
     const spawned = world.spawn(
       { component: Name, data: { value: 'Cube' } },
@@ -344,6 +376,7 @@ describe('Gateway asset read surface', () => {
       ball: spawned.value,
       meshHandle: HANDLE_CUBE as unknown as number,
       matHandle: matHandle as unknown as number,
+      texHandle: texHandle as unknown as number,
     };
   }
 
@@ -400,6 +433,63 @@ describe('Gateway asset read surface', () => {
     expect(gateway.assetCatalog().some((e) => e.guid === MATERIAL_GUID)).toBe(true);
     const payload = gateway.lookupAsset(MATERIAL_GUID);
     expect((payload as { kind?: string } | undefined)?.kind).toBe('material');
+  });
+
+  // ── describeAssetByGuid: the lightweight by-GUID leg (friction #4) ──────────
+  // A material POD exposes its texture bindings as GUID strings. Before this leg,
+  // the only by-GUID path was lookupAsset(guid), which returns the FULL payload —
+  // for a texture that's the entire pixel buffer. describeAssetByGuid is the
+  // by-GUID complement of describeAsset(handle): identity + shape, no buffer.
+
+  it('describeAssetByGuid returns texture shape metadata WITHOUT the pixel buffer', () => {
+    const { gateway } = setup();
+    const d = gateway.describeAssetByGuid(TEXTURE_GUID);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.kind).toBe('texture');
+      expect(d.guid).toBe(TEXTURE_GUID);
+      // Lightweight POD fields flow through `meta` (kind-agnostic projection).
+      expect(d.meta?.width).toBe(2);
+      expect(d.meta?.height).toBe(2);
+      expect(d.meta?.format).toBe('rgba8unorm');
+      // The whole point: the heavy `data` buffer is stripped, at any nesting.
+      expect(d.meta?.data).toBeUndefined();
+      // And the summary is small — the friction was a multi-MB pixel dump.
+      expect(JSON.stringify(d).length).toBeLessThan(512);
+    }
+  });
+
+  it('describeAssetByGuid and describeAsset agree on the same asset (SSOT — no drift)', () => {
+    const { gateway, matHandle } = setup();
+    const byHandle = gateway.describeAsset(matHandle);
+    const byGuid = gateway.describeAssetByGuid(MATERIAL_GUID);
+    expect(byHandle.ok && byGuid.ok).toBe(true);
+    if (byHandle.ok && byGuid.ok) {
+      expect(byGuid.kind).toBe(byHandle.kind);
+      expect(byGuid.guid).toBe(byHandle.guid);
+      expect(byGuid.name).toBe(byHandle.name);
+      expect(byGuid.meta).toEqual(byHandle.meta);
+    }
+  });
+
+  it('describeAssetByGuid returns a structured miss for an unknown GUID', () => {
+    const { gateway } = setup();
+    const d = gateway.describeAssetByGuid('00000000-0000-0000-0000-000000000000');
+    expect(d.ok).toBe(false);
+    if (!d.ok) expect(d.error.code).toBe('ASSET_NOT_FOUND');
+  });
+
+  it('describeAsset(handle) carries the same buffer-stripped meta (shared summary, kind-agnostic)', () => {
+    const { gateway, texHandle } = setup();
+    const d = gateway.describeAsset(texHandle);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.kind).toBe('texture');
+      expect(d.meta?.width).toBe(2);
+      expect(d.meta?.height).toBe(2);
+      // No hard-coded per-kind field list: the heavy buffer is dropped by shape.
+      expect(d.meta?.data).toBeUndefined();
+    }
   });
 });
 

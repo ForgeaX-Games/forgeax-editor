@@ -75,11 +75,47 @@ const REQUIRED_KEYWORDS = [
   // keeps the "enumerate a parent's children" example from vanishing
   // (EXPERIMENT-REPORT round-4 friction #1; round-2 deferred #3).
   'ChildOf',
-  // Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
+// Dispatching a composed op: args are TOP-LEVEL (not nested under `args`) and
   // argsSchema is ENFORCED at dispatch for defined ops. Without this section a
   // docs-only AI defines an op it cannot correctly call, and trusts a schema that
   // used to be decorative (EXPERIMENT-REPORT round-4 friction #1/#2).
   'Dispatch a composed op',
+  // RHI frame capture (render-debug) — an ENGINE capability reached via
+  // globalThis.__forgeax.captureFrame, deliberately OUTSIDE the gateway (not an
+  // op). A docs-only AI reading the "one door" narrative could not find how to
+  // capture a frame until round-4 (rhi-debug). These anchors keep the "Debug
+  // rendering" section (which also states WHY it's out-of-door) from vanishing.
+  'captureFrame',
+  '__forgeax',
+  // Asset WRITE legs — import a file into the catalog + place a catalogued scene
+  // GUID into the world. The read legs were documented but the write legs (and the
+  // last-leg `addSceneAssetToScene`) were invisible to a docs-only AI: it could
+  // import (via listOps discovery) but had no documented path to PLACE the result,
+  // so the whole import→instantiate chain dead-ended (EXPERIMENT-REPORT round-6
+  // friction #1/#3). These anchors keep the "Import an external asset, then place
+  // it" section from silently vanishing.
+  'importAsset',
+  'addSceneAssetToScene',
+  // Empty-scene launch trap — `dev:standalone` (no --game) opens an EMPTY scene, so
+  // Play degrades to a no-op while `dispatch({kind:'play'})` still returns {ok:true}.
+  // Rounds 3 & 5 both misdiagnosed this (blamed async flip / escalated a non-bug).
+  // The Scripts prereq must keep telling a docs-only AI to boot `fx start --game`
+  // for real Play dogfood (EXPERIMENT-REPORT round-8 friction #1/#3).
+  'fx start --game',
+  // Terminal-aware play lifecycle — `play` assembly is async + can fail; a
+  // `mode`-only poller waits forever on a degraded assemble. The doc MUST teach
+  // polling `playPhase` to a TERMINAL value (play|failed) + reading lastPlayError
+  // on failure. Keeps the round-8 #3 fix's projection from silently reverting to
+  // the old "poll mode" band-aid (EXPERIMENT-REPORT round-8 friction #3).
+  'playPhase',
+  'lastPlayError',
+  // Lightweight by-GUID asset read leg — a material POD exposes its texture
+  // bindings as GUID strings; the only by-GUID path used to be lookupAsset, which
+  // returns the FULL payload (a texture's whole pixel buffer → multi-MB dump). The
+  // "Read what asset an entity references" section MUST keep teaching
+  // describeAssetByGuid (identity + buffer-stripped `meta`) as the way to follow a
+  // GUID pointer without a context-bomb (EXPERIMENT-REPORT round-9 friction #4).
+  'describeAssetByGuid',
 ];
 
 // ---------------------------------------------------------------------------

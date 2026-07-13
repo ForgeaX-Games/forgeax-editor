@@ -50,6 +50,8 @@ export { EditGateway } from './io/gateway';
 export type {
   BusListener,
   DispatchResult,
+  AssetSummary,
+  AssetSummaryResult,
   CommandOrigin,
   HistoryStep,
   OpHandle,
@@ -346,10 +348,6 @@ export type { ContextMenuRenderer, ContextMenuRequest, MenuItemDef } from './ui/
 export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 
 // ── Dock bridge helpers ──
-
-// ── Project authoring (M3) ──
-export { openProject, type OpenProjectResult } from './session/open-project';
-export { createFetchReader } from './io/fetch-reader';
 
 // ── Host-injected game path resolver (layout decoupling) ──
 export {

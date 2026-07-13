@@ -357,6 +357,15 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const cur = engine.get(eH, tok);
   if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
+  // Guard `patch` before Object.keys — a missing/null/non-object patch (e.g. a
+  // caller that passed addComponent's `value` field by mistake) must return a
+  // structured INVALID_ARGS, never throw a raw `Cannot convert undefined or null
+  // to object` TypeError. gateway.dispatch validates this at the door now, but
+  // ctx.dispatchSub (transaction sub-ops) and gateway.begin bypass the door, so
+  // the applier stays the innermost invariant point (solo round-14).
+  if (typeof cmd.patch !== 'object' || cmd.patch === null || Array.isArray(cmd.patch)) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `setComponent requires an object "patch" field (got ${cmd.patch === null ? 'null' : Array.isArray(cmd.patch) ? 'array' : typeof cmd.patch}); note setComponent uses "patch", addComponent uses "value"` } };
+  }
   const before = clone(cur.value) as Record<string, unknown>;
   const restore: Record<string, unknown> = {};
   for (const k of Object.keys(cmd.patch)) restore[k] = before[k];

@@ -4,19 +4,44 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
-import { loadAssetConfig } from '@forgeax/engine-pack/config';
+import { resolveGameAssetRoots, type ResolvedRoot } from '@forgeax/editor-core/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Cross-platform setup for shared-assets:
-// Git on Windows without core.symlinks=true checks out symlinks as plain text files containing the target path.
-// This breaks Vite dev server. We dynamically create a 'junction' on Windows if needed.
-(function setupSharedAssets() {
+// The shared/external asset submodule (forgeax-editor-assets) resolved to its
+// REAL path, two levels up from this package. `@shared/<sub>` roots declared in
+// a game's package.json#forgeax.assets.roots resolve against this base (via
+// resolveGameAssetRoots). See the farm comment below for why the real path is
+// then rewritten to the in-viteRoot symlink before scanning.
+const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
+
+// Cross-platform external-root farm (generalizes the former single hardcoded
+// `sharedAssetRoots()` mount — architecture-principles §1 SSOT: one `roots`
+// concept, not a per-game list PLUS a separate shared-roots appender).
+//
+// WHY A SYMLINK IS STILL REQUIRED (not just an abs path in roots):
+//   play-runtime's process.cwd() == viteRoot == this package dir, and every
+//   catalog entry's relativeUrl = withBase('/preview', relative(cwd, assetAbs))
+//   (pack-catalog.ts). withBase does posix.resolve('/', rel), which CLAMPS
+//   leading `../` — so an external abs path (forgeax-editor-assets lives ABOVE
+//   viteRoot) yields a mangled `/preview/forgeax-editor-assets/...` URL that
+//   resolves under viteRoot and 404s. The symlink makes the whole submodule
+//   appear UNDER viteRoot as `shared-assets/`, so relative(cwd, .../shared-assets/x)
+//   is a clean in-root subpath vite can serve. The scanner does NOT realpath-deref,
+//   so the `shared-assets/` prefix is preserved. Every `@shared/<sub>` root lives
+//   under this ONE submodule, so ONE whole-dir symlink covers all scopes — no
+//   per-scope farm needed. `farmPath()` (below) rewrites resolved shared roots
+//   to their `shared-assets/<sub>` path before they reach the scanner.
+//
+// Git on Windows without core.symlinks=true checks out symlinks as plain text
+// files containing the target path, which breaks the Vite dev server — so we
+// (re)create a real symlink/junction on demand.
+(function setupExternalRootFarm() {
   const linkPath = resolve(here, 'shared-assets');
-  const targetPath = resolve(here, '..', '..', 'forgeax-editor-assets');
+  const targetPath = SHARED_BASE;
   if (existsSync(linkPath)) {
     const stat = lstatSync(linkPath);
     if (!stat.isSymbolicLink() && stat.isFile()) {
@@ -34,6 +59,16 @@ const here = dirname(fileURLToPath(import.meta.url));
     console.warn(`[forgeax] failed to create shared-assets junction:`, e);
   }
 })();
+
+// Rewrite a resolved root to the path the scanner should see. Local roots pass
+// through as their abs path; shared (`@shared/<sub>`) roots are redirected to the
+// in-viteRoot symlink `shared-assets/<sub>` so relative(cwd,…) stays a clean,
+// serveable subpath (see the farm comment above). `resolveGameAssetRoots` has
+// already existsSync-filtered against the REAL path; the symlink points at the
+// same dir so the redirected path exists too.
+function farmPath(r: ResolvedRoot): string {
+  return r.shared && r.sub !== undefined ? resolve(here, 'shared-assets', r.sub) : r.abs;
+}
 
 // Self-contained vite root: the engine directory itself. Pre-2026-05-13 the
 // root was the parent dir (packages/forgeax/), which forced an
@@ -148,11 +183,11 @@ function gamesDirRoot(): string {
 const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX ?? '';
 
 // Scan every game's declared asset roots as pack roots. Uses the SSOT
-// (package.json#forgeax.assets.roots via loadAssetConfig) instead of
-// hardcoding 'assets'. One-level glob over <gamesDir>/<slug>/<root>
-// deliberately excludes nested dirs like shoot/backup/assets, whose
-// .pack.json files reuse the same GUIDs and would trip the scanner's
-// duplicate-guid guard (collapsing the whole catalog).
+// (package.json#forgeax.assets.roots via resolveGameAssetRoots, which also
+// expands `@shared/<sub>` external roots) instead of hardcoding 'assets'.
+// One-level glob over <gamesDir>/<slug>/<root> deliberately excludes nested
+// dirs like shoot/backup/assets, whose .pack.json files reuse the same GUIDs
+// and would trip the scanner's duplicate-guid guard (collapsing the catalog).
 function gameAssetRoots(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir) return [];
@@ -160,47 +195,34 @@ function gameAssetRoots(): string[] {
   const roots: string[] = [];
   for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
     const gameDir = join(gamesDir, slug);
-    const config = loadAssetConfig(gameDir);
-    for (const r of config.roots) {
-      if (existsSync(r)) roots.push(r);
+    // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
+    // resolves `@shared/<sub>` external roots against SHARED_BASE, and
+    // existsSync-filters. farmPath redirects shared roots through the in-viteRoot
+    // symlink so their scanned path (and thus relativeUrl) stays serveable.
+    for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE })) {
+      roots.push(farmPath(r));
     }
   }
   return roots;
 }
 
-// Shared template assets live under the engine vite root (here/shared-assets)
-// and are folded into EVERY game's per-game catalog. The default game template
-// loads its environment skylight from a single shared sky.hdr cube-texture
-// sidecar here rather than duplicating the 1.3MB HDR into each game's assets/.
-// Lives under the vite root so it ships with the frozen .app copy too (Tauri),
-// and its relativeUrl (relative to cwd=here, +base) is one vite serves.
-// Returns [] when absent (older deploys) so catalogs degrade to game-only.
-function sharedAssetRoots(): string[] {
-  const dir = resolve(here, 'shared-assets');
-  return existsSync(dir) ? [dir] : [];
-}
-
-// Per-game pack roots: the game's declared asset roots from package.json
-// (forgeax.assets.roots via loadAssetConfig SSOT). Scene packs live alongside
-// other assets under the declared roots (A2/A3: scenes are ordinary assets).
+// Per-game pack roots: the game's declared asset roots (local + `@shared/…`)
+// from package.json#forgeax.assets.roots (SSOT), farm-rewritten so shared roots
+// serve from under viteRoot. Scene packs live alongside other assets under the
+// declared roots (A2/A3: scenes are ordinary assets).
 function perGamePackRoots(slug: string): string[] {
   const gameDir = join(gamesDirRoot(), slug);
-  const config = loadAssetConfig(gameDir);
-  return (config.roots as string[]).filter((p) => existsSync(p));
+  return resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE }).map(farmPath);
 }
 
 // Return slugs for every game directory under the host-injected games dir that
-// has at least one declared asset root. Symlink game directories are included
-// because existsSync follows symlinks. Mirrors gameAssetRoots().
+// has at least one (existing) declared asset root. Mirrors gameAssetRoots().
 function gameSlugs(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir || !existsSync(gamesDir)) return [];
   return readdirSync(gamesDir)
     .filter(isRealGameSlug)
-    .filter((slug) => {
-      const config = loadAssetConfig(join(gamesDir, slug));
-      return config.roots.some((r) => existsSync(r));
-    });
+    .filter((slug) => resolveGameAssetRoots(join(gamesDir, slug), { sharedBase: SHARED_BASE }).length > 0);
 }
 
 // Per-game base-strip: pluginPack's middleware matches per-game routes as
@@ -240,7 +262,7 @@ export function forgeaxPerGamePackIndex() {
         const roots = perGamePackRoots(slug);
         if (roots.length === 0) { next(); return; }
         try {
-          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
+          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1)]);
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(catalog));
@@ -259,7 +281,7 @@ export function forgeaxPerGamePackIndex() {
         const roots = perGamePackRoots(slug);
         if (roots.length === 0) continue;
         try {
-          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1), ...sharedAssetRoots()]);
+          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1)]);
           const fileName = `pack-index/${slug}.json`;
           this.emitFile({
             type: 'asset',
@@ -378,24 +400,26 @@ export default defineConfig({
     forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
-    // SINGLE pluginPack instance over game roots + shared template assets.
-    // It was TWO instances (game roots, then shared) — but both register a
+    // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`
+    // alike (gameAssetRoots() now farm-rewrites shared roots into this one list;
+    // there is no longer a separate sharedAssetRoots() appender — §1 SSOT).
+    // It was once TWO instances (game roots, then shared) — but both register a
     // vite plugin named 'forgeax:pack', each mounting its OWN `/__import/:guid`
     // dev middleware. Middlewares run in registration order, and the handler
     // 404s (`meta-not-found`) + RETURNS on a GUID absent from its own catalog
     // instead of `next()`-ing. So the first (game-roots) instance swallowed
     // every request for a shared-asset GUID (the template sky.hdr equirect) →
     // the shared instance never saw it → `/__import/<sky>` 404 → solid-color
-    // skylight fallback. Merging into ONE instance with the UNION of roots puts
-    // every GUID in a single catalog + single middleware, so the cold-import
-    // cook path resolves shared + per-game GUIDs alike. imageImporter is needed
-    // for the .hdr equirect sidecar (else the bare .hdr is mislabeled rgba8unorm
-    // and uploadCubemapFromEquirect rejects with `invalid-source-format`);
+    // skylight fallback. ONE instance with the UNION of roots puts every GUID in
+    // a single catalog + single middleware, so the cold-import cook path resolves
+    // shared + per-game GUIDs alike. imageImporter is needed for the .hdr equirect
+    // sidecar (else the bare .hdr is mislabeled rgba8unorm and
+    // uploadCubemapFromEquirect rejects with `invalid-source-format`);
     // gltfImporter for per-game .glb cooks. A cross-root duplicate GUID no longer
     // collapses the catalog to []: buildCatalog (build-catalog.ts) degrades to a
     // per-root scan + first-wins de-dup, dropping only the offending root.
     pluginPack({
-      roots: [...gameAssetRoots(), ...sharedAssetRoots()],
+      roots: gameAssetRoots(),
       base: '/preview/',
       importers: [imageImporter, gltfImporter],
     }) as never,
