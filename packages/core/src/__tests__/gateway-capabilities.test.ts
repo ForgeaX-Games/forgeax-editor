@@ -427,14 +427,14 @@ describe('Gateway asset read surface', () => {
     }
   });
 
-  it('describeAsset marks a builtin mesh (HANDLE_CUBE) as builtin with no GUID', () => {
+  it('describeAsset gives a GUID for the catalogued builtin mesh (HANDLE_CUBE)', () => {
     const { gateway, meshHandle } = setup();
     const d = gateway.describeAsset(meshHandle);
     expect(d.ok).toBe(true);
     if (d.ok) {
       expect(d.kind).toBe('mesh');
-      expect(d.builtin).toBe(true);
-      expect(d.guid).toBeUndefined();
+      expect(d.builtin).toBeUndefined();
+      expect(d.guid).toBe('cbe42beb-8975-5096-b3a1-3dda4cb4c077');
     }
   });
 

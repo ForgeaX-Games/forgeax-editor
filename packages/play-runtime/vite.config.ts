@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
-import { resolveGameAssetRoots, type ResolvedRoot } from '@forgeax/editor-core/asset-roots';
+// Vite config bundling externalizes package subpaths, so Node would receive core's
+// raw TypeScript export. Import the same core helper relatively to bundle it first.
+import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { buildPerGameCatalog } from './pack-catalog.js';
