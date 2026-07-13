@@ -202,6 +202,36 @@ describe('Gateway public capability matrix', () => {
     expect(world.get(ball, Name).unwrap().value).toBe('BouncyBall');
   });
 
+  it('Compose + Duplicate: a transaction prepares public duplicates with material/subtree fidelity and one undo', () => {
+    const beforeUndo = gateway.appliedCount();
+    const beforeLedger = gateway.ledger.length;
+    const duplicated = gateway.dispatch({
+      kind: 'transaction',
+      label: 'duplicate two renderable balls',
+      commands: [
+        { kind: 'duplicateEntity', entity: ball, name: 'Batch copy A', posOffset: [2, 0, 0] },
+        { kind: 'duplicateEntity', entity: ball, name: 'Batch copy B', posOffset: [4, 0, 0] },
+      ],
+    }, 'ai');
+    expect(duplicated.ok).toBe(true);
+    if (!duplicated.ok) return;
+    const copies = duplicated.result?.created ?? [];
+    expect(copies).toHaveLength(2);
+    for (const copy of copies) {
+      expect(materialCount(world, copy)).toBe(1);
+      expect(childrenOf(world, copy)).toHaveLength(1);
+    }
+    expect(gateway.appliedCount()).toBe(beforeUndo + 1);
+    expect(gateway.ledger).toHaveLength(beforeLedger + 1);
+    expect(gateway.ledger.at(-1)?.kind).toBe('transaction');
+    expect(gateway.origins.at(-1)).toBe('ai');
+
+    expect(gateway.undo()).toBe(true);
+    expect(roots(world)).toEqual([ball]);
+    expect(gateway.redo()).toBe(true);
+    expect(roots(world)).toHaveLength(3);
+  });
+
   it('Collect + Duplicate: AI can round-trip material and child subtree with one undo/redo', () => {
     const collected = gateway.collectSceneAsset(ball);
     expect(collected.ok).toBe(true);

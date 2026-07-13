@@ -413,11 +413,15 @@ export class EditGateway {
       // dispatch so a transaction's forward-references (spawn then reparent under
       // it) resolve.
       alias,
-      // Span-pushing sub-dispatch: a transaction sub-op recurses back through
-      // the executor so each sub-op gets its own child span AND records its own
-      // engine leaves via the same cached facade (AC-07 + AC-09). The SAME alias
-      // map is reused so placeholders stay resolvable across the transaction.
-      dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub, alias),
+      // Span-pushing sub-dispatch: a transaction sub-op first receives the same
+      // gateway-owned preparation as top-level dispatch (notably duplicate's
+      // SceneAsset collection), then recurses through the executor. Each sub-op
+      // therefore gets its own child span + engine leaves; the SAME alias map
+      // keeps forward-reference placeholders resolvable across the transaction.
+      dispatchSub: (_ctx, sub) => {
+        const prepared = this._prepareDocumentCommand(sub);
+        return prepared.ok ? this._execDocumentApplier(sub, alias) : prepared;
+      },
       // Read side: same query-snapshot the session/eval ctx exposes (D-2 ctx
       // contract, t12a). Document appliers don't read it, but it is part of the
       // ctx shape and available for defined document ops that might. Sunk
@@ -430,14 +434,43 @@ export class EditGateway {
     return ctx;
   }
 
-  /** Execute a document applier through the executor: build DocApplierCtx →
-   *  pushSpan → call applier(ctx, cmd) → popSpan.
-   *  Used by dispatch (and, via ctx.dispatchSub, by transaction sub-ops).
-   *
-   *  The applier receives a DocApplierCtx whose only world access is the
-   *  controlled `engine` proxy — no raw world, no EditSession (AC-01 / D-2).
-   *  Every write it performs records its engine interface leaf onto the span
-   *  pushed here (AC-09). */
+  /**
+   * Prepare a document command whose gateway contract includes a live read before
+   * its applier can write. This runs at the shared executor entrance — rather than
+   * only top-level dispatch — so a transaction's nested `duplicateEntity` command
+   * has the exact same public semantics as a direct duplicate (solo round-27 P9).
+   * The preparation is idempotent: a replay command already carries `_asset`, so
+   * redo never re-collects a source that may have changed or been deleted.
+   */
+  private _prepareDocumentCommand(cmd: EditorOp): { ok: true } | { ok: false; error: CommandError } {
+    if (cmd.kind !== 'duplicateEntity') return { ok: true };
+
+    const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+    if (typeof duplicate.entity !== 'number') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
+      };
+    }
+    if (duplicate._asset !== undefined) return { ok: true };
+
+    const source = duplicate.entity as EntityHandle;
+    const collected = this.collectSceneAsset(source);
+    if (!collected.ok) return collected;
+    duplicate._asset = collected.asset;
+    if (duplicate.parent === undefined) duplicate.parent = entParent(this.activeWorld, source);
+    const sourceName = entName(this.activeWorld, source);
+    if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
+    if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
+    return { ok: true };
+  }
+
+  /** Execute a document applier through the executor: prepare → build DocApplierCtx
+   *  → pushSpan → call applier(ctx, cmd) → popSpan. Used by dispatch (and, via
+   *  ctx.dispatchSub, by transaction sub-ops). The applier receives a DocApplierCtx
+   *  whose only world access is the controlled `engine` proxy — no raw world or
+   *  EditSession (AC-01 / D-2). Every write records its engine interface leaf on
+   *  the active span (AC-09). */
   private _execDocumentApplier(cmd: EditorOp, alias: DocAliasMap = new Map()): ReturnType<ApplierFn> {
     const kind = cmd.kind;
     const applier = documentAppliers.get(kind);
@@ -531,43 +564,14 @@ export class EditGateway {
           return { ok: false, error: { code: 'INVALID_ARGS', hint } };
         }
       }
-      // duplicateEntity is the public convenience operation. Capture its
-      // SceneAsset exactly once before the document applier writes so redo uses
-      // the same GUID-backed POD rather than re-reading a changed source entity.
-      if (kind === 'duplicateEntity') {
-        const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
-        if (typeof duplicate.entity !== 'number') {
-          return {
-            ok: false,
-            error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
-          };
-        }
-        if (duplicate._asset === undefined) {
-          const source = duplicate.entity as EntityHandle;
-          const collected = this.collectSceneAsset(source);
-          if (!collected.ok) return collected;
-          duplicate._asset = collected.asset;
-          if (duplicate.parent === undefined) {
-            duplicate.parent = entParent(this.activeWorld, source);
-          }
-          const sourceName = entName(this.activeWorld, source);
-          if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
-          if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
-        }
-      }
-
       // destroyEntity: pre-collect a scene-asset snapshot so undo can restore
-      // materials via GUID round-trip (instantiateSceneAsset). Same pattern as
-      // duplicateEntity above. Collection runs here (before the applier despawns)
-      // so the entity tree is still live and shared<T> handles can be reversed to
-      // GUIDs. For multi-delete the ops arrive wrapped in a transaction — the
-      // transaction branch below pre-fills each destroyEntity sub-op too.
+      // materials via GUID round-trip (instantiateSceneAsset). Collection runs
+      // before the applier despawns while the entity tree remains live. For
+      // multi-delete the commands arrive wrapped in a transaction, so pre-fill
+      // each direct destroy sub-op before the applier iterates them.
       if (kind === 'destroyEntity') {
         this._preCollectDestroyAsset(cmd as Extract<EditorOp, { kind: 'destroyEntity' }>);
       }
-      // transaction: pre-fill destroyEntity sub-ops before the applier iterates
-      // them (ctx.dispatchSub bypasses this top-level dispatch, so sub-ops would
-      // otherwise never hit the destroyEntity branch above).
       if (kind === 'transaction') {
         for (const sub of (cmd as Extract<EditorOp, { kind: 'transaction' }>).commands) {
           if (sub.kind === 'destroyEntity') {
@@ -576,7 +580,10 @@ export class EditGateway {
         }
       }
 
-      // Document ops: executor wraps applier → ctx created → span pushed.
+      // Prepare this public document command before the executor writes. Nested
+      // transaction duplicates pass through the same helper in dispatchSub above.
+      const prepared = this._prepareDocumentCommand(cmd);
+      if (!prepared.ok) return prepared;
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
       // transientMode (play·scene): still apply + emit for immediate feedback,
