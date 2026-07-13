@@ -76,7 +76,7 @@ import {
   PROPAGATE_TRANSFORMS_SYSTEM,
 } from '@forgeax/engine-runtime';
 import { statePlugin } from '@forgeax/engine-state';
-import { physicsPlugin } from '@forgeax/engine-physics';
+import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener } from '@forgeax/engine-audio';
 import {
   audioPlugin,
@@ -348,6 +348,65 @@ export async function assemblePlayWorld(
             break;
           }
         });
+      },
+    });
+  }
+
+  // Sensor receiver-injection (round-20, P7): CollidingEntities is the physics
+  // set-query receiver — the physics tick's writebackCollidingEntities
+  // (rapier-physics-world-3d.ts) writes the overlap set ONLY into entities that
+  // ALREADY carry CollidingEntities, and silently skips the rest. But the engine
+  // declares CollidingEntities component-level `transient:true` (a derived runtime
+  // view; persisting it would make instantiateScene double-write, AC-07/AC-08), so
+  // it is stripped by collect-scene-asset on saveDocToDisk and never reaches the
+  // disk-reloaded play world. A CODE game recovers by re-adding it at spawn in its
+  // main.ts every session (collectathon spawnPlayer, physics D6); the editor's
+  // author→save→Play flow has NO per-session code seam, so an authored sensor's
+  // overlap set stayed empty forever in Play (Edit≠Play — the trigger never fires).
+  //
+  // Fix (same class as the audio-subsystem wiring above): derive receiver intent
+  // from what the entity IS — a `Collider{isSensor:true}` whose entire purpose is
+  // overlap detection — NOT from the stripped transient marker or a name list
+  // (architecture §2.5: depend on the persisting `isSensor` signal, which DOES
+  // round-trip, not a consumer-side enumeration). This system runs BEFORE the
+  // physics backend sync each frame and adds an empty CollidingEntities to any
+  // sensor lacking it, so the writeback has a target. Gated on deps.physics (no
+  // physics backend → no writeback → nothing to receive). Targets are collected
+  // first, then added AFTER the query completes (addComponent migrates archetypes,
+  // which must not happen mid-iteration).
+  if (deps.physics) {
+    (playWorld as {
+      addSystem(sys: {
+        name: string;
+        before?: string[];
+        queries: unknown[];
+        fn: () => void;
+      }): void;
+    }).addSystem({
+      name: 'sensor-colliding-entities-receiver',
+      before: ['physicsSyncBackend'],
+      queries: [],
+      fn: () => {
+        const w = playWorld as {
+          get(e: EntityHandle, c: unknown): { ok: boolean; value: { isSensor: boolean } };
+          addComponent(e: EntityHandle, d: unknown): { ok: boolean };
+        };
+        const targets: EntityHandle[] = [];
+        const query = createQueryState({ with: [Collider, Entity] });
+        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
+          const entitySelf = bundle.Entity.self;
+          for (let i = 0; i < entitySelf.length; i++) {
+            const entity = (entitySelf[i] ?? 0) as EntityHandle;
+            const col = w.get(entity, Collider);
+            if (!col.ok || col.value.isSensor !== true) continue;
+            // already a receiver? skip (CollidingEntities.get is {ok:false} when absent)
+            if (w.get(entity, CollidingEntities as never).ok) continue;
+            targets.push(entity);
+          }
+        });
+        for (const e of targets) {
+          w.addComponent(e, { component: CollidingEntities, data: { entities: [] } });
+        }
       },
     });
   }
