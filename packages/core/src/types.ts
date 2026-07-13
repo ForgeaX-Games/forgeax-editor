@@ -38,7 +38,13 @@ export type CreatableAssetKind = 'scene';
 export type BuiltinEditorOp =
   // ── document domain (engine World, SSOT) — produce inverse → undo + ledger ──
   | { kind: 'spawnEntity'; name?: string; parent?: EntityId | null; components?: Record<string, unknown>; source?: EntitySource; /** filled by applier */ _id?: EntityId }
-  | { kind: 'destroyEntity'; entity: EntityId }
+  | { kind: 'destroyEntity'; entity: EntityId;
+    /** Gateway-filled scene-asset snapshot for material-preserving undo (GUID round-trip). */
+    _asset?: SceneAsset;
+    /** Parent handle of the root entity at destroy time (undo restores hierarchy). */
+    _parent?: EntityId | null;
+    /** Name of the root entity at destroy time (undo restores display name). */
+    _name?: string }
   | { kind: 'rename'; entity: EntityId; name: string }
   | { kind: 'reparent'; entity: EntityId; parent: EntityId | null }
   | { kind: 'setComponent'; entity: EntityId; component: string; patch: Record<string, unknown> }

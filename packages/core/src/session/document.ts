@@ -259,38 +259,69 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   // Collect subtree via engine handles (eH + Children members).
   const idStack: EntityHandle[] = [eH];
   const visitedEng = new Set<EntityHandle>();
-  const entries: Array<{ eId: EntityHandle; name: string; comps: Record<string, unknown> }> = [];
+  const subtree: EntityHandle[] = [];
   while (idStack.length > 0) {
     const ce = idStack.pop()!;
     if (visitedEng.has(ce)) continue;
     visitedEng.add(ce);
-    const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
-    const comps: Record<string, unknown> = {};
-    for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['EditorHidden', EditorHidden]] as [string, CToken][]) {
-      const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
-    }
-    const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
-    entries.push({ eId: ce, name: nm, comps });
+    subtree.push(ce);
     const chR = engine.get(ce, Children);
     if (chR.ok && chR.value.entities != null) {
       const arr = chR.value.entities as { readonly length: number; [index: number]: number };
       for (let ci = 0; ci < arr.length; ci++) if (!visitedEng.has(arr[ci]! as EntityHandle)) idStack.push(arr[ci]! as EntityHandle);
     }
   }
-  // Despawn bottom-up.
-  for (const entry of [...entries].reverse()) {
-    const dr = engine.despawn(entry.eId);
+  // ── Collect legacy component snapshot (fallback path only) ──────────────
+  // When _asset is absent (direct applyCommand without Gateway, or collect
+  // failure), fall back to the old spawnEntity inverse. The snapshot must be
+  // collected BEFORE despawn while the components are still live.
+  let legacyEntries: Array<{ name: string; comps: Record<string, unknown> }> | undefined;
+  if (!cmd._asset) {
+    legacyEntries = [];
+    for (const ce of subtree) {
+      const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
+      const comps: Record<string, unknown> = {};
+      for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['EditorHidden', EditorHidden]] as [string, CToken][]) {
+        const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
+      }
+      const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
+      legacyEntries.push({ name: nm, comps });
+    }
+  }
+
+  // Despawn bottom-up (leaves before parents).
+  for (const e of [...subtree].reverse()) {
+    const dr = engine.despawn(e);
     if (!dr.ok) return { ok: false, error: { code: 'DESPAWN_FAILED', hint: String(dr.error) } };
   }
-  // Inverse respawns the collected entities (names + components survive undo).
-  // parent:null + comps carrying ChildOf preserves the prior mount shape as far
-  // as the collected component data allows (I1: cross-respawn handle identity is
-  // not reconstructed — the respawned entities carry fresh handles).
-  const spawnCmds: EditorOp[] = entries.map((e) => ({
+
+  // ── Build inverse ──────────────────────────────────────────────────────
+  if (cmd._asset) {
+    // New path: scene-asset GUID round-trip preserves materials faithfully.
+    // instantiateSceneAsset rebuilds the full subtree from the POD; its own
+    // inverse is destroyEntity (document.ts:549), closing the undo/redo loop.
+    const rootName = cmd._name ?? `Entity ${cmd.entity}`;
+    return {
+      ok: true,
+      inverse: {
+        kind: 'instantiateSceneAsset',
+        asset: cmd._asset,
+        parent: cmd._parent ?? null,
+        name: rootName,
+        label: `undo destroy ${rootName}`,
+      },
+      created: [],
+    };
+  }
+
+  // Fallback: legacy spawnEntity inverse (no _asset — materials will be lost
+  // but geometry/names survive). Kept for backward compat with direct
+  // applyCommand callers that bypass Gateway pre-collection.
+  const spawnCmds: EditorOp[] = legacyEntries!.map((e) => ({
     kind: 'spawnEntity' as const,
     name: e.name, parent: null, components: e.comps,
   }));
-  const rootName = entries[0]?.name ?? `Entity ${cmd.entity}`;
+  const rootName = legacyEntries![0]?.name ?? `Entity ${cmd.entity}`;
   return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds }, created: [] };
 }
 

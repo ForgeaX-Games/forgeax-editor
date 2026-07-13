@@ -556,6 +556,26 @@ export class EditGateway {
         }
       }
 
+      // destroyEntity: pre-collect a scene-asset snapshot so undo can restore
+      // materials via GUID round-trip (instantiateSceneAsset). Same pattern as
+      // duplicateEntity above. Collection runs here (before the applier despawns)
+      // so the entity tree is still live and shared<T> handles can be reversed to
+      // GUIDs. For multi-delete the ops arrive wrapped in a transaction — the
+      // transaction branch below pre-fills each destroyEntity sub-op too.
+      if (kind === 'destroyEntity') {
+        this._preCollectDestroyAsset(cmd as Extract<EditorOp, { kind: 'destroyEntity' }>);
+      }
+      // transaction: pre-fill destroyEntity sub-ops before the applier iterates
+      // them (ctx.dispatchSub bypasses this top-level dispatch, so sub-ops would
+      // otherwise never hit the destroyEntity branch above).
+      if (kind === 'transaction') {
+        for (const sub of (cmd as Extract<EditorOp, { kind: 'transaction' }>).commands) {
+          if (sub.kind === 'destroyEntity') {
+            this._preCollectDestroyAsset(sub as Extract<EditorOp, { kind: 'destroyEntity' }>);
+          }
+        }
+      }
+
       // Document ops: executor wraps applier → ctx created → span pushed.
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
@@ -897,6 +917,24 @@ export class EditGateway {
    */
   collectSceneAsset(entity: EntityHandle): CollectSceneAssetResult {
     return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
+  }
+
+  /** Pre-fill a destroyEntity op's _asset / _parent / _name before the applier
+   *  runs. Called from dispatch for both top-level destroyEntity AND for
+   *  destroyEntity sub-ops inside a transaction (deleteManyCascade). Collection
+   *  failure is non-fatal: the applier falls back to the legacy spawnEntity
+   *  inverse path (materials lost, but delete still works). */
+  private _preCollectDestroyAsset(
+    destroy: Extract<EditorOp, { kind: 'destroyEntity' }>,
+  ): void {
+    if (destroy._asset !== undefined) return;
+    const entity = destroy.entity as EntityHandle;
+    const collected = this.collectSceneAsset(entity);
+    if (collected.ok) {
+      destroy._asset = collected.asset;
+      destroy._parent = entParent(this.activeWorld, entity);
+      destroy._name = entName(this.activeWorld, entity);
+    }
   }
 
   // ── Asset read surface (Part 4) ────────────────────────────────────────────
