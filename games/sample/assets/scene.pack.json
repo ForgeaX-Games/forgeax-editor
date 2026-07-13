@@ -267,7 +267,6 @@
       "guid": "3a000001-0000-5000-8000-000000000001",
       "kind": "material",
       "payload": {
-        "kind": "material",
         "passes": [
           {
             "name": "Forward",
@@ -303,7 +302,6 @@
       "guid": "3a000002-0000-5000-8000-000000000002",
       "kind": "material",
       "payload": {
-        "kind": "material",
         "passes": [
           {
             "name": "Forward",
@@ -339,7 +337,6 @@
       "guid": "3a000003-0000-5000-8000-000000000003",
       "kind": "material",
       "payload": {
-        "kind": "material",
         "passes": [
           {
             "name": "Forward",
