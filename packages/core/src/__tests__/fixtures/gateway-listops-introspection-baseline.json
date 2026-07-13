@@ -146,6 +146,51 @@
     "title": "Asset Validation Failed"
   },
   {
+    "id": "bindAssetRef",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number",
+          "description": "Target entity handle (an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine mount-override round-trip, not this op)."
+        },
+        "component": {
+          "type": "string",
+          "description": "Component carrying the shared<T> field, e.g. \"MeshRenderer\", \"Skylight\", \"AnimationPlayer\". Must already be present on the entity (this patches it)."
+        },
+        "field": {
+          "type": "string",
+          "description": "The shared<T> field to bind, e.g. \"materials\", \"equirect\", \"clips\". Discover its type via gateway.describeComponent(component)."
+        },
+        "assetType": {
+          "type": "string",
+          "description": "Engine asset-union tag for allocSharedRef, e.g. \"MaterialAsset\", \"EquirectAsset\", \"AnimationClip\". Must match the field's shared<T> target type."
+        },
+        "guids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Catalogued asset GUID(s) (from gateway.assetCatalog()). For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array."
+        },
+        "slot": {
+          "type": "number",
+          "description": "For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`."
+        }
+      },
+      "required": [
+        "entity",
+        "component",
+        "field",
+        "assetType",
+        "guids"
+      ]
+    },
+    "title": "Bind Asset Ref (resolve GUID -> shared<T> handle)"
+  },
+  {
     "id": "cbGoBack",
     "domain": "session",
     "source": "builtin",

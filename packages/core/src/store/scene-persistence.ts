@@ -285,6 +285,9 @@ export const worldToPack = diskIo.worldToPack;
 /** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */
 export const loadSceneByGuid = diskIo.loadSceneByGuid;
 export const instantiateSceneRefUnderWorld = diskIo.instantiateSceneRefUnderWorld;
+/** @internal-store — the bindAssetRef session applier CALLS this to resolve a
+ *  catalogued asset GUID to a live shared<T> handle before writing it. */
+export const resolveAssetRefToHandle = diskIo.resolveAssetRefToHandle;
 export const flushPendingSaveBeacon = diskIo.flushPendingSaveBeacon;
 export const replaceDoc = diskIo.replaceDoc;
 export const stripEditorHiddenMarker = diskIo.stripEditorHiddenMarker;

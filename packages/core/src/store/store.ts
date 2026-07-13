@@ -103,6 +103,7 @@ export {
   stripEditorHiddenMarker,
   loadDocFromDisk,
   instantiateSceneRefUnderWorld,
+  resolveAssetRefToHandle,
   hasPendingDiskSave,
   cancelPendingDiskSave,
   flushPendingSaveBeacon,

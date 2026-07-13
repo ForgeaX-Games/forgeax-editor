@@ -296,6 +296,7 @@ in a detached promise. There is **no `created[]`** on a session op — confirm c
 |:--|:--|:--|
 | `importAsset` | `{ destPath, sourceName?, skipUpload? }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). |
 | `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. |
+| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot? }` | **Bind a catalogued asset GUID into a `shared<T>` component field** — the front-door GUID→handle binder. `addComponent`/`setComponent` pass values RAW (no resolution), so a GUID in a `shared<T>` field silently becomes handle `0`; this op resolves each GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle via an undoable `setComponent`. Closes the whole class: `MeshRenderer.materials` (`assetType:'MaterialAsset'`), `Skylight`/`SkyboxBackground.equirect` (`'EquirectAsset'`), `AnimationPlayer.clips` (`'AnimationClip'`). `slot` writes one array element; omit to write the whole field. **Owned entities only** — a `shared<T>` field on a mount MEMBER still needs the engine mount-override round-trip (P6, escalated). |
 | `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
 | `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
 
@@ -350,17 +351,21 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > `dispatch({ kind:'addComponent', entity, component:'AnimationPlayer', value:{ clips:[<clip>], weights:[1], looping:true } })`
 > (`addComponent`, **not** `setComponent` — `setComponent` only patches a component that already exists).
 > `describeComponent('AnimationPlayer')` gives the field schema (`clips/times/weights/speeds/paused/looping`).
-> **Two gaps currently block this end-to-end (do not expect it to work yet):**
-> 1. **No clip-binding leg.** `clips` is `array<shared<AnimationClip>,4>`; passing a clip **GUID** (in any
->    shape) is silently coerced to handle `0` — `applyAddComponent`/`applySetComponent` pass component data
->    raw with no GUID→handle resolution (mesh/material refs get one via `drag-spawn-resolve.ts`; clips have
->    none). There is no front-door op to bind a clip by GUID.
-> 2. **Mount-member overrides don't round-trip.** A component authored on a *mounted* child (the fox is a
->    SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's `collect-scene-asset` OOS-1
->    does not fold `mount.overrides[]` back on collect, and Play reloads from disk, so the authored
->    `AnimationPlayer` never reaches Play (Edit≠Play).
-> Closing both is tracked for `forgeax-closed-loop` (solo round-10, P6). Until then, treat skinned-asset
-> *playback* as unsupported through the front door; import + place + inspect the rig works today.
+> **Clip-binding leg (gap 1) — now solved by `bindAssetRef`; mount-member round-trip (gap 2) still open:**
+> 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` is
+>    `array<shared<AnimationClip>,4>`; passing a clip **GUID** to `addComponent`/`setComponent` is silently
+>    coerced to handle `0` (they pass component data raw). Use the front-door binder instead:
+>    `dispatch({ kind:'bindAssetRef', entity, component:'AnimationPlayer', field:'clips', assetType:'AnimationClip', guids:[clipGuid], slot:0 })`
+>    — it resolves the GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle. (First `addComponent`
+>    an `AnimationPlayer` with the scalar params — `weights/speeds/paused/looping` — then `bindAssetRef` the
+>    `clips`.) This closes the old "no clip-binding leg" gap for **owned** entities (solo round-11).
+> 2. **Mount-member overrides still don't round-trip.** A component authored on a *mounted* child (the fox
+>    from `addSceneAssetToScene` is a SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's
+>    `collect-scene-asset` OOS-1 does not fold `mount.overrides[]` back on collect, and Play reloads from disk,
+>    so the authored `AnimationPlayer` never reaches Play (Edit≠Play). This is the remaining P6 blocker,
+>    tracked for `forgeax-closed-loop` (solo round-10 ENGINE-FINDING). **Workaround today:** author animation
+>    on an **owned** skinned entity (e.g. one flat-instantiated, not a nested mount) — `bindAssetRef` +
+>    owned-entity round-trip both work. A mounted rig's playback waits on the engine mount-override fix.
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 

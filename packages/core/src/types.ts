@@ -102,6 +102,23 @@ export type BuiltinEditorOp =
   // wrapper's SceneInstance ref, which the wrapper-spawn (a document op inside the
   // body) round-trips as one mounts[] entry.
   | { kind: 'addSceneAssetToScene'; sceneGuid: string; name?: string }
+  // bindAssetRef (solo round-11 / P5 rendering-authoring convergence): "resolve a
+  // catalogued asset GUID to a live shared<T> handle and write it into a component
+  // field." SESSION-domain, ledger-only, fire-and-forget async — it must
+  // loadByGuid (async), exactly like addSceneAssetToScene, so it cannot ride the
+  // SYNC document appliers. This is the ONE front-door projection of the engine's
+  // own GUID->handle resolution onto a component field: `addComponent`/
+  // `setComponent` pass their `value`/`patch` RAW (no shared<T> resolution), so a
+  // GUID string in a shared<T> field silently coerces to handle 0. This op closes
+  // the whole class at once — MeshRenderer.materials (array<shared<MaterialAsset>>),
+  // Skylight/SkyboxBackground.equirect (shared<EquirectAsset>), AnimationPlayer.clips
+  // (array<shared<AnimationClip>>) — by loadByGuid -> allocSharedRef -> writing the
+  // resolved handle via a document setComponent (so the authored bind is undoable +
+  // round-trips like any owned-entity component write). `assetType` is the engine
+  // asset-union tag allocSharedRef expects (e.g. 'MaterialAsset'); `field` is the
+  // shared<T> field on `component`; `slot` targets one element of an array field
+  // (omit to write the whole array from `guids`).
+  | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number }
   | { kind: 'setFolderSelection'; paths: string[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }

@@ -436,6 +436,29 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Add Scene Asset to Scene',
   },
+  // bindAssetRef (solo round-11 / P5 rendering-authoring): session-domain, ledger-
+  // only, fire-and-forget async. Cataloged so AI self-discovers it via listOps().
+  // The missing front-door binder for shared<T> component fields: addComponent/
+  // setComponent pass value RAW (no GUID->handle resolution), so a GUID in a
+  // shared<T> field silently becomes handle 0. This op resolves each GUID
+  // (loadByGuid -> allocSharedRef) and writes the live handle(s) into the field via
+  // a document setComponent (undoable, round-trips). One op for the whole class:
+  // materials / equirect / animation-clips.
+  { id: 'bindAssetRef', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'number', description: 'Target entity handle (an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine mount-override round-trip, not this op).' },
+        component: { type: 'string', description: 'Component carrying the shared<T> field, e.g. "MeshRenderer", "Skylight", "AnimationPlayer". Must already be present on the entity (this patches it).' },
+        field: { type: 'string', description: 'The shared<T> field to bind, e.g. "materials", "equirect", "clips". Discover its type via gateway.describeComponent(component).' },
+        assetType: { type: 'string', description: 'Engine asset-union tag for allocSharedRef, e.g. "MaterialAsset", "EquirectAsset", "AnimationClip". Must match the field\'s shared<T> target type.' },
+        guids: { type: 'array', items: { type: 'string' }, description: 'Catalogued asset GUID(s) (from gateway.assetCatalog()). For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array.' },
+        slot: { type: 'number', description: 'For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`.' },
+      },
+      required: ['entity', 'component', 'field', 'assetType', 'guids'],
+    },
+    title: 'Bind Asset Ref (resolve GUID -> shared<T> handle)',
+  },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════
   { id: 'setHoverEntity', domain: 'transient',

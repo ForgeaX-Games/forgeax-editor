@@ -102,6 +102,7 @@ export interface DiskIo {
   inlineAssetCount(pack: unknown): number;
   loadSceneByGuid(sceneGuid: string): Promise<boolean>;
   instantiateSceneRefUnderWorld(sceneGuid: string, parentHandle: number): Promise<number | null>;
+  resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null>;
   doLoadDocFromDisk(): Promise<boolean>;
   doSaveDocToDisk(): Promise<boolean>;
   flushPendingSaveBeacon(): void;
@@ -354,6 +355,40 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     }
   }
 
+  /**
+   * Resolve a catalogued asset GUID to a LIVE shared<T> handle in the current
+   * editor world, via the engine's canonical loadByGuid -> allocSharedRef spine —
+   * the SAME spine instantiateSceneRefUnderWorld uses for scenes, generalized to
+   * any asset-union type (MaterialAsset / EquirectAsset / AnimationClip / ...).
+   * This is the resolution half of the bindAssetRef op: the handle it returns is
+   * minted from loadByGuid, so its payload sits in the registry catalog / origin
+   * index and engine writeback (_guidForAsset) reverses handle -> GUID on save —
+   * the bound ref round-trips (Edit=Play), never a silent handle-0. Returns the
+   * u32 handle, or null on a bad GUID / load miss (caller surfaces it; NEVER
+   * writes a 0). `assetType` is the engine asset-union tag allocSharedRef expects.
+   */
+  async function resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null> {
+    const w: WorldType = gateway.doc.world;
+    const reg: AssetRegistry | undefined = gateway.doc.registry;
+    if (!w || !reg) return null;
+    try {
+      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+      const parsed = AssetGuid.parse(guid);
+      if (!parsed.ok) { console.warn('[editor-core] resolveAssetRefToHandle: bad guid', guid); return null; }
+      const loadRes = await reg.loadByGuid(parsed.value);
+      if (!loadRes.ok) { console.warn('[editor-core] resolveAssetRefToHandle: loadByGuid failed:', (loadRes.error as { code?: string })?.code); return null; }
+      // allocSharedRef is chrome handle-casting (mirrors drag-spawn-resolve's mesh/
+      // material minting); the resulting handle rides the setComponent the op then
+      // dispatches (which DOES go through the ledger). Cast to the u32 the component
+      // shared<T> field stores.
+      const handle = w.allocSharedRef(assetType as never, loadRes.value) as unknown as number;
+      return handle;
+    } catch (err) {
+      console.warn('[editor-core] resolveAssetRefToHandle: threw', err);
+      return null;
+    }
+  }
+
   // ── disk load ────────────────────────────────────────────────────────────────
   /** Load the active game's scene from disk (native pack). Returns true if a
    *  valid doc was loaded. Uses engine-native world.instantiateScene via
@@ -514,6 +549,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     inlineAssetCount,
     loadSceneByGuid,
     instantiateSceneRefUnderWorld,
+    resolveAssetRefToHandle,
     doLoadDocFromDisk,
     doSaveDocToDisk,
     flushPendingSaveBeacon,
