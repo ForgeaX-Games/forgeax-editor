@@ -17,6 +17,7 @@ import type { DocApplierCtx } from './document';
 import { deletedEntryCache, renamedNameCache, duplicatedGuidCache, type PackAssetEntry } from '../io/asset-io-facade';
 import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
 import type { SceneAsset } from '@forgeax/engine-types';
+import { Materials } from '@forgeax/engine-runtime';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,26 @@ export async function deleteFile(filePath: string): Promise<boolean> {
  *  random anyway — it gained nothing from stableGuid's determinism.) */
 export function generateAssetGuid(): string {
   return AssetGuid.format(AssetGuid.random());
+}
+
+// ── Active-scene-pack resolver seam (breaks the pack-ops <-> scene-persistence
+// import cycle) ────────────────────────────────────────────────────────────────
+// createMaterial defaults a new material into the ACTIVE scene's real pack (the same
+// path disk-io saves the scene to). That path lives in scene-persistence (scenePath(),
+// which reads the sceneList off disk-io) — but scene-persistence transitively imports
+// the gateway/appliers chain that ends here in pack-ops, so a STATIC import of
+// scenePath would form a module-init cycle (TDZ: "Cannot access 'EditGateway' before
+// initialization"). Instead pack-ops depends on an ABSTRACTION (§2.5): a nullable
+// `() => string | null` resolver that scene-persistence registers at init. The import
+// then flows one way (scene-persistence -> pack-ops) and the applier reads the live
+// scene pack lazily at dispatch time. Null until registered (unit env / no host).
+let activeScenePackResolver: (() => string | null) | null = null;
+
+/** Host/store seam: scene-persistence registers its `scenePath` here at init so
+ *  createMaterial can default a material into the active scene's pack without a
+ *  static import cycle. Pass null to clear (tests). */
+export function registerActiveScenePackResolver(fn: (() => string | null) | null): void {
+  activeScenePackResolver = fn;
 }
 
 // ── Dangling refs check ──────────────────────────────────────────────────────
@@ -398,6 +419,85 @@ function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
 }
 
 registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);
+
+// ── Document applier: createMaterial (solo round-12 / P5 rendering-authoring) ──
+// The front-door "AUTHOR a PBR material" op. createAsset (above) mints only BLANK
+// payloads per kind ("UI/AI never carry payloads") and supports only 'scene', so it
+// cannot author a material's params; bindAssetRef (round-11) only BINDS an existing
+// catalogued GUID. This op fills the gap: mint a NEW MaterialAsset from
+// baseColor/metallic/roughness into the pack, so an AI can create a look from scratch
+// then bindAssetRef it onto a mesh. DOCUMENT-domain like createAsset (undoable,
+// inverse=destroyAsset, writes through ctx.assetIO — the sole asset write gate).
+//
+// The POD is built by the engine's canonical Materials.standard() builder — NOT a
+// hand-rolled passes[] array (§2.5: three cook sites already disagree on pass count;
+// the engine owns the SSOT material shape). guid is caller-minted (the dispatch
+// contract surfaces no minted value — ApplyResult carries only created[]; round-11
+// proved created is null over the eval bridge — so the caller mints the guid and
+// reuses it for the follow-up bindAssetRef). packPath is optional: an eval AI has no
+// basePath, so it defaults to the active game's scene.pack.json (the same target
+// disk-io.ts writes the scene to).
+export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { guid, name, baseColor, metallic, roughness, packPath, refs } = cmd as {
+    guid: string; name: string; baseColor: [number, number, number, number];
+    metallic?: number; roughness?: number; packPath?: string; refs?: string[];
+  };
+  // Fail Fast (§5): reject a malformed op before it writes a broken pack entry.
+  if (typeof guid !== 'string' || guid.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `guid` (mint via crypto.randomUUID(); the caller reuses it for bindAssetRef)' } };
+  }
+  if (typeof name !== 'string' || name.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `name`' } };
+  }
+  if (!Array.isArray(baseColor) || baseColor.length !== 4 || !baseColor.every((c) => typeof c === 'number')) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires `baseColor` as [r,g,b,a] (four numbers, 0..1)' } };
+  }
+  if (metallic !== undefined && typeof metallic !== 'number') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `metallic` must be a number (0..1) if given' } };
+  }
+  if (roughness !== undefined && typeof roughness !== 'number') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `roughness` must be a number (0..1) if given' } };
+  }
+  // Default to the ACTIVE scene's real pack path — the SAME path disk-io saves the
+  // scene to (via the registered scenePath resolver), so an authored material lands in
+  // the same pack the scene round-trips through (Edit=Play) and an AI need not know the
+  // game's disk layout. NOT resolveGamePath('scene.pack.json') — a game's scene pack
+  // may live under a subdir (the sample's is assets/scene.pack.json), which that naive
+  // default misses. A caller MAY still target another pack explicitly via packPath.
+  // The resolver can be unregistered (unit env) or return null (no scene bound, e.g.
+  // the 'default' demo shell) — turn both into a STRUCTURED error rather than a
+  // partial/failed write (Fail Fast §5; the executor does not catch applier throws).
+  let targetPack: string;
+  if (typeof packPath === 'string' && packPath.length > 0) {
+    targetPack = packPath;
+  } else {
+    let resolved: string | null = null;
+    try {
+      resolved = activeScenePackResolver ? activeScenePackResolver() : null;
+    } catch {
+      resolved = null;
+    }
+    if (!resolved) {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial: no `packPath` given and no active scene pack resolvable (no scene bound / default shell) — pass an explicit packPath (game-relative, e.g. "sample/assets/scene.pack.json")' } };
+    }
+    targetPack = resolved;
+  }
+  // Canonical PBR POD from the engine builder (SSOT — no hand-rolled passes).
+  const payload = Materials.standard({
+    baseColor,
+    ...(metallic !== undefined ? { metallic } : {}),
+    ...(roughness !== undefined ? { roughness } : {}),
+  }) as unknown as Record<string, unknown>;
+  // Fire-and-forget async IO through the asset gate (mirrors createAsset). The
+  // document-applier contract is synchronous: return the inverse immediately; IO
+  // completes in background; broadcastAssetsChanged() refreshes the catalog.
+  void ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs } })
+    .then(() => broadcastAssetsChanged())
+    .catch((e) => console.warn('[editor-core] createMaterial IO failed:', e));
+  return { ok: true, inverse: { kind: 'destroyAsset', packPath: targetPack, guid } as unknown as EditorOp, created: [] };
+}
+
+registerApplier('document', 'createMaterial', applyCreateMaterial as unknown as ApplierFn);
 
 // ── Document appliers: renameAsset / duplicateAsset (G-4) ─────────────────────
 // Two MORE DOCUMENT-domain ops (undoable) added by the keyboard-router/context-menu

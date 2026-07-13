@@ -65,6 +65,17 @@ export type BuiltinEditorOp =
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
   | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
+  // createMaterial (solo round-12 / P5 rendering-authoring): mint a NEW PBR
+  // MaterialAsset from params (baseColor/metallic/roughness) into a pack, so an AI
+  // can AUTHOR a look — not just BIND an existing catalogued GUID (bindAssetRef,
+  // round-11). DOCUMENT-domain like createAsset (undoable, inverse=destroyAsset),
+  // but param-driven (createAsset builds only blank payloads) and CATALOGUED (AI-
+  // discoverable — the wart createAsset never fixed). The POD is built by the
+  // engine's canonical Materials.standard() builder (§2.5 — no hand-rolled passes).
+  // `guid` is caller-minted (the dispatch contract has no channel to return one;
+  // the caller reuses the same guid for the follow-up bindAssetRef). `packPath`
+  // optional — defaults to the active game's scene.pack.json in the applier.
+  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; packPath?: string; refs?: string[] }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──

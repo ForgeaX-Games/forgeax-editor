@@ -304,6 +304,29 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Duplicate Asset',
   },
+  // createMaterial (solo round-12 / P5 rendering-authoring): AUTHOR a new PBR
+  // MaterialAsset from params — the create-a-look counterpart to bindAssetRef's
+  // bind-an-existing-look. Cataloged (unlike createAsset) so an AI discovers it via
+  // listOps(). The applier builds the POD via the engine's Materials.standard()
+  // builder and writes it to the pack; the caller then binds the same guid onto a
+  // mesh's MeshRenderer.materials via bindAssetRef.
+  {
+    id: 'createMaterial', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', description: 'Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles).' },
+        name: { type: 'string', description: 'Human-readable material name shown in the asset catalog.' },
+        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color as [r,g,b,a], each 0..1 (a = opacity).' },
+        metallic: { type: 'number', description: 'PBR metallic 0..1 (default 0 = dielectric).' },
+        roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
+        packPath: { type: 'string', description: 'Optional target pack path; defaults to the active game scene.pack.json (the same pack the scene saves into). An AI over the eval bridge normally omits this.' },
+        refs: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['guid', 'name', 'baseColor'],
+    },
+    title: 'Create Material',
+  },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
   // ── selection ops: the entity id is a WORLD-BOUND handle ─────────────────────

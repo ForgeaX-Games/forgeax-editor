@@ -205,6 +205,55 @@
     "title": "Go Forward"
   },
   {
+    "id": "createMaterial",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "description": "Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable material name shown in the asset catalog."
+        },
+        "baseColor": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "PBR base color as [r,g,b,a], each 0..1 (a = opacity)."
+        },
+        "metallic": {
+          "type": "number",
+          "description": "PBR metallic 0..1 (default 0 = dielectric)."
+        },
+        "roughness": {
+          "type": "number",
+          "description": "PBR roughness 0..1 (default 0.5)."
+        },
+        "packPath": {
+          "type": "string",
+          "description": "Optional target pack path; defaults to the active game scene.pack.json (the same pack the scene saves into). An AI over the eval bridge normally omits this."
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "guid",
+        "name",
+        "baseColor"
+      ]
+    },
+    "title": "Create Material"
+  },
+  {
     "id": "createSceneFile",
     "domain": "session",
     "source": "builtin",

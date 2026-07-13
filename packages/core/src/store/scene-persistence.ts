@@ -69,6 +69,7 @@ import { gateway } from './gateway';
 import { sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
+import { registerActiveScenePackResolver } from '../session/pack-ops';
 import { stableGuid } from '../scene/scene-pack';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
@@ -280,6 +281,11 @@ export const clearDocStorage = storage.clearDocStorage;
 // instantiateSceneRefUnderWorld / stripEditorHiddenMarker / inlineAssetCount.
 /** @internal-store — disk-watch READS this (D-6 seam). Not in facade/barrel. */
 export const scenePath = diskIo.scenePath;
+// Feed the active-scene-pack resolver seam so the createMaterial document applier
+// (session/pack-ops) can default a new material into the active scene's real pack
+// without a static import cycle (pack-ops <- ... <- scene-persistence). One-way:
+// scene-persistence imports pack-ops (already, for its appliers), never the reverse.
+registerActiveScenePackResolver(() => diskIo.scenePath());
 /** @internal-store — disk-watch READS this to serialize for the echo compare. */
 export const worldToPack = diskIo.worldToPack;
 /** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */
