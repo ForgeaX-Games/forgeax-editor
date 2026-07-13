@@ -18,6 +18,19 @@ const here = dirname(fileURLToPath(import.meta.url));
 // then rewritten to the in-viteRoot symlink before scanning.
 const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
 
+// Implicit `template-game-default` shared scope. The demo-seed default template's
+// scene references the shared sky.hdr equirect GUID (81eec382) but its own assets/
+// has no sky.hdr and its package.json declares only `["assets"]` — never
+// `@shared/template-game-default` (that would leak the editor's `@shared/`
+// convention into the engine submodule's template). play-runtime injects the
+// scope for EVERY game so the template sky folds into the pack catalog, matching
+// edit-runtime's engine-vite-preset (they share this via editor-core's
+// resolveGameAssetRoots.implicitSharedSubs — architecture-principles §1 SSOT).
+// Without it, /__import/<sky-guid> 404s `meta-not-found` and the skylight falls
+// back to a solid color. existsSync-filtered, so an absent submodule degrades to
+// game-only.
+const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
+
 // Cross-platform external-root farm (generalizes the former single hardcoded
 // `sharedAssetRoots()` mount — architecture-principles §1 SSOT: one `roots`
 // concept, not a per-game list PLUS a separate shared-roots appender).
@@ -199,7 +212,7 @@ function gameAssetRoots(): string[] {
     // resolves `@shared/<sub>` external roots against SHARED_BASE, and
     // existsSync-filters. farmPath redirects shared roots through the in-viteRoot
     // symlink so their scanned path (and thus relativeUrl) stays serveable.
-    for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE })) {
+    for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
       roots.push(farmPath(r));
     }
   }
@@ -212,7 +225,7 @@ function gameAssetRoots(): string[] {
 // declared roots (A2/A3: scenes are ordinary assets).
 function perGamePackRoots(slug: string): string[] {
   const gameDir = join(gamesDirRoot(), slug);
-  return resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE }).map(farmPath);
+  return resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS }).map(farmPath);
 }
 
 // Return slugs for every game directory under the host-injected games dir that

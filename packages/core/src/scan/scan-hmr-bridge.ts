@@ -193,6 +193,17 @@ export async function replayLastScanDone(): Promise<void> {
       console.warn(`[scan-hmr] GET /__pack/scan-done → ${res.status}`);
       return;
     }
+    // Guard against a host that doesn't serve this route: when the request
+    // SPA-falls back to index.html the status is 200 but the body is HTML, and
+    // a blind res.json() throws "Unexpected token '<'". The scan-HMR producer
+    // (WS forgeax:scan-* signals + this GET route) is engine-side; a host/engine
+    // pin without it simply has no replay to offer — treat a non-JSON response
+    // as "route absent" and degrade quietly (WS remains the primary path).
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      console.info('[scan-hmr] GET /__pack/scan-done: non-JSON response (route not served) — skipping replay');
+      return;
+    }
     const data: unknown = await res.json();
     applyScanDonePayload(data, 'http-replay');
   } catch (err) {
