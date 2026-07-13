@@ -489,6 +489,25 @@ export default defineConfig({
     host: HOST,
     strictPort: true,
     open: false,
+    // Perf "A": the studio shell (:18920) now fetches game assets straight from
+    // this play-engine origin (:15173) instead of via its same-origin /preview
+    // proxy, so asset traffic gets its OWN browser connection pool and can't
+    // starve the shell API. That makes the requests cross-origin, and Vite 8
+    // defaults `server.cors` to false — without this the browser blocks the
+    // responses (no Access-Control-Allow-Origin). Reflect only the studio dev
+    // origins (loopback, http+https); override via FORGEAX_ASSET_CORS_ORIGINS
+    // (comma-separated) for non-default interface ports / remote gateways.
+    cors: {
+      origin: (process.env.FORGEAX_ASSET_CORS_ORIGINS
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)) ?? [
+        'http://127.0.0.1:18920',
+        'http://localhost:18920',
+        'https://127.0.0.1:18920',
+        'https://localhost:18920',
+      ],
+    },
     watch: {
       usePolling: true,
       interval: 300,
