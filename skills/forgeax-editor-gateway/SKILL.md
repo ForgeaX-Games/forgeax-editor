@@ -123,6 +123,18 @@ if (r.ok) {
   const [handle] = r.result?.created ?? [];
   if (handle !== undefined) gateway.dispatch({ kind: 'setSelection', id: handle }, 'ai');
 }
+
+// setComponent PATCHES an existing component; addComponent ATTACHES a new one —
+// and they use DIFFERENT field names: setComponent takes `patch`, addComponent
+// takes `value`. Mixing them is a common reflex; the gateway now rejects it with a
+// structured error (never a thrown TypeError) so a wrong field is self-correcting:
+//   setComponent{ entity, component, patch: {…} }   // patch an existing component
+//   addComponent{ entity, component, value: {…} }   // attach a new component
+// A missing/malformed required field on ANY builtin document op → {ok:false,
+// error:{code:'INVALID_ARGS', hint}} at the door (same Fail-Fast validation
+// session/transient ops always had). e.g. setComponent without `patch`:
+//   → { ok:false, error:{ code:'INVALID_ARGS',
+//        hint:'invalid args for "setComponent": patch: missing required field "patch"' } }
 ```
 
 ## begin -> update -> commit -- Continuous Operation
@@ -401,6 +413,18 @@ const miss = gateway.describeComponent('Postion');   // typo
 > `schema` values are the engine's type keywords as strings (`'array<f32, 3>'`, `'f32'`,
 > `'shared<MeshAsset>'`, `'entity'`, …). `defaults` is present only when the component declared
 > layer-2 defaults; its vector values are plain `number[]` (JSON-safe), not live TypedArrays.
+
+> [!IMPORTANT]
+> **Camera post-processing lives on the `Camera` component, NOT `PostProcessParams`.** The knobs you
+> reach for — `tonemap` / `exposure` / `whitePoint` / `bloom` / `bloomThreshold` / `bloomIntensity` /
+> `bloomBlurRadius` / `clearColor` — are scalar fields on `Camera` (`describeComponent('Camera')`), so you
+> author them exactly like light/shadow scalars: `spawnEntity{components:{Camera:{tonemap:1, bloom:1,
+> exposure:1.3, …}}}` (author) or `setComponent{entity, component:'Camera', patch:{exposure:0.9}}` (tune),
+> then `saveDocToDisk` — they round-trip byte-faithful to disk (Edit=Play). The separately-named
+> `PostProcessParams` component (`{shader:'string', data:'buffer'}`) is a DIFFERENT thing: a low-level
+> custom-fullscreen-shader escape hatch (register a shader id + raw params bytes for a bespoke pass), not
+> the home of production tonemapping/bloom. Don't reach for `PostProcessParams` to turn on bloom — the name
+> is a trap; use `Camera`. (solo round-14)
 
 
 > [!NOTE]

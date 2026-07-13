@@ -506,20 +506,24 @@ export class EditGateway {
           },
         };
       }
-      // Entry args validation for defineOp-authored document ops (Fail Fast §5 /
-      // Schema-as-Contract §3). Builtin document ops are validated field-by-field
-      // inside applyCommand (entity/component/patch checks), so they fall through
-      // here untouched. A `source:'defined'` document op, however, hands its raw
-      // `{...args}` straight to the user plan(query,args) — nothing checks the
-      // declared argsSchema, so a missing/wrong-typed arg used to flow silently
-      // into the plan (e.g. `x + undefined = NaN`) and corrupt the world with a
-      // {ok:true} + trace OK. Validate the SAME way session/transient ops are
-      // validated below (reuse validateArgs + INVALID_ARGS — no new mechanism),
-      // turning the silent corruption into a loud, catchable error. Guarded on
-      // source==='defined' so this never double-validates a builtin. (Session
-      // defineOp ops already hit the shared validator further down.)
+      // Entry args validation for ALL catalogued document ops (Fail Fast §5 /
+      // Schema-as-Contract §3), the SAME door-validation session/transient ops get
+      // below. Previously this was gated on `source==='defined'`, on the belief
+      // (stated in a since-deleted comment) that "builtin document ops are validated
+      // field-by-field inside applyCommand" — that was FALSE: e.g. applySetComponent
+      // does `Object.keys(cmd.patch)` with no guard, so a missing/null `patch`
+      // THREW a raw `TypeError: Cannot convert undefined or null to object` through
+      // the gateway, which promises a structured `{ok:false,error}` for all bad
+      // input (solo round-14). The catalog ALREADY declares each op's argsSchema
+      // (e.g. setComponent.required:['entity','component','patch']) and validateArgs
+      // ALREADY exists — only the wiring skipped builtins. Validating every doc op
+      // with an argsSchema here (defined + builtin, uniform with the other two
+      // domains) turns those crashes into a loud, catchable INVALID_ARGS and closes
+      // the whole class (every builtin doc op reading a required field unguarded).
+      // The applier stays defended too (applySetComponent guards `patch`) because
+      // ctx.dispatchSub (transaction sub-ops) and begin() bypass THIS door.
       const docDescriptor = getOp(kind);
-      if (docDescriptor?.source === 'defined' && docDescriptor.argsSchema) {
+      if (docDescriptor?.argsSchema) {
         const v = validateArgs(docDescriptor.argsSchema, cmd);
         if (!v.ok) {
           const first = v.errors[0];

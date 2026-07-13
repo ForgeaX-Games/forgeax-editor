@@ -110,7 +110,10 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         name: { type: 'string' },
-        parent: { type: 'number' },
+        // parent is EntityId | null (types.ts) — null / omit spawns a root. Must
+        // be `nullable` or the now-enforced door-validation (solo round-14) would
+        // wrongly reject `spawnEntity{parent:null}`, a real caller shape.
+        parent: { type: 'number', nullable: true },
         components: { type: 'object' },
         source: { type: 'string' },
       },
@@ -144,7 +147,10 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         entity: { type: 'number' },
-        parent: { type: 'number' },
+        // parent is EntityId | null (types.ts) — null reparents to root. Must be
+        // `nullable` or the now-enforced door-validation (solo round-14) would
+        // wrongly reject `reparent{parent:null}` (reparent-to-root / ungroup).
+        parent: { type: 'number', nullable: true },
       },
       required: ['entity'],
     },

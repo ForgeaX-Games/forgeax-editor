@@ -533,7 +533,8 @@
           "type": "number"
         },
         "parent": {
-          "type": "number"
+          "type": "number",
+          "nullable": true
         }
       },
       "required": [
@@ -871,7 +872,8 @@
           "type": "string"
         },
         "parent": {
-          "type": "number"
+          "type": "number",
+          "nullable": true
         },
         "components": {
           "type": "object"
