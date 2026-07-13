@@ -42,7 +42,6 @@ import {
 } from '@forgeax/engine-runtime';
 import { Entity, getRegisteredSystems } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { physicsPlugin } from '@forgeax/engine-physics';
 import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
 import {
   gateway,
@@ -334,7 +333,19 @@ async function bootViewport(
     pointerLockAllowed: () => false,
     // Composite two-world render: editorWorld (camera) + sceneWorld (resources).
     drawSource: worldManager.createDrawSource(),
-    ...(editPhysics ? { plugins: [physicsPlugin(editPhysics)] } : {}),
+    // NO physics in the EDIT world (D-7 invariant, see :378-383 + solo P7
+    // round-15): physics is a game SIMULATION system, and per D-7 "game systems
+    // only exist in the transient playWorld built by play-assemble" — the
+    // sceneWorld (= this createApp world, save's only source) must carry no
+    // ticking game systems. Assembling physicsPlugin here made a `RigidBody`
+    // authored at rest FALL to the floor on load (gravity integrating every edit
+    // frame), so a save persisted the fallen pose — Edit ≠ Play, authored-intent
+    // corruption. The plugin registers only the tick SYSTEMS + PhysicsWorld
+    // resource (nothing in the editor reads either); the physics COMPONENTS
+    // auto-register at import via defineComponent, so authoring (spawn / set /
+    // serialize / describe) stays fully functional without it. ▶ Play still
+    // simulates: play-assemble.ts assembles physicsPlugin(deps.physics) into the
+    // fresh play world (editPhysics is threaded there via `physics:` below).
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
     importTransport: {
