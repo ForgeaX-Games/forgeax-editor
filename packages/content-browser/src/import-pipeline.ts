@@ -87,27 +87,41 @@ export async function importFiles(
 
   // Host-resolved import target — the studio games-dir convention lives in the
   // edit-runtime adapter (setPathResolver), not here.
-  const basePath = resolveGamePath(currentPath || 'assets');
+  // FIX: keep the game-relative path (without slug) for dispatch — the applier
+  // calls resolveGamePath() internally, so passing the already-resolved basePath
+  // would double-prefix (e.g. hellforge/hellforge/...).
+  const gameRelBase = currentPath || 'assets';
+  const basePath = resolveGamePath(gameRelBase);
+  logImport('pipeline.importFiles.resolvedBase', { basePath, gameRelBase });
 
   for (const file of importable) {
     progress.current = file.name;
     onProgress?.(structuredClone(progress));
 
-    const destPath = `${basePath}/${file.name}`;
+    const uploadPath = `${basePath}/${file.name}`;
+    const gameRelPath = `${gameRelBase}/${file.name}`;
     let result: ImportFileResult;
     try {
+      logImport('pipeline.file.readBytes', { filename: file.name, size: file.size, uploadPath, gameRelPath });
       const base64 = arrayBufferToBase64(await file.arrayBuffer());
+      logImport('pipeline.file.uploading', { filename: file.name, base64Len: base64.length, uploadPath });
       // Upload bytes through the assetIO write-gate BEFORE dispatch — the op
       // carries a path, not bytes (ledger stays clean, op stays AI-replayable).
-      const uploaded = await assetIO.uploadSourceBytes(destPath, base64);
+      const uploaded = await assetIO.uploadSourceBytes(uploadPath, base64);
+      logImport('pipeline.file.uploadResult', { filename: file.name, uploaded });
       if (!uploaded) {
         result = { filename: file.name, status: 'error', error: 'Upload failed' };
       } else {
         // Bytes are now on disk → dispatch the one-door import op (skipUpload).
+        // Pass the game-RELATIVE path (without slug) — the applier calls
+        // resolveGamePath() to add the slug, so passing the already-resolved
+        // uploadPath would double-prefix (hellforge/hellforge/...).
+        logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
         const r = gateway.dispatch(
-          { kind: 'importAsset', destPath, sourceName: file.name, skipUpload: true },
+          { kind: 'importAsset', destPath: gameRelPath, sourceName: file.name, skipUpload: true },
           'human',
         );
+        logImport('pipeline.file.dispatchResult', { filename: file.name, ok: r.ok, error: (r as { error?: { code?: string } }).error?.code });
         // The applier is fire-and-forget (async session-op contract); a synchronous
         // ok means the op was accepted. Precise per-file cook errors surface through
         // the console + the post-reload catalog (sibling-op parity — see import-ops.ts).
@@ -123,9 +137,11 @@ export async function importFiles(
 
     results.push(result);
     progress.completed++;
+    logImport('pipeline.file.done', { filename: file.name, status: result.status, error: result.error });
     onProgress?.(structuredClone(progress));
   }
 
+  logImport('pipeline.importFiles.complete', { total: results.length, results: results.map(r => ({ f: r.filename, s: r.status, e: r.error })) });
   broadcastAssetsChanged();
   onReload?.();
 

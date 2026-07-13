@@ -252,8 +252,14 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        label: { type: 'string' },
-        commands: { type: 'array' },
+        label: {
+          type: 'string',
+          description: 'single undo/ledger label for the whole batch (e.g. "bulk-spawn x500"); the transaction is atomic — all sub-ops apply or none, and it collapses to ONE undo entry.',
+        },
+        commands: {
+          type: 'array',
+          description: 'array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). Forward-references work — spawn an entity then reparent under it within the same commands array.',
+        },
       },
       required: ['label', 'commands'],
     },

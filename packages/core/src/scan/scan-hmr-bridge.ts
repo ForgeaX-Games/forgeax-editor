@@ -193,6 +193,17 @@ export async function replayLastScanDone(): Promise<void> {
       console.warn(`[scan-hmr] GET /__pack/scan-done → ${res.status}`);
       return;
     }
+    // Guard against a host that doesn't serve this route: when the request
+    // SPA-falls back to index.html the status is 200 but the body is HTML, and
+    // a blind res.json() throws "Unexpected token '<'". The scan-HMR producer
+    // (WS forgeax:scan-* signals + this GET route) is engine-side; a host/engine
+    // pin without it simply has no replay to offer — treat a non-JSON response
+    // as "route absent" and degrade quietly (WS remains the primary path).
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      console.info('[scan-hmr] GET /__pack/scan-done: non-JSON response (route not served) — skipping replay');
+      return;
+    }
     const data: unknown = await res.json();
     applyScanDonePayload(data, 'http-replay');
   } catch (err) {
@@ -271,6 +282,16 @@ export function installScanHmrBridge(): () => void {
     }
   };
 
+  // Runtime asset-changed signal from vite-plugin-pack (sidecar meta.json write).
+  // Replaces full-reload — Content Browser refreshes incrementally without page reload.
+  const onAssetChanged = (data: unknown): void => {
+    const d = data as { file?: string; event?: string; kind?: 'sidecar' | 'source' };
+    console.info(`[scan-hmr] ← forgeax:asset-changed kind=${d?.kind} file=${d?.file}`);
+    if (d?.kind === 'sidecar') {
+      broadcastAssetsChanged('pack-changed');
+    }
+  };
+
   // Plan v2 H4: validation diagnostics from Node-side scan
   const onScanValidation = (data: unknown): void => {
     const d = data as { diagnostics?: ScanDiagnostic[] };
@@ -292,6 +313,7 @@ export function installScanHmrBridge(): () => void {
   hot.on('forgeax:scan-validation', onScanValidation);
   hot.on('forgeax:assetReimported', onAssetReimported);
   hot.on('forgeax:assetOrphanDetected', onAssetOrphan);
+  hot.on('forgeax:asset-changed', onAssetChanged);
 
   // Race replay: if Node already finished startup scan before we subscribed.
   void replayLastScanDone();
@@ -303,5 +325,6 @@ export function installScanHmrBridge(): () => void {
     hot.off('forgeax:scan-validation', onScanValidation);
     hot.off('forgeax:assetReimported', onAssetReimported);
     hot.off('forgeax:assetOrphanDetected', onAssetOrphan);
+    hot.off('forgeax:asset-changed', onAssetChanged);
   };
 }
