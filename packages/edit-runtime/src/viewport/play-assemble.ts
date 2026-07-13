@@ -61,10 +61,29 @@
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
 import { createApp, inputPlugin } from '@forgeax/engine-app';
-import { World } from '@forgeax/engine-ecs';
-import { transformPlugin, timePlugin, animationPlugin } from '@forgeax/engine-runtime';
+import {
+  World,
+  createQueryState,
+  queryRun,
+  Entity,
+  type EntityHandle,
+} from '@forgeax/engine-ecs';
+import {
+  transformPlugin,
+  timePlugin,
+  animationPlugin,
+  Transform,
+  PROPAGATE_TRANSFORMS_SYSTEM,
+} from '@forgeax/engine-runtime';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin } from '@forgeax/engine-physics';
+import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener } from '@forgeax/engine-audio';
+import {
+  audioPlugin,
+  createWebAudioBackend,
+  WebAudioEngine,
+  syncListenerFromWorldMatrix,
+} from '@forgeax/engine-audio-webaudio';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
@@ -232,17 +251,41 @@ export async function assemblePlayWorld(
   // contract). Flushed in REVERSE registration order on ■ Stop (detach() below).
   const cleanups: Array<() => void> = [];
 
+  // Audio backend (round-17, P8): the assemble form does NOT auto-create the
+  // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle") — so
+  // editor ▶ Play must pre-inject it itself, exactly as it pre-injects the input
+  // backend above and as a standalone game's own createApp does (create-app.ts
+  // canvas form :481). Without this the play world had no AUDIO_ENGINE_RESOURCE_KEY
+  // and no audioTickSystem, so EVERY audio game's AudioSource silently never fired
+  // in editor Play (Edit≠Play) — the same canvas-vs-assemble divergence class that
+  // create-app.ts:455 already fixed for AnimationAssetResolver. audioPlugin.build()
+  // is a no-op unless it finds this resource, so the inject MUST precede createApp.
+  //
+  // Cost for an audio-less scene is ~zero: createWebAudioBackend is fully lazy
+  // (no AudioContext until the first play() / .listener touch — web-audio-engine.ts
+  // D-3), the tick system walks zero AudioSource entities, and listener-sync only
+  // touches backend.listener when an AudioListener entity exists. So we wire it
+  // unconditionally (unlike physics, whose rapier WASM load is expensive and thus
+  // forge.json-gated) — matching D-8 "the play world is the same shape as a
+  // standalone game runtime."
+  const audioBackend = createWebAudioBackend();
+  (playWorld as { insertResource(key: unknown, value: unknown): void }).insertResource(
+    AUDIO_ENGINE_RESOURCE_KEY,
+    audioBackend,
+  );
+
   // D-7: the assemble form runs ONLY the plugins we list (defaultSet=[]), so
-  // explicitly replicate the canvas-form default 5 plugins + physics (aligning
-  // with the editor's own canvas-form assembly). D-8: no EditMode resource is
-  // injected — the play world is the same shape as a standalone game runtime, so
-  // game systems tick without a notEditing gate.
+  // explicitly replicate the canvas-form default 5 plugins + physics + audio
+  // (aligning with the editor's own canvas-form assembly). D-8: no EditMode
+  // resource is injected — the play world is the same shape as a standalone game
+  // runtime, so game systems tick without a notEditing gate.
   const plugins: unknown[] = [
     transformPlugin(),
     timePlugin(),
     animationPlugin(),
     statePlugin(),
     inputPlugin(),
+    audioPlugin(),
     ...(deps.physics ? [physicsPlugin(deps.physics)] : []),
   ];
 
@@ -268,6 +311,46 @@ export async function assemblePlayWorld(
     // below can delegate the pointer-lock game gate to it.
     readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
+
+  // Audio listener-sync (round-17, P8): the assemble form deliberately leaves
+  // listener-sync to the host (create-app.ts:665 registers it ONLY on the canvas
+  // form; assemble hosts "manage their own sync"). Mirror the canvas closure here
+  // so spatial audio (spatialBlend>0) attenuates as the AudioListener entity moves.
+  // Runs as an ECS addSystem after propagateTransforms (NOT registerUpdate) so it
+  // reads the CURRENT frame's Transform.world mat4. backend.listener is a lazy
+  // getter (builds the AudioContext on first touch) — read it ONLY when an
+  // AudioListener entity actually exists so an audio-less / listener-less scene
+  // never forces context creation.
+  if (audioBackend instanceof WebAudioEngine) {
+    const backend = audioBackend;
+    (playWorld as {
+      addSystem(sys: {
+        name: string;
+        after?: string[];
+        queries: unknown[];
+        fn: () => void;
+      }): void;
+    }).addSystem({
+      name: 'audio-listener-sync',
+      after: [PROPAGATE_TRANSFORMS_SYSTEM],
+      queries: [],
+      fn: () => {
+        const query = createQueryState({ with: [AudioListener, Entity] });
+        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
+          const entitySelf = bundle.Entity.self;
+          for (let i = 0; i < entitySelf.length; i++) {
+            const entity = (entitySelf[i] ?? 0) as EntityHandle;
+            const tf = (playWorld as { get(e: EntityHandle, c: unknown): { ok: boolean; value: { world: Float32Array } } }).get(entity, Transform);
+            if (!tf.ok) continue;
+            const listener = backend.listener;
+            if (listener === undefined) break;
+            syncListenerFromWorldMatrix(listener, tf.value.world);
+            break;
+          }
+        });
+      },
+    });
+  }
 
   // ── defaultScene: pure-read GUID path (research Finding 2) ──
   // loadByGuid returned the SceneAsset payload — its handle-typed fields (e.g.
@@ -331,6 +414,18 @@ export async function assemblePlayWorld(
 
   const detach = (): void => {
     detachInput?.();
+    // Audio backend teardown (round-17, P8): the assemble form does NOT wire
+    // audioBackendDispose (create-app.ts: canvas form owns that; assemble hosts
+    // own lifecycle, OOS-5), so ■ Stop must destroy the backend we created above —
+    // stop all nodes, disconnect, close the AudioContext. Guarded + idempotent
+    // (WebAudioEngine.destroy is a no-op if the context was never built). Runs
+    // before the game cleanups so a game's registerCleanup(AudioContext) teardown
+    // can't race a still-live backend node.
+    try {
+      audioBackend.destroy();
+    } catch (err) {
+      console.warn('[editor] ■ Stop audioBackend.destroy() threw:', err);
+    }
     // Flush the game's cleanup callbacks in REVERSE registration order (LIFO).
     // pop() drains the array so a second detach() flushes nothing (idempotent);
     // each is guarded so one throwing cleanup can't strand the rest or block the
