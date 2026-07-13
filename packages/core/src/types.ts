@@ -237,7 +237,12 @@ export interface CommandError {
     // error). Surfaced through gateway.failPlayAttempt so playPhase reads 'failed'
     // + lastPlayError carries this — instead of dispatch({kind:'play'}) returning
     // {ok:true} while play silently never started (the round-3/5 misdiagnosis trap).
-    | 'play-assemble-failed';
+    | 'play-assemble-failed'
+    // ── solo round-28: async scene-mount failure ──
+    // addSceneAssetToScene loads + instantiates a catalogued SceneAsset in a
+    // detached session continuation. Its accepted dispatch must still expose the
+    // terminal outcome through the same gateway read surface — never console-only.
+    | 'scene-mount-failed';
   hint: string;
 }
 

@@ -86,3 +86,43 @@ describe('addSceneAssetToScene dispatch (session applier)', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe('addSceneAssetToScene async observability', () => {
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    gw = new EditGateway(createEditSession());
+  });
+
+  it('publishes pending → mounted without inventing a second operation path', () => {
+    expect(gw.sceneMountPhase).toBe('idle');
+    expect(gw.lastSceneMountError).toBeNull();
+
+    gw.beginSceneMountAttempt();
+    expect(gw.sceneMountPhase).toBe('pending');
+    expect(gw.lastSceneMountError).toBeNull();
+
+    gw.completeSceneMountAttempt();
+    expect(gw.sceneMountPhase).toBe('mounted');
+    expect(gw.lastSceneMountError).toBeNull();
+  });
+
+  it('publishes a structured terminal mount failure that a caller can branch on', () => {
+    gw.beginSceneMountAttempt();
+    gw.failSceneMountAttempt({
+      code: 'scene-mount-failed',
+      hint: 'could not load scene asset guid',
+    });
+
+    expect(gw.sceneMountPhase).toBe('failed');
+    expect(gw.lastSceneMountError).toEqual({
+      code: 'scene-mount-failed',
+      hint: 'could not load scene asset guid',
+    });
+
+    // A retry resets the old terminal state before the next asynchronous result.
+    gw.beginSceneMountAttempt();
+    expect(gw.sceneMountPhase).toBe('pending');
+    expect(gw.lastSceneMountError).toBeNull();
+  });
+});

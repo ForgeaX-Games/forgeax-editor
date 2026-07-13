@@ -246,6 +246,17 @@ export class EditGateway {
   private _playPending = false;
   private _lastPlayError: CommandError | null = null;
 
+  // ── Async scene-mount observability (solo round-28, P3/P9) ────────────────
+  // `addSceneAssetToScene` is necessarily a session-domain detached continuation:
+  // it must load a catalog GUID before the canonical engine instantiate spine can
+  // write the derived mount subtree. As with Play, immediate `{ok:true}` only means
+  // the request was accepted. These two fields make the TERMINAL result public so a
+  // docs-only caller can poll a stable operation-specific state rather than infer
+  // success from a browser reload, host log, or a stale catalog.
+  private _sceneMountPending = false;
+  private _lastSceneMountSucceeded = false;
+  private _lastSceneMountError: CommandError | null = null;
+
   /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
   get activeWorld(): World {
     return (this._playWorld ?? this.doc.world) as unknown as World;
@@ -280,6 +291,51 @@ export class EditGateway {
    *  attempt begins or play succeeds (see beginPlayAttempt/enterPlay). */
   get lastPlayError(): CommandError | null {
     return this._lastPlayError;
+  }
+
+  /**
+   * Terminal-aware scene-mount phase. `pending` means the accepted
+   * `addSceneAssetToScene` request is still resolving its GUID-backed SceneAsset;
+   * `mounted` confirms the engine instantiated its derived subtree; `failed` pairs
+   * with `lastSceneMountError`; `idle` has no in-flight or failed attempt.
+   */
+  get sceneMountPhase(): 'idle' | 'pending' | 'mounted' | 'failed' {
+    if (this._sceneMountPending) return 'pending';
+    if (this._lastSceneMountError !== null) return 'failed';
+    if (this._lastSceneMountSucceeded) return 'mounted';
+    return 'idle';
+  }
+
+  /** The structured terminal error from the latest failed scene mount, or null. */
+  get lastSceneMountError(): CommandError | null {
+    return this._lastSceneMountError;
+  }
+
+  /** Mark a `addSceneAssetToScene` continuation as in flight. */
+  beginSceneMountAttempt(): void {
+    this._sceneMountPending = true;
+    this._lastSceneMountSucceeded = false;
+    this._lastSceneMountError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Mark the asynchronous scene mount successful. */
+  completeSceneMountAttempt(): void {
+    this._sceneMountPending = false;
+    this._lastSceneMountSucceeded = true;
+    this._lastSceneMountError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Publish a structured scene-mount failure through the public gateway read surface. */
+  failSceneMountAttempt(error: CommandError): void {
+    this._sceneMountPending = false;
+    this._lastSceneMountSucceeded = false;
+    this._lastSceneMountError = error;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
   }
 
   /** Mark a ▶ Play attempt as in flight (playPhase → 'starting'). Clears any prior
