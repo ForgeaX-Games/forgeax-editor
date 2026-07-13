@@ -61,7 +61,7 @@
   },
   {
     "name": "describeComponent",
-    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; enums?: Record<string, Record<string, number>> | undefined; } | { ok: false; error: CommandError; }"
+    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; enums?: Record<string, Record<string, number>> | undefined; transient?: Record<string, true> | undefined; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "dispatch",

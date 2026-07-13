@@ -1027,6 +1027,13 @@ export class EditGateway {
    * SPAWN_FAILED "Known fields" hint). Unknown name → structured
    * UNKNOWN_COMPONENT whose hint lists the registered names (reused shape from
    * query-snapshot). Read-only: no world/ledger mutation, not an op.
+   *
+   * `transient` (solo round-25) marks the DERIVED, non-authored fields — a field
+   * whose value is recomputed each frame from the persisted local state, skipped
+   * by scene collect (engine D-5). It lets a docs-only AI tell an authored INPUT
+   * (`Transform.pos`) from a derived read-only OUTPUT (`Transform.world`, the
+   * frame-lagged resolved world matrix): don't author a transient field, and
+   * expect it to lag a frame after a mutation until the propagate/derive pass runs.
    */
   describeComponent(
     name: string,
@@ -1037,6 +1044,7 @@ export class EditGateway {
         schema: Record<string, string>;
         defaults?: Record<string, unknown>;
         enums?: Record<string, Record<string, number>>;
+        transient?: Record<string, true>;
       }
     | { ok: false; error: CommandError } {
     const token = resolveComponent(name);
@@ -1062,6 +1070,7 @@ export class EditGateway {
       schema: Record<string, string>;
       defaults?: Record<string, unknown>;
       enums?: Record<string, Record<string, number>>;
+      transient?: Record<string, true>;
     } = {
       ok: true,
       name: token.name,
@@ -1087,12 +1096,27 @@ export class EditGateway {
     // field carries labels (backward-compatible: predates the engine change →
     // token.fields[f].labels is undefined for every field → key omitted).
     const enums: Record<string, Record<string, number>> = {};
-    const fields = token.fields as Record<string, { labels?: Readonly<Record<string, number>> } | undefined>;
+    const fields = token.fields as Record<
+      string,
+      { labels?: Readonly<Record<string, number>>; transient?: boolean } | undefined
+    >;
     for (const field of Object.keys(schema)) {
       const labels = fields[field]?.labels;
       if (labels !== undefined) enums[field] = { ...labels };
     }
     if (Object.keys(enums).length > 0) result.enums = enums;
+    // Transient (derived, non-authored) fields (solo round-25): the engine field
+    // descriptor's `transient` flag (D-5) is reflected on `token.fields[field]`;
+    // project the fields where it's true so a docs-only AI can tell an authored
+    // INPUT from a derived read-only OUTPUT (e.g. `Transform.world`, recomputed
+    // each frame from local TRS — reading it right after a mutation returns the
+    // stale value until the propagate pass runs). Only transient fields appear;
+    // the key is omitted entirely when none is transient (backward-compatible).
+    const transient: Record<string, true> = {};
+    for (const field of Object.keys(schema)) {
+      if (fields[field]?.transient === true) transient[field] = true;
+    }
+    if (Object.keys(transient).length > 0) result.transient = transient;
     return result;
   }
 

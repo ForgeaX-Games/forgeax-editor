@@ -581,4 +581,57 @@ describe('Gateway component read surface', () => {
     expect(d.ok).toBe(true);
     if (d.ok) expect(d.enums).toBeUndefined();
   });
+
+  // solo round-25 (P1 residue): DERIVED (transient) fields are projected under
+  // `transient` so a docs-only AI can tell an authored INPUT (Transform.pos) from
+  // a derived read-only OUTPUT (Transform.world, the frame-lagged resolved world
+  // matrix). Round-1 logged the trap: reading `world` right after a mutation
+  // returns the stale value with no front-door signpost. The engine already
+  // declares `world` transient (D-5); this projects that flag through the door.
+  it('describeComponent projects derived fields under `transient` (synthetic)', () => {
+    const compName = `R25_DescribeTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
+      derived: { type: 'array<f32, 16>', default: new Float32Array(16), transient: true },
+    });
+
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      // the transient field is projected; the authored field is NOT in the map
+      expect(d.transient).toBeDefined();
+      expect(d.transient?.derived).toBe(true);
+      expect(d.transient?.pos).toBeUndefined();
+      // still JSON-safe (no live handles)
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent marks Transform.world transient (the round-1 friction)', () => {
+    // The real friction: Transform.world is derived each frame from local TRS
+    // (engine transform.ts declares it transient:true, D-5). The door must
+    // signpost it so an AI does not author it or read it stale.
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.transient?.world).toBe(true);
+      // authored TRS inputs are NOT transient
+      expect(d.transient?.pos).toBeUndefined();
+      expect(d.transient?.quat).toBeUndefined();
+      expect(d.transient?.scale).toBeUndefined();
+    }
+  });
+
+  it('describeComponent omits `transient` for a component with no derived fields', () => {
+    // A synthetic all-authored component → key absent (backward-compatible with a
+    // pre-round-25 pin, which never sets the key).
+    const compName = `R25_NoTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      a: { type: 'f32', default: 0 },
+      b: { type: 'f32', default: 1 },
+    });
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.transient).toBeUndefined();
+  });
 });
