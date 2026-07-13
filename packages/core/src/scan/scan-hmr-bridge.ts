@@ -271,6 +271,16 @@ export function installScanHmrBridge(): () => void {
     }
   };
 
+  // Runtime asset-changed signal from vite-plugin-pack (sidecar meta.json write).
+  // Replaces full-reload — Content Browser refreshes incrementally without page reload.
+  const onAssetChanged = (data: unknown): void => {
+    const d = data as { file?: string; event?: string; kind?: 'sidecar' | 'source' };
+    console.info(`[scan-hmr] ← forgeax:asset-changed kind=${d?.kind} file=${d?.file}`);
+    if (d?.kind === 'sidecar') {
+      broadcastAssetsChanged('pack-changed');
+    }
+  };
+
   // Plan v2 H4: validation diagnostics from Node-side scan
   const onScanValidation = (data: unknown): void => {
     const d = data as { diagnostics?: ScanDiagnostic[] };
@@ -292,6 +302,7 @@ export function installScanHmrBridge(): () => void {
   hot.on('forgeax:scan-validation', onScanValidation);
   hot.on('forgeax:assetReimported', onAssetReimported);
   hot.on('forgeax:assetOrphanDetected', onAssetOrphan);
+  hot.on('forgeax:asset-changed', onAssetChanged);
 
   // Race replay: if Node already finished startup scan before we subscribed.
   void replayLastScanDone();
@@ -303,5 +314,6 @@ export function installScanHmrBridge(): () => void {
     hot.off('forgeax:scan-validation', onScanValidation);
     hot.off('forgeax:assetReimported', onAssetReimported);
     hot.off('forgeax:assetOrphanDetected', onAssetOrphan);
+    hot.off('forgeax:asset-changed', onAssetChanged);
   };
 }

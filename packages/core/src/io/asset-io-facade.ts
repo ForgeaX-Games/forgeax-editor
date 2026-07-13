@@ -153,22 +153,31 @@ export class AssetIOFacade {
   /** Upload raw source bytes (base64) to disk at destPath. `POST /api/files/upload`. */
   async uploadSourceBytes(destPath: string, base64: string): Promise<boolean> {
     recordAssetLeaf('assetIO.uploadSourceBytes');
-    const r = await fetch('/api/files/upload', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: destPath, data: base64 }),
-    });
-    return r.ok;
+    console.info('[import-diag] uploadSourceBytes', { destPath, base64Len: base64.length });
+    try {
+      const r = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: destPath, data: base64 }),
+      });
+      console.info('[import-diag] uploadSourceBytes response', { status: r.status, ok: r.ok });
+      return r.ok;
+    } catch (err) {
+      console.error('[import-diag] uploadSourceBytes THREW', err);
+      return false;
+    }
   }
 
   /** Write a pre-built `.meta.json` sidecar (text content) to disk. `POST /api/files`. */
   async writeMetaSidecar(metaPath: string, content: string): Promise<boolean> {
     recordAssetLeaf('assetIO.writeMetaSidecar');
+    console.info('[import-diag] writeMetaSidecar', { metaPath, contentLen: content.length });
     const r = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: metaPath, content }),
     });
+    console.info('[import-diag] writeMetaSidecar response', { metaPath, status: r.status, ok: r.ok });
     return r.ok;
   }
 
@@ -177,14 +186,19 @@ export class AssetIOFacade {
    *  (matching the old triggerCook contract — a cook failure is surfaced, not thrown). */
   async triggerCook(guid: string): Promise<string | undefined> {
     recordAssetLeaf('assetIO.triggerCook');
+    console.info('[import-diag] triggerCook', { guid });
     try {
       const res = await fetch(`/__import/${guid}`, { method: 'POST' });
+      console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string; reason?: string; hint?: string };
-        return body.reason ?? body.hint ?? `cook failed (${res.status})`;
+        const reason = body.reason ?? body.hint ?? `cook failed (${res.status})`;
+        console.warn('[import-diag] triggerCook FAILED', { guid, reason, body });
+        return reason;
       }
       return undefined;
-    } catch {
+    } catch (err) {
+      console.error('[import-diag] triggerCook THREW', { guid }, err);
       return undefined;
     }
   }
@@ -193,11 +207,16 @@ export class AssetIOFacade {
    *  `GET /api/files/raw`. Returns null on 404 / network error. */
   async readSourceBytes(path: string): Promise<ArrayBuffer | null> {
     recordAssetLeaf('assetIO.readSourceBytes');
+    console.info('[import-diag] readSourceBytes', { path });
     try {
       const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`);
+      console.info('[import-diag] readSourceBytes response', { path, status: r.status, ok: r.ok });
       if (!r.ok) return null;
-      return await r.arrayBuffer();
-    } catch {
+      const buf = await r.arrayBuffer();
+      console.info('[import-diag] readSourceBytes got', { path, byteLength: buf.byteLength });
+      return buf;
+    } catch (err) {
+      console.error('[import-diag] readSourceBytes THREW', { path }, err);
       return null;
     }
   }
