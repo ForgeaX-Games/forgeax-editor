@@ -128,7 +128,10 @@ bun run dev                   # :15290 standalone host only (expects :15280 alre
 bun -F @forgeax/editor-play-runtime dev        # → http://localhost:15173
 ```
 
-`FORGEAX_ENGINE_PORT` overrides the port (default `15173`).
+`FORGEAX_ENGINE_PORT` overrides the port (default `15173`). Note: the `bun fx start
+--play` dev-stack CLI runs play-runtime on **`:15273`** instead (it sets
+`FORGEAX_ENGINE_PORT=15273`) so it never collides with — or kills — the studio
+superrepo stack, which owns `:15173`. See the port map note below.
 
 ### Embedded in studio — `:18920`
 
@@ -144,9 +147,19 @@ start the standalone stack for this** — start the full studio stack instead
 |:--|:--|:--|
 | `15290` | standalone chrome host | `bun run dev:standalone` / `bun run dev` |
 | `15280` | edit-runtime (Edit mode) | `bun run dev:standalone` / `bun run dev:edit-runtime` |
-| `15173` | play-runtime (Play mode) | `bun -F @forgeax/editor-play-runtime dev` |
+| `15173` | play-runtime (Play mode, **raw** path) | `bun -F @forgeax/editor-play-runtime dev` (vite default) |
+| `15273` | play-runtime (Play mode, **`bun fx` stack**) | `bun fx start --play` (see note) |
 | `18920` | studio-embed host | full studio stack (studio repo) |
 | `18900` | forgeax-server | full studio stack (studio repo) |
+
+> [!NOTE]
+> **Why two play-runtime ports.** The studio superrepo stack (`forgeax-studio
+> scripts/run.ts`) launches _this package's_ play-runtime on `:15173` (its
+> `PORT_ENGINE` default, relying on the `vite.config.ts` default). So the editor's
+> own `bun fx` dev-stack pins its play-runtime to `:15273` and keeps `15173` out of
+> its port-based cleanup — an editor-stack start/stop never SIGTERMs studio's engine,
+> and both stacks coexist. The raw `bun -F …play-runtime dev` path keeps the `15173`
+> default (studio depends on it). Enforced by `scripts/lint-fx-no-studio-port.mjs`.
 
 > [!NOTE]
 > forgeax-editor is a standalone git repo (`https://github.com/ForgeaXGame/forgeax-editor`)
@@ -182,4 +195,5 @@ P3 SSOT-relocation loop closes the OQ-1 gap.
 | `bun install` reports `unresolved workspace` | engine submodule not fetched or `workspace:*` pin broken | `git submodule update --init --recursive`; stacks resolve via the parent repo's bun workspaces glob |
 | `bun run typecheck` fails | a package's deps aren't installed or types mismatch | run `bun install` first, then `bun run typecheck` |
 | `bun run lint:dep` reports no-circular | a new cross-package import broke the DAG | check `.dependency-cruiser.cjs` rules; keep the DAG `core ← content-browser ← panels ← edit-runtime` |
-| port `15290` / `15280` / `15173` in use | another vite instance wasn't stopped | `bash stop.sh` (studio repo) or manually `kill` the PID |
+| port `15290` / `15280` / `15273` in use | another vite instance wasn't stopped | `bun fx stop`, `bash stop.sh` (studio repo), or manually `kill` the PID |
+| studio's `:15173` play-runtime keeps dying / studio browser floods with `:15173 ERR_CONNECTION_REFUSED` | an **old** editor build managed `:15173` in its `bun fx` cleanup and killed studio's engine | fixed: the editor `bun fx` stack now runs play-runtime on `:15273` and leaves `:15173` alone — update the editor submodule past this fix |

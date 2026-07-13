@@ -32,14 +32,16 @@ Both are rebuilt on demand — never committed. A bare `bun install` alone does 
 | Standalone dev (recommended) | `bun run dev:standalone` → http://localhost:15290 |
 | Edit-runtime only | `bun run dev:edit-runtime` (:15280, HMR→15290) |
 | Standalone host only | `bun run dev` (:15290, expects :15280 up) |
-| Play mode | `bun -F @forgeax/editor-play-runtime dev` → :15173 |
+| Play mode | `bun -F @forgeax/editor-play-runtime dev` → :15173 (raw path keeps the vite default; `bun fx start --play` runs it on **:15273** — see port map) |
 | Self-boot B2 gate (the CI gate) | `bun run selfcheck:b2` |
 | E2E (Playwright) | `bun run test:e2e` (install browser once: `bun run test:e2e:install`) |
 | Single E2E spec | `bun run test:e2e e2e/<name>.spec.ts` (or `-g "<test name>"`) |
 | Unit test one package | `bun -F @forgeax/<pkg> test` (e.g. `bun -F @forgeax/platform-io test`) |
 | CLI dev-stack (`bun fx`) | `bun fx setup` · `bun fx start [--play\|--game DIR\|--bg\|--rhi-debug]` · `bun fx stop` · `bun fx update [--dry-run\|--no-stash]` (pull root + sync submodules to pins + ff `.forgeax-harness`) · `bun fx clean [--deep\|--dry-run]` (restore clean git status across root + submodules) · `bun fx help`. Entry is TypeScript `scripts/fx.ts` (run by bun), mirroring forgeax-studio's `bun fx` vocabulary; `setup`/`start`/`stop`/`update`/`clean` are also reachable as `bun run <verb>`. Typechecked in CI via `scripts/tsconfig.json` (`bun run typecheck:scripts`). |
 
-> **Port map:** `15290` standalone chrome host · `15280` edit-runtime · `15173` play-runtime · `18920` studio-embed host · `18900` forgeax-server (studio-only). Standalone wiring **requires** `FORGEAX_INTERFACE_PORT=15290` so edit-runtime HMR doesn't hammer the dead studio port `:18920` — `dev:standalone` sets it for you; a bare `bun -F …edit-runtime dev` will flood the console with `ERR_CONNECTION_REFUSED`.
+> **Port map:** `15290` standalone chrome host · `15280` edit-runtime · `15273` play-runtime (the `bun fx` stack — see note) · `18920` studio-embed host · `18900` forgeax-server (studio-only). Standalone wiring **requires** `FORGEAX_INTERFACE_PORT=15290` so edit-runtime HMR doesn't hammer the dead studio port `:18920` — `dev:standalone` sets it for you; a bare `bun -F …edit-runtime dev` will flood the console with `ERR_CONNECTION_REFUSED`.
+>
+> **Why play-runtime is `15273` under `bun fx`, not `15173`:** the studio superrepo stack (`forgeax-studio scripts/run.ts`) launches **this package's** play-runtime on `:15173` (its `PORT_ENGINE` default, via `bun x vite` with no `FORGEAX_ENGINE_PORT` — it relies on `play-runtime/vite.config.ts`'s `15173` default). The editor's `scripts/fx.ts` therefore pins its OWN stack to `:15273` (`PLAY_RUNTIME_PORT`) and keeps `15173` out of its `killByPorts` set, so an editor-stack start/stop never SIGTERMs studio's engine (the two dev stacks coexist). The `vite.config.ts` default stays `15173` on purpose (studio depends on it); only fx orchestration uses `15273`. Gate: `scripts/lint-fx-no-studio-port.mjs` (in `bun run lint`).
 
 ## Architecture
 
