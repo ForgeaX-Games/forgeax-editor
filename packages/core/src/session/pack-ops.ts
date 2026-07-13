@@ -26,16 +26,17 @@ import { Materials } from '@forgeax/engine-runtime';
 // other file invoking these directly is a lint-unique-mutator violation.
 export async function readPack(packPath: string): Promise<PackFile | null> {
   try {
+    console.info('[delete-diag] readPack: fetching /api/files?path=%s', packPath);
     const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
-    if (!r.ok) return null;
+    if (!r.ok) { console.warn('[delete-diag] readPack: fetch failed status=%d for %s', r.status, packPath); return null; }
     const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    // M1: validate pack shell before returning (AC-01 — plan-strategy D-1/D-3).
-    // Replaces the bare `JSON.parse(j.content) as PackFile` cast.
+    if (!j.content) { console.warn('[delete-diag] readPack: no content field for %s', packPath); return null; }
     const parsed = JSON.parse(j.content);
     const result = validatePackShell(parsed);
+    if (!result.ok) console.warn('[delete-diag] readPack: pack validation failed for %s', packPath);
     return result.ok ? result.pack : null;
-  } catch {
+  } catch (e) {
+    console.warn('[delete-diag] readPack: exception for %s:', packPath, e);
     return null;
   }
 }
@@ -356,6 +357,8 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   // is left in the cache so a redo→undo cycle can resolve it again.
   const guid = (newGuidCacheKey ? duplicatedGuidCache.get(newGuidCacheKey) : undefined) ?? rawGuid;
   const key = _cacheKey(packPath, guid);
+  console.info('[delete-diag] applyDestroyAsset: packPath=%s guid=%s isPack=%s cacheKey=%s',
+    packPath, guid, packPath.endsWith('.pack.json'), key);
   // Fire the async delete; stash the snapshot so undo can restore the full entry.
   // The document-applier contract is synchronous (returns inverse immediately);
   // the IO is fire-and-forget. A .catch guards against an unhandled rejection if
@@ -363,6 +366,7 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   // so a failed write must not crash the host (D-1: the gateway is the only door).
   void ctx.assetIO.deletePackEntry(packPath, guid).then((entry) => {
     deletedEntryCache.set(key, entry);
+    broadcastAssetsChanged();
   }).catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e));
   return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
 }
@@ -372,7 +376,9 @@ export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   const key = cacheKey ?? _cacheKey(packPath, guid);
   const entry = deletedEntryCache.get(key);
   if (entry) {
-    void ctx.assetIO.writePackEntry(packPath, entry).catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
+    void ctx.assetIO.writePackEntry(packPath, entry)
+      .then(() => broadcastAssetsChanged())
+      .catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
     deletedEntryCache.delete(key);
   }
   return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
