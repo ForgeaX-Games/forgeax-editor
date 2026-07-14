@@ -3,7 +3,7 @@
 // The single place that builds an AppHost + wires the built-in plugin list.
 // Studio (which injects Dashboard / Settings / StatusFeeds / surfaces / slots /
 // detached / editor concrete plugins) calls this and passes them via
-// `overrides.plugins`. Interface-alone callers pass no overrides — no overlays,
+// `overrides.extensions`. Interface-alone callers pass no overrides — no overlays,
 // no detached windows, and no editor-specific panels show up (only the L1 base +
 // chat remain).
 //
@@ -15,30 +15,30 @@ import {
   createAppHost,
   type AppHost,
   type AppHostControl,
-  type AppPlugin,
-  type AppPluginContext,
+  type AppExtension,
+  type AppExtensionContext,
 } from './core/app-shell';
-import { createPluginLoader } from './core/plugin-foundation/loader';
-import { foundationCommandsPlugin } from './core/plugins/foundation-commands';
-import { foundationBusPlugin } from './core/plugins/foundation-bus';
-import { foundationStoragePlugin } from './core/plugins/foundation-storage';
-import { foundationPanelsPlugin } from './core/plugins/foundation-panels';
-import { builtinCommandsPlugin } from './core/plugins/builtin-commands';
-import { panelsChatPlugin } from './core/plugins/panels-chat';
-import './core/plugins/session-client.d'; // side-effect: AppHost.session type augmentation
-import { sessionClientPlugin } from './core/plugins/session-client';
-import './core/plugins/workbench-client.d'; // side-effect: AppHost.workbench type augmentation
-import { workbenchClientPlugin } from './core/plugins/workbench-client';
-import './core/plugins/observability.d'; // side-effect: AppHost.observability type augmentation
-import { observabilityPlugin } from './core/plugins/observability';
-import { trajectoryPlugin } from './core/plugins/trajectory';
+import { createExtensionLoader } from './core/extension-foundation/loader';
+import { foundationCommandsExtension } from './core/extensions/foundation-commands';
+import { foundationBusExtension } from './core/extensions/foundation-bus';
+import { foundationStorageExtension } from './core/extensions/foundation-storage';
+import { foundationPanelsExtension } from './core/extensions/foundation-panels';
+import { builtinCommandsExtension } from './core/extensions/builtin-commands';
+import { panelsChatExtension } from './core/extensions/panels-chat';
+import './core/extensions/session-client.d'; // side-effect: AppHost.session type augmentation
+import { sessionClientExtension } from './core/extensions/session-client';
+import './core/extensions/workbench-client.d'; // side-effect: AppHost.workbench type augmentation
+import { workbenchClientExtension } from './core/extensions/workbench-client';
+import './core/extensions/observability.d'; // side-effect: AppHost.observability type augmentation
+import { observabilityExtension } from './core/extensions/observability';
+import { trajectoryExtension } from './core/extensions/trajectory';
 import { consoleLogger } from './core/app-shell/logger';
 
 export interface AppHostBootstrapOverrides {
   /** Studio injects dashboard / settings / surfaces / slots / detached /
    *  editor concrete plugins here. Appended AFTER the built-in list so they
    *  can depend on foundation capabilities. */
-  readonly plugins?: readonly AppPlugin[];
+  readonly extensions?: readonly AppExtension[];
 }
 
 export interface AppHostBootstrapResult {
@@ -52,16 +52,16 @@ export async function bootstrapAppHost(
 ): Promise<AppHostBootstrapResult> {
   const { host, control } = createAppHost();
 
-  const contextFactory = (m: AppPlugin): AppPluginContext => ({
+  const contextFactory = (m: AppExtension): AppExtensionContext => ({
     host,
     bus: host.bus,
     storage: host.storage,
     log: consoleLogger,
     registerCommand: (cmd) => host.commands.register(cmd),
-    contributePanels: (patch) => foundationPanelsPlugin.contributePanels(host, patch),
+    contributePanels: (patch) => foundationPanelsExtension.contributePanels(host, patch),
   });
 
-  const loader = createPluginLoader<AppPluginContext, string>({
+  const loader = createExtensionLoader<AppExtensionContext, string>({
     capabilities: control.capabilities,
     contextFactory,
     onError: (err, m, phase) =>
@@ -70,7 +70,7 @@ export async function bootstrapAppHost(
 
   // Wrap each manifest so control.beginSetup / endSetup brackets its sync
   // setup frame — host.extend(cap, api) inside setup() needs an active owner.
-  const wrap = (m: AppPlugin): AppPlugin => ({
+  const wrap = (m: AppExtension): AppExtension => ({
     ...m,
     async setup(ctx) {
       control.beginSetup(m);
@@ -82,18 +82,18 @@ export async function bootstrapAppHost(
     },
   });
 
-  const manifests: AppPlugin[] = [
-    foundationCommandsPlugin,
-    foundationBusPlugin,
-    foundationStoragePlugin,
-    foundationPanelsPlugin,
-    builtinCommandsPlugin,
-    panelsChatPlugin,
-    sessionClientPlugin,
-    workbenchClientPlugin,
-    observabilityPlugin,
-    trajectoryPlugin,
-    ...(overrides.plugins ?? []),
+  const manifests: AppExtension[] = [
+    foundationCommandsExtension,
+    foundationBusExtension,
+    foundationStorageExtension,
+    foundationPanelsExtension,
+    builtinCommandsExtension,
+    panelsChatExtension,
+    sessionClientExtension,
+    workbenchClientExtension,
+    observabilityExtension,
+    trajectoryExtension,
+    ...(overrides.extensions ?? []),
   ].map(wrap);
 
   await loader.load(manifests);

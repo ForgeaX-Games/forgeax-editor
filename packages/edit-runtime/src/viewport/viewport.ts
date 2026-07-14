@@ -293,7 +293,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       // Always-on-top gizmo: draw in the Overlay queue (4000, drawn last) with
       // depthCompare:'always' + no depth write, so the handles are never hidden
       // behind the (possibly huge) object they're anchored on.
-      const base = Materials.unlit([a.color[0], a.color[1], a.color[2], 1]) as {
+      const base = Materials.unlit([a.color[0], a.color[1], a.color[2], 1], { castShadow: false }) as {
         passes?: { queue?: number; renderState?: Record<string, unknown> }[];
       };
       const mat = {
@@ -471,7 +471,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
   function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
     // M4 (w20): param-gizmo material minted on editorWorld (editorEngine).
-    if (!paramMat) paramMat = editorEngine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1]));
+    if (!paramMat) paramMat = editorEngine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1], { castShadow: false }));
     return paramMat;
   }
   function despawnParam(): void {

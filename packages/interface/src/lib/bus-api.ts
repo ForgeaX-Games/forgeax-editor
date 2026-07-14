@@ -1,6 +1,6 @@
 // P2.6a — typed client for /api/bus/* endpoints.
 // Mirrors the slim shape returned by packages/server/src/api/bus.ts so the UI
-// never depends on full PluginManifest fields server-side never exposes.
+// never depends on full ExtensionManifest fields server-side never exposes.
 
 export interface BusWorkbenchPaneInfo {
   defaultWidth?: number;

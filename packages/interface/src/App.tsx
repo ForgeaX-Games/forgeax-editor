@@ -5,7 +5,7 @@
 // and renders the fixed chrome (TopBar / DockShell / SurfaceKeepAliveLayer /
 // GlobalStatusBar / overlays / modals). All side effects — postMessage
 // listeners, editor-ref pills, focus-panel routing, builtin actions — live in
-// plugins now (see core/plugins/*). This file only owns:
+// plugins now (see core/extensions/*). This file only owns:
 //   - global shortcut binding (reads store; not a plugin concern)
 //   - reading store flags for shell chrome data-attrs
 //   - overlays / status-feeds slot rendering (via host.panels)
@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import { TopBar } from './components/TopBar/TopBar';
 import { DockRegion } from './components/DockShell/DockRegion';
-import { PanelRenderersProvider, type PanelRenderers } from './components/DockShell/panelRenderers';
+import { PanelRenderersProvider } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
 import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
 import { HealthIndicator } from './components/StatusBar/HealthIndicator';
@@ -32,15 +32,13 @@ import { HostProvider, type AppHost } from './core/app-shell';
 import './App.css';
 
 export interface AppProps {
-  /** Studio injects concrete overlay / surface / slot / detached / editor plugins. */
+  /** Studio injects concrete overlay / surface / slot / detached / editor
+   *  extensions here (ADR 0025 M1 — the sole assembly channel; the legacy
+   *  `panelRenderers` escape hatch was removed once studio migrated). */
   overrides?: AppHostBootstrapOverrides;
-  /** LEGACY escape hatch for interface-alone callers still passing a
-   *  full PanelRenderers object without plugins. Merged into host.panels
-   *  one-shot after boot; downstream still reads through host.panels. */
-  panelRenderers?: PanelRenderers;
 }
 
-export function App({ overrides, panelRenderers }: AppProps = {}): React.ReactElement | null {
+export function App({ overrides }: AppProps = {}): React.ReactElement | null {
   useGlobalShortcuts();
   const fullscreen         = useShellStore((s) => s.fullscreen);
   const sidebarCollapsed   = useShellStore((s) => s.sidebarCollapsed);
@@ -58,13 +56,12 @@ export function App({ overrides, panelRenderers }: AppProps = {}): React.ReactEl
     let dispose: (() => Promise<void>) | null = null;
     void bootstrapAppHost(overrides).then((r) => {
       if (disposed) { void r.dispose(); return; }
-      if (panelRenderers) Object.assign(r.host.panels, panelRenderers);
       setHost(r.host);
       dispose = r.dispose;
       bootStageAppMounted();
     });
     return () => { disposed = true; void dispose?.(); };
-  }, [overrides, panelRenderers]);
+  }, [overrides]);
 
   if (!host) return null;
 

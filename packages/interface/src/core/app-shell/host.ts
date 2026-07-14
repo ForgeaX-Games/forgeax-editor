@@ -1,14 +1,14 @@
 // packages/interface/src/core/app-shell/host.ts
 import {
   createCommandsRegistry, type CommandsRegistry,
-} from '../plugin-foundation/commands';
-import { EventBus } from '../plugin-foundation/bus';
-import { createContextKeys, type ContextKeysApi } from '../plugin-foundation/context-keys';
-import { createStorageApi, type StorageApi } from '../plugin-foundation/storage';
-import { createCapabilityRegistry, type CapabilityRegistry } from '../plugin-foundation/capabilities';
-import { PluginConflictError } from '../plugin-foundation/errors';
+} from '../extension-foundation/commands';
+import { EventBus } from '../extension-foundation/bus';
+import { createContextKeys, type ContextKeysApi } from '../extension-foundation/context-keys';
+import { createStorageApi, type StorageApi } from '../extension-foundation/storage';
+import { createCapabilityRegistry, type CapabilityRegistry } from '../extension-foundation/capabilities';
+import { ExtensionConflictError } from '../extension-foundation/errors';
 import type {
-  AppBusEventMap, AppHost, AppHostBase, AppLogger, AppPlugin, HostCapability,
+  AppBusEventMap, AppHost, AppHostBase, AppLogger, AppExtension, HostCapability,
 } from './types';
 import { consoleLogger } from './logger';
 import { DEFAULT_PANEL_RENDERERS, type PanelRenderers } from '../../components/DockShell/panelRenderers';
@@ -25,7 +25,7 @@ export interface CreateAppHostDeps {
 }
 
 export interface AppHostControl {
-  beginSetup(manifest: AppPlugin): void;
+  beginSetup(manifest: AppExtension): void;
   endSetup(): void;
   removeExtensionsByOwner(ownerId: string): void;
   readonly capabilities: CapabilityRegistry<HostCapability>;
@@ -54,7 +54,7 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   const extensions: ExtensionRecord[] = [];
   const extensionFields: Record<string, unknown> = {};
 
-  let activeSetup: AppPlugin | null = null;
+  let activeSetup: AppExtension | null = null;
 
   const base: AppHostBase = {
     commands, bus, storage, contextKeys, panels,
@@ -64,20 +64,20 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
         throw new Error(`[app-shell] host.extend("${String(capability)}") called outside plugin setup`);
       }
       if (!activeSetup.provides?.includes(capability)) {
-        throw new PluginConflictError({
+        throw new ExtensionConflictError({
           id: String(capability), subRegistryName: 'host.extend',
           existingOwner: '(none)', newOwner: activeSetup.id,
         });
       }
       if (extensionFields[capability as string] !== undefined) {
         const orig = extensions.find((e) => e.capability === capability);
-        throw new PluginConflictError({
+        throw new ExtensionConflictError({
           id: String(capability), subRegistryName: 'host.extend',
           existingOwner: orig?.owner ?? '(unknown)', newOwner: activeSetup.id,
         });
       }
       if (BUILT_IN_CAPS.includes(capability)) {
-        throw new PluginConflictError({
+        throw new ExtensionConflictError({
           id: String(capability), subRegistryName: 'host.extend',
           existingOwner: '(built-in)', newOwner: activeSetup.id,
         });

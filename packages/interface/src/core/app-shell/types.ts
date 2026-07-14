@@ -1,10 +1,10 @@
 // packages/interface/src/core/app-shell/types.ts
 import type React from 'react';
-import type { PluginManifest, Cleanup } from '../plugin-foundation';
-import type { EventBus } from '../plugin-foundation/bus';
-import type { CommandsRegistry, CommandDescriptor } from '../plugin-foundation/commands';
-import type { ContextKeysApi } from '../plugin-foundation/context-keys';
-import type { StorageApi } from '../plugin-foundation/storage';
+import type { ExtensionManifest, Cleanup } from '../extension-foundation';
+import type { EventBus } from '../extension-foundation/bus';
+import type { CommandsRegistry, CommandDescriptor } from '../extension-foundation/commands';
+import type { ContextKeysApi } from '../extension-foundation/context-keys';
+import type { StorageApi } from '../extension-foundation/storage';
 import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
 import type { PillPayload } from '../../lib/composer-bridge';
 
@@ -53,7 +53,7 @@ export interface AppHost extends AppHostBase {
   readonly [extension: string]: unknown;
 }
 
-export interface AppPluginContext {
+export interface AppExtensionContext {
   readonly host: AppHost;
   readonly bus: EventBus<AppBusEventMap>;
   readonly storage: StorageApi;
@@ -62,4 +62,4 @@ export interface AppPluginContext {
   contributePanels(patch: Partial<PanelRenderers>): Cleanup;
 }
 
-export type AppPlugin = PluginManifest<HostCapability, AppPluginContext>;
+export type AppExtension = ExtensionManifest<HostCapability, AppExtensionContext>;
