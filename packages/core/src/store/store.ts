@@ -111,8 +111,9 @@ export {
   clearDocStorage,
   inlineAssetCount,
   wouldDropInlineAssets,
+  mergeLoadedInlineOrphans,
 } from './scene-persistence';
-export type { SceneFileEntry, PlayConfig } from './scene-persistence';
+export type { SceneFileEntry, PlayConfig, LoadedInlineSnapshot } from './scene-persistence';
 
 // ── cluster 11: disk-watch ──
 export { initDiskWatch } from './disk-watch';

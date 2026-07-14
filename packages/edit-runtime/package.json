@@ -50,6 +50,7 @@
     "@forgeax/engine-audio": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",

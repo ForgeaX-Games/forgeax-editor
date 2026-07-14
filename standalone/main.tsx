@@ -19,7 +19,8 @@
 //   AC-04b — the engine <canvas> lives in THIS document (in-process viewport)
 //   AC-04c — DockShell still registers every ep:* panel (now component slots)
 //   AC-05  — panels + chat share one flat dock, freely interleaved
-//   AC-09  — hideChatAndForge closes the chat panel for the standalone host
+//   AC-09  — no chat/Forge in the standalone host (structural: no extension
+//            contributes panels.chat — formerly the hideChatAndForge prop)
 //
 // Anchors: plan-strategy S2 D4/D5/D6/D8, S3.1 host entry; requirements AC-04/05/09;
 //          research Finding 2/3/7.
@@ -27,9 +28,16 @@
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
-import { DEFAULT_PANEL_RENDERERS, type PanelRenderers, type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
+// ADR 0025 M1: the shell is assembled through AppExtension manifests passed to
+// <App overrides={{ extensions }}/> — the panelRenderers escape-hatch prop was
+// removed in interface#112. panels-editor is interface's built-in factory for
+// the ep:* dock panels + surfaces; the custom extension below carries the
+// leftover fields (workbench layout seed + editor bridge hooks).
+import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
-import { useAppStore } from '@forgeax/interface/store';
+import { useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
@@ -134,14 +142,35 @@ function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
   return <ViewportComponent gameSlug={__FORGEAX_GAME_SLUG__} gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined} />;
 }
 
-const standaloneRenderers: PanelRenderers = {
-  ...DEFAULT_PANEL_RENDERERS,
-  editorPanelIds: [...EDITOR_PANELS],
-  builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
-  panels: standalonePanels,
-  surfaces: { SceneEditor: StandaloneSceneEditor },
-  editor: { setContextMenuRenderer, installBridge: installInterfaceBridge },
+/** Fields no interface factory covers: the workbench layout seed and the
+ *  editor bridge hooks — one custom extension keeps them on the same
+ *  contributePanels channel (mirrors studio's studio.editor-integration). */
+const standaloneEditorIntegrationExtension: AppExtension = {
+  id: 'standalone.editor-integration', version: '1.0.0',
+  requires: ['panels'],
+  setup(ctx) {
+    return ctx.contributePanels({
+      builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
+      editor: { setContextMenuRenderer, installBridge: installInterfaceBridge },
+    });
+  },
 };
+
+/** Standalone shell assembly (ADR 0025 M1). No extension contributes a
+ *  panels.chat descriptor, so the chat dock panel simply never exists here —
+ *  the AC-09 "no chat/Forge in standalone" guarantee is now structural
+ *  (formerly the hideChatAndForge prop). Module-scope const so <App>'s
+ *  overrides prop stays referentially stable. */
+const STANDALONE_OVERRIDES = {
+  extensions: [
+    createPanelsEditorExtension({
+      editorPanelIds: [...EDITOR_PANELS],
+      panels: standalonePanels,
+      surfaces: { SceneEditor: StandaloneSceneEditor },
+    }),
+    standaloneEditorIntegrationExtension,
+  ] as readonly AppExtension[],
+} as const;
 
 function boot(): void {
   const rootEl = document.getElementById('root');
@@ -160,7 +189,7 @@ function boot(): void {
   // the shell. The engine boot itself gets the game via ViewportComponent props
   // (StandaloneSceneEditor), not this pin.
   try {
-    useAppStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
+    useShellStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
   } catch {
     /* store/localStorage unavailable — fine; empty-scene path still works */
   }
@@ -187,13 +216,13 @@ function boot(): void {
 
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +
-  // ContextMenu (plan-strategy D-1: diff-set empty). hideChatAndForge drops
-  // the chat panel + Forge entry. panelRenderers injects standalone's
-  // in-process ViewportComponent + editor panel slots.
+  // ContextMenu (plan-strategy D-1: diff-set empty). The extension set injects
+  // standalone's in-process ViewportComponent + editor panel slots; chat/Forge
+  // never mount because nothing contributes them (AC-09, structural).
   try {
     createRoot(rootEl).render(
       <StrictMode>
-        <App hideChatAndForge panelRenderers={standaloneRenderers} />
+        <App overrides={STANDALONE_OVERRIDES} />
       </StrictMode>,
     );
   } catch (err) {
