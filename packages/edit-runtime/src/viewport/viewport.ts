@@ -685,7 +685,8 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   function onDown(e: PointerEvent): void {
     if (!inCanvas(e.target)) return;
     if (inputToGame()) return;
-    lastX = downX = e.clientX; lastY = downY = e.clientY;
+    canvas.focus({ preventScroll: true });
+    lastX = downX = e.clientX; lastY = e.clientY;
     // Blender DEFAULT navigation, aligned 1:1:
     //   MMB = orbit · Shift+MMB = pan · Ctrl+MMB = zoom · wheel = zoom · LMB = select.
     //   Left is freed entirely for selection + gizmo, so a large object filling
