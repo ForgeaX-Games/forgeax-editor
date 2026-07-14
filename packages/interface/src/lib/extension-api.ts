@@ -2,7 +2,7 @@
 // Mirrors the slim shape returned by packages/server/src/api/bus.ts so the UI
 // never depends on full ExtensionManifest fields server-side never exposes.
 
-export interface BusWorkbenchPaneInfo {
+export interface ExtensionWorkbenchPaneInfo {
   defaultWidth?: number;
   minWidth?: number;
   collapsible?: boolean;
@@ -10,7 +10,7 @@ export interface BusWorkbenchPaneInfo {
   scrollable?: boolean;
 }
 
-export interface BusWorkbenchInfo {
+export interface ExtensionWorkbenchInfo {
   id: string;
   icon?: string;
   position?: number;
@@ -18,10 +18,10 @@ export interface BusWorkbenchInfo {
   hidden?: boolean;
   /** Doc 06 §panes — declared split-pane intent. Sidebar uses `panes.left` to
    *  decide whether to mount an iframe with `?pane=left` instead of the legacy
-   *  BusPluginPlaceholder info card. Center pane is rendered by MainArea. */
+   *  ExtensionPlaceholder info card. Center pane is rendered by MainArea. */
   panes?: {
-    left?: BusWorkbenchPaneInfo;
-    center?: BusWorkbenchPaneInfo;
+    left?: ExtensionWorkbenchPaneInfo;
+    center?: ExtensionWorkbenchPaneInfo;
   };
   /** Soft hint — when this workbench is active, the corner agent picker
    *  defaults to this agent's plugin id. User can still pick any session
@@ -29,11 +29,11 @@ export interface BusWorkbenchInfo {
   preferredAgent?: string;
 }
 
-// P3.13 — model-binding capability summary exposed via /api/bus/plugins.
+// P3.13 — model-binding capability summary exposed via /api/extensions/list.
 // Composer reads vendor/channel/roles to render a routing chip strip so the
 // kind=model-binding plugin is no longer invisible outside the Bus admin
 // panel.
-export interface BusModelBindingInfo {
+export interface ExtensionModelBindingInfo {
   channel: string;
   vendor: string;
   models: string[];
@@ -43,21 +43,21 @@ export interface BusModelBindingInfo {
 // P2.6g — skill / tool / event / cli-provider capability summaries surfaced by
 // BusAdminPanel detail rows. Mirrors the slim shape projected by the server
 // (file paths + runner cmd/args + httpAdapter.auth all stripped).
-export interface BusSkillInfo {
+export interface ExtensionSkillInfo {
   id: string;
   trigger: string;
 }
 
-export interface BusToolInfo {
+export interface ExtensionToolInfo {
   id: string;
   exposedToAI?: boolean;
 }
 
-export interface BusEventInfo {
+export interface ExtensionEventInfo {
   name: string;
 }
 
-export interface BusCliProviderInfo {
+export interface ExtensionCliProviderInfo {
   id: string;
   displayName: string;
   models?: string[];
@@ -74,7 +74,7 @@ export interface BusCliProviderInfo {
 // BusEntrySlim on the server; backend/standalone/manifest entry fields stay
 // stripped server-side. BusAdminPanel renders this in the expanded detail
 // row alongside the existing manifest hint path.
-export interface BusEntryInfo {
+export interface ExtensionEntryInfo {
   frontend?: string;
   /** Phase A3: standalone iframe-served plugin entry. When `start`/`port` is
    *  set, the host can mount the plugin via an iframe + postMessage RPC
@@ -87,7 +87,7 @@ export interface BusEntryInfo {
   };
 }
 
-export interface BusAgentInfo {
+export interface ExtensionAgentInfo {
   id: string;
   role?: string;
   personaFile?: string;
@@ -97,7 +97,7 @@ export interface BusAgentInfo {
   multiInstance?: boolean;
 }
 
-export interface BusPluginInfo {
+export interface ExtensionInfo {
   id: string;
   version: string;
   kind: string;
@@ -105,26 +105,26 @@ export interface BusPluginInfo {
   description?: { zh?: string; en?: string; ja?: string } | string;
   icon?: string;
   experimental?: boolean;
-  workbench?: BusWorkbenchInfo;
-  modelBinding?: BusModelBindingInfo;
-  skills?: BusSkillInfo[];
-  tools?: BusToolInfo[];
-  events?: BusEventInfo[];
-  cliProvider?: BusCliProviderInfo;
-  agent?: BusAgentInfo;
-  entry?: BusEntryInfo;
+  workbench?: ExtensionWorkbenchInfo;
+  modelBinding?: ExtensionModelBindingInfo;
+  skills?: ExtensionSkillInfo[];
+  tools?: ExtensionToolInfo[];
+  events?: ExtensionEventInfo[];
+  cliProvider?: ExtensionCliProviderInfo;
+  agent?: ExtensionAgentInfo;
+  entry?: ExtensionEntryInfo;
   /** kind=agent 才有：统一命名。title=「中文职能·英文名」，sub=灰字英文职能。 */
   naming?: { title: string; sub: string };
 }
 
-export interface BusPluginListResponse {
+export interface ExtensionListResponse {
   kind: string | null;
   count: number;
-  items: BusPluginInfo[];
+  items: ExtensionInfo[];
 }
 
 export function pickLang(
-  text: BusPluginInfo['displayName'] | BusPluginInfo['description'],
+  text: ExtensionInfo['displayName'] | ExtensionInfo['description'],
   lang: 'zh' | 'en' = 'zh',
   fallback = '',
 ): string {
@@ -133,11 +133,11 @@ export function pickLang(
   return text[lang] ?? text.zh ?? text.en ?? fallback;
 }
 
-export async function listBusPlugins(kind?: string): Promise<BusPluginListResponse> {
+export async function listExtensions(kind?: string): Promise<ExtensionListResponse> {
   const url = kind
-    ? `/api/bus/plugins?kind=${encodeURIComponent(kind)}`
-    : '/api/bus/plugins';
-  const empty: BusPluginListResponse = { kind: kind ?? null, count: 0, items: [] };
+    ? `/api/extensions/list?kind=${encodeURIComponent(kind)}`
+    : '/api/extensions/list';
+  const empty: ExtensionListResponse = { kind: kind ?? null, count: 0, items: [] };
   const res = await fetch(url);
   // The plugin bus is a studio-only surface (workbench app, front-L2). The
   // standalone editor has NO bus router, so its absence is EXPECTED, not an
@@ -150,25 +150,25 @@ export async function listBusPlugins(kind?: string): Promise<BusPluginListRespon
   if (!res.headers.get('content-type')?.includes('application/json')) {
     return empty;
   }
-  return (await res.json()) as BusPluginListResponse;
+  return (await res.json()) as ExtensionListResponse;
 }
 
 // Shared short-TTL cache + in-flight dedupe for the full (no-kind) plugin
-// list. Many surfaces (WorkbenchPluginHost, Sidebar tiles, BuildBadge, …)
+// list. Many surfaces (WorkbenchExtensionHost, Sidebar tiles, BuildBadge, …)
 // fetch this concurrently; without dedupe each mount fires its own request and
 // a single slow/failed one can leave that panel stuck. `force` bypasses the
 // TTL (used by pollers that need to observe a manifest that just gained
 // entry.standalone) but still rides any in-flight request.
-let _busAllCache: { ts: number; data: BusPluginListResponse } | null = null;
-let _busAllInflight: Promise<BusPluginListResponse> | null = null;
+let _busAllCache: { ts: number; data: ExtensionListResponse } | null = null;
+let _busAllInflight: Promise<ExtensionListResponse> | null = null;
 const BUS_ALL_TTL_MS = 2000;
 
-export async function listBusPluginsShared(opts?: { force?: boolean }): Promise<BusPluginListResponse> {
+export async function listExtensionsShared(opts?: { force?: boolean }): Promise<ExtensionListResponse> {
   if (!opts?.force && _busAllCache && Date.now() - _busAllCache.ts < BUS_ALL_TTL_MS) {
     return _busAllCache.data;
   }
   if (_busAllInflight) return _busAllInflight;
-  _busAllInflight = listBusPlugins()
+  _busAllInflight = listExtensions()
     .then((data) => {
       _busAllCache = { ts: Date.now(), data };
       return data;

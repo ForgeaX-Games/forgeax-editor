@@ -108,10 +108,10 @@ export default defineConfig({
     // .forgeax/games tree.
     watch: { usePolling: false, ignored: ['**/src-tauri/**', '**/node_modules/**', '**/dist/**', '**/.git/**'] },
     // Vite 5+ restricts file access to its project root by default.  Marketplace
-    // plugin frontends live at ../../marketplace/plugins/*/src/panel.tsx and
+    // plugin frontends live at ../../marketplace/extensions/*/src/panel.tsx and
     // are statically imported via Sidebar.tsx's LazyPluginPanels map; allow the
     // monorepo root so those imports resolve.  See:
-    //   packages/marketplace/plugins/wb-character-forge/DESIGN.md (template).
+    //   packages/marketplace/extensions/wb-character-forge/DESIGN.md (template).
     fs: { allow: ['..', '../..'] },
     proxy: {
       '/api': { target: SERVER, changeOrigin: true },
@@ -138,12 +138,12 @@ export default defineConfig({
       // @id, @fs) just like /preview. Mirrors the preview-runtime wiring.
       '/editor': { target: EDITOR, changeOrigin: true, ws: true },
       // Plugin iframe assets — the studio server's serveStatic mounts each
-      // plugin's vite build dist under /plugins/<plugin-id>/*. Without this
+      // plugin's vite build dist under /extensions/<plugin-id>/*. Without this
       // proxy the interface dev server SPA-falls back to its own index.html
       // and the iframe ends up loading a nested studio UI. See:
-      //   packages/server/src/main.ts → serveStatic('/plugins/wb-character/*')
-      //   packages/marketplace/plugins/wb-character-host/panel.tsx
-      '/plugins': { target: SERVER, changeOrigin: true },
+      //   packages/server/src/main.ts → serveStatic('/extensions/wb-character/*')
+      //   packages/marketplace/extensions/wb-character-host/panel.tsx
+      '/extensions': { target: SERVER, changeOrigin: true },
       // wb-character iframe legacy shim — the plugin submodule's 88 fetch
       // sites hit /__ce-api__/* expecting the old vite-dev plugin. Studio
       // host owns this surface now via server/src/api/ce-api-shim.ts; route

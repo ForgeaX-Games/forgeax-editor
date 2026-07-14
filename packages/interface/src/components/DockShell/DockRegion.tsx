@@ -3,11 +3,11 @@ import { RotateCcw } from 'lucide-react';
 import { FloatingMenu } from '../ui/FloatingMenu';
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type SerializedDockview } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
-import { WbPluginDockPanel } from './WbPluginDockPanel';
+import { WbExtensionDockPanel } from './WbExtensionDockPanel';
 import { RecoveryBoundary } from '../ErrorBoundary';
 import { getWindowManager } from '../../lib/platform';
 import { useTranslation, getLocale } from '@/i18n';
-import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
+import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
 import {
@@ -253,11 +253,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // the console) for a capability standalone intentionally doesn't have. (bus-api
   // still degrades gracefully if it IS hit; this just avoids the pointless wire
   // request — §4 前L2 不连后L2.)
-  const [busPlugins, setBusPlugins] = useState<BusPluginInfo[]>([]);
+  const [busPlugins, setBusPlugins] = useState<ExtensionInfo[]>([]);
   useEffect(() => {
     if (hideChatPanel) return; // no injected chat/agent engine → no plugin bus
     let cancelled = false;
-    void listBusPlugins('workbench').then((res) => { if (!cancelled) setBusPlugins(res.items ?? []); });
+    void listExtensions('workbench').then((res) => { if (!cancelled) setBusPlugins(res.items ?? []); });
     return () => { cancelled = true; };
   }, [hideChatPanel]);
 
@@ -273,7 +273,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       // affordance for that panel only, not the whole shell.
       () => (
         <RecoveryBoundary scope={`wb:${p.id}`} fullscreen={false}>
-          <WbPluginDockPanel pluginId={p.id} />
+          <WbExtensionDockPanel pluginId={p.id} />
         </RecoveryBoundary>
       ),
     ])),
@@ -865,7 +865,7 @@ function LayoutControl({
 }: {
   apiRef: React.RefObject<DockviewApi | null>;
   onReopen: (id: string) => void;
-  busPlugins: BusPluginInfo[];
+  busPlugins: ExtensionInfo[];
   isMember: (id: string) => boolean;
   editorPanelIds: readonly string[];
   titleFor: (id: string) => string;

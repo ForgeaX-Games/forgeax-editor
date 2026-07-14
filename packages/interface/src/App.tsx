@@ -11,10 +11,10 @@
 //   - overlays / status-feeds slot rendering (via host.panels)
 //   - triggering bootStageAppMounted() AFTER host boot completes
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { TopBar } from './components/TopBar/TopBar';
 import { DockRegion } from './components/DockShell/DockRegion';
-import { PanelRenderersProvider } from './components/DockShell/panelRenderers';
+import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
 import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
 import { HealthIndicator } from './components/StatusBar/HealthIndicator';
@@ -27,8 +27,8 @@ import { SlotDebugOverlay, isSlotDebugEnabled } from './components/SlotDebugOver
 import { bootStageAppMounted } from './boot/driver';
 import { useGlobalShortcuts } from './lib/global-shortcuts';
 import { useShellStore } from './store';
-import { bootstrapAppHost, type AppHostBootstrapOverrides } from './appHostBootstrap';
-import { HostProvider, type AppHost } from './core/app-shell';
+import { bootstrapAppHost, type AppHostBootstrapOverrides, type AppHostBootstrapResult } from './appHostBootstrap';
+import { HostProvider } from './core/app-shell';
 import './App.css';
 
 export interface AppProps {
@@ -49,23 +49,36 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
   const onboardingPhase = useOnboardingPhase();
   const shellHidden = onboardingPhase === 'welcome' || onboardingPhase === 'project';
 
-  const [host, setHost] = useState<AppHost | null>(null);
+  const [boot, setBoot] = useState<AppHostBootstrapResult | null>(null);
 
   useEffect(() => {
     let disposed = false;
     let dispose: (() => Promise<void>) | null = null;
     void bootstrapAppHost(overrides).then((r) => {
       if (disposed) { void r.dispose(); return; }
-      setHost(r.host);
+      setBoot(r);
       dispose = r.dispose;
       bootStageAppMounted();
     });
     return () => { disposed = true; void dispose?.(); };
   }, [overrides]);
 
-  if (!host) return null;
+  // ADR 0025 M2: host.panels is a version-memoized DERIVED snapshot of the
+  // contribution registry. Subscribing here means post-boot contributions and
+  // extension cleanups (e.g. capability-driven deactivation) re-render the
+  // shell — a new snapshot identity flows down PanelRenderersProvider.
+  const subscribePanels = useMemo(
+    () => (boot ? (cb: () => void) => boot.control.onPanelsChange(cb) : (_: () => void) => () => {}),
+    [boot],
+  );
+  const renderers = useSyncExternalStore(
+    subscribePanels,
+    () => (boot ? boot.host.panels : DEFAULT_PANEL_RENDERERS),
+  );
 
-  const renderers = host.panels;
+  if (!boot) return null;
+  const host = boot.host;
+
   const StatusFeeds = renderers.chrome?.StatusFeeds;
   const Dashboard   = renderers.overlays?.Dashboard;
   const Settings    = renderers.overlays?.Settings;

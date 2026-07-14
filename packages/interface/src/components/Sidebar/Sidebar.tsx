@@ -5,10 +5,10 @@ import { emitDeepLink } from '../../lib/deep-link-bus';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
 import { FilesPanel } from './FilesPanel';
 import { AgentsPanelSlot } from '../DockShell/panelRegistry';
-import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
+import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
-import { pluginRendersInMainArea, pluginRendersInSidebarLeftPane } from '../MainArea/WorkbenchPluginHost';
-import { KeepAlivePluginIframes } from '../MainArea/KeepAlivePluginIframes';
+import { extensionRendersInMainArea, extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensionHost';
+import { KeepAliveExtensionIframes } from '../MainArea/KeepAliveExtensionIframes';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import { useTranslation } from '@/i18n';
 import './Sidebar.css';
@@ -16,20 +16,20 @@ import './Sidebar.css';
 // Phase B4 — the static `PLUGIN_PANEL_LOADERS` import map is gone. Plugins
 // that want to render in the Sidebar's left pane declare
 // `workbench.panes.left` + `entry.standalone` in their manifest, and we
-// mount them through `StandalonePluginIframe pane="left"` — mirroring the
-// MainArea path in `WorkbenchPluginHost.tsx`. Anything without an iframe
-// surface falls through to `BusPluginPlaceholder`.
+// mount them through `StandaloneExtensionIframe pane="left"` — mirroring the
+// MainArea path in `WorkbenchExtensionHost.tsx`. Anything without an iframe
+// surface falls through to `ExtensionPlaceholder`.
 // Cross-references:
-//   - manifest sample: packages/marketplace/plugins/wb-character/forgeax-plugin.json
-//   - host helper:     pluginRendersInSidebarLeftPane (MainArea/WorkbenchPluginHost)
-//   - server route:    packages/server/src/main.ts → /plugins/<id>/* serveStatic
+//   - manifest sample: packages/marketplace/extensions/wb-character/forgeax-plugin.json
+//   - host helper:     extensionRendersInSidebarLeftPane (MainArea/WorkbenchExtensionHost)
+//   - server route:    packages/server/src/main.ts → /extensions/<id>/* serveStatic
 
 // P2.6a — the WORKBENCH icons row is two segments stitched together:
 //
 //   [built-in tabs] + [bus-sourced workbench plugins]
 //
 // Built-in tabs (Agents/Files) wire real panels. Bus-sourced rows come from
-// `GET /api/bus/plugins?kind=workbench` and render the manifest's emoji icon +
+// `GET /api/extensions/list?kind=workbench` and render the manifest's emoji icon +
 // displayName.zh; clicking one shows the description.zh in the right pane as
 // a richer placeholder. When the bus call fails we fall back to a small set of
 // hardcoded labels so the UI still looks alive — this matches the v3 KPI of
@@ -37,7 +37,7 @@ import './Sidebar.css';
 //
 // Cross-references:
 //   - server: packages/server/src/api/bus.ts → createBusRouter
-//   - lib:    packages/interface/src/lib/bus-api.ts → listBusPlugins
+//   - lib:    packages/interface/src/lib/extension-api.ts → listExtensions
 //   - spec:   forgeax-dev-diary/2026-05-15/modules/10-workbench-spec.md
 
 type BuiltinId = 'agents' | 'files';
@@ -55,7 +55,7 @@ interface BusEntry {
   id: string;
   label: string;
   emoji: string;
-  manifest: BusPluginInfo;
+  manifest: ExtensionInfo;
 }
 
 type Entry = BuiltinEntry | BusEntry;
@@ -108,10 +108,10 @@ export function Sidebar() {
   const detachSurface = useShellStore((s) => s.detachSurface);
   const redockSurface = useShellStore((s) => s.redockSurface);
   // Plugins currently open as top-level DockShell panels — their iframes are
-  // rendered in that panel, so KeepAlivePluginIframes skips them here.
-  const dockedPlugins = useShellStore((s) => s.dockedPlugins);
+  // rendered in that panel, so KeepAliveExtensionIframes skips them here.
+  const dockedExtensions = useShellStore((s) => s.dockedExtensions);
 
-  const [busPlugins, setBusPlugins] = useState<BusPluginInfo[] | null>(null);
+  const [busPlugins, setBusPlugins] = useState<ExtensionInfo[] | null>(null);
 
   // Sidebar is a persistent component (it does not remount on tab switches).
   // Retry the bus fetch a few times before giving up so a slow boot doesn't
@@ -125,7 +125,7 @@ export function Sidebar() {
 
     const load = () => {
       attempts += 1;
-      listBusPlugins('workbench')
+      listExtensions('workbench')
         .then((res) => {
           if (cancelled) return;
           setBusPlugins(res.items);
@@ -177,9 +177,9 @@ export function Sidebar() {
   // The left-pane standalone plugin to show right now (or null). Fed to the
   // keep-alive overlay so switching wb tabs only flips visibility instead of
   // unmounting/reloading the iframe.
-  const leftPaneActivePlugin = useMemo<BusPluginInfo | null>(
+  const leftPaneActivePlugin = useMemo<ExtensionInfo | null>(
     () =>
-      activeEntry?.kind === 'bus' && pluginRendersInSidebarLeftPane(activeEntry.manifest)
+      activeEntry?.kind === 'bus' && extensionRendersInSidebarLeftPane(activeEntry.manifest)
         ? activeEntry.manifest
         : null,
     [activeEntry],
@@ -224,7 +224,7 @@ export function Sidebar() {
           const manifest = entry?.kind === 'bus' ? entry.manifest : null;
           useShellStore.getState().openWorkbench({
             tab: a.tab,
-            expandedPluginId: manifest && pluginRendersInMainArea(manifest) ? manifest.id : null,
+            expandedPluginId: manifest && extensionRendersInMainArea(manifest) ? manifest.id : null,
           });
         },
       },
@@ -421,9 +421,9 @@ export function Sidebar() {
             // and `workbench.panes.left`, its `?pane=left` iframe is rendered
             // by the keep-alive overlay below (so switching wb tabs doesn't
             // reload it). Without explicit left intent we render the
-            // BusPluginPlaceholder info card.
-            pluginRendersInSidebarLeftPane(activeEntry.manifest) ? null : (
-              <BusPluginPlaceholder entry={activeEntry} siblingCount={busEntries.length} />
+            // ExtensionPlaceholder info card.
+            extensionRendersInSidebarLeftPane(activeEntry.manifest) ? null : (
+              <ExtensionPlaceholder entry={activeEntry} siblingCount={busEntries.length} />
             )
           ) : (
             <ToolPlaceholder label={activeEntry?.label ?? ''} sub="Coming soon" />
@@ -458,12 +458,12 @@ export function Sidebar() {
                 </button>
               );
             })()}
-            {leftPaneActivePlugin && dockedPlugins.has(leftPaneActivePlugin.id) ? (
+            {leftPaneActivePlugin && dockedExtensions.has(leftPaneActivePlugin.id) ? (
               <div className="ws-pane-floating">
                 <span>{t('sidebar.inDockPanel')}</span>
               </div>
             ) : (
-              <KeepAlivePluginIframes pane="left" activePlugin={leftPaneActivePlugin} floatingKeys={floatingSurfaces} />
+              <KeepAliveExtensionIframes pane="left" activePlugin={leftPaneActivePlugin} floatingKeys={floatingSurfaces} />
             )}
           </div>
         </div>
@@ -485,7 +485,7 @@ export function Sidebar() {
 // description) — manifest fields previously hidden in title-tooltips get
 // promoted to default-visible mini-strips. i18n readers (en) no longer have
 // to read the Chinese line first.
-function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblingCount: number }) {
+function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblingCount: number }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const m = entry.manifest;
@@ -497,7 +497,7 @@ function BusPluginPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   const dir = m.id.startsWith('@forgeax-plugin/')
     ? m.id.slice('@forgeax-plugin/'.length)
     : m.id;
-  const manifestPath = `packages/marketplace/plugins/${dir}/manifest.json`;
+  const manifestPath = `packages/marketplace/extensions/${dir}/manifest.json`;
   const openInBus = () => {
     emitDeepLink('bus:expand-plugin', m.id);
     openSettingsStore('settings', 'plugins');

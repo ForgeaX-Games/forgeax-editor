@@ -17,11 +17,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import { getLocale, useTranslation } from '@/i18n';
-import type { BusPluginInfo } from '../../lib/bus-api';
+import type { ExtensionInfo } from '../../lib/extension-api';
 import { useShellStore } from '../../store';
 import { getSessionClient } from '../../store-parts/session-client';
 import { getWorkbenchClient } from '../../store';
-import { PluginIframeHost } from '../PluginHost/PluginIframeHost';
+import { ExtensionIframeHost } from '../ExtensionHost/ExtensionIframeHost';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
  *  index.html reads `?pane=` and tags `<body data-pane=...>`; CSS hides the
@@ -30,7 +30,7 @@ import { PluginIframeHost } from '../PluginHost/PluginIframeHost';
 export type PluginIframePane = 'left' | 'center';
 
 interface Props {
-  plugin: BusPluginInfo;
+  plugin: ExtensionInfo;
   pane?: PluginIframePane;
   /** Keep-alive visibility. When false the iframe stays mounted & alive but is
    *  CSS-hidden (no reload), and we push `visibility.changed{visible:false}` so
@@ -46,7 +46,7 @@ interface Props {
 }
 
 function buildIframeSrc(
-  plugin: BusPluginInfo,
+  plugin: ExtensionInfo,
   pane?: PluginIframePane,
   slug?: string | null,
 ): string | null {
@@ -54,12 +54,12 @@ function buildIframeSrc(
   if (!sa) return null;
   // Three address modes:
   //   1. embeddedAlso=true — plugin ships a built dist served by the host at
-  //      /plugins/<id>/. Prefer this when set: the studio doesn't launch the
+  //      /extensions/<id>/. Prefer this when set: the studio doesn't launch the
   //      plugin's own dev server, and declared `port` may collide with other
   //      services (e.g. wb-character's 15173 collides with the engine).
   //   2. plugin declares `port` — use http://<host>:<port>/<readyProbe?>
-  //   3. plugin only declares `start` — fall back to /plugins/<id>/.
-  const embeddedSrc = `/plugins/${encodeURIComponent(plugin.id.replace(/^@[^/]+\//, ''))}/`;
+  //   3. plugin only declares `start` — fall back to /extensions/<id>/.
+  const embeddedSrc = `/extensions/${encodeURIComponent(plugin.id.replace(/^@[^/]+\//, ''))}/`;
   let base: string;
   if (sa.embeddedAlso === true) base = embeddedSrc;
   else if (typeof sa.port === 'number') {
@@ -119,7 +119,7 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
   useShellStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedPluginId: targetPluginId });
 }
 
-export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
+export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
   const { t } = useTranslation();
   // STABLE cache key. Was `${version}-${Date.now()}` which defeated keep-alive:
   // any iframe remount (re-parent / reconcile) recomputed Date.now() → new URL →
@@ -216,7 +216,7 @@ export function StandalonePluginIframe({ plugin, pane, active = true, reloadNonc
   }
 
   return (
-    <PluginIframeHost
+    <ExtensionIframeHost
       pluginId={plugin.id}
       src={src}
       pane={pane}

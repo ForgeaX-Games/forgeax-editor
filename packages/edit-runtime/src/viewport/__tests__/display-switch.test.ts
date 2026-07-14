@@ -42,8 +42,8 @@ describe('display toggle orthogonality (w21, §3.2 hard constraint 2)', () => {
   });
 
   it('G toggles display in play mode without affecting run (play·game ⇄ play·scene)', () => {
-    setViewportQuadrant({ run: 'play', display: 'game' });
-    setViewportQuadrant({ display: 'scene' }); // G / Esc possess exit
+    setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
+    setViewportQuadrant({ display: 'scene' }); // display exit revokes control
     const q = getViewportQuadrant();
     expect(q.run).toBe('play');       // game keeps ticking (hard constraint 3)
     expect(q.display).toBe('scene');
@@ -137,18 +137,16 @@ describe('auxiliary visibility derivation (w21)', () => {
 describe('inputTarget truth table from setViewportQuadrant (w21, complements w16)', () => {
   beforeEach(resetToEntry);
 
-  it('all four quadrants return correct inputTarget via getViewportQuadrant', () => {
-    // edit·scene
+  it('game display remains editor-owned until explicit control activation', () => {
     setViewportQuadrant({ run: 'edit', display: 'scene' });
     expect(getViewportQuadrant().inputTarget).toBe('editor');
-    // edit·game
     setViewportQuadrant({ display: 'game' });
     expect(getViewportQuadrant().inputTarget).toBe('editor');
-    // play·scene
     setViewportQuadrant({ run: 'play', display: 'scene' });
     expect(getViewportQuadrant().inputTarget).toBe('editor');
-    // play·game
     setViewportQuadrant({ display: 'game' });
+    expect(getViewportQuadrant().inputTarget).toBe('editor');
+    setViewportQuadrant({ control: 'game' });
     expect(getViewportQuadrant().inputTarget).toBe('game');
   });
 
@@ -157,9 +155,9 @@ describe('inputTarget truth table from setViewportQuadrant (w21, complements w16
       ['edit', 'scene', 'editor'],
       ['edit', 'game', 'editor'],
       ['play', 'scene', 'editor'],
-      ['play', 'game', 'game'],
+      ['play', 'game', 'editor'],
     ] as const) {
-      setViewportQuadrant({ run, display });
+      setViewportQuadrant({ run, display, control: expected });
       expect(getInputTarget()).toBe(expected);
       expect(getViewportQuadrant().inputTarget).toBe(expected);
     }

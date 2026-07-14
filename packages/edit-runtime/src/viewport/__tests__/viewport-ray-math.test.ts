@@ -137,11 +137,11 @@ describe('viewport-ray pure geometry — GOLDEN equivalence net (w18, AC-05/AC-1
 });
 
 describe('viewport-camera orbit + lifecycle pure functions — GOLDEN net (w18, AC-05)', () => {
-  it('deriveInputTarget: only play·game owns game input', () => {
+  it('deriveInputTarget: only an explicit Play game lease owns input', () => {
     expect(deriveInputTarget('play', 'game')).toBe('game');
-    expect(deriveInputTarget('play', 'scene')).toBe('editor');
+    expect(deriveInputTarget('play', 'editor')).toBe('editor');
     expect(deriveInputTarget('edit', 'game')).toBe('editor');
-    expect(deriveInputTarget('edit', 'scene')).toBe('editor');
+    expect(deriveInputTarget('edit', 'editor')).toBe('editor');
   });
 
   it('clampPitch / clampDist: bounds enforced, pass-through in range', () => {

@@ -34,7 +34,7 @@ const apiCallPattern =
 
 const allowedApiPatterns: RegExp[] = [
   /^\/api\/boot-splash$/,
-  /^\/api\/bus\/plugins(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/,
+  /^\/api\/extensions\/list(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/,
   /^\/api\/bus\/ui\/surfaces(?:\/\$\{[^}]+\}\/(?:ack|pending|snapshot)|\/\$\{[^}]+\})?$/,
   /^\/api\/cli\/health$/,
   // literal 'upload' — UploadPanel (SettingsPrimitives) drives the two-phase

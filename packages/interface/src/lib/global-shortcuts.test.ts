@@ -52,7 +52,7 @@ function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & 
     getLastSelectionDomain: () => 'entity',
     isPlayMode: () => false,
     getDisplay: () => 'scene',
-    getInputTarget: () => 'scene',
+    getInputTarget: () => 'editor',
     deleteEntities: (ids) => { calls.deleteEntities.push(ids); },
     duplicateEntities: (ids) => { calls.duplicateEntities.push(ids); },
     renameEntity: (id) => { calls.renameEntity.push(id); },
@@ -117,16 +117,16 @@ describe('keyboard router — dual-domain Delete (AC-C2)', () => {
 });
 
 describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
-  it('play·game → releases input to editor controls without stopping simulation', () => {
+  it('play·game → revokes game control without stopping simulation or changing display', () => {
     const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'game' });
     registerKeyboardRouterDeps(deps);
     const esc = findByCombo(buildShortcuts(), 'Esc');
     expect(esc.run()).toBe(true);
-    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'releaseGameControl' }, 'human']]);
   });
 
   it('outside play·game does not dispatch a viewport transition', () => {
-    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'scene' });
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const esc = findByCombo(buildShortcuts(), 'Esc');
     esc.run();
@@ -136,7 +136,7 @@ describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
 
 describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', () => {
   it('edit·scene → toggle to game (dispatch setDisplay game, human)', () => {
-    const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'scene' });
+    const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'G');
     expect(g.run()).toBe(true);
@@ -144,7 +144,7 @@ describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', ()
   });
 
   it('edit·game → toggle back to scene (edit·game bug fixed, RK-10)', () => {
-    const deps = mockDeps({ getDisplay: () => 'game', getInputTarget: () => 'scene' });
+    const deps = mockDeps({ getDisplay: () => 'game', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'G');
     expect(g.run()).toBe(true);
@@ -152,7 +152,7 @@ describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', ()
   });
 
   it('play·scene → toggle (scene input, not game — G still belongs to editor)', () => {
-    const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'scene', isPlayMode: () => true });
+    const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor', isPlayMode: () => true });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'G');
     expect(g.run()).toBe(true);

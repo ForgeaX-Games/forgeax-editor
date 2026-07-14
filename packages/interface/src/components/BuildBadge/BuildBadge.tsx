@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from '@/i18n';
 import {
-  listBusPlugins,
+  listExtensions,
   pickLang,
-  type BusPluginInfo,
-  type BusPluginListResponse,
-} from '../../lib/bus-api';
+  type ExtensionInfo,
+  type ExtensionListResponse,
+} from '../../lib/extension-api';
 
 // P4.79 · break the 13-tick CSS-only pearl/decoration streak by surfacing
-// a previously invisible backend island: /api/bus/plugins counts. The
+// a previously invisible backend island: /api/extensions/list counts. The
 // server has exposed Bus.plugins.list() since P2.6a (commit aa5ee13) but
 // the player has never seen the data outside the BusAdminPanel (which is
 // closed by default). This badge anchors itself fixed bottom-right of the
 // viewport so it is unconditionally visible on every page/mode, fetches
-// /api/bus/plugins once on mount, and renders a compact pill with total
+// /api/extensions/list once on mount, and renders a compact pill with total
 // count + kind breakdown (workbench / cli-provider / agent / model /
 // skill / tool / etc). All styles are inline so no CSS file (interface
 // dirty storm in full effect) is touched. New directory under src/components/
@@ -29,7 +29,7 @@ interface KindBreakdown {
   other: number;
 }
 
-function tallyByKind(items: BusPluginListResponse['items']): KindBreakdown {
+function tallyByKind(items: ExtensionListResponse['items']): KindBreakdown {
   const counts: KindBreakdown = {
     workbench: 0,
     agent: 0,
@@ -69,10 +69,10 @@ function tallyByKind(items: BusPluginListResponse['items']): KindBreakdown {
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'ok'; total: number; kinds: KindBreakdown; items: BusPluginInfo[] }
+  | { status: 'ok'; total: number; kinds: KindBreakdown; items: ExtensionInfo[] }
   | { status: 'error'; message: string };
 
-const KIND_ORDER: Array<{ key: string; label: string; match: (p: BusPluginInfo) => boolean }> = [
+const KIND_ORDER: Array<{ key: string; label: string; match: (p: ExtensionInfo) => boolean }> = [
   { key: 'workbench', label: 'workbench', match: (p) => p.kind === 'workbench' },
   { key: 'agent', label: 'agent', match: (p) => p.kind === 'agent' },
   { key: 'cli-provider', label: 'cli-provider', match: (p) => p.kind === 'cli-provider' },
@@ -81,8 +81,8 @@ const KIND_ORDER: Array<{ key: string; label: string; match: (p: BusPluginInfo) 
   { key: 'tool', label: 'tool', match: (p) => p.kind === 'tool' },
 ];
 
-function groupByKind(items: BusPluginInfo[]): Array<{ label: string; rows: BusPluginInfo[] }> {
-  const used = new Set<BusPluginInfo>();
+function groupByKind(items: ExtensionInfo[]): Array<{ label: string; rows: ExtensionInfo[] }> {
+  const used = new Set<ExtensionInfo>();
   const groups = KIND_ORDER.map(({ label, match }) => {
     const rows = items.filter((p) => match(p));
     rows.forEach((r) => used.add(r));
@@ -102,7 +102,7 @@ export function BuildBadge() {
 
   useEffect(() => {
     let cancelled = false;
-    listBusPlugins()
+    listExtensions()
       .then((res) => {
         if (cancelled) return;
         setState({
@@ -198,14 +198,14 @@ export function BuildBadge() {
   let content: ReactNode;
   if (state.status === 'loading') {
     content = <span style={kindSpan}>bus · loading…</span>;
-    title = 'forgeax · /api/bus/plugins loading…';
+    title = 'forgeax · /api/extensions/list loading…';
   } else if (state.status === 'error') {
     content = (
       <>
         <span style={kindSpan}>bus offline</span>
       </>
     );
-    title = `forgeax · /api/bus/plugins error: ${state.message}`;
+    title = `forgeax · /api/extensions/list error: ${state.message}`;
   } else {
     const k = state.kinds;
     const parts: string[] = [];

@@ -4,7 +4,7 @@
  *  provider picker (`cursor-agent`, `claude-code`, `codex`, …). `null` means
  *  the forgeax-native EventBus path (no CLI subprocess). */
 
-import { listBusPluginsShared, type BusPluginInfo } from './bus-api';
+import { listExtensionsShared, type ExtensionInfo } from './extension-api';
 
 /** Marketplace cli-provider plugin id → runtime kernel id. */
 const PREFERRED_CLI_TO_KERNEL: Record<string, string | null> = {
@@ -33,13 +33,13 @@ export function preferredCliProviderToKernel(preferred?: string | null): string 
   return null;
 }
 
-let agentPluginsCache: BusPluginInfo[] | null = null;
-let agentPluginsInflight: Promise<BusPluginInfo[]> | null = null;
+let agentPluginsCache: ExtensionInfo[] | null = null;
+let agentPluginsInflight: Promise<ExtensionInfo[]> | null = null;
 
-async function loadAgentPlugins(): Promise<BusPluginInfo[]> {
+async function loadAgentPlugins(): Promise<ExtensionInfo[]> {
   if (agentPluginsCache) return agentPluginsCache;
   if (!agentPluginsInflight) {
-    agentPluginsInflight = listBusPluginsShared()
+    agentPluginsInflight = listExtensionsShared()
       .then((res) => res.items.filter((p) => p.kind === 'agent'))
       .then((items) => {
         agentPluginsCache = items;
@@ -48,7 +48,7 @@ async function loadAgentPlugins(): Promise<BusPluginInfo[]> {
       })
       .catch(() => {
         agentPluginsInflight = null;
-        return [] as BusPluginInfo[];
+        return [] as ExtensionInfo[];
       });
   }
   return agentPluginsInflight;

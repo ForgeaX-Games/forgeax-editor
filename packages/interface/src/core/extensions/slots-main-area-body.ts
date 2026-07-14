@@ -5,7 +5,6 @@ import type { AppExtension } from '../app-shell/types';
 export function createSlotsMainAreaBodyExtension(MainAreaBody: React.ComponentType): AppExtension {
   return {
     id: 'slots.main-area-body', version: '1.0.0',
-    requires: ['panels'],
-    setup(ctx) { return ctx.contributePanels({ slots: { MainAreaBody } }); },
+    contributes: { panels: { slots: { MainAreaBody } } },
   };
 }

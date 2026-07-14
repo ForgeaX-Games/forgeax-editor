@@ -2,7 +2,7 @@
  * Phase D2 — surface store.
  *
  * In-process registry of `surface.expose` snapshots that arrive from plugin
- * iframes via the host SDK (`port.surface.subscribe` in StandalonePluginIframe).
+ * iframes via the host SDK (`port.surface.subscribe` in StandaloneExtensionIframe).
  * Lets the dev-mode hover overlay show "this button equals tool X(args)" and
  * gives an AI prompt-builder a single place to read the catalogue of UI
  * actions the user could currently click.

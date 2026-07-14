@@ -966,7 +966,7 @@
 
 /* ── P4.20 · tb-skill SkillBadge (skill-kind deep-link) ───────────────────
    Adds the 4th live LED to tb-right: gold #ffc878 dot + Sparkles glyph +
-   small `Skill N` count, polled every 12s via /api/bus/plugins?kind=skill.
+   small `Skill N` count, polled every 12s via /api/extensions/list?kind=skill.
    Color family is the same gold the rest of the codebase already uses for
    skill (.ba-chip.k-skill / .ss-kind-chip.k-skill / .dash-kind-row.k-skill /
    .cp-bus-chip.k-skill / .ba-prov-tag.k-skill) so "gold = skill" reads
@@ -1060,7 +1060,7 @@
 
 /* ── P4.21 · tb-tool ToolBadge (tool-kind deep-link) ──────────────────────
    Adds the 5th live LED to tb-right: orange #ff8c42 dot + Wrench glyph +
-   small `Tool N` count, polled every 12s via /api/bus/plugins?kind=tool.
+   small `Tool N` count, polled every 12s via /api/extensions/list?kind=tool.
    Same orange family used by .ba-chip.k-tool / .ba-kind-tag.k-tool /
    .ss-kind-chip.k-tool / .ba-prov-tag.k-tool so "orange = tool" stays
    consistent from the very top bar into Bus admin. 4-tone grammar

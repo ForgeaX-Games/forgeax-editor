@@ -1,6 +1,6 @@
 import { useShellStore } from '../../store';
 import { ViewportPanel } from './SurfacePanels';
-import { CenterPluginLayer } from './CenterPluginLayer';
+import { CenterExtensionLayer } from './CenterExtensionLayer';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import './MainArea.css';
 
@@ -27,7 +27,7 @@ export function MainArea() {
           here (above the mode/tab conditionals) so plugin iframes survive
           viewport↔workbench and tab switches instead of cold-restarting. It
           self-hides when no standalone plugin is expanded. */}
-      <CenterPluginLayer />
+      <CenterExtensionLayer />
     </main>
   );
 }

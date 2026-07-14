@@ -10,7 +10,6 @@ export function createPanelsWorkbenchPluginsExtension(
 ): AppExtension {
   return {
     id: 'panels.workbench-plugins', version: '1.0.0',
-    requires: ['panels'],
-    setup(ctx) { return ctx.contributePanels({ workbenchPanels }); },
+    contributes: { panels: { workbenchPanels } },
   };
 }

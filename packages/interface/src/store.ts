@@ -5,7 +5,8 @@ import { alertDialog } from './lib/dialog';
 import { createObservabilityState } from './store-parts/observability';
 import { createShellState } from './store-parts/shell';
 import { getSessionClient } from './store-parts/session-client';
-import { getWorkbenchClient } from './store-parts/workbench-client';
+import { getWorkbenchClient, hasWorkbenchClient } from './store-parts/workbench-client';
+import { mostRecentSid, pickActiveSid } from './store-parts/session-pick';
 import {
   cleanupLegacySessionKeys,
   loadActiveSid,
@@ -292,7 +293,7 @@ export interface AppState {
   // P2.6a — widened from a closed union to `string` because the Sidebar TOOLS
   // row now mixes built-in tabs (`agents`/`files`) with bus-sourced workbench
   // plugin ids (e.g. `wb:character`, `wb:skill`). The set is open and grows
-  // as new wb-* manifests land in packages/marketplace/plugins/.
+  // as new wb-* manifests land in packages/marketplace/extensions/.
   workbenchTab: string;
   setWorkbenchTab: (t: string) => void;
 
@@ -301,11 +302,11 @@ export interface AppState {
   // like wb-character), tile click sets this slot instead of workbenchTab.
   // MainArea/WorkbenchMode.tsx early-returns a full-bleed plugin host when
   // this is non-null; null = show the default workbench gallery / editor.
-  workbenchExpandedPluginId: string | null;
-  setWorkbenchExpandedPluginId: (id: string | null) => void;
+  workbenchExpandedExtensionId: string | null;
+  setWorkbenchExpandedExtensionId: (id: string | null) => void;
 
   // 2026-06 (architecture review §B3) — workbenchTab (sidebar nav) and
-  // workbenchExpandedPluginId (center takeover) used to be set by separate
+  // workbenchExpandedExtensionId (center takeover) used to be set by separate
   // calls on every "open a plugin" path; missing one desynced the sidebar
   // left pane from the center (the left-pane-blank class of bug). openWorkbench
   // is the ONE atomic action every open path funnels through, so the two fields
@@ -323,7 +324,7 @@ export interface AppState {
   // keep-alive) or `floating` (present here, hosted in a Tauri WebviewWindow).
   // While floating, the main window MUST NOT also render its keep-alive iframe
   // (that would spin up a second 3D engine / WS for the same surface), so
-  // KeepAlivePluginIframes filters these out.
+  // KeepAliveExtensionIframes filters these out.
   //
   // Browser form: detach is a no-op (WindowManager.canDetach() === false), so
   // this map stays empty and behavior is unchanged.
@@ -332,9 +333,9 @@ export interface AppState {
   redockSurface: (d: import('./lib/platform').SurfaceDescriptor) => Promise<void>;
   /** Plugin IDs currently open as top-level DockShell panels (so Sidebar knows
    *  to hide their keep-alive iframes to avoid double-rendering). */
-  dockedPlugins: Set<string>;
-  addDockedPlugin: (id: string) => void;
-  removeDockedPlugin: (id: string) => void;
+  dockedExtensions: Set<string>;
+  addDockedExtension: (id: string) => void;
+  removeDockedExtension: (id: string) => void;
   /** Internal: called by the WindowManager close listener (see main.tsx) when
    *  the user closes a detached window — redocks without re-closing the window. */
   markSurfaceDocked: (key: string) => void;
@@ -694,6 +695,16 @@ export const useShellStore = create<AppState>((set, get) => ({
     });
     if (agentId) {
       void resolveKernelForAgent(agentId).then((kernelId) => {
+        // 只有解析出具体 CLI 内核 id 的显式 CLI persona(cc-coder /
+        // claude-code-default / codex-default 等)才反写全局 provider ——
+        // 这是"CLI as subagent persona"要的行为。kernelId === null 意味着
+        // `forgeax-native` 或无偏好,而 forgeax-native 是几乎所有普通 agent
+        // (forge / iori / suzu…)manifest 里的脚手架默认值,不是用户意图:
+        // 把它当权威偏好会在 AgentSwitcher 自动 pin root、或点普通 agent
+        // 页签时,把用户在 Settings › Providers 手选的内核静默冲回 native
+        // 并写盘(体感即"内核设置没有持久化")。全局 provider 的 SSOT 是
+        // 用户的 Settings 选择,native 缺省不覆盖它。
+        if (!kernelId) return;
         useShellStore.setState((s) => {
           const tab = s.tabs.find((t) => t.sid === sid);
           if (!tab || tab.agentId !== agentId) return {};
@@ -823,8 +834,22 @@ export const useShellStore = create<AppState>((set, get) => ({
       const { fetchSessionList, createSession, connectForgeaXWs } = getSessionClient();
       try {
         // 列表恒按当前 game 收口（pinnedSlug；null 时 server 回落 active game）。
-        const scope = get().pinnedSlug ?? undefined;
+        let scope = get().pinnedSlug ?? undefined;
         let metas = await fetchSessionList(scope);
+        if (metas.length === 0 && scope && hasWorkbenchClient()) {
+          // 收口为空且带着本地 pin —— pin 可能已陈旧（game 被删/改名后 localStorage
+          // 残留）。server 的 active game 才是 SSOT：先纠偏再重查。否则下面的真空
+          // 兜底会新建一条 session（server 端绑到 active game，跟这里的 scope 并不
+          // 一致），用户看到的就是"刷新后历史消失、聊天变成全新空会话"。
+          const activeSlug = await getWorkbenchClient().getActiveSlug()
+            .then((r) => r.activeSlug)
+            .catch(() => null);
+          if (activeSlug && activeSlug !== scope) {
+            get().setPinnedSlug(activeSlug);
+            scope = activeSlug;
+            metas = await fetchSessionList(scope);
+          }
+        }
         if (metas.length === 0) {
           // 真空态：兜底建一条。**不**传 displayName / defaultDir —— 让 server 端
           // 缺省决定，UI 走 tabLabel 占位规则反映"无名"真值，不再硬塞 default。
@@ -843,11 +868,9 @@ export const useShellStore = create<AppState>((set, get) => ({
           providerOverride: get().providerOverride,
           lastActivityAt: m.lastActivityAt,
         }));
-        // localStorage 上次的 active sid 优先（如果还在 list 里），否则 tabs[0]。
-        const persisted = loadActiveSid();
-        const active = persisted && newTabs.some((t) => t.sid === persisted)
-          ? persisted
-          : (newTabs[0]?.sid ?? null);
+        // localStorage 上次的 active sid 优先（如果还在 list 里），否则最近活跃的
+        // 一条（规则见 session-pick.ts）。
+        const active = pickActiveSid(newTabs, loadActiveSid());
         // provider 是全局设置，绝不从 tab 反推（会随 active session 乱跳）。
         set({
           tabs: newTabs,
@@ -892,10 +915,9 @@ export const useShellStore = create<AppState>((set, get) => ({
             lastActivityAt: m.lastActivityAt,
           };
         });
-        // 如果 active 还在新 list 里就保留，否则掉到 [0]。空 list → null。
-        const active = s.activeSid && merged.some((t) => t.sid === s.activeSid)
-          ? s.activeSid
-          : (merged[0]?.sid ?? null);
+        // 如果 active 还在新 list 里就保留，否则掉到最近活跃的一条（规则见
+        // session-pick.ts）。空 list → null。
+        const active = pickActiveSid(merged, s.activeSid);
         persistActiveSid(active);
         // provider 全局，不从 tab 反推。
         return {
@@ -930,10 +952,10 @@ export const useShellStore = create<AppState>((set, get) => ({
       await get().createNewSession();
       return;
     }
-    // D1:落到最近活跃的一条。switchToSession 会重连 WS,故无条件调(refreshSessions
-    // 只改 tabs/activeSid,不重连 WS)。
-    const recent = [...tabs].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0];
-    await get().switchToSession(recent.sid);
+    // D1:落到最近活跃的一条（规则见 session-pick.ts）。switchToSession 会重连
+    // WS,故无条件调(refreshSessions 只改 tabs/activeSid,不重连 WS)。
+    const recent = mostRecentSid(tabs);
+    if (recent) await get().switchToSession(recent);
   },
 
   createNewSession: async (opts) => {

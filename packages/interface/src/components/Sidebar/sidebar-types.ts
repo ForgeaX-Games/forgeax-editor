@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import type { BusPluginInfo } from '../../lib/bus-api';
+import type { ExtensionInfo } from '../../lib/extension-api';
 
 export type BuiltinId = 'agents' | 'files';
 
@@ -15,7 +15,7 @@ export interface BusEntry {
   id: string;
   label: string;
   emoji: string;
-  manifest: BusPluginInfo;
+  manifest: ExtensionInfo;
 }
 
 export type SidebarEntry = BuiltinEntry | BusEntry;

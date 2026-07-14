@@ -1,6 +1,6 @@
 // P2.6d — Bus admin panel: full visibility into what the bus actually loaded.
 // Top-level mode, mounted by MainArea when store.mode === 'bus'. Lists every
-// plugin returned by GET /api/bus/plugins, grouped by `kind`, with one row per
+// plugin returned by GET /api/extensions/list, grouped by `kind`, with one row per
 // plugin: id / displayName.zh / version / workbench info (icon + panelSize +
 // position) when applicable, plus an experimental flag chip.
 //
@@ -27,7 +27,7 @@
 // P4.34 — for the agent KindSection, render a violet (#c4a3ff — agent
 // tribe color matching ts-agent / cp-agent / tb-agent family) health LED
 // between .ba-kind-count and .ba-kind-desc, reading `N reg · M/K run`.
-// Driven by polling listBusPlugins('agent') + dashApi.daemons.list() in
+// Driven by polling listExtensions('agent') + dashApi.daemons.list() in
 // lockstep every 10s; tone is ok (≥1 daemon running) / warn (registered
 // but 0 running) / down (registered = 0 or fetch failed) / loading. This
 // is the 3rd Bus admin section LED (after cli-provider P4.14 +
@@ -88,7 +88,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation, type TFunction } from '@/i18n';
-import { listBusPlugins, pickLang, type BusPluginInfo } from '../../lib/bus-api';
+import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useShellStore } from '../../store';
 import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
@@ -133,7 +133,7 @@ interface WbSurfacesSnapshot {
 
 // P4.34 — health roll-up for the **agent** KindSection header LED. After the
 // daemon subsystem was retired (R3) this LED only reads the registered agent
-// plugin count from `/api/bus/plugins?kind=agent`. Tone: ok (violet) when
+// plugin count from `/api/extensions/list?kind=agent`. Tone: ok (violet) when
 // ≥1 agent plugin is registered; down (red) on fetch failure or 0 plugins;
 // loading on first paint. The warn-amber state ("registered but no daemon
 // running") no longer applies — agents now run inside session contexts via
@@ -145,7 +145,7 @@ interface AgentSnapshot {
 }
 
 // P4.35 — health roll-up for the **model-binding** KindSection header LED.
-// Joins `/api/bus/plugins?kind=model-binding` (registered model-binding plugins
+// Joins `/api/extensions/list?kind=model-binding` (registered model-binding plugins
 // · today only `@forgeax-plugin/model-anthropic-text`) with `/api/cli-providers`
 // via a static vendor→provider map: anthropic → claude-code, openai → codex,
 // cursor → cursor-agent, forgeax → forgeax. A binding is "live" when its mapped
@@ -221,7 +221,7 @@ interface SkillSnapshot {
 // cb-tl-strip P3.84) when ≥1 ready & not all experimental; warn (amber)
 // when ready < registered OR all are experimental; down (red) when
 // registered = 0 or fetch failure; loading on first paint. Single-channel
-// poll (listBusPlugins('tool')) — tools have no per-binding runtime health
+// poll (listExtensions('tool')) — tools have no per-binding runtime health
 // channel today, same shape as skill snapshot.
 interface ToolSnapshot {
   tone: ProvHealthTone;
@@ -241,7 +241,7 @@ interface ToolSnapshot {
 
 interface KindGroup {
   kind: string;
-  items: BusPluginInfo[];
+  items: ExtensionInfo[];
 }
 
 // P-UI-SURFACES — slim shape of GET /api/bus/ui/surfaces response items.
@@ -277,8 +277,8 @@ const KIND_ORDER: Record<string, number> = {
   tool: 60,
 };
 
-function groupByKind(items: BusPluginInfo[]): KindGroup[] {
-  const m = new Map<string, BusPluginInfo[]>();
+function groupByKind(items: ExtensionInfo[]): KindGroup[] {
+  const m = new Map<string, ExtensionInfo[]>();
   for (const it of items) {
     const list = m.get(it.kind) ?? [];
     list.push(it);
@@ -301,7 +301,7 @@ function groupByKind(items: BusPluginInfo[]): KindGroup[] {
 // P2.6e — substring match against id + displayName.zh + displayName.en. Case
 // insensitive, '' = match all. Keeps the table dense so the player can type
 // 'wb' to see workbenches, 'cli' to see cli-providers, 'anim' to jump to one.
-function matchesQuery(p: BusPluginInfo, q: string): boolean {
+function matchesQuery(p: ExtensionInfo, q: string): boolean {
   if (!q) return true;
   const hay = [
     p.id,
@@ -315,7 +315,7 @@ function matchesQuery(p: BusPluginInfo, q: string): boolean {
 
 export function BusAdminPanel() {
   const { t } = useTranslation();
-  const [items, setItems] = useState<BusPluginInfo[]>([]);
+  const [items, setItems] = useState<ExtensionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [refreshTs, setRefreshTs] = useState(Date.now());
@@ -365,7 +365,7 @@ export function BusAdminPanel() {
     agentIds: [],
   });
   // P4.35 — model-binding section LED snapshot. Refilled by polling 2 endpoints
-  // in lockstep every 10s: listBusPlugins('model-binding') gives the registered
+  // in lockstep every 10s: listExtensions('model-binding') gives the registered
   // bindings + vendor/channel/models; dashApi.providers() gives per-provider
   // health.ok. We join via VENDOR_TO_PROVIDER (anthropic → claude-code etc).
   // Tone classification mirrors P4.34 agent: live ≥ 1 ⇒ ok-teal; registered ≥ 1
@@ -378,7 +378,7 @@ export function BusAdminPanel() {
     bindings: [],
   });
   // P4.36 — skill section LED snapshot. Refilled by polling
-  // listBusPlugins('skill') every 10s. Unlike mb/agent this LED has no
+  // listExtensions('skill') every 10s. Unlike mb/agent this LED has no
   // second channel — "ready" is derived intra-plugin from skills.length≥1;
   // "experimental" from manifest experimental:true. Lockstep cadence with
   // the other 4 LEDs so all 5 visibly update in the same tick.
@@ -391,7 +391,7 @@ export function BusAdminPanel() {
   });
   // P4.37 — tool section LED snapshot. Same shape as skillSnap (single
   // channel — tool plugins have no per-binding runtime health). Refilled by
-  // polling listBusPlugins('tool') every 10s, lockstep with the other 5
+  // polling listExtensions('tool') every 10s, lockstep with the other 5
   // section LEDs so 6/6 LEDs visibly update in the same tick.
   const [toolSnap, setToolSnap] = useState<ToolSnapshot>({
     tone: 'loading',
@@ -415,7 +415,7 @@ export function BusAdminPanel() {
   // — arrow keys only move focus, never toggle, because expand mutates
   // expandedIds + fires P3.40 ChatPanel TabStrip flash (side effects).
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
-  // P2.7f — deep-link target from Sidebar's BusPluginPlaceholder "在 Bus 详情
+  // P2.7f — deep-link target from Sidebar's ExtensionPlaceholder "在 Bus 详情
   //查看 →" button. Consumed once on mount + whenever it flips non-null, then
   // cleared so a back-and-forth between Sidebar/Bus tab doesn't re-expand
   // (player may have manually collapsed it since).
@@ -430,7 +430,7 @@ export function BusAdminPanel() {
   useEffect(() => {
     let cancel = false;
     setLoading(true);
-    listBusPlugins()
+    listExtensions()
       .then((r) => {
         if (cancel) return;
         setItems(r.items);
@@ -548,7 +548,7 @@ export function BusAdminPanel() {
     let cancelled = false;
     const tick = async (): Promise<void> => {
       try {
-        const plugins = await listBusPlugins('agent');
+        const plugins = await listExtensions('agent');
         if (cancelled) return;
         const agentIds = plugins.items.map((p) => p.id);
         const tone: ProvHealthTone = agentIds.length === 0 ? 'down' : 'ok';
@@ -584,7 +584,7 @@ export function BusAdminPanel() {
     const tick = async (): Promise<void> => {
       try {
         const [plugins, providers] = await Promise.all([
-          listBusPlugins('model-binding'),
+          listExtensions('model-binding'),
           dashApi.providers(),
         ]);
         if (cancelled) return;
@@ -634,7 +634,7 @@ export function BusAdminPanel() {
     let cancelled = false;
     const tick = async (): Promise<void> => {
       try {
-        const r = await listBusPlugins('skill');
+        const r = await listExtensions('skill');
         if (cancelled) return;
         const skills = r.items.map((p) => {
           const triggers = (p.skills ?? []).map((s) => s.trigger);
@@ -684,7 +684,7 @@ export function BusAdminPanel() {
     let cancelled = false;
     const tick = async (): Promise<void> => {
       try {
-        const r = await listBusPlugins('tool');
+        const r = await listExtensions('tool');
         if (cancelled) return;
         const tools = r.items.map((p) => {
           const toolList = p.tools ?? [];
@@ -946,7 +946,7 @@ export function BusAdminPanel() {
             : `${agentSnap.registered}`;
         const agentTitle =
           agentSnap.tone === 'loading'
-            ? 'Agent — checking /api/bus/plugins?kind=agent …'
+            ? 'Agent — checking /api/extensions/list?kind=agent …'
             : `Agent — ${agentSnap.registered} plugin${agentSnap.registered === 1 ? '' : 's'} registered · ${t('bus.mdFocusKind', { kind: 'agent' })}`;
         const provCount = cliProv.tone === 'loading' ? '…/…' : `${cliProv.ok}/${cliProv.total}`;
         const provTitle =
@@ -1352,7 +1352,7 @@ export function BusAdminPanel() {
         ))}
       </div>
       <div className="ba-footnote">
-        {t('bus.footnoteSource')}<code>GET /api/bus/plugins</code> · slim shape · provides.{'{'}workbench / modelBinding /
+        {t('bus.footnoteSource')}<code>GET /api/extensions/list</code> · slim shape · provides.{'{'}workbench / modelBinding /
         skills / tools / events / cliProvider{'}'} {t('bus.footnoteExpanded')} · {t('bus.footnoteBroken')} ·
         {' '}{t('bus.footnoteRowHint')}
       </div>
@@ -1465,12 +1465,12 @@ function KindSection({
       : `${wbMounted}/${wbTotal} mounted`
     : '';
   // P4.34 — agent section LED. After daemon retirement (R3), driven only by
-  // listBusPlugins('agent') every 10s. Tone is `agentSnap.tone` (ok-violet
+  // listExtensions('agent') every 10s. Tone is `agentSnap.tone` (ok-violet
   // when ≥1 plugin registered, down-red on 0 or fetch failure).
   const showAgentLed = group.kind === 'agent';
   const agentTitle = showAgentLed
     ? agentSnap.tone === 'loading'
-      ? 'Agent — checking /api/bus/plugins?kind=agent …'
+      ? 'Agent — checking /api/extensions/list?kind=agent …'
       : agentSnap.tone === 'down' && agentSnap.registered === 0
         ? 'Agent — bus fetch failed or no agent plugins registered'
         : [
@@ -1484,7 +1484,7 @@ function KindSection({
       : `${agentSnap.registered} reg`
     : '';
   // P4.35 — model-binding section LED. Driven by parent BusAdminPanel polling
-  // listBusPlugins('model-binding') + dashApi.providers() in lockstep. Tone /
+  // listExtensions('model-binding') + dashApi.providers() in lockstep. Tone /
   // counts read directly from mbSnap (computed at fetch time via the
   // vendor→provider map join). Tooltip lists each binding's vendor/channel +
   // mapped provider + health detail so the player can see *why* a binding is
@@ -1492,7 +1492,7 @@ function KindSection({
   const showMbLed = group.kind === 'model-binding';
   const mbTitle = showMbLed
     ? mbSnap.tone === 'loading'
-      ? 'Model Binding — checking /api/bus/plugins?kind=model-binding + /api/cli-providers …'
+      ? 'Model Binding — checking /api/extensions/list?kind=model-binding + /api/cli-providers …'
       : mbSnap.tone === 'down' && mbSnap.registered === 0
         ? 'Model Binding — none registered (or bus/cli-providers fetch failed)'
         : [
@@ -1516,7 +1516,7 @@ function KindSection({
       ? '…/…'
       : `${mbSnap.live}/${mbSnap.registered} live`
     : '';
-  // P4.36 — skill section LED. Single-channel poll (listBusPlugins('skill'))
+  // P4.36 — skill section LED. Single-channel poll (listExtensions('skill'))
   // exposed via parent BusAdminPanel as skillSnap. Tooltip lists each skill
   // plugin's id + its registered trigger(s) + a [stable]/[experimental]/
   // [no triggers] tail so the player can see *why* a tone is warn (today
@@ -1526,7 +1526,7 @@ function KindSection({
   const showSkillLed = group.kind === 'skill';
   const skillTitle = showSkillLed
     ? skillSnap.tone === 'loading'
-      ? 'Skill — checking /api/bus/plugins?kind=skill …'
+      ? 'Skill — checking /api/extensions/list?kind=skill …'
       : skillSnap.tone === 'down' && skillSnap.registered === 0
         ? 'Skill — none registered (or bus fetch failed)'
         : [
@@ -1559,7 +1559,7 @@ function KindSection({
   const showToolLed = group.kind === 'tool';
   const toolTitle = showToolLed
     ? toolSnap.tone === 'loading'
-      ? 'Tool — checking /api/bus/plugins?kind=tool …'
+      ? 'Tool — checking /api/extensions/list?kind=tool …'
       : toolSnap.tone === 'down' && toolSnap.registered === 0
         ? 'Tool — none registered (or bus fetch failed)'
         : [
@@ -1699,7 +1699,7 @@ function KindSection({
 }
 
 interface PluginRowProps {
-  p: BusPluginInfo;
+  p: ExtensionInfo;
   expanded: boolean;
   onToggle: (id: string) => void;
   rowRefs: React.MutableRefObject<Map<string, HTMLTableRowElement>>;
@@ -1840,7 +1840,7 @@ function PluginDetail({
   descEn,
   onSoloKind,
 }: {
-  p: BusPluginInfo;
+  p: ExtensionInfo;
   descZh: string;
   descEn: string;
   onSoloKind: (kind: string) => void;
@@ -1877,12 +1877,12 @@ function PluginDetail({
   const hasAgentLink = p.kind === 'agent';
   const hasWbLink = p.kind === 'workbench' && !!wb;
   const hasKindLink = !hasAgentLink && !hasWbLink;
-  // The id IS the npm package; daemon scans packages/marketplace/plugins/<dir>
+  // The id IS the npm package; daemon scans packages/marketplace/extensions/<dir>
   // where dir is the trailing segment after the @forgeax-plugin/ scope.
   const dir = p.id.startsWith('@forgeax-plugin/')
     ? p.id.slice('@forgeax-plugin/'.length)
     : p.id;
-  const manifestHint = `packages/marketplace/plugins/${dir}/manifest.json`;
+  const manifestHint = `packages/marketplace/extensions/${dir}/manifest.json`;
   // P4.95 — manifest hint pill becomes click-to-copy. Parallel move to P4.94
   // (entry.frontend lime pill → deep-link button): the cyan manifest path was
   // information-only for 4 weeks; now one click copies it to the clipboard so
@@ -2042,14 +2042,14 @@ function PluginDetail({
                 type="button"
                 className="ba-detail-code ba-detail-entry ba-detail-entry-link"
                 onClick={(e) => { e.stopPropagation(); onOpenWbTab(); }}
-                title={t('bus.entryOpenWbTitle', { wbId: wb.id, path: `packages/marketplace/plugins/${dir}/${p.entry.frontend.replace(/^\.\//, '')}` })}
+                title={t('bus.entryOpenWbTitle', { wbId: wb.id, path: `packages/marketplace/extensions/${dir}/${p.entry.frontend.replace(/^\.\//, '')}` })}
               >
                 {p.entry.frontend}
               </button>
             ) : (
               <code
                 className="ba-detail-code ba-detail-entry"
-                title={`packages/marketplace/plugins/${dir}/${p.entry.frontend.replace(/^\.\//, '')}`}
+                title={`packages/marketplace/extensions/${dir}/${p.entry.frontend.replace(/^\.\//, '')}`}
               >
                 {p.entry.frontend}
               </code>
@@ -2119,7 +2119,7 @@ function PluginDetail({
 // stripped). Returns null when the plugin advertises none of these — keeps
 // the detail row visually identical for plugins where only workbench /
 // modelBinding apply (those have their own dedicated cells / strips upstream).
-function ProvidesDetail({ p }: { p: BusPluginInfo }) {
+function ProvidesDetail({ p }: { p: ExtensionInfo }) {
   const { t } = useTranslation();
   const cp = p.cliProvider;
   const skills = p.skills ?? [];
@@ -2244,7 +2244,7 @@ function ProvidesDetail({ p }: { p: BusPluginInfo }) {
   );
 }
 
-function capabilityChips(caps: NonNullable<BusPluginInfo['cliProvider']>['capabilities']) {
+function capabilityChips(caps: NonNullable<ExtensionInfo['cliProvider']>['capabilities']) {
   // 5 fixed keys per CliProviderCapability.capabilities in
   // packages/server/src/bus/types/registry.ts — pre-rendered in a stable order
   // so the player can compare two cli-providers row-by-row.
@@ -2280,7 +2280,7 @@ const CLI_CAP_SHORT: Record<(typeof CLI_CAP_KEYS)[number], string> = {
   sessions: 'sess',
 };
 
-function CliCapabilityMatrix({ items }: { items: BusPluginInfo[] }) {
+function CliCapabilityMatrix({ items }: { items: ExtensionInfo[] }) {
   // Defensive: only rows that actually expose cliProvider make it into the
   // matrix. Server never emits cli-provider kind without cliProvider, but the
   // filter keeps the matrix correct if that ever drifts.

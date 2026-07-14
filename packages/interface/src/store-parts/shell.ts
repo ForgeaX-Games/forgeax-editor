@@ -17,15 +17,15 @@ export function createShellState(
   | 'setMode'
   | 'workbenchTab'
   | 'setWorkbenchTab'
-  | 'workbenchExpandedPluginId'
-  | 'setWorkbenchExpandedPluginId'
+  | 'workbenchExpandedExtensionId'
+  | 'setWorkbenchExpandedExtensionId'
   | 'openWorkbench'
   | 'floatingSurfaces'
   | 'detachSurface'
   | 'redockSurface'
-  | 'dockedPlugins'
-  | 'addDockedPlugin'
-  | 'removeDockedPlugin'
+  | 'dockedExtensions'
+  | 'addDockedExtension'
+  | 'removeDockedExtension'
   | 'markSurfaceDocked'
   | 'activeSession'
   | 'setActiveSession'
@@ -47,22 +47,22 @@ export function createShellState(
     setMode: (m) => set({ mode: m }),
     workbenchTab: 'agents',
     setWorkbenchTab: (t) => set({ workbenchTab: t }),
-    workbenchExpandedPluginId: null,
-    setWorkbenchExpandedPluginId: (id) => set({ workbenchExpandedPluginId: id }),
+    workbenchExpandedExtensionId: null,
+    setWorkbenchExpandedExtensionId: (id) => set({ workbenchExpandedExtensionId: id }),
     openWorkbench: ({ tab, expandedPluginId }) => set((s) => ({
       mode: 'ai',
       workbenchTab: tab ?? s.workbenchTab,
-      workbenchExpandedPluginId: expandedPluginId !== undefined
+      workbenchExpandedExtensionId: expandedPluginId !== undefined
         ? expandedPluginId
-        : s.workbenchExpandedPluginId,
+        : s.workbenchExpandedExtensionId,
     })),
 
-    dockedPlugins: new Set<string>(),
-    addDockedPlugin: (id) => set((s) => ({ dockedPlugins: new Set([...s.dockedPlugins, id]) })),
-    removeDockedPlugin: (id) => set((s) => {
-      const next = new Set(s.dockedPlugins);
+    dockedExtensions: new Set<string>(),
+    addDockedExtension: (id) => set((s) => ({ dockedExtensions: new Set([...s.dockedExtensions, id]) })),
+    removeDockedExtension: (id) => set((s) => {
+      const next = new Set(s.dockedExtensions);
       next.delete(id);
-      return { dockedPlugins: next };
+      return { dockedExtensions: next };
     }),
 
     floatingSurfaces: {},

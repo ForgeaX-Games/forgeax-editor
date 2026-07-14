@@ -10,7 +10,7 @@
 // thin `<SurfaceAnchor>` placeholder that publishes its DOM element here; the layer
 // reads the active anchor's rect and overlays the live surface on top.
 //
-// Same "render-but-hide, never re-parent" idea as KeepAlivePluginIframes — moving an
+// Same "render-but-hide, never re-parent" idea as KeepAliveExtensionIframes — moving an
 // iframe between DOM parents forces a reload, so the iframe never moves; only its
 // fixed-position rect tracks the anchor.
 

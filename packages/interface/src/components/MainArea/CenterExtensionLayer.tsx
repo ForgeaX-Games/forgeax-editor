@@ -3,10 +3,10 @@ import type { ReactElement } from 'react';
 import { MoveLeft, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../store';
-import { usePluginManifest, manifestMatchesId } from '../../lib/use-plugin-manifest';
-import { pickLang, type BusPluginInfo } from '../../lib/bus-api';
+import { useExtensionManifest, manifestMatchesId } from '../../lib/use-extension-manifest';
+import { pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
-import { KeepAlivePluginIframes } from './KeepAlivePluginIframes';
+import { KeepAliveExtensionIframes } from './KeepAliveExtensionIframes';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 /**
@@ -19,30 +19,30 @@ import { usePanelRenderers } from '../DockShell/panelRenderers';
  * cold-restarted on each switch. This layer lives directly under `.main-area`
  * (which never unmounts), so the iframes it owns survive preview↔workbench and
  * tab switches; we only toggle which one is `active` (visible) — see
- * KeepAlivePluginIframes.
+ * KeepAliveExtensionIframes.
  *
  * The inline wb-plugin-author panel (no standalone iframe build yet) is NOT
- * handled here — WorkbenchMode still routes it to WorkbenchPluginHost.
+ * handled here — WorkbenchMode still routes it to WorkbenchExtensionHost.
  */
-export function CenterPluginLayer(): ReactElement {
+export function CenterExtensionLayer(): ReactElement {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const CornerAgentPicker = usePanelRenderers().slots?.CornerAgentPicker;
   const mode = useShellStore((s) => s.mode);
-  const expandedPluginId = useShellStore((s) => s.workbenchExpandedPluginId);
-  const setExpandedPluginId = useShellStore((s) => s.setWorkbenchExpandedPluginId);
+  const expandedPluginId = useShellStore((s) => s.workbenchExpandedExtensionId);
+  const setExpandedPluginId = useShellStore((s) => s.setWorkbenchExpandedExtensionId);
   const floatingSurfaces = useShellStore((s) => s.floatingSurfaces);
   const detachSurface = useShellStore((s) => s.detachSurface);
   const redockSurface = useShellStore((s) => s.redockSurface);
-  const live = usePluginManifest(expandedPluginId ?? '');
+  const live = useExtensionManifest(expandedPluginId ?? '');
 
-  // Per-plugin manifest cache. `usePluginManifest` flips back to 'loading' on
+  // Per-plugin manifest cache. `useExtensionManifest` flips back to 'loading' on
   // every expandedPluginId change (its effect re-fetches), which would null out
   // `activePlugin` and flash the "正在加载插件…" overlay even when switching to a
   // plugin whose iframe is already kept alive. Caching the last resolved
   // manifest per id lets a re-visit resolve synchronously → no loading flash,
   // no hide/show flicker. New (never-seen) plugins still show loading once.
-  const manifestCacheRef = useRef<Map<string, BusPluginInfo>>(new Map());
+  const manifestCacheRef = useRef<Map<string, ExtensionInfo>>(new Map());
   // `live` may briefly be the PREVIOUS plugin's manifest on the first render
   // after a switch — only trust it when it matches the current expanded id (by
   // either manifest id or workbench-id alias, since callers open by both).
@@ -67,7 +67,7 @@ export function CenterPluginLayer(): ReactElement {
   const showLoading = mode === 'ai' && !!expandedPluginId && live === 'loading' && !resolved;
   const showError =
     mode === 'ai' && !!expandedPluginId && live !== 'loading' && !isStandalone
-    // wb-plugin-author renders inline via WorkbenchPluginHost, not here.
+    // wb-plugin-author renders inline via WorkbenchExtensionHost, not here.
     && resolved !== null;
   const showUnavailable =
     mode === 'ai' && !!expandedPluginId && live === null && !resolved;
@@ -141,7 +141,7 @@ export function CenterPluginLayer(): ReactElement {
         </div>
       )}
       <div className="fx-center-plugin-body">
-        <KeepAlivePluginIframes
+        <KeepAliveExtensionIframes
           pane="center"
           activePlugin={activePlugin}
           floatingKeys={floatingSurfaces}

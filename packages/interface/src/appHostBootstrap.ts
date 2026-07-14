@@ -1,15 +1,18 @@
 // packages/interface/src/appHostBootstrap.ts
 //
-// The single place that builds an AppHost + wires the built-in plugin list.
+// The single place that builds an AppHost + wires the built-in extension list.
 // Studio (which injects Dashboard / Settings / StatusFeeds / surfaces / slots /
-// detached / editor concrete plugins) calls this and passes them via
+// detached / editor concrete extensions) calls this and passes them via
 // `overrides.extensions`. Interface-alone callers pass no overrides — no overlays,
 // no detached windows, and no editor-specific panels show up (only the L1 base +
 // chat remain).
 //
 // Each manifest's setup is wrapped in a control.beginSetup(m) / try / finally
 // endSetup() bracket so host.extend(capability, api) — which requires an
-// active setup — always sees the right owner during synchronous plugin boot.
+// active setup — always sees the right owner during synchronous extension boot.
+// The wrap is also where declarative `contributes` lands (ADR 0025 M2): panels
+// contributions are registered before setup() runs and removed together with
+// the extension's cleanup, so a pure-UI extension needs no setup at all.
 
 import {
   createAppHost,
@@ -18,11 +21,12 @@ import {
   type AppExtension,
   type AppExtensionContext,
 } from './core/app-shell';
+import type { ExtensionManifest, Cleanup } from './core/extension-foundation/types';
+import type { HostCapability } from './core/app-shell/types';
 import { createExtensionLoader } from './core/extension-foundation/loader';
 import { foundationCommandsExtension } from './core/extensions/foundation-commands';
 import { foundationBusExtension } from './core/extensions/foundation-bus';
 import { foundationStorageExtension } from './core/extensions/foundation-storage';
-import { foundationPanelsExtension } from './core/extensions/foundation-panels';
 import { builtinCommandsExtension } from './core/extensions/builtin-commands';
 import { panelsChatExtension } from './core/extensions/panels-chat';
 import './core/extensions/session-client.d'; // side-effect: AppHost.session type augmentation
@@ -52,41 +56,52 @@ export async function bootstrapAppHost(
 ): Promise<AppHostBootstrapResult> {
   const { host, control } = createAppHost();
 
-  const contextFactory = (m: AppExtension): AppExtensionContext => ({
+  const contextFactory = (m: ExtensionManifest<HostCapability, AppExtensionContext>): AppExtensionContext => ({
     host,
     bus: host.bus,
     storage: host.storage,
     log: consoleLogger,
     registerCommand: (cmd) => host.commands.register(cmd),
-    contributePanels: (patch) => foundationPanelsExtension.contributePanels(host, patch),
+    contributePanels: (patch) => control.contributePanels(m.id, patch),
   });
 
   const loader = createExtensionLoader<AppExtensionContext, string>({
     capabilities: control.capabilities,
     contextFactory,
     onError: (err, m, phase) =>
-      consoleLogger.error(`plugin "${m.id}" ${phase} error`, err),
+      consoleLogger.error(`extension "${m.id}" ${phase} error`, err),
   });
 
   // Wrap each manifest so control.beginSetup / endSetup brackets its sync
   // setup frame — host.extend(cap, api) inside setup() needs an active owner.
-  const wrap = (m: AppExtension): AppExtension => ({
+  // The wrap also applies declarative `contributes.panels` BEFORE setup() and
+  // composes its removal into the extension's cleanup (reverse order), and
+  // supplies the loader-required setup shim for contributes-only extensions.
+  const wrap = (m: AppExtension): ExtensionManifest<HostCapability, AppExtensionContext> => ({
     ...m,
     async setup(ctx) {
       control.beginSetup(m);
       try {
-        return await m.setup(ctx);
+        const cleanups: Cleanup[] = [];
+        if (m.contributes?.panels) {
+          cleanups.push(control.contributePanels(m.id, m.contributes.panels));
+        }
+        const r = await m.setup?.(ctx);
+        if (typeof r === 'function') cleanups.push(r);
+        if (cleanups.length === 0) return undefined;
+        return async () => {
+          for (const c of cleanups.slice().reverse()) await c();
+        };
       } finally {
         control.endSetup();
       }
     },
   });
 
-  const manifests: AppExtension[] = [
+  const manifests = [
     foundationCommandsExtension,
     foundationBusExtension,
     foundationStorageExtension,
-    foundationPanelsExtension,
     builtinCommandsExtension,
     panelsChatExtension,
     sessionClientExtension,

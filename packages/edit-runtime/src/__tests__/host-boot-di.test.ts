@@ -163,7 +163,7 @@ function makeCtx(over?: Partial<HostSessionContext>): HostSessionContext {
     setBootStage: (s: string) => { stageCalls.push(s); },
     discoverGameCameraFromWorld: () => {},
     applyActiveCamera: () => {},
-    canvas: {} as never,
+    playInput: { sample: () => ({ downKeys: new Set(), upKeys: new Set(), buttons: [false, false, false], movementX: 0, movementY: 0, wheelDelta: 0, focused: true, pointerLocked: false }), detach() {} },
     physics: undefined,
     ...over,
   } as HostSessionContext;

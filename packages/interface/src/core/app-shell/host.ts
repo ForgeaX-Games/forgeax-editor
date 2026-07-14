@@ -6,11 +6,14 @@ import { EventBus } from '../extension-foundation/bus';
 import { createContextKeys, type ContextKeysApi } from '../extension-foundation/context-keys';
 import { createStorageApi, type StorageApi } from '../extension-foundation/storage';
 import { createCapabilityRegistry, type CapabilityRegistry } from '../extension-foundation/capabilities';
+import { createContributionRegistry } from '../extension-foundation/contribution-registry';
 import { ExtensionConflictError } from '../extension-foundation/errors';
+import type { Cleanup } from '../extension-foundation/types';
 import type {
   AppBusEventMap, AppHost, AppHostBase, AppLogger, AppExtension, HostCapability,
 } from './types';
 import { consoleLogger } from './logger';
+import { derivePanelRenderers } from './derive-panel-renderers';
 import { DEFAULT_PANEL_RENDERERS, type PanelRenderers } from '../../components/DockShell/panelRenderers';
 
 const BUILT_IN_CAPS: readonly HostCapability[] = [
@@ -29,6 +32,12 @@ export interface AppHostControl {
   endSetup(): void;
   removeExtensionsByOwner(ownerId: string): void;
   readonly capabilities: CapabilityRegistry<HostCapability>;
+  /** ADR 0025 M2 — the contribution channel behind host.panels. Owner-tagged;
+   *  the returned Cleanup removes exactly this batch (snapshot re-folds). */
+  contributePanels(owner: string, patch: Partial<PanelRenderers>): Cleanup;
+  /** Coarse change signal for the derived panels snapshot (React subscribes
+   *  via useSyncExternalStore in App.tsx). */
+  onPanelsChange(listener: () => void): () => void;
   dispose(): void;
 }
 
@@ -46,10 +55,24 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   const bus = new EventBus<AppBusEventMap>();
   const storage: StorageApi = createStorageApi(log);
   const contextKeys: ContextKeysApi = createContextKeys();
-  // panels is mutable during boot — plugins call ctx.contributePanels() to
-  // merge patches into this container. foundation-panels plugin exposes it
-  // as host.panels below.
-  const panels: PanelRenderers = { ...DEFAULT_PANEL_RENDERERS, ...deps.initialPanels };
+  // ADR 0025 M2: the ContributionRegistry is the SSOT; host.panels is a
+  // memoized DERIVED snapshot (new identity per registry version — App.tsx
+  // reads it through useSyncExternalStore, so post-boot contributions and
+  // cleanups re-render the shell). deps.initialPanels joins as the host-owned
+  // baseline contribution.
+  const panelsRegistry = createContributionRegistry<Partial<PanelRenderers>>();
+  if (deps.initialPanels) panelsRegistry.contribute('(host)', deps.initialPanels);
+  let panelsCache: { v: number; snap: PanelRenderers } | null = null;
+  const panelsSnapshot = (): PanelRenderers => {
+    const v = panelsRegistry.version();
+    if (panelsCache?.v === v) return panelsCache.snap;
+    const snap = derivePanelRenderers(
+      DEFAULT_PANEL_RENDERERS,
+      panelsRegistry.entries().map((e) => e.item),
+    );
+    panelsCache = { v, snap };
+    return snap;
+  };
 
   const extensions: ExtensionRecord[] = [];
   const extensionFields: Record<string, unknown> = {};
@@ -57,7 +80,8 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   let activeSetup: AppExtension | null = null;
 
   const base: AppHostBase = {
-    commands, bus, storage, contextKeys, panels,
+    commands, bus, storage, contextKeys,
+    get panels() { return panelsSnapshot(); },
     get capabilities() { return caps.snapshot(); },
     extend(capability, api) {
       if (activeSetup === null) {
@@ -125,6 +149,8 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
     },
     endSetup() { activeSetup = null; },
     capabilities: caps,
+    contributePanels(owner, patch) { return panelsRegistry.contribute(owner, patch); },
+    onPanelsChange(listener) { return panelsRegistry.onChange(listener); },
     removeExtensionsByOwner(ownerId) {
       const indices: number[] = [];
       for (let i = extensions.length - 1; i >= 0; i--) {

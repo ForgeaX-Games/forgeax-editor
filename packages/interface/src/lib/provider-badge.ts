@@ -50,7 +50,7 @@ export function providerBadgeFor(id: string): ProviderBadge {
 
 // Module-scope registry of bus cli-provider plugins, keyed by shortId
 // (e.g. 'claude-code'). Single fetch on first hook use; subsequent hook
-// callers reuse the cached map. /api/bus/plugins?kind=cli-provider is
+// callers reuse the cached map. /api/extensions/list?kind=cli-provider is
 // session-immutable in the current v1 (plugins load at server boot), so
 // no polling needed. Failure → empty map (pill stays non-interactive).
 let _cliProviderMap: Map<string, string> | null = null;
@@ -76,7 +76,7 @@ function shortIdFromPluginId(pluginId: string): string | null {
 function ensureCliProviderMap(): Promise<void> {
   if (_cliProviderMap) return Promise.resolve();
   if (_cliProviderLoad) return _cliProviderLoad;
-  _cliProviderLoad = fetch('/api/bus/plugins?kind=cli-provider')
+  _cliProviderLoad = fetch('/api/extensions/list?kind=cli-provider')
     .then((r) => (r.ok ? r.json() : { items: [] }))
     .then((j: { items?: CliProviderItem[] }) => {
       const m = new Map<string, string>();

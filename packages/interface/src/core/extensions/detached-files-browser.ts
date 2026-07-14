@@ -5,7 +5,6 @@ import type { AppExtension } from '../app-shell/types';
 export function createDetachedFilesBrowserExtension(FilesBrowser: React.ComponentType): AppExtension {
   return {
     id: 'detached.files-browser', version: '1.0.0',
-    requires: ['panels'],
-    setup(ctx) { return ctx.contributePanels({ detached: { FilesBrowser } }); },
+    contributes: { panels: { detached: { FilesBrowser } } },
   };
 }

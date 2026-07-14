@@ -2,12 +2,12 @@ import type { ReactElement } from 'react';
 import { MoveLeft } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../store';
-import type { BusPluginInfo } from '../../lib/bus-api';
-import { usePluginManifest } from '../../lib/use-plugin-manifest';
+import type { ExtensionInfo } from '../../lib/extension-api';
+import { useExtensionManifest } from '../../lib/use-extension-manifest';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 // MainArea-side workbench plugin host. Standalone-iframe plugins are now owned
-// by the keep-alive `CenterPluginLayer` (always-mounted overlay in MainArea) so
+// by the keep-alive `CenterExtensionLayer` (always-mounted overlay in MainArea) so
 // they survive tab/mode switches instead of cold-restarting. This component is
 // reduced to the one case the layer does NOT handle: the inline
 // `wb-plugin-author` panel, which has no standalone iframe build yet.
@@ -15,29 +15,29 @@ import { usePanelRenderers } from '../DockShell/panelRenderers';
 /** Returns true if the plugin should be rendered in the central MainArea
  *  (i.e. it declares a standalone iframe entry). Sidebar callers use this
  *  to know when to hand off rendering to the central pane. */
-export function pluginRendersInMainArea(pluginInfo?: BusPluginInfo | null): boolean {
+export function extensionRendersInMainArea(pluginInfo?: ExtensionInfo | null): boolean {
   return !!pluginInfo?.entry?.standalone;
 }
 
 /** Doc 06 §panes — true when the plugin declares an explicit left pane and
  *  ships a standalone iframe to host it. Sidebar uses this to decide whether
- *  to mount `<StandalonePluginIframe pane="left">` in place of the legacy
- *  BusPluginPlaceholder info card. */
-export function pluginRendersInSidebarLeftPane(pluginInfo?: BusPluginInfo | null): boolean {
+ *  to mount `<StandaloneExtensionIframe pane="left">` in place of the legacy
+ *  ExtensionPlaceholder info card. */
+export function extensionRendersInSidebarLeftPane(pluginInfo?: ExtensionInfo | null): boolean {
   return !!(pluginInfo?.entry?.standalone && pluginInfo?.workbench?.panes?.left);
 }
 
 /** Inline host for non-iframe workbench panels. WorkbenchMode routes
- *  standalone-iframe plugins to the keep-alive CenterPluginLayer and only calls
+ *  standalone-iframe plugins to the keep-alive CenterExtensionLayer and only calls
  *  this for plugins that have an injected inline panel (see
  *  PanelRenderers.workbenchPanels — studio registers wb-plugin-author; interface
  *  itself names no specific plugin). The manifest fetch just feeds the agent
  *  picker's preferredAgent. */
-export function WorkbenchPluginHost(): ReactElement | null {
+export function WorkbenchExtensionHost(): ReactElement | null {
   const { t } = useTranslation();
-  const pluginId = useShellStore((s) => s.workbenchExpandedPluginId);
-  const setPluginId = useShellStore((s) => s.setWorkbenchExpandedPluginId);
-  const manifest = usePluginManifest(pluginId ?? '');
+  const pluginId = useShellStore((s) => s.workbenchExpandedExtensionId);
+  const setPluginId = useShellStore((s) => s.setWorkbenchExpandedExtensionId);
+  const manifest = useExtensionManifest(pluginId ?? '');
   const { workbenchPanels, slots } = usePanelRenderers();
   const CornerAgentPicker = slots?.CornerAgentPicker;
 
@@ -51,7 +51,7 @@ export function WorkbenchPluginHost(): ReactElement | null {
 
   const preferredAgentPluginId = manifest && manifest !== 'loading' ? manifest.workbench?.preferredAgent : undefined;
 
-  // Standalone-iframe plugins are owned by CenterPluginLayer (keep-alive).
+  // Standalone-iframe plugins are owned by CenterExtensionLayer (keep-alive).
   if (manifest && manifest !== 'loading' && manifest.entry?.standalone) return null;
 
   // Inline (non-iframe) panel injected by the host. Studio registers
@@ -80,6 +80,6 @@ export function WorkbenchPluginHost(): ReactElement | null {
   }
 
   // Manifest still resolving, or a non-standalone non-author plugin — the
-  // CenterPluginLayer overlay renders the loading / "缺少入口" status instead.
+  // CenterExtensionLayer overlay renders the loading / "缺少入口" status instead.
   return null;
 }

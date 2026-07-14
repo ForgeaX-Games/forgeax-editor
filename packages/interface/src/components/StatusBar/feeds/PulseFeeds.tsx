@@ -16,7 +16,7 @@ import { Brain, Sparkles, Wrench, Bot, Gauge } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../../store';
 import { emitDeepLink } from '../../../lib/deep-link-bus';
-import { listBusPlugins } from '../../../lib/bus-api';
+import { listExtensions } from '../../../lib/extension-api';
 import { dashApi } from '../../../lib/dashboard-api';
 import { useStatusBarItem } from '../store';
 import { StatusChip, type ChipState } from '../StatusChip';
@@ -102,7 +102,7 @@ function ModelBindingPulseFeed() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('model-binding');
+        const r = await listExtensions('model-binding');
         if (cancelled) return;
         setState(r.count > 0 ? 'ok' : 'empty');
         setCount(r.count);
@@ -155,7 +155,7 @@ function SkillPulseFeed() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('skill');
+        const r = await listExtensions('skill');
         if (cancelled) return;
         setState(r.count > 0 ? 'ok' : 'empty');
         setCount(r.count); setIds(r.items.map((p) => p.id));
@@ -207,7 +207,7 @@ function ToolPulseFeed() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('tool');
+        const r = await listExtensions('tool');
         if (cancelled) return;
         setState(r.count > 0 ? 'ok' : 'empty');
         setCount(r.count); setIds(r.items.map((p) => p.id));
@@ -259,7 +259,7 @@ function AgentPulseFeed() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('agent');
+        const r = await listExtensions('agent');
         if (cancelled) return;
         setState(r.count > 0 ? 'ok' : 'empty');
         setCount(r.count); setIds(r.items.map((p) => p.id));

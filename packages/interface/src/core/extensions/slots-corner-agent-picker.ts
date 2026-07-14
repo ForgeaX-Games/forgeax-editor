@@ -7,7 +7,6 @@ export function createSlotsCornerAgentPickerExtension(
 ): AppExtension {
   return {
     id: 'slots.corner-agent-picker', version: '1.0.0',
-    requires: ['panels'],
-    setup(ctx) { return ctx.contributePanels({ slots: { CornerAgentPicker } }); },
+    contributes: { panels: { slots: { CornerAgentPicker } } },
   };
 }

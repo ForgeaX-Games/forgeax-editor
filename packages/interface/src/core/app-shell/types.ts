@@ -62,4 +62,19 @@ export interface AppExtensionContext {
   contributePanels(patch: Partial<PanelRenderers>): Cleanup;
 }
 
-export type AppExtension = ExtensionManifest<HostCapability, AppExtensionContext>;
+/** ADR 0025 M2 — declarative contributions. Applied by the bootstrap glue
+ *  before setup() runs and removed with the extension's cleanup; a pure-UI
+ *  extension is just data (no setup at all). */
+export interface AppExtensionContributes {
+  readonly panels?: Partial<PanelRenderers>;
+}
+
+/** An app-shell extension manifest. Unlike the domain-agnostic
+ *  ExtensionManifest, `setup` is OPTIONAL here — contributes-only extensions
+ *  need no imperative code; the bootstrap wrap supplies the loader-required
+ *  setup shim (see appHostBootstrap.ts). */
+export type AppExtension =
+  Omit<ExtensionManifest<HostCapability, AppExtensionContext>, 'setup'> & {
+    readonly setup?: ExtensionManifest<HostCapability, AppExtensionContext>['setup'];
+    readonly contributes?: AppExtensionContributes;
+  };

@@ -19,7 +19,7 @@ export interface PluginIframeHostProps {
   loadErrorText: (error: string) => string;
 }
 
-export function PluginIframeHost({
+export function ExtensionIframeHost({
   pluginId,
   src,
   pane,
@@ -97,7 +97,7 @@ export function PluginIframeHost({
         onInvalid: (_, reason) => {
           if (import.meta.env.DEV) {
             // eslint-disable-next-line no-console
-            console.warn('[PluginIframeHost] invalid envelope:', reason);
+            console.warn('[ExtensionIframeHost] invalid envelope:', reason);
           }
         },
       });

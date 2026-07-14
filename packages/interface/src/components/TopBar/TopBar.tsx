@@ -23,7 +23,7 @@ import { getWorkbenchClient } from '../../store';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { dashApi } from '../../lib/dashboard-api';
 import { alertDialog, confirmDialog } from '../../lib/dialog';
-import { listBusPlugins } from '../../lib/bus-api';
+import { listExtensions } from '../../lib/extension-api';
 import { useTranslation } from '@/i18n';
 import { PublishOnboarding } from './PublishOnboarding';
 import { publishDoc } from './publish-options';
@@ -108,7 +108,7 @@ function useWorkbenchPluginCount(): WbCountState {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('workbench');
+        const r = await listExtensions('workbench');
         if (cancelled) return;
         setState({ kind: 'ok', count: r.count });
       } catch {
@@ -128,7 +128,7 @@ function useWorkbenchPluginCount(): WbCountState {
 // Opus 4.7"). Bus already hosts a `@forgeax-plugin/model-anthropic-text`
 // model-binding plugin (kind=model-binding count=1) but no surface at the
 // top right reflected that registration or let the player drill into it.
-// Now: polls /api/bus/plugins?kind=model-binding every 12s, decorates the
+// Now: polls /api/extensions/list?kind=model-binding every 12s, decorates the
 // pill with a teal #7be7c4 LED dot + small count suffix, and turns the
 // span into a button. Click → setMode('bus') + setPendingBusKindFilter(
 // 'model-binding') — same kind-only-no-expand deep-link pattern P4.3's
@@ -150,7 +150,7 @@ function useModelBindingCount(): MbCountState {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await listBusPlugins('model-binding');
+        const r = await listExtensions('model-binding');
         if (cancelled) return;
         setState({ kind: 'ok', count: r.count, ids: r.items.map((p) => p.id) });
       } catch {

@@ -4,7 +4,7 @@
  * A detached window loads the SAME bundle as the main shell but with
  * `?surface=...` in its URL. `main.tsx` decodes it and mounts this instead of
  * the full <App>, so the window shows ONLY the requested surface (today: a
- * plugin iframe). It reuses <StandalonePluginIframe> verbatim — the iframe is
+ * plugin iframe). It reuses <StandaloneExtensionIframe> verbatim — the iframe is
  * always `active` here because the whole OS window IS the visibility (no
  * keep-alive hiding needed at this level).
  *
@@ -14,8 +14,8 @@
 import type { ReactElement } from 'react';
 import type { SurfaceDescriptor } from '../lib/platform';
 import { useTranslation } from '@/i18n';
-import { usePluginManifest } from '../lib/use-plugin-manifest';
-import { StandalonePluginIframe } from './MainArea/StandalonePluginIframe';
+import { useExtensionManifest } from '../lib/use-extension-manifest';
+import { StandaloneExtensionIframe } from './MainArea/StandaloneExtensionIframe';
 import { ConsolePanel } from './MainArea/ConsolePanel';
 import { Sidebar } from './Sidebar/Sidebar';
 import { MainArea } from './MainArea/MainArea';
@@ -127,7 +127,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
 
 function DetachedPluginSurface({ surface }: Props): ReactElement {
   const { t } = useTranslation();
-  const manifest = usePluginManifest(surface.id);
+  const manifest = useExtensionManifest(surface.id);
 
   if (manifest === 'loading') {
     return (
@@ -146,7 +146,7 @@ function DetachedPluginSurface({ surface }: Props): ReactElement {
 
   return (
     <div className="fx-detached-surface" style={fill}>
-      <StandalonePluginIframe plugin={manifest} pane={surface.pane} active />
+      <StandaloneExtensionIframe plugin={manifest} pane={surface.pane} active />
     </div>
   );
 }

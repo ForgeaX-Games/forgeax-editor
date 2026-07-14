@@ -7,9 +7,6 @@ export function createSurfacesSceneEditorExtension(
 ): AppExtension {
   return {
     id: 'surfaces.scene-editor', version: '1.0.0',
-    requires: ['panels'],
-    setup(ctx) {
-      return ctx.contributePanels({ surfaces: { SceneEditor } });
-    },
+    contributes: { panels: { surfaces: { SceneEditor } } },
   };
 }

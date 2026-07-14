@@ -14,7 +14,7 @@ import { useShellStore, tabLabel, type AppMode } from '../store';
 import { setActiveWorkbench } from './workbenches';
 import { useHealthStore } from '../components/StatusBar/healthStore';
 import { getBrowserConsole, clearBrowserConsole } from '../components/StatusBar/healthBridge';
-import { listBusPlugins, pickLang } from './bus-api';
+import { listExtensions, pickLang } from './extension-api';
 
 let registered = false;
 
@@ -120,7 +120,7 @@ export function registerBuiltinActions(): void {
     firstClass: true,
     surface: 'ui',
     run: async () => {
-      const { items } = await listBusPlugins('workbench');
+      const { items } = await listExtensions('workbench');
       const plugins = items
         .filter((p) => !p.workbench?.hidden)
         .map((p) => ({
@@ -143,7 +143,7 @@ export function registerBuiltinActions(): void {
     surface: 'ui',
     // 命令面板把 pluginId 变成「现有插件」下拉,免瞎填。
     choices: {
-      pluginId: async () => (await listBusPlugins('workbench')).items.filter((p) => !p.workbench?.hidden).map((p) => p.id),
+      pluginId: async () => (await listExtensions('workbench')).items.filter((p) => !p.workbench?.hidden).map((p) => p.id),
     },
     run: (args) => {
       const pluginId = args.pluginId as string;

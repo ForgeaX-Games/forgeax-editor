@@ -105,8 +105,8 @@ export interface KeyboardRouterDeps {
   isPlayMode: () => boolean;
   /** Current viewport display axis (for G toggle, AC-Cb4). */
   getDisplay: () => 'scene' | 'game';
-  /** Current input owner (for G: play·game yields to the game, T0-10 / RK-10). */
-  getInputTarget: () => 'scene' | 'game';
+  /** Current input owner (for G: an active game lease yields to the game). */
+  getInputTarget: () => 'editor' | 'game';
   /** Entity: delete the given handles (cascade, one undo step). */
   deleteEntities: (ids: number[]) => void;
   /** Entity: duplicate the given handles. */
@@ -322,11 +322,11 @@ export function buildShortcuts(): ShortcutDef[] {
       allowInInput: true,
       match: (e) => e.key === 'Escape' && !mod(e) && !e.shiftKey && !e.altKey,
       run: () => {
-        // Escape releases Play's game input to the editor controls without
-        // stopping the simulation: play·game → play·scene. G intentionally stays
-        // game-owned in play·game (routeG), so it cannot trigger this transition.
+        // Escape revokes the explicit game-control lease without changing the
+        // simulation or what the viewport displays. G remains game-owned while
+        // leased, so it cannot steal a gameplay key to do this transition.
         if (routerDeps?.isPlayMode() && routerDeps.getInputTarget() === 'game') {
-          routerDeps.dispatch({ kind: 'setDisplay', display: 'scene' }, 'human');
+          routerDeps.dispatch({ kind: 'releaseGameControl' }, 'human');
           return true;
         }
         const s = store();
