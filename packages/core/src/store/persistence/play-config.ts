@@ -1,6 +1,6 @@
 // store/persistence/play-config — the launcher-config persistence cluster:
-// <game>/play-config.json read/write (UE-style "play this level"). Read by the
-// GAME at boot: { mode: 'campaign' } or { mode: 'level', level: '<sceneId>' }.
+// <game>/play-config.json read/write (UE-style "play this scene"). The editor
+// host consumes its selected SceneAsset GUID before bootstrap; games never read it.
 //
 // M2 (w7): a `createPlayConfig(deps)` DI factory. This is the CLEAN fetch
 // injection proof (D-2 / R-P1): readPlayConfig / writePlayConfig reach the backend
@@ -27,9 +27,8 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose.
 import type { ScenePersistenceContext } from '../scene-persistence';
 
-/** The play-config launcher shape (written by the editor's PlayLauncher select,
- *  read by the game at boot). */
-export interface PlayConfig { mode: 'campaign' | 'level'; level?: string; endAfter?: boolean }
+/** Host-owned launcher selection. Scene identity stays a GUID, never a filename. */
+export interface PlayConfig { mode: 'campaign' | 'level'; sceneGuid?: string; endAfter?: boolean }
 
 /** All createPlayConfig needs: the state handle, the injected fetch
  *  (D-2 / R-P1), and the host path resolver. */

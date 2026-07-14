@@ -2,10 +2,9 @@
 //
 // Shows what THIS editor window is editing (one window ↔ one scene, bound via
 // `?sceneFile=` — see store.switchSceneFile) and configures what the Studio
-// ▶ Play tab runs: the full campaign from main, or one specific level.
-// Writes the game's play-config.json via writePlayConfig (host-resolved path,
-// /api/files; gitignored, per-developer launcher state); the game's main.ts
-// reads it at boot.
+// ▶ Play tab runs: the full campaign from main, or one specific SceneAsset.
+// Writes host-owned launcher state via writePlayConfig; the play host consumes
+// its selected GUID before bootstrap, while the game owns campaign semantics.
 import { useEffect, useState } from 'react';
 import {
   getSceneId, useSceneList, useSceneFile, readPlayConfig, writePlayConfig,
@@ -25,7 +24,7 @@ export function LauncherPanel() {
 
   useEffect(() => {
     void readPlayConfig().then((cfg) => {
-      setValue(cfg.mode === 'level' && cfg.level ? cfg.level : CAMPAIGN);
+      setValue(cfg.mode === 'level' && cfg.sceneGuid ? cfg.sceneGuid : CAMPAIGN);
     });
   }, []);
 
@@ -33,23 +32,20 @@ export function LauncherPanel() {
     return <div className="panel ed-launcher"><h3>{t('editor.launcher.title')}</h3><div className="muted" style={{ padding: '4px 10px' }}>{t('editor.launcher.noGameOpen')}</div></div>;
   }
 
-  const pick = (v: string): void => {
-    setValue(v);
-    void writePlayConfig(v === CAMPAIGN ? { mode: 'campaign' } : { mode: 'level', level: v })
-      .then((ok) => {
-        if (!ok) return;
-        setSavedAt(Date.now());
-        // Switch the running ▶ Play to the picked level LIVE — post VAG_SET_LEVEL
-        // so the game switches in place (unloadLevel+loadLevel) instead of
-        // reloading the Play iframe (a reload re-creates the WebGPU context, which
-        // wedges WKWebView's GPU process). CAMPAIGN → first level. Multi-level
-        // games handle it; single-scene games ignore it (no-op). PlaySurface lives
-        // in the Studio shell (top window) and forwards it to the game iframe.
-        const level = v === CAMPAIGN ? (levels[0]?.id ?? '') : v;
-        if (level) {
-          try { window.top?.postMessage({ type: 'VAG_SET_LEVEL', level }, '*'); } catch { /* cross-origin */ }
-        }
-      });
+  const pick = (sceneGuid: string): void => {
+    setValue(sceneGuid);
+    void writePlayConfig(
+      sceneGuid === CAMPAIGN ? { mode: 'campaign' } : { mode: 'level', sceneGuid },
+    ).then((ok) => {
+      if (!ok) return;
+      setSavedAt(Date.now());
+      // Live switching preserves the running WebGPU context. The game receives
+      // only the selected SceneAsset GUID and decides whether it is meaningful.
+      const selectedGuid = sceneGuid === CAMPAIGN ? levels[0]?.guid : sceneGuid;
+      if (selectedGuid) {
+        try { window.top?.postMessage({ type: 'VAG_SET_LEVEL', sceneGuid: selectedGuid }, '*'); } catch { /* cross-origin */ }
+      }
+    });
   };
 
   return (
@@ -71,10 +67,15 @@ export function LauncherPanel() {
           <input type="radio" name="play-target" checked={value === CAMPAIGN} onChange={() => pick(CAMPAIGN)} />
           <span>{t('editor.launcher.campaignOption')}</span>
         </label>
-        {levels.map((s) => (
-          <label key={s.id} className="launcher-option">
-            <input type="radio" name="play-target" checked={value === s.id} onChange={() => pick(s.id)} />
-            <span>{t('editor.launcher.levelOnly', { name: s.name ?? s.id })}</span>
+        {levels.map((scene) => (
+          <label key={scene.guid} className="launcher-option">
+            <input
+              type="radio"
+              name="play-target"
+              checked={value === scene.guid}
+              onChange={() => pick(scene.guid)}
+            />
+            <span>{t('editor.launcher.levelOnly', { name: scene.name ?? scene.id })}</span>
           </label>
         ))}
       </div>

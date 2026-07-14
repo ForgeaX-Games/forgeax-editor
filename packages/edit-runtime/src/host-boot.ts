@@ -90,6 +90,14 @@ export interface HostGameSession {
   readonly slug: string | null;
   /** Host game->disk layout root. Required when slug names a real game. */
   readonly gameRoot?: string;
+  /**
+   * Host-owned catalog URL for this game. An absolute dev URL deliberately
+   * selects the play engine's asset origin; a packaged host supplies its
+   * same-origin URL. The engine only consumes this catalog boundary.
+   */
+  readonly packIndexUrl?: string;
+  /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
+  readonly selectedSceneGuid?: string;
 }
 
 /**

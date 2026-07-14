@@ -71,12 +71,15 @@ describe('createPlayConfig — fetch injected, no network (AC-02 / R-P1)', () =>
     const { deps: d, ctx } = deps({
       fetch: (path) => {
         calls.push(path);
-        return Promise.resolve(new Response(JSON.stringify({ content: JSON.stringify({ mode: 'level', level: 'lvl2' }) }), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({ content: JSON.stringify({ mode: 'level', sceneGuid: '11111111-2222-4333-8444-555555555555' }) }), { status: 200 }));
       },
     });
     ctx.currentSceneId = 'shoot';
     const pc = createPlayConfig(d);
-    expect(await pc.readPlayConfig()).toEqual({ mode: 'level', level: 'lvl2' });
+    expect(await pc.readPlayConfig()).toEqual({
+      mode: 'level',
+      sceneGuid: '11111111-2222-4333-8444-555555555555',
+    });
     expect(calls.length).toBe(1);
     expect(calls[0]).toContain(encodeURIComponent('/games/g1/play-config.json'));
     expect(calls[0]).toContain('optional=1');
