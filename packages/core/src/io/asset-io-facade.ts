@@ -13,11 +13,21 @@
 //   feat (keyboard-router convergence) M2 T2-1: AssetIOFacade encapsulates the
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
 import type { PackFile } from '../scene/scene-pack';
-import { readPack, writePack, deleteAsset, generateAssetGuid } from '../session/pack-ops';
+import {
+  readPack, writePack, deleteAsset, generateAssetGuid,
+  readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset, type MetaSubAsset,
+} from '../session/pack-ops';
 import { recordAssetLeaf } from './trace';
 
 /** A single asset entry inside a pack file (derived from the zod PackFile shape). */
 export type PackAssetEntry = PackFile['assets'][number];
+
+/** A CRUD-target entry: either an internal `.pack.json` asset (`assets[]`) or an
+ *  external `.meta.json` sub-asset (`subAssets[]`). The facade dispatches on the
+ *  path suffix; the snapshot cache holds whichever the delete produced. */
+export type AssetEntry = PackAssetEntry | MetaSubAsset;
+
+const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json');
 
 /**
  * Snapshot of deleted asset entries, keyed by `${packPath}#${guid}`, captured
@@ -27,7 +37,7 @@ export type PackAssetEntry = PackFile['assets'][number];
  * read inside the applier — instead the entry is stashed here and read back by the
  * inverse op. Entries are evicted once restoreAsset consumes them.
  */
-export const deletedEntryCache = new Map<string, PackAssetEntry>();
+export const deletedEntryCache = new Map<string, AssetEntry>();
 
 /**
  * Snapshot of the PRE-rename name, keyed by `${packPath}#${guid}`, captured in the
@@ -63,9 +73,11 @@ export const duplicatedGuidCache = new Map<string, string>();
  * same-name same-shape surface (plan-strategy §4 AC-06).
  */
 export class AssetIOFacade {
-  /** Read one asset entry from a pack file (null if pack/entry missing). */
-  async readPackEntry(packPath: string, guid: string): Promise<PackAssetEntry | null> {
+  /** Read one asset entry (null if pack/sidecar or entry missing). Dispatches on
+   *  the path suffix: `.meta.json` → external sub-asset, else `.pack.json`. */
+  async readPackEntry(packPath: string, guid: string): Promise<AssetEntry | null> {
     recordAssetLeaf('assetIO.readPackEntry');
+    if (isMetaPath(packPath)) return readMetaSubAsset(packPath, guid);
     const pack = await readPack(packPath);
     if (!pack) return null;
     return pack.assets.find((a) => a.guid === guid) ?? null;
@@ -73,13 +85,10 @@ export class AssetIOFacade {
 
   /** Delete one asset entry, returning the SNAPSHOT of the deleted entry so the
    *  op's inverse can restore it (OOS-5 single-asset undo). Throws if the entry
-   *  could not be read or the delete failed. */
-  async deletePackEntry(packPath: string, guid: string): Promise<PackAssetEntry> {
+   *  could not be read or the delete failed. `deleteAsset` already routes
+   *  `.meta.json` targets to the sidecar-aware path. */
+  async deletePackEntry(packPath: string, guid: string): Promise<AssetEntry> {
     recordAssetLeaf('assetIO.deletePackEntry');
-    console.info('[delete-diag] deletePackEntry: packPath=%s guid=%s isPack=%s', packPath, guid, packPath.endsWith('.pack.json'));
-    const pack = await readPack(packPath);
-    console.info('[delete-diag] deletePackEntry: readPack result=%s assetCount=%d',
-      pack ? 'OK' : 'NULL', pack?.assets?.length ?? -1);
     const entry = await this.readPackEntry(packPath, guid);
     if (!entry) throw new Error(`[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`);
     const ok = await deleteAsset(packPath, guid);
@@ -87,14 +96,17 @@ export class AssetIOFacade {
     return entry;
   }
 
-  /** Write (create or replace) one asset entry. Returns true on success. */
-  async writePackEntry(packPath: string, entry: PackAssetEntry): Promise<boolean> {
+  /** Write (create or replace) one asset entry. Returns true on success.
+   *  Dispatches on the path suffix like readPackEntry. */
+  async writePackEntry(packPath: string, entry: AssetEntry): Promise<boolean> {
     recordAssetLeaf('assetIO.writePackEntry');
+    if (isMetaPath(packPath)) return writeMetaSubAsset(packPath, entry as MetaSubAsset);
     const pack = await readPack(packPath);
     if (!pack) return false;
-    const idx = pack.assets.findIndex((a) => a.guid === entry.guid);
-    if (idx >= 0) pack.assets[idx] = entry;
-    else pack.assets.push(entry);
+    const packEntry = entry as PackAssetEntry;
+    const idx = pack.assets.findIndex((a) => a.guid === packEntry.guid);
+    if (idx >= 0) pack.assets[idx] = packEntry;
+    else pack.assets.push(packEntry);
     return writePack(packPath, pack);
   }
 
@@ -134,6 +146,7 @@ export class AssetIOFacade {
     newName: string,
   ): Promise<{ ok: boolean; oldName: string | null }> {
     recordAssetLeaf('assetIO.renamePackEntry');
+    if (isMetaPath(packPath)) return renameMetaSubAsset(packPath, guid, newName);
     const pack = await readPack(packPath);
     if (!pack) return { ok: false, oldName: null };
     const entry = pack.assets.find((a) => a.guid === guid);
