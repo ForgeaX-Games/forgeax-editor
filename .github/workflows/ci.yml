@@ -100,11 +100,25 @@ jobs:
       # A generic self-hosted runner does not imply GitHub-hosted image tools.
       # Fail fast if the trusted worker lacks sudo (the composite build path
       # must not assume passwordless sudo or an Ubuntu package manager).
+      # A generic self-hosted runner does not imply GitHub-hosted image tools.
+      # Fail fast if the trusted worker lacks sudo.
+      #
+      # Self-hosted $HOME PERSISTS across jobs (unlike ephemeral ubuntu-latest).
+      # Recursive private-submodule checkout writes a GLOBAL
+      # `http.https://github.com/.extraheader` Authorization to auth the private
+      # clones. If that survives into the NEXT job on this host, actions/checkout
+      # adds its own token header on top → git sends TWO Authorization headers →
+      # GitHub rejects the fetch with `remote: Duplicate header: "Authorization"`
+      # / HTTP 400. Scrub any residue BEFORE checkout so every self-hosted run
+      # starts from a clean credential state (no-op on a clean host / hosted
+      # runner; --unset-all exits 5 when the key is absent, hence `|| true`).
+      # Mirrors forgeax-studio ci.yml + forgeax-engine build-artifacts.
       - name: Verify self-hosted Linux prerequisites
         if: runner.environment == 'self-hosted'
         run: |
           set -eu
           command -v sudo
+          git config --global --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
 
       # GHA is the kubeela PAT that can read the private ForgeaXGame/forgeax-*
       # submodules this repo pins (engine / interface / platform-io / editor-assets).
@@ -256,11 +270,16 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     timeout-minutes: 30
     steps:
+      # Scrub a persisted global http.extraheader Authorization before checkout —
+      # see the b2-self-boot job's identical step for the full rationale (private
+      # self-hosted $HOME persists a submodule-auth header → duplicate
+      # Authorization → GitHub 400). No-op on a clean / hosted runner.
       - name: Verify self-hosted Linux prerequisites
         if: runner.environment == 'self-hosted'
         run: |
           set -eu
           command -v sudo
+          git config --global --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
 
       - name: Checkout (with submodules)
         uses: actions/checkout@v5

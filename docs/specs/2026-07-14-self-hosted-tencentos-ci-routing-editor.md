@@ -84,6 +84,14 @@ A generic self-hosted runner does **not** imply GitHub-hosted image tools:
 - Each self-hosted-eligible job has a `Verify self-hosted Linux prerequisites` preflight
   (`command -v sudo`, guarded by `runner.environment == 'self-hosted'`) so a mis-provisioned worker
   fails fast rather than deep in the build.
+- That same preflight **scrubs a persisted global git auth header before checkout**:
+  `git config --global --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true`.
+  The self-hosted `$HOME` persists across jobs, and recursive private-submodule checkout writes a
+  global `http.https://github.com/.extraheader` Authorization; if it survives into the next job,
+  `actions/checkout` adds its own token header on top → git sends **two** Authorization headers →
+  GitHub rejects the fetch with `remote: Duplicate header: "Authorization"` / HTTP 400. `--unset-all`
+  before checkout makes each self-hosted run start from a clean credential state (no-op on a clean /
+  hosted runner). Mirrors `forgeax-studio` ci.yml and `forgeax-engine` build-artifacts.
 
 ## Operational prerequisite
 
