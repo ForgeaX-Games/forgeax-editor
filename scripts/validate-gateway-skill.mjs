@@ -96,6 +96,12 @@ const REQUIRED_KEYWORDS = [
   // it" section from silently vanishing.
   'importAsset',
   'addSceneAssetToScene',
+  // Async scene mounts must be polled through their own terminal lifecycle;
+  // a wrapper entity or immediate `{ok:true}` is not a completion signal.
+  // Keeps the r28 observability repair and r29 component-first verification
+  // recipe visible to a docs-only driver.
+  'sceneMountPhase',
+  'lastSceneMountError',
   // Empty-scene launch trap — `dev:standalone` (no --game) opens an EMPTY scene, so
   // Play degrades to a no-op while `dispatch({kind:'play'})` still returns {ok:true}.
   // Rounds 3 & 5 both misdiagnosed this (blamed async flip / escalated a non-bug).
