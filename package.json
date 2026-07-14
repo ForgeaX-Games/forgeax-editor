@@ -4,7 +4,7 @@
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "forgeax editor monorepo — 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + 5 entry points (. / ./edit / ./play / ./panels / ./protocol) for the forgeax editor",
+  "description": "forgeax editor monorepo — 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + thin subpath entry points (see exports map) for host embedding",
   "repository": {
     "type": "git",
     "url": "https://github.com/ForgeaXGame/forgeax-studio.git",
@@ -17,10 +17,14 @@
   "exports": {
     ".": "./src/index.ts",
     "./app-kit": "./src/app-kit.ts",
+    "./bridge": "./src/bridge.ts",
     "./default-dock-layout": "./src/default-dock-layout.ts",
+    "./keyboard-router-deps": "./packages/edit-runtime/src/keyboard-router-deps.ts",
     "./panels": "./packages/panels/src/manifest.ts",
     "./play": "./src/play.ts",
     "./protocol": "./src/protocol.ts",
+    "./viewport": "./packages/edit-runtime/src/viewport/ViewportComponent.tsx",
+    "./vite-preset": "./packages/edit-runtime/src/viewport/engine-vite-preset.ts",
     "./package.json": "./package.json"
   },
   "workspaces": [
