@@ -27,7 +27,8 @@
 // Ports (see README "Run"):
 //   :15290  standalone chrome host (vite, root=standalone/) — the page you open
 //   :15280  edit-runtime (panel + viewport iframe source); host proxies /editor → it
-//   :15173  play-runtime (Play mode) — only with `start --play`
+//   :15273  play-runtime (Play mode) — only with `start --play` (NOT 15173 — see
+//           PLAY_RUNTIME_PORT below: studio's superrepo stack owns 15173)
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, openSync } from 'node:fs';
@@ -60,9 +61,19 @@ const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx');
 const FBX_WASM_MJS = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.mjs');
 const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
+// Editor's OWN play-runtime port. Deliberately NOT 15173: the studio superrepo
+// stack (forgeax-studio scripts/run.ts) launches THIS package's play-runtime on
+// 15173 (its PORT_ENGINE default, via `bun x vite` with no FORGEAX_ENGINE_PORT),
+// so if the editor stack managed/killed 15173 its port-based killByPorts would
+// SIGTERM studio's engine (feedback 2026-07-13-editor-studio-15173-port-collision).
+// Keeping our own stack on 15273 lets both coexist. NOTE: the raw
+// `bun -F @forgeax/editor-play-runtime dev` path still defaults to 15173
+// (play-runtime/vite.config.ts default — unchanged, so studio keeps working);
+// only fx orchestration pins 15273 (fed via the base `env` FORGEAX_ENGINE_PORT).
+const PLAY_RUNTIME_PORT = 15273;
 // 15295 = DEV-only live gateway bridge relay (on by default; FORGEAX_BRIDGE=0
 // opts out). Listed so `stop`/startup-preflight free a stale relay too.
-const PORTS = [15290, 15280, 15281, 15173, 15295];
+const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, 15295];
 const GAME_API_PORT = 15281;
 // The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
 // the AI tools and their harness ship together). ROOT-relative because
@@ -457,6 +468,12 @@ async function run(argv: string[]): Promise<void> {
     ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
+    // Single SSOT for the editor stack's play-runtime port. Set AFTER the
+    // ...process.env spread so it always wins: every spawn inherits this base env,
+    // so play-runtime binds PLAY_RUNTIME_PORT AND edit-runtime's /preview proxy
+    // targets it — no stale 15173 anywhere in the fx-orchestrated stack, and it
+    // stays consistent with the PORTS kill-set (which lists PLAY_RUNTIME_PORT).
+    FORGEAX_ENGINE_PORT: String(PLAY_RUNTIME_PORT),
     ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
   };
   if (rhiDebug) ok('RHI-debug capture enabled → window.__forgeax.captureFrame(n) in the :15290 console');
@@ -509,7 +526,8 @@ async function run(argv: string[]): Promise<void> {
     if (play)
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
-        env: { ...env, FORGEAX_ENGINE_PORT: '15173' },
+        // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
+        env,
         detach: true,
         logFd: log('play'),
       });
@@ -545,11 +563,12 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (play) {
-    step('starting play-runtime :15173 ...');
+    step(`starting play-runtime :${PLAY_RUNTIME_PORT} ...`);
     children.push(
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
-        env: { ...env, FORGEAX_ENGINE_PORT: '15173' },
+        // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
+        env,
       }),
     );
   }
@@ -570,7 +589,7 @@ Usage:
 Lifecycle:
   setup | install               prepare everything (submodules, deps, engine dist + wasm)
   start | run [--play]          start the stack (:15290 host + :15280 edit-runtime
-                                [+ :15173 play-runtime with --play]); Ctrl-C stops
+                                [+ :15273 play-runtime with --play]); Ctrl-C stops
   start --game DIR              open a real game (DIR directly contains forge.json)
   start --bg                    start in background, returns immediately
   start --rhi-debug            enable engine RHI frame capture (window.__forgeax.captureFrame)

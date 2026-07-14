@@ -494,11 +494,11 @@ export function registerBuiltinActions(): void {
     id: 'game.create',
     title: '新建游戏',
     description:
-      'Create a NEW game (project) from the template and give it its own dedicated chat session. Args: slug (required, 2-41 chars lowercase ASCII/digits/hyphens, must start with a letter/digit — e.g. "neon-runner") + optional name (display name) + optional brief (one line describing what game to make, recorded in FORGE.md for later). Fails with 409 if the slug already exists — use game.switch for existing games; list existing slugs to avoid collisions. NOTE: this does NOT switch the UI to the new game (switching mid-turn would break the active chat channel). Tell the user the game is ready and to open it from the top-bar game switcher; game.switch will land on its dedicated session.',
+      'Create a NEW game (project) from the template and give it its own dedicated chat session. Args: slug (required, 1-41 chars lowercase ASCII/digits/hyphens, must start with a letter/digit — e.g. "neon-runner") + optional name (display name) + optional brief (one line describing what game to make, recorded in FORGE.md for later). Fails with 409 if the slug already exists — use game.switch for existing games; list existing slugs to avoid collisions. NOTE: this does NOT switch the UI to the new game (switching mid-turn would break the active chat channel). Tell the user the game is ready and to open it from the top-bar game switcher; game.switch will land on its dedicated session.',
     schema: {
       type: 'object',
       properties: {
-        slug: { type: 'string', description: '2-41 位小写字母/数字/连字符,首位字母或数字;如 "neon-runner"' },
+        slug: { type: 'string', description: '1-41 位小写字母/数字/连字符,首位字母或数字;如 "neon-runner"' },
         name: { type: 'string', description: '显示名(可选,缺省用 slug)' },
         brief: { type: 'string', description: '一句话说明要做什么游戏(可选,写进 FORGE.md)' },
       },

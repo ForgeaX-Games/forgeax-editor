@@ -76,6 +76,10 @@ export class AssetIOFacade {
    *  could not be read or the delete failed. */
   async deletePackEntry(packPath: string, guid: string): Promise<PackAssetEntry> {
     recordAssetLeaf('assetIO.deletePackEntry');
+    console.info('[delete-diag] deletePackEntry: packPath=%s guid=%s isPack=%s', packPath, guid, packPath.endsWith('.pack.json'));
+    const pack = await readPack(packPath);
+    console.info('[delete-diag] deletePackEntry: readPack result=%s assetCount=%d',
+      pack ? 'OK' : 'NULL', pack?.assets?.length ?? -1);
     const entry = await this.readPackEntry(packPath, guid);
     if (!entry) throw new Error(`[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`);
     const ok = await deleteAsset(packPath, guid);

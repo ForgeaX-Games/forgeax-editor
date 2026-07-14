@@ -36,8 +36,9 @@ import type {
 } from '@forgeax/engine-ecs';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { PackError } from '@forgeax/engine-pack/errors';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetError, SceneAsset } from '@forgeax/engine-types';
-import { err } from '@forgeax/engine-types';
+import { err, ok } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
@@ -186,6 +187,53 @@ export class EngineFacade {
   ): Handle<Target, 'shared'> {
     _recordLeaf('world.allocSharedRef');
     return this._world.allocSharedRef(target, payload, onLastRelease);
+  }
+
+  /** Resolve a catalogued asset GUID string to a live shared<T> handle
+   *  SYNCHRONOUSLY (feat-20260713 M7 / AC-10, D-5 editor front-door clip binder).
+   *
+   *  This is the synchronous half of `loadByGuid`: it reads the registry's
+   *  `assetCatalog` fast-path (already-catalogued payload) and mints a shared
+   *  handle via `allocSharedRef` — the SAME loadByGuid→allocSharedRef spine the
+   *  drag-spawn resolver (drag-spawn-resolve.ts) and preview closure
+   *  (host-session.ts) use, but sync so it can run INSIDE a synchronous document
+   *  applier (applyAddComponent / applySetComponent). The async fetch-from-pack
+   *  path is intentionally NOT used here: the front-door binder always operates
+   *  on an already-imported (catalogued) asset, and the async fire-and-forget
+   *  door already exists (`bindAssetRef` session op). A GUID that is not
+   *  catalogued returns a structured miss so the applier fails fast (charter P3 /
+   *  Fail Fast) rather than passing the string through — which the engine's M2 P3
+   *  gate now rejects with `shared-field-invalid-value`.
+   *
+   *  Lives here (not in the applier) because minting a handle needs both the raw
+   *  world (`allocSharedRef`, gated to this file by lint-unique-mutator) and the
+   *  AssetRegistry (catalog read). Records the same 'world.allocSharedRef' leaf as
+   *  a direct alloc. `target` is the shared<T> tag (e.g. 'AnimationClip'). */
+  resolveSharedGuid(
+    target: string,
+    guid: string,
+  ): Result<number, { code: 'NO_REGISTRY' | 'BAD_GUID' | 'ASSET_NOT_CATALOGUED'; hint: string }> {
+    if (!this._registry) {
+      return err({
+        code: 'NO_REGISTRY' as const,
+        hint: 'this facade has no AssetRegistry (headless / pre-boot world); GUID resolution is unavailable',
+      });
+    }
+    const parsed = AssetGuid.parse(guid);
+    if (!parsed.ok) {
+      return err({ code: 'BAD_GUID' as const, hint: `not a valid asset GUID: ${guid}` });
+    }
+    const key = AssetGuid.format(parsed.value).toLowerCase();
+    const envelope = this._registry.assetCatalog.get(key);
+    if (envelope === undefined) {
+      return err({
+        code: 'ASSET_NOT_CATALOGUED' as const,
+        hint: `GUID ${guid} is not catalogued; import the asset (or use the async bindAssetRef op) before binding`,
+      });
+    }
+    _recordLeaf('world.allocSharedRef');
+    const handle = this._world.allocSharedRef(target, envelope.payload) as unknown as number;
+    return ok(handle);
   }
 
   /** Instantiate a collected `SceneAsset` (from `rootsToSceneAsset`) as live

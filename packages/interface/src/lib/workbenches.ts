@@ -620,6 +620,7 @@ export function loadWorkbenchList(): WorkbenchListState {
 export function setActiveWorkbench(id: string): void {
   const state = loadWorkbenchList();
   if (!state.list.find((w) => w.id === id)) return;
+  if (state.activeId === id) return;
   saveState({ ...state, activeId: id });
   notify();
 }

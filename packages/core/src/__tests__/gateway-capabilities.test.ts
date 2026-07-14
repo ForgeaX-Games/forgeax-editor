@@ -10,7 +10,7 @@
 // material round-trip required for Edit = reopen = Play.
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -200,6 +200,36 @@ describe('Gateway public capability matrix', () => {
     expect(gateway.origins.at(-1)).toBe('ai');
     expect(gateway.undo()).toBe(true);
     expect(world.get(ball, Name).unwrap().value).toBe('BouncyBall');
+  });
+
+  it('Compose + Duplicate: a transaction prepares public duplicates with material/subtree fidelity and one undo', () => {
+    const beforeUndo = gateway.appliedCount();
+    const beforeLedger = gateway.ledger.length;
+    const duplicated = gateway.dispatch({
+      kind: 'transaction',
+      label: 'duplicate two renderable balls',
+      commands: [
+        { kind: 'duplicateEntity', entity: ball, name: 'Batch copy A', posOffset: [2, 0, 0] },
+        { kind: 'duplicateEntity', entity: ball, name: 'Batch copy B', posOffset: [4, 0, 0] },
+      ],
+    }, 'ai');
+    expect(duplicated.ok).toBe(true);
+    if (!duplicated.ok) return;
+    const copies = duplicated.result?.created ?? [];
+    expect(copies).toHaveLength(2);
+    for (const copy of copies) {
+      expect(materialCount(world, copy)).toBe(1);
+      expect(childrenOf(world, copy)).toHaveLength(1);
+    }
+    expect(gateway.appliedCount()).toBe(beforeUndo + 1);
+    expect(gateway.ledger).toHaveLength(beforeLedger + 1);
+    expect(gateway.ledger.at(-1)?.kind).toBe('transaction');
+    expect(gateway.origins.at(-1)).toBe('ai');
+
+    expect(gateway.undo()).toBe(true);
+    expect(roots(world)).toEqual([ball]);
+    expect(gateway.redo()).toBe(true);
+    expect(roots(world)).toHaveLength(3);
   });
 
   it('Collect + Duplicate: AI can round-trip material and child subtree with one undo/redo', () => {
@@ -397,14 +427,14 @@ describe('Gateway asset read surface', () => {
     }
   });
 
-  it('describeAsset marks a builtin mesh (HANDLE_CUBE) as builtin with no GUID', () => {
+  it('describeAsset gives a GUID for the catalogued builtin mesh (HANDLE_CUBE)', () => {
     const { gateway, meshHandle } = setup();
     const d = gateway.describeAsset(meshHandle);
     expect(d.ok).toBe(true);
     if (d.ok) {
       expect(d.kind).toBe('mesh');
-      expect(d.builtin).toBe(true);
-      expect(d.guid).toBeUndefined();
+      expect(d.builtin).toBeUndefined();
+      expect(d.guid).toBe('cbe42beb-8975-5096-b3a1-3dda4cb4c077');
     }
   });
 
@@ -546,5 +576,92 @@ describe('Gateway component read surface', () => {
       expect(d.error.code).toBe('UNKNOWN_COMPONENT');
       expect(d.error.hint).toContain('registered component names:');
     }
+  });
+
+  // solo round-24 (P7 residue): enum-field label→value maps are projected under
+  // `enums` so a docs-only AI learns the legal variants + integers from the
+  // schema alone (e.g. RigidBody.type → static=0/dynamic=1/kinematic=2) instead
+  // of reading engine source (the recurring friction #1, rounds 15/20/22).
+  // Register a synthetic labels-bearing component so the projection is tested
+  // generically (no physics dep, no registration-order coupling).
+  it('describeComponent projects an enum field label map under `enums`', () => {
+    // Uniquely-named to avoid clobbering the global component registry across runs.
+    const compName = `R24_DescribeEnum_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      motion: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
+      mass: { type: 'f32', default: 1 },
+    });
+
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      // the enum field is projected with its full label map
+      expect(d.enums).toBeDefined();
+      expect(d.enums?.motion).toEqual({ static: 0, dynamic: 1, kinematic: 2 });
+      // a non-enum field carries no entry (only labelled fields appear)
+      expect(d.enums?.mass).toBeUndefined();
+      // still JSON-safe (no live handles)
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent omits `enums` for a component with no labelled fields', () => {
+    // Transform has no enum-with-labels field → key absent (backward-compatible).
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.enums).toBeUndefined();
+  });
+
+  // solo round-25 (P1 residue): DERIVED (transient) fields are projected under
+  // `transient` so a docs-only AI can tell an authored INPUT (Transform.pos) from
+  // a derived read-only OUTPUT (Transform.world, the frame-lagged resolved world
+  // matrix). Round-1 logged the trap: reading `world` right after a mutation
+  // returns the stale value with no front-door signpost. The engine already
+  // declares `world` transient (D-5); this projects that flag through the door.
+  it('describeComponent projects derived fields under `transient` (synthetic)', () => {
+    const compName = `R25_DescribeTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
+      derived: { type: 'array<f32, 16>', default: new Float32Array(16), transient: true },
+    });
+
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      // the transient field is projected; the authored field is NOT in the map
+      expect(d.transient).toBeDefined();
+      expect(d.transient?.derived).toBe(true);
+      expect(d.transient?.pos).toBeUndefined();
+      // still JSON-safe (no live handles)
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent marks Transform.world transient (the round-1 friction)', () => {
+    // The real friction: Transform.world is derived each frame from local TRS
+    // (engine transform.ts declares it transient:true, D-5). The door must
+    // signpost it so an AI does not author it or read it stale.
+    const d = gw().describeComponent('Transform');
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.transient?.world).toBe(true);
+      // authored TRS inputs are NOT transient
+      expect(d.transient?.pos).toBeUndefined();
+      expect(d.transient?.quat).toBeUndefined();
+      expect(d.transient?.scale).toBeUndefined();
+    }
+  });
+
+  it('describeComponent omits `transient` for a component with no derived fields', () => {
+    // A synthetic all-authored component → key absent (backward-compatible with a
+    // pre-round-25 pin, which never sets the key).
+    const compName = `R25_NoTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      a: { type: 'f32', default: 0 },
+      b: { type: 'f32', default: 1 },
+    });
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) expect(d.transient).toBeUndefined();
   });
 });

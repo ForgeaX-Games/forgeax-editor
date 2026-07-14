@@ -38,7 +38,10 @@ import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
-import { resolveGameAssetRoots } from '@forgeax/editor-core/asset-roots';
+// Vite's config bundle externalizes package subpaths, leaving Node to load core's
+// source-only TypeScript export. Reach the same core helper relatively so Vite
+// folds it into the config bundle before Node evaluates that bundle.
+import { resolveGameAssetRoots } from '../../../core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';

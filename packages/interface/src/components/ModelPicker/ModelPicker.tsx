@@ -90,7 +90,7 @@ export function ModelPicker(props: ModelPickerProps) {
   } = props;
   const mode = props.mode ?? 'single';
 
-  const { models, error, refresh } = useModelCatalog(providerId);
+  const { models, driver, error, refresh } = useModelCatalog(providerId);
   const [open, setOpen] = useState(variant === 'inline');
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(-1);
@@ -302,7 +302,15 @@ export function ModelPicker(props: ModelPickerProps) {
       </div>
       {error && <div className="mp-err">{error}</div>}
       {!models && !error && <div className="mp-loading">loading…</div>}
-      {models && flat.length === 0 && (
+      {/* 内核目录不可用(回退链全部落空,source='none'):显式空态 + 失败原因,
+          绝不展示假列表;trigger 上保留用户已选模型不受影响。 */}
+      {models && flat.length === 0 && !query && driver?.source === 'none' && (
+        <div className="mp-empty mp-unavailable" data-testid="model-picker-unavailable" title={driver.error}>
+          <div>catalog unavailable for {driver.id}</div>
+          {driver.error && <div className="mp-unavailable-detail">{driver.error}</div>}
+        </div>
+      )}
+      {models && flat.length === 0 && !(driver?.source === 'none' && !query) && (
         <div className="mp-empty">{query ? `no matches for "${query}"` : 'catalog empty'}</div>
       )}
       {grouped.gateway.map((m, i) => renderRow(m, i))}
@@ -310,6 +318,18 @@ export function ModelPicker(props: ModelPickerProps) {
         <>
           <div className="mp-group" aria-hidden="true">
             {grouped.driver[0]?.driverLabel ?? 'driver'} · {grouped.driver.length} · no local cost
+            {/* 非实时来源徽章:last-known = 上次成功探测的缓存;static = 内核预置表 */}
+            {(driver?.source === 'last-known' || driver?.source === 'static') && (
+              <span
+                className="mp-stale"
+                data-testid="model-picker-stale-badge"
+                title={driver.source === 'last-known'
+                  ? `cached from the last successful fetch${driver.error ? ` — live fetch failed: ${driver.error}` : ''}`
+                  : `kernel-declared static defaults${driver.error ? ` — discovery failed: ${driver.error}` : ''}`}
+              >
+                {driver.source === 'last-known' ? 'cached' : 'preset'}
+              </span>
+            )}
           </div>
           {grouped.driver.map((m, i) => renderRow(m, grouped.gateway.length + i))}
         </>

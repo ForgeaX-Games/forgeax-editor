@@ -208,3 +208,24 @@
   color: var(--text-primary);
 }
 .mp-eye:disabled { cursor: not-allowed; color: var(--color-icon-disabled); }
+
+/* 内核目录不可用空态(回退链 source='none'):突出但不刺眼,detail 换行展示原因 */
+.mp-unavailable { color: var(--text-primary); }
+.mp-unavailable-detail {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  word-break: break-all;
+  max-width: 320px;
+}
+/* 非实时来源徽章(cached = last-known 盘缓存;preset = 内核预置静态表) */
+.mp-stale {
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 9px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}

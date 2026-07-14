@@ -10,8 +10,9 @@
   pointer-events: none;
 }
 
-/* Dim scrim — pointer-events auto so clicks outside the card don't leak to the
-   shell (the tour is modal). The cutout ring is a separate element. */
+/* Dim scrim with an optional rectangular hole punched out over the anchor
+   (clip-path). The ring is only the bright outline — it must not paint another
+   full-viewport dim, or the hole would look black again. */
 .tour-scrim {
   position: absolute;
   inset: 0;
@@ -20,15 +21,20 @@
   animation: tour-fade-in 0.15s ease-out;
 }
 
-/* Highlight ring drawn over the anchor. box-shadow spread paints the dim as a
-   "hole" so the anchor reads through while everything else stays scrimmed. */
+/* Bright outline only — no box-shadow dim (scrim owns the dim + hole). */
 .tour-ring {
   position: absolute;
   border-radius: 8px;
   outline: 2px solid var(--primary, #d4ff48);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
   pointer-events: none;
   transition: top 0.2s ease, left 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+
+/* Invisible click catcher over the spotlight hole (scrim is clipped away there). */
+.tour-hole-sink {
+  position: absolute;
+  border-radius: 8px;
+  pointer-events: auto;
 }
 
 .tour-coach {
@@ -99,11 +105,16 @@
 .tour-btn-ghost:hover:not(:disabled) { color: var(--text-secondary, rgba(255, 255, 255, 0.62)); }
 .tour-btn-primary {
   background: var(--primary, #d4ff48);
-  color: var(--color-text-on-bright-primary, #12161c);
+  color: var(--color-text-on-bright-primary, #000000);
   border: none;
-  font-weight: 600;
+  font-weight: 500;
 }
-.tour-btn-primary:hover { filter: brightness(1.05); }
+.tour-btn-primary:hover:not(:disabled),
+.tour-btn-primary:active:not(:disabled),
+.tour-btn-primary:focus-visible:not(:disabled) {
+  background: var(--color-brand-primary-hover, var(--primary, #d4ff48));
+  color: var(--color-text-on-bright-primary, #000000);
+}
 
 @keyframes tour-fade-in {
   from { opacity: 0; }

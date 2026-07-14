@@ -246,6 +246,17 @@ export class EditGateway {
   private _playPending = false;
   private _lastPlayError: CommandError | null = null;
 
+  // ── Async scene-mount observability (solo round-28, P3/P9) ────────────────
+  // `addSceneAssetToScene` is necessarily a session-domain detached continuation:
+  // it must load a catalog GUID before the canonical engine instantiate spine can
+  // write the derived mount subtree. As with Play, immediate `{ok:true}` only means
+  // the request was accepted. These two fields make the TERMINAL result public so a
+  // docs-only caller can poll a stable operation-specific state rather than infer
+  // success from a browser reload, host log, or a stale catalog.
+  private _sceneMountPending = false;
+  private _lastSceneMountSucceeded = false;
+  private _lastSceneMountError: CommandError | null = null;
+
   /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
   get activeWorld(): World {
     return (this._playWorld ?? this.doc.world) as unknown as World;
@@ -280,6 +291,51 @@ export class EditGateway {
    *  attempt begins or play succeeds (see beginPlayAttempt/enterPlay). */
   get lastPlayError(): CommandError | null {
     return this._lastPlayError;
+  }
+
+  /**
+   * Terminal-aware scene-mount phase. `pending` means the accepted
+   * `addSceneAssetToScene` request is still resolving its GUID-backed SceneAsset;
+   * `mounted` confirms the engine instantiated its derived subtree; `failed` pairs
+   * with `lastSceneMountError`; `idle` has no in-flight or failed attempt.
+   */
+  get sceneMountPhase(): 'idle' | 'pending' | 'mounted' | 'failed' {
+    if (this._sceneMountPending) return 'pending';
+    if (this._lastSceneMountError !== null) return 'failed';
+    if (this._lastSceneMountSucceeded) return 'mounted';
+    return 'idle';
+  }
+
+  /** The structured terminal error from the latest failed scene mount, or null. */
+  get lastSceneMountError(): CommandError | null {
+    return this._lastSceneMountError;
+  }
+
+  /** Mark a `addSceneAssetToScene` continuation as in flight. */
+  beginSceneMountAttempt(): void {
+    this._sceneMountPending = true;
+    this._lastSceneMountSucceeded = false;
+    this._lastSceneMountError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Mark the asynchronous scene mount successful. */
+  completeSceneMountAttempt(): void {
+    this._sceneMountPending = false;
+    this._lastSceneMountSucceeded = true;
+    this._lastSceneMountError = null;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Publish a structured scene-mount failure through the public gateway read surface. */
+  failSceneMountAttempt(error: CommandError): void {
+    this._sceneMountPending = false;
+    this._lastSceneMountSucceeded = false;
+    this._lastSceneMountError = error;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
   }
 
   /** Mark a ▶ Play attempt as in flight (playPhase → 'starting'). Clears any prior
@@ -413,11 +469,15 @@ export class EditGateway {
       // dispatch so a transaction's forward-references (spawn then reparent under
       // it) resolve.
       alias,
-      // Span-pushing sub-dispatch: a transaction sub-op recurses back through
-      // the executor so each sub-op gets its own child span AND records its own
-      // engine leaves via the same cached facade (AC-07 + AC-09). The SAME alias
-      // map is reused so placeholders stay resolvable across the transaction.
-      dispatchSub: (_ctx, sub) => this._execDocumentApplier(sub, alias),
+      // Span-pushing sub-dispatch: a transaction sub-op first receives the same
+      // gateway-owned preparation as top-level dispatch (notably duplicate's
+      // SceneAsset collection), then recurses through the executor. Each sub-op
+      // therefore gets its own child span + engine leaves; the SAME alias map
+      // keeps forward-reference placeholders resolvable across the transaction.
+      dispatchSub: (_ctx, sub) => {
+        const prepared = this._prepareDocumentCommand(sub);
+        return prepared.ok ? this._execDocumentApplier(sub, alias) : prepared;
+      },
       // Read side: same query-snapshot the session/eval ctx exposes (D-2 ctx
       // contract, t12a). Document appliers don't read it, but it is part of the
       // ctx shape and available for defined document ops that might. Sunk
@@ -430,14 +490,43 @@ export class EditGateway {
     return ctx;
   }
 
-  /** Execute a document applier through the executor: build DocApplierCtx →
-   *  pushSpan → call applier(ctx, cmd) → popSpan.
-   *  Used by dispatch (and, via ctx.dispatchSub, by transaction sub-ops).
-   *
-   *  The applier receives a DocApplierCtx whose only world access is the
-   *  controlled `engine` proxy — no raw world, no EditSession (AC-01 / D-2).
-   *  Every write it performs records its engine interface leaf onto the span
-   *  pushed here (AC-09). */
+  /**
+   * Prepare a document command whose gateway contract includes a live read before
+   * its applier can write. This runs at the shared executor entrance — rather than
+   * only top-level dispatch — so a transaction's nested `duplicateEntity` command
+   * has the exact same public semantics as a direct duplicate (solo round-27 P9).
+   * The preparation is idempotent: a replay command already carries `_asset`, so
+   * redo never re-collects a source that may have changed or been deleted.
+   */
+  private _prepareDocumentCommand(cmd: EditorOp): { ok: true } | { ok: false; error: CommandError } {
+    if (cmd.kind !== 'duplicateEntity') return { ok: true };
+
+    const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
+    if (typeof duplicate.entity !== 'number') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
+      };
+    }
+    if (duplicate._asset !== undefined) return { ok: true };
+
+    const source = duplicate.entity as EntityHandle;
+    const collected = this.collectSceneAsset(source);
+    if (!collected.ok) return collected;
+    duplicate._asset = collected.asset;
+    if (duplicate.parent === undefined) duplicate.parent = entParent(this.activeWorld, source);
+    const sourceName = entName(this.activeWorld, source);
+    if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
+    if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
+    return { ok: true };
+  }
+
+  /** Execute a document applier through the executor: prepare → build DocApplierCtx
+   *  → pushSpan → call applier(ctx, cmd) → popSpan. Used by dispatch (and, via
+   *  ctx.dispatchSub, by transaction sub-ops). The applier receives a DocApplierCtx
+   *  whose only world access is the controlled `engine` proxy — no raw world or
+   *  EditSession (AC-01 / D-2). Every write records its engine interface leaf on
+   *  the active span (AC-09). */
   private _execDocumentApplier(cmd: EditorOp, alias: DocAliasMap = new Map()): ReturnType<ApplierFn> {
     const kind = cmd.kind;
     const applier = documentAppliers.get(kind);
@@ -531,32 +620,26 @@ export class EditGateway {
           return { ok: false, error: { code: 'INVALID_ARGS', hint } };
         }
       }
-      // duplicateEntity is the public convenience operation. Capture its
-      // SceneAsset exactly once before the document applier writes so redo uses
-      // the same GUID-backed POD rather than re-reading a changed source entity.
-      if (kind === 'duplicateEntity') {
-        const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
-        if (typeof duplicate.entity !== 'number') {
-          return {
-            ok: false,
-            error: { code: 'INVALID_ARGS', hint: 'duplicateEntity requires an entity handle' },
-          };
-        }
-        if (duplicate._asset === undefined) {
-          const source = duplicate.entity as EntityHandle;
-          const collected = this.collectSceneAsset(source);
-          if (!collected.ok) return collected;
-          duplicate._asset = collected.asset;
-          if (duplicate.parent === undefined) {
-            duplicate.parent = entParent(this.activeWorld, source);
+      // destroyEntity: pre-collect a scene-asset snapshot so undo can restore
+      // materials via GUID round-trip (instantiateSceneAsset). Collection runs
+      // before the applier despawns while the entity tree remains live. For
+      // multi-delete the commands arrive wrapped in a transaction, so pre-fill
+      // each direct destroy sub-op before the applier iterates them.
+      if (kind === 'destroyEntity') {
+        this._preCollectDestroyAsset(cmd as Extract<EditorOp, { kind: 'destroyEntity' }>);
+      }
+      if (kind === 'transaction') {
+        for (const sub of (cmd as Extract<EditorOp, { kind: 'transaction' }>).commands) {
+          if (sub.kind === 'destroyEntity') {
+            this._preCollectDestroyAsset(sub as Extract<EditorOp, { kind: 'destroyEntity' }>);
           }
-          const sourceName = entName(this.activeWorld, source);
-          if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
-          if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
         }
       }
 
-      // Document ops: executor wraps applier → ctx created → span pushed.
+      // Prepare this public document command before the executor writes. Nested
+      // transaction duplicates pass through the same helper in dispatchSub above.
+      const prepared = this._prepareDocumentCommand(cmd);
+      if (!prepared.ok) return prepared;
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
       // transientMode (play·scene): still apply + emit for immediate feedback,
@@ -899,6 +982,24 @@ export class EditGateway {
     return collectLiveSceneAsset(this.doc.registry, this.activeWorld, entity);
   }
 
+  /** Pre-fill a destroyEntity op's _asset / _parent / _name before the applier
+   *  runs. Called from dispatch for both top-level destroyEntity AND for
+   *  destroyEntity sub-ops inside a transaction (deleteManyCascade). Collection
+   *  failure is non-fatal: the applier falls back to the legacy spawnEntity
+   *  inverse path (materials lost, but delete still works). */
+  private _preCollectDestroyAsset(
+    destroy: Extract<EditorOp, { kind: 'destroyEntity' }>,
+  ): void {
+    if (destroy._asset !== undefined) return;
+    const entity = destroy.entity as EntityHandle;
+    const collected = this.collectSceneAsset(entity);
+    if (collected.ok) {
+      destroy._asset = collected.asset;
+      destroy._parent = entParent(this.activeWorld, entity);
+      destroy._name = entName(this.activeWorld, entity);
+    }
+  }
+
   // ── Asset read surface (Part 4) ────────────────────────────────────────────
   // query() returns a shared<T> field as { kind:'opaque-handle', type, raw },
   // where `raw` is the engine handle value. These read methods turn that handle —
@@ -1027,11 +1128,25 @@ export class EditGateway {
    * SPAWN_FAILED "Known fields" hint). Unknown name → structured
    * UNKNOWN_COMPONENT whose hint lists the registered names (reused shape from
    * query-snapshot). Read-only: no world/ledger mutation, not an op.
+   *
+   * `transient` (solo round-25) marks the DERIVED, non-authored fields — a field
+   * whose value is recomputed each frame from the persisted local state, skipped
+   * by scene collect (engine D-5). It lets a docs-only AI tell an authored INPUT
+   * (`Transform.pos`) from a derived read-only OUTPUT (`Transform.world`, the
+   * frame-lagged resolved world matrix): don't author a transient field, and
+   * expect it to lag a frame after a mutation until the propagate/derive pass runs.
    */
   describeComponent(
     name: string,
   ):
-    | { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> }
+    | {
+        ok: true;
+        name: string;
+        schema: Record<string, string>;
+        defaults?: Record<string, unknown>;
+        enums?: Record<string, Record<string, number>>;
+        transient?: Record<string, true>;
+      }
     | { ok: false; error: CommandError } {
     const token = resolveComponent(name);
     if (!token) {
@@ -1050,7 +1165,14 @@ export class EditGateway {
     for (const [field, type] of Object.entries(token.schema)) {
       schema[field] = String(type);
     }
-    const result: { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> } = {
+    const result: {
+      ok: true;
+      name: string;
+      schema: Record<string, string>;
+      defaults?: Record<string, unknown>;
+      enums?: Record<string, Record<string, number>>;
+      transient?: Record<string, true>;
+    } = {
       ok: true,
       name: token.name,
       schema,
@@ -1066,6 +1188,36 @@ export class EditGateway {
       }
       result.defaults = defaults;
     }
+    // Enum-field label→value maps (engine solo round-24): an `enum` field stores
+    // a bare u32 variant index; its label map lives on the field descriptor
+    // (`token.fields[field].labels`), projected here so a docs-only AI learns the
+    // legal variants + their integers (e.g. RigidBody.type → static=0/dynamic=1/
+    // kinematic=2) from the schema alone, not from engine source. Only fields
+    // that declared labels appear; a JSON-safe plain-object copy. Absent when no
+    // field carries labels (backward-compatible: predates the engine change →
+    // token.fields[f].labels is undefined for every field → key omitted).
+    const enums: Record<string, Record<string, number>> = {};
+    const fields = token.fields as Record<
+      string,
+      { labels?: Readonly<Record<string, number>>; transient?: boolean } | undefined
+    >;
+    for (const field of Object.keys(schema)) {
+      const labels = fields[field]?.labels;
+      if (labels !== undefined) enums[field] = { ...labels };
+    }
+    if (Object.keys(enums).length > 0) result.enums = enums;
+    // Transient (derived, non-authored) fields (solo round-25): the engine field
+    // descriptor's `transient` flag (D-5) is reflected on `token.fields[field]`;
+    // project the fields where it's true so a docs-only AI can tell an authored
+    // INPUT from a derived read-only OUTPUT (e.g. `Transform.world`, recomputed
+    // each frame from local TRS — reading it right after a mutation returns the
+    // stale value until the propagate pass runs). Only transient fields appear;
+    // the key is omitted entirely when none is transient (backward-compatible).
+    const transient: Record<string, true> = {};
+    for (const field of Object.keys(schema)) {
+      if (fields[field]?.transient === true) transient[field] = true;
+    }
+    if (Object.keys(transient).length > 0) result.transient = transient;
     return result;
   }
 

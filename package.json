@@ -45,7 +45,7 @@
     "update": "bun scripts/fx.ts update",
     "clean": "bun scripts/fx.ts clean",
     "bootstrap-worktree": "node scripts/bootstrap-worktree.mjs",
-    "lint": "node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-no-any-in-store.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-readme-bilingual.mjs && node scripts/lint-op-via-gateway.mjs && node scripts/lint-unique-mutator.mjs && node scripts/lint-single-keydown-router.mjs && node scripts/lint-no-store-setter-sugar.mjs && node scripts/lint-wasm-before-dist.mjs && node scripts/lint-no-direct-pack-crud.mjs",
+    "lint": "node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-no-any-in-store.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-readme-bilingual.mjs && node scripts/lint-op-via-gateway.mjs && node scripts/lint-unique-mutator.mjs && node scripts/lint-single-keydown-router.mjs && node scripts/lint-no-store-setter-sugar.mjs && node scripts/lint-wasm-before-dist.mjs && node scripts/lint-no-direct-pack-crud.mjs && node scripts/lint-fx-no-studio-port.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:engine-shim": "node scripts/lint-no-bare-engine-shim.mjs",
     "lint:dep": "dependency-cruiser --output-type err-html -c .dependency-cruiser.cjs packages",

@@ -21,15 +21,11 @@
     },
     "connect": {
       "title": "Connect a model",
-      "hint": "Pick one or configure several — you can change any of them later in Settings.",
-      "keyBadge": "Configured",
+      "hint": "Pick one way to connect — you can change it later in Settings.",
       "keyTitle": "Use an API Key",
       "keySub": "Any OpenAI-compatible endpoint (official / OpenRouter / private proxy).",
-      "keyCta": "Enter API Key",
-      "cliBadge": "Connected",
       "cliTitle": "Use a local CLI",
       "cliSub": "Connect a local claude-code / codex / cursor-agent.",
-      "cliCta": "Connect local CLI",
       "cliStatus": {
         "loading": "checking…",
         "ok": "connectable",
@@ -43,6 +39,9 @@
       "checking": "Checking connection…",
       "ok": "Connected: {{list}}. Continuing shortly…",
       "fail": "Connection failed. Check the connection method you configured.",
+      "failEmpty": "Please enter Base URL and API Key.",
+      "failNeedSelect": "Please choose a connection method (API Key or local CLI).",
+      "failLive": "API connectivity test failed. Please check your base URL or API key.",
       "failCli": "Connection failed. Is local CLI · {{cli}} installed and running? Install guide:"
     },
     "next": "Next",
@@ -52,12 +51,12 @@
     "project": {
       "title": "Set up your workspace",
       "root": "Project root",
-      "rootHint": "Projects are created as games under this workspace (~/ is your home).",
+      "rootHint": "Projects are created as games under this workspace (~/ is your home). Changing the root only picks the path; create/switch happens when you click New.",
       "changeRoot": "Change",
       "rootPickTitle": "Choose workspace directory",
       "name": "Project name",
-      "namePlaceholder": "e.g. my-first-game",
-      "nameRequired": "Enter a project name (≥2 chars, lowercase/digits/hyphens).",
+      "namePlaceholder": "Optional; leave blank for untitled-1",
+      "nameRequired": "Enter a project name (≥1 char, lowercase/digits/hyphens).",
       "willCreate": "Will create project: {{name}}",
       "busy": {
         "new": "Creating your project…",
@@ -71,8 +70,9 @@
       "existingDesc": "This workspace already has {{count}} project(s) — pick one to enter directly, no need to create a new one.",
       "existingOpen": "Open",
       "openTitle": "Open a directory",
-      "openDesc": "Adopt an existing game directory on disk into this workspace (keeps its own path).",
+      "openDesc": "Pick any folder to mount into this workspace (outside the root is fine). Empty folders are auto-initialized as a game project.",
       "openCta": "Choose directory",
+      "errNotGame": "That folder is not a game and is not empty. Pick an empty folder (auto-initialized) or one that already has forge.json / main.ts.",
       "sampleTitle": "From a template",
       "sampleDesc": "Copy a built-in game as a new project in this workspace.",
       "sampleCta": "Choose template",
@@ -125,11 +125,15 @@
       "setActive": "Set as active",
       "inUse": "In use",
       "switched": "Switched model source: {{source}}",
+      "native": {
+        "title": "ForgeaX Kernel (native)",
+        "hint": "The built-in ForgeaX kernel — the default, flagship path. Runs in-process and resolves whatever model credential you configure below (a LiteLLM proxy, or a direct ANTHROPIC / OPENAI / GEMINI key).",
+        "badge": "Native",
+        "useReason": "Configure a model credential first — a LiteLLM proxy, or an ANTHROPIC / OPENAI / GEMINI key."
+      },
       "api": {
         "title": "LiteLLM Proxy",
-        "hint": "Point at your LiteLLM proxy: set Base URL + Key. Both the model catalog and the native ForgeaX kernel route through it (the key is mirrored to ANTHROPIC_* so forgeax-core speaks to the proxy).",
-        "useLabel": "Use LiteLLM for model calls",
-        "useReason": "Enter and save both the LiteLLM Base URL and Key first"
+        "hint": "Point at your LiteLLM proxy: set Base URL + Key. Both the model catalog and the native ForgeaX kernel route through it (the key is mirrored to ANTHROPIC_* so forgeax-core speaks to the proxy)."
       },
       "cli": {
         "title": "Local CLI",
@@ -530,7 +534,7 @@
     "gameMeta": "{{count}} files · {{time}}",
     "deleteTooltip": "Delete game",
     "unpin": "Unpin — follow latest",
-    "slugError": "slug: 2-41 chars / lowercase ASCII / digits / hyphens",
+    "slugError": "slug: 1-41 chars / lowercase ASCII / digits / hyphens",
     "kickoffMessage": "Just created games/{{slug}}/, brief: {{brief}}. Please run the full pipeline: Iori → Suzu → you write the code.",
     "modalTitle": "New project",
     "slugLabel": "slug (project directory name)",

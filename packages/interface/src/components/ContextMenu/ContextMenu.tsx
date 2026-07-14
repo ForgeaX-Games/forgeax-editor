@@ -160,6 +160,7 @@ export function ContextMenu() {
                 key={`i${i}`}
                 disabled={it.disabled}
                 className={it.danger ? 'text-destructive focus:text-destructive' : undefined}
+                data-testid={`ctx-menu-${it.label.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()}`}
                 onSelect={() => {
                   if (!it.disabled) it.onClick();
                 }}

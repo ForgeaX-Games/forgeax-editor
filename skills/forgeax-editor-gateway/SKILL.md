@@ -301,8 +301,11 @@ assets exist?"*. The **write legs** are ordinary `dispatch` ops — the same doo
 Content Browser, so an AI is an equal peer (registry razor). They are **session-domain, ledger-only**
 (no undo — a cook/instantiate produces derived artefacts) and, because they do disk / `loadByGuid`
 I/O, **fire-and-forget async**: `dispatch` returns `{ok:true}` synchronously while the work completes
-in a detached promise. There is **no `created[]`** on a session op — confirm completion by **polling
-`assetCatalog()` / `query()`**, not by reading the dispatch result.
+in a detached promise. There is **no `created[]`** on a session op. `importAsset` has no terminal
+status read yet, so confirm it by polling `assetCatalog()` after any disk-watch reload. In contrast,
+`addSceneAssetToScene` publishes the terminal mount result through `sceneMountPhase` and
+`lastSceneMountError` — do not infer completion from the synchronous dispatch result, a wrapper
+entity, or a host log.
 
 | Op | Args | Does |
 |:--|:--|:--|
@@ -340,7 +343,14 @@ const scene = gateway.assetCatalog().find(
 // 3) Place it — real geometry + skeleton/skin, one mounts[] entry. (No AnimationPlayer — see below.)
 gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox' }, 'ai');
 
-// 4) Confirm the skinned instance landed (poll query — the mount is async).
+// 4) Poll the operation-specific terminal state, not only a component query.
+// `mounted` means the canonical engine instantiate continuation completed;
+// `failed` pairs with a machine-branchable error. Retry clears a prior terminal state.
+while (gateway.sceneMountPhase === 'pending') await new Promise((r) => setTimeout(r, 250));
+if (gateway.sceneMountPhase === 'failed') throw new Error(gateway.lastSceneMountError?.hint);
+
+// 5) Confirm the skinned instance landed. Query by semantic component — mount
+// descendants do not inherit the wrapper's Name.
 const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree (an entity carrying Skin)
 ```
 
@@ -348,8 +358,11 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > **What lands is a wrapper + a subtree — query by the COMPONENT, not the wrapper name.**
 > `addSceneAssetToScene` mounts an identity-`Transform` **wrapper** entity (named by `name`)
 > whose CHILDREN carry the actual `MeshRenderer` / `Skin` / geometry. Filtering by the wrapper's
-> name and expecting a `MeshRenderer` on it sees nothing → a false "it didn't land". Query by the
-> component you want (`query({ with: ['MeshRenderer'] })`) to catch the mesh children.
+> name and expecting a `MeshRenderer` on it sees nothing → a false "it didn't land". First wait for
+> `sceneMountPhase === 'mounted'` (or branch on `failed` / `lastSceneMountError`), then query by the
+> component you want (`query({ with: ['MeshRenderer'] })`) to catch the mesh children. For a
+> multi-material scene, a non-empty `MeshRenderer.materials` array is semantic mount evidence; do
+> not expect the derived mesh child to carry the wrapper name.
 > Also: the mount is **async** and **each headless `gateway-eval.mjs` call is a fresh page load
 > (= a reopen from disk)** — a mount you placed but did NOT `saveDocToDisk` is gone on the next
 > eval. Place → inspect → **save** within one eval if you need it to persist; a *separate* eval is

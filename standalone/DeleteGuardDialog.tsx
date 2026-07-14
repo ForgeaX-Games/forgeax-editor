@@ -36,7 +36,7 @@ export function DeleteGuardDialog() {
         }}
       >
         <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>
-          删除{多 ? ` ${req.assets.length} 个资产` : '资产'}？
+          删除{multi ? ` ${req.assets.length} 个资产` : '资产'}？
         </h3>
         <p style={{ margin: '0 0 10px', fontSize: 13, opacity: 0.8 }}>
           这些资产将被永久删除（document 域 op，可撤销）。

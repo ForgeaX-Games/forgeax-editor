@@ -75,12 +75,52 @@ async function callExecute<T>(name: string, args: string[]): Promise<T> {
 /** Catalog 来自 `~/.forgeax/key/models.json`（disk）与 LiteLLM `/v1/models`（live）
  *  的合并：live 权威时展示集合即 live 那份，disk 只静默补元数据。
  *  返回顺序由 server 端按「强度」排好（claude 族最前 → 版本号降序 → tier），
- *  前端不再二次排序，直接平铺渲染。providerId 非空时返回对应 rented CLI 的
+ *  前端不再二次排序，直接平铺渲染。providerId 非空时返回对应内核的
  *  driver-scoped catalog。 */
 export async function listModels(providerId?: string | null): Promise<ModelCatalogEntry[]> {
+  return (await listModelsWithMeta(providerId)).models;
+}
+
+/** 内核目录回退链(env → kernel.listModels → last-known → static → none)
+ *  的命中层元数据。UI 用它渲染空态("目录不可用",而不是假列表)和
+ *  「缓存/预置」徽章。gateway 路径(providerId 为空)没有这段。 */
+export interface CatalogDriverMeta {
+  id: string;
+  source: 'env' | 'kernel' | 'last-known' | 'static' | 'none' | string;
+  error?: string;
+  ids: number;
+  cached?: boolean;
+}
+
+export interface ModelCatalogWithMeta {
+  models: ModelCatalogEntry[];
+  driver?: CatalogDriverMeta;
+}
+
+/** listModels + driver 元数据透传(内核目录路径需要;见 CatalogDriverMeta)。 */
+export async function listModelsWithMeta(providerId?: string | null): Promise<ModelCatalogWithMeta> {
   const args = providerId ? [providerId] : [];
-  const data = await callQuery<{ models: ModelCatalogEntry[] }>("list_models", args);
-  return data.models ?? [];
+  const data = await callQuery<{ models: ModelCatalogEntry[]; driver?: CatalogDriverMeta }>("list_models", args);
+  return { models: data.models ?? [], driver: data.driver };
+}
+
+/** Full `list_models` payload including the live-probe summary. Use this when
+ *  connectivity must NOT treat disk-only fallback as success (onboarding). */
+export async function listModelsWithLive(
+  providerId?: string | null,
+): Promise<{
+  models: ModelCatalogEntry[];
+  live: { source: string; error?: string; ids: number };
+}> {
+  const args = providerId ? [providerId] : [];
+  const data = await callQuery<{
+    models: ModelCatalogEntry[];
+    live: { source: string; error?: string; ids: number };
+  }>("list_models", args);
+  return {
+    models: data.models ?? [],
+    live: data.live ?? { source: "disabled", ids: 0 },
+  };
 }
 
 /** 读 agent.json::models.model —— **不**经 AGENT_DEFAULTS deep-merge，

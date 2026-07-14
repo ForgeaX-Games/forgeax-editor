@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 // M3 (AC-03): asset-selection is a transient op dispatched through the one
 // gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
 // setAssetSelection setter.
@@ -45,13 +46,16 @@ function registryEntryToCBAsset(
 ): CBAsset {
   // Use relativeUrl as a proxy for packPath for folder-tree navigation.
   // CRUD operations on disk packs use this to locate the .pack.json.
+  const packPath = e.relativeUrl;
+  console.info('[delete-diag] registryEntryToCBAsset: guid=%s kind=%s relativeUrl=%s → packPath=%s isPack=%s',
+    e.guid, e.kind, e.relativeUrl, packPath, packPath.endsWith('.pack.json'));
   return {
     type: 'asset',
     guid: e.guid,
     kind: e.kind,
     name: e.name ?? e.guid.slice(0, 8),
     payload: {},
-    packPath: e.relativeUrl,
+    packPath,
     packIndex: index,
     refs: e.refs ? [...e.refs] : [],
     estimatedSize: 0,
@@ -129,15 +133,29 @@ export function ContentBrowser() {
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = gateway.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
-    const entries = registry?.listCatalog?.();
-    if (!entries || entries.length === 0) {
-      setAllAssets([]);
+    //
+    // refreshCatalog first: listCatalog() is a sync cache read. On single-realm boot the
+    // Assets tab is inactive, so ContentBrowser mounts AFTER host-session's one-shot
+    // broadcastAssetsChanged (and installAssetCatalogRefresh is wired even later). Without
+    // an explicit refresh here the first mount sees an empty packIndexCache forever.
+    type RegistrySurface = {
+      listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[];
+      refreshCatalog?: () => Promise<boolean>;
+    };
+    const registry = gateway.doc.registry as RegistrySurface | undefined;
+    const apply = () => {
+      const entries = registry?.listCatalog?.();
+      if (!entries || entries.length === 0) {
+        setAllAssets([]);
+      } else {
+        setAllAssets(entries.map(registryEntryToCBAsset));
+      }
       setLoading(false);
+    };
+    if (registry?.refreshCatalog) {
+      void registry.refreshCatalog().then(apply).catch(apply);
     } else {
-      const catalog = entries.map(registryEntryToCBAsset);
-      setAllAssets(catalog);
-      setLoading(false);
+      apply();
     }
   }, []);
 
@@ -306,7 +324,8 @@ export function ContentBrowser() {
     setDeleteTargets(current => {
       if (current) {
         for (const a of current) {
-          // D6: unified delete path — gateway.dispatch (same as keyboard router).
+          console.info('[delete-diag] performDelete: dispatching destroyAsset guid=%s packPath=%s kind=%s name=%s',
+            a.guid, a.packPath, a.kind, a.name);
           gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
         }
       }
@@ -571,14 +590,15 @@ export function ContentBrowser() {
         </div>
       )}
 
-      {deleteTargets && (
+      {deleteTargets && createPortal(
         <DeleteGuardDialog
           targets={deleteTargets}
           impact={computeDeleteImpact(deleteTargets.map(t => t.guid), assetGraph)}
           nameByGuid={nameByGuid}
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}
-        />
+        />,
+        document.body,
       )}
     </div>
   );

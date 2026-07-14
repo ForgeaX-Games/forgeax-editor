@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 import { MoveLeft, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../store';
-import { usePluginManifest } from '../../lib/use-plugin-manifest';
+import { usePluginManifest, manifestMatchesId } from '../../lib/use-plugin-manifest';
 import { pickLang, type BusPluginInfo } from '../../lib/bus-api';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
 import { KeepAlivePluginIframes } from './KeepAlivePluginIframes';
@@ -43,13 +43,17 @@ export function CenterPluginLayer(): ReactElement {
   // manifest per id lets a re-visit resolve synchronously → no loading flash,
   // no hide/show flicker. New (never-seen) plugins still show loading once.
   const manifestCacheRef = useRef<Map<string, BusPluginInfo>>(new Map());
-  if (live && live !== 'loading' && live.id) {
-    manifestCacheRef.current.set(live.id, live);
+  // `live` may briefly be the PREVIOUS plugin's manifest on the first render
+  // after a switch — only trust it when it matches the current expanded id (by
+  // either manifest id or workbench-id alias, since callers open by both).
+  const liveForThis = live && live !== 'loading' && expandedPluginId && manifestMatchesId(live, expandedPluginId) ? live : null;
+  // Key the cache by the REQUESTED id (expandedPluginId), not live.id: a caller
+  // that opens by the workbench-id alias must get a cache hit on re-visit, else
+  // the loading overlay flashes every time.
+  if (liveForThis && expandedPluginId) {
+    manifestCacheRef.current.set(expandedPluginId, liveForThis);
   }
   const cached = expandedPluginId ? manifestCacheRef.current.get(expandedPluginId) ?? null : null;
-  // `live` may briefly be the PREVIOUS plugin's manifest on the first render
-  // after a switch — only trust it when its id matches the current expanded id.
-  const liveForThis = live && live !== 'loading' && live.id === expandedPluginId ? live : null;
 
   // Prefer the cache (always correct for this id, resolves synchronously on a
   // re-visit so there's no loading flash); fall back to a freshly-resolved

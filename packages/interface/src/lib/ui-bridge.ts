@@ -4,7 +4,7 @@
  *    - POST /:sid/ui-lease       获焦 acquire / 心跳续期(displace 语义,「最后获焦 tab」持有)
  *    - POST /:sid/ui-manifest    registry 变更时 push 可序列化 manifest(**必须持 lease**——
  *                                manifest 是 trust-gate 的权限输入,声明与执行方必须同源)
- *    - perception:query(WS)     kind = ui_snapshot / ui_invoke → 本模块应答
+ *    - perception:query(WS)     kind = ui_snapshot / ui_invoke / ui_screenshot → 本模块应答
  *    - POST /:sid/perception-reply  带 leaseId 回灌(server 校验;非持有者的回灌被拒)
  *
  *  多标签规则(评审 2.7,P0 定死):最后获焦的 tab 持 lease,WS 心跳续期;收到 ui_* 查询
@@ -24,6 +24,7 @@ import { startActionDomDiscovery } from './action-dom-discovery';
 import { installUiActionHighlight } from './ui-action-highlight';
 import { installVagActionBridge } from './vag-action-bridge';
 import { buildA11ySummary } from './a11y-summary';
+import { captureUiScreenshot } from './ui-screenshot';
 import { isTrustedMessageOrigin } from './trustedOrigins';
 import { useShellStore } from '../store';
 
@@ -97,7 +98,7 @@ async function answerUiQuery(evt: SessionEvent): Promise<void> {
   if (evt.event.type !== 'perception:query') return;
   const p = evt.event.payload as UiQueryPayload;
   const kind = p.kind;
-  if (kind !== 'ui_snapshot' && kind !== 'ui_invoke') return; // world/frame 归 preview surface
+  if (kind !== 'ui_snapshot' && kind !== 'ui_invoke' && kind !== 'ui_screenshot') return; // world/frame 归 preview surface
   if (typeof p.reqId !== 'string') return;
   const sid = evt.sid;
   knownSids.add(sid);
@@ -122,6 +123,9 @@ async function answerUiQuery(evt: SessionEvent): Promise<void> {
       // P1-13 a11y 兜底:未注册区域的只读定向摘要(detail:'a11y' 按需拉,默认不带)。
       ...(detail === 'a11y' ? { a11y: buildA11ySummary() } : {}),
     };
+  } else if (kind === 'ui_screenshot') {
+    // P3 兜底证据:DOM→canvas 栅格化(失败 fail-soft captured:false,见 ui-screenshot.ts)。
+    snapshot = await captureUiScreenshot(p.query);
   } else {
     const q = (p.query ?? {}) as { actionId?: unknown; args?: unknown };
     if (typeof q.actionId !== 'string' || !q.actionId) {

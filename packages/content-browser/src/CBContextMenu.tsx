@@ -73,14 +73,12 @@ export function buildAssetContextMenu(
       }
     }},
     { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+      console.info('[delete-diag] CBContextMenu.delete: onDelete=%s targets=%d', !!callbacks?.onDelete, targets.length);
       if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
-      // Fallback for hosts without a delete guard wired in. Routes through the ONE
-      // gateway door (destroyAsset document op, undoable) — identical to the primary
-      // path in ContentBrowser.tsx. The applier reaches pack IO via ctx.assetIO and
-      // fires the assetsChanged notification itself; no raw deleteAsset primitive.
       const names = targets.map(a => a.name).join(', ');
       if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
       for (const a of targets) {
+        console.info('[delete-diag] CBContextMenu.delete fallback: dispatching destroyAsset guid=%s packPath=%s', a.guid, a.packPath);
         gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
     }},

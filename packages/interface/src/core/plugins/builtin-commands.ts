@@ -14,6 +14,7 @@
 import type { AppPlugin } from '../app-shell/types';
 import { useShellStore, type AppMode } from '../../store';
 import { setActiveWorkbench } from '../../lib/workbenches';
+import { bumpDockResetEpoch } from '../../components/DockShell/dockResetEpoch';
 
 const getState = () => useShellStore.getState();
 
@@ -62,7 +63,13 @@ export const builtinCommandsPlugin: AppPlugin = {
     cleanups.push(registerCommand({
       id: 'app.dock.reset',
       title: 'Reset dock layout',
-      execute: () => { ctx.bus.emit('dock:reset', {}); return { status: 'completed' as const }; },
+      execute: () => {
+        // Epoch first so DockRegions that are not yet subscribed / onReady can
+        // still apply this reset exactly once when they become ready.
+        bumpDockResetEpoch();
+        ctx.bus.emit('dock:reset', {});
+        return { status: 'completed' as const };
+      },
     }));
 
     cleanups.push(registerCommand({

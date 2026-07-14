@@ -159,7 +159,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
 
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
-    if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(cleaned)) {
+    if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(cleaned)) {
       setErr(t('gameSwitcher.slugError'));
       return;
     }

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { FloatingMenu } from '../ui/FloatingMenu';
-import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps } from 'dockview';
+import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type SerializedDockview } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import { WbPluginDockPanel } from './WbPluginDockPanel';
 import { RecoveryBoundary } from '../ErrorBoundary';
@@ -38,7 +38,31 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { useHost } from '../../core/app-shell';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
 import { buildDefault } from './builtinWorkbenches';
+import { getDockResetEpoch } from './dockResetEpoch';
 import './DockShell.css';
+
+/** Clear chrome collapse + rebuild this region's default dock layout. */
+function rebuildRegionDefault(
+  api: DockviewApi,
+  isMember: (id: string) => boolean,
+  layoutOverride: SerializedDockview | undefined,
+  hideChat: boolean,
+): string {
+  useShellStore.setState({
+    fullscreen: false,
+    sidebarCollapsed: false,
+    chatpanelCollapsed: false,
+  });
+  const activeId = loadWorkbenchList().activeId;
+  try {
+    api.clear();
+    buildDefault(api, activeId, isMember, layoutOverride);
+  } catch { /* noop */ }
+  if (hideChat) {
+    try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
+  }
+  return activeId;
+}
 
 // DockRegion — the interface shell's window/docking layer, parameterized by a
 // `region: DockRegion` prop (design EDITOR-MODE §0.2, chosen lib = dockview).
@@ -138,8 +162,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // Mirror isMember into a ref so callbacks registered with [] deps (onReady,
   // subscribeWorkbenchList, reset, openPanel handler) can read the latest predicate
   // without re-binding — descriptor/override changes propagate through the ref.
+  // useLayoutEffect (not useEffect): tour reset clears panelLocations then
+  // immediately dock-resets; the ref must be fresh before that reset runs.
   const isMemberRef = useRef(isMember);
-  useEffect(() => { isMemberRef.current = isMember; }, [isMember]);
+  useLayoutEffect(() => { isMemberRef.current = isMember; }, [isMember]);
   // After a layout restore (api.fromJSON), close any panel that no longer
   // belongs to THIS region — the saved JSON may include panels the user has
   // since moved via panelLocations overrides.
@@ -189,6 +215,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     [],
   );
   const apiRef = useRef<DockviewApi | null>(null);
+  // Last app.dock.reset epoch this region has applied. Compared to
+  // getDockResetEpoch() so a reset requested before onReady still lands once.
+  const appliedResetEpochRef = useRef(0);
   // Onready-scoped disposables (registry unregister + dockview event subs).
   // Populated in onReady, drained by the unmount effect below so cross-instance
   // wiring doesn't leak between HMR remounts.
@@ -303,63 +332,87 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     });
     api.onDidDrop(() => { dropHandledRef.current = true; });
 
-    // Restore the active workspace's layout, falling back to legacy LS_KEY for
-    // the viewport workspace on first migration, else build the workspace default.
-    const { activeId } = loadWorkbenchList();
-    prevWorkspaceIdRef.current = activeId;
-    let restored = false;
-    // isValidLayout — checks the raw serialized JSON BEFORE giving it to dockview.
-    // Rejects it early so we never briefly flash the wrong layout on screen.
-    const isValidLayout = (parsed: { panels?: Record<string, unknown> }, wsId: string): boolean => {
-      const isCoreWs = wsId === 'scene' || wsId === 'ai';
-      if (parsed.panels) {
-        const panelIds = Object.keys(parsed.panels);
-        // Custom workspaces must not have ep:* editor panels — those come from
-        // the old buildDefault that used the 'scene' branch for unknown ids.
-        if (!isCoreWs && panelIds.some((k) => k.startsWith('ep:'))) return false;
-        // A built-in layout may only restore editor panels declared by this host.
-        if (isCoreWs && panelIds.some((k) => (
-          k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
-        ))) return false;
-      }
-      if (wsId === 'ai' && !parsed.panels?.['main']) return false;
-      return true;
-    };
-
-    const tryRestore = (raw: string | null, wsId: string = activeId): boolean => {
-      if (!raw) return false;
-      try {
-        const parsed = JSON.parse(raw) as { panels?: Record<string, unknown> };
-        if (!isValidLayout(parsed, wsId)) {
-          // Evict the bad layout so it doesn't come back on next load.
-          try { localStorage.removeItem(layoutKey(wsId)); } catch { /* noop */ }
-          return false;
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        api.fromJSON(parsed as any);
-        // Drop any restored panels that no longer belong to THIS region
-        // (panelLocations overrides may have re-homed them since the save).
-        closeStrayPanels(api);
-        const hasViewport = api.getPanel('viewport') || api.getPanel('main') || api.getPanel('tools');
-        const hasAny = hasViewport || api.getPanel('chat') || api.panels.length > 0;
-        if (!hasAny) { api.clear(); return false; }
-        return true;
-      } catch { try { api.clear(); } catch { /* noop */ } return false; }
-    };
-    try {
-      restored = tryRestore(localStorage.getItem(layoutKey(activeId)), activeId);
-      if (!restored && activeId === 'scene') {
-        // migration: try the old single-layout key
-        restored = tryRestore(localStorage.getItem(LS_KEY));
-      }
-    } catch { restored = false; }
-    if (!restored) {
-      buildDefault(
+    // If app.dock.reset was requested before this region was ready, skip restore
+    // and seed the default layout once (same outcome as the reset handler).
+    const resetEpoch = getDockResetEpoch();
+    if (appliedResetEpochRef.current < resetEpoch) {
+      appliedResetEpochRef.current = resetEpoch;
+      const activeId = loadWorkbenchList().activeId;
+      prevWorkspaceIdRef.current = activeId;
+      rebuildRegionDefault(
         api,
-        activeId,
         isMemberRef.current,
         builtinWorkbenchLayoutsRef.current?.[activeId],
+        hideChatRef.current,
       );
+    } else {
+      // Restore the active workspace's layout, falling back to legacy LS_KEY for
+      // the viewport workspace on first migration, else build the workspace default.
+      const { activeId } = loadWorkbenchList();
+      prevWorkspaceIdRef.current = activeId;
+      let restored = false;
+      // isValidLayout — checks the raw serialized JSON BEFORE giving it to dockview.
+      // Rejects it early so we never briefly flash the wrong layout on screen.
+      const isValidLayout = (parsed: { panels?: Record<string, unknown> }, wsId: string): boolean => {
+        const isCoreWs = wsId === 'scene' || wsId === 'ai';
+        if (parsed.panels) {
+          const panelIds = Object.keys(parsed.panels);
+          // Custom workspaces must not have ep:* editor panels — those come from
+          // the old buildDefault that used the 'scene' branch for unknown ids.
+          if (!isCoreWs && panelIds.some((k) => k.startsWith('ep:'))) return false;
+          // A built-in layout may only restore editor panels declared by this host.
+          if (isCoreWs && panelIds.some((k) => (
+            k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
+          ))) return false;
+        }
+        if (wsId === 'ai' && !parsed.panels?.['main']) return false;
+        return true;
+      };
+
+      const tryRestore = (raw: string | null, wsId: string = activeId): boolean => {
+        if (!raw) return false;
+        try {
+          const parsed = JSON.parse(raw) as { panels?: Record<string, unknown> };
+          if (!isValidLayout(parsed, wsId)) {
+            // Evict the bad layout so it doesn't come back on next load.
+            try { localStorage.removeItem(layoutKey(wsId)); } catch { /* noop */ }
+            return false;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          api.fromJSON(parsed as any);
+          // Drop any restored panels that no longer belong to THIS region
+          // (panelLocations overrides may have re-homed them since the save).
+          closeStrayPanels(api);
+          const hasViewport = api.getPanel('viewport') || api.getPanel('main') || api.getPanel('tools');
+          const hasAny = hasViewport || api.getPanel('chat') || api.panels.length > 0;
+          if (!hasAny) { api.clear(); return false; }
+          return true;
+        } catch { try { api.clear(); } catch { /* noop */ } return false; }
+      };
+      try {
+        restored = tryRestore(localStorage.getItem(layoutKey(activeId)), activeId);
+        if (!restored && activeId === 'scene') {
+          // migration: try the old single-layout key
+          restored = tryRestore(localStorage.getItem(LS_KEY));
+        }
+      } catch { restored = false; }
+      if (!restored) {
+        buildDefault(
+          api,
+          activeId,
+          isMemberRef.current,
+          builtinWorkbenchLayoutsRef.current?.[activeId],
+        );
+      }
+
+      // No injected chat surface — close any auto-mounted or restored chat panel
+      // for standalone hosts. Acts as the final post-processing step so neither
+      // buildDefault nor tryRestore needs to know about the flag (plan-strategy
+      // section 2 D-4 keeps chat-slice store untouched and routes the opt-out
+      // strictly through prop drilling).
+      if (hideChatRef.current) {
+        try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
+      }
     }
 
     // Refresh interface-owned and host-injected panel titles after restoration.
@@ -370,15 +423,6 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     ]);
     for (const id of titleIds) {
       try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-    }
-
-    // No injected chat surface — close any auto-mounted or restored chat panel
-    // for standalone hosts. Acts as the final post-processing step so neither
-    // buildDefault nor tryRestore needs to know about the flag (plan-strategy
-    // section 2 D-4 keeps chat-slice store untouched and routes the opt-out
-    // strictly through prop drilling).
-    if (hideChatRef.current) {
-      try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
     }
   }, []);
 
@@ -500,26 +544,23 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     });
   }, []);
 
-  // Reset-layout hook — useEffect for proper cleanup on HMR remounts.
-  useEffect(() => {
+  // Reset-layout hook — useLayoutEffect so a tour reset emitted in useEffect
+  // (after all layout effects) still finds a subscribed listener.
+  useLayoutEffect(() => {
     const onReset = (): void => {
       const api = apiRef.current;
+      const epoch = getDockResetEpoch();
+      // No api yet — onReady will see appliedResetEpochRef < epoch and seed default.
       if (!api) return;
-      try {
-        api.clear();
-        const activeId = loadWorkbenchList().activeId;
-        buildDefault(
-          api,
-          activeId,
-          isMemberRef.current,
-          builtinWorkbenchLayoutsRef.current?.[activeId],
-        );
-        // No injected chat surface — reset-layout rebuilds defaults that may
-        // include a chat panel; close it again for standalone hosts.
-        if (hideChatRef.current) {
-          try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
-        }
-      } catch { /* noop */ }
+      if (appliedResetEpochRef.current >= epoch) return;
+      appliedResetEpochRef.current = epoch;
+      const activeId = loadWorkbenchList().activeId;
+      rebuildRegionDefault(
+        api,
+        isMemberRef.current,
+        builtinWorkbenchLayoutsRef.current?.[activeId],
+        hideChatRef.current,
+      );
     };
     return host.bus.on('dock:reset', onReset);
   }, [host]);
@@ -563,6 +604,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     const hadActiveLayout = !!localStorage.getItem(layoutKey(activeId));
     void initWorkbenchLayouts(new Set(editorPanelIds)).then(() => {
       if (hadActiveLayout) return; // localStorage already had data — nothing to apply
+      // Tour/layout reset already seeded the default — don't rehydrate a stale
+      // project-scoped / server layout over it.
+      if (appliedResetEpochRef.current > 0) return;
       const api = apiRef.current;
       if (!api) return;
       const saved = loadWorkbenchLayout(activeId);
@@ -671,6 +715,15 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // dockview tab drags, so this is safe).
     const on = (): void => document.documentElement.classList.add('fx-dock-dragging');
     const off = (): void => document.documentElement.classList.remove('fx-dock-dragging');
+    // Only flag a drag as a DOCKVIEW tab/group drag when it originates in a tab
+    // strip. In-panel HTML5 drags (e.g. Hierarchy entity rows being re-parented)
+    // must NOT set fx-dock-dragging, or the CSS above would kill pointer-events on
+    // the very drop targets that drag needs (the tree rows). Tab drags always
+    // start inside `.dv-tabs-and-actions-container` (same anchor as onPointerDown).
+    const onDragStart = (e: DragEvent): void => {
+      const t = e.target as Element | null;
+      if (t && t.closest('.dv-tabs-and-actions-container')) on();
+    };
     // Floating-GROUP moves (dragging the window's tab bar) are POINTER-based, not
     // HTML5 dragstart — so catch pointerdown on the tab bar (`.dv-tabs-and-actions-
     // container`) too, else a floating window can't be merged back over an iframe
@@ -721,13 +774,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       }, 0);
     };
     window.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('dragstart', on, true);
+    window.addEventListener('dragstart', onDragStart, true);
     window.addEventListener('pointerup', off, true);
     window.addEventListener('dragend', onDragEnd, true);
     window.addEventListener('drop', off, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('dragstart', on, true);
+      window.removeEventListener('dragstart', onDragStart, true);
       window.removeEventListener('pointerup', off, true);
       window.removeEventListener('dragend', onDragEnd, true);
       window.removeEventListener('drop', off, true);

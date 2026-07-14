@@ -24,12 +24,12 @@
     "signature": "() => void"
   },
   {
-    "name": "buildQueryFn",
-    "signature": "() => QuerySnapshotFn"
+    "name": "beginSceneMountAttempt",
+    "signature": "() => void"
   },
   {
-    "name": "cancel",
-    "signature": "(handle: OpHandle) => DispatchResult"
+    "name": "buildQueryFn",
+    "signature": "() => QuerySnapshotFn"
   },
   {
     "name": "canRedo",
@@ -40,12 +40,20 @@
     "signature": "() => boolean"
   },
   {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
     "name": "collectSceneAsset",
     "signature": "(entity: EntityHandle) => CollectSceneAssetResult"
   },
   {
     "name": "commit",
     "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
+    "name": "completeSceneMountAttempt",
+    "signature": "() => void"
   },
   {
     "name": "defineOp",
@@ -61,7 +69,7 @@
   },
   {
     "name": "describeComponent",
-    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; } | { ok: false; error: CommandError; }"
+    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; enums?: Record<string, Record<string, number>> | undefined; transient?: Record<string, true> | undefined; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "dispatch",
@@ -88,6 +96,10 @@
     "signature": "(error: CommandError) => void"
   },
   {
+    "name": "failSceneMountAttempt",
+    "signature": "(error: CommandError) => void"
+  },
+  {
     "name": "historySteps",
     "signature": "() => HistoryStep[]"
   },
@@ -97,6 +109,10 @@
   },
   {
     "name": "lastPlayError",
+    "signature": "CommandError | null"
+  },
+  {
+    "name": "lastSceneMountError",
     "signature": "CommandError | null"
   },
   {
@@ -158,6 +174,10 @@
   {
     "name": "scanLocked",
     "signature": "boolean"
+  },
+  {
+    "name": "sceneMountPhase",
+    "signature": "\"failed\" | \"idle\" | \"pending\" | \"mounted\""
   },
   {
     "name": "static registerBuiltinOp",

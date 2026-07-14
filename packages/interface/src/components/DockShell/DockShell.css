@@ -103,12 +103,32 @@
    position: relative anchors the .fx-auxbar-resizer absolutely at the left edge. */
 .fx-dockregion-AuxBar { flex: 0 0 auto; position: relative; }
 
-/* While dragging a tab/group anywhere, disable ONLY iframes so dockview's drop
-   overlay receives dragover over iframe panels (iframes swallow native drag).
-   IMPORTANT: do NOT disable .dv-react-part — dockview's own drop detection lives
-   in the panel/content area; disabling it breaks docking onto NON-iframe panels
-   (chat / workbench). Global on <html> since dockview portals floats to <body>. */
-html.fx-dock-dragging iframe { pointer-events: none !important; }
+/* While dragging a dockview TAB/GROUP (fx-dock-dragging is scoped to tab-strip
+   drags in DockRegion — NOT in-panel HTML5 drags like Hierarchy rows), make the
+   hovered panel body transparent to the native drag so dockview's own drop
+   detection is reliable:
+
+   1) iframes swallow native drag entirely, so the drop overlay never sees the
+      dragover over an iframe panel (Main preview / plugin panes).
+   2) The keep-alive surface (Play/Edit viewport <canvas>) overlays the viewport
+      dockview anchor at z-index 40 / pointer-events:auto — post single-realm it
+      is no longer an <iframe>, so the iframe rule alone left the viewport unable
+      to accept drops ("viewport 下面放不了").
+   3) Panel BODIES with densely-nested elements (Hierarchy tree rows, Assets grid)
+      generate HTML5 dragenter/dragleave flicker on their children; with the
+      abyss theme's in-place drop overlay that flicker clears dockview's drop
+      `_state`, so a split-your-own-group drop (drag Assets tab to the bottom of
+      the Hierarchy column) landed on a cleared state and snapped back. Killing
+      pointer-events on the body CHILDREN routes every drag event straight to the
+      panel content wrapper (single, stable dragover target) — no flicker.
+
+   IMPORTANT: disable the body CHILDREN (.dv-react-part > *), NOT .dv-react-part
+   itself — dockview's per-panel drop detection lives on the content wrapper;
+   disabling the wrapper breaks docking onto NON-iframe panels (chat / workbench).
+   Global on <html> since dockview portals floating groups to <body>. */
+html.fx-dock-dragging iframe,
+html.fx-dock-dragging .fx-surface-keepalive-item { pointer-events: none !important; }
+html.fx-dock-dragging .fx-dockshell .dv-react-part > * { pointer-events: none !important; }
 
 /* Per-group "pop out to OS window" button (rightHeaderActionsComponent). */
 .fx-dock-popout {

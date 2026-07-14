@@ -124,7 +124,9 @@ export function getAction(id: string): UiActionDef | undefined {
 
 // ─── 派发单入口(评审 2.4:data-* 只做发现,执行永远走这里)──────────────────
 
-/** AI 派发时打的来源标记;window 事件供 ghost 高亮层(P1)与 telemetry 衔接。 */
+/** AI 派发时打的来源标记;window 事件供 ghost 高亮层(P1)与 telemetry / 轨迹追踪衔接。
+ *  detail 形:`{ id, source, args }` —— args 让轨迹追踪(lib/ui-trajectory)记得下「做了啥」,
+ *  ghost 高亮只用 id/source(向后兼容,多带的字段无害)。 */
 export const UI_ACTION_DISPATCH_EVENT = 'forgeax:ui-action-dispatch';
 
 /** 极简 JSON Schema 参数校验(P0:required + 顶层 properties 的原始类型)。
@@ -198,7 +200,7 @@ export async function dispatchAction(
   if (valid !== true) return done({ status: 'rejected', reason: valid });
 
   try {
-    window.dispatchEvent(new CustomEvent(UI_ACTION_DISPATCH_EVENT, { detail: { id, source: src } }));
+    window.dispatchEvent(new CustomEvent(UI_ACTION_DISPATCH_EVENT, { detail: { id, source: src, args } }));
   } catch {
     /* SSR / no window — ignore */
   }

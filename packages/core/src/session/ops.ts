@@ -158,41 +158,35 @@ export function reparentAt(
   reparentEntity(child, parent);
 }
 
-// post-order (children before parent) so the transaction's reversed inverse
-// respawns parents before children on undo (avoids INVALID_PARENT).
-function postOrder(handle: EntityHandle, out: EntityHandle[]): void {
-  for (const c of childrenOf(gateway.activeWorld, handle)) postOrder(c, out);
-  out.push(handle);
-}
+// Single destroyEntity per root: applyDestroyEntity walks the subtree internally
+// and despawns children before parent. The old per-entity explosion conflicted
+// with the scene-asset undo path (collectSceneAsset collects the full subtree,
+// so per-entity destroys would double-restore children on undo).
 
 export function deleteEntityCascade(handle: EntityHandle): void {
   if (!entExists(gateway.activeWorld, handle)) return;
-  const order: EntityHandle[] = [];
-  postOrder(handle, order);
-  const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  gateway.dispatch({ kind: 'transaction', label: `delete ${handle}`, commands });
+  gateway.dispatch({ kind: 'destroyEntity', entity: handle });
   gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
 // Cascade-delete several entities (+ their subtrees) in one undo step. De-dupes
-// overlapping subtrees so an entity is never destroyed twice.
+// to independent roots: if A is an ancestor of B, only A is dispatched (its
+// subtree walk inside applyDestroyEntity covers B).
 export function deleteManyCascade(handles: EntityHandle[]): void {
-  const seen = new Set<EntityHandle>();
-  const order: EntityHandle[] = [];
-  for (const handle of handles) {
-    if (!entExists(gateway.activeWorld, handle)) continue;
-    const sub: EntityHandle[] = [];
-    postOrder(handle, sub);
-    for (const e of sub) {
-      if (!seen.has(e)) {
-        seen.add(e);
-        order.push(e);
-      }
-    }
+  const world = gateway.activeWorld;
+  const live = handles.filter((h) => entExists(world, h));
+  if (live.length === 0) return;
+  // Dedup to independent roots — drop any entity whose ancestor is also in the set.
+  const roots = live.filter((h) =>
+    !live.some((other) => other !== h && isSelfOrDescendant(world, other, h)),
+  );
+  if (roots.length === 0) return;
+  if (roots.length === 1) {
+    gateway.dispatch({ kind: 'destroyEntity', entity: roots[0]! });
+  } else {
+    const commands: EditorOp[] = roots.map((e) => ({ kind: 'destroyEntity', entity: e }));
+    gateway.dispatch({ kind: 'transaction', label: `delete x${roots.length}`, commands });
   }
-  if (order.length === 0) return;
-  const commands: EditorOp[] = order.map((e) => ({ kind: 'destroyEntity', entity: e }));
-  gateway.dispatch({ kind: 'transaction', label: `delete x${handles.length}`, commands });
   gateway.dispatch({ kind: 'setSelection', id: null });
 }
 

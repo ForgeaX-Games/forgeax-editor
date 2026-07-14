@@ -189,18 +189,37 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
   if (!step) return null;
   const coach = coachPosition(anchorRect);
   const ring = anchorRect ? ringBox(anchorRect) : null;
+  // evenodd polygon: full viewport minus the ring rect → dim everywhere except
+  // the highlighted panel (which stays undimmed).
+  const scrimClip = ring
+    ? `polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, ${ring.left}px ${ring.top}px, ${ring.left}px ${ring.top + ring.height}px, ${ring.left + ring.width}px ${ring.top + ring.height}px, ${ring.left + ring.width}px ${ring.top}px, ${ring.left}px ${ring.top}px)`
+    : undefined;
 
   return (
     <div className="tour-root" role="dialog" aria-modal="true" aria-label={step.anchor}>
       {/* Scrim is a click SINK, not a dismiss target: clicking anywhere outside
           the coach must NOT quit the tour (only the explicit Skip button / Esc
-          do). It still swallows clicks so the shell underneath isn't poked. */}
-      <div className="tour-scrim" onClick={(e) => e.stopPropagation()} />
+          do). clip-path punches a hole over the anchor so that panel stays clear
+          while the rest of the shell stays dimmed. */}
+      <div
+        className="tour-scrim"
+        style={scrimClip ? { clipPath: scrimClip } : undefined}
+        onClick={(e) => e.stopPropagation()}
+      />
       {ring && (
-        <div
-          className="tour-ring"
-          style={{ top: ring.top, left: ring.left, width: ring.width, height: ring.height }}
-        />
+        <>
+          {/* Hole is clipped out of the scrim, so a separate sink blocks clicks
+              on the highlighted panel (tour stays non-interactive). */}
+          <div
+            className="tour-hole-sink"
+            style={{ top: ring.top, left: ring.left, width: ring.width, height: ring.height }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div
+            className="tour-ring"
+            style={{ top: ring.top, left: ring.left, width: ring.width, height: ring.height }}
+          />
+        </>
       )}
       <div
         className="tour-coach"

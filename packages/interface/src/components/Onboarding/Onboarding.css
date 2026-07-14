@@ -5,7 +5,9 @@
 
 .fx-ob-overlay {
   --ob-accent: var(--primary, #d4ff48);
-  --ob-on-accent: var(--on-primary, #12161c);
+  /* Bright lime fill → black text. Must use design-system on-bright token
+     (not the nonexistent --on-primary) so hover/active stay readable. */
+  --ob-on-accent: var(--color-text-on-bright-primary, #000000);
   --ob-bg-chrome: #141414;
   --ob-bg-editor: #181818;
   --ob-text: var(--text-primary, #e8e8e8);
@@ -86,10 +88,34 @@
   background: transparent; color: var(--ob-text); cursor: pointer;
 }
 .fx-ob-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.fx-ob-btn-primary { background: var(--ob-accent); color: var(--ob-on-accent); border: none; }
-.fx-ob-btn-secondary { background: var(--ob-fill-2); }
+/* Color contract matches .tb-modal-btn.primary; weight stays 500 (base), not 600. */
+.fx-ob-btn-primary {
+  background: var(--ob-accent);
+  color: var(--ob-on-accent);
+  border: none;
+}
+.fx-ob-btn-primary:hover:not(:disabled),
+.fx-ob-btn-primary:active:not(:disabled),
+.fx-ob-btn-primary:focus-visible:not(:disabled) {
+  background: var(--color-brand-primary-hover, var(--ob-accent));
+  color: var(--ob-on-accent);
+}
+/* Busy/disabled lime CTA: never fade the whole control with opacity — black text
+   and lime fill both go translucent and composite into the same muddy green. */
+.fx-ob-btn-primary:disabled,
+.fx-ob-btn-primary:disabled:hover {
+  opacity: 1;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--ob-accent) 42%, var(--ob-bg-editor));
+  color: var(--ob-on-accent);
+}
+.fx-ob-btn-secondary { background: var(--ob-fill-2); color: var(--ob-text); }
+.fx-ob-btn-secondary:hover:not(:disabled) {
+  background: var(--ob-fill-1);
+  color: var(--ob-text);
+}
 .fx-ob-btn-ghost { background: transparent; border-color: transparent; color: var(--ob-text-3); }
-.fx-ob-btn-ghost:hover { color: var(--ob-text-2); }
+.fx-ob-btn-ghost:hover:not(:disabled) { color: var(--ob-text-2); }
 .fx-ob-btn-block { width: 100%; }
 
 /* Match the connect panel's Select trigger (shadcn h-9 / rounded-md / shadow-sm
@@ -106,6 +132,12 @@
 
 .fx-ob-card { border: 1px solid var(--ob-stroke-2); border-radius: 9px; background: var(--ob-fill-4); overflow: hidden; }
 .fx-ob-card.sel { border-color: var(--ob-accent); }
+.fx-ob-connect-card { cursor: pointer; }
+.fx-ob-connect-card:focus { outline: none; }
+.fx-ob-connect-card:focus-visible { box-shadow: inset 0 0 0 1px var(--ob-accent); }
+.fx-ob-connect-title { font-weight: 600; font-size: 14px; line-height: 1.4; }
+.fx-ob-connect-card .fx-ob-input,
+.fx-ob-connect-card button { cursor: auto; }
 .fx-ob-card-ch { display: flex; align-items: center; justify-content: space-between; padding: 7px 11px; font-size: 12px; color: var(--ob-text-2); border-bottom: 1px solid var(--ob-stroke-3); }
 .fx-ob-card-cb { padding: 11px; }
 .fx-ob-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

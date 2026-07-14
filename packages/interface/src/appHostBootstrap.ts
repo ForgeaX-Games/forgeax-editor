@@ -31,6 +31,7 @@ import './core/plugins/workbench-client.d'; // side-effect: AppHost.workbench ty
 import { workbenchClientPlugin } from './core/plugins/workbench-client';
 import './core/plugins/observability.d'; // side-effect: AppHost.observability type augmentation
 import { observabilityPlugin } from './core/plugins/observability';
+import { trajectoryPlugin } from './core/plugins/trajectory';
 import { consoleLogger } from './core/app-shell/logger';
 
 export interface AppHostBootstrapOverrides {
@@ -91,6 +92,7 @@ export async function bootstrapAppHost(
     sessionClientPlugin,
     workbenchClientPlugin,
     observabilityPlugin,
+    trajectoryPlugin,
     ...(overrides.plugins ?? []),
   ].map(wrap);
 

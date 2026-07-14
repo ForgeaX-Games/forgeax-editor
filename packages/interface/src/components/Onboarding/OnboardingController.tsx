@@ -1,8 +1,8 @@
 // OnboardingController — faithful port of first-run-onboarding-prototype onto
 // the live shell (design §11). Phases:
 //
-//   welcome  → language + connect-a-model (API Key / local CLI, any combo).
-//              "Next" runs a connectivity check → 2s auto-advance.
+//   welcome  → language + connect-a-model (mutually exclusive API Key / local CLI;
+//              Next probes the selected path) → 2s auto-advance on success.
 //   project  → root dir + new / open / sample project cards → enter home.
 //   home     → TourOverlay coach marks over the LIVE shell, then a first-chat
 //              nudge near the composer. Completing / skipping ends onboarding.
@@ -13,16 +13,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation, changeLanguage, getLocale, type Locale } from '@/i18n';
 import { useShellStore } from '../../store';
+import { useHost } from '../../core/app-shell';
 import { applyModelRoute } from '../../lib/model-route';
+import { listModelsWithLive } from '../../lib/model-config';
 import { activateWorkspace } from '../../lib/workspace-activate';
 import { fetchCliProviders, type CliProviderInfo } from '../../lib/cli-providers';
-import { FsBrowser } from '../TopBar/FsBrowser';
-import '../TopBar/FsBrowser.css';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TourOverlay, type TourStep } from '../TourOverlay';
 import { APP_EVENTS } from '../../lib/storageKeys';
 import { loadOnboarding, saveOnboarding, type OnboardingPhase, PHASE_ORDER } from './types';
+import {
+  interpretLiveCatalogProbe,
+  needsConnectSelection,
+  validateApiKeyFields,
+  type ConnectSelected,
+} from './connect-selection';
+import { isUserExistingGame, resolveProjectName, toGameSlug } from './project-name';
+import { latchTourShellDefaults, prepareTourShell } from './prepareTourShell';
+import { loadWorkbenchList, subscribeWorkbenchList } from '../../lib/workbenches';
 import './Onboarding.css';
+
+/** Native OS folder dialog via the local Studio server (same machine as the UI). */
+async function pickDirectoryNative(): Promise<string | null> {
+  const r = await fetch('/api/fs/pick-directory', { method: 'POST' });
+  const j = (await r.json().catch(() => null)) as {
+    ok?: boolean;
+    cancelled?: boolean;
+    path?: string;
+    error?: string;
+  } | null;
+  if (j?.cancelled) return null;
+  if (!r.ok || !j?.ok || !j.path) throw new Error(j?.error ?? `HTTP ${r.status}`);
+  return j.path;
+}
 
 type CheckResult = '' | 'ok' | 'fail';
 // A local-CLI driver id. Not a closed union: the connectable set is whatever
@@ -40,12 +63,6 @@ interface TemplateInfo { slug: string; name: string }
  *  directly instead of being forced through create. */
 interface ExistingGame { slug: string; name: string }
 
-/** Turn a free-typed project name into a game slug (GAME_SLUG_RE: lowercase
- *  ascii/digits/hyphens, 2-41). Underscores are NOT allowed for game slugs. */
-function toGameSlug(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
 // ── Pending project intent (survives the activate→reload root switch) ──────────
 // Creating the first project under a root that ISN'T the running workspace root
 // (e.g. dev cwd = repo, but the user wants ~/ForgeaxProjects) requires switching
@@ -53,18 +70,43 @@ function toGameSlug(name: string): string {
 // the intent here BEFORE activating, then the freshly-booted controller resumes
 // it (now under the correct root) and creates the game. Same-root creates skip
 // all of this and never touch localStorage.
-type PendingIntent =
+type ProjectIntent =
   | { kind: 'new'; root: string; name: string }
   | { kind: 'template'; root: string; name: string; template: string }
   | { kind: 'open'; root: string; path: string };
 
+type PendingIntent = ProjectIntent & { at: number };
+
+/** Drop pending intents older than this — leftover entries from failed/abandoned
+ *  root switches were auto-resuming on every project-step mount and painting
+ *  ghost errors ("already exists" / "not a game folder") with no user action. */
+const PENDING_TTL_MS = 90_000;
+
 const PENDING_KEY = 'forgeax.onboarding.pendingProject';
 function loadPending(): PendingIntent | null {
-  try { const s = localStorage.getItem(PENDING_KEY); return s ? (JSON.parse(s) as PendingIntent) : null; }
-  catch { return null; }
+  try {
+    const s = localStorage.getItem(PENDING_KEY);
+    if (!s) return null;
+    const p = JSON.parse(s) as Partial<PendingIntent> & { kind?: string };
+    if (!p || !p.kind) { clearPending(); return null; }
+    // Legacy payloads without `at` are treated as stale (pre-TTL bug source).
+    if (typeof p.at !== 'number' || Date.now() - p.at > PENDING_TTL_MS) {
+      clearPending();
+      return null;
+    }
+    return p as PendingIntent;
+  } catch { return null; }
 }
-function savePending(p: PendingIntent): void { try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)); } catch { /* ignore */ } }
+function savePending(p: ProjectIntent): void {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify({ ...p, at: Date.now() })); } catch { /* ignore */ }
+}
 function clearPending(): void { try { localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } }
+
+/** Map raw server errors to onboarding copy (keep unknown messages as-is). */
+function formatProjectError(raw: string, t: (key: string) => string): string {
+  if (/not a game folder/i.test(raw)) return t('onboarding.project.errNotGame');
+  return raw;
+}
 
 /** True when `root` (a `~/…` or absolute path) is the currently-active workspace
  *  root — compared against BOTH the friendly (`~/…`) and absolute server forms. */
@@ -157,6 +199,7 @@ async function patchEnv(patch: Record<string, string>): Promise<void> {
 
 export function OnboardingController() {
   const { t } = useTranslation();
+  const host = useHost();
   const openOverlay = useShellStore((s) => s.openOverlay);
   const switchGame = useShellStore((s) => s.switchGame);
 
@@ -164,10 +207,9 @@ export function OnboardingController() {
   const [lang, setLang] = useState<Locale>(() => getLocale());
 
   // ── welcome: connect-a-model runtime ──
-  const [keyOpen, setKeyOpen] = useState(false);
+  const [selected, setSelected] = useState<ConnectSelected>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [cliOpen, setCliOpen] = useState(false);
   const [cli, setCli] = useState<CliId>('claude-code');
   // Live health of local CLI drivers, keyed by provider id — drives the
   // per-option "connectable" status inside the CLI dropdown. Fetched lazily the
@@ -186,11 +228,9 @@ export function OnboardingController() {
   // the root first (activate + reload + resume). ──
   const [projRoot, setProjRoot] = useState('~/ForgeaxProjects');
   const [projName, setProjName] = useState('');
-  const [rootPickerOpen, setRootPickerOpen] = useState(false);
   const [tmplOpen, setTmplOpen] = useState(false);
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null);
   const [tmplSlug, setTmplSlug] = useState<string | null>(null);
-  const [fsOpen, setFsOpen] = useState(false);
   const [projBusy, setProjBusy] = useState(false);
   // Which action is in-flight — drives a specific "creating…/copying…/opening…"
   // loading banner so the (possibly multi-second) server-side copy isn't a
@@ -206,23 +246,18 @@ export function OnboardingController() {
   const [tourIdx, setTourIdx] = useState(0);
   const [tourActive, setTourActive] = useState(() => !loadOnboarding().done.tour);
 
-  const keyOn = apiKey.trim().length > 0;
-  // "Connected" for CLI means the SELECTED driver is actually reachable (health
-  // ok) — NOT merely that the section is expanded. This mirrors keyOn (real key
-  // present) so the highlight + "connected" badge persist after collapse and
-  // only ever reflect a genuinely usable path.
-  const cliOn = cliStatus(cli, cliProviders) === 'ok';
-  // Two distinct notions, deliberately NOT conflated:
-  //  • cliOn / keyOn            — genuinely CONNECTED (health ok / key present).
-  //    Drives the "connected" badge + the success summary list.
-  //  • *Engaged*                — the user PICKED this path (expanded the CLI
-  //    card or typed a key), regardless of whether it's healthy yet.
-  // The Next-button gate keys off ENGAGEMENT: engaging an unavailable CLI must
-  // run the check and surface the red "install it" callout — NOT be treated as
-  // "nothing configured" and soft-skip to project (the reported bug was gating
-  // on cliOn, so a down CLI looked identical to no选择 → silent pass-through).
-  const cliEngaged = cliOpen;
-  const credentialEngaged = keyOn || cliEngaged;
+  // Scene tab + default dock layout so tour anchors (sidebar/preview/chat) exist.
+  // Re-apply when workbench list notifies with a non-scene activeId — home mount
+  // races ProjectSwitcher.setCurrentProject, which can revive a stale 'ai' tab
+  // from the real project namespace after our first prepare.
+  useEffect(() => {
+    if (phase !== 'home' || !tourActive) return;
+    prepareTourShell(host);
+    return subscribeWorkbenchList(() => {
+      if (loadWorkbenchList().activeId === 'scene') return;
+      prepareTourShell(host);
+    });
+  }, [phase, tourActive, host]);
 
   const setPhase = useCallback((p: OnboardingPhase) => {
     setPhaseState(p);
@@ -268,11 +303,10 @@ export function OnboardingController() {
   }, [cliProviders, cli]);
 
   const connectedList = useCallback((): string[] => {
-    const a: string[] = [];
-    if (keyOn) a.push(t('onboarding.connected.key'));
-    if (cliOn) a.push(t('onboarding.connected.cli', { cli }));
-    return a;
-  }, [keyOn, cliOn, cli, t]);
+    if (selected === 'key') return [t('onboarding.connected.key')];
+    if (selected === 'cli') return [t('onboarding.connected.cli', { cli })];
+    return [];
+  }, [selected, cli, t]);
 
   const beginCountdown = useCallback(() => {
     setCountdown(2);
@@ -286,50 +320,72 @@ export function OnboardingController() {
   }, [resetCheck, setPhase]);
 
   const runCheck = useCallback(async () => {
-    if (!credentialEngaged) { setPhase('project'); return; }
+    if (needsConnectSelection(selected)) {
+      setChecking(false);
+      setCheckResult('fail');
+      setCheckFailMsg(t('onboarding.check.failNeedSelect'));
+      return;
+    }
     resetCheck();
     setChecking(true);
     try {
-      if (keyOpen && keyOn) {
-        await patchEnv({ OPENAI_BASE_URL: baseUrl.trim(), OPENAI_API_KEY: apiKey.trim() });
-        // First credential landed → re-pull model catalogs so the picker probes
-        // with the new key instead of the empty/disk-only list it may have cached
-        // behind the overlay (else the models only appear after a page refresh).
+      if (selected === 'key') {
+        if (validateApiKeyFields(baseUrl, apiKey) === 'empty') {
+          setChecking(false);
+          setCheckResult('fail');
+          setCheckFailMsg(t('onboarding.check.failEmpty'));
+          return;
+        }
+        const url = baseUrl.trim();
+        const key = apiKey.trim();
+        // Align with Settings › Providers: live catalog + llm-gateway read
+        // LITELLM_PROXY_*, and forgeax-core speaks Anthropic protocol against
+        // ANTHROPIC_* (mirrored on save). OPENAI_* still set for gpt-* routing.
+        await patchEnv({
+          OPENAI_BASE_URL: url,
+          OPENAI_API_KEY: key,
+          LITELLM_PROXY_BASE_URL: url,
+          LITELLM_PROXY_KEY: key,
+          ANTHROPIC_BASE_URL: url,
+          ANTHROPIC_API_KEY: key,
+        });
+        // Gate on LIVE /v1/models only — list_models falls back to disk catalog
+        // when live fails, so a bare listModels() would always "succeed".
+        const { live } = await listModelsWithLive(null);
+        const probe = interpretLiveCatalogProbe(live);
+        if (!probe.ok) {
+          setChecking(false);
+          setCheckResult('fail');
+          setCheckFailMsg(t('onboarding.check.failLive'));
+          return;
+        }
         try {
           const { refreshAllModelCatalogs } = await import('../ModelPicker/useModelCatalog');
           await refreshAllModelCatalogs();
-        } catch { /* catalog refresh failure must not undo the saved credential */ }
+        } catch { /* best-effort UI cache refresh */ }
+        await applyModelRoute({ kind: 'api-key', model: OB_API_KEY_DEFAULT_MODEL });
+        setChecking(false);
+        setCheckResult('ok');
+        beginCountdown();
+        return;
       }
-      let ok = true;
-      // Only gate on CLI health when the user actually engaged the CLI card —
-      // otherwise a merely-installed default driver (e.g. claude-code) could
-      // block an API-key user.
-      const wantCli = cliEngaged;
-      if (wantCli) {
-        try {
-          const { providers } = await fetchCliProviders(true);
-          ok = !!providers.find((p) => p.id === cli)?.health.ok;
-        } catch { ok = false; }
+
+      // selected === 'cli'
+      let ok = false;
+      try {
+        const { providers } = await fetchCliProviders(true);
+        ok = !!providers.find((p) => p.id === cli)?.health.ok;
+      } catch {
+        ok = false;
       }
-      // Persist the chosen source as the ACTIVE model route (SSOT) — the same
-      // applyModelRoute that Settings' "set as active" uses — so the home shell
-      // and the first session created after onboarding inherit it. Without this
-      // the CLI/API-key choice was never applied and chat fell back to the
-      // native forgeax-core route. Precedence = explicit engagement: an opened,
-      // healthy CLI wins, else the API-key card.
       if (ok) {
-        if (wantCli) {
-          await applyModelRoute({ kind: 'cli', providerId: cli });
-        } else if (keyOpen && keyOn) {
-          await applyModelRoute({ kind: 'api-key', model: OB_API_KEY_DEFAULT_MODEL });
-        }
-      }
-      setChecking(false);
-      if (ok) { setCheckResult('ok'); beginCountdown(); }
-      else {
+        await applyModelRoute({ kind: 'cli', providerId: cli });
+        setChecking(false);
+        setCheckResult('ok');
+        beginCountdown();
+      } else {
+        setChecking(false);
         setCheckResult('fail');
-        // A driver may have no install-doc entry (any future kernel from
-        // /api/cli/health). Show the plain message without a dangling link then.
         const lk = CLI_LINKS[cli];
         setCheckFailMsg(
           lk ? (
@@ -347,7 +403,7 @@ export function OnboardingController() {
       setCheckResult('fail');
       setCheckFailMsg((e as Error).message || t('onboarding.check.fail'));
     }
-  }, [credentialEngaged, resetCheck, keyOpen, keyOn, baseUrl, apiKey, cliEngaged, cli, beginCountdown, setPhase, t]);
+  }, [selected, resetCheck, baseUrl, apiKey, cli, beginCountdown, t]);
 
   // §14: there is NO "skip to home" — layout (home) is entered ONLY after a
   // project is initialized (createGame / openGameDir → enterHomeWith). The
@@ -382,13 +438,17 @@ export function OnboardingController() {
   // Fetched once on mount; drives the "open an existing project" section so a
   // workspace that already has games never forces a create (§14 amendment:
   // opening an existing game IS a valid init — enterHomeWith reuses the same
-  // pin + enter path as create/link).
+  // pin + enter path as create/link). Filter out the `default` session stub so
+  // an empty workspace does not show a fake "已有项目" row.
   const [existingGames, setExistingGames] = useState<ExistingGame[] | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetch('/api/workbench/games')
       .then((r) => r.json() as Promise<{ games?: ExistingGame[] }>)
-      .then((j) => { if (!cancelled) setExistingGames(j.games ?? []); })
+      .then((j) => {
+        if (cancelled) return;
+        setExistingGames((j.games ?? []).filter((g) => isUserExistingGame(g.slug)));
+      })
       .catch(() => { if (!cancelled) setExistingGames([]); });
     return () => { cancelled = true; };
   }, []);
@@ -398,6 +458,8 @@ export function OnboardingController() {
   // fresh and reads the active game — no full reload needed for the game step).
   const enterHomeWith = useCallback(async (slug: string) => {
     if (slug) { try { await switchGame(slug); } catch { /* pin best-effort */ } }
+    // Latch Scene + default layout intent before shell mounts (onReady race).
+    if (!loadOnboarding().done.tour) latchTourShellDefaults();
     setPhase('home');
   }, [switchGame, setPhase]);
 
@@ -419,7 +481,7 @@ export function OnboardingController() {
   // Do the actual game create/link. Assumes the workspace root is ALREADY correct
   // (either it matched projRoot, or we've activated + reloaded into it). Throws on
   // failure so the caller can surface the error.
-  const execIntent = useCallback(async (intent: PendingIntent) => {
+  const execIntent = useCallback(async (intent: ProjectIntent) => {
     if (intent.kind === 'open') {
       const r = await fetch('/api/workbench/games/link', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -446,29 +508,32 @@ export function OnboardingController() {
   // projRoot first: if it already is, create immediately (no reload); otherwise
   // stash the intent, switch the root (activate → reload), and let the reloaded
   // controller resume it (see the resume effect below).
-  const startAction = useCallback(async (intent: PendingIntent) => {
+  const startAction = useCallback(async (intent: ProjectIntent) => {
+    let next = intent;
     if (intent.kind !== 'open') {
-      if (toGameSlug(intent.name).length < 2) { setProjErr(t('onboarding.project.nameRequired')); return; }
+      const existing = (existingGames ?? []).map((g) => g.slug);
+      const resolved = resolveProjectName(intent.name, existing);
+      next = { ...intent, name: resolved.name };
     }
     setProjBusy(true);
-    setProjBusyKind(intent.kind);
+    setProjBusyKind(next.kind);
     setProjErr(null);
     try {
-      if (await isActiveRoot(intent.root)) {
-        await execIntent(intent);
+      if (await isActiveRoot(next.root)) {
+        await execIntent(next);
         return;
       }
       // Root switch needed — persist BEFORE activating (activate reloads the page).
-      savePending(intent);
-      await activateWorkspace({ path: intent.root, initIfMissing: true, scaffold: false });
+      savePending(next);
+      await activateWorkspace({ path: next.root, initIfMissing: true, scaffold: false });
       window.location.reload();
     } catch (e) {
       clearPending();
-      setProjErr((e as Error).message);
+      setProjErr(formatProjectError((e as Error).message, t));
       setProjBusy(false);
       setProjBusyKind(null);
     }
-  }, [execIntent, t]);
+  }, [execIntent, existingGames, t]);
 
   // Resume a pending intent after the activate→reload root switch. Runs once when
   // the controller mounts at the project phase with a stashed intent whose root
@@ -486,12 +551,57 @@ export function OnboardingController() {
         await execIntent(pending);
       } catch (e) {
         clearPending();
-        setProjErr((e as Error).message);
+        const msg = (e as Error).message ?? '';
+        // Create already succeeded on a prior attempt (or the slug was taken
+        // before resume). Swallow — otherwise remounting the project step with
+        // a stale pending intent paints a ghost ".forgeax/games/… already exists"
+        // error even though the user did nothing this visit.
+        if (/already exists/i.test(msg)) {
+          setProjBusy(false);
+          setProjBusyKind(null);
+          return;
+        }
+        setProjErr(formatProjectError(msg, t));
         setProjBusy(false);
         setProjBusyKind(null);
       }
     })();
-  }, [phase, execIntent]);
+  }, [phase, execIntent, t]);
+
+  const pickProjRoot = useCallback(async () => {
+    try {
+      const path = await pickDirectoryNative();
+      if (!path) return;
+      setProjRoot(path);
+      if (projErr) setProjErr(null);
+      // Path only — do NOT activate/reload here. Workspace switch + create happen
+      // when the user clicks 新建/模板/打开. Existing-games list is for the ACTIVE
+      // root; refresh it if the pick matches, otherwise hide until create switches.
+      if (await isActiveRoot(path)) {
+        try {
+          const r = await fetch('/api/workbench/games');
+          const j = (await r.json()) as { games?: ExistingGame[] };
+          setExistingGames((j.games ?? []).filter((g) => isUserExistingGame(g.slug)));
+        } catch {
+          setExistingGames([]);
+        }
+      } else {
+        setExistingGames([]);
+      }
+    } catch (e) {
+      setProjErr((e as Error).message);
+    }
+  }, [projErr]);
+
+  const pickOpenDir = useCallback(async () => {
+    try {
+      const path = await pickDirectoryNative();
+      if (!path) return;
+      await startAction({ kind: 'open', root: projRoot, path });
+    } catch (e) {
+      setProjErr((e as Error).message);
+    }
+  }, [projRoot, startAction]);
 
   const onLang = (next: Locale) => { setLang(next); changeLanguage(next); };
 
@@ -568,15 +678,12 @@ export function OnboardingController() {
                 t={t}
                 lang={lang}
                 onLang={onLang}
-                keyOpen={keyOpen}
-                setKeyOpen={(v) => { setKeyOpen(v); resetCheck(); }}
+                selected={selected}
+                setSelected={(v) => { setSelected(v); resetCheck(); }}
                 baseUrl={baseUrl}
-                setBaseUrl={setBaseUrl}
+                setBaseUrl={(v) => { setBaseUrl(v); if (checkResult) resetCheck(); }}
                 apiKey={apiKey}
                 setApiKey={(v) => { setApiKey(v); if (checkResult) resetCheck(); }}
-                keyOn={keyOn}
-                cliOpen={cliOpen}
-                setCliOpen={(v) => { setCliOpen(v); resetCheck(); }}
                 cli={cli}
                 setCli={(v) => { setCli(v); resetCheck(); }}
                 cliProviders={cliProviders}
@@ -589,7 +696,7 @@ export function OnboardingController() {
               <ProjectView
                 t={t}
                 projRoot={projRoot}
-                onChangeRoot={() => setRootPickerOpen(true)}
+                onChangeRoot={() => void pickProjRoot()}
                 projName={projName}
                 setProjName={(v) => { setProjName(v); if (projErr) setProjErr(null); }}
                 busy={projBusy}
@@ -597,7 +704,7 @@ export function OnboardingController() {
                 err={projErr}
                 onNew={() => void startAction({ kind: 'new', root: projRoot, name: projName })}
                 onTemplate={() => { setTmplSlug(null); setTmplOpen(true); }}
-                onOpen={() => setFsOpen(true)}
+                onOpen={() => void pickOpenDir()}
                 existingGames={existingGames}
                 onOpenExisting={(slug) => void openExisting(slug)}
               />
@@ -606,11 +713,6 @@ export function OnboardingController() {
         </div>
 
         <div className="fx-ob-row" style={{ marginTop: 10 }}>
-          <button
-            className="fx-ob-btn fx-ob-btn-ghost"
-            disabled={phase === 'welcome'}
-            onClick={() => { if (phase === 'project') { resetCheck(); setPhase('welcome'); } }}
-          >{t('onboarding.back')}</button>
           <div className="fx-ob-grow" />
           {phase === 'welcome' && (
             <>
@@ -646,39 +748,6 @@ export function OnboardingController() {
           busy={projBusy}
         />
       )}
-      {phase === 'project' && rootPickerOpen && (
-        <div className="fx-ob-modal-scrim" onClick={(e) => { if (e.target === e.currentTarget) setRootPickerOpen(false); }}>
-          <div className="fx-ob-modal">
-            <div className="fx-ob-modal-inner">
-              <h3 className="fx-ob-h3">{t('onboarding.project.rootPickTitle')}</h3>
-              {/* Pick the WORKSPACE dir. We only set the field here; the actual
-                  root switch happens on the create/open action (§14). */}
-              <FsBrowser
-                initialDir={projRoot}
-                onPick={(absPath) => { setProjRoot(absPath); setRootPickerOpen(false); if (projErr) setProjErr(null); }}
-                onCancel={() => setRootPickerOpen(false)}
-                busy={false}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-      {phase === 'project' && fsOpen && (
-        <div className="fx-ob-modal-scrim" onClick={(e) => { if (e.target === e.currentTarget) setFsOpen(false); }}>
-          <div className="fx-ob-modal">
-            <div className="fx-ob-modal-inner">
-              <h3 className="fx-ob-h3">{t('onboarding.project.openTitle')}</h3>
-              <FsBrowser
-                initialDir={projRoot}
-                onPick={(absPath) => { setFsOpen(false); void startAction({ kind: 'open', root: projRoot, path: absPath }); }}
-                onCancel={() => setFsOpen(false)}
-                busy={projBusy}
-                externalError={projErr}
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -688,25 +757,41 @@ export function OnboardingController() {
 export type TFn = ReturnType<typeof useTranslation>['t'];
 
 function ConnectCard({
-  on, badge, title, sub, cta, onCta, expand,
+  selected, onSelect, title, sub, children,
 }: {
-  on: boolean; badge: string; title: string; sub: string; cta: string;
-  onCta: () => void; expand?: React.ReactNode;
+  selected: boolean;
+  onSelect: () => void;
+  title: string;
+  sub: string;
+  children: React.ReactNode;
 }) {
   return (
-    <div className={`fx-ob-card${on ? ' sel' : ''}`}>
+    <div
+      className={`fx-ob-card fx-ob-connect-card${selected ? ' sel' : ''}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      // Prevent focusing the card on mouse click: focus inside the overflow:auto
+      // shell triggers scroll-into-view and looks like the text "shrinks"/jitters.
+      // Keyboard users still get focus via Tab + Enter/Space.
+      onMouseDown={(e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('input, textarea, button, [role="combobox"]')) return;
+        e.preventDefault();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
       <div className="fx-ob-card-cb">
-        <div className="fx-ob-row" style={{ alignItems: 'flex-start' }}>
-          <div className="fx-ob-stack fx-ob-gap6" style={{ flex: 1, minWidth: 0 }}>
-            <div className="fx-ob-row" style={{ gap: 8 }}>
-              <span style={{ fontWeight: 600 }}>{title}</span>
-              {on && <span className="fx-ob-pill sm active static">{badge}</span>}
-            </div>
-            <div className="fx-ob-small fx-ob-sec">{sub}</div>
-          </div>
-          <button className="fx-ob-btn fx-ob-btn-secondary" style={{ whiteSpace: 'nowrap' }} onClick={onCta}>{cta}</button>
+        <div className="fx-ob-stack fx-ob-gap6">
+          <span className="fx-ob-connect-title">{title}</span>
+          <div className="fx-ob-small fx-ob-sec">{sub}</div>
+          {children}
         </div>
-        {expand}
       </div>
     </div>
   );
@@ -714,9 +799,10 @@ function ConnectCard({
 
 function WelcomeView(props: {
   t: TFn; lang: Locale; onLang: (l: Locale) => void;
-  keyOpen: boolean; setKeyOpen: (v: boolean) => void; baseUrl: string; setBaseUrl: (v: string) => void;
-  apiKey: string; setApiKey: (v: string) => void; keyOn: boolean;
-  cliOpen: boolean; setCliOpen: (v: boolean) => void; cli: CliId; setCli: (v: CliId) => void;
+  selected: ConnectSelected; setSelected: (v: ConnectSelected) => void;
+  baseUrl: string; setBaseUrl: (v: string) => void;
+  apiKey: string; setApiKey: (v: string) => void;
+  cli: CliId; setCli: (v: CliId) => void;
   cliProviders: CliProviderInfo[] | null;
   checking: boolean; checkResult: CheckResult; checkFailMsg: React.ReactNode; connectedList: string[];
 }) {
@@ -744,47 +830,66 @@ function WelcomeView(props: {
 
         <div className="fx-ob-stack fx-ob-gap8">
           <ConnectCard
-            on={props.keyOn}
-            badge={t('onboarding.connect.keyBadge')}
+            selected={props.selected === 'key'}
+            onSelect={() => props.setSelected('key')}
             title={t('onboarding.connect.keyTitle')}
             sub={t('onboarding.connect.keySub')}
-            cta={props.keyOpen ? t('onboarding.collapse') : t('onboarding.connect.keyCta')}
-            onCta={() => props.setKeyOpen(!props.keyOpen)}
-            expand={props.keyOpen && (
-              <div className="fx-ob-stack fx-ob-gap6" style={{ marginTop: 10 }}>
-                <input className="fx-ob-input" placeholder="Base URL, e.g. https://api.openai.com/v1" value={props.baseUrl} onChange={(e) => props.setBaseUrl(e.target.value)} />
-                <input className="fx-ob-input" type="password" placeholder="API Key" value={props.apiKey} onChange={(e) => props.setApiKey(e.target.value)} />
-              </div>
-            )}
-          />
+          >
+            <div className="fx-ob-stack fx-ob-gap6" style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+              <input
+                className="fx-ob-input"
+                placeholder="Base URL, e.g. https://api.openai.com/v1"
+                value={props.baseUrl}
+                onChange={(e) => {
+                  if (props.selected !== 'key') props.setSelected('key');
+                  props.setBaseUrl(e.target.value);
+                }}
+                onFocus={() => { if (props.selected !== 'key') props.setSelected('key'); }}
+              />
+              <input
+                className="fx-ob-input"
+                type="password"
+                placeholder="API Key"
+                value={props.apiKey}
+                onChange={(e) => {
+                  if (props.selected !== 'key') props.setSelected('key');
+                  props.setApiKey(e.target.value);
+                }}
+                onFocus={() => { if (props.selected !== 'key') props.setSelected('key'); }}
+              />
+            </div>
+          </ConnectCard>
 
           <ConnectCard
-            on={props.cliOpen}
-            badge={t('onboarding.connect.cliBadge')}
+            selected={props.selected === 'cli'}
+            onSelect={() => props.setSelected('cli')}
             title={t('onboarding.connect.cliTitle')}
             sub={t('onboarding.connect.cliSub')}
-            cta={props.cliOpen ? t('onboarding.collapse') : t('onboarding.connect.cliCta')}
-            onCta={() => props.setCliOpen(!props.cliOpen)}
-            expand={props.cliOpen && (
-              <div style={{ marginTop: 10 }}>
-                <Select value={props.cli} onValueChange={(v) => props.setCli(v as CliId)}>
-                  {/* Shared Select, themed to the onboarding control family so it
-                      reads as one with the .fx-ob-input fields (same radius/border/
-                      height). twMerge lets these override the component defaults. */}
-                  <SelectTrigger className="rounded-[6px] border-[color:var(--ob-stroke-1)] text-[color:var(--ob-text)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[var(--z-toplevel)]">
-                    {cliIdsFrom(props.cliProviders).map((id) => (
-                      <SelectItem key={id} value={id}>
-                        <CliOptionLabel t={t} id={id} providers={props.cliProviders} />
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          />
+          >
+            <div style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+              <Select
+                value={props.cli}
+                onValueChange={(v) => {
+                  if (props.selected !== 'cli') props.setSelected('cli');
+                  props.setCli(v as CliId);
+                }}
+                onOpenChange={(open) => {
+                  if (open && props.selected !== 'cli') props.setSelected('cli');
+                }}
+              >
+                <SelectTrigger className="rounded-[6px] border-[color:var(--ob-stroke-1)] text-[color:var(--ob-text)]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[var(--z-toplevel)]">
+                  {cliIdsFrom(props.cliProviders).map((id) => (
+                    <SelectItem key={id} value={id}>
+                      <CliOptionLabel t={t} id={id} providers={props.cliProviders} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </ConnectCard>
         </div>
       </div>
 
@@ -808,15 +913,18 @@ function ProjectView(props: {
   existingGames: ExistingGame[] | null; onOpenExisting: (slug: string) => void;
 }) {
   const { t } = props;
-  const slug = toGameSlug(props.projName);
-  const nameOk = slug.length >= 2;
+  const resolved = resolveProjectName(
+    props.projName,
+    (props.existingGames ?? []).map((g) => g.slug),
+  );
   const busyMsg = props.busyKind ? t(`onboarding.project.busy.${props.busyKind}`) : t('onboarding.project.busy.new');
   // "New"/"template" create a game <slug> under the workspace root; "open" adopts
   // an existing game dir at any path (name not needed — derived server-side).
-  const cards: { id: 'new' | 'sample' | 'open'; title: string; desc: string; cta: string; onGo: () => void; needsName: boolean }[] = [
-    { id: 'new', title: t('onboarding.project.newTitle'), desc: t('onboarding.project.newDesc'), cta: t('onboarding.project.newCta'), onGo: props.onNew, needsName: true },
-    { id: 'sample', title: t('onboarding.project.sampleTitle'), desc: t('onboarding.project.sampleDesc'), cta: t('onboarding.project.sampleCta'), onGo: props.onTemplate, needsName: true },
-    { id: 'open', title: t('onboarding.project.openTitle'), desc: t('onboarding.project.openDesc'), cta: t('onboarding.project.openCta'), onGo: props.onOpen, needsName: false },
+  // Empty name auto-resolves to untitled-N — never block create on the name field.
+  const cards: { id: 'new' | 'sample' | 'open'; title: string; desc: string; cta: string; onGo: () => void }[] = [
+    { id: 'new', title: t('onboarding.project.newTitle'), desc: t('onboarding.project.newDesc'), cta: t('onboarding.project.newCta'), onGo: props.onNew },
+    { id: 'sample', title: t('onboarding.project.sampleTitle'), desc: t('onboarding.project.sampleDesc'), cta: t('onboarding.project.sampleCta'), onGo: props.onTemplate },
+    { id: 'open', title: t('onboarding.project.openTitle'), desc: t('onboarding.project.openDesc'), cta: t('onboarding.project.openCta'), onGo: props.onOpen },
   ];
   return (
     <div className="fx-ob-stack fx-ob-gap12">
@@ -869,7 +977,7 @@ function ProjectView(props: {
           <input className="fx-ob-input" style={{ flex: 1, minWidth: 0 }} placeholder={t('onboarding.project.namePlaceholder')} value={props.projName} onChange={(e) => props.setProjName(e.target.value)} />
         </div>
         <div className="fx-ob-tiny" style={{ color: 'var(--ob-text-4)', marginTop: 6 }}>
-          {nameOk ? t('onboarding.project.willCreate', { name: slug }) : t('onboarding.project.rootHint')}
+          {t('onboarding.project.willCreate', { name: resolved.slug })}
         </div>
       </div>
       <div className="fx-ob-grid3">
@@ -881,7 +989,7 @@ function ProjectView(props: {
                 <div className="fx-ob-small fx-ob-sec">{o.desc}</div>
                 <button
                   className="fx-ob-btn fx-ob-btn-secondary fx-ob-btn-block"
-                  disabled={props.busy || (o.needsName && !nameOk)}
+                  disabled={props.busy}
                   onClick={o.onGo}
                 >{o.cta}</button>
               </div>

@@ -99,7 +99,10 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
  *  engine's native mount mechanism. Returns true on success. On failure the
  *  wrapper is left in place (harmless empty node) and we return false — callers
  *  MUST NOT fall back to cubes. */
-async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<boolean> {
+async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
+  { ok: true; wrapper: EntityHandle; root: number }
+  | { ok: false; hint: string }
+> {
   // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty).
   // The spawn's created channel gives the real engine handle — that handle IS the
   // wrapper identity we parent the nested instance under (no id-to-handle lookup).
@@ -111,18 +114,19 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<bo
   const wrapperHandle: EntityHandle | undefined =
     r.ok && r.result ? r.result.created[0] : undefined;
   if (wrapperHandle === undefined) {
-    console.warn('[spawn-asset] could not resolve wrapper handle for GLB mount');
-    return false;
+    return { ok: false, hint: 'could not create the SceneInstance wrapper entity' };
   }
   const root = await instantiateSceneRefUnderWorld(sceneGuid, wrapperHandle as unknown as number);
   if (root === null) {
-    console.warn('[spawn-asset] GLB scene instantiate failed — NOT falling back to cubes:', { sceneGuid, name });
-    return false;
+    return {
+      ok: false,
+      hint: `could not load or instantiate scene asset ${sceneGuid}; the empty wrapper remains and can be undone`,
+    };
   }
   notifyDocChanged();
   broadcastAssetsChanged();
   console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapper: wrapperHandle, root });
-  return true;
+  return { ok: true, wrapper: wrapperHandle, root };
 }
 
 // ── Session applier: addSceneAssetToScene (ledger-only, no undo) ───────────────
@@ -148,9 +152,19 @@ sessionAppliers.set('addSceneAssetToScene', (op) => {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'addSceneAssetToScene requires a non-empty `sceneGuid` (a catalogued scene sub-asset GUID)' } };
   }
   const label = typeof name === 'string' && name.length > 0 ? name : 'Scene';
-  void spawnGlbSceneAsMount(sceneGuid, label).catch((e) =>
-    console.warn('[editor-core] addSceneAssetToScene failed:', e),
-  );
+  gateway.beginSceneMountAttempt();
+  void spawnGlbSceneAsMount(sceneGuid, label)
+    .then((result) => {
+      if (result.ok) {
+        gateway.completeSceneMountAttempt();
+        return;
+      }
+      gateway.failSceneMountAttempt({ code: 'scene-mount-failed', hint: result.hint });
+    })
+    .catch((e) => {
+      const hint = e instanceof Error ? e.message : String(e);
+      gateway.failSceneMountAttempt({ code: 'scene-mount-failed', hint });
+    });
   return { ok: true };
 });
 

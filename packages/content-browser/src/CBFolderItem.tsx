@@ -14,6 +14,8 @@ export function CBFolderItem({ folder, selected, thumbnailSize = 80, onClick, on
   return (
     <div
       className={`cb-grid-item cb-grid-folder${selected ? ' sel' : ''}`}
+      data-testid="cb-folder-item"
+      data-folder-path={folder.path}
       style={{ width: thumbnailSize + 8, height: thumbnailSize + 28 }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}

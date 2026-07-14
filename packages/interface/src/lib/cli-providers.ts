@@ -23,7 +23,11 @@ export interface CliProviderInfo {
 }
 
 const PROVIDER_DISPLAY: Record<string, string> = {
-  "forgeax": "ForgeaX CLI",
+  // The native kernel arrives from /api/cli/health as `forgeax-core` (the
+  // product-shell-injected kernel id). There is NO bare `forgeax` provider —
+  // the pre-R3 `forgeax` CliProvider was dropped (see cli-providers registry
+  // comment), so a `forgeax` mapping here would just point at a ghost id.
+  "forgeax-core": "ForgeaX Kernel",
   "claude-code": "the reference agent CLI",
   "codex": "OpenAI Codex",
   "cursor-agent": "Cursor Agent",

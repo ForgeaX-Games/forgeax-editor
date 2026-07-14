@@ -50,6 +50,11 @@ export interface WorkbenchActions {
   resetPanelLocations: () => void;
 }
 
+/** Clear panelLocations on the active workbench only (sync, non-React). */
+export function resetActivePanelLocations(): void {
+  updateActive((w) => ({ ...w, panelLocations: {} }));
+}
+
 export function useWorkbenchActions(): WorkbenchActions {
   const moveTo = useCallback((panelId: string, region: DockRegion) => {
     updateActive((w) => ({
@@ -59,7 +64,7 @@ export function useWorkbenchActions(): WorkbenchActions {
   }, []);
 
   const resetPanelLocations = useCallback(() => {
-    updateActive((w) => ({ ...w, panelLocations: {} }));
+    resetActivePanelLocations();
   }, []);
 
   return { moveTo, resetPanelLocations };

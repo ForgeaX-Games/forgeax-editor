@@ -43,6 +43,8 @@ const allowedApiPatterns: RegExp[] = [
   /^\/api\/events\/stream\?topic=(?:plugin\.reloaded|tool\.confirm-\*|tool\.confirm-required)$/,
   /^\/api\/files\/tree\?root=.forgeax\/games\/\$\{[^}]+\}$/,
   /^\/api\/fs\/browse\?dir=\$\{[^}]+\}$/,
+  // Onboarding native OS folder picker (project root / open directory).
+  /^\/api\/fs\/pick-directory$/,
   /^\/api\/health$/,
   /^\/api\/logs$/,
   /^\/api\/narrative\/history$/,

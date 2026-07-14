@@ -138,6 +138,7 @@ testFixture('(a) valid fixture', [
   'Dispatch a composed op with top-level args; argsSchema is enforced at dispatch.',
   'RHI frame capture is reached via globalThis.__forgeax.captureFrame — outside the gateway.',
   'Use importAsset to cook a file, then addSceneAssetToScene to place a catalogued scene GUID.',
+  'Poll gateway.sceneMountPhase and inspect gateway.lastSceneMountError for a terminal scene mount.',
   'For real Play dogfood boot `bun fx start --game games/sample` — no --game opens an empty scene.',
   'Poll gateway.playPhase to a terminal value; on failed read gateway.lastPlayError.',
   'Follow a material texture GUID with gateway.describeAssetByGuid — not lookupAsset (full buffer).',

@@ -873,13 +873,18 @@
         },
         "parent": {
           "type": "number",
-          "nullable": true
+          "nullable": true,
+          "description": "parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below."
         },
         "components": {
           "type": "object"
         },
         "source": {
           "type": "string"
+        },
+        "_id": {
+          "type": "number",
+          "description": "transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction."
         }
       }
     },
@@ -940,7 +945,7 @@
         },
         "commands": {
           "type": "array",
-          "description": "array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). Forward-references work — spawn an entity then reparent under it within the same commands array."
+          "description": "array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn's `parent` to that same negative value — the alias map resolves it to the root's real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index — 0 is a real handle and fails `INVALID_PARENT`. The whole batch's created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn)."
         }
       },
       "required": [

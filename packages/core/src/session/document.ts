@@ -42,7 +42,7 @@ import {
   Name,
   Transform,
 } from '@forgeax/engine-runtime';
-import { getRegisteredComponents } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditorHidden } from '../components/EditorHidden';
@@ -69,7 +69,7 @@ export { createEditSession } from './edit-session';
  *  (AC-09). Reads (`get`) record nothing. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat'
+  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid'
 >;
 
 /** Transaction-scoped spawn-placeholder alias (replaces the deleted legacy
@@ -259,38 +259,69 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   // Collect subtree via engine handles (eH + Children members).
   const idStack: EntityHandle[] = [eH];
   const visitedEng = new Set<EntityHandle>();
-  const entries: Array<{ eId: EntityHandle; name: string; comps: Record<string, unknown> }> = [];
+  const subtree: EntityHandle[] = [];
   while (idStack.length > 0) {
     const ce = idStack.pop()!;
     if (visitedEng.has(ce)) continue;
     visitedEng.add(ce);
-    const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
-    const comps: Record<string, unknown> = {};
-    for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['EditorHidden', EditorHidden]] as [string, CToken][]) {
-      const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
-    }
-    const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
-    entries.push({ eId: ce, name: nm, comps });
+    subtree.push(ce);
     const chR = engine.get(ce, Children);
     if (chR.ok && chR.value.entities != null) {
       const arr = chR.value.entities as { readonly length: number; [index: number]: number };
       for (let ci = 0; ci < arr.length; ci++) if (!visitedEng.has(arr[ci]! as EntityHandle)) idStack.push(arr[ci]! as EntityHandle);
     }
   }
-  // Despawn bottom-up.
-  for (const entry of [...entries].reverse()) {
-    const dr = engine.despawn(entry.eId);
+  // ── Collect legacy component snapshot (fallback path only) ──────────────
+  // When _asset is absent (direct applyCommand without Gateway, or collect
+  // failure), fall back to the old spawnEntity inverse. The snapshot must be
+  // collected BEFORE despawn while the components are still live.
+  let legacyEntries: Array<{ name: string; comps: Record<string, unknown> }> | undefined;
+  if (!cmd._asset) {
+    legacyEntries = [];
+    for (const ce of subtree) {
+      const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
+      const comps: Record<string, unknown> = {};
+      for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['EditorHidden', EditorHidden]] as [string, CToken][]) {
+        const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
+      }
+      const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
+      legacyEntries.push({ name: nm, comps });
+    }
+  }
+
+  // Despawn bottom-up (leaves before parents).
+  for (const e of [...subtree].reverse()) {
+    const dr = engine.despawn(e);
     if (!dr.ok) return { ok: false, error: { code: 'DESPAWN_FAILED', hint: String(dr.error) } };
   }
-  // Inverse respawns the collected entities (names + components survive undo).
-  // parent:null + comps carrying ChildOf preserves the prior mount shape as far
-  // as the collected component data allows (I1: cross-respawn handle identity is
-  // not reconstructed — the respawned entities carry fresh handles).
-  const spawnCmds: EditorOp[] = entries.map((e) => ({
+
+  // ── Build inverse ──────────────────────────────────────────────────────
+  if (cmd._asset) {
+    // New path: scene-asset GUID round-trip preserves materials faithfully.
+    // instantiateSceneAsset rebuilds the full subtree from the POD; its own
+    // inverse is destroyEntity (document.ts:549), closing the undo/redo loop.
+    const rootName = cmd._name ?? `Entity ${cmd.entity}`;
+    return {
+      ok: true,
+      inverse: {
+        kind: 'instantiateSceneAsset',
+        asset: cmd._asset,
+        parent: cmd._parent ?? null,
+        name: rootName,
+        label: `undo destroy ${rootName}`,
+      },
+      created: [],
+    };
+  }
+
+  // Fallback: legacy spawnEntity inverse (no _asset — materials will be lost
+  // but geometry/names survive). Kept for backward compat with direct
+  // applyCommand callers that bypass Gateway pre-collection.
+  const spawnCmds: EditorOp[] = legacyEntries!.map((e) => ({
     kind: 'spawnEntity' as const,
     name: e.name, parent: null, components: e.comps,
   }));
-  const rootName = entries[0]?.name ?? `Entity ${cmd.entity}`;
+  const rootName = legacyEntries![0]?.name ?? `Entity ${cmd.entity}`;
   return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds }, created: [] };
 }
 
@@ -369,9 +400,112 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   const before = clone(cur.value) as Record<string, unknown>;
   const restore: Record<string, unknown> = {};
   for (const k of Object.keys(cmd.patch)) restore[k] = before[k];
-  const r = engine.set(eH, tok, cmd.patch as Parameters<typeof engine.set>[2]);
+  // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
+  // in shared fields of the patch to live handles first (same step as
+  // applyAddComponent — the setComponent path binds a clip onto an existing
+  // AnimationPlayer). Fail Fast on a resolve miss; never pass the string to set().
+  const resolvedPatch = resolveSharedFields(engine, cmd.component, cmd.patch as Record<string, unknown>);
+  if (!resolvedPatch.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolvedPatch.hint } };
+  const r = engine.set(eH, tok, resolvedPatch.value as Parameters<typeof engine.set>[2]);
   if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
   return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore }, created: [] };
+}
+
+// ── shared<T> front-door binder (M7 / AC-10, plan-strategy D-5) ──────────────
+// A catalogued asset GUID string written into a shared<T> component field
+// (AnimationPlayer.clips, MeshFilter.assetHandle, MeshRenderer.materials, …) must
+// be resolved to a live handle BEFORE the engine sees it. The engine's M2 P3 gate
+// now REJECTS a raw GUID string in a shared<T> field (`shared-field-invalid-value`)
+// instead of silently coercing it to handle 0, so the editor front door
+// (addComponent / setComponent) resolves here first — mirroring the drag-spawn
+// resolver (drag-spawn-resolve.ts) + preview closure (host-session.ts) spine, but
+// synchronous so it runs inside the sync document applier.
+//
+// It is GENERAL (§2.5 — depend on the field's declared shape, not a per-asset-kind
+// switch): the shared<T> target tag is derived from the component's own
+// `resolveComponent(comp).schema[field]` keyword (`shared<X>` scalar or
+// `array<shared<X>, N>` element), so one step closes material / clip / any future
+// shared<T> field with zero new ops (no bindAnimationClip fan-out).
+//
+// Mixed-value boundary (plan-strategy D-8): only STRING elements are resolved;
+// NUMBER elements are already-live handles and pass through untouched.
+
+/** Extract the shared<T> target tag from a schema field keyword, or null if the
+ *  field is not a shared reference. Handles both the scalar form `shared<X>` and
+ *  the managed-array form `array<shared<X>, N>` / `array<shared<X>>`. */
+function sharedTargetOf(fieldType: string): string | null {
+  const scalar = /^shared<([^<>]+)>$/.exec(fieldType);
+  if (scalar) return scalar[1] ?? null;
+  const arr = /^array<shared<([^<>]+)>(?:\s*,\s*\d+)?>$/.exec(fieldType);
+  if (arr) return arr[1] ?? null;
+  return null;
+}
+
+/** Resolve any GUID-string values inside a component data/patch object's
+ *  shared<T> fields into live handles. Returns a NEW object with the resolved
+ *  values (untouched fields copied by reference); a resolve miss on any GUID
+ *  aborts with a structured error so the caller fails fast (never a silent
+ *  handle-0). Non-shared fields and numeric (already-live) handle values pass
+ *  through unchanged. When the component has no shared fields — or the value
+ *  carries no GUID strings — the original object is returned as-is. */
+function resolveSharedFieldGuids(
+  engine: EngineWriteProxy,
+  componentName: string,
+  value: Record<string, unknown>,
+): { ok: true; value: Record<string, unknown> } | { ok: false; hint: string } {
+  const tok = resolveComponent(componentName) as { schema?: Record<string, string> } | undefined;
+  const schema = tok?.schema;
+  if (!schema) return { ok: true, value };
+
+  let out: Record<string, unknown> | null = null; // lazily cloned on first change
+  for (const [field, fieldValue] of Object.entries(value)) {
+    const fieldType = schema[field];
+    if (typeof fieldType !== 'string') continue;
+    const target = sharedTargetOf(fieldType);
+    if (target === null) continue;
+
+    if (Array.isArray(fieldValue)) {
+      // array<shared<T>>: resolve string elements, pass numbers through.
+      let changed = false;
+      const resolvedArr: unknown[] = fieldValue.map((el) => {
+        if (typeof el !== 'string') return el;
+        const r = engine.resolveSharedGuid(target, el);
+        if (!r.ok) throw new SharedResolveMiss(`could not resolve GUID for ${componentName}.${field}[]: ${r.error.hint}`);
+        changed = true;
+        return r.value;
+      });
+      if (changed) {
+        out ??= { ...value };
+        out[field] = resolvedArr;
+      }
+    } else if (typeof fieldValue === 'string') {
+      // scalar shared<T>: resolve the single GUID.
+      const r = engine.resolveSharedGuid(target, fieldValue);
+      if (!r.ok) return { ok: false, hint: `could not resolve GUID for ${componentName}.${field}: ${r.error.hint}` };
+      out ??= { ...value };
+      out[field] = r.value;
+    }
+  }
+  return { ok: true, value: out ?? value };
+}
+
+/** Sentinel thrown by the array-resolve arm so a mid-array miss unwinds to a
+ *  single structured caller error (Array.map cannot early-return a Result). */
+class SharedResolveMiss extends Error {}
+
+/** Run the shared-field resolve, translating the array-arm sentinel into the
+ *  uniform structured-error shape the callers consume. */
+function resolveSharedFields(
+  engine: EngineWriteProxy,
+  componentName: string,
+  value: Record<string, unknown>,
+): { ok: true; value: Record<string, unknown> } | { ok: false; hint: string } {
+  try {
+    return resolveSharedFieldGuids(engine, componentName, value);
+  } catch (e) {
+    if (e instanceof SharedResolveMiss) return { ok: false, hint: e.message };
+    throw e;
+  }
 }
 
 // ── addComponent applier ──────────────────────────────────────────────────────
@@ -385,7 +519,12 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   if (engine.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
-  const r = engine.addComponent(eH, { component: tok, data: (cmd.value ?? {}) as never });
+  // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
+  // in shared fields to live handles before the engine sees them (Fail Fast on a
+  // resolve miss — never pass the string through to the P3 gate / a silent 0).
+  const resolved = resolveSharedFields(engine, cmd.component, (cmd.value ?? {}) as Record<string, unknown>);
+  if (!resolved.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: resolved.hint } };
+  const r = engine.addComponent(eH, { component: tok, data: resolved.value as never });
   if (!r.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: String(r.error) } };
   return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component }, created: [] };
 }

@@ -21,15 +21,11 @@
     },
     "connect": {
       "title": "连接一个模型",
-      "hint": "可任选一种或同时配置多种方式，之后都能在设置里修改。",
-      "keyBadge": "已配置",
+      "hint": "任选一种方式连接，之后都能在设置里修改。",
       "keyTitle": "使用 API Key",
       "keySub": "任意 OpenAI 兼容端点（官方 / OpenRouter / 私有代理）。",
-      "keyCta": "填写 API Key",
-      "cliBadge": "已连接",
       "cliTitle": "使用本地 CLI",
       "cliSub": "可以连接本地 claude-code / codex / cursor-agent 使用。",
-      "cliCta": "连接本地 CLI",
       "cliStatus": {
         "loading": "检测中…",
         "ok": "可连接",
@@ -43,6 +39,9 @@
       "checking": "正在检测连接…",
       "ok": "连接成功：{{list}}。即将进入下一步…",
       "fail": "连接失败，请检查你配置的连接方式是否正确。",
+      "failEmpty": "请填写 Base URL 和 API Key。",
+      "failNeedSelect": "请先选择一种连接方式（API Key 或本地 CLI）。",
+      "failLive": "API 测试联通失败，请检查您的 base URL 或 API key。",
       "failCli": "连接失败，本地 CLI · {{cli}} 是否已安装并正常启动，安装教程："
     },
     "next": "下一步",
@@ -52,12 +51,12 @@
     "project": {
       "title": "设置你的 workspace",
       "root": "项目根目录",
-      "rootHint": "项目会作为一个 game 建在这个 workspace 下（~/ 即用户主目录）。",
+      "rootHint": "项目会作为一个 game 建在这个 workspace 下（~/ 即用户主目录）。点「更改」只选定路径；真正切换并创建要等点「新建」。",
       "changeRoot": "更改",
       "rootPickTitle": "选择 workspace 目录",
       "name": "项目名称",
-      "namePlaceholder": "例如 my-first-game",
-      "nameRequired": "请填写项目名称（≥2 位，小写字母/数字/连字符）。",
+      "namePlaceholder": "可选；留空则自动命名为 untitled-1",
+      "nameRequired": "请填写项目名称（≥1 位，小写字母/数字/连字符）。",
       "willCreate": "将创建项目：{{name}}",
       "busy": {
         "new": "正在创建项目…",
@@ -71,8 +70,9 @@
       "existingDesc": "当前 workspace 已有 {{count}} 个项目——直接选择一个进入，无需新建。",
       "existingOpen": "打开",
       "openTitle": "打开目录",
-      "openDesc": "把磁盘上任意一个已有游戏目录挂进当前 workspace（保留其自身路径）。",
+      "openDesc": "选择任意目录挂进当前 workspace（可在根目录以外）。空目录会自动初始化为游戏项目。",
       "openCta": "选择目录",
+      "errNotGame": "所选目录不是游戏项目，且不是空目录。请选空文件夹（将自动初始化），或选已有 forge.json / main.ts 的目录。",
       "sampleTitle": "从模板创建",
       "sampleDesc": "以一个内置游戏为模板，拷贝成当前 workspace 下的新项目。",
       "sampleCta": "选择模板",
@@ -125,11 +125,15 @@
       "setActive": "设为使用",
       "inUse": "当前使用",
       "switched": "已切换模型来源：{{source}}",
+      "native": {
+        "title": "ForgeaX 内核(原生)",
+        "hint": "内置的 ForgeaX 内核 —— 默认、旗舰对话路径。进程内运行,使用你在下方配置的任意模型凭据(LiteLLM 代理,或 ANTHROPIC / OPENAI / GEMINI 直连 key)。",
+        "badge": "原生",
+        "useReason": "请先配置一个模型凭据 —— LiteLLM 代理,或 ANTHROPIC / OPENAI / GEMINI key。"
+      },
       "api": {
         "title": "LiteLLM 代理",
-        "hint": "指向你的 LiteLLM 代理：填 Base URL 与 Key。模型目录和原生 ForgeaX 内核都走它（Key 会镜像到 ANTHROPIC_*，让 forgeax-core 直连该代理）。",
-        "useLabel": "用 LiteLLM 调用模型",
-        "useReason": "先填写并保存 LiteLLM 的 Base URL 与 Key"
+        "hint": "指向你的 LiteLLM 代理：填 Base URL 与 Key。模型目录和原生 ForgeaX 内核都走它（Key 会镜像到 ANTHROPIC_*，让 forgeax-core 直连该代理）。"
       },
       "cli": {
         "title": "本地 CLI",
@@ -530,7 +534,7 @@
     "gameMeta": "{{count}} files · {{time}}",
     "deleteTooltip": "删除 game",
     "unpin": "取消固定 — 跟随最新",
-    "slugError": "slug: 2-41 字符 / 小写 ASCII / 数字 / 连字符",
+    "slugError": "slug: 1-41 字符 / 小写 ASCII / 数字 / 连字符",
     "kickoffMessage": "刚创建了 games/{{slug}}/，brief：{{brief}}。请走完 Iori → Suzu → 你自己写代码的流水线。",
     "modalTitle": "新建项目",
     "slugLabel": "slug (项目目录名)",
