@@ -21,11 +21,30 @@ const WEBGPU_ALLOW = /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup|requestAd
 const realErrors = (errors: { source: string; text: string }[]): string[] =>
   errors.filter((e) => !WEBGPU_ALLOW.test(e.text)).map((e) => `${e.source}: ${e.text.split('\n')[0]}`);
 
+/** Activate the Assets tab (default layout shows Hierarchy) and wait for
+ *  ContentBrowser to lazy-mount and populate asset items. Uses the DEV-mode
+ *  __dockApi global with a UI-click fallback for resilience. */
+async function activateAssetsPanel(page: import('@playwright/test').Page) {
+  const activated = await page.evaluate(() => {
+    try {
+      const api = (window as any).__dockApi;
+      if (api) { api.getPanel('ep:assets')?.api.setActive(); return true; }
+    } catch { /* noop */ }
+    return false;
+  });
+  if (!activated) {
+    const tab = page.locator('.dv-tab', { hasText: /^Assets$/ });
+    if (await tab.isVisible({ timeout: 3_000 }).catch(() => false)) await tab.click();
+  }
+  await expect(page.locator('.cb-root')).toBeVisible({ timeout: 15_000 });
+}
+
 test.describe('smoke — Content Browser context menu interactions', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(STANDALONE_URL);
     await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(3000);
+    await activateAssetsPanel(page);
   });
 
   test('asset items render in the Content Browser', async ({ page }) => {
