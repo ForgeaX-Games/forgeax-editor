@@ -47,12 +47,15 @@ import {
   gateway,
   panelBridge,
   getSceneId,
+  getSelection,
+  entComponents,
   switchSceneFile,
   registerSessionApplier,
   createEvalChannel,
 } from '@forgeax/editor-core';
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
+import { installColliderDebugOverlay } from './collider-debug-overlay';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
 // bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
 // hotspot, AC-10). bootViewport keeps only the call sites.
@@ -74,7 +77,7 @@ import {
   setGameCameraEntity,
   deriveActiveCameraEntity,
 } from './viewport-quadrant';
-import { _syncDisplayMode } from './display-bus';
+import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
 import { CommandPalette } from '../panels/command-palette';
@@ -373,6 +376,17 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+
+  // solo P7 round-31: selected collider chrome reuses the engine's existing
+  // immediate-mode DebugDraw overlay. It reads the active scene-world SSOT each
+  // frame and emits no authored state; debug-draw's graph pass owns its flush.
+  installColliderDebugOverlay({
+    app: editorApp,
+    getSelection,
+    getEntityComponents: (entity) => entComponents(gateway.doc.world, entity),
+    isAuxVisible,
+    isEditMode: () => getViewportQuadrant().run === 'edit',
+  });
 
   // pack-index catalog for loadByGuid (was :389).
   const sceneSlug = getSceneId();
