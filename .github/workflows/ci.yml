@@ -28,6 +28,23 @@ name: CI
 # engine does not export fails here, not at the user's runtime in studio.
 # Remaining heavier gates (e2e) still live in the studio superrepo CI.
 
+# Runner routing (mirrors forgeax-engine PR #705; rationale recorded in
+# docs/specs/2026-07-14-self-hosted-tencentos-ci-routing-editor.md — the YAML
+# below is the executable SSOT, that doc is the narrative):
+#   - `b2-self-boot` + `typecheck` are trusted, ABI-agnostic build work (Rust
+#     wgpu-wasm + bun install + tsc/lint/tests; NO apt-get, NO browser), so for
+#     TRUSTED events (same-repo PR, main push, manual run) they route to the
+#     org-level TencentOS self-hosted pool `[self-hosted, Linux, X64]`. A FORK
+#     `pull_request` runs repository code, so it is NEVER given a self-hosted
+#     runner — the selector sends fork PRs to ephemeral `ubuntu-latest`.
+#   - `smoke-play` STAYS on `ubuntu-latest` unconditionally: `playwright install
+#     --with-deps` uses Ubuntu apt/dpkg paths TencentOS does not provide, and
+#     the SwiftShader WebGPU path is only validated on the hosted image.
+#   - `CACHE_RUNNER_SCOPE` (env, below) namespaces the engine-dist cache by
+#     runner class — hosted + self-hosted Linux both report runner.os == Linux,
+#     so the SHA alone would let one class restore the other's blobs.
+#   - Do NOT use `pull_request_target` to make fork code self-hosted-eligible.
+
 # Doc-only changes are exempt: the B2 self-boot + typecheck gates below can only
 # be affected by code / config / submodule pins, never by prose. `paths-ignore`
 # skips this heavy workflow for pushes/PRs that touch ONLY these paths (a mixed
@@ -58,11 +75,37 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Runner routing (mirrors forgeax-engine PR #705 — see
+  # docs/specs/2026-07-14-self-hosted-tencentos-ci-routing-editor.md). Fork PRs
+  # run on an ephemeral GitHub-hosted runner; same-repository PRs, main pushes,
+  # and manual runs use the trusted org-level TencentOS runner pool. The SAME
+  # condition namespaces the engine-dist cache below so build artifacts never
+  # cross the runner boundary — hosted + self-hosted Linux BOTH report
+  # runner.os == Linux, so runner.os alone is not a safe cache identity.
+  CACHE_RUNNER_SCOPE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-hosted-linux-x64' || 'self-hosted-linux-x64' }}
+
 jobs:
   b2-self-boot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + B2
+    # selfcheck; NO apt-get, NO browser). Fork PRs → ephemeral ubuntu-latest;
+    # trusted events → the TencentOS self-hosted pool [self-hosted, Linux, X64].
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    # 30-minute cold-cache allowance: a first self-hosted run must build the
+    # engine wgpu-wasm (Rust) from scratch before the B2 selfcheck. Warm runs
+    # (engine-dist cache hit) finish in a few minutes. Matches the typecheck
+    # job's ceiling; both share the same engine-SHA cache namespace.
+    timeout-minutes: 30
     steps:
+      # A generic self-hosted runner does not imply GitHub-hosted image tools.
+      # Fail fast if the trusted worker lacks sudo (the composite build path
+      # must not assume passwordless sudo or an Ubuntu package manager).
+      - name: Verify self-hosted Linux prerequisites
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -eu
+          command -v sudo
+
       # GHA is the kubeela PAT that can read the private ForgeaXGame/forgeax-*
       # submodules this repo pins (engine / interface / platform-io / editor-assets).
       # Same secret name forgeax-engine's CI uses; set it on this repo with
@@ -90,7 +133,10 @@ jobs:
           path: |
             packages/engine/packages/*/dist
             packages/engine/packages/wgpu-wasm/pkg
-          key: engine-dist-${{ steps.engine.outputs.sha }}
+          # Namespaced by runner class (spec §Cache isolation): hosted +
+          # self-hosted Linux both report runner.os == Linux, so the SHA alone
+          # would let one class restore the other's blobs across the boundary.
+          key: engine-dist-${{ env.CACHE_RUNNER_SCOPE }}-${{ steps.engine.outputs.sha }}
 
       # ── cache-miss only: build the engine library (mirrors the typecheck job) ──
       - name: Setup Rust toolchain (for wgpu-wasm)
@@ -99,8 +145,28 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Setup wasm-pack
-        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+      # wasm-pack provisioning is split by runner class (spec §Tool provisioning):
+      # the TencentOS runner exports BASH_FUNC_* env entries and
+      # taiki-e/install-action correctly REJECTS shell-function injection, so it
+      # cannot run there. Self-hosted downloads the official static musl archive;
+      # GitHub-hosted keeps the action. Both are cache-miss-only.
+      - name: Setup wasm-pack (self-hosted Linux)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true' && runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/wasm-pack"
+          curl --fail --location --retry 3 \
+            https://github.com/rustwasm/wasm-pack/releases/download/v0.14.0/wasm-pack-v0.14.0-x86_64-unknown-linux-musl.tar.gz \
+            -o "$RUNNER_TEMP/wasm-pack.tar.gz"
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          tar -xzf "$RUNNER_TEMP/wasm-pack.tar.gz" -C "$dir" --strip-components=1
+          "$dir/wasm-pack" --version
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Setup wasm-pack (GitHub-hosted)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true' && runner.environment != 'self-hosted'
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@0.14.0
@@ -183,9 +249,19 @@ jobs:
   # wasm-pack (its committed pkg/*.d.ts shims are in git; the .wasm is not), which
   # tsc -b needs to resolve WebGPU/wgpu types.
   typecheck:
-    runs-on: ubuntu-latest
+    # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + lint +
+    # dep-cruiser + tsc + unit tests; NO apt-get, NO browser). Same fork-safe
+    # routing as b2-self-boot: fork PRs → ubuntu-latest; trusted events → the
+    # TencentOS self-hosted pool.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
     timeout-minutes: 30
     steps:
+      - name: Verify self-hosted Linux prerequisites
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -eu
+          command -v sudo
+
       - name: Checkout (with submodules)
         uses: actions/checkout@v5
         with:
@@ -208,7 +284,10 @@ jobs:
           path: |
             packages/engine/packages/*/dist
             packages/engine/packages/wgpu-wasm/pkg
-          key: engine-dist-${{ steps.engine.outputs.sha }}
+          # Namespaced by runner class (spec §Cache isolation): hosted +
+          # self-hosted Linux both report runner.os == Linux, so the SHA alone
+          # would let one class restore the other's blobs across the boundary.
+          key: engine-dist-${{ env.CACHE_RUNNER_SCOPE }}-${{ steps.engine.outputs.sha }}
 
       # ── cache-miss only: build the engine (mirrors engine CI build-artifacts) ──
       - name: Setup Rust toolchain (for wgpu-wasm)
@@ -217,8 +296,28 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Setup wasm-pack
-        if: steps.engine-dist-cache.outputs.cache-hit != 'true'
+      # wasm-pack provisioning is split by runner class (spec §Tool provisioning):
+      # the TencentOS runner exports BASH_FUNC_* env entries and
+      # taiki-e/install-action correctly REJECTS shell-function injection, so it
+      # cannot run there. Self-hosted downloads the official static musl archive;
+      # GitHub-hosted keeps the action. Both are cache-miss-only.
+      - name: Setup wasm-pack (self-hosted Linux)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true' && runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/wasm-pack"
+          curl --fail --location --retry 3 \
+            https://github.com/rustwasm/wasm-pack/releases/download/v0.14.0/wasm-pack-v0.14.0-x86_64-unknown-linux-musl.tar.gz \
+            -o "$RUNNER_TEMP/wasm-pack.tar.gz"
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          tar -xzf "$RUNNER_TEMP/wasm-pack.tar.gz" -C "$dir" --strip-components=1
+          "$dir/wasm-pack" --version
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Setup wasm-pack (GitHub-hosted)
+        if: steps.engine-dist-cache.outputs.cache-hit != 'true' && runner.environment != 'self-hosted'
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@0.14.0
@@ -354,7 +453,10 @@ jobs:
           path: |
             packages/engine/packages/*/dist
             packages/engine/packages/wgpu-wasm/pkg
-          key: engine-dist-${{ steps.engine.outputs.sha }}
+          # Namespaced by runner class (spec §Cache isolation): hosted +
+          # self-hosted Linux both report runner.os == Linux, so the SHA alone
+          # would let one class restore the other's blobs across the boundary.
+          key: engine-dist-${{ env.CACHE_RUNNER_SCOPE }}-${{ steps.engine.outputs.sha }}
 
       - name: Setup Rust toolchain (for wgpu-wasm)
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
@@ -362,6 +464,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # smoke-play is ALWAYS GitHub-hosted (Playwright/apt/lavapipe boundary —
+      # never on the self-hosted pool), so the action is fine here; no split.
       - name: Setup wasm-pack
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@v2
