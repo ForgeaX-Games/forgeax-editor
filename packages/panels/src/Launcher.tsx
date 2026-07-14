@@ -67,13 +67,13 @@ export function LauncherPanel() {
           <input type="radio" name="play-target" checked={value === CAMPAIGN} onChange={() => pick(CAMPAIGN)} />
           <span>{t('editor.launcher.campaignOption')}</span>
         </label>
-        {levels.map((scene) => (
+        {levels.filter((scene) => scene.guid !== undefined).map((scene) => (
           <label key={scene.guid} className="launcher-option">
             <input
               type="radio"
               name="play-target"
               checked={value === scene.guid}
-              onChange={() => pick(scene.guid)}
+              onChange={() => pick(scene.guid!)}
             />
             <span>{t('editor.launcher.levelOnly', { name: scene.name ?? scene.id })}</span>
           </label>

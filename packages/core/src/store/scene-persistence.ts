@@ -171,7 +171,7 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
 export const ctx = createScenePersistenceContext();
 
 /** A game's scene-manifest entry (one scene pack plus its stable asset identity). */
-export interface SceneFileEntry { id: string; name?: string; pack: string; guid: string }
+export interface SceneFileEntry { id: string; name?: string; pack: string; guid?: string }
 
 // ── Compose the four persistence DI units (D-3) ───────────────────────────────
 // ONE of each factory with the real gateway / fetch / fetchWithTimeout /
