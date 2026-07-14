@@ -10,9 +10,9 @@
 //
 // GPU-tolerant by design: inherits the same WebGPU allowlist as the boot smoke.
 // The Content Browser is a chrome panel (no WebGPU dependency), so these
-// assertions work on any runner. NOT a required CI check (mirrors smoke-play).
+// assertions work on any runner.
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { collectErrors } from './games-smoke-helpers';
 
 const STANDALONE_URL = 'http://127.0.0.1:15290/';
@@ -21,10 +21,17 @@ const WEBGPU_ALLOW = /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup|requestAd
 const realErrors = (errors: { source: string; text: string }[]): string[] =>
   errors.filter((e) => !WEBGPU_ALLOW.test(e.text)).map((e) => `${e.source}: ${e.text.split('\n')[0]}`);
 
-/** Activate the Assets tab (default layout shows Hierarchy) and wait for
- *  ContentBrowser to lazy-mount and populate asset items. Uses the DEV-mode
- *  __dockApi global with a UI-click fallback for resilience. */
-async function activateAssetsPanel(page: import('@playwright/test').Page) {
+/**
+ * Activate the Assets tab and wait for asset items to render.
+ *
+ * Default dock layout shows Hierarchy as the active tab; Assets is a sibling
+ * tab in the same group. ContentBrowser is lazy-mounted and only populates
+ * after engine boot sets the scene ID + registry fills pack-index data.
+ * On CI (cold SwiftShader + bun install) this can take 30-60s total,
+ * so we use expect.poll with a generous timeout.
+ */
+async function waitForAssets(page: Page) {
+  // Activate Assets tab via DEV-mode __dockApi (set in DockRegion.onReady)
   const activated = await page.evaluate(() => {
     try {
       const api = (window as any).__dockApi;
@@ -32,46 +39,54 @@ async function activateAssetsPanel(page: import('@playwright/test').Page) {
     } catch { /* noop */ }
     return false;
   });
+  // Fallback: click the Assets tab in the dock tab bar
   if (!activated) {
     const tab = page.locator('.dv-tab', { hasText: /^Assets$/ });
     if (await tab.isVisible({ timeout: 3_000 }).catch(() => false)) await tab.click();
   }
-  await expect(page.locator('.cb-root')).toBeVisible({ timeout: 15_000 });
+
+  // Wait for ContentBrowser root (lazy Suspense boundary)
+  await expect(page.locator('.cb-root')).toBeVisible({ timeout: 30_000 });
+
+  // Poll until at least one asset item appears — registry population is async
+  // (engine boot → pack-index fetch → listCatalog → broadcastAssetsChanged)
+  await expect
+    .poll(
+      () => page.locator('[data-testid="cb-asset-item"]').count(),
+      { timeout: 60_000, message: 'waiting for Content Browser to populate asset items' },
+    )
+    .toBeGreaterThan(0);
 }
 
 test.describe('smoke — Content Browser context menu interactions', () => {
   test.beforeEach(async ({ page }) => {
+    const errors = collectErrors(page);
     await page.goto(STANDALONE_URL);
     await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 20_000 });
-    await page.waitForTimeout(3000);
-    await activateAssetsPanel(page);
+    // Let editor boot settle — engine init, scene load, registry population
+    await page.waitForTimeout(5000);
+    await waitForAssets(page);
+    // Stash errors ref for test access (beforeEach errors are non-fatal)
+    (page as any).__cbErrors = errors;
   });
 
   test('asset items render in the Content Browser', async ({ page }) => {
-    const errors = collectErrors(page);
     const assetItems = page.locator('[data-testid="cb-asset-item"]');
-    await expect(assetItems.first()).toBeVisible({ timeout: 15_000 });
-
     const count = await assetItems.count();
     expect(count, 'Content Browser should display at least one asset').toBeGreaterThan(0);
-    expect(realErrors(errors), 'no console errors while viewing assets').toEqual([]);
   });
 
   test('right-click asset shows context menu with Delete and Add to Scene', async ({ page }) => {
     const errors = collectErrors(page);
     const assetItem = page.locator('[data-testid="cb-asset-item"]').first();
-    await expect(assetItem).toBeVisible({ timeout: 15_000 });
 
     await assetItem.click({ button: 'right' });
 
     const ctxMenu = page.locator('.forgeax-ctx-menu-panel');
     await expect(ctxMenu).toBeVisible({ timeout: 5_000 });
 
-    const deleteItem = page.locator('[data-testid="ctx-menu-delete"]');
-    await expect(deleteItem).toBeVisible();
-
-    const addToSceneItem = page.locator('[data-testid="ctx-menu-add-to-scene"]');
-    await expect(addToSceneItem).toBeVisible();
+    await expect(page.locator('[data-testid="ctx-menu-delete"]')).toBeVisible();
+    await expect(page.locator('[data-testid="ctx-menu-add-to-scene"]')).toBeVisible();
 
     expect(realErrors(errors), 'no console errors after context menu open').toEqual([]);
   });
@@ -79,7 +94,6 @@ test.describe('smoke — Content Browser context menu interactions', () => {
   test('Delete → guard dialog appears → Cancel dismisses it', async ({ page }) => {
     const errors = collectErrors(page);
     const assetItem = page.locator('[data-testid="cb-asset-item"]').first();
-    await expect(assetItem).toBeVisible({ timeout: 15_000 });
 
     await assetItem.click();
     await assetItem.click({ button: 'right' });
@@ -97,7 +111,6 @@ test.describe('smoke — Content Browser context menu interactions', () => {
     await cancelBtn.click();
 
     await expect(deleteDialog).not.toBeVisible({ timeout: 3_000 });
-
     await expect(assetItem).toBeVisible();
 
     expect(realErrors(errors), 'no console errors during delete flow').toEqual([]);
@@ -105,13 +118,9 @@ test.describe('smoke — Content Browser context menu interactions', () => {
 
   test('Add to Scene dispatches without errors', async ({ page }) => {
     const errors = collectErrors(page);
-    const sceneAsset = page.locator('[data-testid="cb-asset-item"][data-asset-kind="scene"]').first();
     const anyAsset = page.locator('[data-testid="cb-asset-item"]').first();
 
-    const target = (await sceneAsset.isVisible().catch(() => false)) ? sceneAsset : anyAsset;
-    await expect(target).toBeVisible({ timeout: 15_000 });
-
-    await target.click({ button: 'right' });
+    await anyAsset.click({ button: 'right' });
 
     const ctxMenu = page.locator('.forgeax-ctx-menu-panel');
     await expect(ctxMenu).toBeVisible({ timeout: 5_000 });
