@@ -43,7 +43,7 @@ import { isScenePack, stableGuid, validatePackShell } from '../../scene/scene-pa
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 import { createEditSession } from '../../session/document';
 import { worldRootHandles } from '../entity-state';
-import type { ScenePersistenceContext } from '../scene-persistence';
+import type { ScenePersistenceContext, LoadedInlineSnapshot } from '../scene-persistence';
 import type { EditorOp, EditSession } from '../../types';
 import type { EntityHandle, WorldType } from '../../scene/scene-types';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
@@ -149,6 +149,49 @@ export function wouldDropInlineAssets(floor: number | null, newPack: unknown): b
   return inlineAssetCount(newPack) < floor;
 }
 
+/** Re-append inline assets that lived in the pack at LOAD but are no longer
+ *  reachable from live refs[] (orphans). Mutates `pack.assets` in place.
+ *  Pure — no registry; payloads come from the load-time snapshot so we never
+ *  depend on an orphan still being resolvable after world edits. */
+export function mergeLoadedInlineOrphans(
+  pack: Record<string, unknown>,
+  orphans: ReadonlyArray<LoadedInlineSnapshot> | null | undefined,
+): number {
+  if (!orphans || orphans.length === 0) return 0;
+  const assets = pack.assets as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(assets)) return 0;
+
+  const already = new Set(
+    assets
+      .map((a) => (a.guid as string | undefined)?.toLowerCase())
+      .filter((g): g is string => !!g),
+  );
+  let merged = 0;
+  for (const entry of orphans) {
+    if (!entry?.guid || entry.kind === 'scene') continue;
+    const key = entry.guid.toLowerCase();
+    if (already.has(key)) continue;
+    assets.push({
+      guid: entry.guid,
+      kind: entry.kind,
+      // Clone so a later pack mutate cannot corrupt the load-floor snapshot.
+      payload: entry.payload === undefined ? undefined : JSON.parse(JSON.stringify(entry.payload)),
+      refs: Array.isArray(entry.refs) ? JSON.parse(JSON.stringify(entry.refs)) : [],
+    });
+    already.add(key);
+    merged++;
+    console.info(
+      `[editor-core][diag]   orphan=${entry.guid} → MERGED from load snapshot (kind=${entry.kind})`,
+    );
+  }
+  if (merged > 0) {
+    console.info(
+      `[editor-core][diag] mergeLoadedInlineOrphans: merged=${merged}, total assets now=${assets.length} (inline=${assets.filter((a) => a.kind !== 'scene').length})`,
+    );
+  }
+  return merged;
+}
+
 /** Re-append inline asset bodies (materials etc. whose payload lives in THIS
  *  scene.pack) to a freshly serialized pack, so saving round-trips them instead
  *  of silently dropping the payload. Mutates `pack.assets` in place. Pure — no
@@ -162,21 +205,35 @@ function appendInlineAssets(
   if (!Array.isArray(assets)) return;
   const sceneEntry = assets.find((a) => a.kind === 'scene');
   const refs = (sceneEntry?.refs as ReadonlyArray<string> | undefined) ?? [];
-  if (refs.length === 0) return;
+  if (refs.length === 0) {
+    console.warn('[editor-core][diag] appendInlineAssets: refs[] is empty — no inline assets to append');
+    return;
+  }
 
   // The package path that identifies "inline to this scene". Prefer the scene
   // GUID's own package path; fall back to the scene entry's guid.
   const scenePkgGuid = sceneGuid ?? (sceneEntry?.guid as string | undefined);
   const scenePkgPath = scenePkgGuid ? reg.packageOf(scenePkgGuid)?.path : undefined;
 
+  console.info(
+    `[editor-core][diag] appendInlineAssets: sceneGuid=${sceneGuid}, scenePkgGuid=${scenePkgGuid}, scenePkgPath=${scenePkgPath}, refs.length=${refs.length}`,
+  );
+
   const already = new Set(assets.map((a) => (a.guid as string | undefined)?.toLowerCase()));
+  let appendedCount = 0;
 
   for (const refGuid of refs) {
     const key = refGuid.toLowerCase();
-    if (already.has(key)) continue;
+    if (already.has(key)) {
+      console.info(`[editor-core][diag]   ref=${refGuid} → already in pack (skip)`);
+      continue;
+    }
     const pkg = reg.packageOf(refGuid);
     const payload = reg.lookup(refGuid) as { kind?: string } | undefined;
-    if (!payload) continue; // unresolvable — leave as a bare ref (catalog/builtin)
+    if (!payload) {
+      console.warn(`[editor-core][diag]   ref=${refGuid} → reg.lookup returned null (unresolvable, skip)`);
+      continue;
+    }
     // Builtin meshes (packageOf === null, kind mesh) auto-register on load; a
     // catalog asset has its own file (path !== scenePath). Only inline when the
     // asset's body genuinely belongs in this scene.pack:
@@ -185,10 +242,21 @@ function appendInlineAssets(
     const isInline =
       (pkg != null && pkg.path === scenePkgPath) ||
       (pkg === null && payload.kind !== 'mesh' && payload.kind !== 'scene');
-    if (!isInline) continue;
+    if (!isInline) {
+      console.info(
+        `[editor-core][diag]   ref=${refGuid} → NOT inline (kind=${payload.kind}, pkg.path=${pkg?.path ?? 'null'}, scenePkgPath=${scenePkgPath}) (skip)`,
+      );
+      continue;
+    }
+    console.info(`[editor-core][diag]   ref=${refGuid} → INLINE (kind=${payload.kind}, pkg.path=${pkg?.path ?? 'null'}) → appending`);
     assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [] });
     already.add(key);
+    appendedCount++;
   }
+
+  console.info(
+    `[editor-core][diag] appendInlineAssets done: appended=${appendedCount}, total assets now=${assets.length} (scene=1, inline=${assets.length - 1})`,
+  );
 }
 
 /**
@@ -251,8 +319,18 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     // Round-trip inline assets (materials etc.) that physically live IN this
     // scene.pack — the engine serializer emits only the scene entry, so dropping
     // an inline body is data loss ("add-to-scene → whole scene turned grey").
-    appendInlineAssets(packR.value as Record<string, unknown>, reg, sceneGuid);
-    return JSON.stringify(packR.value, null, 2) + '\n';
+    const packObj = packR.value as Record<string, unknown>;
+    const preAppendCount = (packObj.assets as Array<unknown>)?.length ?? 0;
+    appendInlineAssets(packObj, reg, sceneGuid);
+    // Orphans: inline bodies on disk at load that are no longer in live refs[]
+    // (e.g. material still in pack, no MeshRenderer holds it). Merge from the
+    // load snapshot so save cannot drop authored pack data below the floor.
+    const orphanMerged = mergeLoadedInlineOrphans(packObj, ctx.loadedInlineAssets);
+    const postAppendCount = (packObj.assets as Array<unknown>)?.length ?? 0;
+    console.info(
+      `[editor-core][diag] worldToPack: sceneGuid=${sceneGuid}, rootHandles=${rootHandles.length}, assets before append=${preAppendCount}, after=${postAppendCount}, orphanMerged=${orphanMerged}`,
+    );
+    return JSON.stringify(packObj, null, 2) + '\n';
   }
 
   /** The exact byte content saveDocToDisk would write for the current doc (used
@@ -398,6 +476,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     if (!p) return false;
     // Forget the previous scene's identity before loading a new one.
     ctx.currentSceneGuid = null;
+    ctx.loadedInlineAssetFloor = null;
+    ctx.loadedInlineAssets = null;
     try {
       const r = await deps.fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
       if (r.ok) {
@@ -410,6 +490,32 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
             // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk
             // truth, not the live world (which may fail to populate handles).
             ctx.loadedInlineAssetFloor = inlineAssetCount(parsed);
+            // Diagnostic: log what we loaded so we can compare against save-time
+            const loadedAssets = parsed.assets as Array<{
+              guid?: string;
+              kind?: string;
+              payload?: unknown;
+              refs?: unknown[];
+            }>;
+            const loadedInline = loadedAssets.filter((a) => a.kind !== 'scene');
+            // Snapshot full bodies for orphan merge on save (not just the count).
+            ctx.loadedInlineAssets = loadedInline
+              .filter((a): a is { guid: string; kind: string; payload?: unknown; refs?: unknown[] } =>
+                typeof a.guid === 'string' && typeof a.kind === 'string',
+              )
+              .map((a) => ({
+                guid: a.guid,
+                kind: a.kind,
+                payload: a.payload === undefined ? undefined : JSON.parse(JSON.stringify(a.payload)),
+                refs: Array.isArray(a.refs) ? JSON.parse(JSON.stringify(a.refs)) : [],
+              }));
+            console.info(
+              `[editor-core][diag] doLoadDocFromDisk: loaded pack from ${p}, total assets=${loadedAssets.length}, inline floor=${ctx.loadedInlineAssetFloor}`,
+            );
+            console.info(
+              `[editor-core][diag] doLoadDocFromDisk: inline assets on disk (${loadedInline.length}):\n` +
+              loadedInline.map((a, i) => `  [${i}] ${a.guid} (${a.kind})`).join('\n'),
+            );
             const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
             if (sceneAssetEntry?.guid) ctx.currentSceneGuid = sceneAssetEntry.guid;
             // Load via the engine's canonical loadByGuid -> instantiate path.
@@ -459,8 +565,21 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     // #2). Guarding against the load floor (not the current on-disk count) means a
     // prior stripping write can't lower the bar (0 >= 0 no longer passes forever).
     if (wouldDropInlineAssets(ctx.loadedInlineAssetFloor, parsedNew)) {
+      const newCount = inlineAssetCount(parsedNew);
       console.error(
-        `[editor-core] saveDocToDisk: serialized pack has ${inlineAssetCount(parsedNew)} inline asset(s) but the scene loaded with ${ctx.loadedInlineAssetFloor} — aborting write to protect materials`,
+        `[editor-core] saveDocToDisk: serialized pack has ${newCount} inline asset(s) but the scene loaded with ${ctx.loadedInlineAssetFloor} — aborting write to protect materials`,
+      );
+      // Diagnostic: list inline asset GUIDs in the new pack so we can diff against disk
+      const newAssets = (parsedNew as { assets?: Array<{ guid?: string; kind?: string }> })?.assets;
+      if (Array.isArray(newAssets)) {
+        const inlineGuids = newAssets.filter((a) => a.kind !== 'scene').map((a) => `${a.guid} (${a.kind})`);
+        console.error(
+          `[editor-core][diag] saveDocToDisk: inline assets in serialized pack (${inlineGuids.length}):\n` +
+          inlineGuids.map((g, i) => `  [${i}] ${g}`).join('\n'),
+        );
+      }
+      console.error(
+        `[editor-core][diag] saveDocToDisk: scenePath=${p}, currentSceneGuid=${ctx.currentSceneGuid}, loadedInlineAssetFloor=${ctx.loadedInlineAssetFloor}`,
       );
       return false;
     }

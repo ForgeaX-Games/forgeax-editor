@@ -18,7 +18,7 @@
 // probes; a headless bun test cannot host the WebGPU editor world.
 
 import { describe, expect, it } from 'bun:test';
-import { inlineAssetCount, wouldDropInlineAssets } from '../store/store';
+import { inlineAssetCount, wouldDropInlineAssets, mergeLoadedInlineOrphans } from '../store/store';
 
 describe('inlineAssetCount — safety-net counter for save round-trip', () => {
   it('counts non-scene asset entries (inline material bodies)', () => {
@@ -99,5 +99,59 @@ describe('wouldDropInlineAssets — load-floor material-strip guard', () => {
   it('null floor (no scene loaded yet) never blocks — first-time save proceeds', () => {
     expect(wouldDropInlineAssets(null, stripped)).toBe(false);
     expect(wouldDropInlineAssets(null, full)).toBe(false);
+  });
+});
+
+describe('mergeLoadedInlineOrphans — preserve unused inline bodies across save', () => {
+  it('re-appends a load-snapshot orphan missing from serialized refs walk', () => {
+    const pack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        { guid: 's', kind: 'scene', payload: {}, refs: ['m1'] },
+        { guid: 'm1', kind: 'material', payload: { kind: 'material', name: 'used' }, refs: [] },
+      ],
+    };
+    const orphans = [
+      { guid: 'm1', kind: 'material', payload: { kind: 'material', name: 'used' }, refs: [] },
+      { guid: 'd480b87c-orphan', kind: 'material', payload: { kind: 'material', name: 'orphan' }, refs: [] },
+    ];
+    const merged = mergeLoadedInlineOrphans(pack as Record<string, unknown>, orphans);
+    expect(merged).toBe(1);
+    expect(inlineAssetCount(pack)).toBe(2);
+    const orphan = pack.assets.find((a) => a.guid === 'd480b87c-orphan') as { payload: { name: string } };
+    expect(orphan?.payload?.name).toBe('orphan');
+  });
+
+  it('is a no-op when snapshot is null/empty or already complete', () => {
+    const pack = {
+      assets: [
+        { guid: 's', kind: 'scene' },
+        { guid: 'm1', kind: 'material', payload: {}, refs: [] },
+      ],
+    };
+    expect(mergeLoadedInlineOrphans(pack as Record<string, unknown>, null)).toBe(0);
+    expect(mergeLoadedInlineOrphans(pack as Record<string, unknown>, [])).toBe(0);
+    expect(
+      mergeLoadedInlineOrphans(pack as Record<string, unknown>, [
+        { guid: 'm1', kind: 'material', payload: {}, refs: [] },
+      ]),
+    ).toBe(0);
+    expect(inlineAssetCount(pack)).toBe(1);
+  });
+
+  it('with orphan merge, floor guard allows the previously-aborting 11-vs-12 case', () => {
+    const serialized = {
+      assets: [
+        { kind: 'scene' },
+        ...Array.from({ length: 11 }, (_, i) => ({ guid: `m${i}`, kind: 'material' })),
+      ],
+    };
+    expect(wouldDropInlineAssets(12, serialized)).toBe(true);
+    mergeLoadedInlineOrphans(serialized as Record<string, unknown>, [
+      { guid: 'd480-orphan', kind: 'material', payload: { keep: true }, refs: [] },
+    ]);
+    expect(inlineAssetCount(serialized)).toBe(12);
+    expect(wouldDropInlineAssets(12, serialized)).toBe(false);
   });
 });
