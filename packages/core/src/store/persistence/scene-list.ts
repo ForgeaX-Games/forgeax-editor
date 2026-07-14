@@ -153,9 +153,9 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       // A2: scene discovery is kind-driven — scan all packs under the game dir and
       // filter by `kind === 'scene'`.
       const scenePacks = await findAllScenePacks(ctx.currentSceneId);
-      for (const { pack } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
+      for (const { pack, guid } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
         const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-        ctx.sceneList.push({ id: stem, name: stem, pack });
+        ctx.sceneList.push({ id: stem, name: stem, pack, guid });
       }
       // Fallback: resolve forge.json `defaultScene` GUID when no scene packs found.
       if (ctx.sceneList.length === 0) {
@@ -164,7 +164,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
           const pack = await findScenePackByGuid(ctx.currentSceneId, defGuid);
           if (pack) {
             const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-            ctx.sceneList.push({ id: stem, name: stem, pack });
+            ctx.sceneList.push({ id: stem, name: stem, pack, guid: defGuid });
           }
         }
       }

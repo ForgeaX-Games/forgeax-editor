@@ -149,6 +149,10 @@ export interface ViewportComponentProps {
   readonly gameSlug?: string | null;
   /** Host game->disk layout root. Required when gameSlug names a real game. */
   readonly gameRoot?: string;
+  /** Host-owned asset catalog URL for this game. */
+  readonly packIndexUrl?: string;
+  /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
+  readonly selectedSceneGuid?: string;
 }
 
 /**
@@ -158,7 +162,12 @@ export interface ViewportComponentProps {
  * latch. Standalone injects this as DockShell's renderEdit; edit-runtime's thin
  * main.tsx mounts it directly. The host passes the active game via props.
  */
-export function ViewportComponent({ gameSlug = null, gameRoot }: ViewportComponentProps = {}): React.ReactElement {
+export function ViewportComponent({
+  gameSlug = null,
+  gameRoot,
+  packIndexUrl,
+  selectedSceneGuid,
+}: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [fps, setFpsState] = useState(0);
   // Deferred ▶/■ actions — wired once host-boot returns the run lifecycle. The
@@ -193,7 +202,12 @@ export function ViewportComponent({ gameSlug = null, gameRoot }: ViewportCompone
     const container = containerRef.current;
     if (!container) return;
 
-    void bootViewport(container, actionsRef, setFpsState, { slug: gameSlug, gameRoot });
+    void bootViewport(container, actionsRef, setFpsState, {
+      slug: gameSlug,
+      gameRoot,
+      packIndexUrl,
+      selectedSceneGuid,
+    });
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
     // Standalone teardown = page navigation. Multi-game host teardown =
     // resetEditRealm() which runs registerTeardown() handles (viewport.dispose
@@ -388,13 +402,18 @@ async function bootViewport(
     isEditMode: () => getViewportQuadrant().run === 'edit',
   });
 
-  // pack-index catalog for loadByGuid (was :389).
+  // The host owns asset delivery. Its configured pack-index URL is the base the
+  // registry uses for every catalog entry, which keeps Studio dev asset traffic
+  // on the play-engine origin without a global fetch patch. Standalone hosts that
+  // do not inject a URL retain their local pack-index convention.
   const sceneSlug = getSceneId();
   const selfHostPack = typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && !!__FORGEAX_GAME_DIR_ABS__;
-  const packIndexUrl = (!selfHostPack && sceneSlug && sceneSlug !== 'default')
-    ? `/preview/pack-index/${sceneSlug}.json`
-    : `${BASE}/pack-index.json`;
-  renderer.assets.configurePackIndex(packIndexUrl);
+  const resolvedPackIndexUrl = gameSession.packIndexUrl ?? (
+    (!selfHostPack && sceneSlug && sceneSlug !== 'default')
+      ? `/preview/pack-index/${sceneSlug}.json`
+      : `${BASE}/pack-index.json`
+  );
+  renderer.assets.configurePackIndex(resolvedPackIndexUrl);
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
   // The createApp world IS the sceneWorld (authored content, save's only source —
@@ -658,6 +677,7 @@ async function bootViewport(
       // canvas and mirrors the edit assembly's physics plugin (D-1/D-7).
       canvas,
       physics: editPhysics,
+      ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
