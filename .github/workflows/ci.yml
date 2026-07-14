@@ -209,6 +209,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
           pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
@@ -374,6 +378,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
           pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
@@ -512,6 +520,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
           pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean

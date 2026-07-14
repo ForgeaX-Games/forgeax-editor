@@ -15,22 +15,24 @@
 // single SSOT entry points for both human UI gestures (ViewportBar) and scripted
 // AI users — same surface, same semantics (charter P4).
 
-import { deriveInputTarget, type RunMode, type DisplayMode, type InputTarget } from './viewport';
+import { deriveInputTarget, type RunMode, type DisplayMode, type InputTarget, type ControlOwner } from './viewport';
 
-export type { RunMode, DisplayMode, InputTarget };
+export type { RunMode, DisplayMode, InputTarget, ControlOwner };
 
-/** The full quadrant snapshot: the two authoritative axes + the derived owner. */
+/** The viewport facts are independent: simulation, presentation, and explicit input lease. */
 export interface ViewportQuadrant {
   readonly run: RunMode;
   readonly display: DisplayMode;
-  /** Derived (C-4) — never set independently. */
+  readonly control: ControlOwner;
+  /** Derived from run + control — display must never grant gameplay input. */
   readonly inputTarget: InputTarget;
 }
 
-// Default entry state is edit·scene (requirements AC-03: first open → run=edit,
-// display=scene; aids + ViewportBar on, game logic stopped).
+// Default entry state is edit·scene with editor control. Starting Play preserves
+// editor control until a trusted canvas gesture explicitly grants the game lease.
 let run: RunMode = 'edit';
 let display: DisplayMode = 'scene';
+let control: ControlOwner = 'editor';
 
 // ── camera entity registration (w22) ────────────────────────────────────────
 // The engine's ActiveCamera resource (w12) receives an entity id; the editor
@@ -81,26 +83,31 @@ export function deriveActiveCameraEntity(): number | undefined {
 type QuadrantListener = (q: ViewportQuadrant) => void;
 const listeners = new Set<QuadrantListener>();
 
-/** Current quadrant snapshot. inputTarget is recomputed each read (pure derive). */
+/** Current viewport snapshot. inputTarget remains a pure derivation. */
 export function getViewportQuadrant(): ViewportQuadrant {
-  return { run, display, inputTarget: deriveInputTarget(run, display) };
+  return { run, display, control, inputTarget: deriveInputTarget(run, control) };
 }
 
-/** The derived input owner for the current quadrant (C-4). The viewport input
- *  gate (w17) and the pointer-lock gate (w19) both read THIS — one derivation. */
+/** The derived consumer of canvas input for the current control lease. */
 export function getInputTarget(): InputTarget {
-  return deriveInputTarget(run, display);
+  return deriveInputTarget(run, control);
 }
 
-/** Patch run and/or display, then notify subscribers. Only ▶/■ move `run`
- *  (and they own the simulation lifecycle elsewhere); G / possess move `display`.
- *  inputTarget is never accepted here — it is derived, not stored (C-4). */
-export function setViewportQuadrant(patch: { run?: RunMode; display?: DisplayMode }): void {
+/**
+ * Patch the explicit viewport facts. A non-playing or non-game display state
+ * cannot retain game control, so those transitions revoke it structurally.
+ */
+export function setViewportQuadrant(patch: { run?: RunMode; display?: DisplayMode; control?: ControlOwner }): void {
   const nextRun = patch.run ?? run;
   const nextDisplay = patch.display ?? display;
-  if (nextRun === run && nextDisplay === display) return;
+  const requestedControl = patch.control ?? control;
+  const nextControl: ControlOwner = nextRun === 'play' && nextDisplay === 'game'
+    ? requestedControl
+    : 'editor';
+  if (nextRun === run && nextDisplay === display && nextControl === control) return;
   run = nextRun;
   display = nextDisplay;
+  control = nextControl;
   const snap = getViewportQuadrant();
   for (const fn of listeners) fn(snap);
 }

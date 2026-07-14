@@ -26,6 +26,7 @@ export type Quat = [number, number, number, number];
 export type RunMode = 'edit' | 'play';
 export type DisplayMode = 'scene' | 'game';
 export type InputTarget = 'editor' | 'game';
+export type ControlOwner = InputTarget;
 
 /** Result of orbit camera pose computation — camera position + basis vectors + camera quaternion. */
 export interface OrbitCameraResult {
@@ -57,10 +58,13 @@ const _tmpV3 = new Float32Array(3) as EngineVec3;
 
 // ── pure functions ───────────────────────────────────────────────────────────
 
-/** Pure selector: which surface owns viewport input for a given quadrant.
- *  Only play·game possesses the game; every other quadrant stays editor-owned. */
-export function deriveInputTarget(run: RunMode, display: DisplayMode): InputTarget {
-  return run === 'play' && display === 'game' ? 'game' : 'editor';
+/**
+ * Input ownership is derived from the simulation lifecycle plus an explicit
+ * control lease. Display remains a camera/chrome concern: watching a game must
+ * not silently grant it the keyboard.
+ */
+export function deriveInputTarget(run: RunMode, control: ControlOwner): InputTarget {
+  return run === 'play' && control === 'game' ? 'game' : 'editor';
 }
 
 /** Clamp pitch to the allowed range for orbit camera (prevents gimbal lock). */

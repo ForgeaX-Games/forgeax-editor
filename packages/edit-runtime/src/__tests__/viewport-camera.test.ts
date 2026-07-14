@@ -14,20 +14,14 @@ import type { Vec3 } from '../viewport/viewport-ray';
 
 // ── deriveInputTarget (AC-03, plan-strategy D-5) ────────────────────────────
 
-test('deriveInputTarget: play+game -> game (the only game-owned quadrant)', () => {
+test('deriveInputTarget: Play needs an explicit game control lease', () => {
   expect(deriveInputTarget('play', 'game')).toBe('game');
+  expect(deriveInputTarget('play', 'editor')).toBe('editor');
 });
 
-test('deriveInputTarget: play+scene -> editor', () => {
-  expect(deriveInputTarget('play', 'scene')).toBe('editor');
-});
-
-test('deriveInputTarget: edit+game -> editor', () => {
+test('deriveInputTarget: an edit lifecycle never routes input to game', () => {
   expect(deriveInputTarget('edit', 'game')).toBe('editor');
-});
-
-test('deriveInputTarget: edit+scene -> editor', () => {
-  expect(deriveInputTarget('edit', 'scene')).toBe('editor');
+  expect(deriveInputTarget('edit', 'editor')).toBe('editor');
 });
 
 // ── clampPitch ──────────────────────────────────────────────────────────────
