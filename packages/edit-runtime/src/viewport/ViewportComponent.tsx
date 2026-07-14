@@ -42,7 +42,12 @@ import {
 } from '@forgeax/engine-runtime';
 import { Entity, getRegisteredSystems } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { INPUT_BACKEND_KEY, INPUT_SNAPSHOT_RESOURCE_KEY } from '@forgeax/engine-input';
+import {
+  attachBrowserInputBackend,
+  createCanvasInputBoundary,
+  INPUT_BACKEND_KEY,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
+} from '@forgeax/engine-input';
 import {
   gateway,
   panelBridge,
@@ -240,6 +245,7 @@ export function ViewportComponent({
             // session op, so display toggle is ledger-visible + AI-equivalent.
             gateway.dispatch({ kind: 'setDisplay', display: q.display === 'game' ? 'scene' : 'game' }, 'human');
           }}
+          onControlGame={() => gateway.dispatch({ kind: 'grantGameControl' }, 'human')}
           onFullscreen={() => {
             const slug = getSceneId();
             const url = slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
@@ -323,6 +329,12 @@ async function bootViewport(
   // clean. Without this the handle-pair invalidation is dead — see w23.
   registerTeardown(worldManager.attach());
 
+  // One physical canvas owns one browser acquisition backend. Its routed editor
+  // and game views are injected into their respective worlds; no second Play
+  // attach may subscribe to window keyboard events.
+  const canvasInput = createCanvasInputBoundary(attachBrowserInputBackend(canvas).backend);
+  registerTeardown(() => canvasInput.detach());
+
   // ── Engine boot (was :318). createApp MOVED here (not copied) — net-zero world
   // construction across the M2 diff (lint-no-second-world). ─────────────────────
   // M4 (w21, S6 / AC-07): the composite drawSource feeds [editorWorld, sceneWorld]
@@ -332,6 +344,7 @@ async function bootViewport(
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
   const app = await createApp(canvas, {
+    input: canvasInput.editor,
     // Pointer-lock gate: the EDITOR's own backend must NEVER request pointer lock.
     // It exists only for edit-mode orbit/pan/pick + play·scene free-look, all of
     // which use drag deltas (setPointerCapture, D-5) — never a locked cursor.
@@ -672,10 +685,9 @@ async function bootViewport(
       setBootStage: (s: string) => emitBoot(`boot ▸ ${s}`),
       discoverGameCameraFromWorld,
       applyActiveCamera,
-      // M2: the shared canvas + resolved physics backend feed ▶ Play's fresh-world
-      // assembly (play-assemble). play attaches its own input backend to this
-      // canvas and mirrors the edit assembly's physics plugin (D-1/D-7).
-      canvas,
+      // ▶ Play receives the game view of the single host-owned canvas boundary;
+      // it never attaches a second browser backend to this physical canvas.
+      playInput: canvasInput.game,
       physics: editPhysics,
       ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
@@ -690,10 +702,57 @@ async function bootViewport(
   // cross-game realm reset, flushing any pending save first.
   registerTeardown(() => session.dispose());
 
+  const revokeGameControl = (): void => {
+    canvasInput.revokeGame();
+    setViewportQuadrant({ control: 'editor' });
+  };
+  const grantGameControl = (): void => {
+    const q = getViewportQuadrant();
+    if (q.run !== 'play' || q.display !== 'game') return;
+    canvasInput.grantGame();
+    setViewportQuadrant({ control: 'game' });
+  };
+
+  // A capture-phase activation grants the lease before the browser backend sees
+  // the event, then stops this activating click from becoming an accidental shot.
+  const activateGameFromCanvas = (event: PointerEvent): void => {
+    if (getInputTarget() === 'game') return;
+    grantGameControl();
+    event.stopImmediatePropagation();
+  };
+  canvas.addEventListener('pointerdown', activateGameFromCanvas, true);
+  registerTeardown(() => canvas.removeEventListener('pointerdown', activateGameFromCanvas, true));
+
+  const revokeOnFocus = (event: FocusEvent): void => {
+    const target = event.target as HTMLElement | null;
+    if (target?.matches('input, textarea, select, [contenteditable="true"]') || target?.isContentEditable) {
+      revokeGameControl();
+    }
+  };
+  const revokeOnHidden = (): void => {
+    if (document.visibilityState === 'hidden') revokeGameControl();
+  };
+  window.addEventListener('focusin', revokeOnFocus, true);
+  window.addEventListener('blur', revokeGameControl);
+  document.addEventListener('visibilitychange', revokeOnHidden);
+  registerTeardown(() => {
+    window.removeEventListener('focusin', revokeOnFocus, true);
+    window.removeEventListener('blur', revokeGameControl);
+    document.removeEventListener('visibilitychange', revokeOnHidden);
+  });
+
   // Wire the deferred ▶/■ chrome actions now that the lifecycle exists (was :505).
   actionsRef.current = {
-    playSimulation: () => { setViewportQuadrant({ run: 'play', display: 'game' }); session.playSimulation(); },
-    stopSimulation: () => { session.stopSimulation(); setViewportQuadrant({ run: 'edit', display: 'scene' }); },
+    playSimulation: () => {
+      canvasInput.revokeGame();
+      setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
+      session.playSimulation();
+    },
+    stopSimulation: () => {
+      revokeGameControl();
+      session.stopSimulation();
+      setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+    },
   };
 
   // ── D-11 (plan-strategy §2): register the REAL play/stop session appliers ────
@@ -719,10 +778,19 @@ async function bootViewport(
   // lives here in edit-runtime (DAG downstream — core stays headless, RK-11).
   const unregSetDisplay = registerSessionApplier('setDisplay', (op) => {
     const { display } = op as { display: 'scene' | 'game' };
+    if (display !== 'game') revokeGameControl();
     setViewportQuadrant({ display });
     return { ok: true };
   });
-  registerTeardown(() => { unregSetDisplay(); });
+  const unregReleaseGameControl = registerSessionApplier('releaseGameControl', () => {
+    revokeGameControl();
+    return { ok: true };
+  });
+  const unregGrantGameControl = registerSessionApplier('grantGameControl', () => {
+    grantGameControl();
+    return { ok: true };
+  });
+  registerTeardown(() => { unregSetDisplay(); unregReleaseGameControl(); unregGrantGameControl(); });
 
   // addSystem·removeSystem are SESSION-domain ops — enabling/disabling an engine
   // system is ledger-visible + AI-equivalent but NOT undoable, exactly like

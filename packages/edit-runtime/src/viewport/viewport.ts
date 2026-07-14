@@ -43,7 +43,7 @@ import { meshFromInterleaved } from '@forgeax/engine-geometry';
 // (createViewport) + re-export barrel — the engine wiring + interaction state
 // machine stay here; all pure math is imported from the three sibling modules.
 export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
-export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
+export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
 import {
@@ -676,43 +676,15 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
   const SCALE_KEYS = ['scaleX', 'scaleY', 'scaleZ'];
 
-  // A click is "in the viewport" unless it landed on one of the docked panels or
-  // toolbar. The canvas is behind the #ui overlay, so e.target is usually a DOM
-  // element from the overlay — filtering panels is more robust than matching canvas.
-  // Selectors updated to match current DockShell (dockview-based) + keep-alive layer.
-  const overPanel = (t: EventTarget | null): boolean =>
-    !!(t as HTMLElement | null)?.closest?.('.fx-dockshell, .fx-dockwrap, .fx-dock-popout, .ed-toolbar');
-
-  // Wheel-only: also yield to portaled floating UI (Radix) and any real scroller.
-  // overPanel stays dock-only for pointer/click; wheel needs the wider gate because
-  // Select/Dropdown/Dialog portal onto document.body outside .fx-dockshell.
-  const FLOATING_UI =
-    '[data-radix-popper-content-wrapper], [data-radix-select-viewport], ' +
-    '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], ' +
-    '.settings-panel-overlay, .settings-panel-shell';
-  const hasScrollableAncestor = (el: HTMLElement | null): boolean => {
-    for (let n = el; n && n !== document.body; n = n.parentElement) {
-      const { overflowY } = getComputedStyle(n);
-      if (
-        (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
-        n.scrollHeight > n.clientHeight + 1
-      ) return true;
-    }
-    return false;
-  };
-  const shouldYieldWheel = (t: EventTarget | null): boolean => {
-    const el = t as HTMLElement | null;
-    if (!el?.closest) return false;
-    if (overPanel(el)) return true;
-    if (el.closest(FLOATING_UI)) return true;
-    if (hasScrollableAncestor(el)) return true;
-    if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
-    return false;
-  };
+  // The viewport is a physical canvas boundary. Events outside it belong to the
+  // browser/UI by construction; no selector whitelist or scrollability inference
+  // is needed to decide who owns a wheel or pointer gesture.
+  const inCanvas = (target: EventTarget | null): boolean =>
+    target === canvas || canvas.contains(target as Node | null);
 
   function onDown(e: PointerEvent): void {
-    if (overPanel(e.target)) return; // let panels handle their own clicks
-    if (inputToGame()) return; // play·game: input belongs to the game — let it pass through to canvas
+    if (!inCanvas(e.target)) return;
+    if (inputToGame()) return;
     lastX = downX = e.clientX; lastY = downY = e.clientY;
     // Blender DEFAULT navigation, aligned 1:1:
     //   MMB = orbit · Shift+MMB = pan · Ctrl+MMB = zoom · wheel = zoom · LMB = select.
@@ -770,7 +742,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   }
 
   function onMove(e: PointerEvent): void {
-    if (inputToGame()) return; // play·game: game owns pointer-move
+    if (inputToGame()) return;
     if (mode === 'none') return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
@@ -881,15 +853,15 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   }
 
   function onWheel(e: WheelEvent): void {
-    if (shouldYieldWheel(e.target)) return;
-    if (inputToGame()) return; // play·game: game owns wheel (let it scroll/zoom in-game)
+    if (!inCanvas(e.target)) return;
+    if (inputToGame()) return;
     e.preventDefault();
     dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
     applyCamera();
   }
 
   function onContext(e: MouseEvent): void {
-    if (!overPanel(e.target)) e.preventDefault();
+    if (inCanvas(e.target)) e.preventDefault();
   }
 
   /** Re-aim to the default character framing: target chest-height, ~4.5m back,
@@ -935,19 +907,19 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
 
   // double-click an entity → select + frame it.
   function onDblClick(e: MouseEvent): void {
-    if (overPanel(e.target)) return;
-    if (inputToGame()) return; // play·game: no editor double-click select/frame
+    if (!inCanvas(e.target)) return;
+    if (inputToGame()) return;
     const hit = pick(e.clientX, e.clientY);
     if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); gateway.dispatch({ kind: 'requestFrame' }); }
   }
 
-  window.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointerdown', onDown);
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
-  window.addEventListener('wheel', onWheel, { passive: false });
-  window.addEventListener('contextmenu', onContext);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('contextmenu', onContext);
   window.addEventListener('keydown', onKey);
-  window.addEventListener('dblclick', onDblClick);
+  canvas.addEventListener('dblclick', onDblClick);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
@@ -981,13 +953,13 @@ onDisplayModeChange(() => refreshGizmos());
 
   return {
     dispose() {
-      window.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('wheel', onWheel);
-      window.removeEventListener('contextmenu', onContext);
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('contextmenu', onContext);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('dblclick', onDblClick);
+      canvas.removeEventListener('dblclick', onDblClick);
       unsubSel();
       unsubMode();
       unsubDoc();

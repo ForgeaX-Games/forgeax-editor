@@ -19,9 +19,10 @@ interface GameOverlayProps {
   onPlay: () => void;
   onStop: () => void;
   onToggleDisplay: () => void;
+  onControlGame: () => void;
 }
 
-export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay }: GameOverlayProps) {
+export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay, onControlGame }: GameOverlayProps) {
   const [visible, setVisible] = useState(false);
   const [quadrant, setQuadrant] = useState<ViewportQuadrant>(getViewportQuadrant);
 
@@ -35,6 +36,7 @@ export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay }: GameOverla
   // Hover gate: the overlay appears only when the cursor enters the ~40px trigger
   // zone along the viewport top edge AND display is 'game'. It hides on mouse leave.
   const isPlay = quadrant.run === 'play';
+  const gameControls = quadrant.control === 'game';
 
   return (
     <div
@@ -57,6 +59,20 @@ export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay }: GameOverla
         >
           {isPlay ? '■' : '▶'}
         </button>
+        {isPlay && !gameControls && (
+          <>
+            <span className="vp-game-overlay-sep" />
+            <button
+              type="button"
+              className="vp-game-overlay-btn"
+              data-testid="game-overlay-control"
+              title="Control game (click canvas also works)"
+              onClick={onControlGame}
+            >
+              Control
+            </button>
+          </>
+        )}
         <span className="vp-game-overlay-sep" />
         <button
           type="button"

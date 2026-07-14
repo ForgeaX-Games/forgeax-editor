@@ -19,10 +19,11 @@ interface ViewportChromeProps {
   onPlay: () => void;
   onStop: () => void;
   onToggleDisplay: () => void;
+  onControlGame: () => void;
   onFullscreen: () => void;
 }
 
-export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onFullscreen }: ViewportChromeProps) {
+export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControlGame, onFullscreen }: ViewportChromeProps) {
   const [isGame, setIsGame] = useState<boolean>(() => getViewportQuadrant().display === 'game');
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onFullscr
         onPlay={onPlay}
         onStop={onStop}
         onToggleDisplay={onToggleDisplay}
+        onControlGame={onControlGame}
       />
     );
   }

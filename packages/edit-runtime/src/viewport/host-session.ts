@@ -44,7 +44,7 @@
 //     historical feat feat-20260707-editor-world-fork-ssot-level-load-play-activeworld.
 
 import { toShared } from '@forgeax/engine-ecs';
-import { attachBrowserInputBackend, INPUT_BACKEND_KEY } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { entComponent, publishMeshStats } from '@forgeax/editor-core';
 import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-core';
@@ -111,11 +111,10 @@ export interface HostSessionContext {
   /** Re-apply the derived active camera to the engine. */
   readonly applyActiveCamera: () => void;
   /**
-   * The shared canvas (M2 play-assemble). ▶ Play attaches a fresh input backend
-   * to THIS canvas for the play world, and detaches it on ■ Stop — the single
-   * host-owned renderer already targets this canvas (D-1), so play draws here too.
+   * The host-owned routed backend for the transient Play world. It shares the
+   * viewport's one browser acquisition boundary; Play never attaches DOM input.
    */
-  readonly canvas: HTMLCanvasElement;
+  readonly playInput: InputBackend;
   /**
    * Physics backend resolved from the game's forge.json (resolveEditPhysics), or
    * undefined for a non-physics game. Threaded through so the play assembly's
@@ -517,13 +516,11 @@ export function createHostSession(deps: HostSessionDeps): {
       return null;
     };
 
-    // play-assemble dep: attach a fresh input backend to the SHARED canvas for the
-    // play world + pre-inject the INPUT_BACKEND_KEY resource BEFORE createApp runs
-    // plugins (engine D-3). Returns the detach callback the lifecycle calls on ■ Stop.
+    // The play world receives the game view of the one canvas boundary. It never
+    // owns browser listeners or detaches the host boundary on Stop.
     const attachPlayInput = (playWorld: unknown): (() => void) | undefined => {
-      const handle = attachBrowserInputBackend(ctx.canvas);
-      (playWorld as { insertResource(k: string, v: unknown): void }).insertResource(INPUT_BACKEND_KEY, handle.backend);
-      return () => { try { handle(); } catch { /* already detached */ } };
+      (playWorld as { insertResource(k: string, v: unknown): void }).insertResource(INPUT_BACKEND_KEY, ctx.playInput);
+      return undefined;
     };
 
     runLifecycle = createRunLifecycle({
