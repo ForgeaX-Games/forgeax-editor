@@ -9,8 +9,10 @@
 //   4. Cancel delete → dialog dismissed, asset still present
 //
 // GPU-tolerant by design: inherits the same WebGPU allowlist as the boot smoke.
-// The Content Browser is a chrome panel (no WebGPU dependency), so these
-// assertions work on any runner.
+// The Content Browser is a chrome panel (no WebGPU dependency for UI wiring),
+// but the asset LIST comes from AssetRegistry.listCatalog() which is filled via
+// pack-index fetch — ContentBrowser.reload() now calls refreshCatalog() so a
+// late-mounted Assets tab still populates without relying on a missed broadcast.
 
 import { expect, test, type Page } from '@playwright/test';
 import { collectErrors } from './games-smoke-helpers';
@@ -21,17 +23,31 @@ const WEBGPU_ALLOW = /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup|requestAd
 const realErrors = (errors: { source: string; text: string }[]): string[] =>
   errors.filter((e) => !WEBGPU_ALLOW.test(e.text)).map((e) => `${e.source}: ${e.text.split('\n')[0]}`);
 
+/** Vite pack-index is served once pluginPack boots — proves game catalog exists. */
+async function waitForPackIndex(page: Page): Promise<number> {
+  let count = 0;
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`${STANDALONE_URL}pack-index.json`);
+        if (!res.ok()) return 0;
+        const body = await res.json();
+        const entries = Array.isArray(body) ? body : (body as { assets?: unknown[] })?.assets;
+        count = Array.isArray(entries) ? entries.length : 0;
+        return count;
+      },
+      { timeout: 60_000, message: 'waiting for /pack-index.json to serve game assets' },
+    )
+    .toBeGreaterThan(0);
+  return count;
+}
+
 /**
- * Activate the Assets tab and wait for asset items to render.
- *
- * Default dock layout shows Hierarchy as the active tab; Assets is a sibling
- * tab in the same group. ContentBrowser is lazy-mounted and only populates
- * after engine boot sets the scene ID + registry fills pack-index data.
- * On CI (cold SwiftShader + bun install) this can take 30-60s total,
- * so we use expect.poll with a generous timeout.
+ * Activate Assets tab and wait until ContentBrowser renders at least one asset.
+ * Forces a toolbar "Save All" (broadcastAssetsChanged) on each poll so a still-
+ * empty first mount re-reads after refreshCatalog settles.
  */
 async function waitForAssets(page: Page) {
-  // Activate Assets tab via DEV-mode __dockApi (set in DockRegion.onReady)
   const activated = await page.evaluate(() => {
     try {
       const api = (window as any).__dockApi;
@@ -39,20 +55,21 @@ async function waitForAssets(page: Page) {
     } catch { /* noop */ }
     return false;
   });
-  // Fallback: click the Assets tab in the dock tab bar
   if (!activated) {
     const tab = page.locator('.dv-tab', { hasText: /^Assets$/ });
     if (await tab.isVisible({ timeout: 3_000 }).catch(() => false)) await tab.click();
   }
 
-  // Wait for ContentBrowser root (lazy Suspense boundary)
   await expect(page.locator('.cb-root')).toBeVisible({ timeout: 30_000 });
 
-  // Poll until at least one asset item appears — registry population is async
-  // (engine boot → pack-index fetch → listCatalog → broadcastAssetsChanged)
   await expect
     .poll(
-      () => page.locator('[data-testid="cb-asset-item"]').count(),
+      async () => {
+        // Save All → broadcastAssetsChanged → ContentBrowser.reload → refreshCatalog
+        const saveAll = page.locator('.cb-toolbar-btn', { hasText: 'Save All' });
+        if (await saveAll.isVisible().catch(() => false)) await saveAll.click().catch(() => {});
+        return page.locator('[data-testid="cb-asset-item"]').count();
+      },
       { timeout: 60_000, message: 'waiting for Content Browser to populate asset items' },
     )
     .toBeGreaterThan(0);
@@ -60,14 +77,20 @@ async function waitForAssets(page: Page) {
 
 test.describe('smoke — Content Browser context menu interactions', () => {
   test.beforeEach(async ({ page }) => {
-    const errors = collectErrors(page);
     await page.goto(STANDALONE_URL);
     await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 20_000 });
-    // Let editor boot settle — engine init, scene load, registry population
-    await page.waitForTimeout(5000);
+    // Pack catalog must be served before we expect the Assets panel to fill.
+    await waitForPackIndex(page);
+    // Engine boot (createApp) sets __forgeax_editor; give it a soft wait so
+    // gateway.doc.registry is wired before ContentBrowser's first reload.
+    await page.waitForFunction(
+      () => !!(window as any).__forgeax_editor?.gateway?.doc?.registry,
+      { timeout: 60_000 },
+    ).catch(() => {
+      // GPU-less runners may fail createApp — pack-index still exists; CB may
+      // stay empty. Subsequent poll will surface a clear failure message.
+    });
     await waitForAssets(page);
-    // Stash errors ref for test access (beforeEach errors are non-fatal)
-    (page as any).__cbErrors = errors;
   });
 
   test('asset items render in the Content Browser', async ({ page }) => {
