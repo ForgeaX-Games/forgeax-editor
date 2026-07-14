@@ -44,8 +44,11 @@ async function waitForPackIndex(page: Page): Promise<number> {
 
 /**
  * Activate Assets tab and wait until ContentBrowser renders at least one asset.
- * Forces a toolbar "Save All" (broadcastAssetsChanged) on each poll so a still-
- * empty first mount re-reads after refreshCatalog settles.
+ *
+ * UE-parity: root path shows folders only (non-recursive). games/sample packs
+ * live under `assets/…`, so we drill into that folder before asserting items.
+ * Re-clicks Save All while polling so a still-empty first mount re-reads after
+ * refreshCatalog settles.
  */
 async function waitForAssets(page: Page) {
   const activated = await page.evaluate(() => {
@@ -62,15 +65,35 @@ async function waitForAssets(page: Page) {
 
   await expect(page.locator('.cb-root')).toBeVisible({ timeout: 30_000 });
 
+  // Wait until scoped catalog has content (folder and/or asset at any level)
   await expect
     .poll(
       async () => {
-        // Save All → broadcastAssetsChanged → ContentBrowser.reload → refreshCatalog
         const saveAll = page.locator('.cb-toolbar-btn', { hasText: 'Save All' });
         if (await saveAll.isVisible().catch(() => false)) await saveAll.click().catch(() => {});
-        return page.locator('[data-testid="cb-asset-item"]').count();
+        const folders = await page.locator('[data-testid="cb-folder-item"]').count();
+        const assets = await page.locator('[data-testid="cb-asset-item"]').count();
+        return folders + assets;
       },
-      { timeout: 60_000, message: 'waiting for Content Browser to populate asset items' },
+      { timeout: 60_000, message: 'waiting for Content Browser folder/asset entries' },
+    )
+    .toBeGreaterThan(0);
+
+  // Drill into assets/ if we're still on the root (folders only, no pack files)
+  if ((await page.locator('[data-testid="cb-asset-item"]').count()) === 0) {
+    const folder = page.locator('[data-testid="cb-folder-item"][data-folder-path="assets"]').first();
+    const sourceItem = page.locator('.cb-source-item', { hasText: /assets/ }).first();
+    if (await folder.isVisible().catch(() => false)) {
+      await folder.dblclick();
+    } else if (await sourceItem.isVisible().catch(() => false)) {
+      await sourceItem.click();
+    }
+  }
+
+  await expect
+    .poll(
+      () => page.locator('[data-testid="cb-asset-item"]').count(),
+      { timeout: 30_000, message: 'waiting for Content Browser assets inside assets/ folder' },
     )
     .toBeGreaterThan(0);
 }
