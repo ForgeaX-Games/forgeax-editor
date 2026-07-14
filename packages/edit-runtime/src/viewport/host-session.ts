@@ -122,6 +122,8 @@ export interface HostSessionContext {
    * plugin set mirrors the edit assembly (D-7).
    */
   readonly physics: PhysicsBackend | undefined;
+  /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
+  readonly selectedSceneGuid?: string;
   /**
    * Optional per-frame callback the run-lifecycle registers on the PLAY App so it
    * keeps ticking while the edit App is paused during play. Production wires the
@@ -293,7 +295,17 @@ export function createHostSession(deps: HostSessionDeps): {
    * Returns the ▶/■ pair so ViewportComponent can wire the ViewportChrome actions.
    */
   async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
-    const { app, world, renderer, viewport, emitBoot, setBootStage, discoverGameCameraFromWorld, applyActiveCamera } = ctx;
+    const {
+      app,
+      world,
+      renderer,
+      viewport,
+      emitBoot,
+      setBootStage,
+      discoverGameCameraFromWorld,
+      applyActiveCamera,
+      selectedSceneGuid,
+    } = ctx;
 
     // M3 t16 (plan-strategy §2 D-2 / D-11, research F-3): obtain the single
     // core-minted EngineFacade AFTER ViewportComponent injected the world
@@ -415,8 +427,9 @@ export function createHostSession(deps: HostSessionDeps): {
     const playSimulation = (): void => { void runLifecycle?.playSimulation(); };
     const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
 
-    // Read forge.json once per ▶ Play so defaultScene + entry are consistent (both
-    // come from the same GameProject read). Returns { entry?, defaultSceneGuid? }.
+    // Read forge.json once per ▶ Play so entry and default SceneAsset fallback
+    // come from the same GameProject read. The host-selected GUID, when present,
+    // supersedes that fallback before any scene is loaded or instanced.
     const readForgeForPlay = async (): Promise<{ entry?: string; defaultSceneGuid?: string }> => {
       try {
         const gameForgePath = resolveGamePath(FORGE_JSON);
@@ -431,11 +444,32 @@ export function createHostSession(deps: HostSessionDeps): {
         const out: { entry?: string; defaultSceneGuid?: string } = {};
         const entry = gp.value.entry;
         if (typeof entry === 'string' && entry) out.entry = entry.replace(/^\.?\//, '');
-        const ds = gp.value.defaultScene;
-        if (typeof ds === 'string' && ds.length > 0) out.defaultSceneGuid = ds;
+        const fallback = gp.value.defaultScene;
+        if (typeof fallback === 'string' && fallback.length > 0) out.defaultSceneGuid = fallback;
+
+        // Launcher state is host-owned. It may select any catalogued SceneAsset,
+        // but never changes forge.json and is never read by game code.
+        if (selectedSceneGuid === undefined) {
+          const selectionPath = resolveGamePath('play-config.json');
+          const selectionResponse = await deps.fetch(
+            `/api/files?path=${encodeURIComponent(selectionPath)}&optional=1`,
+            { cache: 'no-store' },
+          );
+          if (selectionResponse.ok) {
+            const selection = await selectionResponse.json() as { content?: string };
+            if (selection.content) {
+              const config = JSON.parse(selection.content) as { mode?: unknown; sceneGuid?: unknown };
+              if (config.mode === 'level' && typeof config.sceneGuid === 'string') {
+                out.defaultSceneGuid = config.sceneGuid;
+              }
+            }
+          }
+        } else {
+          out.defaultSceneGuid = selectedSceneGuid;
+        }
         return out;
       } catch (e) {
-        console.warn('[editor] ▶ Play forge.json read failed:', e);
+        console.warn('[editor] ▶ Play forge.json or launcher selection read failed:', e);
         return {};
       }
     };
@@ -510,6 +544,7 @@ export function createHostSession(deps: HostSessionDeps): {
           // game HUD is clipped to the viewport and can never survive a stop.
           viewportContainer: ctx.viewportContainer,
           ...(ctx.physics ? { physics: ctx.physics } : {}),
+          ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
         });
         // PLAY-only: add the plugin systems into the fresh play world so game
         // logic (e.g. `rotate`) actually ticks. The schedule marks dirty and

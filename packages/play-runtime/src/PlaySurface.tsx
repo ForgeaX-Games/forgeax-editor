@@ -125,10 +125,9 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
     const onMessage = (ev: MessageEvent) => {
       const t0 = (ev.data as { type?: unknown } | null)?.type;
       // Control signal from the Studio shell / editor Launcher (a DIFFERENT
-      // window than the game iframe) asking ▶ Play to reload — e.g. the launcher
-      // picked another level and rewrote play-config.json, which the game only
-      // reads at boot. Handle it BEFORE the same-source gate below (that gate
-      // exists to ignore other iframes' telemetry, but this is a legit command).
+      // window than the game iframe) asking ▶ Play to reload. Handle it BEFORE
+      // the same-source gate below (that gate exists to ignore other iframes'
+      // telemetry, but this is a legitimate host command).
       if (t0 === 'VAG_PREVIEW_RELOAD') {
         const ifr = iframeRef.current;
         if (ifr) {
@@ -140,15 +139,13 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
         }
         return;
       }
-      // Launcher "play this level" → forward to the running game so it switches
-      // level IN PLACE (game main.ts handles VAG_SET_LEVEL via unloadLevel+
-      // loadLevel) — no iframe reload, no WebGPU context recreate. Single-scene
-      // games ignore it (no-op). Also from the shell (a DIFFERENT window), so
-      // handle before the same-source gate.
+      // Launcher "play this scene" → transparently forward the SceneAsset GUID
+      // to the running game. It switches in place, preserving the WebGPU context;
+      // games that do not recognise the GUID safely ignore it.
       if (t0 === 'VAG_SET_LEVEL') {
-        const level = (ev.data as { level?: unknown })?.level;
-        if (typeof level === 'string') {
-          try { iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_SET_LEVEL', level }, '*'); } catch { /* iframe gone */ }
+        const sceneGuid = (ev.data as { sceneGuid?: unknown })?.sceneGuid;
+        if (typeof sceneGuid === 'string') {
+          try { iframeRef.current?.contentWindow?.postMessage({ type: 'VAG_SET_LEVEL', sceneGuid }, '*'); } catch { /* iframe gone */ }
         }
         return;
       }

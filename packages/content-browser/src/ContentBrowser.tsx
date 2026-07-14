@@ -41,14 +41,23 @@ import './content-browser.css';
 // Content Browser's "Add with Dependencies" and dependency-graph features.
 
 function registryEntryToCBAsset(
-  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] },
+  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[]; sourcePath?: string },
   index: number,
 ): CBAsset {
-  // Use relativeUrl as a proxy for packPath for folder-tree navigation.
-  // CRUD operations on disk packs use this to locate the .pack.json.
-  const packPath = e.relativeUrl;
-  console.info('[delete-diag] registryEntryToCBAsset: guid=%s kind=%s relativeUrl=%s → packPath=%s isPack=%s',
-    e.guid, e.kind, e.relativeUrl, packPath, packPath.endsWith('.pack.json'));
+  // packPath is the CRUD target on disk — NOT the runtime load URL. For an
+  // internal `.pack.json` asset the two coincide (relativeUrl IS the pack). For
+  // an external import (FBX/GLB/HDR/audio/font) relativeUrl points at a DDC
+  // artefact (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no
+  // stable mapping back to the source; the CRUD target is the `.meta.json`
+  // sidecar beside the source file. The engine surfaces that source location as
+  // `sourcePath` (engine sourcePath-through-listCatalog, #711); derive the
+  // sidecar path from it. Fallback to relativeUrl for inline/dev entries that
+  // never went through pack-index (no sidecar, no CRUD).
+  const packPath = e.relativeUrl.endsWith('.pack.json')
+    ? e.relativeUrl
+    : e.sourcePath
+      ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json`
+      : e.relativeUrl;
   return {
     type: 'asset',
     guid: e.guid,
@@ -139,7 +148,7 @@ export function ContentBrowser() {
     // broadcastAssetsChanged (and installAssetCatalogRefresh is wired even later). Without
     // an explicit refresh here the first mount sees an empty packIndexCache forever.
     type RegistrySurface = {
-      listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[];
+      listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[]; sourcePath?: string }[];
       refreshCatalog?: () => Promise<boolean>;
     };
     const registry = gateway.doc.registry as RegistrySurface | undefined;
@@ -324,8 +333,6 @@ export function ContentBrowser() {
     setDeleteTargets(current => {
       if (current) {
         for (const a of current) {
-          console.info('[delete-diag] performDelete: dispatching destroyAsset guid=%s packPath=%s kind=%s name=%s',
-            a.guid, a.packPath, a.kind, a.name);
           gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
         }
       }

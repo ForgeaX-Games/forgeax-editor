@@ -116,6 +116,17 @@ function isStale(world: World, handle: EntityHandle): boolean {
   return !r.ok;
 }
 
+/** Studio cross-game switch clears `gateway.doc.world` before the next createApp
+ *  injects a fresh world. Read helpers must tolerate a missing world (Fail Soft)
+ *  so Hierarchy/Inspector Rows that still hold stale fiber props do not throw on
+ *  `undefined.get(...)`. */
+function hasWorld(world: World | null | undefined): world is World {
+  return world != null;
+}
+
+const NO_WORLD_HINT =
+  'activeWorld is unavailable (cross-game realm gap); wait for the next createApp inject';
+
 // ── Active read-binding provider (IoC seam — world-manager fills it) ──────────
 //
 // feat-20260709-editor-world-partition VERIFY finding-3 (defense-in-depth):
@@ -180,6 +191,10 @@ function checkHandle(
     // world-mismatch; stale-entity-handle keeps its narrowed detail.reason.
     return v.error;
   }
+  // Missing world (cross-game gap): treat as stale so Result callers stay structured.
+  if (!hasWorld(world)) {
+    return { code: 'stale-entity-handle', hint: NO_WORLD_HINT, entity: handle };
+  }
   // Legacy fallback (no binding): plain liveness, reason-less stale error.
   return isStale(world, handle)
     ? { code: 'stale-entity-handle', hint: STALE_HINT, entity: handle }
@@ -192,6 +207,7 @@ function checkHandle(
  *  so this covers all live entities). Replaces the deleted enumeration helpers
  *  that iterated the legacy-map keyset. */
 export function worldEntityHandles(world: World): EntityHandle[] {
+  if (!hasWorld(world)) return [];
   const out: EntityHandle[] = [];
   // `Entity` must be in the query `with` for `bundle.Entity.self` (the row
   // handle column) to be populated — same convention query-snapshot.ts uses.
@@ -221,6 +237,7 @@ export function worldEntityHandles(world: World): EntityHandle[] {
  *  live handle (a detached parent — e.g. the synthetic SceneInstance root that
  *  the editor does not track). Replaces the deleted entRootHandles. */
 export function worldRootHandles(world: World): EntityHandle[] {
+  if (!hasWorld(world)) return [];
   const all = worldEntityHandles(world);
   const live = new Set<number>(all as unknown as number[]);
   const roots: EntityHandle[] = [];
@@ -236,23 +253,28 @@ export function worldRootHandles(world: World): EntityHandle[] {
 // ── Entity info accessors (activeWorld read face) ───────────────────────────
 
 /** Entity existence: a live handle in `world` (Name resolves). This is the
- *  detectable stale signal for the plain-return helpers (false === stale/absent). */
+ *  detectable stale signal for the plain-return helpers (false === stale/absent).
+ *  Missing world (cross-game gap) → false. */
 export function entExists(world: World, handle: EntityHandle): boolean {
+  if (!hasWorld(world)) return false;
   return world.get(handle, Name).ok;
 }
 
 /** Get entity name from the world (SSOT). Returns a `#<handle>` fallback for a
  *  stale handle so UI never renders `undefined`; callers needing to DISTINGUISH
  *  stale from live use entExists / entComponent (which carry the structured
- *  error). */
+ *  error). Missing world → same `#<handle>` fallback. */
 export function entName(world: World, handle: EntityHandle): string {
+  if (!hasWorld(world)) return `#${handle}`;
   const r = world.get(handle, Name);
   if (r.ok) return r.value.value;
   return `#${handle}`;
 }
 
-/** Parent handle of `handle`, or null for a root (no live ChildOf). */
+/** Parent handle of `handle`, or null for a root (no live ChildOf).
+ *  Missing world → null. */
 export function entParent(world: World, handle: EntityHandle): EntityHandle | null {
+  if (!hasWorld(world)) return null;
   const r = world.get(handle, ChildOf);
   if (!r.ok) return null;
   const parent = (r.value as { parent: number }).parent as EntityHandle;
@@ -283,6 +305,9 @@ export function entComponent(
   compName: string,
   opts?: HandleCheckOpts,
 ): StaleHandleResult<Record<string, unknown>> {
+  if (!hasWorld(world)) {
+    return { ok: false, error: { code: 'stale-entity-handle', hint: NO_WORLD_HINT, entity: handle } };
+  }
   const bad = checkHandle(world, handle, opts?.binding, opts?.pair);
   if (bad !== null) return { ok: false, error: bad };
   const token = resolveReadToken(compName);
@@ -311,6 +336,7 @@ export function entComponents(
   handle: EntityHandle,
   opts?: HandleCheckOpts,
 ): Record<string, unknown> {
+  if (!hasWorld(world)) return {};
   if (checkHandle(world, handle, opts?.binding, opts?.pair) !== null) return {};
   const out: Record<string, unknown> = {};
   for (const [name, token] of getRegisteredComponents()) {

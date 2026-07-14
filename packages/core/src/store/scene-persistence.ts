@@ -128,11 +128,24 @@ export interface ScenePersistenceContext {
    *  current on-disk file); the beacon reads it synchronously (no disk await during
    *  pagehide). null = no scene loaded yet (guard is a no-op, e.g. first-ever save). */
   loadedInlineAssetFloor: number | null;
+  /** Full inline asset entry bodies captured from the on-disk pack at LOAD time.
+   *  worldToPack merges any of these that are missing from the live refs[] walk
+   *  (orphan materials no longer attached to any entity) so a save cannot drop
+   *  authored pack data the safety floor also protects. null = no scene loaded. */
+  loadedInlineAssets: LoadedInlineSnapshot[] | null;
   /** Cohesive dirty write — disk-watch's reverse-write seam (== deleted _setDirty). */
   setDirty(v: boolean): void;
   /** Cohesive scene-GUID write — disk-watch's reverse-write seam
    *  (== deleted _setCurrentSceneGuid). */
   setCurrentSceneGuid(guid: string): void;
+}
+
+/** One non-scene asset entry snapshotted from a pack at load (orphan-merge input). */
+export interface LoadedInlineSnapshot {
+  guid: string;
+  kind: string;
+  payload: unknown;
+  refs: unknown[];
 }
 
 /** Build the single persistence-state handle. Field initial values are the exact
@@ -147,6 +160,7 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     asyncOpResult: null,
     isDirty: false,
     loadedInlineAssetFloor: null,
+    loadedInlineAssets: null,
     setDirty(v: boolean): void { this.isDirty = v; },
     setCurrentSceneGuid(guid: string): void { this.currentSceneGuid = guid; },
   };
@@ -156,8 +170,8 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
  *  reaches the SAME live handle; NOT re-exported through the store.ts facade/barrel. */
 export const ctx = createScenePersistenceContext();
 
-/** A game's scene-manifest entry (one level pack). */
-export interface SceneFileEntry { id: string; name?: string; pack: string }
+/** A game's scene-manifest entry (one scene pack plus its stable asset identity). */
+export interface SceneFileEntry { id: string; name?: string; pack: string; guid?: string }
 
 // ── Compose the four persistence DI units (D-3) ───────────────────────────────
 // ONE of each factory with the real gateway / fetch / fetchWithTimeout /
@@ -300,7 +314,7 @@ export const stripEditorHiddenMarker = diskIo.stripEditorHiddenMarker;
 export const inlineAssetCount = diskIo.inlineAssetCount;
 // Pure load-floor strip guard (#101) — no deps, so re-exported straight from
 // disk-io rather than composed onto the diskIo instance. store.ts forwards it.
-export { wouldDropInlineAssets } from './persistence/disk-io';
+export { wouldDropInlineAssets, mergeLoadedInlineOrphans } from './persistence/disk-io';
 
 // ── Disk load / save session ops (session-domain, ledger only, no undo) ────────
 registerAsyncSessionOp('loadDocFromDisk', diskIo.doLoadDocFromDisk);

@@ -257,7 +257,10 @@ export class EditGateway {
   private _lastSceneMountSucceeded = false;
   private _lastSceneMountError: CommandError | null = null;
 
-  /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld. */
+  /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld.
+   *  During a studio cross-game switch teardown may briefly leave doc.world undefined
+   *  until the next createApp inject — callers must treat a missing world as empty
+   *  (see entity-state / Hierarchy guards). */
   get activeWorld(): World {
     return (this._playWorld ?? this.doc.world) as unknown as World;
   }

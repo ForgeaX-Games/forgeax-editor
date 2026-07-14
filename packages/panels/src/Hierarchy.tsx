@@ -160,11 +160,14 @@ function Row({
   // M3 (I1/AC-08): entity view read from the active world (SSOT) via entity-state
   // helpers keyed by EntityHandle. `hidden` derives from the EditorHidden
   // component; `components` from the world component walk.
-  if (!entExists(gateway.activeWorld, id)) return null;
-  const nodeName = entName(gateway.activeWorld, id);
-  const nodeComponents = entComponents(gateway.activeWorld, id);
+  // Cross-game gap: activeWorld may be briefly undefined while old Row fibers still
+  // re-render — bail before any world.get (AC-01).
+  const world = gateway.activeWorld;
+  if (world == null || !entExists(world, id)) return null;
+  const nodeName = entName(world, id);
+  const nodeComponents = entComponents(world, id);
   const nodeHidden = 'EditorHidden' in nodeComponents;
-  const kids = flat ? [] : childrenOf(gateway.activeWorld, id);
+  const kids = flat ? [] : childrenOf(world, id);
   const isCollapsed = collapsed?.has(id) ?? false;
   function commitRename(next: string) {
     setEditing(false);
@@ -385,7 +388,9 @@ export function HierarchyPanel() {
   // controls so they don't silently no-op (P0-4). enterPlay/exitPlay emit, so
   // useDocVersion re-renders this on mode change.
   const readOnly = gateway.mode === 'play';
-  const roots = childrenOf(gateway.activeWorld, null);
+  const activeWorld = gateway.activeWorld;
+  const worldReady = activeWorld != null;
+  const roots = worldReady ? childrenOf(activeWorld, null) : [];
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
   const toggleCollapse = (id: EntityHandle) =>
@@ -400,6 +405,7 @@ export function HierarchyPanel() {
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
   const openMenu = (m: Menu) => {
+    if (!worldReady) return;
     // M7 / AC-15: entity name/components read from world (SSOT); doc.entities +
     // EntityNode.source deleted, so the edit-source menu item is dropped.
     const snapshot = [...getSelectionList()];
@@ -423,11 +429,27 @@ export function HierarchyPanel() {
   // by component lets a human/AI find entities by capability, e.g. "light".
   // M7 / AC-15: entity list + name/components come from world (SSOT) via
   // entity-state; doc.order/doc.entities deleted.
-  const matches = q
-    ? worldEntityHandles(gateway.activeWorld).filter((id) => {
-        return entName(gateway.activeWorld, id).toLowerCase().includes(q) || Object.keys(entComponents(gateway.activeWorld, id)).some((c) => c.toLowerCase().includes(q));
+  const matches = q && worldReady
+    ? worldEntityHandles(activeWorld).filter((id) => {
+        return entName(activeWorld, id).toLowerCase().includes(q) || Object.keys(entComponents(activeWorld, id)).some((c) => c.toLowerCase().includes(q));
       })
     : [];
+
+  // Cross-game switch gap: show a quiet placeholder until createApp reinjects doc.world.
+  if (!worldReady) {
+    return (
+      <div className="panel" data-testid="panel-hierarchy" data-world-gap="1" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <h3 style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+          Hierarchy
+          <DeleteScopeRing active={delDomain === 'entity'} domain="entity" />
+        </h3>
+        <div className="muted" data-testid="hier-world-gap" style={{ padding: '12px 10px' }}>
+          Switching game…
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="panel"

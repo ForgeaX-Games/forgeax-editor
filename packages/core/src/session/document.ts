@@ -791,6 +791,8 @@ export function applyCommand(session: EditSession, cmd: EditorOp): ApplyResult {
 // (AC-11 Half A gone; Half B 'Children' kept out of spawnComponentData).
 
 export function childrenOf(world: World, parent: EntityHandle | null): EntityHandle[] {
+  // Cross-game realm gap: doc.world may be briefly undefined — empty tree, no throw.
+  if (world == null) return [];
   if (parent !== null) {
     const ch = world.get(parent, Children);
     if (ch.ok) {

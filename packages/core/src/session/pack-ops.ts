@@ -26,17 +26,14 @@ import { Materials } from '@forgeax/engine-runtime';
 // other file invoking these directly is a lint-unique-mutator violation.
 export async function readPack(packPath: string): Promise<PackFile | null> {
   try {
-    console.info('[delete-diag] readPack: fetching /api/files?path=%s', packPath);
     const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
-    if (!r.ok) { console.warn('[delete-diag] readPack: fetch failed status=%d for %s', r.status, packPath); return null; }
+    if (!r.ok) return null;
     const j = (await r.json()) as { content?: string };
-    if (!j.content) { console.warn('[delete-diag] readPack: no content field for %s', packPath); return null; }
+    if (!j.content) return null;
     const parsed = JSON.parse(j.content);
     const result = validatePackShell(parsed);
-    if (!result.ok) console.warn('[delete-diag] readPack: pack validation failed for %s', packPath);
     return result.ok ? result.pack : null;
-  } catch (e) {
-    console.warn('[delete-diag] readPack: exception for %s:', packPath, e);
+  } catch {
     return null;
   }
 }
@@ -265,6 +262,66 @@ async function deleteMetaAsset(metaPath: string, guid: string): Promise<boolean>
   return writeJsonFile(metaPath, meta);
 }
 
+// ── External-asset (.meta.json sidecar) entry primitives ─────────────────────
+// An imported FBX/GLB/HDR/audio/font asset is NOT a `.pack.json` (shape
+// `assets[]` of `PackAssetEntry`); its CRUD target is the `<source>.meta.json`
+// sidecar (shape `subAssets[]` of `{guid, kind, sourceIndex, name?}`, the cook
+// output). The CRUD appliers dispatch on the target path's suffix (the SAME
+// `.pack.json` vs `.meta.json` switch `deleteAsset` already owns at this
+// boundary — §2.5: the producer owns the exhaustive switch, consumers stay
+// path-agnostic). These three primitives are the meta-side mirror of
+// readPack-entry / writePack-entry / rename so the destroy→restore undo pair and
+// rename round-trip work on external assets, not just internal packs.
+
+/** One sub-asset entry inside a `.meta.json` sidecar (the cook output shape). */
+export interface MetaSubAsset {
+  guid: string;
+  kind: string;
+  sourceIndex: number;
+  name?: string;
+  [k: string]: unknown;
+}
+
+/** Read one sub-asset from a `.meta.json` sidecar (null if sidecar/entry missing). */
+export async function readMetaSubAsset(metaPath: string, guid: string): Promise<MetaSubAsset | null> {
+  const meta = await readJsonFile(metaPath);
+  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
+  if (!Array.isArray(subs)) return null;
+  return subs.find(s => s.guid === guid) ?? null;
+}
+
+/** Upsert one sub-asset into a `.meta.json` sidecar (restore-on-undo). Returns
+ *  false if the sidecar is missing/malformed — a deleted LAST sub-asset also
+ *  removed the sidecar + source file, which this cannot resurrect (the editor
+ *  does not snapshot source bytes); that undo is a no-op by design. */
+export async function writeMetaSubAsset(metaPath: string, entry: MetaSubAsset): Promise<boolean> {
+  const meta = await readJsonFile(metaPath);
+  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
+  if (!meta || !Array.isArray(subs)) return false;
+  const idx = subs.findIndex(s => s.guid === entry.guid);
+  if (idx >= 0) subs[idx] = entry;
+  else subs.push(entry);
+  return writeJsonFile(metaPath, meta);
+}
+
+/** Rename one sub-asset (its `name`) in a `.meta.json` sidecar, returning the
+ *  replaced (old) name so the inverse can restore it. */
+export async function renameMetaSubAsset(
+  metaPath: string,
+  guid: string,
+  newName: string,
+): Promise<{ ok: boolean; oldName: string | null }> {
+  const meta = await readJsonFile(metaPath);
+  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
+  if (!meta || !Array.isArray(subs)) return { ok: false, oldName: null };
+  const entry = subs.find(s => s.guid === guid);
+  if (!entry) return { ok: false, oldName: null };
+  const oldName = entry.name ?? null;
+  entry.name = newName;
+  const ok = await writeJsonFile(metaPath, meta);
+  return { ok, oldName };
+}
+
 /** Create a new empty pack file. */
 export async function createPack(
   dirPath: string,
@@ -357,8 +414,6 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   // is left in the cache so a redo→undo cycle can resolve it again.
   const guid = (newGuidCacheKey ? duplicatedGuidCache.get(newGuidCacheKey) : undefined) ?? rawGuid;
   const key = _cacheKey(packPath, guid);
-  console.info('[delete-diag] applyDestroyAsset: packPath=%s guid=%s isPack=%s cacheKey=%s',
-    packPath, guid, packPath.endsWith('.pack.json'), key);
   // Fire the async delete; stash the snapshot so undo can restore the full entry.
   // The document-applier contract is synchronous (returns inverse immediately);
   // the IO is fire-and-forget. A .catch guards against an unhandled rejection if
