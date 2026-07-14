@@ -712,6 +712,12 @@ async function bootViewport(
     canvasInput.grantGame();
     setViewportQuadrant({ control: 'game' });
   };
+  // Scripted state transitions use the same physical boundary transition as UI
+  // gestures; the quadrant remains the SSOT, while the boundary owns cleanup.
+  registerTeardown(onViewportQuadrantChange((q) => {
+    if (q.inputTarget === 'game') canvasInput.grantGame();
+    else canvasInput.revokeGame();
+  }));
 
   // A capture-phase activation grants the lease before the browser backend sees
   // the event, then stops this activating click from becoming an accidental shot.
