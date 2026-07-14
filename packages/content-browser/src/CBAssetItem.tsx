@@ -47,6 +47,9 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
   return (
     <div
       className={`cb-grid-item${selected ? ' sel' : ''}`}
+      data-testid="cb-asset-item"
+      data-asset-kind={asset.kind}
+      data-asset-guid={asset.guid}
       style={{ width: thumbnailSize + 8, height: thumbnailSize + 28 }}
       draggable
       onDragStart={handleDragStart}

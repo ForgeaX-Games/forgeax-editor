@@ -415,3 +415,8 @@ jobs:
       # in CI so it starts fresh. Run only the smoke spec.
       - name: Boot + Play smoke (games/sample)
         run: bun run test:e2e e2e/smoke-boot-play.spec.ts
+
+      # Content Browser smoke: right-click Delete & Add-to-Scene interactions.
+      # Reuses the same webServer stack started above (Playwright caches it).
+      - name: Content Browser smoke (games/sample)
+        run: bun run test:e2e e2e/smoke-content-browser.spec.ts
