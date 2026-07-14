@@ -43,12 +43,13 @@ export function DeleteGuardDialog({
   const danger = impact.hasExternalReferencers;
 
   return (
-    <div className="cb-dialog-overlay" onClick={onCancel}>
+    <div className="cb-dialog-overlay" data-testid="cb-delete-guard-overlay" onClick={onCancel}>
       <div
         className="cb-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-label="Confirm delete"
+        data-testid="cb-delete-guard-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="cb-dialog-title">
@@ -83,12 +84,13 @@ export function DeleteGuardDialog({
         </div>
 
         <div className="cb-dialog-actions">
-          <button className="cb-dialog-btn" onClick={onCancel}>
+          <button className="cb-dialog-btn" data-testid="cb-delete-guard-cancel" onClick={onCancel}>
             Cancel
           </button>
           <button
             ref={confirmRef}
             className={`cb-dialog-btn ${danger ? 'cb-dialog-btn-danger' : 'cb-dialog-btn-primary'}`}
+            data-testid="cb-delete-guard-confirm"
             onClick={onConfirm}
           >
             Delete{danger ? ' anyway' : ''}

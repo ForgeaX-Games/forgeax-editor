@@ -133,15 +133,29 @@ export function ContentBrowser() {
     setLoading(true);
     // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
     // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    const registry = gateway.doc.registry as { listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[] } | undefined;
-    const entries = registry?.listCatalog?.();
-    if (!entries || entries.length === 0) {
-      setAllAssets([]);
+    //
+    // refreshCatalog first: listCatalog() is a sync cache read. On single-realm boot the
+    // Assets tab is inactive, so ContentBrowser mounts AFTER host-session's one-shot
+    // broadcastAssetsChanged (and installAssetCatalogRefresh is wired even later). Without
+    // an explicit refresh here the first mount sees an empty packIndexCache forever.
+    type RegistrySurface = {
+      listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[] }[];
+      refreshCatalog?: () => Promise<boolean>;
+    };
+    const registry = gateway.doc.registry as RegistrySurface | undefined;
+    const apply = () => {
+      const entries = registry?.listCatalog?.();
+      if (!entries || entries.length === 0) {
+        setAllAssets([]);
+      } else {
+        setAllAssets(entries.map(registryEntryToCBAsset));
+      }
       setLoading(false);
+    };
+    if (registry?.refreshCatalog) {
+      void registry.refreshCatalog().then(apply).catch(apply);
     } else {
-      const catalog = entries.map(registryEntryToCBAsset);
-      setAllAssets(catalog);
-      setLoading(false);
+      apply();
     }
   }, []);
 
