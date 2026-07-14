@@ -289,6 +289,7 @@ async function bootViewport(
   // click-pick both need the actual rendered surface, not a hidden placeholder.
   const canvas = document.createElement('canvas');
   canvas.id = 'app';
+  canvas.tabIndex = 0;
   canvas.style.cssText = 'position:absolute;inset:0;display:block;width:100%;height:100%';
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = (container.clientWidth || window.innerWidth) * dpr;
@@ -723,6 +724,7 @@ async function bootViewport(
   // the event, then stops this activating click from becoming an accidental shot.
   const activateGameFromCanvas = (event: PointerEvent): void => {
     if (getInputTarget() === 'game') return;
+    canvas.focus({ preventScroll: true });
     grantGameControl();
     event.stopImmediatePropagation();
   };
