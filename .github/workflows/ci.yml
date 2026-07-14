@@ -209,7 +209,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          pnpm install --frozen-lockfile
+          # Self-hosted runners can retain a stale pnpm metadata store while its
+          # workspace node_modules tree was removed. Force reconstruction here:
+          # the cache key is the engine SHA and this runs only on a cache miss.
+          pnpm install --frozen-lockfile --force
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
@@ -374,7 +377,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          pnpm install --frozen-lockfile
+          # Self-hosted runners can retain a stale pnpm metadata store while its
+          # workspace node_modules tree was removed. Force reconstruction here:
+          # the cache key is the engine SHA and this runs only on a cache miss.
+          pnpm install --frozen-lockfile --force
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
@@ -512,7 +518,10 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          pnpm install --frozen-lockfile
+          # Self-hosted runners can retain a stale pnpm metadata store while its
+          # workspace node_modules tree was removed. Force reconstruction here:
+          # the cache key is the engine SHA and this runs only on a cache miss.
+          pnpm install --frozen-lockfile --force
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
