@@ -209,10 +209,11 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          # Self-hosted runners can retain a stale pnpm metadata store while its
-          # workspace node_modules tree was removed. Force reconstruction here:
-          # the cache key is the engine SHA and this runs only on a cache miss.
-          pnpm install --frozen-lockfile --force
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
+          pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
@@ -377,10 +378,11 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          # Self-hosted runners can retain a stale pnpm metadata store while its
-          # workspace node_modules tree was removed. Force reconstruction here:
-          # the cache key is the engine SHA and this runs only on a cache miss.
-          pnpm install --frozen-lockfile --force
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
+          pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
@@ -518,10 +520,11 @@ jobs:
         if: steps.engine-dist-cache.outputs.cache-hit != 'true'
         run: |
           cd packages/engine
-          # Self-hosted runners can retain a stale pnpm metadata store while its
-          # workspace node_modules tree was removed. Force reconstruction here:
-          # the cache key is the engine SHA and this runs only on a cache miss.
-          pnpm install --frozen-lockfile --force
+          # The engine dist cache intentionally excludes node_modules. A persistent
+          # runner can retain broken linker metadata, so drop it before rebuilding
+          # this cache-miss-only dependency tree.
+          rm -rf node_modules
+          pnpm install --frozen-lockfile
           pnpm -r --filter "./packages/*" build
           pnpm exec tsc -b --clean
           pnpm exec tsc -b
