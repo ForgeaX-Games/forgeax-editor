@@ -363,7 +363,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
      position:fixed coincided with the viewport; in the single realm the viewport
      is one dock panel among many, so fixed would escape it. absolute keeps the
      bar/hints/clip pinned inside the viewport panel. */
-  position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 10;
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 1000;
   display: flex; align-items: center; gap: 3px; padding: 3px 8px;
   background: rgba(21, 22, 24, 0.85); border-radius: 0 0 8px 8px;
   border: 1px solid var(--line, #2a2d30); border-top: none;
@@ -417,7 +417,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 /* Dismissible controls cheat-sheet pinned to the bottom-center of the viewport. */
 .vp-hints {
   /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
-  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 9;
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 1000;
   display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px);
   padding: 6px 30px 6px 12px; pointer-events: auto;
   background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
@@ -440,7 +440,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 /* Collapsed state — a tiny "?" pill at the bottom-right to reopen the sheet. */
 .vp-hints-toggle {
   /* single-realm: anchor inside .ep-viewport-root, not the window (see .vp-bar). */
-  position: absolute; bottom: 10px; right: 12px; z-index: 9; pointer-events: auto;
+  position: absolute; bottom: 10px; right: 12px; z-index: 1000; pointer-events: auto;
   width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   background: rgba(21, 22, 24, 0.82); border: 1px solid var(--line, #2a2d30);
   border-radius: 50%; backdrop-filter: blur(8px); cursor: pointer;
@@ -473,16 +473,12 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 
 /* ── Game overlay: minimal semi-transparent hover bar for display='game' (w24) ── */
 .vp-game-overlay-container {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   height: 40px;
-  z-index: 100;
-  pointer-events: none;
-}
-/* Trigger zone becomes interactive on hover — parent stops forwarding */
-.vp-game-overlay-container:hover {
+  z-index: 1000;
   pointer-events: auto;
 }
 .vp-game-overlay {
