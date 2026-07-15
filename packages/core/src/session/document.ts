@@ -469,6 +469,7 @@ function resolveSharedFieldGuids(
       let changed = false;
       const resolvedArr: unknown[] = fieldValue.map((el) => {
         if (typeof el !== 'string') return el;
+        if (!el) { changed = true; return 0; } // empty string → null handle
         const r = engine.resolveSharedGuid(target, el);
         if (!r.ok) throw new SharedResolveMiss(`could not resolve GUID for ${componentName}.${field}[]: ${r.error.hint}`);
         changed = true;
@@ -479,6 +480,12 @@ function resolveSharedFieldGuids(
         out[field] = resolvedArr;
       }
     } else if (typeof fieldValue === 'string') {
+      // Empty string = no asset assigned → null handle (0). Skip resolution.
+      if (!fieldValue) {
+        out ??= { ...value };
+        out[field] = 0;
+        continue;
+      }
       // scalar shared<T>: resolve the single GUID.
       const r = engine.resolveSharedGuid(target, fieldValue);
       if (!r.ok) return { ok: false, hint: `could not resolve GUID for ${componentName}.${field}: ${r.error.hint}` };

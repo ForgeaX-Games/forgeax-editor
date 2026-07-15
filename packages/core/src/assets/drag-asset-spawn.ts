@@ -111,6 +111,12 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
       components: {
         Transform: nativeTransform({ y: scale[1] / 2 + 0.01 }, scale),
         MeshFilter: { assetHandle: HANDLE_CUBE },
+        // EditorPendingTextureAsset: command-level marker (schema-outsider, dropped by
+        // spawnComponentData). The edit-runtime resolver (drag-spawn-resolve.ts) reads
+        // the guid, creates a new MaterialAsset with this texture bound, and binds it
+        // to the spawned entity's MeshRenderer via bindAssetRef — same pattern as the
+        // mesh branch's EditorPendingMeshAsset marker.
+        EditorPendingTextureAsset: { guid: ref.guid },
       },
     };
   }

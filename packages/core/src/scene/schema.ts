@@ -18,6 +18,8 @@
 // `'vec'` FieldType carrying `arity`; the Inspector renders one inline N-axis
 // row per vec field, keyed by array index (not sibling scalar keys).
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+
 export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum' | 'vec';
 
 export interface FieldSchema {
@@ -68,7 +70,7 @@ const REGISTRY: Record<string, ComponentSchema> = {
   MeshFilter: {
     name: 'MeshFilter',
     fields: [
-      { key: 'assetHandle', type: 'asset', tooltip: 'shared mesh asset handle (built-in or imported)' },
+      { key: 'assetHandle', type: 'asset', default: HANDLE_CUBE, tooltip: 'shared mesh asset handle (built-in or imported)' },
     ],
   },
   // ── MeshRenderer: engine-native materials[] (replaces Material) ───────────────
@@ -76,7 +78,7 @@ const REGISTRY: Record<string, ComponentSchema> = {
   MeshRenderer: {
     name: 'MeshRenderer',
     fields: [
-      { key: 'materials', type: 'asset', tooltip: 'array of shared MaterialAsset handles' },
+      { key: 'materials', type: 'asset', default: [], tooltip: 'array of shared MaterialAsset handles' },
     ],
   },
   // ── DirectionalLight: engine-native vec (feat-20260709 M2 direction/color collapse)
@@ -141,6 +143,17 @@ const REGISTRY: Record<string, ComponentSchema> = {
       { key: 'restitution', type: 'number', min: 0, max: 1, step: 0.01, default: 0 },
     ],
   },
+  // ── SpriteRegionOverride: engine-native per-entity sprite UV region ──────────
+  // Engine: sprite-region-override.ts:104 defineComponent { region: array<f32,4> }
+  SpriteRegionOverride: {
+    name: 'SpriteRegionOverride',
+    fields: [
+      { key: 'region', type: 'vec', arity: 4, step: 0.01,
+        default: [0, 0, 1, 1],
+        labels: ['uMin', 'vMin', 'uW', 'vH'],
+        tooltip: 'per-entity sprite UV region override [uMin, vMin, uWidth, vHeight]' },
+    ],
+  },
 };
 
 export function getComponentSchema(name: string): ComponentSchema | undefined {
@@ -172,6 +185,8 @@ export function defaultFieldValue(fs: FieldSchema): unknown {
       return false;
     case 'color':
       return '#cccccc';
+    case 'asset':
+      return 0; // null handle — no asset assigned
     default:
       return '';
   }
