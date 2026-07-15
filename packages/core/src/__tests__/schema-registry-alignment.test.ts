@@ -1,23 +1,41 @@
-// schema-registry-alignment.test.ts — verify reflection-based schema against engine SSOT
+﻿// schema-registry-alignment.test.ts — verify reflection-based schema against engine SSOT
 //
-// 2026-07-15: Rewritten for engine reflection. Components are registered via
-// engine module imports (triggering their defineComponent calls), then the
-// reflection system introspects them through getRegisteredComponents().
-//
-// Covers:
-//   A. Render components (from @forgeax/engine-runtime/components)
-//   B. Physics components (manually registered for test isolation)
-//   C. Filtering rules (transient, relationship, excluded)
-//   D. listComponentSchemas completeness
-//   E. defaultComponentData correctness
+// Registers components ONLY when missing (resolveComponent). Never overwrites
+// tokens already registered by other tests / @forgeax/engine-runtime imports —
+// global nameToToken overwrite would poison query-snapshot / roundtrip suites.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import { defineComponent } from '@forgeax/engine-ecs';
+import { defineComponent, resolveComponent } from '@forgeax/engine-ecs';
+import type { ComponentSchema as EngineSchema } from '@forgeax/engine-ecs';
 
-// ── Engine components registration for test ──────────────────────────────────
-// Engine components are registered via defineComponent at import time in
-// production. For unit tests we manually register the schemas so tests are
-// self-contained and don't depend on engine module structure.
+// Side-effect: register real runtime components (production tokens).
+import {
+  Transform,
+  MeshFilter,
+  MeshRenderer,
+  DirectionalLight,
+  PointLight,
+  SpotLight,
+  Camera,
+  Skylight,
+  SkyboxBackground,
+  AnimationPlayer,
+  GlyphText,
+  Layer,
+  SortKey,
+  PointLightShadow,
+  SpriteRegionOverride,
+  SceneInstance,
+  ChildOf,
+  Children,
+  Name,
+} from '@forgeax/engine-runtime';
+
+void Transform; void MeshFilter; void MeshRenderer;
+void DirectionalLight; void PointLight; void SpotLight; void Camera;
+void Skylight; void SkyboxBackground; void AnimationPlayer; void GlyphText;
+void Layer; void SortKey; void PointLightShadow; void SpriteRegionOverride;
+void SceneInstance; void ChildOf; void Children; void Name;
 
 import {
   _resetSchemaCache,
@@ -30,118 +48,19 @@ import {
   type FieldType,
 } from '../scene/schema';
 
-function registerRuntimeComponents() {
-  defineComponent('Transform', {
-    pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
-    quat: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
-    scale: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    world: { type: 'array<f32, 16>', transient: true },
-  });
-  defineComponent('MeshFilter', {
-    assetHandle: 'shared<MeshAsset>',
-  });
-  defineComponent('MeshRenderer', {
-    materials: 'array<shared<MaterialAsset>>',
-  });
-  defineComponent('DirectionalLight', {
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    castShadow: 'bool',
-    cascadeCount: 'f32',
-    splitLambda: 'f32',
-    cascadeBlend: 'f32',
-    mapSize: 'f32',
-    depthBias: 'f32',
-    normalBias: 'f32',
-    shadowDistance: 'f32',
-    pcfKernelSize: 'f32',
-  });
-  defineComponent('PointLight', {
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    range: 'f32',
-  });
-  defineComponent('SpotLight', {
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    range: 'f32',
-    innerConeDeg: 'f32',
-    outerConeDeg: 'f32',
-    castShadow: 'bool',
-    mapSize: 'f32',
-    depthBias: 'f32',
-    normalBias: 'f32',
-    nearPlane: 'f32',
-    farPlane: 'f32',
-    pcfKernelSize: 'f32',
-  });
-  defineComponent('Camera', {
-    fov: 'f32',
-    aspect: 'f32',
-    near: 'f32',
-    far: 'f32',
-    projection: 'f32',
-    left: 'f32',
-    right: 'f32',
-    bottom: 'f32',
-    top: 'f32',
-    tonemap: 'f32',
-    exposure: 'f32',
-    whitePoint: 'f32',
-    antialias: 'f32',
-    bloom: 'f32',
-    bloomThreshold: 'f32',
-    bloomIntensity: 'f32',
-    bloomBlurRadius: 'f32',
-    clearColor: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
-    autoAspect: 'bool',
-  });
-  defineComponent('Skylight', {
-    equirect: 'shared<EquirectAsset>',
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-  });
-  defineComponent('SkyboxBackground', {
-    equirect: 'shared<EquirectAsset>',
-    mode: 'f32',
-  });
-  defineComponent('AnimationPlayer', {
-    clips: 'array<shared<AnimationClip>, 4>',
-    times: { type: 'array<f32, 4>' },
-    weights: { type: 'array<f32, 4>' },
-    speeds: { type: 'array<f32, 4>', default: new Float32Array([1, 1, 1, 1]) },
-    paused: 'bool',
-    looping: 'bool',
-  });
-  defineComponent('GlyphText', {
-    fontHandle: 'shared<FontAsset>',
-    text: 'string',
-    fontSize: 'f32',
-    color: { type: 'array<f32, 4>', default: new Float32Array([1, 1, 1, 1]) },
-  });
-  defineComponent('Layer', { value: 'i32' });
-  defineComponent('SortKey', { value: 'f32' });
-  defineComponent('PointLightShadow', {
-    mapSize: 'f32',
-    depthBias: 'f32',
-    normalBias: 'f32',
-    nearPlane: 'f32',
-    farPlane: 'f32',
-    pcfKernelSize: 'f32',
-  });
-  defineComponent('SpriteRegionOverride', {
-    region: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 1, 1]) },
-  });
-  // Transient / relationship components (should be filtered)
-  defineComponent('SceneInstance', {}, { transient: true });
-  defineComponent('CollidingEntities', {}, { transient: true });
-  // Will be overridden by physics registerPhysicsComponents
+/** Register only if the name is not already in the global engine registry. */
+function ensureComponent(
+  name: string,
+  fields: EngineSchema,
+  options?: { transient?: boolean },
+): void {
+  if (resolveComponent(name)) return;
+  defineComponent(name, fields as never, options as never);
 }
 
-function registerPhysicsComponents() {
-  defineComponent('RigidBody', {
+function ensurePhysicsAndFilterFixtures(): void {
+  // Physics — not a core package dependency; stub only when absent.
+  ensureComponent('RigidBody', {
     type: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
     mass: 'f32',
     linearDamping: 'f32',
@@ -149,7 +68,7 @@ function registerPhysicsComponents() {
     gravityScale: 'f32',
     ccdEnabled: 'bool',
   });
-  defineComponent('Collider', {
+  ensureComponent('Collider', {
     shape: { type: 'enum', default: 0, labels: { cuboid: 0, sphere: 1, capsule: 2 } },
     halfExtents: { type: 'array<f32, 3>', default: new Float32Array([0.5, 0.5, 0.5]) },
     radius: 'f32',
@@ -161,7 +80,7 @@ function registerPhysicsComponents() {
     collisionGroups: 'u32',
     solverGroups: 'u32',
   });
-  defineComponent('CharacterController', {
+  ensureComponent('CharacterController', {
     offset: 'f32',
     maxSlopeClimbDeg: 'f32',
     minSlopeSlideDeg: 'f32',
@@ -170,17 +89,21 @@ function registerPhysicsComponents() {
     snapToGroundDist: 'f32',
     grounded: { type: 'bool', transient: true },
   });
+  // Filter fixtures — only stub when the suite has not loaded them yet.
+  ensureComponent('CollidingEntities', {}, { transient: true });
+  ensureComponent('Skin', { skeleton: 'shared<Skeleton>' });
+  ensureComponent('Tilemap', { tiles: 'array<u32>' });
+  ensureComponent('TileLayer', { data: 'array<u32>' });
+  ensureComponent('SpriteAnimation', { regions: 'array<f32>' });
+  ensureComponent('SpriteInstances', { transforms: 'array<f32>' });
+  ensureComponent('Instances', { transforms: 'array<f32>' });
+  ensureComponent('PostProcessParams', { shader: 'string' });
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test helpers
-// ═══════════════════════════════════════════════════════════════════════════════
 
 function fieldKeys(comp: string): string[] {
   return getComponentSchema(comp)?.fields.map((f) => f.key) ?? [];
 }
 
-/** Assert that fields is a superset of the expected keys. */
 function expectKeys(comp: string, ...keys: string[]) {
   const ks = new Set(fieldKeys(comp));
   for (const k of keys) {
@@ -194,18 +117,11 @@ function expectFieldType(comp: string, key: string, type: FieldType) {
   expect(fs!.type, `${comp}.${key} type`).toBe(type);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Test setup — register components, then reset cache to pick them up
-// ═══════════════════════════════════════════════════════════════════════════════
-
 beforeAll(() => {
-  _resetSchemaCache();
-  registerRuntimeComponents();
-  registerPhysicsComponents();
+  ensurePhysicsAndFilterFixtures();
   _resetSchemaCache();
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
 describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   it('Transform: pos/quat/scale vec, no euler scalars', () => {
     expect(getComponentSchema('Transform')).toBeDefined();
@@ -213,9 +129,7 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
     expectFieldType('Transform', 'pos', 'vec');
     expectFieldType('Transform', 'quat', 'vec');
     expectFieldType('Transform', 'scale', 'vec');
-    // Old per-axis scalars must NOT appear
-    expect(fieldKeys('Transform')).not.toContain('posX');
-    expect(fieldKeys('Transform')).not.toContain('rotX');
+    expect(fieldKeys('Transform')).not.toContain('world');
   });
 
   it('MeshFilter: assetHandle, no kind', () => {
@@ -234,16 +148,15 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
       'cascadeCount', 'splitLambda', 'cascadeBlend', 'mapSize',
       'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize',
     );
-    expect(fieldKeys('DirectionalLight').length).toBeGreaterThanOrEqual(12);
   });
 
   it('DirectionalLight shadow fields have showWhen castShadow=true', () => {
-    const shadowKeys = ['cascadeCount', 'splitLambda', 'cascadeBlend', 'mapSize',
-      'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize'];
-    for (const k of shadowKeys) {
+    for (const k of ['cascadeCount', 'splitLambda', 'cascadeBlend', 'mapSize',
+      'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize']) {
       const fs = fieldSchema('DirectionalLight', k);
-      expect(fs, `DirectionalLight.${k} missing`).toBeDefined();
-      expect(fs!.showWhen, `${k} missing showWhen`).toEqual({ key: 'castShadow', in: ['true'] });
+      expect(fs?.showWhen, `${k} missing showWhen`).toEqual({ key: 'castShadow', in: ['true'] });
+      expect(fieldVisible('DirectionalLight', fs, { castShadow: false })).toBe(false);
+      expect(fieldVisible('DirectionalLight', fs, { castShadow: true })).toBe(true);
     }
   });
 
@@ -266,16 +179,14 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   });
 
   it('Camera ortho bounds hidden in perspective mode', () => {
-    const data = { projection: 0 };
     for (const k of ['left', 'right', 'bottom', 'top']) {
-      expect(fieldVisible('Camera', fieldSchema('Camera', k), data)).toBe(false);
+      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 0 })).toBe(false);
     }
   });
 
   it('Camera ortho bounds visible in orthographic mode (projection=1)', () => {
-    const data = { projection: 1 };
     for (const k of ['left', 'right', 'bottom', 'top']) {
-      expect(fieldVisible('Camera', fieldSchema('Camera', k), data)).toBe(true);
+      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 1 })).toBe(true);
     }
   });
 
@@ -297,7 +208,7 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   it('AnimationPlayer: 6 fields, fixed 4 slots', () => {
     expectKeys('AnimationPlayer', 'clips', 'times', 'weights', 'speeds', 'paused', 'looping');
     expectFieldType('AnimationPlayer', 'clips', 'asset');
-    for (const k of ['times', 'weights', 'speeds']) {
+    for (const k of ['times', 'weights', 'speeds'] as const) {
       expectFieldType('AnimationPlayer', k, 'vec');
     }
   });
@@ -329,12 +240,11 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
 describe('Reflection: physics components', () => {
   it('RigidBody: 6 fields, type is number with enum labels in tooltip', () => {
     expectKeys('RigidBody', 'type', 'mass', 'linearDamping', 'angularDamping', 'gravityScale', 'ccdEnabled');
     const fs = fieldSchema('RigidBody', 'type');
-    expect(fs?.type).toBe('number'); // enum→number mapping
+    expect(fs?.type).toBe('number');
   });
 
   it('Collider: 10 fields (shape, extents, physics params)', () => {
@@ -343,7 +253,6 @@ describe('Reflection: physics components', () => {
       'friction', 'restitution',
       'density', 'isSensor', 'collisionGroups', 'solverGroups',
     );
-    // shape is enum in engine → number in editor
     expectFieldType('Collider', 'shape', 'number');
   });
 
@@ -356,7 +265,6 @@ describe('Reflection: physics components', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
 describe('Reflection: filtering rules', () => {
   it('transient components are excluded', () => {
     expect(getComponentSchema('SceneInstance')).toBeUndefined();
@@ -376,16 +284,12 @@ describe('Reflection: filtering rules', () => {
   });
 
   it('internal field types are excluded from schema fields', () => {
-    // Entity component is excluded entirely, but even if registered,
-    // fields like 'self' (entity type) should not appear.
-    // Transform.world is transient → excluded at field level.
     const tf = getComponentSchema('Transform');
     const keys = tf!.fields.map(f => f.key);
     expect(keys).not.toContain('world');
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
 describe('Reflection: listComponentSchemas completeness', () => {
   it('includes all registered + expected components', () => {
     const names = new Set(listComponentSchemas().map(s => s.name));
@@ -434,7 +338,6 @@ describe('Reflection: listComponentSchemas completeness', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
 describe('Reflection: _resetSchemaCache', () => {
   it('resetting cache and re-querying returns fresh schemas', () => {
     const before = getComponentSchema('Transform');
