@@ -13,7 +13,11 @@
     "yesterday": "Yesterday"
   },
   "onboarding": {
-    "step": { "welcome": "Welcome · Language · Connect", "project": "Set up workspace", "home": "Enter home" },
+    "step": {
+      "welcome": "Welcome · Language · Connect",
+      "project": "Set up workspace",
+      "home": "Enter home"
+    },
     "welcome": {
       "title": "Welcome to Forgeax Studio!",
       "lead": "Just tell Forge \"make a game about X\" — it plans, writes the code, and shows your game running live.",
@@ -34,7 +38,10 @@
       }
     },
     "collapse": "Collapse",
-    "connected": { "key": "API Key", "cli": "Local CLI · {{cli}}" },
+    "connected": {
+      "key": "API Key",
+      "cli": "Local CLI · {{cli}}"
+    },
     "check": {
       "checking": "Checking connection…",
       "ok": "Connected: {{list}}. Continuing shortly…",
@@ -88,12 +95,30 @@
       "confirm": "Confirm"
     },
     "tour": {
-      "sidebar": { "anchor": "Left · Sidebar", "body": "Agent team, Workbench tool entries, and long-term memory all live here." },
-      "preview": { "anchor": "Center · Preview", "body": "The live game canvas. Forge edits the code once and this updates in seconds." },
-      "chat": { "anchor": "Right · ChatPanel", "body": "Where you talk to Forge. State needs, watch the thinking, send messages." },
-      "tbLeft": { "anchor": "Top-left · Switchers", "body": "Switch project, game, and Forge session here." },
-      "tbCenter": { "anchor": "Top-center · Workspace tabs", "body": "Play · Edit · AI workspaces, each remembering its layout; add or remove them." },
-      "tbRight": { "anchor": "Top-right · Tools & publish", "body": "Dashboard monitoring, layout, settings, and one-click publish." },
+      "sidebar": {
+        "anchor": "Left · Sidebar",
+        "body": "Agent team, Workbench tool entries, and long-term memory all live here."
+      },
+      "preview": {
+        "anchor": "Center · Preview",
+        "body": "The live game canvas. Forge edits the code once and this updates in seconds."
+      },
+      "chat": {
+        "anchor": "Right · ChatPanel",
+        "body": "Where you talk to Forge. State needs, watch the thinking, send messages."
+      },
+      "tbLeft": {
+        "anchor": "Top-left · Switchers",
+        "body": "Switch project, game, and Forge session here."
+      },
+      "tbCenter": {
+        "anchor": "Top-center · Workspace tabs",
+        "body": "Play · Edit · AI workspaces, each remembering its layout; add or remove them."
+      },
+      "tbRight": {
+        "anchor": "Top-right · Tools & publish",
+        "body": "Dashboard monitoring, layout, settings, and one-click publish."
+      },
       "prev": "Prev",
       "skip": "Skip",
       "next": "Next",
@@ -118,7 +143,7 @@
   },
   "settings": {
     "title": "Settings",
-    "subtitle": "configure forgeax · plugins · keys · account",
+    "subtitle": "configure forgeax · extensions · keys · account",
     "providers": {
       "hint": "Connect a model source: a LiteLLM proxy or a local CLI.",
       "activeBanner": "Currently using: {{source}}",
@@ -145,7 +170,7 @@
     },
     "groups": {
       "config": "Config",
-      "plugin": "Plugins",
+      "extension": "Extensions",
       "system": "System",
       "account": "Account",
       "about": "About",
@@ -171,7 +196,7 @@
       "llmHint": "forgeax/.env; takes effect after restarting the stack",
       "anthropicPlaceholder": "sk-ant-... or Azure key",
       "multimodalTitle": "Multimodal Keys",
-      "multimodalHint": "image-gen / video-gen / multimodal proxy · used by plugins like wb-character",
+      "multimodalHint": "image-gen / video-gen / multimodal proxy · used by extensions like wb-character",
       "arkImageLabel": "ARK_IMAGE_KEY (Seedream illustration)",
       "arkVideoLabel": "ARK_VIDEO_KEY (Seedance video)"
     },
@@ -327,9 +352,9 @@
     }
   },
   "bus": {
-    "title": "Bus Plugin Overview",
+    "title": "Bus Extension Overview",
     "refresh": "Refresh",
-    "refreshTitle": "Re-fetch /api/bus/plugins",
+    "refreshTitle": "Re-fetch /api/extensions/list",
     "mdFocusKind": "click to focus {{kind}} kind",
     "healthOverview": "Health Overview",
     "registered": "registered",
@@ -344,8 +369,8 @@
     "searchPlaceholder": "Search by id / name (e.g. wb-anim / character)…",
     "reset": "Clear",
     "resetTitle": "Clear kind filter + search",
-    "requestFailed": "Request failed: {{err}} · check whether /api/bus/plugins is reachable",
-    "emptyNoPlugins": "Bus loaded no plugins — check the marketplace scan path",
+    "requestFailed": "Request failed: {{err}} · check whether /api/extensions/list is reachable",
+    "emptyNoExtensions": "Bus loaded no extensions — check the marketplace scan path",
     "emptyNoMatch": "No match — check the search term or reset the filter",
     "rowKbdTitle": "↑↓ / Home / End row keyboard navigation · Enter / Space to expand",
     "rowKbdLabel": "Row keyboard navigation · {{n}} rows · Enter to expand",
@@ -362,24 +387,24 @@
     "copied": "Copied",
     "manifestCopiedTitle": "✓ Path copied to clipboard",
     "manifestCopyTitle": "Click to copy path to clipboard · paste into a terminal or editor to jump straight to forgeax-extension.json",
-    "detailKindSoloTitle": "Click to show only {{kind}} plugins · use the ✕ button in the top filter row to clear filtering",
+    "detailKindSoloTitle": "Click to show only {{kind}} extensions · use the ✕ button in the top filter row to clear filtering",
     "versionCopiedTitle": "✓ Version copied to clipboard",
     "versionCopyTitle": "Click to copy version · paste into a changelog / shell / commit message",
-    "uiFrontendTitle": "entry.frontend · this plugin's React panel source (relative to the plugin dir) · dynamically imported by the Sidebar via PLUGIN_PANEL_LOADERS when the workbench tab is opened",
+    "uiFrontendTitle": "entry.frontend · this extension's React panel source (relative to the extension dir) · dynamically imported by the Sidebar via PLUGIN_PANEL_LOADERS when the workbench tab is opened",
     "entryOpenWbTitle": "Open the wb:{{wbId}} tab · render {{path}}",
     "backlinkAgent": "Highlight in Sidebar",
     "backlinkAgentTitle": "Highlight the card matching {{id}} in the Sidebar AGENTS section",
     "backlinkWb": "Open wb-* tab",
     "backlinkWbTitle": "Switch back to Workbench and open the wb:{{wbId}} tab",
     "backlinkKind": "Flash BUS KINDS",
-    "backlinkKindTitle": "Flash the {{kind}} pill in the Sidebar BUS KINDS footer for 1.5s — peripheral confirmation of this plugin's kind at the chrome edge",
+    "backlinkKindTitle": "Flash the {{kind}} pill in the Sidebar BUS KINDS footer for 1.5s — peripheral confirmation of this extension's kind at the chrome edge",
     "detailNoteBroken": "broken[] field not yet exposed by server — pending P3 work",
-    "tallyCliTitle": "This plugin is registered as a cliProvider (1 = yes / 0 = no)",
-    "tallySkillTitle": "Number of skills this plugin registers with the Bus (Bus.skills[])",
-    "tallyToolTitle": "Number of tools this plugin registers with the Bus (Bus.tools[])",
-    "tallyEventTitle": "Number of event schemas this plugin registers with the Bus (Bus.events[])",
-    "provTallyEmptyTitle": "This plugin exposes no cliProvider/skill/tool/event to the Bus — usually a kind=workbench pure-frontend plugin (the panel runs on its own)",
-    "provTallyTitle": "This plugin provides {{n}} provider entries to the Bus (cli+skill+tool+event total)",
+    "tallyCliTitle": "This extension is registered as a cliProvider (1 = yes / 0 = no)",
+    "tallySkillTitle": "Number of skills this extension registers with the Bus (Bus.skills[])",
+    "tallyToolTitle": "Number of tools this extension registers with the Bus (Bus.tools[])",
+    "tallyEventTitle": "Number of event schemas this extension registers with the Bus (Bus.events[])",
+    "provTallyEmptyTitle": "This extension exposes no cliProvider/skill/tool/event to the Bus — usually a kind=workbench pure-frontend extension (the panel runs on its own)",
+    "provTallyTitle": "This extension provides {{n}} provider entries to the Bus (cli+skill+tool+event total)",
     "provTallyNote": "No provides · pure frontend / placeholder",
     "provAiFlagTitle": "exposedToAI=true · directly callable by AI agents",
     "kindDescWorkbench": "Left TOOLS row + main panel entry (11 creation kinds + admin + code)",
@@ -413,13 +438,13 @@
     "mentionSoon": "@ mention — coming soon",
     "agentItemInBusTitle": "{{name}} · {{role}} · also on the bus host — click to insert @{{id}}",
     "agentItemTitle": "{{name}} · {{role}} — click to insert @{{id}}",
-    "viewInBusAria": "View {{plugin}} in Bus details",
-    "viewInBusTitle": "View {{plugin}} in Bus details →",
+    "viewInBusAria": "View {{extension}} in Bus details",
+    "viewInBusTitle": "View {{extension}} in Bus details →",
     "atFoot": "↑↓ navigate · ⏎ insert @<id> · → go to Bus details · Esc close",
     "busSkillsTitle": "Bus skills ({{count}}) — click to pick a trigger command and insert it into the input box",
     "slashSoon": "Slash commands — coming soon",
-    "slashItemDescTitle": "{{name}} · {{plugin}}\n{{desc}}\n— click to insert {{trigger}}",
-    "slashItemTitle": "{{name}} · {{plugin}} — click to insert {{trigger}}",
+    "slashItemDescTitle": "{{name}} · {{extension}}\n{{desc}}\n— click to insert {{trigger}}",
+    "slashItemTitle": "{{name}} · {{extension}} — click to insert {{trigger}}",
     "slashFoot": "↑↓ navigate · ⏎ insert trigger · → go to Bus details · Esc close",
     "modelDisabledProvider": "Currently routing via the {{provider}} channel; that provider decides its own model. Switch to the forgeax or claude-code channel to edit agent.json::models.model",
     "modelDisabledNoAgent": "No agent selected yet — cannot read agent.json",
@@ -430,7 +455,7 @@
     "cliDescCodex": "OpenAI Codex CLI",
     "cliDescCursor": "Cursor Agent CLI",
     "cliDescCodebuddy": "a peer agent CLI Code CLI",
-    "cliBusPillTitle": "bus plugin: {{plugin}} · click to view in Bus details →",
+    "cliBusPillTitle": "bus extension: {{extension}} · click to view in Bus details →",
     "interruptTitle": "Interrupt the current reply and send now (steer)",
     "queueSendTitle": "Queue send — runs in order after the current reply finishes ([Enter])",
     "stopTitle": "Stop the current reply (does not affect queued messages)",
@@ -448,8 +473,8 @@
     "directory": "Directory",
     "dir_ref": "Directory reference",
     "dir_name": "Directory name",
-    "workshop_plugin": "Workshop plugin",
-    "workshop_plugin_ref": "Workshop plugin reference",
+    "workshop_extension": "Workshop extension",
+    "workshop_extension_ref": "Workshop extension reference",
     "current_game": "Current game",
     "current_game_ref": "Current game reference",
     "path_prefix": "Path prefix",
@@ -464,9 +489,9 @@
     "chat_message_ref": "Chat message reference",
     "copy_message": "Copy message",
     "user_message_ref": "User message reference",
-    "bus_plugin": "Bus plugin",
-    "bus_plugin_ref": "Bus plugin reference",
-    "copy_plugin_id": "Copy plugin id",
+    "bus_extension": "Bus extension",
+    "bus_extension_ref": "Bus extension reference",
+    "copy_extension_id": "Copy extension id",
     "scene_entity": "Scene entity",
     "source": "Source",
     "components": "Components",
@@ -500,7 +525,7 @@
     "consoleEmpty": "No console output yet — the game's console.log/warn/error shows here live",
     "networkEmpty": "No network requests yet — the game's fetch / XHR / WebSocket shows here live",
     "galleryTitle": "Workbench",
-    "loadingPluginList": "Loading plugin list…",
+    "loadingExtensionList": "Loading extension list…",
     "gallerySub": "Pick a workbench to start — click a tile to switch to its wb-* tab in the Sidebar",
     "bumpedStatsSuffix": "bumped (manifest version is not a 0.0.x placeholder)",
     "implementedEntryCount": "implemented entry count",
@@ -509,7 +534,7 @@
     "verTagBumped": "already bumped · in development (not a 0.0.x placeholder)",
     "verTagPlaceholder": "placeholder semantic version · will bump when implemented",
     "wipTagTitle": "experimental — manifest marks experimental:true · real implementation pending Phase 4+",
-    "toolsExposedToAi": "exposed to AI by this workbench plugin",
+    "toolsExposedToAi": "exposed to AI by this workbench extension",
     "agentsLoadFailed": "Failed to load agents",
     "agentsTitle": "Agents · Team",
     "agentsEmpty": "No agents yet — Forge dispatches team members automatically after you send a message",
@@ -576,19 +601,19 @@
   "sidebar": {
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
-    "workbenchPluginsHint": "Workbench plugins (bus-sourced · ←→ to switch)",
+    "workbenchExtensionsHint": "Workbench extensions (bus-sourced · ←→ to switch)",
     "tabTooltip": "{{label}} · {{id}} · ←→ to switch tab",
     "inSeparateWindow": "In a separate window",
     "redockToMainWindow": "Redock to main window",
     "popOutToSeparateWindow": "Pop out to a separate window",
     "inDockPanel": "In Dock panel",
     "providesToolsTooltip": "{{count}} tools · callable by AI agent: {{list}}",
-    "providesNoTools": "This plugin exposes no tools to the AI agent",
+    "providesNoTools": "This extension exposes no tools to the AI agent",
     "providesEventsTooltip": "{{count}} events · emitted on the bus: {{list}}",
-    "providesNoEvents": "This plugin emits no events on the bus",
+    "providesNoEvents": "This extension emits no events on the bus",
     "providesSkillsTooltip": "{{count}} skills · injected into chat composer: {{list}}",
-    "providesNoSkills": "This plugin declares no skills",
-    "familyTooltip": "{{count}} workbench plugins on the bus — click to filter Bus detail by kind=workbench →",
+    "providesNoSkills": "This extension declares no skills",
+    "familyTooltip": "{{count}} workbench extensions on the bus — click to filter Bus detail by kind=workbench →",
     "openInBusTooltip": "Switch to the Bus tab (⌘3) and auto-expand the {{id}} detail row",
     "openInBusDetail": "View in Bus detail →"
   },
@@ -626,8 +651,8 @@
     },
     "install": {
       "title": "Install",
-      "hint": "Copy to destRoot/.forgeax/plugins/<id>/ · auto reload",
-      "destRootL1Placeholder": "Usually: ~ (writes to ~/.forgeax/plugins/)",
+      "hint": "Copy to destRoot/.forgeax/extensions/<id>/ · auto reload",
+      "destRootL1Placeholder": "Usually: ~ (writes to ~/.forgeax/extensions/)",
       "destRootL2Placeholder": "Current project root",
       "layerL1": "L1 · user level",
       "layerL2": "L2 · project level",
@@ -648,8 +673,8 @@
   },
   "author": {
     "fork": {
-      "title": "Fork plugin",
-      "hint": "Copy an existing plugin to L1/L2, then chat-driven vibe-edit",
+      "title": "Fork extension",
+      "hint": "Copy an existing extension to L1/L2, then chat-driven vibe-edit",
       "sourceLabel": "Source",
       "selectPlaceholder": "— select —",
       "newIdLabel": "New id",
@@ -658,7 +683,7 @@
       "layerL2": "L2 · project-level",
       "copying": "Copying…",
       "refresh": "Refresh list",
-      "refreshTitle": "Re-fetch /api/plugins/manifests",
+      "refreshTitle": "Re-fetch /api/extensions/manifests",
       "doneBadge": "Forked ✓",
       "doneHelp": "Auto-reloaded — the new version should appear in the sidebar.",
       "note": "Fork only copies the source directory (incl. prompt / handlers / config). manifest.id is rewritten, displayName gets a \"(mine)\" suffix. L1 has higher priority than L0; the fork immediately replaces the original in the sidebar."
@@ -692,8 +717,8 @@
       "hint": "Toggle the progress bar / bus inventory row individually",
       "showProgressBar": "Show progress bar",
       "showProgressBarHint": "(React startup progress · usually finishes in ~1s)",
-      "showBusInventory": "Show bus plugin count",
-      "showBusInventoryHint": "(fetches /api/bus/plugins once · for debugging)"
+      "showBusInventory": "Show bus extension count",
+      "showBusInventoryHint": "(fetches /api/extensions/list once · for debugging)"
     },
     "apply": {
       "title": "Apply / Reset",
@@ -755,7 +780,7 @@
     "create": "Create"
   },
   "dashboard": {
-    "busKindRegistering": "{{kind}} · registering plugins…",
+    "busKindRegistering": "{{kind}} · registering extensions…",
     "clickToBusAdmin": "click → Bus admin →",
     "clickToBusDetail": "click to switch to Bus detail →",
     "brandTotalTitle": "{{count}} sessions · auto-refresh every 30s",
@@ -774,7 +799,7 @@
     "mb": {
       "title": {
         "some": "Model bindings · {{count}} on bus · click to drill into Bus admin →",
-        "none": "Model bindings · 0 plugins · click to open Bus admin",
+        "none": "Model bindings · 0 extensions · click to open Bus admin",
         "down": "Model bindings · Bus list temporarily unreadable",
         "loading": "Model bindings · loading…"
       }
@@ -782,7 +807,7 @@
     "skill": {
       "title": {
         "some": "Skills · {{count}} on bus · click to drill into Bus admin →",
-        "none": "Skills · 0 plugins · click to open Bus admin",
+        "none": "Skills · 0 extensions · click to open Bus admin",
         "down": "Skills · Bus list temporarily unreadable",
         "loading": "Skills · loading…"
       }
@@ -790,7 +815,7 @@
     "tool": {
       "title": {
         "some": "Tools · {{count}} on bus · click to drill into Bus admin →",
-        "none": "Tools · 0 plugins · click to open Bus admin",
+        "none": "Tools · 0 extensions · click to open Bus admin",
         "down": "Tools · Bus list temporarily unreadable",
         "loading": "Tools · loading…"
       }
@@ -798,7 +823,7 @@
     "agent": {
       "title": {
         "some": "Agents · {{count}} on bus · click to drill into Bus admin →",
-        "none": "Agents · 0 plugins · click to open Bus admin",
+        "none": "Agents · 0 extensions · click to open Bus admin",
         "down": "Agents · Bus list temporarily unreadable",
         "loading": "Agents · loading…"
       }
@@ -925,16 +950,46 @@
         "copied": "Copied"
       },
       "doc": {
-        "web": { "what": "Bundle the game into a self-contained website folder — drop it on any server (or run it locally) and share a link.", "when": "Lightest way to share · needs a WebGPU browser" },
-        "windows": { "what": "Produce a folder with a launcher .exe — double-click to play, no browser or internet needed.", "when": "For a downloadable PC build" },
-        "macos": { "what": "Produce a folder with a launcher + a double-clickable \"Play\".command — runs the game locally on this Mac.", "when": "For a downloadable / local playtest Mac build" },
-        "android": { "what": "Export a standard Android Studio project (not a ready APK); open it in Android Studio to build the app.", "when": "Asks for app name / package id / icon first" },
-        "cloud": { "what": "The easiest path — no export, no config: publish to the cloud in one click and get a shareable online link in seconds.", "when": "Coming soon" },
-        "ios": { "what": "Export an Xcode project to build an iOS app.", "when": "Asks for app name / bundle id / icon first" },
-        "engine": { "what": "Advanced switch — rebuild the engine core before packaging.", "when": "Only when the export looks different from the preview" },
-        "engineRoot": { "what": "Which engine build the export bundles against.", "when": "Usually auto-selected — leave as is" },
-        "history": { "what": "Every export is recorded here; retry or delete any of them.", "when": "To trace or re-run a previous build" },
-        "clean": { "what": "Free the disk space used by the build cache — never touches exported products or history.", "when": "When disk space is tight" }
+        "web": {
+          "what": "Bundle the game into a self-contained website folder — drop it on any server (or run it locally) and share a link.",
+          "when": "Lightest way to share · needs a WebGPU browser"
+        },
+        "windows": {
+          "what": "Produce a folder with a launcher .exe — double-click to play, no browser or internet needed.",
+          "when": "For a downloadable PC build"
+        },
+        "macos": {
+          "what": "Produce a folder with a launcher + a double-clickable \"Play\".command — runs the game locally on this Mac.",
+          "when": "For a downloadable / local playtest Mac build"
+        },
+        "android": {
+          "what": "Export a standard Android Studio project (not a ready APK); open it in Android Studio to build the app.",
+          "when": "Asks for app name / package id / icon first"
+        },
+        "cloud": {
+          "what": "The easiest path — no export, no config: publish to the cloud in one click and get a shareable online link in seconds.",
+          "when": "Coming soon"
+        },
+        "ios": {
+          "what": "Export an Xcode project to build an iOS app.",
+          "when": "Asks for app name / bundle id / icon first"
+        },
+        "engine": {
+          "what": "Advanced switch — rebuild the engine core before packaging.",
+          "when": "Only when the export looks different from the preview"
+        },
+        "engineRoot": {
+          "what": "Which engine build the export bundles against.",
+          "when": "Usually auto-selected — leave as is"
+        },
+        "history": {
+          "what": "Every export is recorded here; retry or delete any of them.",
+          "when": "To trace or re-run a previous build"
+        },
+        "clean": {
+          "what": "Free the disk space used by the build cache — never touches exported products or history.",
+          "when": "When disk space is tight"
+        }
       }
     },
     "onboard": {
@@ -999,7 +1054,7 @@
       "tooltip": "Layout · reopen / reset / presets"
     },
     "settings": {
-      "tooltip": "System settings · Plugins / Keys / Models / About"
+      "tooltip": "System settings · Extensions / Keys / Models / About"
     },
     "publish": {
       "packaging": "Packaging {{platform}}…",
@@ -1051,29 +1106,29 @@
     "modePreview": "Switch to Preview mode",
     "modeWorkbench": "Switch to Workbench mode",
     "switchWorkbenchN": "Switch to workbench {{n}} (Blender parity — indexed into workbench list)",
-    "openPlugins": "Settings → Plugins (was the Bus mode tab)",
+    "openExtensions": "Settings → Extensions (was the Bus mode tab)",
     "focusComposer": "Focus the right ChatPanel composer"
   },
   "analytics": {
     "clickToBusDetail": "click to switch to Bus detail →",
     "clickToBusAdminFilter": "click → Bus admin (filter={{label}}) →"
   },
-  "centerPlugin": {
+  "centerExtension": {
     "backToTileGridTitle": "Back to the 12-tile workbench grid",
     "backToWorkbench": "Back to workbench",
     "redockTitle": "Redock the standalone window into the main window",
     "redock": "Redock",
     "detachTitle": "Pop out as a standalone window",
     "detach": "Pop out",
-    "openedInWindowPrefix": "Plugin ",
+    "openedInWindowPrefix": "Extension ",
     "openedInWindowSuffix": " is now open in a standalone window.",
-    "loadingPluginPrefix": "Loading plugin ",
-    "loadingPluginSuffix": "…",
-    "missingStandalonePrefix": "Plugin ",
+    "loadingExtensionPrefix": "Loading extension ",
+    "loadingExtensionSuffix": "…",
+    "missingStandalonePrefix": "Extension ",
     "missingStandaloneMid": " is missing a ",
     "missingStandaloneSuffix": " entry.",
-    "pluginUnavailablePrefix": "Could not load plugin ",
-    "pluginUnavailableSuffix": ". Make sure forgeax-server is running (bun scripts/run.ts in forgeax-studio), then refresh."
+    "extensionUnavailablePrefix": "Could not load extension ",
+    "extensionUnavailableSuffix": ". Make sure forgeax-server is running (bun scripts/run.ts in forgeax-studio), then refresh."
   },
   "errorBoundary": {
     "retry": "Retry",
@@ -1091,7 +1146,7 @@
     "filterSource": "Filter source {{source}}",
     "copyAll": "Copy all",
     "clear": "Clear",
-    "emptyNoMessages": "No messages yet. Errors from Play / Edit / plugins / shell will appear here.",
+    "emptyNoMessages": "No messages yet. Errors from Play / Edit / extensions / shell will appear here.",
     "emptyNoMatch": "No entries match the current filter."
   },
   "permission": {
@@ -1115,7 +1170,7 @@
     "editorPanels": "Editor Panels",
     "mainPanels": "Main Panels",
     "morePanels": "More Panels",
-    "pluginPanels": "Plugin Panels"
+    "extensionPanels": "Extension Panels"
   },
   "firstRun": {
     "errMissingKey": "Please enter your OpenRouter API Key",
@@ -1172,7 +1227,7 @@
       "open": "Open surface overlay (dev)"
     },
     "overlay": {
-      "empty": "No plugin has called surface.expose"
+      "empty": "No extension has called surface.expose"
     },
     "action": {
       "formClose": "Close form",
@@ -1202,11 +1257,11 @@
     "recommendedPrefix": "Recommended",
     "recommendedSuffix": "is not in the current session"
   },
-  "wbPluginDock": {
-    "loadingPlugin": "Loading {{pluginId}}…",
+  "wbExtensionDock": {
+    "loadingExtension": "Loading {{extensionId}}…",
     "popoutTitle": "Pop out as a standalone OS window",
     "popoutLabel": "Standalone window",
-    "loadingPluginGeneric": "Loading plugin…"
+    "loadingExtensionGeneric": "Loading extension…"
   },
   "chatAgentCapsule": {
     "prevPage": "Previous page",
@@ -1220,23 +1275,68 @@
   },
   "detachedSurface": {
     "unknownPanel": "Unknown panel surface \"{{id}}\".",
-    "loadingPlugin": "Loading plugin {{id}}…",
-    "pluginNotFound": "Plugin {{id}} not found."
+    "loadingExtension": "Loading extension {{id}}…",
+    "extensionNotFound": "Extension {{id}} not found."
   },
   "forgeCard": {
     "thinking": "{{displayName}} is thinking",
     "emptyResponse": "(Empty response — the upstream cli produced nothing this time; try sending again)"
   },
   "agentStatus": {
-    "expectant": ["On standby", "Slacking off", "Rubbing hands, ready to go", "Geared up and ready"],
-    "focused": ["Brain on fire", "Holding a mental meeting", "Gears spinning like crazy", "Deep in thought"],
-    "cheerful": ["Yapping away", "Keyboard's on fire", "Muttering along", "Typing at warp speed"],
-    "diligent": ["Firing up the grill", "Clang-clang, under construction", "Firing up the furnace", "Heads down, grinding"],
-    "delegating": ["Handing out tasks", "Calling in backup", "Commanding the squad", "Playing hands-off boss"],
-    "proud": ["Fresh out of the oven", "Dish is served", "Ding~ all done", "Delivered with pride"],
-    "weary": ["Recovering HP", "Grabbing a water break", "Battery running low", "Flopping for a bit"],
-    "sad": ["Oops, crashed", "Hitting a wall", "Having an emo moment", "Wiping away tears"],
-    "curious": ["Gathering to watch", "Peeking curiously", "Looking around", "Poking around"]
+    "expectant": [
+      "On standby",
+      "Slacking off",
+      "Rubbing hands, ready to go",
+      "Geared up and ready"
+    ],
+    "focused": [
+      "Brain on fire",
+      "Holding a mental meeting",
+      "Gears spinning like crazy",
+      "Deep in thought"
+    ],
+    "cheerful": [
+      "Yapping away",
+      "Keyboard's on fire",
+      "Muttering along",
+      "Typing at warp speed"
+    ],
+    "diligent": [
+      "Firing up the grill",
+      "Clang-clang, under construction",
+      "Firing up the furnace",
+      "Heads down, grinding"
+    ],
+    "delegating": [
+      "Handing out tasks",
+      "Calling in backup",
+      "Commanding the squad",
+      "Playing hands-off boss"
+    ],
+    "proud": [
+      "Fresh out of the oven",
+      "Dish is served",
+      "Ding~ all done",
+      "Delivered with pride"
+    ],
+    "weary": [
+      "Recovering HP",
+      "Grabbing a water break",
+      "Battery running low",
+      "Flopping for a bit"
+    ],
+    "sad": [
+      "Oops, crashed",
+      "Hitting a wall",
+      "Having an emo moment",
+      "Wiping away tears"
+    ],
+    "curious": [
+      "Gathering to watch",
+      "Peeking curiously",
+      "Looking around",
+      "Poking around"
+    ]
   },
   "markdownView": {
     "taskDoneReadonly": "Done (read-only)",
@@ -1272,8 +1372,8 @@
     "fileRef": "[file: {{path}}]",
     "narrativeWorkshop": "Narrative Workshop"
   },
-  "standalonePlugin": {
-    "noEntryPrefix": "Plugin",
+  "standaloneExtension": {
+    "noEntryPrefix": "Extension",
     "noEntryMiddle": "has no",
     "noEntrySuffix": "entry.",
     "iframeLoadFailed": "iframe failed to load: {{error}}"
@@ -1315,7 +1415,7 @@
   },
   "workbenchModuleStrip": {
     "ariaLabel": "Workbench modules",
-    "empty": "No workbench plugins available"
+    "empty": "No workbench extensions available"
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · click to view in Bus details →"

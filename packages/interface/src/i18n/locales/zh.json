@@ -13,7 +13,11 @@
     "yesterday": "昨天"
   },
   "onboarding": {
-    "step": { "welcome": "欢迎 · 语言 · 连接模型", "project": "设置 workspace", "home": "进入首页" },
+    "step": {
+      "welcome": "欢迎 · 语言 · 连接模型",
+      "project": "设置 workspace",
+      "home": "进入首页"
+    },
     "welcome": {
       "title": "欢迎来到 Forgeax Studio！",
       "lead": "只需要告诉 Forge “做一个 xxx 的游戏”，它会自动计划、写代码并且实时向你展示正在创作的游戏。",
@@ -34,7 +38,10 @@
       }
     },
     "collapse": "收起",
-    "connected": { "key": "API Key", "cli": "本地 CLI · {{cli}}" },
+    "connected": {
+      "key": "API Key",
+      "cli": "本地 CLI · {{cli}}"
+    },
     "check": {
       "checking": "正在检测连接…",
       "ok": "连接成功：{{list}}。即将进入下一步…",
@@ -88,12 +95,30 @@
       "confirm": "确认"
     },
     "tour": {
-      "sidebar": { "anchor": "左栏 · Sidebar", "body": "Agent 团队、Workbench 工具入口、长期记忆都在这里。" },
-      "preview": { "anchor": "中栏 · Preview", "body": "游戏实时画布。Forge 改一次代码，这里几秒后就变。" },
-      "chat": { "anchor": "右栏 · ChatPanel", "body": "跟 Forge 对话的地方。说需求、看思考过程、发消息。" },
-      "tbLeft": { "anchor": "顶栏左区 · 切换器", "body": "切换项目、游戏、Forge 会话的地方。" },
-      "tbCenter": { "anchor": "顶栏中区 · 工作区标签", "body": "Play·Edit·AI 工作区，各自记住布局、可增删。" },
-      "tbRight": { "anchor": "顶栏右区 · 工具与发布", "body": "Dashboard 监控、布局、设置，一键发布打包。" },
+      "sidebar": {
+        "anchor": "左栏 · Sidebar",
+        "body": "Agent 团队、Workbench 工具入口、长期记忆都在这里。"
+      },
+      "preview": {
+        "anchor": "中栏 · Preview",
+        "body": "游戏实时画布。Forge 改一次代码，这里几秒后就变。"
+      },
+      "chat": {
+        "anchor": "右栏 · ChatPanel",
+        "body": "跟 Forge 对话的地方。说需求、看思考过程、发消息。"
+      },
+      "tbLeft": {
+        "anchor": "顶栏左区 · 切换器",
+        "body": "切换项目、游戏、Forge 会话的地方。"
+      },
+      "tbCenter": {
+        "anchor": "顶栏中区 · 工作区标签",
+        "body": "Play·Edit·AI 工作区，各自记住布局、可增删。"
+      },
+      "tbRight": {
+        "anchor": "顶栏右区 · 工具与发布",
+        "body": "Dashboard 监控、布局、设置，一键发布打包。"
+      },
       "prev": "上一个",
       "skip": "跳过",
       "next": "下一个",
@@ -118,7 +143,7 @@
   },
   "settings": {
     "title": "设置",
-    "subtitle": "configure forgeax · plugins · keys · account",
+    "subtitle": "configure forgeax · extensions · keys · account",
     "providers": {
       "hint": "连接一个模型来源：LiteLLM 代理或本地 CLI。",
       "activeBanner": "当前使用：{{source}}",
@@ -145,7 +170,7 @@
     },
     "groups": {
       "config": "配置",
-      "plugin": "插件",
+      "extension": "扩展",
       "system": "系统",
       "account": "账户",
       "about": "关于",
@@ -171,7 +196,7 @@
       "llmHint": "forgeax/.env;重启 stack 后生效",
       "anthropicPlaceholder": "sk-ant-... 或 Azure key",
       "multimodalTitle": "多模态 Keys",
-      "multimodalHint": "image-gen / video-gen / 多模代理 · wb-character 等插件用",
+      "multimodalHint": "image-gen / video-gen / 多模代理 · wb-character 等扩展用",
       "arkImageLabel": "ARK_IMAGE_KEY (Seedream 立绘)",
       "arkVideoLabel": "ARK_VIDEO_KEY (Seedance 视频)"
     },
@@ -327,9 +352,9 @@
     }
   },
   "bus": {
-    "title": "Bus 插件总览",
+    "title": "Bus 扩展总览",
     "refresh": "刷新",
-    "refreshTitle": "重新拉取 /api/bus/plugins",
+    "refreshTitle": "重新拉取 /api/extensions/list",
     "mdFocusKind": "单击聚焦 {{kind}} kind",
     "healthOverview": "健康总览",
     "registered": "注册",
@@ -344,8 +369,8 @@
     "searchPlaceholder": "按 id / 名称搜索 (例如 wb-anim / 角色)…",
     "reset": "清空",
     "resetTitle": "清空 kind 过滤 + 搜索",
-    "requestFailed": "请求失败：{{err}} · 检查 /api/bus/plugins 是否可达",
-    "emptyNoPlugins": "bus 未加载任何 plugin — 检查 marketplace scan 路径",
+    "requestFailed": "请求失败：{{err}} · 检查 /api/extensions/list 是否可达",
+    "emptyNoExtensions": "bus 未加载任何 extension — 检查 marketplace scan 路径",
     "emptyNoMatch": "无匹配 — 检查搜索词或重启过滤",
     "rowKbdTitle": "↑↓ / Home / End 行键盘导航 · Enter / Space 展开",
     "rowKbdLabel": "行键盘导航 · {{n}} rows · Enter 展开",
@@ -362,24 +387,24 @@
     "copied": "已复制",
     "manifestCopiedTitle": "✓ 已复制路径到剪贴板",
     "manifestCopyTitle": "点击复制路径到剪贴板 · 粘贴到终端或编辑器可直达 forgeax-extension.json",
-    "detailKindSoloTitle": "点击仅显示 {{kind}} 类的插件 · 顶部过滤行的 ✕ 按钮可清除筛选",
+    "detailKindSoloTitle": "点击仅显示 {{kind}} 类的扩展 · 顶部过滤行的 ✕ 按钮可清除筛选",
     "versionCopiedTitle": "✓ 已复制版本号到剪贴板",
     "versionCopyTitle": "点击复制版本号 · 可粘贴到 changelog / shell / commit message",
-    "uiFrontendTitle": "entry.frontend · 此插件的 React 面板源码 (相对 plugin 目录) · workbench tab 点开后由 Sidebar 通过 PLUGIN_PANEL_LOADERS 动态 import",
+    "uiFrontendTitle": "entry.frontend · 此扩展的 React 面板源码 (相对 extension 目录) · workbench tab 点开后由 Sidebar 通过 PLUGIN_PANEL_LOADERS 动态 import",
     "entryOpenWbTitle": "打开 wb:{{wbId}} tab · 渲染 {{path}}",
     "backlinkAgent": "在 Sidebar 高亮",
     "backlinkAgentTitle": "在 Sidebar AGENTS 区高亮 {{id}} 对应卡片",
     "backlinkWb": "打开 wb-* tab",
     "backlinkWbTitle": "切回 Workbench 并打开 wb:{{wbId}} tab",
     "backlinkKind": "闪烁 BUS KINDS",
-    "backlinkKindTitle": "在 Sidebar 底部 BUS KINDS footer 闪烁 {{kind}} 胶囊 1.5s — 余光确认这颗 plugin 在 chrome 边缘的 kind 归属",
+    "backlinkKindTitle": "在 Sidebar 底部 BUS KINDS footer 闪烁 {{kind}} 胶囊 1.5s — 余光确认这颗 extension 在 chrome 边缘的 kind 归属",
     "detailNoteBroken": "broken[] 字段尚未由 server 暴露 — 等 P3 颗粒补",
-    "tallyCliTitle": "本插件作为 cliProvider 注册 (1 = 是 / 0 = 否)",
-    "tallySkillTitle": "本插件向 Bus 注册的 skill 数 (Bus.skills[])",
-    "tallyToolTitle": "本插件向 Bus 注册的 tool 数 (Bus.tools[])",
-    "tallyEventTitle": "本插件向 Bus 注册的 event schema 数 (Bus.events[])",
-    "provTallyEmptyTitle": "本插件未向 Bus 暴露 cliProvider/skill/tool/event — 通常是 kind=workbench 的纯前端插件 (panel 自己跑)",
-    "provTallyTitle": "本插件向 Bus 提供 {{n}} 个 provider 入口 (cli+skill+tool+event 合计)",
+    "tallyCliTitle": "本扩展作为 cliProvider 注册 (1 = 是 / 0 = 否)",
+    "tallySkillTitle": "本扩展向 Bus 注册的 skill 数 (Bus.skills[])",
+    "tallyToolTitle": "本扩展向 Bus 注册的 tool 数 (Bus.tools[])",
+    "tallyEventTitle": "本扩展向 Bus 注册的 event schema 数 (Bus.events[])",
+    "provTallyEmptyTitle": "本扩展未向 Bus 暴露 cliProvider/skill/tool/event — 通常是 kind=workbench 的纯前端扩展 (panel 自己跑)",
+    "provTallyTitle": "本扩展向 Bus 提供 {{n}} 个 provider 入口 (cli+skill+tool+event 合计)",
     "provTallyNote": "无 provides · 纯前端 / placeholder",
     "provAiFlagTitle": "exposedToAI=true · AI agent 可直接调用",
     "kindDescWorkbench": "左侧 TOOLS 行 + 主面板入口（11 类创作 + admin + code）",
@@ -413,13 +438,13 @@
     "mentionSoon": "@ 提示 — 即将上线",
     "agentItemInBusTitle": "{{name}} · {{role}} · 同时位于 bus host — 单击插入 @{{id}}",
     "agentItemTitle": "{{name}} · {{role}} — 单击插入 @{{id}}",
-    "viewInBusAria": "在 Bus 详情查看 {{plugin}}",
-    "viewInBusTitle": "在 Bus 详情查看 {{plugin}} →",
+    "viewInBusAria": "在 Bus 详情查看 {{extension}}",
+    "viewInBusTitle": "在 Bus 详情查看 {{extension}} →",
     "atFoot": "↑↓ 选 · ⏎ 插入 @<id> · → 跳 Bus 详情 · Esc 关闭",
     "busSkillsTitle": "Bus skills ({{count}}) — 单击选触发命令插入到输入框",
     "slashSoon": "斜杠命令 — 即将上线",
-    "slashItemDescTitle": "{{name}} · {{plugin}}\n{{desc}}\n— 单击插入 {{trigger}}",
-    "slashItemTitle": "{{name}} · {{plugin}} — 单击插入 {{trigger}}",
+    "slashItemDescTitle": "{{name}} · {{extension}}\n{{desc}}\n— 单击插入 {{trigger}}",
+    "slashItemTitle": "{{name}} · {{extension}} — 单击插入 {{trigger}}",
     "slashFoot": "↑↓ 选 · ⏎ 插入触发 · → 跳 Bus 详情 · Esc 关闭",
     "modelDisabledProvider": "当前走 {{provider}} 渠道,该 provider 自己决定模型;切到 forgeax 或 claude-code 渠道才能改 agent.json::models.model",
     "modelDisabledNoAgent": "还没选 agent — 无法读 agent.json",
@@ -430,7 +455,7 @@
     "cliDescCodex": "OpenAI Codex CLI",
     "cliDescCursor": "Cursor Agent CLI",
     "cliDescCodebuddy": "a peer agent CLI Code CLI",
-    "cliBusPillTitle": "bus plugin: {{plugin}} · 单击在 Bus 详情查看 →",
+    "cliBusPillTitle": "bus extension: {{extension}} · 单击在 Bus 详情查看 →",
     "interruptTitle": "打断当前回复并立即发送（steer）",
     "queueSendTitle": "排队发送 — 当前回复结束后依次执行（[Enter]）",
     "stopTitle": "停止当前回复（不影响已排队消息）",
@@ -448,8 +473,8 @@
     "directory": "目录",
     "dir_ref": "目录引用",
     "dir_name": "目录名",
-    "workshop_plugin": "工坊插件",
-    "workshop_plugin_ref": "工坊插件引用",
+    "workshop_extension": "工坊扩展",
+    "workshop_extension_ref": "工坊扩展引用",
     "current_game": "当前 game",
     "current_game_ref": "当前 game 引用",
     "path_prefix": "路径前缀",
@@ -464,9 +489,9 @@
     "chat_message_ref": "对话消息引用",
     "copy_message": "复制消息",
     "user_message_ref": "用户消息引用",
-    "bus_plugin": "Bus 插件",
-    "bus_plugin_ref": "Bus 插件引用",
-    "copy_plugin_id": "复制 plugin id",
+    "bus_extension": "Bus 扩展",
+    "bus_extension_ref": "Bus 扩展引用",
+    "copy_extension_id": "复制 extension id",
     "scene_entity": "场景实体",
     "source": "源",
     "components": "组件",
@@ -500,7 +525,7 @@
     "consoleEmpty": "暂无 console 输出 — 游戏 console.log/warn/error 会在这里实时显示",
     "networkEmpty": "暂无网络请求 — 游戏的 fetch / XHR / WebSocket 会在这里实时显示",
     "galleryTitle": "Workbench · 工作台",
-    "loadingPluginList": "加载 plugin 列表…",
+    "loadingExtensionList": "加载 extension 列表…",
     "gallerySub": "选一个工作台开始 — 点击 tile 切到 Sidebar 对应 wb-* 选项卡",
     "bumpedStatsSuffix": "bumped (manifest version 非 0.0.x 占位)",
     "implementedEntryCount": "实装入口数量",
@@ -509,7 +534,7 @@
     "verTagBumped": "已 bump · 实装中 (非 0.0.x 占位)",
     "verTagPlaceholder": "占位语义版本 · 后续实装会 bump",
     "wipTagTitle": "experimental — manifest 标 experimental:true · 真实现待 Phase 4+",
-    "toolsExposedToAi": "由本 workbench plugin 暴露给 AI",
+    "toolsExposedToAi": "由本 workbench extension 暴露给 AI",
     "agentsLoadFailed": "加载 agents 失败",
     "agentsTitle": "Agents · 协作团队",
     "agentsEmpty": "暂无 agents — 发送消息后 Forge 会自动派遣团队成员",
@@ -576,19 +601,19 @@
   "sidebar": {
     "expandSidebar": "展开侧栏",
     "collapseSidebar": "折叠侧栏",
-    "workbenchPluginsHint": "Workbench 插件 (bus-sourced · ←→ 切换)",
+    "workbenchExtensionsHint": "Workbench 扩展 (bus-sourced · ←→ 切换)",
     "tabTooltip": "{{label}} · {{id}} · ←→ 切换 tab",
     "inSeparateWindow": "已在独立窗口",
     "redockToMainWindow": "收回主窗",
     "popOutToSeparateWindow": "弹出为独立窗口",
     "inDockPanel": "已在 Dock 面板",
     "providesToolsTooltip": "{{count}} tools · AI agent 可调用：{{list}}",
-    "providesNoTools": "此插件未向 AI agent 暴露 tools",
+    "providesNoTools": "此扩展未向 AI agent 暴露 tools",
     "providesEventsTooltip": "{{count}} events · bus 上 emit：{{list}}",
-    "providesNoEvents": "此插件未向 bus emit events",
+    "providesNoEvents": "此扩展未向 bus emit events",
     "providesSkillsTooltip": "{{count}} skills · 注入 chat composer：{{list}}",
-    "providesNoSkills": "此插件未声明 skills",
-    "familyTooltip": "Bus 上共 {{count}} 个 workbench 插件 — 单击在 Bus 详情按 kind=workbench 过滤 →",
+    "providesNoSkills": "此扩展未声明 skills",
+    "familyTooltip": "Bus 上共 {{count}} 个 workbench 扩展 — 单击在 Bus 详情按 kind=workbench 过滤 →",
     "openInBusTooltip": "切换到 Bus tab (⌘3) 并自动展开 {{id}} 详情行",
     "openInBusDetail": "在 Bus 详情查看 →"
   },
@@ -626,8 +651,8 @@
     },
     "install": {
       "title": "安装",
-      "hint": "复制到 destRoot/.forgeax/plugins/<id>/ · 自动 reload",
-      "destRootL1Placeholder": "通常: ~ (写入 ~/.forgeax/plugins/)",
+      "hint": "复制到 destRoot/.forgeax/extensions/<id>/ · 自动 reload",
+      "destRootL1Placeholder": "通常: ~ (写入 ~/.forgeax/extensions/)",
       "destRootL2Placeholder": "当前 project root",
       "layerL1": "L1 · 用户级",
       "layerL2": "L2 · 项目级",
@@ -648,8 +673,8 @@
   },
   "author": {
     "fork": {
-      "title": "Fork plugin",
-      "hint": "把现有 plugin 拷到 L1/L2,接下来 chat-driven vibe-edit",
+      "title": "Fork extension",
+      "hint": "把现有 extension 拷到 L1/L2,接下来 chat-driven vibe-edit",
       "sourceLabel": "源",
       "selectPlaceholder": "— 选择 —",
       "newIdLabel": "新 id",
@@ -658,7 +683,7 @@
       "layerL2": "L2 · 项目级",
       "copying": "复制中…",
       "refresh": "刷新清单",
-      "refreshTitle": "重新拉 /api/plugins/manifests",
+      "refreshTitle": "重新拉 /api/extensions/manifests",
       "doneBadge": "已 fork ✓",
       "doneHelp": "已自动 reload — sidebar 应该看到新版本。",
       "note": "fork 仅复制源目录(含 prompt / handlers / config)。manifest.id 改写、displayName 加 \"(我的)\" 后缀。L1 优先级高于 L0,fork 立即在 sidebar 替换原版。"
@@ -692,8 +717,8 @@
       "hint": "单独开关进度条 / bus 库存行",
       "showProgressBar": "显示进度条",
       "showProgressBarHint": "（React 启动进度 · 平时 ~1s 走完）",
-      "showBusInventory": "显示 bus 插件总数",
-      "showBusInventoryHint": "（拉一次 /api/bus/plugins · 调试用）"
+      "showBusInventory": "显示 bus 扩展总数",
+      "showBusInventoryHint": "（拉一次 /api/extensions/list · 调试用）"
     },
     "apply": {
       "title": "应用 / 重置",
@@ -755,7 +780,7 @@
     "create": "创建"
   },
   "dashboard": {
-    "busKindRegistering": "{{kind}} · 插件登记中…",
+    "busKindRegistering": "{{kind}} · 扩展登记中…",
     "clickToBusAdmin": "单击 → Bus admin →",
     "clickToBusDetail": "单击切到 Bus 详情 →",
     "brandTotalTitle": "{{count}} sessions · 30s 自动刷新",
@@ -774,7 +799,7 @@
     "mb": {
       "title": {
         "some": "Model bindings · {{count}} on bus · 单击下钻 Bus admin →",
-        "none": "Model bindings · 0 plugins · 单击进入 Bus admin",
+        "none": "Model bindings · 0 extensions · 单击进入 Bus admin",
         "down": "Model bindings · Bus 列表暂不可读",
         "loading": "Model bindings · loading…"
       }
@@ -782,7 +807,7 @@
     "skill": {
       "title": {
         "some": "Skills · {{count}} on bus · 单击下钻 Bus admin →",
-        "none": "Skills · 0 plugins · 单击进入 Bus admin",
+        "none": "Skills · 0 extensions · 单击进入 Bus admin",
         "down": "Skills · Bus 列表暂不可读",
         "loading": "Skills · loading…"
       }
@@ -790,7 +815,7 @@
     "tool": {
       "title": {
         "some": "Tools · {{count}} on bus · 单击下钻 Bus admin →",
-        "none": "Tools · 0 plugins · 单击进入 Bus admin",
+        "none": "Tools · 0 extensions · 单击进入 Bus admin",
         "down": "Tools · Bus 列表暂不可读",
         "loading": "Tools · loading…"
       }
@@ -798,7 +823,7 @@
     "agent": {
       "title": {
         "some": "Agents · {{count}} on bus · 单击下钻 Bus admin →",
-        "none": "Agents · 0 plugins · 单击进入 Bus admin",
+        "none": "Agents · 0 extensions · 单击进入 Bus admin",
         "down": "Agents · Bus 列表暂不可读",
         "loading": "Agents · loading…"
       }
@@ -925,16 +950,46 @@
         "copied": "已复制"
       },
       "doc": {
-        "web": { "what": "把游戏打包成一个自包含的网站文件夹，丢到任意服务器（或本地）就能跑，发个链接别人就能玩。", "when": "最轻量的分享方式 · 需 WebGPU 浏览器" },
-        "windows": { "what": "生成一个带启动器 .exe 的文件夹，双击即玩，不用装浏览器、不用联网。", "when": "适合做成可下载的 PC 版" },
-        "macos": { "what": "生成一个带启动器 + 可双击「Play」.command 的文件夹，在这台 Mac 上本地运行游戏。", "when": "适合本地试玩 / 做可下载的 Mac 版" },
-        "android": { "what": "导出一个标准的 Android Studio 工程（不是直接 APK），在 Android Studio 里编译成手机 App。", "when": "点它会先让你填应用名 / 包名 / 图标" },
-        "cloud": { "what": "最省事的方式：不用导出、不用配置，点一下就发布到云端，几秒后拿到在线链接，任何人打开即玩。", "when": "即将支持" },
-        "ios": { "what": "导出 Xcode 工程以构建 iOS App。", "when": "点它会先让你填应用名 / Bundle ID / 图标" },
-        "engine": { "what": "高级开关，打包前重新编译引擎核心，一般不用管。", "when": "仅当导出结果和预览不一致时勾选" },
-        "engineRoot": { "what": "导出时绑定的引擎构建版本。", "when": "通常自动选好，保持默认即可" },
-        "history": { "what": "每一次导出的记录都在这里，可一键重试或删除。", "when": "想追溯或重跑某次导出时" },
-        "clean": { "what": "释放打包缓存占用的磁盘空间，只删缓存，不碰你已导出的成品和历史。", "when": "磁盘紧张时" }
+        "web": {
+          "what": "把游戏打包成一个自包含的网站文件夹，丢到任意服务器（或本地）就能跑，发个链接别人就能玩。",
+          "when": "最轻量的分享方式 · 需 WebGPU 浏览器"
+        },
+        "windows": {
+          "what": "生成一个带启动器 .exe 的文件夹，双击即玩，不用装浏览器、不用联网。",
+          "when": "适合做成可下载的 PC 版"
+        },
+        "macos": {
+          "what": "生成一个带启动器 + 可双击「Play」.command 的文件夹，在这台 Mac 上本地运行游戏。",
+          "when": "适合本地试玩 / 做可下载的 Mac 版"
+        },
+        "android": {
+          "what": "导出一个标准的 Android Studio 工程（不是直接 APK），在 Android Studio 里编译成手机 App。",
+          "when": "点它会先让你填应用名 / 包名 / 图标"
+        },
+        "cloud": {
+          "what": "最省事的方式：不用导出、不用配置，点一下就发布到云端，几秒后拿到在线链接，任何人打开即玩。",
+          "when": "即将支持"
+        },
+        "ios": {
+          "what": "导出 Xcode 工程以构建 iOS App。",
+          "when": "点它会先让你填应用名 / Bundle ID / 图标"
+        },
+        "engine": {
+          "what": "高级开关，打包前重新编译引擎核心，一般不用管。",
+          "when": "仅当导出结果和预览不一致时勾选"
+        },
+        "engineRoot": {
+          "what": "导出时绑定的引擎构建版本。",
+          "when": "通常自动选好，保持默认即可"
+        },
+        "history": {
+          "what": "每一次导出的记录都在这里，可一键重试或删除。",
+          "when": "想追溯或重跑某次导出时"
+        },
+        "clean": {
+          "what": "释放打包缓存占用的磁盘空间，只删缓存，不碰你已导出的成品和历史。",
+          "when": "磁盘紧张时"
+        }
       }
     },
     "onboard": {
@@ -999,7 +1054,7 @@
       "tooltip": "布局 · 重开 / 重置 / 预设"
     },
     "settings": {
-      "tooltip": "系统设置 · Plugins / Keys / Models / About"
+      "tooltip": "系统设置 · Extensions / Keys / Models / About"
     },
     "publish": {
       "packaging": "正在打包 {{platform}}…",
@@ -1051,29 +1106,29 @@
     "modePreview": "切到 Preview 模式",
     "modeWorkbench": "切到 Workbench 模式",
     "switchWorkbenchN": "切到第 {{n}} 个 workbench(Blender 风格 · 按列表索引)",
-    "openPlugins": "Settings → Plugins(原 Bus mode tab)",
+    "openExtensions": "Settings → Extensions(原 Bus mode tab)",
     "focusComposer": "聚焦右侧 ChatPanel 输入框"
   },
   "analytics": {
     "clickToBusDetail": "单击切到 Bus 详情 →",
     "clickToBusAdminFilter": "单击 → Bus admin (filter={{label}}) →"
   },
-  "centerPlugin": {
+  "centerExtension": {
     "backToTileGridTitle": "返回 12 个工作台 tile 网格",
     "backToWorkbench": "返回工作台",
     "redockTitle": "把独立窗口收回主窗",
     "redock": "收回主窗",
     "detachTitle": "弹出为独立窗口",
     "detach": "弹出窗口",
-    "openedInWindowPrefix": "插件 ",
+    "openedInWindowPrefix": "扩展 ",
     "openedInWindowSuffix": " 已在独立窗口中打开。",
-    "loadingPluginPrefix": "正在加载插件 ",
-    "loadingPluginSuffix": "…",
-    "missingStandalonePrefix": "插件 ",
+    "loadingExtensionPrefix": "正在加载扩展 ",
+    "loadingExtensionSuffix": "…",
+    "missingStandalonePrefix": "扩展 ",
     "missingStandaloneMid": " 缺少 ",
     "missingStandaloneSuffix": " 入口。",
-    "pluginUnavailablePrefix": "无法加载插件 ",
-    "pluginUnavailableSuffix": "。请确认 forgeax-server 已启动（在 forgeax-studio 目录运行 bun scripts/run.ts），然后刷新页面。"
+    "extensionUnavailablePrefix": "无法加载扩展 ",
+    "extensionUnavailableSuffix": "。请确认 forgeax-server 已启动（在 forgeax-studio 目录运行 bun scripts/run.ts），然后刷新页面。"
   },
   "errorBoundary": {
     "retry": "重试",
@@ -1091,7 +1146,7 @@
     "filterSource": "筛选来源 {{source}}",
     "copyAll": "复制全部",
     "clear": "清空",
-    "emptyNoMessages": "暂无消息。来自 Play / Edit / 插件 / shell 的错误会显示在这里。",
+    "emptyNoMessages": "暂无消息。来自 Play / Edit / 扩展 / shell 的错误会显示在这里。",
     "emptyNoMatch": "当前筛选无匹配条目。"
   },
   "permission": {
@@ -1115,7 +1170,7 @@
     "editorPanels": "编辑器面板",
     "mainPanels": "主面板",
     "morePanels": "更多面板",
-    "pluginPanels": "插件面板"
+    "extensionPanels": "扩展面板"
   },
   "firstRun": {
     "errMissingKey": "请输入 OpenRouter API Key",
@@ -1172,7 +1227,7 @@
       "open": "打开 surface overlay (dev)"
     },
     "overlay": {
-      "empty": "无 plugin 调用 surface.expose"
+      "empty": "无 extension 调用 surface.expose"
     },
     "action": {
       "formClose": "关闭表单",
@@ -1202,11 +1257,11 @@
     "recommendedPrefix": "推荐",
     "recommendedSuffix": "未在当前 session 中"
   },
-  "wbPluginDock": {
-    "loadingPlugin": "正在加载 {{pluginId}}…",
+  "wbExtensionDock": {
+    "loadingExtension": "正在加载 {{extensionId}}…",
     "popoutTitle": "弹出为独立 OS 窗口",
     "popoutLabel": "独立窗口",
-    "loadingPluginGeneric": "正在加载插件…"
+    "loadingExtensionGeneric": "正在加载扩展…"
   },
   "chatAgentCapsule": {
     "prevPage": "上一页",
@@ -1220,23 +1275,68 @@
   },
   "detachedSurface": {
     "unknownPanel": "未知面板 surface「{{id}}」。",
-    "loadingPlugin": "正在加载插件 {{id}}…",
-    "pluginNotFound": "未找到插件 {{id}}。"
+    "loadingExtension": "正在加载扩展 {{id}}…",
+    "extensionNotFound": "未找到扩展 {{id}}。"
   },
   "forgeCard": {
     "thinking": "{{displayName}} 正在思考",
     "emptyResponse": "(空响应 — 上游 cli 这次没产出内容；再发一次试试)"
   },
   "agentStatus": {
-    "expectant": ["正在待命中", "摸鱼中", "搓手手准备开工", "整装待发"],
-    "focused": ["正在烧脑中", "脑内开会中", "齿轮疯狂转动", "闭关思考"],
-    "cheerful": ["正在叭叭中", "键盘冒火中", "碎碎念中", "飞速码字"],
-    "diligent": ["正在烧烤中", "叮叮当当施工中", "正在开炉", "埋头苦干"],
-    "delegating": ["正在派活中", "喊人来帮忙", "指挥小队", "当甩手掌柜"],
-    "proud": ["新鲜出炉啦", "成品出锅", "叮~搞定", "骄傲交付"],
-    "weary": ["正在回血中", "喝口水歇会儿", "电量告急", "瘫一会儿"],
-    "sad": ["不小心翻车了", "撞墙中", "emo 一下", "正在擦眼泪"],
-    "curious": ["正在围观中", "好奇张望", "东瞅瞅西看看", "探头探脑"]
+    "expectant": [
+      "正在待命中",
+      "摸鱼中",
+      "搓手手准备开工",
+      "整装待发"
+    ],
+    "focused": [
+      "正在烧脑中",
+      "脑内开会中",
+      "齿轮疯狂转动",
+      "闭关思考"
+    ],
+    "cheerful": [
+      "正在叭叭中",
+      "键盘冒火中",
+      "碎碎念中",
+      "飞速码字"
+    ],
+    "diligent": [
+      "正在烧烤中",
+      "叮叮当当施工中",
+      "正在开炉",
+      "埋头苦干"
+    ],
+    "delegating": [
+      "正在派活中",
+      "喊人来帮忙",
+      "指挥小队",
+      "当甩手掌柜"
+    ],
+    "proud": [
+      "新鲜出炉啦",
+      "成品出锅",
+      "叮~搞定",
+      "骄傲交付"
+    ],
+    "weary": [
+      "正在回血中",
+      "喝口水歇会儿",
+      "电量告急",
+      "瘫一会儿"
+    ],
+    "sad": [
+      "不小心翻车了",
+      "撞墙中",
+      "emo 一下",
+      "正在擦眼泪"
+    ],
+    "curious": [
+      "正在围观中",
+      "好奇张望",
+      "东瞅瞅西看看",
+      "探头探脑"
+    ]
   },
   "markdownView": {
     "taskDoneReadonly": "已完成（只读）",
@@ -1272,8 +1372,8 @@
     "fileRef": "[文件: {{path}}]",
     "narrativeWorkshop": "叙事工坊"
   },
-  "standalonePlugin": {
-    "noEntryPrefix": "插件",
+  "standaloneExtension": {
+    "noEntryPrefix": "扩展",
     "noEntryMiddle": "没有",
     "noEntrySuffix": "入口。",
     "iframeLoadFailed": "iframe 加载失败：{{error}}"
@@ -1315,7 +1415,7 @@
   },
   "workbenchModuleStrip": {
     "ariaLabel": "工作台模块",
-    "empty": "暂无工作台插件"
+    "empty": "暂无工作台扩展"
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · 单击在 Bus 详情查看 →"

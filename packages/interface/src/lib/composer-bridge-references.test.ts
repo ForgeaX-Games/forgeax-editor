@@ -37,7 +37,7 @@ describe('buildReferenceFor — DOM units', () => {
     { name: 'dir', html: `<div class="fp-row dir"><span class="fp-name">src</span></div>`, kind: 'dir', icon: '📁', detailIncludes: 'src' },
     { name: 'agent-card', html: `<div class="agent-card" data-agent-id="iori" data-role="pillar"><span class="ac-name">Iori★</span></div>`, kind: 'agent', icon: '🤝', detailIncludes: '@iori' },
     { name: 'wm-agent-card', html: `<div class="wm-agent-card" data-agent-id="suzu" data-agent-name="Suzu"></div>`, kind: 'agent', icon: '🤝', detailIncludes: '@suzu' },
-    { name: 'ws-icon-btn', html: `<button class="ws-icon-btn" data-plugin-id="@x/wb-character" aria-label="角色"></button>`, kind: 'tool', icon: '🔧', detailIncludes: 'wb-character' },
+    { name: 'ws-icon-btn', html: `<button class="ws-icon-btn" data-extension-id="@x/wb-character" aria-label="角色"></button>`, kind: 'tool', icon: '🔧', detailIncludes: 'wb-character' },
     { name: 'preview-toolbar', html: `<div class="preview-toolbar" data-game-slug="sector-strike"></div>`, kind: 'game', icon: '🎮', detailIncludes: 'sector-strike' },
     { name: 'console-row', html: `<div class="console-row">RhiError: boom</div>`, kind: 'log', icon: '📜', detailIncludes: 'RhiError' },
     { name: 'workspace-tab', html: `<button class="mode-tab" data-ws-id="ws-abc" data-ws-name="Workspace 1"></button>`, kind: 'tool', icon: '🗂', detailIncludes: 'Workspace 1' },
@@ -45,7 +45,7 @@ describe('buildReferenceFor — DOM units', () => {
     { name: 'session-row', html: `<div class="tb-game-row" data-session-id="sid123" data-session-name="sess"></div>`, kind: 'tool', icon: '💬', detailIncludes: 'sid123' },
     { name: 'chat-msg', html: `<div class="kc-text">你好世界</div>`, kind: 'log', icon: '💭', detailIncludes: '你好世界' },
     { name: 'user-msg', html: `<div class="user-bubble">问个问题</div>`, kind: 'log', icon: '🧑', detailIncludes: '问个问题' },
-    { name: 'bus-plugin', html: `<div data-plugin-id="@x/model-anthropic">model</div>`, kind: 'tool', icon: '🔌', detailIncludes: 'model-anthropic' },
+    { name: 'bus-plugin', html: `<div data-extension-id="@x/model-anthropic">model</div>`, kind: 'tool', icon: '🔌', detailIncludes: 'model-anthropic' },
   ];
 
   for (const c of cases) {
@@ -78,10 +78,10 @@ describe('buildReferenceFor — DOM units', () => {
     expect(buildReferenceFor(node)).toBeNull();
   });
 
-  it('ws-icon-btn wins over the generic [data-plugin-id] descriptor', () => {
-    // a ws-icon-btn also carries data-plugin-id; the specific descriptor (earlier
+  it('ws-icon-btn wins over the generic [data-extension-id] descriptor', () => {
+    // a ws-icon-btn also carries data-extension-id; the specific descriptor (earlier
     // in the list) must win, and the generic one self-excludes inside .ws-icon-btn.
-    const node = el(`<button class="ws-icon-btn" data-plugin-id="@x/p" aria-label="P"></button>`);
+    const node = el(`<button class="ws-icon-btn" data-extension-id="@x/p" aria-label="P"></button>`);
     const ref = buildReferenceFor(node);
     expect(ref?.descriptor.kind).toBe('wb-plugin');
     expect(ref?.pill.icon).toBe('🔧'); // not 🔌

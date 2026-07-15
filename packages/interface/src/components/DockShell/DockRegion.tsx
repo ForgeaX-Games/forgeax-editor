@@ -79,7 +79,7 @@ function rebuildRegionDefault(
 //   CORE     — workbench / viewport / chat
 //   OPTIONAL — agents / files / console (布局 menu toggles)
 //   EDITOR   — ep:* editor sub-panels (in-process React components, single-realm)
-//   PLUGINS  — wb:<pluginId> panels merged in at runtime (below)
+//   PLUGINS  — wb:<extensionId> panels merged in at runtime (below)
 
 const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migration to workspace layouts
 
@@ -253,11 +253,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // the console) for a capability standalone intentionally doesn't have. (bus-api
   // still degrades gracefully if it IS hit; this just avoids the pointless wire
   // request — §4 前L2 不连后L2.)
-  const [busPlugins, setBusPlugins] = useState<ExtensionInfo[]>([]);
+  const [busExtensions, setBusExtensions] = useState<ExtensionInfo[]>([]);
   useEffect(() => {
     if (hideChatPanel) return; // no injected chat/agent engine → no plugin bus
     let cancelled = false;
-    void listExtensions('workbench').then((res) => { if (!cancelled) setBusPlugins(res.items ?? []); });
+    void listExtensions('workbench').then((res) => { if (!cancelled) setBusExtensions(res.items ?? []); });
     return () => { cancelled = true; };
   }, [hideChatPanel]);
 
@@ -267,17 +267,17 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const components = useMemo(() => ({
     ...BASE_PANEL_COMPONENTS,
     ...buildEditorPanelComponents(editorPanelIds),
-    ...Object.fromEntries(busPlugins.map((p) => [
+    ...Object.fromEntries(busExtensions.map((p) => [
       `wb:${p.id}`,
       // Region-scoped recovery: a plugin panel crash shows a retry/reload
       // affordance for that panel only, not the whole shell.
       () => (
         <RecoveryBoundary scope={`wb:${p.id}`} fullscreen={false}>
-          <WbExtensionDockPanel pluginId={p.id} />
+          <WbExtensionDockPanel extensionId={p.id} />
         </RecoveryBoundary>
       ),
     ])),
-  }), [busPlugins, editorPanelIds]);
+  }), [busExtensions, editorPanelIds]);
   const preFullscreen = useRef<{ tools: boolean; chat: boolean } | null>(null);
   // Track the workspace id that is currently rendered in the dock so we can
   // save its layout before switching. Lives outside onReady so useEffect cleanup
@@ -846,7 +846,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       <LayoutControl
         apiRef={apiRef}
         onReopen={reopen}
-        busPlugins={busPlugins}
+        busExtensions={busExtensions}
         isMember={isMember}
         editorPanelIds={editorPanelIds}
         titleFor={titleFor}
@@ -858,14 +858,14 @@ export function DockRegion({ region }: { region: DockRegionId }) {
 function LayoutControl({
   apiRef,
   onReopen,
-  busPlugins,
+  busExtensions,
   isMember,
   editorPanelIds,
   titleFor,
 }: {
   apiRef: React.RefObject<DockviewApi | null>;
   onReopen: (id: string) => void;
-  busPlugins: ExtensionInfo[];
+  busExtensions: ExtensionInfo[];
   isMember: (id: string) => boolean;
   editorPanelIds: readonly string[];
   titleFor: (id: string) => string;
@@ -920,10 +920,10 @@ function LayoutControl({
               <span className="fx-dl-check">{isOpen(id) ? '✓' : '＋'}</span>{titleFor(id)}
             </button>
           ))}
-          {busPlugins.length > 0 && (
+          {busExtensions.length > 0 && (
             <>
-              <div className="fx-dl-head">{t('dockShell.pluginPanels')}</div>
-              {busPlugins.filter((p) => isMember(`wb:${p.id}`)).map((p) => {
+              <div className="fx-dl-head">{t('dockShell.extensionPanels')}</div>
+              {busExtensions.filter((p) => isMember(`wb:${p.id}`)).map((p) => {
                 const id = `wb:${p.id}`;
                 const label = pickLang(p.displayName, getLocale(), p.id);
                 return (

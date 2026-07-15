@@ -2,7 +2,7 @@
  * Phase A3 — iframe-mounted workbench plugin.
  *
  * Renders the plugin's standalone dev server inside an iframe and wires it to
- * the host RPC channel via `createPluginPort` from `@forgeax/host-sdk`. This
+ * the host RPC channel via `createExtensionPort` from `@forgeax/host-sdk`. This
  * is the new path that will eventually replace the import-tree-based
  * `MAINAREA_PLUGIN_LOADERS` map. Today (A3) it's gated behind the
  * `VITE_FX_USE_IFRAME=true` env flag and only kicks in when a plugin
@@ -27,11 +27,11 @@ import { ExtensionIframeHost } from '../ExtensionHost/ExtensionIframeHost';
  *  index.html reads `?pane=` and tags `<body data-pane=...>`; CSS hides the
  *  irrelevant regions so left/center can be embedded as sibling iframes that
  *  sync via same-origin BroadcastChannel. */
-export type PluginIframePane = 'left' | 'center';
+export type ExtensionIframePane = 'left' | 'center';
 
 interface Props {
   plugin: ExtensionInfo;
-  pane?: PluginIframePane;
+  pane?: ExtensionIframePane;
   /** Keep-alive visibility. When false the iframe stays mounted & alive but is
    *  CSS-hidden (no reload), and we push `visibility.changed{visible:false}` so
    *  heavy plugins can pause their render loop. Defaults to true (standalone /
@@ -47,7 +47,7 @@ interface Props {
 
 function buildIframeSrc(
   plugin: ExtensionInfo,
-  pane?: PluginIframePane,
+  pane?: ExtensionIframePane,
   slug?: string | null,
 ): string | null {
   const sa = plugin.entry?.standalone;
@@ -116,7 +116,7 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
     /* localStorage unavailable (private mode) — target falls back to selector */
   }
   const wbId = PLUGIN_TO_WB_ID[targetPluginId] ?? targetPluginId.replace(/^@[^/]+\//, '');
-  useShellStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedPluginId: targetPluginId });
+  useShellStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedExtensionId: targetPluginId });
 }
 
 export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
@@ -208,23 +208,23 @@ export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadN
   if (!src) {
     return (
       <div style={{ padding: 20, color: '#888' }}>
-        {t('standalonePlugin.noEntryPrefix')} <code>{plugin.id}</code>{' '}
-        {t('standalonePlugin.noEntryMiddle')} <code>entry.standalone</code>{' '}
-        {t('standalonePlugin.noEntrySuffix')}
+        {t('standaloneExtension.noEntryPrefix')} <code>{plugin.id}</code>{' '}
+        {t('standaloneExtension.noEntryMiddle')} <code>entry.standalone</code>{' '}
+        {t('standaloneExtension.noEntrySuffix')}
       </div>
     );
   }
 
   return (
     <ExtensionIframeHost
-      pluginId={plugin.id}
+      extensionId={plugin.id}
       src={src}
       pane={pane}
       active={active}
       onNavigate={handleNavigate}
       onChatPost={handleChatPost}
       onToolCall={handleToolCall}
-      loadErrorText={(error) => t('standalonePlugin.iframeLoadFailed', { error })}
+      loadErrorText={(error) => t('standaloneExtension.iframeLoadFailed', { error })}
     />
   );
 }

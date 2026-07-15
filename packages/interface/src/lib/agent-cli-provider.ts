@@ -33,25 +33,25 @@ export function preferredCliProviderToKernel(preferred?: string | null): string 
   return null;
 }
 
-let agentPluginsCache: ExtensionInfo[] | null = null;
-let agentPluginsInflight: Promise<ExtensionInfo[]> | null = null;
+let agentExtensionsCache: ExtensionInfo[] | null = null;
+let agentExtensionsInflight: Promise<ExtensionInfo[]> | null = null;
 
-async function loadAgentPlugins(): Promise<ExtensionInfo[]> {
-  if (agentPluginsCache) return agentPluginsCache;
-  if (!agentPluginsInflight) {
-    agentPluginsInflight = listExtensionsShared()
+async function loadAgentExtensions(): Promise<ExtensionInfo[]> {
+  if (agentExtensionsCache) return agentExtensionsCache;
+  if (!agentExtensionsInflight) {
+    agentExtensionsInflight = listExtensionsShared()
       .then((res) => res.items.filter((p) => p.kind === 'agent'))
       .then((items) => {
-        agentPluginsCache = items;
-        agentPluginsInflight = null;
+        agentExtensionsCache = items;
+        agentExtensionsInflight = null;
         return items;
       })
       .catch(() => {
-        agentPluginsInflight = null;
+        agentExtensionsInflight = null;
         return [] as ExtensionInfo[];
       });
   }
-  return agentPluginsInflight;
+  return agentExtensionsInflight;
 }
 
 /** Resolve the CLI kernel id for an agent path/display id (e.g. `cursor-default`). */
@@ -59,7 +59,7 @@ export async function resolveKernelForAgent(agentId: string): Promise<string | n
   const key = agentId.trim();
   if (!key) return null;
 
-  const plugins = await loadAgentPlugins();
+  const plugins = await loadAgentExtensions();
   const hit = plugins.find((p) => {
     const id = p.agent?.id;
     if (!id) return false;
@@ -75,6 +75,6 @@ export async function resolveKernelForAgent(agentId: string): Promise<string | n
 
 /** Test-only: bust the bus agent cache between cases. */
 export function _resetAgentCliProviderCacheForTests(): void {
-  agentPluginsCache = null;
-  agentPluginsInflight = null;
+  agentExtensionsCache = null;
+  agentExtensionsInflight = null;
 }

@@ -13,8 +13,8 @@
  *                 relocated so 1..9 are free for workbench switching)
  *   Ctrl+/        focus chat composer
  *   Ctrl+H        open Settings → Changelog
- *   Esc           exit viewport Play game input → editor controls; otherwise
- *                 close current overlay (Settings → Dashboard → Fullscreen)
+ *   Esc           stop viewport Play; otherwise close current overlay
+ *                 (Settings → Dashboard → Fullscreen)
  *
  * IME 安全:
  *   - 总是用 Ctrl+Shift 复合,避开浏览器原生 (Ctrl+1/2/3 切 tab · Ctrl+J 下载 · Ctrl+B 收藏栏 · Ctrl+W/T 关/开 tab)
@@ -40,7 +40,7 @@ export interface ShortcutDef {
   /** 分组(Layout / Mode / Overlay / Focus / general / edit)。 */
   group: 'layout' | 'mode' | 'overlay' | 'focus' | 'general' | 'edit';
   /** 触发动作。返回 true 表示 preventDefault。 */
-  run: () => boolean | void;
+  run: (e?: KeyboardEvent) => boolean | void;
   /** Esc 这种允许在 input 里触发(其他必须 target 不是 editable 才触发)。 */
   allowInInput?: boolean;
 }
@@ -79,7 +79,7 @@ function mod(e: KeyboardEvent): boolean {
 // ── Editor keyboard-router deps (keyboard-router convergence, M4 T4-1..T4-3) ──
 // The interface package is editor-agnostic (lint:agnostic forbids importing
 // @forgeax/editor), so the edit-domain shortcuts (Delete / Backspace / F2 /
-// Ctrl+D / Ctrl+A / G) are injected by the host editor via
+// Ctrl+D / Ctrl+A / Shift+G) are injected by the host editor via
 // registerKeyboardRouterDeps. Each dep is a thin callback the editor wires to
 // its own gateway / selection / viewport-quadrant — the router stays a pure
 // dispatcher and never touches editor state directly (G-1 / AC-A1: still ONE
@@ -103,9 +103,9 @@ export interface KeyboardRouterDeps {
   getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
   /** True under ▶ Play (entity-domain Delete must early-return, AC-A5b). */
   isPlayMode: () => boolean;
-  /** Current viewport display axis (for G toggle, AC-Cb4). */
+  /** Current viewport display axis (for Shift+G toggle, AC-Cb4). */
   getDisplay: () => 'scene' | 'game';
-  /** Current input owner (for G: an active game lease yields to the game). */
+  /** Current input owner. */
   getInputTarget: () => 'editor' | 'game';
   /** Entity: delete the given handles (cascade, one undo step). */
   deleteEntities: (ids: number[]) => void;
@@ -191,14 +191,22 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     else deps.selectAllEntities();
     return true;
   };
-  // G display toggle (AC-Cb4): play·game + inputTarget==='game' yields to the
-  // game (T0-10). Otherwise toggle scene⇄game through the setDisplay session op.
-  const routeG = (): boolean => {
-    if (deps.getInputTarget() === 'game') return false;
-    deps.dispatch(
-      { kind: 'setDisplay', display: deps.getDisplay() === 'game' ? 'scene' : 'game' },
-      'human',
-    );
+  // Shift+G viewport escape: plain G remains game-owned. Outside Play this
+  // shortcut is inactive; during Play it toggles play·game ⇄ play·scene.
+  const routeShiftG = (): boolean => {
+    if (!deps.isPlayMode()) return false;
+    deps.dispatch({ kind: 'setDisplay', display: deps.getDisplay() === 'game' ? 'scene' : 'game' }, 'human');
+    return true;
+  };
+  const routeEditorOwnedPlayKey = (e?: KeyboardEvent): boolean => {
+    if (!e) return true;
+    const key = e.key.toLowerCase();
+    if (!mod(e) && !e.altKey) {
+      if (key === 'w') deps.dispatch({ kind: 'setGizmoMode', mode: 'translate' }, 'human');
+      else if (key === 'e') deps.dispatch({ kind: 'setGizmoMode', mode: 'rotate' }, 'human');
+      else if (key === 'r') deps.dispatch({ kind: 'setGizmoMode', mode: 'scale' }, 'human');
+      else if (key === 'f') deps.dispatch({ kind: 'requestFrame' }, 'human');
+    }
     return true;
   };
 
@@ -234,12 +242,19 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       run: routeCtrlA,
     },
     {
-      combo: 'G',
+      combo: 'Shift+G',
       group: 'edit',
-      label: 'Toggle viewport display (scene ⇄ game)',
-      match: (e) => !mod(e) && !e.shiftKey && !e.altKey
+      label: 'Toggle Play scene view',
+      match: (e) => !mod(e) && e.shiftKey && !e.altKey
         && (e.key === 'g' || e.key === 'G'),
-      run: routeG,
+      run: routeShiftG,
+    },
+    {
+      combo: 'Play editor input shield',
+      group: 'edit',
+      label: 'Shield game input while editor-owned',
+      match: () => deps.isPlayMode() && deps.getInputTarget() !== 'game',
+      run: routeEditorOwnedPlayKey,
     },
   ];
 }
@@ -322,12 +337,11 @@ export function buildShortcuts(): ShortcutDef[] {
       allowInInput: true,
       match: (e) => e.key === 'Escape' && !mod(e) && !e.shiftKey && !e.altKey,
       run: () => {
-        // Escape exits Play possession: it leaves the simulation running but
-        // returns to the scene/editor view, which structurally revokes game
-        // control. G remains game-owned while leased, so it cannot steal a
-        // gameplay key to do this transition.
-        if (routerDeps?.isPlayMode() && routerDeps.getInputTarget() === 'game') {
-          routerDeps.dispatch({ kind: 'setDisplay', display: 'scene' }, 'human');
+        // Escape is a Play-only viewport shortcut: stop the transient play
+        // session and return to edit mode. The listener stays in the single
+        // global router; outside Play this branch is inactive.
+        if (routerDeps?.isPlayMode()) {
+          routerDeps.dispatch({ kind: 'stop' }, 'human');
           return true;
         }
         const s = store();
@@ -373,7 +387,7 @@ export function buildShortcuts(): ShortcutDef[] {
     {
       combo: 'Ctrl+Shift+0',
       group: 'overlay',
-      label: t('shortcuts.openPlugins'),
+      label: t('shortcuts.openExtensions'),
       match: (e) => mod(e) && e.shiftKey && (e.code === 'Digit0' || e.key === '0' || e.key === ')'),
       run: () => { store().openOverlay('settings', 'plugins'); return true; },
     },
@@ -412,7 +426,7 @@ export function buildShortcuts(): ShortcutDef[] {
     },
   ];
   // Inject the host editor's edit-domain shortcuts (Delete / F2 / Ctrl+D /
-  // Ctrl+A / G) when deps were registered at boot. Keeps this file editor-agnostic.
+  // Ctrl+A / Shift+G) when deps were registered at boot. Keeps this file editor-agnostic.
   if (routerDeps) shortcuts.push(...editShortcuts(routerDeps));
   return shortcuts;
 }
@@ -436,7 +450,7 @@ export function useGlobalShortcuts(): void {
         if (!s.match(e)) continue;
         // 2. Typing target → only allow shortcuts marked allowInInput.
         if (isTypingTarget(e) && !s.allowInInput) return;
-        const shouldPreventDefault = s.run() !== false;
+        const shouldPreventDefault = s.run(e) !== false;
         if (shouldPreventDefault) {
           e.preventDefault();
           e.stopPropagation();

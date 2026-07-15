@@ -137,19 +137,19 @@ export function registerBuiltinActions(): void {
     title: '打开工作台插件',
     description:
       "Open the workbench and expand a specific plugin by id — the concrete 'open this plugin' step. It switches to the workbench (AI) workspace, then expands that plugin's panel. Discover valid ids and what each does via workbench.list_plugins.",
-    schema: { type: 'object', properties: { pluginId: { type: 'string' } }, required: ['pluginId'] },
+    schema: { type: 'object', properties: { extensionId: { type: 'string' } }, required: ['extensionId'] },
     capability: 'write',
     firstClass: true,
     surface: 'ui',
-    // 命令面板把 pluginId 变成「现有插件」下拉,免瞎填。
+    // 命令面板把 extensionId 变成「现有插件」下拉,免瞎填。
     choices: {
-      pluginId: async () => (await listExtensions('workbench')).items.filter((p) => !p.workbench?.hidden).map((p) => p.id),
+      extensionId: async () => (await listExtensions('workbench')).items.filter((p) => !p.workbench?.hidden).map((p) => p.id),
     },
     run: (args) => {
-      const pluginId = args.pluginId as string;
+      const extensionId = args.extensionId as string;
       setActiveWorkbench('ai');
-      st().openWorkbench({ expandedPluginId: pluginId });
-      return { status: 'completed', stateDigest: { activeWorkspace: 'ai', expandedPluginId: pluginId } };
+      st().openWorkbench({ expandedExtensionId: extensionId });
+      return { status: 'completed', stateDigest: { activeWorkspace: 'ai', expandedExtensionId: extensionId } };
     },
   });
 

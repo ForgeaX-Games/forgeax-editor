@@ -28,7 +28,7 @@ interface Props {
 
 export function DetachedSurface({ surface }: Props): ReactElement {
   if (surface.kind === 'plugin') {
-    return <DetachedPluginSurface surface={surface} />;
+    return <DetachedExtensionSurface surface={surface} />;
   }
   return <DetachedPanelSurface surface={surface} />;
 }
@@ -125,21 +125,21 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
   );
 }
 
-function DetachedPluginSurface({ surface }: Props): ReactElement {
+function DetachedExtensionSurface({ surface }: Props): ReactElement {
   const { t } = useTranslation();
   const manifest = useExtensionManifest(surface.id);
 
   if (manifest === 'loading') {
     return (
       <div style={fillCenter}>
-        <span style={{ color: '#888' }}>{t('detachedSurface.loadingPlugin', { id: surface.id })}</span>
+        <span style={{ color: '#888' }}>{t('detachedSurface.loadingExtension', { id: surface.id })}</span>
       </div>
     );
   }
   if (!manifest) {
     return (
       <div style={fillCenter}>
-        <span style={{ color: '#c44' }}>{t('detachedSurface.pluginNotFound', { id: surface.id })}</span>
+        <span style={{ color: '#c44' }}>{t('detachedSurface.extensionNotFound', { id: surface.id })}</span>
       </div>
     );
   }

@@ -30,10 +30,10 @@ export function manifestMatchesId(m: ExtensionInfo, id: string): boolean {
  *  Extracted from WorkbenchExtensionHost so the keep-alive CenterExtensionLayer can
  *  share one implementation (single source of truth for manifest resolution).
  */
-export function useExtensionManifest(pluginId: string): ExtensionInfo | null | 'loading' {
+export function useExtensionManifest(extensionId: string): ExtensionInfo | null | 'loading' {
   const [info, setInfo] = useState<ExtensionInfo | null | 'loading'>('loading');
   useEffect(() => {
-    if (!pluginId) {
+    if (!extensionId) {
       setInfo(null);
       return;
     }
@@ -49,7 +49,7 @@ export function useExtensionManifest(pluginId: string): ExtensionInfo | null | '
       try {
         const res = await listExtensionsShared({ force: attempts > 1 });
         if (cancelled) return;
-        const found = res.items.find((p) => manifestMatchesId(p, pluginId)) ?? null;
+        const found = res.items.find((p) => manifestMatchesId(p, extensionId)) ?? null;
         setInfo(found);
         if (found?.entry?.standalone || attempts >= MAX_ATTEMPTS) return;
       } catch {
@@ -67,6 +67,6 @@ export function useExtensionManifest(pluginId: string): ExtensionInfo | null | '
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [pluginId]);
+  }, [extensionId]);
   return info;
 }

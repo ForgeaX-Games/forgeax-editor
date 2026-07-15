@@ -311,11 +311,11 @@ export interface AppState {
   // left pane from the center (the left-pane-blank class of bug). openWorkbench
   // is the ONE atomic action every open path funnels through, so the two fields
   // can never drift. (The low-level setters above remain only for the center
-  // "返回工作台" collapse, which clears expandedPluginId while keeping the tab.)
+  // "返回工作台" collapse, which clears expandedExtensionId while keeping the tab.)
   //   tab               — sidebar tab to activate ('agents' | 'files' | 'wb:<id>')
-  //   expandedPluginId  — plugin to expand into the center, or null (none).
+  //   expandedExtensionId  — plugin to expand into the center, or null (none).
   //                       Omit to leave the current center plugin untouched.
-  openWorkbench: (opts: { tab?: string; expandedPluginId?: string | null }) => void;
+  openWorkbench: (opts: { tab?: string; expandedExtensionId?: string | null }) => void;
 
   // ── Windowing (detached OS windows) ──
   // Set of surface keys (see lib/platform/surface.ts `surfaceKey`) currently

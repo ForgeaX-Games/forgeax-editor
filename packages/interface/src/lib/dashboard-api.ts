@@ -95,7 +95,7 @@ export const dashApi = {
        *  remaining `h.bus?.…` readers (Sidebar BusHealthLamp / TopBar / Dashboard)
        *  compile; those are dead bus indicators outside the bottom status bar. */
       bus?: {
-        pluginCount: number;
+        extensionCount: number;
         brokenCount: number;
         listenerCount: number;
         ringSize: number;

@@ -15,16 +15,16 @@ import { usePanelRenderers } from '../DockShell/panelRenderers';
 /** Returns true if the plugin should be rendered in the central MainArea
  *  (i.e. it declares a standalone iframe entry). Sidebar callers use this
  *  to know when to hand off rendering to the central pane. */
-export function extensionRendersInMainArea(pluginInfo?: ExtensionInfo | null): boolean {
-  return !!pluginInfo?.entry?.standalone;
+export function extensionRendersInMainArea(extensionInfo?: ExtensionInfo | null): boolean {
+  return !!extensionInfo?.entry?.standalone;
 }
 
 /** Doc 06 §panes — true when the plugin declares an explicit left pane and
  *  ships a standalone iframe to host it. Sidebar uses this to decide whether
  *  to mount `<StandaloneExtensionIframe pane="left">` in place of the legacy
  *  ExtensionPlaceholder info card. */
-export function extensionRendersInSidebarLeftPane(pluginInfo?: ExtensionInfo | null): boolean {
-  return !!(pluginInfo?.entry?.standalone && pluginInfo?.workbench?.panes?.left);
+export function extensionRendersInSidebarLeftPane(extensionInfo?: ExtensionInfo | null): boolean {
+  return !!(extensionInfo?.entry?.standalone && extensionInfo?.workbench?.panes?.left);
 }
 
 /** Inline host for non-iframe workbench panels. WorkbenchMode routes
@@ -35,21 +35,21 @@ export function extensionRendersInSidebarLeftPane(pluginInfo?: ExtensionInfo | n
  *  picker's preferredAgent. */
 export function WorkbenchExtensionHost(): ReactElement | null {
   const { t } = useTranslation();
-  const pluginId = useShellStore((s) => s.workbenchExpandedExtensionId);
-  const setPluginId = useShellStore((s) => s.setWorkbenchExpandedExtensionId);
-  const manifest = useExtensionManifest(pluginId ?? '');
+  const extensionId = useShellStore((s) => s.workbenchExpandedExtensionId);
+  const setExtensionId = useShellStore((s) => s.setWorkbenchExpandedExtensionId);
+  const manifest = useExtensionManifest(extensionId ?? '');
   const { workbenchPanels, slots } = usePanelRenderers();
   const CornerAgentPicker = slots?.CornerAgentPicker;
 
-  if (!pluginId) return null;
+  if (!extensionId) return null;
 
   const back = (
-    <button className="wb-plugin-back" onClick={() => setPluginId(null)} title={t('centerPlugin.backToTileGridTitle')}>
-      <MoveLeft size={12} /><span>{t('centerPlugin.backToWorkbench')}</span>
+    <button className="wb-plugin-back" onClick={() => setExtensionId(null)} title={t('centerExtension.backToTileGridTitle')}>
+      <MoveLeft size={12} /><span>{t('centerExtension.backToWorkbench')}</span>
     </button>
   );
 
-  const preferredAgentPluginId = manifest && manifest !== 'loading' ? manifest.workbench?.preferredAgent : undefined;
+  const preferredAgentExtensionId = manifest && manifest !== 'loading' ? manifest.workbench?.preferredAgent : undefined;
 
   // Standalone-iframe plugins are owned by CenterExtensionLayer (keep-alive).
   if (manifest && manifest !== 'loading' && manifest.entry?.standalone) return null;
@@ -58,7 +58,7 @@ export function WorkbenchExtensionHost(): ReactElement | null {
   // wb-plugin-author here; standalone registers nothing → this map is empty and
   // we fall through to the placeholder branch below. interface holds no plugin
   // id — it renders whatever the host injected for this expanded plugin.
-  const InlinePanel = workbenchPanels?.[pluginId];
+  const InlinePanel = workbenchPanels?.[extensionId];
   if (InlinePanel) {
     return (
       <div className="wb-plugin-host">
@@ -66,12 +66,12 @@ export function WorkbenchExtensionHost(): ReactElement | null {
           {back}
           {CornerAgentPicker && (
             <div data-fx-slot="CornerAgentPicker" style={{ display: 'contents' }}>
-              <CornerAgentPicker preferredAgentPluginId={preferredAgentPluginId} />
+              <CornerAgentPicker preferredAgentExtensionId={preferredAgentExtensionId} />
             </div>
           )}
         </div>
         <div className="wb-plugin-host-body" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div data-fx-slot={`workbenchPanels:${pluginId}`} style={{ display: 'contents' }}>
+          <div data-fx-slot={`workbenchPanels:${extensionId}`} style={{ display: 'contents' }}>
             <InlinePanel />
           </div>
         </div>

@@ -31,7 +31,7 @@ export function WorkbenchModuleStrip({ entries, activeTabId, onSelect }: Props) 
         const Icon = iconForWorkbenchModule({
           workbenchId: e.id,
           label: e.label,
-          pluginId: e.manifest.id,
+          extensionId: e.manifest.id,
         });
         return (
           <button

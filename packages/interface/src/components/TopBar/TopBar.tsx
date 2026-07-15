@@ -32,9 +32,9 @@ import './TopBar.css';
 type BusCountState =
   | { kind: 'loading' }
   | { kind: 'down' }
-  | { kind: 'ok'; pluginCount: number; brokenCount: number };
+  | { kind: 'ok'; extensionCount: number; brokenCount: number };
 
-function useBusPluginCount(): BusCountState {
+function useBusExtensionCount(): BusCountState {
   const [state, setState] = useState<BusCountState>({ kind: 'loading' });
   useEffect(() => {
     let cancelled = false;
@@ -43,7 +43,7 @@ function useBusPluginCount(): BusCountState {
         const r = await dashApi.health();
         if (cancelled) return;
         if (!r.bus) { setState({ kind: 'down' }); return; }
-        setState({ kind: 'ok', pluginCount: r.bus.pluginCount, brokenCount: r.bus.brokenCount });
+        setState({ kind: 'ok', extensionCount: r.bus.extensionCount, brokenCount: r.bus.brokenCount });
       } catch {
         if (cancelled) return;
         setState({ kind: 'down' });
@@ -65,7 +65,7 @@ function useBusPluginCount(): BusCountState {
 // browser tab and the count goes 2 → 3 live). Color is sky-blue, distinct
 // from amber (workbench) and green (bus): "blue=observers / amber=
 // workbench plugins / green=bus plugins" — three different surfaces in one
-// scan. Reuses dashApi.health() (already cached for useBusPluginCount).
+// scan. Reuses dashApi.health() (already cached for useBusExtensionCount).
 type PreviewCountState =
   | { kind: 'loading' }
   | { kind: 'down' }
@@ -102,7 +102,7 @@ type WbCountState =
   | { kind: 'down' }
   | { kind: 'ok'; count: number };
 
-function useWorkbenchPluginCount(): WbCountState {
+function useWorkbenchExtensionCount(): WbCountState {
   const [state, setState] = useState<WbCountState>({ kind: 'loading' });
   useEffect(() => {
     let cancelled = false;
@@ -637,7 +637,7 @@ export function TopBar() {
   // 上一次的 selected,底部已经切了),用户明确反馈"为什么有好几个选模型
   // 的地方"。SSOT 收回 Composer (`ChatPanel/Composer.tsx <ModelPicker>`),
   // TopBar 只留 Settings 入口和 cli-provider admin 快捷键。
-  // 2026-05-17 — useBusPluginCount / useWorkbenchPluginCount / usePreviewWsCount
+  // 2026-05-17 — useBusExtensionCount / useWorkbenchExtensionCount / usePreviewWsCount
   // hooks no longer wired (count badges were removed). The function bodies are
   // kept in this file for the moment in case future TopBar widgets want them;
   // the unused-imports lint warning is tolerated.

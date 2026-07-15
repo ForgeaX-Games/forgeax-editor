@@ -78,7 +78,7 @@ export interface ExtensionEntryInfo {
   frontend?: string;
   /** Phase A3: standalone iframe-served plugin entry. When `start`/`port` is
    *  set, the host can mount the plugin via an iframe + postMessage RPC
-   *  (createPluginPort). Gated by `VITE_FX_USE_IFRAME=true` until B-phase. */
+   *  (createExtensionPort). Gated by `VITE_FX_USE_IFRAME=true` until B-phase. */
   standalone?: {
     start?: string;
     port?: number;

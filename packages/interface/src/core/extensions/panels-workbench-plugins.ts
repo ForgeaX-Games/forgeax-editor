@@ -5,7 +5,7 @@ import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
 /** Studio owns the concrete workbenchPanels record (wb:* iframe descriptors);
  *  this plugin lifts it into host.panels.workbenchPanels so DockShell reads
  *  a single source. */
-export function createPanelsWorkbenchPluginsExtension(
+export function createPanelsWorkbenchInlineExtension(
   workbenchPanels: PanelRenderers['workbenchPanels'],
 ): AppExtension {
   return {

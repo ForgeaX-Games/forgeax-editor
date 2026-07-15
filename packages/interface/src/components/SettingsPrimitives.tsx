@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Eye, EyeOff, UploadCloud } from 'lucide-react';
+import { Eye, EyeOff, UploadCloud, Copy, Check } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 
 export function Section({
@@ -154,6 +154,34 @@ async function callUploadCommand(args: string[]): Promise<UploadOutcome> {
 
 const PERSONAL_TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo&description=ForgeaX+Upload';
 
+/** Full snapshot URL + copy button — the thing users paste back as feedback. */
+function SnapshotUrlRow({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // clipboard API unavailable (http / permission) — legacy path
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, maxWidth: '100%' }}>
+      <code style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '0 1 auto' }}>{url}</code>
+      <button className="settings-edit-btn" style={{ flex: 'none' }} onClick={() => void copy()}>
+        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? '已复制' : '复制地址'}
+      </button>
+    </div>
+  );
+}
+
 export function UploadPanel({ tokenSet }: { tokenSet?: boolean }) {
   const [phase, setPhase] = useState<'idle' | 'planning' | 'planned' | 'pushing'>('idle');
   const [plan, setPlan] = useState<UploadPlanData | null>(null);
@@ -233,25 +261,28 @@ export function UploadPanel({ tokenSet }: { tokenSet?: boolean }) {
       {outcome && (
         <div className="settings-help" style={{ marginTop: 6 }}>
           {outcome.ok ? (
-            outcome.skipped ? (
-              <span>
-                <span className="ok-pill">内容与最近一次上传完全一致,未新建版本</span>{' '}
-                <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.path}`} target="_blank" rel="noreferrer">
-                  查看已有快照
-                </a>
-              </span>
-            ) : (
-              <span>
-                <span className="ok-pill">已上传 {outcome.filesChanged} 个文件({fmtBytes(outcome.bytes)})</span>{' '}
-                <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.path}`} target="_blank" rel="noreferrer">
-                  查看本次快照
-                </a>{' '}
-                <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.namespace}/data`} target="_blank" rel="noreferrer">
-                  全部版本
-                </a>{' '}
-                <code>@{outcome.commit.slice(0, 7)}</code>
-              </span>
-            )
+            <>
+              {outcome.skipped ? (
+                <span>
+                  <span className="ok-pill">内容与最近一次上传完全一致,未新建版本</span>{' '}
+                  <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.path}`} target="_blank" rel="noreferrer">
+                    查看已有快照
+                  </a>
+                </span>
+              ) : (
+                <span>
+                  <span className="ok-pill">已上传 {outcome.filesChanged} 个文件({fmtBytes(outcome.bytes)})</span>{' '}
+                  <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.path}`} target="_blank" rel="noreferrer">
+                    查看本次快照
+                  </a>{' '}
+                  <a href={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.namespace}/data`} target="_blank" rel="noreferrer">
+                    全部版本
+                  </a>{' '}
+                  <code>@{outcome.commit.slice(0, 7)}</code>
+                </span>
+              )}
+              <SnapshotUrlRow url={`${outcome.repoUrl}/tree/${outcome.branch}/${outcome.path}`} />
+            </>
           ) : (
             <span className="err-pill" style={{ whiteSpace: 'normal' }}>上传失败:{outcome.error}</span>
           )}

@@ -356,7 +356,7 @@ export function BuildBadge() {
                   (p.kind === 'cli-provider' ? '⌘' : p.kind === 'agent' ? '◆' : '·');
                 const shortId = p.id.replace(/^@forgeax-plugin\//, '');
                 return (
-                  <div key={p.id} style={rowStyle} data-plugin-id={p.id}>
+                  <div key={p.id} style={rowStyle} data-extension-id={p.id}>
                     <span style={rowIconStyle} aria-hidden>
                       {icon}
                     </span>

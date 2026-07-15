@@ -254,7 +254,7 @@ interface UiSurfaceAction {
 interface UiSurfaceRow {
   id: string;
   layer: 'host' | 'plugin' | 'iframe';
-  pluginId?: string;
+  extensionId?: string;
   exposedToAI: boolean;
   actions: UiSurfaceAction[];
   mountedAt: number;
@@ -817,7 +817,7 @@ export function BusAdminPanel() {
       setFocusedRowId(orderedRowIds[0]);
     }
   }, [orderedRowIds, focusedRowId]);
-  // P3.58 — moveRowFocus is bound per-row in PluginRow.onKeyDown. Cycles via
+  // P3.58 — moveRowFocus is bound per-row in ExtensionRow.onKeyDown. Cycles via
   // mod-N so ↓ from last wraps to first and ↑ from first wraps to last.
   const moveRowFocus = (currentId: string, key: string) => {
     const n = orderedRowIds.length;
@@ -1053,15 +1053,15 @@ export function BusAdminPanel() {
               const worst: ProvHealthTone =
                 downN > 0 ? 'down' : warnN > 0 ? 'warn' : loadingN === leds.length ? 'loading' : 'ok';
               const hasSolo = enabledKinds !== null && enabledKinds.size < leds.length;
-              const totalPlugins = items.length;
+              const totalExtensions = items.length;
               const ariaLbl =
                 loadingN === leds.length
-                  ? `Bus kind health — loading · ${totalPlugins} plugins total`
-                  : `Bus kind health — ${totalPlugins} plugins total · ${okN} ok, ${warnN} warn, ${downN} down of ${leds.length} kinds`;
+                  ? `Bus kind health — loading · ${totalExtensions} plugins total`
+                  : `Bus kind health — ${totalExtensions} plugins total · ${okN} ok, ${warnN} warn, ${downN} down of ${leds.length} kinds`;
               const titleStr =
                 loadingN === leds.length
-                  ? `Σ ${totalPlugins} plugin · ${t('bus.mdSummaryLoading')}`
-                  : `Σ ${totalPlugins} plugin ${t('bus.registered')} · ${okN}/${leds.length} kind ok · ${warnN} warn · ${downN} down · ${t('bus.mdClearFilter')}`;
+                  ? `Σ ${totalExtensions} plugin · ${t('bus.mdSummaryLoading')}`
+                  : `Σ ${totalExtensions} plugin ${t('bus.registered')} · ${okN}/${leds.length} kind ok · ${warnN} warn · ${downN} down · ${t('bus.mdClearFilter')}`;
               return (
                 <button
                   type="button"
@@ -1072,7 +1072,7 @@ export function BusAdminPanel() {
                 >
                   <span className="ba-md-sum-cell ba-md-sum-total" aria-hidden>
                     <span className="ba-md-sum-sigma">Σ</span>
-                    {totalPlugins}
+                    {totalExtensions}
                   </span>
                   <span className="ba-md-sum-vsep" aria-hidden />
                   {loadingN === leds.length ? (
@@ -1138,7 +1138,7 @@ export function BusAdminPanel() {
                 <div
                   key={s.id}
                   className={`ba-uis-chip layer-${s.layer}${s.exposedToAI ? '' : ' is-dim'}`}
-                  title={`${s.layer} surface · ${totalActions} action${totalActions === 1 ? '' : 's'} · ${aiActions} exposed to AI${s.pluginId ? ` · plugin: ${s.pluginId}` : ''}`}
+                  title={`${s.layer} surface · ${totalActions} action${totalActions === 1 ? '' : 's'} · ${aiActions} exposed to AI${s.extensionId ? ` · plugin: ${s.extensionId}` : ''}`}
                 >
                   <span className="ba-uis-layer">{s.layer}</span>
                   <span className="ba-uis-id">{s.id}</span>
@@ -1253,7 +1253,7 @@ export function BusAdminPanel() {
         </div>
       )}
       {!err && !loading && items.length === 0 && (
-        <div className="ba-empty">{t('bus.emptyNoPlugins')}</div>
+        <div className="ba-empty">{t('bus.emptyNoExtensions')}</div>
       )}
       {!err && !loading && items.length > 0 && groups.length === 0 && (
         <div className="ba-empty">{t('bus.emptyNoMatch')}</div>
@@ -1680,7 +1680,7 @@ function KindSection({
         </thead>
         <tbody>
           {group.items.map((p) => (
-            <PluginRow
+            <ExtensionRow
               key={p.id}
               p={p}
               expanded={expandedIds.has(p.id)}
@@ -1698,7 +1698,7 @@ function KindSection({
   );
 }
 
-interface PluginRowProps {
+interface ExtensionRowProps {
   p: ExtensionInfo;
   expanded: boolean;
   onToggle: (id: string) => void;
@@ -1709,7 +1709,7 @@ interface PluginRowProps {
   onSoloKind: (kind: string) => void;
 }
 
-function PluginRow({
+function ExtensionRow({
   p,
   expanded,
   onToggle,
@@ -1718,7 +1718,7 @@ function PluginRow({
   onSetFocusedRowId,
   onMoveRowFocus,
   onSoloKind,
-}: PluginRowProps) {
+}: ExtensionRowProps) {
   const { t } = useTranslation();
   // Agent 行用统一命名「中文职能·英文名」；其它插件仍用 displayName。
   const nameZh = p.naming?.title || pickLang(p.displayName, 'zh', p.id);
@@ -1826,7 +1826,7 @@ function PluginRow({
       {expanded && (
         <tr className="ba-detail-row">
           <td colSpan={6}>
-            <PluginDetail p={p} descZh={descZh} descEn={descEn} onSoloKind={onSoloKind} />
+            <ExtensionDetail p={p} descZh={descZh} descEn={descEn} onSoloKind={onSoloKind} />
           </td>
         </tr>
       )}
@@ -1834,7 +1834,7 @@ function PluginRow({
   );
 }
 
-function PluginDetail({
+function ExtensionDetail({
   p,
   descZh,
   descEn,
@@ -1848,7 +1848,7 @@ function PluginDetail({
   const { t } = useTranslation();
   const wb = p.workbench;
   // P3.33 — reverse deep-link wiring. kind=agent rows offer "← 在 Sidebar 高亮"
-  // (sets store.pendingSidebarFocusPluginId → AgentsPanel scrolls + flashes the
+  // (sets store.pendingSidebarFocusExtensionId → AgentsPanel scrolls + flashes the
   // matching card). kind=workbench rows offer "← 打开 wb-* tab" (setMode
   // 'ai' + setWorkbenchTab(wb.id) so MainArea opens the placeholder).
   // Together with P3.32's forward AgentsPanel pill + P2.7f's wb-tab "在 Bus
@@ -1867,7 +1867,7 @@ function PluginDetail({
     // Sidebar entries key as `wb:<workbench.id>` (see Sidebar.tsx busEntries),
     // not the raw wb.id, so we must prefix to match. No center expand → the
     // sidebar opens the plugin's placeholder/left pane.
-    openWorkbench({ tab: `wb:${wb.id}`, expandedPluginId: null });
+    openWorkbench({ tab: `wb:${wb.id}`, expandedExtensionId: null });
   };
   const onFlashKindFooter = () => {
     emitDeepLink('sidebar:flash-kind', p.kind);

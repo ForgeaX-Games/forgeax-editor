@@ -1,6 +1,6 @@
 /**
  * global-shortcuts keyboard-router unit tests (T4-9): dual-domain routing,
- * G four-quadrant display toggle, IME / typing-target guards.
+ * Shift+G viewport escape/toggle, IME / typing-target guards.
  *
  * The router stays editor-agnostic (lint:agnostic forbids @forgeax/editor), so
  * the edit-domain shortcuts are exercised through injected mock deps — exactly
@@ -116,17 +116,17 @@ describe('keyboard router — dual-domain Delete (AC-C2)', () => {
   });
 });
 
-describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
-  it('play·game → returns to scene controls without stopping simulation', () => {
+describe('keyboard router — Escape Play stop (AC-Cb4)', () => {
+  it('play mode → stops the transient play session', () => {
     const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'game' });
     registerKeyboardRouterDeps(deps);
     const esc = findByCombo(buildShortcuts(), 'Esc');
     expect(esc.run()).toBe(true);
-    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'stop' }, 'human']]);
   });
 
-  it('outside play·game does not dispatch a viewport transition', () => {
-    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'editor' });
+  it('outside play mode does not dispatch a viewport transition', () => {
+    const deps = mockDeps({ isPlayMode: () => false, getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const esc = findByCombo(buildShortcuts(), 'Esc');
     esc.run();
@@ -134,41 +134,83 @@ describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
   });
 });
 
-describe('keyboard router — G display toggle (AC-Cb4, four-quadrant T4-9)', () => {
-  it('edit·scene → toggle to game (dispatch setDisplay game, human)', () => {
+describe('keyboard router — Shift+G viewport escape/toggle (AC-Cb4, T4-9)', () => {
+  it('plain G is not registered, so gameplay keeps the key', () => {
     const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
-    const g = findByCombo(buildShortcuts(), 'G');
-    expect(g.run()).toBe(true);
-    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'game' }, 'human']]);
+    const shortcuts = buildShortcuts();
+    expect(shortcuts.some((s) => s.combo === 'G')).toBe(false);
+    expect(shortcuts.some((s) => s.match({ key: 'g', code: 'KeyG', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false } as KeyboardEvent))).toBe(false);
   });
 
-  it('edit·game → toggle back to scene (edit·game bug fixed, RK-10)', () => {
+  it('edit·scene + Shift+G → inactive', () => {
+    const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor' });
+    registerKeyboardRouterDeps(deps);
+    const g = findByCombo(buildShortcuts(), 'Shift+G');
+    expect(g.run()).toBe(false);
+    expect(deps.calls.dispatch).toEqual([]);
+  });
+
+  it('edit·game + Shift+G → inactive', () => {
     const deps = mockDeps({ getDisplay: () => 'game', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
-    const g = findByCombo(buildShortcuts(), 'G');
-    expect(g.run()).toBe(true);
-    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
+    const g = findByCombo(buildShortcuts(), 'Shift+G');
+    expect(g.run()).toBe(false);
+    expect(deps.calls.dispatch).toEqual([]);
   });
 
-  it('play·scene → toggle (scene input, not game — G still belongs to editor)', () => {
+  it('play·scene + Shift+G → ordinary play game display', () => {
     const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor', isPlayMode: () => true });
     registerKeyboardRouterDeps(deps);
-    const g = findByCombo(buildShortcuts(), 'G');
+    const g = findByCombo(buildShortcuts(), 'Shift+G');
     expect(g.run()).toBe(true);
     expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'game' }, 'human']]);
   });
 
-  it('play·game (inputTarget=game) → does NOT intercept or exit Play (yields G to the game, T0-10)', () => {
+  it('play·game + Shift+G → scene display, even when game owns plain input', () => {
     const deps = mockDeps({
       getDisplay: () => 'game',
       getInputTarget: () => 'game',
       isPlayMode: () => true,
     });
     registerKeyboardRouterDeps(deps);
-    const g = findByCombo(buildShortcuts(), 'G');
-    expect(g.run()).toBe(false);
+    const g = findByCombo(buildShortcuts(), 'Shift+G');
+    expect(g.run()).toBe(true);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
+  });
+});
+
+describe('keyboard router — editor-owned Play key shield', () => {
+  it('play editor-owned input consumes arbitrary game keys', () => {
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'editor' });
+    registerKeyboardRouterDeps(deps);
+    const shield = findByCombo(buildShortcuts(), 'Play editor input shield');
+    expect(shield.match({ key: 'q', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent)).toBe(true);
+    expect(shield.run({ key: 'q', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent)).toBe(true);
     expect(deps.calls.dispatch).toEqual([]);
+  });
+
+  it('keeps editor W/E/R/F actions while shielding game listeners', () => {
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'editor' });
+    registerKeyboardRouterDeps(deps);
+    const shield = findByCombo(buildShortcuts(), 'Play editor input shield');
+    shield.run({ key: 'w', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent);
+    shield.run({ key: 'e', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent);
+    shield.run({ key: 'r', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent);
+    shield.run({ key: 'f', ctrlKey: false, metaKey: false, altKey: false } as KeyboardEvent);
+    expect(deps.calls.dispatch).toEqual([
+      [{ kind: 'setGizmoMode', mode: 'translate' }, 'human'],
+      [{ kind: 'setGizmoMode', mode: 'rotate' }, 'human'],
+      [{ kind: 'setGizmoMode', mode: 'scale' }, 'human'],
+      [{ kind: 'requestFrame' }, 'human'],
+    ]);
+  });
+
+  it('does not shield when game owns Play input', () => {
+    const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'game' });
+    registerKeyboardRouterDeps(deps);
+    const shield = findByCombo(buildShortcuts(), 'Play editor input shield');
+    expect(shield.match({ key: 'q' } as KeyboardEvent)).toBe(false);
   });
 });
 

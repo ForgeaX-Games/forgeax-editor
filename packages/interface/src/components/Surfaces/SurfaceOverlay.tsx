@@ -114,7 +114,7 @@ function SurfaceOverlayDev(): ReactElement | null {
         ) : (
           surfaces.map((s) => (
             <SurfaceCard
-              key={`${s.pluginId}:${s.surfaceId}`}
+              key={`${s.extensionId}:${s.surfaceId}`}
               surface={s}
               toolsById={toolsById}
             />
@@ -135,7 +135,7 @@ function SurfaceCard({
   return (
     <div className="fx-surf-card">
       <div className="fx-surf-card-head">
-        <span className="fx-surf-plugin">{surface.pluginId}</span>
+        <span className="fx-surf-plugin">{surface.extensionId}</span>
         <span className="fx-surf-id">{surface.surfaceId}</span>
       </div>
       <ul className="fx-surf-actions">
@@ -144,7 +144,7 @@ function SurfaceCard({
             key={a.id}
             action={a}
             tool={toolsById.get(a.id)}
-            pluginId={surface.pluginId}
+            extensionId={surface.extensionId}
           />
         ))}
         {surface.actions.length === 0 ? <li className="fx-surf-empty">(no actions)</li> : null}
@@ -161,11 +161,11 @@ function SurfaceCard({
 function SurfaceActionRow({
   action,
   tool,
-  pluginId,
+  extensionId,
 }: {
   action: SurfaceAction;
   tool?: ToolDescriptorLite;
-  pluginId: string;
+  extensionId: string;
 }): ReactElement {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -184,7 +184,7 @@ function SurfaceActionRow({
         body: JSON.stringify({
           toolId: action.id,
           args: value,
-          caller: { kind: 'user', agentId: pluginId },
+          caller: { kind: 'user', agentId: extensionId },
         }),
       });
       const j = (await r.json()) as { ok: boolean; error?: string; result?: unknown };

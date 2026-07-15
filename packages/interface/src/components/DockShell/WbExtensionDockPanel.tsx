@@ -25,24 +25,24 @@ const StandaloneExtensionIframe = lazy(() =>
 );
 
 interface Props {
-  pluginId: string;
+  extensionId: string;
 }
 
-export function WbExtensionDockPanel({ pluginId }: Props) {
+export function WbExtensionDockPanel({ extensionId }: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const addDockedExtension = useShellStore((s) => s.addDockedExtension);
   const removeDockedExtension = useShellStore((s) => s.removeDockedExtension);
   const detachSurface = useShellStore((s) => s.detachSurface);
-  const manifest = useExtensionManifest(pluginId);
+  const manifest = useExtensionManifest(extensionId);
   const { workbenchPanels } = usePanelRenderers();
 
   useEffect(() => {
-    addDockedExtension(pluginId);
-    return () => removeDockedExtension(pluginId);
-  }, [pluginId, addDockedExtension, removeDockedExtension]);
+    addDockedExtension(extensionId);
+    return () => removeDockedExtension(extensionId);
+  }, [extensionId, addDockedExtension, removeDockedExtension]);
 
-  const InlinePanel = workbenchPanels?.[pluginId];
+  const InlinePanel = workbenchPanels?.[extensionId];
   if (InlinePanel) {
     return (
       <div className="wb-dock-panel wb-dock-inline">
@@ -54,7 +54,7 @@ export function WbExtensionDockPanel({ pluginId }: Props) {
   if (!manifest || manifest === 'loading') {
     return (
       <div className="wb-dock-panel">
-        <div className="wb-dock-loading">{t('wbPluginDock.loadingPlugin', { pluginId })}</div>
+        <div className="wb-dock-loading">{t('wbExtensionDock.loadingExtension', { extensionId })}</div>
       </div>
     );
   }
@@ -71,13 +71,13 @@ export function WbExtensionDockPanel({ pluginId }: Props) {
           <button
             type="button"
             className="wb-dock-popout-btn"
-            title={t('wbPluginDock.popoutTitle')}
+            title={t('wbExtensionDock.popoutTitle')}
             onClick={() => void detachSurface(desc2, { title: label })}
           >
-            <ExternalLink size={12} /> {t('wbPluginDock.popoutLabel')}
+            <ExternalLink size={12} /> {t('wbExtensionDock.popoutLabel')}
           </button>
         )}
-        <Suspense fallback={<div className="wb-dock-loading">{t('wbPluginDock.loadingPluginGeneric')}</div>}>
+        <Suspense fallback={<div className="wb-dock-loading">{t('wbExtensionDock.loadingExtensionGeneric')}</div>}>
           <StandaloneExtensionIframe plugin={manifest} pane="left" active />
         </Suspense>
       </div>

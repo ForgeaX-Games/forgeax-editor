@@ -745,6 +745,13 @@
 }
 .settings-help { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.45)); margin-top: 6px; line-height: 1.5; }
 .settings-help code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 2px; font-size: 10px; color: var(--color-kind-cli-provider); }
+/* Links otherwise inherit browser-default blue — invisible on the dark panel. */
+.settings-help a {
+  color: var(--accent-mint, #7ee7c4);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.settings-help a:hover { color: var(--text-primary, #fff); }
 
 /* CLI Test round-trip result — readable status color (the shared .settings-help
    dim gray was unreadable for a pass/fail signal). Green = ok, red = failed. */

@@ -76,13 +76,13 @@ const WORKBENCH_ICON_BY_ID: Record<string, LucideIcon> = {
 export function iconForWorkbenchModule(input: {
   workbenchId: string;
   label?: string;
-  pluginId?: string;
+  extensionId?: string;
 }): LucideIcon {
   const workbenchId = input.workbenchId.replace(/^wb:/, '').toLowerCase();
   const explicitIcon = WORKBENCH_ICON_BY_ID[workbenchId];
   if (explicitIcon) return explicitIcon;
 
-  const key = `${workbenchId} ${input.label ?? ''} ${input.pluginId ?? ''}`.toLowerCase();
+  const key = `${workbenchId} ${input.label ?? ''} ${input.extensionId ?? ''}`.toLowerCase();
   if (key.includes('narrative') || key.includes('叙事') || key.includes('story') || key.includes('剧情')) return BookOpen;
   // Narrow: only character-forge / 角色锻造 — not every Chinese label ending in 生成器.
   if (key.includes('character-forge') || key.includes('角色锻造')) return PencilRuler;

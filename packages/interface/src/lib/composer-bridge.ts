@@ -29,7 +29,7 @@
 //   dir row       .fp-row.dir             .fp-name text
 //   agent card    .agent-card             data-agent-id (+ .ac-name text, data-role)
 //   wb agent card .wm-agent-card          data-agent-id, data-agent-name
-//   wb plugin     .ws-icon-btn            data-plugin-id, aria-label
+//   wb plugin     .ws-icon-btn            data-extension-id, aria-label
 //   preview game  .preview-toolbar        data-game-slug
 //   console line  .console-row            (text content)
 //   workspace tab .mode-tab               data-ws-id, data-ws-name
@@ -37,7 +37,7 @@
 //   session row   .tb-game-row            data-session-id, data-session-name
 //   chat msg      .kc-text/.kc-body       (text content)
 //   user msg      .user-bubble            (text content)
-//   bus plugin    [data-plugin-id]        data-plugin-id (+ first text line)
+//   bus plugin    [data-extension-id]        data-extension-id (+ first text line)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { create } from 'zustand';
@@ -224,13 +224,13 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
     kind: 'wb-plugin',
     match: '.ws-icon-btn',
     build: (el) => {
-      const pluginId = el.dataset.pluginId || '';
-      if (!pluginId) return null;
-      const label = el.getAttribute('aria-label') || pluginId;
+      const extensionId = el.dataset.extensionId || '';
+      if (!extensionId) return null;
+      const label = el.getAttribute('aria-label') || extensionId;
       return {
         kind: 'tool', display: label, icon: '🔧',
-        detail: `[${t('reference.workshop_plugin_ref')}: \`${pluginId}\` · ${label}]`,
-        tooltip: { title: `🔧 ${t('reference.workshop_plugin')} · ${label}`, lines: [`plugin id: ${pluginId}`] },
+        detail: `[${t('reference.workshop_extension_ref')}: \`${extensionId}\` · ${label}]`,
+        tooltip: { title: `🔧 ${t('reference.workshop_extension')} · ${label}`, lines: [`extension id: ${extensionId}`] },
       };
     },
   },
@@ -332,20 +332,20 @@ export const REFERENCE_REGISTRY: RefDescriptor[] = [
   },
   {
     kind: 'bus-plugin',
-    match: '[data-plugin-id]',
+    match: '[data-extension-id]',
     build: (el) => {
       // ws-icon-btn already handled above; skip it here so we don't double-match.
       if (el.closest('.ws-icon-btn')) return null;
-      const pluginId = el.dataset.pluginId || '';
-      if (!pluginId) return null;
-      const label = truncate(text(el).split('\n')[0] || pluginId, 40);
+      const extensionId = el.dataset.extensionId || '';
+      if (!extensionId) return null;
+      const label = truncate(text(el).split('\n')[0] || extensionId, 40);
       return {
-        kind: 'tool', display: label || pluginId, icon: '🔌',
-        detail: `[${t('reference.bus_plugin_ref')}: id="${pluginId}" label="${label}"]`,
-        tooltip: { title: `🔌 ${t('reference.bus_plugin')} · ${label}`, lines: [`plugin id: ${pluginId}`] },
+        kind: 'tool', display: label || extensionId, icon: '🔌',
+        detail: `[${t('reference.bus_extension_ref')}: id="${extensionId}" label="${label}"]`,
+        tooltip: { title: `🔌 ${t('reference.bus_extension')} · ${label}`, lines: [`extension id: ${extensionId}`] },
       };
     },
-    copy: (el) => { const id = el.dataset.pluginId || ''; return id ? [{ label: t('reference.copy_plugin_id'), text: id }] : []; },
+    copy: (el) => { const id = el.dataset.extensionId || ''; return id ? [{ label: t('reference.copy_extension_id'), text: id }] : []; },
   },
 ];
 

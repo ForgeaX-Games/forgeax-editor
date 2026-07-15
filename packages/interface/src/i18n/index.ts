@@ -48,7 +48,7 @@ const CATALOGS: Record<Locale, Catalog> = { en: en as Catalog, zh: zh as Catalog
 let current: Locale = DEFAULT_LOCALE;
 const listeners = new Set<() => void>();
 
-function broadcastLocaleToPlugins(locale: Locale): void {
+function broadcastLocaleToExtensions(locale: Locale): void {
   if (typeof window === 'undefined') return;
   const msg = { type: 'forgeax:locale-changed', locale };
   for (const iframe of document.querySelectorAll('iframe')) {
@@ -61,7 +61,7 @@ function broadcastLocaleToPlugins(locale: Locale): void {
 }
 
 function emit() {
-  broadcastLocaleToPlugins(current);
+  broadcastLocaleToExtensions(current);
   for (const fn of listeners) fn();
 }
 

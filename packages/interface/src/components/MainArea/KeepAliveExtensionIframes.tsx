@@ -2,13 +2,13 @@ import { useRef } from 'react';
 import type { ReactElement } from 'react';
 import type { ExtensionInfo } from '../../lib/extension-api';
 import { surfaceKey } from '../../lib/platform';
-import { StandaloneExtensionIframe, type PluginIframePane } from './StandaloneExtensionIframe';
+import { StandaloneExtensionIframe, type ExtensionIframePane } from './StandaloneExtensionIframe';
 
 interface Props {
-  pane: PluginIframePane;
+  pane: ExtensionIframePane;
   /** The plugin that should currently be visible in this pane, or null when no
    *  standalone plugin is active. Must be a standalone-iframe plugin. */
-  activePlugin: ExtensionInfo | null;
+  activeExtension: ExtensionInfo | null;
   /** Surface keys (kind:plugin:id:pane) currently detached to their own OS
    *  window. Those iframes are NOT rendered here so the surface isn't hosted
    *  twice; on redock the entry reappears and remounts. */
@@ -31,19 +31,19 @@ interface Props {
  * The visited set only grows (no LRU — Plan B deferred; workbench plugin count
  * is small and Plan C pauses hidden plugins' render loops so idle cost is low).
  */
-export function KeepAliveExtensionIframes({ pane, activePlugin, floatingKeys }: Props): ReactElement {
+export function KeepAliveExtensionIframes({ pane, activeExtension, floatingKeys }: Props): ReactElement {
   // Insertion-ordered registry of every plugin ever activated in this pane.
   // A ref (not state) keeps the iframe DOM nodes stable across re-renders; we
   // mutate it during render which is safe here because the operation is
   // idempotent and the freshly-added entry is read back in the same render.
   const visitedRef = useRef<Map<string, ExtensionInfo>>(new Map());
 
-  if (activePlugin) {
-    const prev = visitedRef.current.get(activePlugin.id);
+  if (activeExtension) {
+    const prev = visitedRef.current.get(activeExtension.id);
     // Add on first visit; refresh the stored manifest if it changed (e.g. the
     // standalone entry just settled after a bus rescan).
-    if (prev !== activePlugin) {
-      visitedRef.current.set(activePlugin.id, activePlugin);
+    if (prev !== activeExtension) {
+      visitedRef.current.set(activeExtension.id, activeExtension);
     }
   }
 
@@ -54,7 +54,7 @@ export function KeepAliveExtensionIframes({ pane, activePlugin, floatingKeys }: 
   return (
     <div className="fx-keepalive-stack">
       {entries.map((plugin) => {
-        const isActive = plugin.id === activePlugin?.id;
+        const isActive = plugin.id === activeExtension?.id;
         return (
           // `.fx-keepalive-item` is `position:absolute; inset:0`, so every visited
           // plugin's item fully overlaps the others and stacks by DOM order. The

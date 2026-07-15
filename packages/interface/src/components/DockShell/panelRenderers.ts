@@ -18,13 +18,13 @@ import type { DockRegion } from './regions';
 // Structural host-SDK boundary. Interface receives these factories from the
 // aggregation host but must neither import nor type-resolve @forgeax/host-sdk:
 // standalone editor intentionally has no such workspace dependency.
-export interface PluginTransport {
+export interface ExtensionTransport {
   post(envelope: unknown): void;
   onMessage(handler: (envelope: unknown) => void): () => void;
   close(): void;
 }
 
-export interface PluginToolCall {
+export interface ExtensionToolCall {
   toolId: string;
   args?: unknown;
   caller: {
@@ -35,13 +35,13 @@ export interface PluginToolCall {
   };
 }
 
-export type PluginToolResult =
+export type ExtensionToolResult =
   | { ok: true; result?: unknown }
   | { ok: false; error: string; code?: string };
 
-export interface PluginPort {
+export interface ExtensionPort {
   onChat(handler: (event: { text: string; attachments?: string[] }) => void): () => void;
-  onToolCall(handler: (call: PluginToolCall) => Promise<PluginToolResult> | PluginToolResult): () => void;
+  onToolCall(handler: (call: ExtensionToolCall) => Promise<ExtensionToolResult> | ExtensionToolResult): () => void;
   surface: {
     subscribe(handler: (event: {
       surfaceId: string;
@@ -55,9 +55,9 @@ export interface PluginPort {
   close(): void;
 }
 
-export interface CreatePluginPortOptions {
-  pluginId: string;
-  transport: PluginTransport;
+export interface CreateExtensionPortOptions {
+  extensionId: string;
+  transport: ExtensionTransport;
   initial?: {
     locale?: 'zh' | 'en' | 'ja';
     theme?: 'light' | 'dark';
@@ -76,7 +76,7 @@ type HostFactory<Options, Result> = {
   call(options: Options): Result;
 }['call'];
 
-export type CreatePluginPort = HostFactory<CreatePluginPortOptions, PluginPort>;
+export type CreateExtensionPort = HostFactory<CreateExtensionPortOptions, ExtensionPort>;
 
 export interface WindowTransportOptions {
   target: Window;
@@ -86,7 +86,7 @@ export interface WindowTransportOptions {
   listenOn?: Window;
 }
 
-export type CreateWindowTransport = (options: WindowTransportOptions) => PluginTransport;
+export type CreateWindowTransport = (options: WindowTransportOptions) => ExtensionTransport;
 
 /**
  * A dock panel descriptor. Carries everything the DockRegion needs to know
@@ -221,13 +221,13 @@ export interface PanelRenderers {
     /** Sidebar's Agents sub-nav body. */
     SidebarAgents?: ComponentType;
     /** Plugin-host top-right widget (in MainArea when a wb:* plugin is expanded). */
-    CornerAgentPicker?: ComponentType<{ preferredAgentPluginId?: string }>;
+    CornerAgentPicker?: ComponentType<{ preferredAgentExtensionId?: string }>;
   };
 
   /** Host-SDK factories for wb:* plugin iframe RPC (studio-only). The contract
    *  is structural so interface stays runnable without host-sdk installed. */
   hostSDK?: {
-    createPluginPort?: CreatePluginPort;
+    createExtensionPort?: CreateExtensionPort;
     createWindowTransport?: CreateWindowTransport;
   };
 

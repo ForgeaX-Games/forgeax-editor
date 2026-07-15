@@ -72,7 +72,7 @@ export function createExtensionLoader<Ctx, C extends string>(
     if (!rec.cleanup) return;
     try { await rec.cleanup(); }
     catch (cause) {
-      const err = new ExtensionSetupError({ pluginId: rec.manifest.id, phase: 'cleanup', cause });
+      const err = new ExtensionSetupError({ extensionId: rec.manifest.id, phase: 'cleanup', cause });
       onError?.(err, rec.manifest, 'cleanup') ?? console.error(err);
     }
   }
@@ -84,7 +84,7 @@ export function createExtensionLoader<Ctx, C extends string>(
       const result = await m.setup(ctx);
       if (typeof result === 'function') cleanup = result as Cleanup;
     } catch (cause) {
-      const err = new ExtensionSetupError({ pluginId: m.id, phase: 'setup', cause });
+      const err = new ExtensionSetupError({ extensionId: m.id, phase: 'setup', cause });
       onError?.(err, m, 'setup') ?? console.error(err);
       return;
     }

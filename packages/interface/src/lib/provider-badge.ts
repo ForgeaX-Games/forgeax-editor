@@ -67,9 +67,9 @@ interface CliProviderItem {
 // helpers in Composer.tsx (P2.7d) + Dashboard cells (P3.65/67/68).
 const CLI_PLUGIN_PREFIX = '@forgeax-plugin/cli-';
 
-function shortIdFromPluginId(pluginId: string): string | null {
-  if (!pluginId.startsWith(CLI_PLUGIN_PREFIX)) return null;
-  const short = pluginId.slice(CLI_PLUGIN_PREFIX.length);
+function shortIdFromExtensionId(extensionId: string): string | null {
+  if (!extensionId.startsWith(CLI_PLUGIN_PREFIX)) return null;
+  const short = extensionId.slice(CLI_PLUGIN_PREFIX.length);
   return short.length > 0 ? short : null;
 }
 
@@ -81,7 +81,7 @@ function ensureCliProviderMap(): Promise<void> {
     .then((j: { items?: CliProviderItem[] }) => {
       const m = new Map<string, string>();
       for (const p of j.items ?? []) {
-        const short = shortIdFromPluginId(p.id);
+        const short = shortIdFromExtensionId(p.id);
         if (short) m.set(short, p.id);
       }
       _cliProviderMap = m;
@@ -90,7 +90,7 @@ function ensureCliProviderMap(): Promise<void> {
   return _cliProviderLoad;
 }
 
-export function useCliProviderPluginMap(): Map<string, string> | null {
+export function useCliProviderExtensionMap(): Map<string, string> | null {
   const [ready, setReady] = useState<boolean>(_cliProviderMap !== null);
   useEffect(() => {
     if (_cliProviderMap) { setReady(true); return; }
@@ -108,12 +108,12 @@ export function ProviderBadgePill({
 }: {
   providerId: string;
   className: string;
-  onBusDeepLink?: (pluginId: string) => void;
+  onBusDeepLink?: (extensionId: string) => void;
 }): ReactElement {
   const badge = providerBadgeFor(providerId);
-  const map = useCliProviderPluginMap();
-  const pluginId = map?.get(providerId) ?? null;
-  const canDeepLink = !!onBusDeepLink && !!pluginId;
+  const map = useCliProviderExtensionMap();
+  const extensionId = map?.get(providerId) ?? null;
+  const canDeepLink = !!onBusDeepLink && !!extensionId;
 
   if (!canDeepLink) {
     return createElement(
@@ -127,7 +127,7 @@ export function ProviderBadgePill({
     );
   }
 
-  const fire = () => onBusDeepLink!(pluginId!);
+  const fire = () => onBusDeepLink!(extensionId!);
   return createElement(
     'span',
     {

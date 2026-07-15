@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import {
   upsertSurface,
-  removePluginSurfaces,
+  removeExtensionSurfaces,
   listSurfaces,
   getSurface,
   subscribeSurfaces,
@@ -22,7 +22,7 @@ describe('surface-store', () => {
 
   it('upsert + get + list round-trip', () => {
     upsertSurface({
-      pluginId: '@x/p',
+      extensionId: '@x/p',
       surfaceId: 'main',
       actions: [{ id: 'save', enabled: true }],
       snapshot: { count: 0 },
@@ -36,27 +36,27 @@ describe('surface-store', () => {
   });
 
   it('upsert replaces existing entry by composite key', () => {
-    upsertSurface({ pluginId: 'p', surfaceId: 's', actions: [], snapshot: 1, updatedAt: 0 });
-    upsertSurface({ pluginId: 'p', surfaceId: 's', actions: [], snapshot: 2, updatedAt: 0 });
+    upsertSurface({ extensionId: 'p', surfaceId: 's', actions: [], snapshot: 1, updatedAt: 0 });
+    upsertSurface({ extensionId: 'p', surfaceId: 's', actions: [], snapshot: 2, updatedAt: 0 });
     expect(listSurfaces()).toHaveLength(1);
     expect(getSurface('p', 's')!.snapshot).toBe(2);
   });
 
-  it('removePluginSurfaces drops only matching plugin', () => {
-    upsertSurface({ pluginId: 'p1', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
-    upsertSurface({ pluginId: 'p2', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
-    removePluginSurfaces('p1');
-    expect(listSurfaces().map((s) => s.pluginId)).toEqual(['p2']);
+  it('removeExtensionSurfaces drops only matching plugin', () => {
+    upsertSurface({ extensionId: 'p1', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
+    upsertSurface({ extensionId: 'p2', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
+    removeExtensionSurfaces('p1');
+    expect(listSurfaces().map((s) => s.extensionId)).toEqual(['p2']);
   });
 
   it('subscribe fires on upsert and remove', () => {
     let calls = 0;
     const off = subscribeSurfaces(() => { calls++; });
-    upsertSurface({ pluginId: 'p', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
-    upsertSurface({ pluginId: 'p', surfaceId: 's2', actions: [], snapshot: null, updatedAt: 0 });
-    removePluginSurfaces('p');
+    upsertSurface({ extensionId: 'p', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
+    upsertSurface({ extensionId: 'p', surfaceId: 's2', actions: [], snapshot: null, updatedAt: 0 });
+    removeExtensionSurfaces('p');
     off();
-    upsertSurface({ pluginId: 'q', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
+    upsertSurface({ extensionId: 'q', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
     expect(calls).toBe(3); // post-unsub upsert ignored
   });
 
@@ -64,14 +64,14 @@ describe('surface-store', () => {
     let okCalls = 0;
     subscribeSurfaces(() => { throw new Error('boom'); });
     subscribeSurfaces(() => { okCalls++; });
-    upsertSurface({ pluginId: 'p', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
+    upsertSurface({ extensionId: 'p', surfaceId: 's', actions: [], snapshot: null, updatedAt: 0 });
     expect(okCalls).toBe(1);
   });
 
-  it('removePluginSurfaces with no match does not fire listeners', () => {
+  it('removeExtensionSurfaces with no match does not fire listeners', () => {
     let calls = 0;
     subscribeSurfaces(() => { calls++; });
-    removePluginSurfaces('nonexistent');
+    removeExtensionSurfaces('nonexistent');
     expect(calls).toBe(0);
   });
 });

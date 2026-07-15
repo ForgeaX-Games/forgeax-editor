@@ -49,11 +49,11 @@ export function createShellState(
     setWorkbenchTab: (t) => set({ workbenchTab: t }),
     workbenchExpandedExtensionId: null,
     setWorkbenchExpandedExtensionId: (id) => set({ workbenchExpandedExtensionId: id }),
-    openWorkbench: ({ tab, expandedPluginId }) => set((s) => ({
+    openWorkbench: ({ tab, expandedExtensionId }) => set((s) => ({
       mode: 'ai',
       workbenchTab: tab ?? s.workbenchTab,
-      workbenchExpandedExtensionId: expandedPluginId !== undefined
-        ? expandedPluginId
+      workbenchExpandedExtensionId: expandedExtensionId !== undefined
+        ? expandedExtensionId
         : s.workbenchExpandedExtensionId,
     })),
 

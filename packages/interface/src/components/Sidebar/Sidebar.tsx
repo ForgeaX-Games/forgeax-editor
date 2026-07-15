@@ -111,7 +111,7 @@ export function Sidebar() {
   // rendered in that panel, so KeepAliveExtensionIframes skips them here.
   const dockedExtensions = useShellStore((s) => s.dockedExtensions);
 
-  const [busPlugins, setBusPlugins] = useState<ExtensionInfo[] | null>(null);
+  const [busExtensions, setBusExtensions] = useState<ExtensionInfo[] | null>(null);
 
   // Sidebar is a persistent component (it does not remount on tab switches).
   // Retry the bus fetch a few times before giving up so a slow boot doesn't
@@ -128,12 +128,12 @@ export function Sidebar() {
       listExtensions('workbench')
         .then((res) => {
           if (cancelled) return;
-          setBusPlugins(res.items);
+          setBusExtensions(res.items);
         })
         .catch(() => {
           if (cancelled) return;
           if (attempts >= MAX_ATTEMPTS) {
-            setBusPlugins([]);
+            setBusExtensions([]);
             return;
           }
           timer = setTimeout(load, RETRY_MS);
@@ -148,7 +148,7 @@ export function Sidebar() {
   }, []);
 
   const busEntries = useMemo<BusEntry[]>(() => {
-    const source = busPlugins ?? [];
+    const source = busExtensions ?? [];
     return source
       .filter((m) => !m.workbench?.hidden)
       .map<BusEntry>((m) => ({
@@ -158,16 +158,16 @@ export function Sidebar() {
         emoji: m.workbench?.icon ?? m.icon ?? '🧩',
         manifest: m,
       }));
-  }, [busPlugins, locale]);
+  }, [busExtensions, locale]);
 
   const entries: Entry[] = useMemo(() => [...BUILTINS, ...busEntries], [busEntries]);
   useEffect(() => {
-    if (!busPlugins || busPlugins.length === 0) return;
+    if (!busExtensions || busExtensions.length === 0) return;
     if (workbenchTab === 'agents' || workbenchTab === 'files') return;
     if (entries.some((e) => e.id === workbenchTab)) return;
     const next = busEntries[0]?.id;
     if (next) setWorkbenchTab(next);
-  }, [busEntries, busPlugins, entries, setWorkbenchTab, workbenchTab]);
+  }, [busEntries, busExtensions, entries, setWorkbenchTab, workbenchTab]);
 
   const activeIdx = useMemo(() => {
     const i = entries.findIndex((e) => e.id === workbenchTab);
@@ -177,7 +177,7 @@ export function Sidebar() {
   // The left-pane standalone plugin to show right now (or null). Fed to the
   // keep-alive overlay so switching wb tabs only flips visibility instead of
   // unmounting/reloading the iframe.
-  const leftPaneActivePlugin = useMemo<ExtensionInfo | null>(
+  const leftPaneActiveExtension = useMemo<ExtensionInfo | null>(
     () =>
       activeEntry?.kind === 'bus' && extensionRendersInSidebarLeftPane(activeEntry.manifest)
         ? activeEntry.manifest
@@ -224,7 +224,7 @@ export function Sidebar() {
           const manifest = entry?.kind === 'bus' ? entry.manifest : null;
           useShellStore.getState().openWorkbench({
             tab: a.tab,
-            expandedPluginId: manifest && extensionRendersInMainArea(manifest) ? manifest.id : null,
+            expandedExtensionId: manifest && extensionRendersInMainArea(manifest) ? manifest.id : null,
           });
         },
       },
@@ -356,7 +356,7 @@ export function Sidebar() {
               className="ws-icons-pill"
               role="tablist"
               aria-orientation="horizontal"
-              title={t('sidebar.workbenchPluginsHint')}
+              title={t('sidebar.workbenchExtensionsHint')}
             >
             {busEntries.map((e, i) => {
               const globalIdx = i + BUILTINS.length;
@@ -373,9 +373,9 @@ export function Sidebar() {
                   tabIndex={active ? 0 : -1}
                   title={t('sidebar.tabTooltip', { label: e.label, id: e.manifest.id })}
                   aria-label={e.label}
-                  data-plugin-id={e.manifest.id}
+                  data-extension-id={e.manifest.id}
                 >
-                  {(() => { const Icon = iconForWorkbenchModule({ workbenchId: e.id, label: e.label, pluginId: e.manifest.id }); return <Icon size={16} />; })()}
+                  {(() => { const Icon = iconForWorkbenchModule({ workbenchId: e.id, label: e.label, extensionId: e.manifest.id }); return <Icon size={16} />; })()}
 
                 </button>
               );
@@ -432,15 +432,15 @@ export function Sidebar() {
               mounted (Sidebar is persistent) so visited left-pane iframes
               survive tab switches; only visibility flips. */}
           <div
-            className={`ws-pane-keepalive${leftPaneActivePlugin ? ' active' : ''}`}
-            style={leftPaneActivePlugin ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-            aria-hidden={leftPaneActivePlugin ? undefined : true}
+            className={`ws-pane-keepalive${leftPaneActiveExtension ? ' active' : ''}`}
+            style={leftPaneActiveExtension ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+            aria-hidden={leftPaneActiveExtension ? undefined : true}
           >
             {(() => {
-              if (!leftPaneActivePlugin || !getWindowManager().canDetach()) return null;
-              const desc: SurfaceDescriptor = { kind: 'plugin', id: leftPaneActivePlugin.id, pane: 'left' };
+              if (!leftPaneActiveExtension || !getWindowManager().canDetach()) return null;
+              const desc: SurfaceDescriptor = { kind: 'plugin', id: leftPaneActiveExtension.id, pane: 'left' };
               const floating = !!floatingSurfaces[surfaceKey(desc)];
-              const label = pickLang(leftPaneActivePlugin.displayName, locale, leftPaneActivePlugin.id);
+              const label = pickLang(leftPaneActiveExtension.displayName, locale, leftPaneActiveExtension.id);
               return floating ? (
                 <div className="ws-pane-floating">
                   <span>{t('sidebar.inSeparateWindow')}</span>
@@ -458,12 +458,12 @@ export function Sidebar() {
                 </button>
               );
             })()}
-            {leftPaneActivePlugin && dockedExtensions.has(leftPaneActivePlugin.id) ? (
+            {leftPaneActiveExtension && dockedExtensions.has(leftPaneActiveExtension.id) ? (
               <div className="ws-pane-floating">
                 <span>{t('sidebar.inDockPanel')}</span>
               </div>
             ) : (
-              <KeepAliveExtensionIframes pane="left" activePlugin={leftPaneActivePlugin} floatingKeys={floatingSurfaces} />
+              <KeepAliveExtensionIframes pane="left" activeExtension={leftPaneActiveExtension} floatingKeys={floatingSurfaces} />
             )}
           </div>
         </div>
@@ -513,7 +513,7 @@ function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   return (
     <div className="tool-placeholder bus-tool">
       <div className="bus-tool-hero">
-        {(() => { const Icon = iconForWorkbenchModule({ workbenchId: entry.id, label: entry.label, pluginId: entry.manifest.id }); return <Icon size={30} className="bus-tool-icon" aria-hidden />; })()}
+        {(() => { const Icon = iconForWorkbenchModule({ workbenchId: entry.id, label: entry.label, extensionId: entry.manifest.id }); return <Icon size={30} className="bus-tool-icon" aria-hidden />; })()}
         <div className="bus-tool-headings">
           <div className="bus-tool-title">{entry.label}</div>
           <div className="bus-tool-pluginid">{m.id}@{m.version}</div>

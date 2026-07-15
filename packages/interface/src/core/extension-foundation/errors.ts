@@ -19,7 +19,7 @@ export class ExtensionConflictError extends Error {
 }
 
 export interface ExtensionSetupErrorInfo {
-  readonly pluginId: string;
+  readonly extensionId: string;
   readonly phase: 'setup' | 'cleanup';
   readonly cause: unknown;
 }
@@ -28,7 +28,7 @@ export class ExtensionSetupError extends Error {
   readonly info: ExtensionSetupErrorInfo;
   constructor(info: ExtensionSetupErrorInfo) {
     super(
-      `[extension-foundation] plugin "${info.pluginId}" ${info.phase} threw: ${String(info.cause)}`,
+      `[extension-foundation] plugin "${info.extensionId}" ${info.phase} threw: ${String(info.cause)}`,
     );
     this.name = 'ExtensionSetupError';
     this.info = info;

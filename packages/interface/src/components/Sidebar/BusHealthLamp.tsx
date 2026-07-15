@@ -6,12 +6,12 @@ import { useShellStore } from '../../store';
 type BusState =
   | { kind: 'loading' }
   | { kind: 'down'; reason: string }
-  | { kind: 'ok'; pluginCount: number; brokenCount: number; listenerCount: number; ringSize: number };
+  | { kind: 'ok'; extensionCount: number; brokenCount: number; listenerCount: number; ringSize: number };
 
 function classify(bus: NonNullable<Awaited<ReturnType<typeof dashApi.health>>['bus']>): BusState {
   return {
     kind: 'ok',
-    pluginCount: bus.pluginCount,
+    extensionCount: bus.extensionCount,
     brokenCount: bus.brokenCount,
     listenerCount: bus.listenerCount,
     ringSize: bus.ringSize,
@@ -69,7 +69,7 @@ export function BusHealthLamp() {
     state.kind === 'ok'
       ? state.brokenCount > 0
         ? 'warn'
-        : state.pluginCount > 0
+        : state.extensionCount > 0
           ? 'ok'
           : 'idle'
       : state.kind === 'loading'
@@ -78,7 +78,7 @@ export function BusHealthLamp() {
 
   const baseTitle =
     state.kind === 'ok'
-      ? `Bus: ${state.pluginCount} plugin · ${state.brokenCount} broken · ${state.listenerCount} listener · ring ${state.ringSize}`
+      ? `Bus: ${state.extensionCount} plugin · ${state.brokenCount} broken · ${state.listenerCount} listener · ring ${state.ringSize}`
       : state.kind === 'loading'
         ? 'Bus: loading…'
         : `Bus down: ${state.reason}`;
@@ -86,8 +86,8 @@ export function BusHealthLamp() {
   const label =
     state.kind === 'ok'
       ? state.brokenCount > 0
-        ? `${state.pluginCount - state.brokenCount}/${state.pluginCount}`
-        : String(state.pluginCount)
+        ? `${state.extensionCount - state.brokenCount}/${state.extensionCount}`
+        : String(state.extensionCount)
       : state.kind === 'loading'
         ? '…'
         : 'down';

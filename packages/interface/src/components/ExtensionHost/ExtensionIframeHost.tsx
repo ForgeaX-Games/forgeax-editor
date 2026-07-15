@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { getLocale, subscribeLocale } from '@/i18n';
 import { requestComposerInsert } from '../../lib/composer-bridge';
-import { removePluginSurfaces, upsertSurface } from '../../lib/surface-store';
+import { removeExtensionSurfaces, upsertSurface } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { usePanelRenderers, type PluginPort } from '../DockShell/panelRenderers';
+import { usePanelRenderers, type ExtensionPort } from '../DockShell/panelRenderers';
 
-export interface PluginIframeHostProps {
-  pluginId: string;
+export interface ExtensionIframeHostProps {
+  extensionId: string;
   src: string;
   pane?: 'left' | 'center';
   active?: boolean;
@@ -20,7 +20,7 @@ export interface PluginIframeHostProps {
 }
 
 export function ExtensionIframeHost({
-  pluginId,
+  extensionId,
   src,
   pane,
   active = true,
@@ -28,20 +28,20 @@ export function ExtensionIframeHost({
   onChatPost,
   onToolCall,
   loadErrorText,
-}: PluginIframeHostProps): ReactElement {
+}: ExtensionIframeHostProps): ReactElement {
   const { hostSDK } = usePanelRenderers();
-  const createPluginPort = hostSDK?.createPluginPort;
+  const createExtensionPort = hostSDK?.createExtensionPort;
   const createWindowTransport = hostSDK?.createWindowTransport;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const portRef = useRef<PluginPort | null>(null);
+  const portRef = useRef<ExtensionPort | null>(null);
   const activeRef = useRef(active);
 
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
-    if (!createPluginPort || !createWindowTransport) return;
-    let port: PluginPort | null = null;
+    if (!createExtensionPort || !createWindowTransport) return;
+    let port: ExtensionPort | null = null;
 
     const onRawMessage = (ev: MessageEvent) => {
       if (ev.source !== iframe.contentWindow) return;
@@ -86,8 +86,8 @@ export function ExtensionIframeHost({
         targetOrigin: '*',
         expectedSource: () => iframe.contentWindow,
       });
-      port = createPluginPort({
-        pluginId,
+      port = createExtensionPort({
+        extensionId,
         transport,
         initial: {
           locale: getLocale(),
@@ -106,7 +106,7 @@ export function ExtensionIframeHost({
       if (onToolCall) port.onToolCall(onToolCall);
       port.surface.subscribe((s) => {
         upsertSurface({
-          pluginId,
+          extensionId,
           surfaceId: s.surfaceId,
           actions: s.actions,
           snapshot: s.snapshot,
@@ -125,9 +125,9 @@ export function ExtensionIframeHost({
       window.removeEventListener('message', onRawMessage);
       port?.close();
       portRef.current = null;
-      removePluginSurfaces(pluginId);
+      removeExtensionSurfaces(extensionId);
     };
-  }, [pluginId, src, pane, createPluginPort, createWindowTransport, onNavigate, onChatPost, onToolCall]);
+  }, [extensionId, src, pane, createExtensionPort, createWindowTransport, onNavigate, onChatPost, onToolCall]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -156,7 +156,7 @@ export function ExtensionIframeHost({
       <iframe
         ref={iframeRef}
         src={src}
-        title={pluginId}
+        title={extensionId}
         style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
       />
