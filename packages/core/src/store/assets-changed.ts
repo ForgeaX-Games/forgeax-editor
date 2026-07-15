@@ -12,10 +12,11 @@
 import { panelBridge } from '../io/panel-bridge';
 
 export type AssetsChangedHint = 'directory-only' | 'pack-changed';
+export type AssetsChangedSource = 'local-op' | 'disk-watch';
 
 /** Notify in-process panels that the asset file list changed.
  *  `hint` allows receivers to skip work: 'directory-only' means no pack changed
  *  (only folder CRUD), so viewport refreshCatalog can be skipped. */
-export function broadcastAssetsChanged(hint?: AssetsChangedHint): void {
-  panelBridge.emit('assetsChanged', hint === undefined ? {} : { hint });
+export function broadcastAssetsChanged(hint?: AssetsChangedHint, source?: AssetsChangedSource): void {
+  panelBridge.emit('assetsChanged', { ...(hint === undefined ? {} : { hint }), ...(source === undefined ? {} : { source }) });
 }

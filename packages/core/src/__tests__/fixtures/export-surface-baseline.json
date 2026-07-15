@@ -1,7 +1,7 @@
 [
   {
     "name": "broadcastAssetsChanged",
-    "signature": "(hint?: AssetsChangedHint | undefined) => void"
+    "signature": "(hint?: AssetsChangedHint | undefined, source?: AssetsChangedSource | undefined) => void"
   },
   {
     "name": "cancelPendingDiskSave",
