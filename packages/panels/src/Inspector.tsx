@@ -563,6 +563,93 @@ export function InspectorPanel() {
                     </div>,
                   );
                 }
+                // Render array<asset> fields (e.g. MeshRenderer.materials) as
+                // drop-target slots with add/remove. Scalar asset fields are handled
+                // in the main loop below.
+                for (const f of getComponentSchema(comp)?.fields ?? []) {
+                  if (f.type !== 'asset') continue;
+                  const arrVal = data[f.key];
+                  // Engine ECS returns array<shared<T>> as TypedArray (Uint32Array),
+                  // not plain Array. Accept both.
+                  if (!Array.isArray(arrVal) && !ArrayBuffer.isView(arrVal)) continue;
+                  const items = Array.from(arrVal as ArrayLike<unknown>);
+                  out.push(
+                    <div className="field" key={`__arr_${f.key}`} data-testid={`insp-${comp}-${f.key}-array`}>
+                      <label title={f.tooltip}>
+                        {f.key}
+                        <span className="asset-dot">{items.length > 0 ? '◆' : '◇'}</span>
+                      </label>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {items.length === 0 && <span style={{ color: 'var(--fg3)', fontSize: '11px' }}>empty — click + to add a slot</span>}
+                        {items.map((item, i) => {
+                          const handleNum = typeof item === 'number' ? item : 0;
+                          const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
+                          const matName = desc?.ok ? (desc.name ?? `#${handleNum}`) : '';
+                          const bc = desc?.ok
+                            ? (desc.meta?.paramValues as Record<string, unknown> | undefined)?.baseColor as number[] | undefined
+                            : undefined;
+                          const swatchColor = bc && bc.length >= 3
+                            ? `rgb(${Math.round(bc[0]! * 255)},${Math.round(bc[1]! * 255)},${Math.round(bc[2]! * 255)})`
+                            : undefined;
+                          return (
+                            <div
+                              key={i}
+                              style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                              onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
+                              onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                e.currentTarget.classList.remove('drop-hot');
+                                const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
+                                if (!assetJson) return;
+                                let ref: { guid?: string; kind?: string } = {};
+                                try { ref = JSON.parse(assetJson); } catch { return; }
+                                if (!ref.guid) return;
+                                gateway.dispatch({
+                                  kind: 'bindAssetRef',
+                                  entity: sel,
+                                  component: comp,
+                                  field: f.key,
+                                  assetType: ref.kind ?? 'MaterialAsset',
+                                  guids: [ref.guid],
+                                  slot: i,
+                                });
+                              }}
+                              onDragOver={(e) => e.preventDefault()}
+                            >
+                              {handleNum > 0 ? (
+                                <>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      width: 16, height: 16, minWidth: 16,
+                                      borderRadius: 3,
+                                      border: '1px solid var(--line)',
+                                      background: swatchColor ?? 'var(--bg2)',
+                                    }}
+                                    title={swatchColor ? `baseColor: ${bc!.map((v: number) => v.toFixed(2)).join(', ')}` : 'no baseColor'}
+                                  />
+                                  <span style={{ flex: 1, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg)' }} title={matName}>
+                                    {matName}
+                                  </span>
+                                </>
+                              ) : (
+                                <span style={{ flex: 1, fontSize: '11px', color: 'var(--fg3)' }}>drop material asset here</span>
+                              )}
+                              <button type="button" className="asset-clear" title="remove slot" onClick={() => {
+                                const next = items.filter((_, j) => j !== i);
+                                gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
+                              }}>×</button>
+                            </div>
+                          );
+                        })}
+                        <button type="button" className="tbtn" style={{ marginTop: 2, fontSize: '11px' }} onClick={() => {
+                          gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                        }}>+ slot</button>
+                      </div>
+                    </div>,
+                  );
+                }
                 for (const k of keys) {
                   const v = data[k];
                   // skip vec fields (rendered inline above) and any nested
@@ -608,13 +695,28 @@ export function InspectorPanel() {
                             placeholder="drop / paste asset uuid"
                             value={strVal}
                             onChange={(e) => setField(e.target.value)}
-                            onDragEnter={(e) => e.currentTarget.classList.add('drop-hot')}
+                            onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
                             onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
                             onDrop={(e) => {
                               e.preventDefault();
                               e.currentTarget.classList.remove('drop-hot');
-                              const uuid = e.dataTransfer.getData('text/plain');
-                              if (uuid) setField(uuid);
+                              const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
+                              if (assetJson) {
+                                try {
+                                  const ref = JSON.parse(assetJson);
+                                  if (ref.guid) {
+                                    gateway.dispatch({
+                                      kind: 'bindAssetRef',
+                                      entity: sel,
+                                      component: comp,
+                                      field: k,
+                                      assetType: ref.kind ?? 'MeshAsset',
+                                      guids: [ref.guid],
+                                    });
+                                    return;
+                                  }
+                                } catch { /* noop */ }
+                              }
                             }}
                             onDragOver={(e) => e.preventDefault()}
                           />
@@ -643,6 +745,7 @@ export function InspectorPanel() {
         <div className="field">
           <label>+ Comp</label>
           <select
+            className="sel"
             data-testid="insp-add-comp-select"
             defaultValue={missingComponents[0]}
             onChange={() => {

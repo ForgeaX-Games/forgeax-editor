@@ -342,6 +342,7 @@ const builtinOps: ReadonlyArray<{
         baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color as [r,g,b,a], each 0..1 (a = opacity).' },
         metallic: { type: 'number', description: 'PBR metallic 0..1 (default 0 = dielectric).' },
         roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
+        baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Stored as refs[] index in pack (engine disk format).' },
         packPath: { type: 'string', description: 'Optional target pack path; defaults to the active game scene.pack.json (the same pack the scene saves into). An AI over the eval bridge normally omits this.' },
         refs: { type: 'array', items: { type: 'string' } },
       },

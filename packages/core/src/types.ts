@@ -81,7 +81,7 @@ export type BuiltinEditorOp =
   // `guid` is caller-minted (the dispatch contract has no channel to return one;
   // the caller reuses the same guid for the follow-up bindAssetRef). `packPath`
   // optional — defaults to the active game's scene.pack.json in the applier.
-  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; packPath?: string; refs?: string[] }
+  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; baseColorTexture?: string; packPath?: string; refs?: string[] }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──

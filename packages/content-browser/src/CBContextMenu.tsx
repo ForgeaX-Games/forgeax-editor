@@ -1,18 +1,57 @@
 import { type CBAsset, type CBFolder, type CBSelection } from './types';
-// M3 (AC-03): asset assignment (setComponent) and asset-selection (a transient
-// op) go through the one gateway door — gateway.dispatch({ kind, … }) — replacing the
-// direct setAssetSelection setter and the origin-less `dispatch` wrapper.
+// M3 (AC-03): asset assignment goes through the one gateway door via bindAssetRef
+// (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  gateway, getSelection,
+  gateway, getSelection, entComponent,
 } from '@forgeax/editor-core';
+import type { EntityHandle } from '@forgeax/editor-core';
 
-/** Map an asset kind to the component patch that assigns it onto an entity. */
-function assignPatchForKind(kind: string, guid: string): { component: string; patch: Record<string, unknown> } | null {
-  if (kind === 'material') return { component: 'Material', patch: { materialAsset: guid } };
-  if (kind === 'mesh') return { component: 'Mesh', patch: { meshAsset: guid } };
-  if (kind === 'texture' || kind === 'image') return { component: 'Material', patch: { albedoMap: guid } };
-  return null;
+/** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
+ *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
+ *  Returns true if the asset was assignable (op dispatched), false otherwise. */
+function assignAssetToEntity(kind: string, guid: string, name: string, entity: EntityHandle): boolean {
+  // material → MeshRenderer.materials
+  if (kind === 'material') {
+    gateway.dispatch({
+      kind: 'bindAssetRef', entity,
+      component: 'MeshRenderer', field: 'materials',
+      assetType: 'MaterialAsset', guids: [guid],
+    }, 'human');
+    return true;
+  }
+  // mesh → MeshFilter.assetHandle
+  if (kind === 'mesh') {
+    gateway.dispatch({
+      kind: 'bindAssetRef', entity,
+      component: 'MeshFilter', field: 'assetHandle',
+      assetType: 'MeshAsset', guids: [guid],
+    }, 'human');
+    return true;
+  }
+  // texture/image → createMaterial + bindAssetRef (Task 3 & Task 5)
+  if (kind === 'texture' || kind === 'image') {
+    // Ensure the entity has MeshRenderer (bindAssetRef requires it)
+    const mr = entComponent(gateway.activeWorld, entity, 'MeshRenderer');
+    if (!mr.ok) {
+      gateway.dispatch({ kind: 'addComponent', entity, component: 'MeshRenderer', value: { materials: [] } }, 'human');
+    }
+    const materialGuid = crypto.randomUUID();
+    gateway.dispatch({
+      kind: 'createMaterial',
+      guid: materialGuid,
+      name: `mat_${name}`,
+      baseColor: [1, 1, 1, 1],
+      baseColorTexture: guid,
+    }, 'human');
+    gateway.dispatch({
+      kind: 'bindAssetRef', entity,
+      component: 'MeshRenderer', field: 'materials',
+      assetType: 'MaterialAsset', guids: [materialGuid],
+    }, 'human');
+    return true;
+  }
+  return false;
 }
 
 export interface ContextMenuItem {
@@ -99,17 +138,14 @@ export function buildAssetContextMenu(
     }},
     { id: 'assign', label: 'Assign to Selected Entity', action: () => {
       const sel = getSelection();
-      const mapping = assignPatchForKind(asset.kind, asset.guid);
-      // With an entity selected AND an assignable kind → actually patch the
-      // component. Otherwise fall back to publishing the asset selection (so the
-      // Inspector / Material panel can pick it up).
-      if (sel !== null && mapping) {
-        gateway.dispatch({ kind: 'setComponent', entity: sel, component: mapping.component, patch: mapping.patch });
-      } else {
-        // M1 (AC-B2): single-asset select uses the setAssetSelectionOne
-        // sugar op (forwards to the multi-base setAssetSelection applier).
-        gateway.dispatch({ kind: 'setAssetSelectionOne', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
+      // With an entity selected AND an assignable kind → delegate to assignAssetToEntity
+      // (uses bindAssetRef for material/mesh, createMaterial+bindAssetRef for texture/image).
+      if (sel !== null && assignAssetToEntity(asset.kind, asset.guid, asset.name, sel)) {
+        return;
       }
+      // Fall back to publishing the asset selection (so the Inspector / Material panel
+      // can pick it up).
+      gateway.dispatch({ kind: 'setAssetSelectionOne', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },
 

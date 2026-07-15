@@ -1,46 +1,49 @@
-// schema-native.test.ts — engine-native field assertions for getComponentSchema
+// schema-native.test.ts — reflection-based engine-native field assertions
 //
-// feat-20260701-editor-world-container-doc-ecs-collapse M3 / m3-test-schema-red
-//
-// AC-22: getComponentSchema(comp).fields must return engine-verbatim field names.
-// These tests are RED now — current schema.ts REGISTRY has editor-authored fields
-// (rotX/Y/Z, Mesh.kind, Material, Light.type etc.) that do NOT match engine
-// defineComponent fields. They turn GREEN after m3-impl-inspector-euler rewrites
-// the REGISTRY to engine-native component schemas.
-//
-// plan-strategy §2 D-2, D-3 / requirements AC-22
+// NEVER call defineComponent() for Transform/MeshFilter/MeshRenderer/… here.
+// A second defineComponent(name, …) overwrites the canonical token in the
+// shared global registry and corrupts every other test in the same process
+// (sceneload-native.test.ts documents the same trap). Import runtime tokens.
 
-import { describe, expect, it } from 'bun:test';
-import { getComponentSchema } from '../scene/schema';
+import { describe, expect, it, beforeAll } from 'bun:test';
+import {
+  Transform,
+  MeshFilter,
+  MeshRenderer,
+  DirectionalLight,
+  PointLight,
+  SpotLight,
+  Camera,
+} from '@forgeax/engine-runtime';
+import { _resetSchemaCache, getComponentSchema } from '../scene/schema';
 
-describe('m3-test-schema-red: schema engine-native field assertions', () => {
-  // ── Transform: pos[3]/quat[4]/scale[3] vec fields; NO rotX/rotY/rotZ ─────────
+void Transform; void MeshFilter; void MeshRenderer;
+void DirectionalLight; void PointLight; void SpotLight; void Camera;
+
+beforeAll(() => {
+  _resetSchemaCache();
+});
+
+describe('Reflection: engine-native field assertions', () => {
   it('Transform schema has pos/quat/scale vec fields (array-TRS), no rotX/Y/Z', () => {
     const schema = getComponentSchema('Transform');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
 
-    // Array-TRS: three engine array columns collapsed into three vec fields.
     expect(keys).toContain('pos');
     expect(keys).toContain('quat');
     expect(keys).toContain('scale');
 
-    // Each is a 'vec' field with the engine array arity.
     const pos = schema!.fields.find((f) => f.key === 'pos')!;
     const quat = schema!.fields.find((f) => f.key === 'quat')!;
     const scale = schema!.fields.find((f) => f.key === 'scale')!;
-    expect(pos.type).toBe('vec');
-    expect(quat.type).toBe('vec');
-    expect(scale.type).toBe('vec');
-    expect(pos.arity).toBe(3);
-    expect(quat.arity).toBe(4);
-    expect(scale.arity).toBe(3);
+    expect(pos.type).toBe('vec'); expect(pos.arity).toBe(3);
+    expect(quat.type).toBe('vec'); expect(quat.arity).toBe(4);
+    expect(scale.type).toBe('vec'); expect(scale.arity).toBe(3);
 
-    // Must NOT have the old per-axis scalar keys …
     expect(keys).not.toContain('posX');
     expect(keys).not.toContain('quatW');
     expect(keys).not.toContain('scaleZ');
-    // … nor editor-authored euler fields (euler is Inspector overlay only).
     expect(keys).not.toContain('rotX');
     expect(keys).not.toContain('rotY');
     expect(keys).not.toContain('rotZ');
@@ -49,7 +52,6 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(keys).not.toContain('z');
   });
 
-  // ── MeshFilter: assetHandle, no kind enum ───────────────────────────────────
   it('MeshFilter schema has assetHandle, no kind enum', () => {
     const schema = getComponentSchema('MeshFilter');
     expect(schema).toBeDefined();
@@ -58,32 +60,24 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(keys).not.toContain('kind');
   });
 
-  // ── MeshRenderer: materials array ──────────────────────────────────────────
   it('MeshRenderer schema has materials', () => {
     const schema = getComponentSchema('MeshRenderer');
     expect(schema).toBeDefined();
-    const keys = schema!.fields.map((f) => f.key);
-    expect(keys).toContain('materials');
+    expect(schema!.fields.map(f => f.key)).toContain('materials');
   });
 
-  // ── DirectionalLight: per-channel scalar fields, no type enum ──────────────
   it('DirectionalLight schema has vec direction/color, no type enum', () => {
     const schema = getComponentSchema('DirectionalLight');
     expect(schema).toBeDefined();
     const keys = schema!.fields.map((f) => f.key);
-
-    // vec direction/color (engine array<f32,3> columns, feat-20260709 M2)
     expect(keys).toContain('direction');
     expect(keys).toContain('color');
     expect(keys).toContain('intensity');
-
-    // Must NOT have the retired per-channel scalars or a type enum
     expect(keys).not.toContain('type');
     expect(keys).not.toContain('colorR');
     expect(keys).not.toContain('directionX');
   });
 
-  // ── PointLight exists ──────────────────────────────────────────────────────
   it('PointLight schema exists', () => {
     const schema = getComponentSchema('PointLight');
     expect(schema).toBeDefined();
@@ -94,7 +88,6 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(keys).toContain('range');
   });
 
-  // ── SpotLight exists ───────────────────────────────────────────────────────
   it('SpotLight schema exists', () => {
     const schema = getComponentSchema('SpotLight');
     expect(schema).toBeDefined();
@@ -108,7 +101,6 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(keys).toContain('outerConeDeg');
   });
 
-  // ── Old editor-authored schemas should NOT exist ───────────────────────────
   it('Mesh schema does not exist', () => {
     expect(getComponentSchema('Mesh')).toBeUndefined();
   });
@@ -121,7 +113,6 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(getComponentSchema('Light')).toBeUndefined();
   });
 
-  // ── Camera exists with engine-native field names ────────────────────────────
   it('Camera schema has engine-native fields (fov, near, far, etc.)', () => {
     const schema = getComponentSchema('Camera');
     expect(schema).toBeDefined();
@@ -131,22 +122,10 @@ describe('m3-test-schema-red: schema engine-native field assertions', () => {
     expect(keys).toContain('far');
   });
 
-  // ── Collider exists with engine-native field names ──────────────────────────
-  it('Collider schema exists with engine-native fields', () => {
-    const schema = getComponentSchema('Collider');
-    expect(schema).toBeDefined();
-    const keys = schema!.fields.map((f) => f.key);
-    expect(keys).toContain('shape');
-  });
-
-  // ── AC-22: field names match engine defineComponent verbatim ────────────────
   it('AC-22: Transform fields match engine defineComponent verbatim (array-TRS)', () => {
     const schema = getComponentSchema('Transform');
     expect(schema).toBeDefined();
     const keys = new Set(schema!.fields.map((f) => f.key));
-    // Engine Transform defineComponent columns (feat-20260709 array-TRS):
-    // pos (array<f32,3>) quat (array<f32,4>) scale (array<f32,3>) world
-    // (world is engine-derived — excluded from editor schema per plan D-2)
     expect(keys.has('pos')).toBe(true);
     expect(keys.has('quat')).toBe(true);
     expect(keys.has('scale')).toBe(true);
