@@ -69,7 +69,7 @@ export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay, onControlGam
               title="Control game (click canvas also works)"
               onClick={onControlGame}
             >
-              Control
+              C
             </button>
           </>
         )}
