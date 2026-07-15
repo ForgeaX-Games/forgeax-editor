@@ -90,7 +90,6 @@ function makeFakeGateway(): {
     engineFacade(): never { return {} as never; },
     enterPlay(_w: unknown): void {},
     exitPlay(): void {},
-    notifyActiveWorldChanged(): void {},
   };
   return { gateway, dispatchCalls, subscribeCount: () => subscribers };
 }

@@ -46,7 +46,7 @@
 import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
-import { entComponent, publishMeshStats } from '@forgeax/editor-core';
+import { entComponent, notifyDocChanged, publishMeshStats } from '@forgeax/editor-core';
 import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-core';
 import { createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
@@ -176,8 +176,6 @@ export interface HostGateway {
   enterPlay(playWorld: unknown): void;
   /** ■ Stop — switch the active-world pointer back to the edit world. */
   exitPlay(): void;
-  /** Publish a live simulation mutation so active-world panels re-read it. */
-  notifyActiveWorldChanged?(): void;
   // Play-attempt observability (solo round-8 #3) — mirror of RunGateway's pair, so
   // the same gateway singleton satisfies both surfaces. Optional for fake-gateway
   // compatibility; the real EditGateway implements both.
@@ -580,7 +578,7 @@ export function createHostSession(deps: HostSessionDeps): {
         // The transient play world mutates through gameplay systems rather than
         // document ops. Notify active-world panels (Hierarchy/Inspector) once per
         // live frame without recording an authored-document mutation.
-        gateway.notifyActiveWorldChanged?.();
+        notifyDocChanged();
       },
       onDirtyPlayHint: () => {
         // D-10: play re-instantiates the last-SAVED scene from disk; unsaved

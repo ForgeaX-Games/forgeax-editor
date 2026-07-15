@@ -362,15 +362,6 @@ export class EditGateway {
     for (const fn of this.listeners) fn(this.doc, null);
   }
 
-  /** Notify active-world consumers after an out-of-band live-world mutation.
-   *  Runtime systems do not traverse the document-op door, but panels such as
-   *  Hierarchy must still re-read the current active World every simulation frame.
-   *  The revision is intentionally not a document revision: gameplay must not make
-   *  the authored scene appear dirty. */
-  notifyActiveWorldChanged(): void {
-    for (const fn of this.listeners) fn(this.doc, null);
-  }
-
   /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11).
    *  Success clears the pending flag + any stale error → playPhase 'play'. */
   enterPlay(playWorld: World): void {
@@ -379,7 +370,7 @@ export class EditGateway {
     this._lastPlayError = null;
     clearSelection();
     this._rev++;
-    this.notifyActiveWorldChanged();
+    for (const fn of this.listeners) fn(this.doc, null);
   }
 
   /** Return the pointer to the edit world. Clears selection + emits notification.
@@ -390,7 +381,7 @@ export class EditGateway {
     this._lastPlayError = null;
     clearSelection();
     this._rev++;
-    this.notifyActiveWorldChanged();
+    for (const fn of this.listeners) fn(this.doc, null);
   }
 
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────
