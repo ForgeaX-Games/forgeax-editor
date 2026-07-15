@@ -731,6 +731,16 @@ async function bootViewport(
   canvas.addEventListener('pointerdown', activateGameFromCanvas, true);
   registerTeardown(() => canvas.removeEventListener('pointerdown', activateGameFromCanvas, true));
 
+  // The browser backend owns window-level keyboard listeners, so focus alone does
+  // not stop a leased game from sampling keys. Any pointer interaction outside the
+  // viewport is therefore an ownership boundary: dock panels, tabs, and shell
+  // controls all return input to the editor without each panel knowing about games.
+  const revokeOnExternalPointerDown = (event: PointerEvent): void => {
+    const target = event.target;
+    if (getInputTarget() === 'game' && !(target instanceof Node && container.contains(target))) {
+      revokeGameControl();
+    }
+  };
   const revokeOnFocus = (event: FocusEvent): void => {
     const target = event.target as HTMLElement | null;
     if (target?.matches('input, textarea, select, [contenteditable="true"]') || target?.isContentEditable) {
@@ -740,10 +750,12 @@ async function bootViewport(
   const revokeOnHidden = (): void => {
     if (document.visibilityState === 'hidden') revokeGameControl();
   };
+  document.addEventListener('pointerdown', revokeOnExternalPointerDown, true);
   window.addEventListener('focusin', revokeOnFocus, true);
   window.addEventListener('blur', revokeGameControl);
   document.addEventListener('visibilitychange', revokeOnHidden);
   registerTeardown(() => {
+    document.removeEventListener('pointerdown', revokeOnExternalPointerDown, true);
     window.removeEventListener('focusin', revokeOnFocus, true);
     window.removeEventListener('blur', revokeGameControl);
     document.removeEventListener('visibilitychange', revokeOnHidden);

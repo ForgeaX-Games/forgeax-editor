@@ -93,6 +93,16 @@ test.describe('play-mode — standalone ▶ Play / FPS / canvas / ■ Stop chain
     await expect(page.locator('[data-testid="game-overlay-fps"]'))
       .toBeAttached({ timeout: 10_000 });
 
+    // Play starts as observation. Exercise the actual possession path before
+    // asking Escape to exit it.
+    await page.locator('canvas#app').click({ position: { x: 8, y: 80 } });
+    await expect.poll(() => page.evaluate(() => {
+      const editor = (window as unknown as {
+        __forgeax_editor?: { getViewportQuadrant: () => { inputTarget: string } };
+      }).__forgeax_editor;
+      return editor?.getViewportQuadrant().inputTarget;
+    })).toBe('game');
+
     // Escape must un-possess play·game → play·scene. The restored ■ control (not
     // ▶) proves the simulation continues while editor controls are available.
     await page.keyboard.press('Escape');
@@ -100,6 +110,48 @@ test.describe('play-mode — standalone ▶ Play / FPS / canvas / ■ Stop chain
       .toBeVisible({ timeout: 10_000 });
     await expect(page.locator('[data-testid="vp-play"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="game-overlay-fps"]')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => {
+      const editor = (window as unknown as {
+        __forgeax_editor?: {
+          getViewportQuadrant: () => {
+            run: string;
+            display: string;
+            inputTarget: string;
+          };
+        };
+      }).__forgeax_editor;
+      return editor?.getViewportQuadrant();
+    })).toMatchObject({ run: 'play', display: 'scene', inputTarget: 'editor' });
+  });
+
+  test('clicking a dock panel revokes game input control', async ({ page }) => {
+    await page.goto(STANDALONE_URL);
+    await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 15_000 });
+
+    await page.locator('[data-testid="vp-play"]').click();
+    await expect(page.locator('[data-testid="game-overlay-fps"]'))
+      .toBeAttached({ timeout: 10_000 });
+
+    // Play starts as observation. A trusted canvas click explicitly grants the
+    // game lease; a later dock-panel click must revoke it before that panel
+    // receives its own interaction.
+    await page.locator('canvas#app').click({ position: { x: 8, y: 80 } });
+    await expect.poll(() => page.evaluate(() => {
+      const editor = (window as unknown as {
+        __forgeax_editor?: { getViewportQuadrant: () => { inputTarget: string } };
+      }).__forgeax_editor;
+      return editor?.getViewportQuadrant().inputTarget;
+    })).toBe('game');
+
+    await page.getByRole('heading', { name: /^Hierarchy/ }).click();
+    await expect.poll(() => page.evaluate(() => {
+      const editor = (window as unknown as {
+        __forgeax_editor?: {
+          getViewportQuadrant: () => { control: string; inputTarget: string };
+        };
+      }).__forgeax_editor;
+      return editor?.getViewportQuadrant();
+    })).toMatchObject({ control: 'editor', inputTarget: 'editor' });
   });
 
   test('■ Stop returns to Edit mode', async ({ page }) => {

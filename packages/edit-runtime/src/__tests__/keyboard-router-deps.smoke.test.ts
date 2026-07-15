@@ -7,8 +7,9 @@
 // regression this extraction fixes). This test pins the exact field set so a
 // future edit that drops one fails here at unit time rather than in the running
 // editor.
-import { describe, it, expect } from 'bun:test';
+import { afterEach, describe, it, expect } from 'bun:test';
 import { buildKeyboardRouterDeps } from '../keyboard-router-deps';
+import { setViewportQuadrant } from '../viewport/viewport-quadrant';
 
 const EXPECTED_KEYS = [
   'dispatch',
@@ -31,6 +32,8 @@ const EXPECTED_KEYS = [
 ] as const;
 
 describe('buildKeyboardRouterDeps — router dep shape (keyboard-router convergence)', () => {
+  afterEach(() => setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' }));
+
   it('returns exactly the 17 interface KeyboardRouterDeps callbacks', () => {
     const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true });
     const rec = deps as unknown as Record<string, unknown>;
@@ -40,5 +43,12 @@ describe('buildKeyboardRouterDeps — router dep shape (keyboard-router converge
     // Exact set — no missing, no extra (extra would mean an interface-side field
     // added without updating this guard; missing means a dropped gesture).
     expect(Object.keys(deps).sort()).toEqual([...EXPECTED_KEYS].sort());
+  });
+
+  it('derives Play from the viewport quadrant, not the edit gateway mode', () => {
+    setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
+    const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true });
+    expect(deps.isPlayMode()).toBe(true);
+    setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
   });
 });
