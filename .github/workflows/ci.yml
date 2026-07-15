@@ -86,7 +86,60 @@ env:
   CACHE_RUNNER_SCOPE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-hosted-linux-x64' || 'self-hosted-linux-x64' }}
 
 jobs:
+  # ── post-merge gate: skip redundant check jobs when the merge tree was
+  # already validated by the PR's last CI run. Only active on main push;
+  # skipped on PRs (always() in dependent jobs prevents skip cascading).
+  post-merge-gate:
+    name: post-merge-gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      skip_checks: ${{ steps.compare.outputs.skip_checks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: false
+          fetch-depth: 2
+          token: ${{ secrets.GHA }}
+
+      - name: Compare merge tree with PR merge ref
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(git log -1 --format=%B | head -1 | sed -n 's/.*#\([0-9][0-9]*\).*/\1/p' || echo "")
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Not a merge commit with PR number — run full CI"
+            echo "skip_checks=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "PR number: ${PR_NUMBER}"
+          MERGE_PARENT1=$(git log -1 --format=%P | awk '{print $1}')
+          PR_BASE=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '.base.sha' 2>/dev/null || echo "")
+          if [ -z "$PR_BASE" ]; then
+            echo "Failed to fetch PR #${PR_NUMBER} base SHA — run full CI"
+            echo "skip_checks=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "merge parent1: ${MERGE_PARENT1}"
+          echo "PR base:       ${PR_BASE}"
+          if [ "$MERGE_PARENT1" = "$PR_BASE" ]; then
+            echo "PR #${PR_NUMBER} base matches merge parent1 — main didn't advance, skipping redundant checks"
+            echo "skip_checks=true" >> $GITHUB_OUTPUT
+          else
+            echo "PR #${PR_NUMBER} base differs from merge parent1 — main advanced, running full CI"
+            echo "skip_checks=false" >> $GITHUB_OUTPUT
+          fi
+
   b2-self-boot:
+    needs: [post-merge-gate]
+    if: always() && ! (needs.post-merge-gate.result == 'success' && needs.post-merge-gate.outputs.skip_checks == 'true')
     # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + B2
     # selfcheck; NO apt-get, NO browser). Fork PRs → ephemeral ubuntu-latest;
     # trusted events → the TencentOS self-hosted pool [self-hosted, Linux, X64].
@@ -267,6 +320,8 @@ jobs:
   # wasm-pack (its committed pkg/*.d.ts shims are in git; the .wasm is not), which
   # tsc -b needs to resolve WebGPU/wgpu types.
   typecheck:
+    needs: [post-merge-gate]
+    if: always() && ! (needs.post-merge-gate.result == 'success' && needs.post-merge-gate.outputs.skip_checks == 'true')
     # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + lint +
     # dep-cruiser + tsc + unit tests; NO apt-get, NO browser). Same fork-safe
     # routing as b2-self-boot: fork PRs → ubuntu-latest; trusted events → the
@@ -456,6 +511,8 @@ jobs:
   # — being non-required — needs NO ci-docs.yml mirror (doc-only PRs skip ci.yml
   # via paths-ignore and don't deadlock). Promote to required once proven stable.
   smoke-play:
+    needs: [post-merge-gate]
+    if: always() && ! (needs.post-merge-gate.result == 'success' && needs.post-merge-gate.outputs.skip_checks == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
