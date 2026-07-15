@@ -111,7 +111,7 @@ export default defineConfig({
     // plugin frontends live at ../../marketplace/extensions/*/src/panel.tsx and
     // are statically imported via Sidebar.tsx's LazyPluginPanels map; allow the
     // monorepo root so those imports resolve.  See:
-    //   packages/marketplace/extensions/wb-character-forge/DESIGN.md (template).
+    //   packages/marketplace/extensions/wb-character/PLUGIN.md
     fs: { allow: ['..', '../..'] },
     proxy: {
       '/api': { target: SERVER, changeOrigin: true },
@@ -142,7 +142,7 @@ export default defineConfig({
       // proxy the interface dev server SPA-falls back to its own index.html
       // and the iframe ends up loading a nested studio UI. See:
       //   packages/server/src/main.ts → serveStatic('/extensions/wb-character/*')
-      //   packages/marketplace/extensions/wb-character-host/panel.tsx
+      //   packages/marketplace/extensions/wb-character/
       '/extensions': { target: SERVER, changeOrigin: true },
       // wb-character iframe legacy shim — the plugin submodule's 88 fetch
       // sites hit /__ce-api__/* expecting the old vite-dev plugin. Studio

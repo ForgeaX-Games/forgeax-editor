@@ -322,11 +322,12 @@ export function buildShortcuts(): ShortcutDef[] {
       allowInInput: true,
       match: (e) => e.key === 'Escape' && !mod(e) && !e.shiftKey && !e.altKey,
       run: () => {
-        // Escape revokes the explicit game-control lease without changing the
-        // simulation or what the viewport displays. G remains game-owned while
-        // leased, so it cannot steal a gameplay key to do this transition.
+        // Escape exits Play possession: it leaves the simulation running but
+        // returns to the scene/editor view, which structurally revokes game
+        // control. G remains game-owned while leased, so it cannot steal a
+        // gameplay key to do this transition.
         if (routerDeps?.isPlayMode() && routerDeps.getInputTarget() === 'game') {
-          routerDeps.dispatch({ kind: 'releaseGameControl' }, 'human');
+          routerDeps.dispatch({ kind: 'setDisplay', display: 'scene' }, 'human');
           return true;
         }
         const s = store();

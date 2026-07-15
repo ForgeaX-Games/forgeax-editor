@@ -88,7 +88,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation, type TFunction } from '@/i18n';
-import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
+import { extensionManifestPathHint, listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useShellStore } from '../../store';
 import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
@@ -1877,12 +1877,10 @@ function PluginDetail({
   const hasAgentLink = p.kind === 'agent';
   const hasWbLink = p.kind === 'workbench' && !!wb;
   const hasKindLink = !hasAgentLink && !hasWbLink;
-  // The id IS the npm package; daemon scans packages/marketplace/extensions/<dir>
-  // where dir is the trailing segment after the @forgeax-plugin/ scope.
-  const dir = p.id.startsWith('@forgeax-plugin/')
-    ? p.id.slice('@forgeax-plugin/'.length)
-    : p.id;
-  const manifestHint = `packages/marketplace/extensions/${dir}/manifest.json`;
+  // Flat L0 path hint from id — see extensionManifestPathHint (no kind bucket /
+  // PluginSourceDescriptor; those were reverted with the kind-layout experiment).
+  const manifestHint = extensionManifestPathHint(p.id);
+  const extensionRootHint = manifestHint.replace(/\/forgeax-extension\.json$/, '');
   // P4.95 — manifest hint pill becomes click-to-copy. Parallel move to P4.94
   // (entry.frontend lime pill → deep-link button): the cyan manifest path was
   // information-only for 4 weeks; now one click copies it to the clipboard so
@@ -2042,14 +2040,14 @@ function PluginDetail({
                 type="button"
                 className="ba-detail-code ba-detail-entry ba-detail-entry-link"
                 onClick={(e) => { e.stopPropagation(); onOpenWbTab(); }}
-                title={t('bus.entryOpenWbTitle', { wbId: wb.id, path: `packages/marketplace/extensions/${dir}/${p.entry.frontend.replace(/^\.\//, '')}` })}
+                title={t('bus.entryOpenWbTitle', { wbId: wb.id, path: `${extensionRootHint}/${p.entry.frontend.replace(/^\.\//, '')}` })}
               >
                 {p.entry.frontend}
               </button>
             ) : (
               <code
                 className="ba-detail-code ba-detail-entry"
-                title={`packages/marketplace/extensions/${dir}/${p.entry.frontend.replace(/^\.\//, '')}`}
+                title={`${extensionRootHint}/${p.entry.frontend.replace(/^\.\//, '')}`}
               >
                 {p.entry.frontend}
               </code>

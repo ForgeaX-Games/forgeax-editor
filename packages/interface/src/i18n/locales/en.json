@@ -282,6 +282,7 @@
       "familyLabel": "family"
     },
     "sections": {
+      "extensions": "Extensions",
       "fxpackImport": ".fxpack import",
       "forkRecord": "Fork & record"
     },
@@ -360,7 +361,7 @@
     "verBumpedTitle": "manifest v{{ver}} bumped · the 0.0.x placeholder semantics have been bumped · this is a real version",
     "copied": "Copied",
     "manifestCopiedTitle": "✓ Path copied to clipboard",
-    "manifestCopyTitle": "Click to copy path to clipboard · paste into a terminal or editor to jump straight to manifest.json",
+    "manifestCopyTitle": "Click to copy path to clipboard · paste into a terminal or editor to jump straight to forgeax-extension.json",
     "detailKindSoloTitle": "Click to show only {{kind}} plugins · use the ✕ button in the top filter row to clear filtering",
     "versionCopiedTitle": "✓ Version copied to clipboard",
     "versionCopyTitle": "Click to copy version · paste into a changelog / shell / commit message",

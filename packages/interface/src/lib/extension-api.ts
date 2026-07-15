@@ -133,6 +133,21 @@ export function pickLang(
   return text[lang] ?? text.zh ?? text.en ?? fallback;
 }
 
+/**
+ * Flat L0 marketplace path hint for BusAdminPanel / Sidebar detail rows.
+ * Normalizes `@forgeax-extension/<slug>` and legacy `@forgeax-plugin/<slug>`
+ * to `packages/marketplace/extensions/<slug>/forgeax-extension.json`.
+ *
+ * Deliberately local (id → path): no kind bucket, no PluginSourceDescriptor /
+ * plugin-layout dependency (those were reverted with the kind-layout experiment).
+ */
+export function extensionManifestPathHint(id: string): string {
+  const slug = id
+    .replace(/^@forgeax-extension\//, '')
+    .replace(/^@forgeax-plugin\//, '');
+  return `packages/marketplace/extensions/${slug}/forgeax-extension.json`;
+}
+
 export async function listExtensions(kind?: string): Promise<ExtensionListResponse> {
   const url = kind
     ? `/api/extensions/list?kind=${encodeURIComponent(kind)}`

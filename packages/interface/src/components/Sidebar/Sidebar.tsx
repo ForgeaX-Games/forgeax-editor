@@ -5,7 +5,7 @@ import { emitDeepLink } from '../../lib/deep-link-bus';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
 import { FilesPanel } from './FilesPanel';
 import { AgentsPanelSlot } from '../DockShell/panelRegistry';
-import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
+import { extensionManifestPathHint, listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { extensionRendersInMainArea, extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensionHost';
 import { KeepAliveExtensionIframes } from '../MainArea/KeepAliveExtensionIframes';
@@ -20,7 +20,7 @@ import './Sidebar.css';
 // MainArea path in `WorkbenchExtensionHost.tsx`. Anything without an iframe
 // surface falls through to `ExtensionPlaceholder`.
 // Cross-references:
-//   - manifest sample: packages/marketplace/extensions/wb-character/forgeax-plugin.json
+//   - manifest sample: packages/marketplace/extensions/wb-character/forgeax-extension.json
 //   - host helper:     extensionRendersInSidebarLeftPane (MainArea/WorkbenchExtensionHost)
 //   - server route:    packages/server/src/main.ts → /extensions/<id>/* serveStatic
 
@@ -494,10 +494,7 @@ function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   const showAlt = descriptionAlt && descriptionAlt !== description;
   const setMode = useShellStore((s) => s.setMode);
   const openSettingsStore = useShellStore((s) => s.openOverlay);
-  const dir = m.id.startsWith('@forgeax-plugin/')
-    ? m.id.slice('@forgeax-plugin/'.length)
-    : m.id;
-  const manifestPath = `packages/marketplace/extensions/${dir}/manifest.json`;
+  const manifestPath = extensionManifestPathHint(m.id);
   const openInBus = () => {
     emitDeepLink('bus:expand-plugin', m.id);
     openSettingsStore('settings', 'plugins');

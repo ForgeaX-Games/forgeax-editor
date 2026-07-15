@@ -282,6 +282,7 @@
       "familyLabel": "家族"
     },
     "sections": {
+      "extensions": "扩展",
       "fxpackImport": ".fxpack 导入",
       "forkRecord": "Fork & 录制"
     },
@@ -360,7 +361,7 @@
     "verBumpedTitle": "manifest v{{ver}} bumped · 已 bump 过 0.0.x 占位语义 · 这是真版本",
     "copied": "已复制",
     "manifestCopiedTitle": "✓ 已复制路径到剪贴板",
-    "manifestCopyTitle": "点击复制路径到剪贴板 · 粘贴到终端或编辑器可直达 manifest.json",
+    "manifestCopyTitle": "点击复制路径到剪贴板 · 粘贴到终端或编辑器可直达 forgeax-extension.json",
     "detailKindSoloTitle": "点击仅显示 {{kind}} 类的插件 · 顶部过滤行的 ✕ 按钮可清除筛选",
     "versionCopiedTitle": "✓ 已复制版本号到剪贴板",
     "versionCopyTitle": "点击复制版本号 · 可粘贴到 changelog / shell / commit message",

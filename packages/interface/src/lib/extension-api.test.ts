@@ -8,7 +8,7 @@
  * raised in DockShell's boot effect before the fix.
  */
 import { describe, it, expect, afterEach } from 'bun:test';
-import { listExtensions } from './extension-api';
+import { extensionManifestPathHint, listExtensions } from './extension-api';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -36,5 +36,27 @@ describe('listExtensions — no-bus degrade', () => {
     mockFetch(200, 'application/json', JSON.stringify(payload));
     const res = await listExtensions('workbench');
     expect(res).toEqual(payload);
+  });
+});
+
+describe('extensionManifestPathHint — flat Marketplace path', () => {
+  it('maps @forgeax-extension/<slug> to packages/marketplace/extensions/<slug>/forgeax-extension.json', () => {
+    expect(extensionManifestPathHint('@forgeax-extension/wb-character')).toBe(
+      'packages/marketplace/extensions/wb-character/forgeax-extension.json',
+    );
+  });
+
+  it('maps legacy @forgeax-plugin/<slug> the same way (persisted / pre-rename ids)', () => {
+    expect(extensionManifestPathHint('@forgeax-plugin/wb-observatory')).toBe(
+      'packages/marketplace/extensions/wb-observatory/forgeax-extension.json',
+    );
+  });
+
+  it('accepts a bare slug and stays flat (no kind bucket)', () => {
+    expect(extensionManifestPathHint('agent-iori')).toBe(
+      'packages/marketplace/extensions/agent-iori/forgeax-extension.json',
+    );
+    expect(extensionManifestPathHint('@forgeax-extension/wb-character')).not.toContain('/workbench/');
+    expect(extensionManifestPathHint('@forgeax-extension/wb-character')).not.toContain('manifest.json');
   });
 });

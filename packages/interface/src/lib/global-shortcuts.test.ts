@@ -117,12 +117,12 @@ describe('keyboard router — dual-domain Delete (AC-C2)', () => {
 });
 
 describe('keyboard router — Escape Play input exit (AC-Cb4)', () => {
-  it('play·game → revokes game control without stopping simulation or changing display', () => {
+  it('play·game → returns to scene controls without stopping simulation', () => {
     const deps = mockDeps({ isPlayMode: () => true, getInputTarget: () => 'game' });
     registerKeyboardRouterDeps(deps);
     const esc = findByCombo(buildShortcuts(), 'Esc');
     expect(esc.run()).toBe(true);
-    expect(deps.calls.dispatch).toEqual([[{ kind: 'releaseGameControl' }, 'human']]);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
   });
 
   it('outside play·game does not dispatch a viewport transition', () => {

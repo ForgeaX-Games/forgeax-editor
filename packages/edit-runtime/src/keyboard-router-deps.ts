@@ -97,7 +97,10 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     getEntitySelection: () => Array.from(getSelectionList()) as unknown as number[],
     getAssetSelection: () => getAssetSelectionList(),
     getLastSelectionDomain: () => getLastSelectionDomain(),
-    isPlayMode: () => gateway.mode === 'play',
+    // Play owns a fresh transient world; gateway.mode still reflects the
+    // persistent edit document during that session. The viewport quadrant is the
+    // authoritative lifecycle state used by the keyboard router.
+    isPlayMode: () => getViewportQuadrant().run === 'play',
     getDisplay: () => getViewportQuadrant().display,
     getInputTarget: () => getInputTarget(),
     deleteEntities: (ids: number[]) => deleteManyCascade(ids as never),
