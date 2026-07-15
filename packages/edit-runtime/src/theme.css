@@ -479,6 +479,7 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
   right: 0;
   height: 40px;
   z-index: 1000;
+  visibility: hidden;
   pointer-events: auto;
 }
 .vp-game-overlay {
