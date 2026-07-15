@@ -151,16 +151,16 @@ function shouldExclude(name: string, comp: Component): boolean {
 // Engine → Editor field type mapping
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Engine field types that should NOT appear in the editor schema. */
+/** Exact engine field types that should NOT appear in the editor schema. */
 const INTERNAL_FIELD_TYPES = new Set<SchemaFieldType>([
-  'entity',       // internal entity handle
-  'array<entity>',// internal entity array
-  'unique<',      // unique resource handle (don't match by prefix)
+  'entity',        // internal entity handle
+  'array<entity>', // internal entity array
 ]);
 
-// Prefix patterns that indicate internal fields
+/** Prefix patterns for parametric types that are editor-internal. */
 function isInternalFieldType(engineType: SchemaFieldType): boolean {
   if (INTERNAL_FIELD_TYPES.has(engineType)) return true;
+  // `unique<T>` is a template literal SchemaFieldType — match by prefix, not Set membership
   if (engineType.startsWith('unique<')) return true;
   return false;
 }

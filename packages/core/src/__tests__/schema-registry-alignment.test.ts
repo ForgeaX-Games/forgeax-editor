@@ -19,7 +19,16 @@ import { defineComponent } from '@forgeax/engine-ecs';
 // production. For unit tests we manually register the schemas so tests are
 // self-contained and don't depend on engine module structure.
 
-import { _resetSchemaCache, getComponentSchema, fieldSchema, listComponentSchemas, defaultComponentData, defaultFieldValue, fieldVisible } from '../scene/schema';
+import {
+  _resetSchemaCache,
+  getComponentSchema,
+  fieldSchema,
+  listComponentSchemas,
+  defaultComponentData,
+  defaultFieldValue,
+  fieldVisible,
+  type FieldType,
+} from '../scene/schema';
 
 function registerRuntimeComponents() {
   defineComponent('Transform', {
@@ -179,7 +188,7 @@ function expectKeys(comp: string, ...keys: string[]) {
   }
 }
 
-function expectFieldType(comp: string, key: string, type: string) {
+function expectFieldType(comp: string, key: string, type: FieldType) {
   const fs = fieldSchema(comp, key);
   expect(fs, `${comp}.${key} not found`).toBeDefined();
   expect(fs!.type, `${comp}.${key} type`).toBe(type);
