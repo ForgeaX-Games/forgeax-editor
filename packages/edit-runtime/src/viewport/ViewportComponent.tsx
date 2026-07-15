@@ -628,11 +628,10 @@ async function bootViewport(
   }
 
   // Keyboard ownership lives in interface's single global-shortcuts router
-  // (keyboard-router convergence M4 T4-7 / AC-Cb1). Escape while play·game
-  // dispatches `setDisplay(scene)`, returning input to editor controls while the
-  // simulation keeps running; G remains game-owned in play·game (T0-10 / RK-10),
-  // so it cannot trigger that transition. Do not restore a local listener here:
-  // it would violate the one-keydown-router invariant and double-handle shortcuts.
+  // (keyboard-router convergence M4 T4-7 / AC-Cb1). Escape is Play-only and
+  // dispatches `stop`; plain G remains game-owned; Shift+G toggles play·game ⇄
+  // play·scene. Do not restore a local listener here: it would violate the
+  // one-keydown-router invariant and double-handle shortcuts.
 
   // play·scene non-commit (was :638). transientMode true exactly in play·scene.
   function syncTransientMode(q: { run: string; display: string }): void {
@@ -705,7 +704,9 @@ async function bootViewport(
         // The lifecycle has already atomically moved gateway.activeWorld to the
         // play world. Publish the matching UI state only now, never during async
         // assembly, so Hierarchy cannot claim Play while showing the edit tree.
-        setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
+        canvas.focus({ preventScroll: true });
+        canvasInput.grantGame();
+        setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
       },
       onPlayFailed: () => {
         // Degrade back to a coherent edit viewport if fresh-world assembly fails.
@@ -816,7 +817,7 @@ async function bootViewport(
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
   // is ledger-visible + AI-equivalent, symmetric to play/stop. The router (and the
-  // ViewportBar / GameOverlay G buttons) dispatch it; the real quadrant mutation
+  // ViewportBar / GameOverlay display buttons) dispatch it; the real quadrant mutation
   // lives here in edit-runtime (DAG downstream — core stays headless, RK-11).
   const unregSetDisplay = registerSessionApplier('setDisplay', (op) => {
     const { display } = op as { display: 'scene' | 'game' };
