@@ -1,86 +1,26 @@
 // schema-native.test.ts — reflection-based engine-native field assertions
 //
-// 2026-07-15: Updated for reflection. Components are manually registered in
-// beforeAll and verified through the reflection API.
+// NEVER call defineComponent() for Transform/MeshFilter/MeshRenderer/… here.
+// A second defineComponent(name, …) overwrites the canonical token in the
+// shared global registry and corrupts every other test in the same process
+// (sceneload-native.test.ts documents the same trap). Import runtime tokens.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import { defineComponent } from '@forgeax/engine-ecs';
+import {
+  Transform,
+  MeshFilter,
+  MeshRenderer,
+  DirectionalLight,
+  PointLight,
+  SpotLight,
+  Camera,
+} from '@forgeax/engine-runtime';
 import { _resetSchemaCache, getComponentSchema } from '../scene/schema';
 
+void Transform; void MeshFilter; void MeshRenderer;
+void DirectionalLight; void PointLight; void SpotLight; void Camera;
+
 beforeAll(() => {
-  _resetSchemaCache();
-
-  // Register the subset of engine components this test file verifies
-  defineComponent('Transform', {
-    pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
-    quat: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
-    scale: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    world: { type: 'array<f32, 16>', transient: true },
-  });
-  defineComponent('MeshFilter', {
-    assetHandle: 'shared<MeshAsset>',
-  });
-  defineComponent('MeshRenderer', {
-    materials: 'array<shared<MaterialAsset>>',
-  });
-  defineComponent('DirectionalLight', {
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    castShadow: 'bool',
-    cascadeCount: 'f32',
-    splitLambda: 'f32',
-    cascadeBlend: 'f32',
-    mapSize: 'f32',
-    depthBias: 'f32',
-    normalBias: 'f32',
-    shadowDistance: 'f32',
-    pcfKernelSize: 'f32',
-  });
-  defineComponent('PointLight', {
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    range: 'f32',
-  });
-  defineComponent('SpotLight', {
-    direction: { type: 'array<f32, 3>' },
-    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
-    intensity: 'f32',
-    range: 'f32',
-    innerConeDeg: 'f32',
-    outerConeDeg: 'f32',
-    castShadow: 'bool',
-    mapSize: 'f32',
-    depthBias: 'f32',
-    normalBias: 'f32',
-    nearPlane: 'f32',
-    farPlane: 'f32',
-    pcfKernelSize: 'f32',
-  });
-  defineComponent('Camera', {
-    fov: 'f32',
-    aspect: 'f32',
-    near: 'f32',
-    far: 'f32',
-    projection: 'f32',
-    left: 'f32',
-    right: 'f32',
-    bottom: 'f32',
-    top: 'f32',
-    tonemap: 'f32',
-    exposure: 'f32',
-    whitePoint: 'f32',
-    antialias: 'f32',
-    bloom: 'f32',
-    bloomThreshold: 'f32',
-    bloomIntensity: 'f32',
-    bloomBlurRadius: 'f32',
-    clearColor: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
-    autoAspect: 'bool',
-  });
-  // Collider is registered in schema-registry-alignment, not here
-  // (this test just asserts Collider schema does NOT exist here)
-
   _resetSchemaCache();
 });
 
@@ -180,11 +120,6 @@ describe('Reflection: engine-native field assertions', () => {
     expect(keys).toContain('fov');
     expect(keys).toContain('near');
     expect(keys).toContain('far');
-  });
-
-  it('Collider schema NOT present here (registered by physics, not runtime)', () => {
-    // This test file only registers runtime components; Collider must not leak.
-    // The schema-registry-alignment test registers Collider separately.
   });
 
   it('AC-22: Transform fields match engine defineComponent verbatim (array-TRS)', () => {
