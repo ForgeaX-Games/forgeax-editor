@@ -689,15 +689,33 @@ async function bootViewport(
       // ▶ Play receives the game view of the single host-owned canvas boundary;
       // it never attaches a second browser backend to this physical canvas.
       playInput: canvasInput.game,
+      // Keep the play App's sole frame loop, but switch its declared renderer
+      // projection by quadrant: game camera in play·game; editor camera over the
+      // live play world in play·scene.
+      createPlayDrawSource: (playWorld) => worldManager.createPlayDrawSource(
+        playWorld as import('@forgeax/engine-ecs').World,
+        () => getViewportQuadrant().display === 'scene',
+      ),
       physics: editPhysics,
       ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
+      onPlayStarted: () => {
+        // The lifecycle has already atomically moved gateway.activeWorld to the
+        // play world. Publish the matching UI state only now, never during async
+        // assembly, so Hierarchy cannot claim Play while showing the edit tree.
+        setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
+      },
+      onPlayFailed: () => {
+        // Degrade back to a coherent edit viewport if fresh-world assembly fails.
+        canvasInput.revokeGame();
+        setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+      },
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: () => {}, stopSimulation: () => {}, dispose: () => {} };
+    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {} };
   }
   // Tear the host session down (disk-watch socket, flush beacons) on a
   // cross-game realm reset, flushing any pending save first.
@@ -720,10 +738,13 @@ async function bootViewport(
     else canvasInput.revokeGame();
   }));
 
-  // A capture-phase activation grants the lease before the browser backend sees
-  // the event, then stops this activating click from becoming an accidental shot.
+  // A capture-phase activation grants the game lease only from the play·game
+  // observation state. In edit·scene and play·scene the same physical canvas is
+  // owned by the editor, so swallowing its pointerdown would disable selection,
+  // gizmo drag, and camera navigation before createViewport can receive them.
   const activateGameFromCanvas = (event: PointerEvent): void => {
-    if (getInputTarget() === 'game') return;
+    const q = getViewportQuadrant();
+    if (q.inputTarget === 'game' || q.run !== 'play' || q.display !== 'game') return;
     canvas.focus({ preventScroll: true });
     grantGameControl();
     event.stopImmediatePropagation();
@@ -765,8 +786,9 @@ async function bootViewport(
   actionsRef.current = {
     playSimulation: () => {
       canvasInput.revokeGame();
-      setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
-      session.playSimulation();
+      // `session.playSimulation()` assembles asynchronously. Its lifecycle
+      // callback publishes play·game only after gateway.activeWorld is live.
+      void session.playSimulation();
     },
     stopSimulation: () => {
       revokeGameControl();

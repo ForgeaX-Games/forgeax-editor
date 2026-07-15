@@ -58,3 +58,29 @@ export function createDrawSource(
     };
   };
 }
+
+/**
+ * Build the same editor-camera composite for a transient play world. The play
+ * App owns the live frame loop, while the editorWorld remains the sole home of
+ * the orbit camera and gizmos; the two worlds therefore stay identity-isolated
+ * and only meet at the renderer's declared owner split.
+ */
+export function createPlayDrawSource(
+  editorWorld: World,
+  playWorld: World,
+  isEditorView: () => boolean,
+): () => DrawSourceResult | undefined {
+  return () => {
+    if (!isEditorView()) {
+      // play·game falls through to playApp's own single-world renderer path,
+      // preserving its game-camera selection without a cross-world camera id.
+      return undefined;
+    }
+    return {
+      // play·scene: editor orbit camera + live simulation world.
+      worlds: [editorWorld, playWorld],
+      cameraOwner: WORLD_REF_EDITOR,
+      resourceOwner: WORLD_REF_SCENE,
+    };
+  };
+}

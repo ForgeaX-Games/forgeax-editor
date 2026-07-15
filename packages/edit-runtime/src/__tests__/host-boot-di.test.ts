@@ -90,6 +90,7 @@ function makeFakeGateway(): {
     engineFacade(): never { return {} as never; },
     enterPlay(_w: unknown): void {},
     exitPlay(): void {},
+    notifyActiveWorldChanged(): void {},
   };
   return { gateway, dispatchCalls, subscribeCount: () => subscribers };
 }
@@ -164,7 +165,10 @@ function makeCtx(over?: Partial<HostSessionContext>): HostSessionContext {
     discoverGameCameraFromWorld: () => {},
     applyActiveCamera: () => {},
     playInput: { sample: () => ({ downKeys: new Set(), upKeys: new Set(), buttons: [false, false, false], movementX: 0, movementY: 0, wheelDelta: 0, focused: true, pointerLocked: false }), detach() {} },
+    createPlayDrawSource: () => () => undefined,
     physics: undefined,
+    onPlayStarted: () => {},
+    onPlayFailed: () => {},
     ...over,
   } as HostSessionContext;
   // stash the spy arrays on the object for assertions (non-enumerable-ish helper)
