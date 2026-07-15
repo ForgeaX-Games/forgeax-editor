@@ -78,7 +78,7 @@ export function GameOverlay({ fps, onPlay, onStop, onToggleDisplay, onControlGam
           type="button"
           className="vp-game-overlay-btn"
           data-testid="game-overlay-display"
-          title="Toggle display (G)"
+          title="Toggle scene view (Shift+G)"
           onClick={onToggleDisplay}
         >
           G

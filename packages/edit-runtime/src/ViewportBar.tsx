@@ -10,7 +10,7 @@
 //   - canUndo/canRedo toggle button enable/disable in real-time via useDocVersion.
 //   - Gizmo mode reads/writes the store's gizmoMode (same as EditorApp does).
 //   - Save calls saveDocToDisk; keyboard shortcuts are registered here too.
-//   - ▶/■/G + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
+//   - ▶/■/display + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
 //     received as props from ViewportChrome.
 import { useEffect, useState } from 'react';
 // M3 (AC-03): gizmo-mode (session op) and save (session op) go through the one
@@ -81,9 +81,10 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
         <button type="button" className="vp-btn" data-testid="vp-play"
           onClick={onPlay} title="Play (▶)">▶</button>
       )}
-      {/* ── Display toggle (w25): G scene⇄game ── */}
-      <button type="button" className={`vp-btn${isGame ? ' on' : ''}`} data-testid="vp-display"
-        onClick={onToggleDisplay} title={isGame ? 'Show aids (G)' : 'Game view (G)'}>G</button>
+      {isPlay && (
+        <button type="button" className={`vp-btn${isGame ? ' on' : ''}`} data-testid="vp-display"
+          onClick={onToggleDisplay} title={isGame ? 'Show scene view (Shift+G)' : 'Game view (Shift+G)'}>G</button>
+      )}
       <span className="vp-sep" />
       {/* ── FPS counter (w25): live from frame-loop accumulator ── */}
       <span className="vp-fps" data-testid="vp-fps">{fps} FPS</span>
