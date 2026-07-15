@@ -27,7 +27,7 @@ export interface PanelBridgeEvents {
   dragAssetEnd: void;
   addAssetToScene: DragAssetRef;
   /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
-  assetsChanged: { hint?: 'directory-only' | 'pack-changed' };
+  assetsChanged: { hint?: 'directory-only' | 'pack-changed'; source?: 'local-op' | 'disk-watch' };
   /** In-process edit-runtime diagnostics; play keeps its real iframe VAG wire. */
   editorHealth: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number };
   editorConsole: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number };
