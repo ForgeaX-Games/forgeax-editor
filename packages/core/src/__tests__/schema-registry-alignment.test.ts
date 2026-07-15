@@ -6,7 +6,6 @@
 
 import { describe, expect, it, beforeAll } from 'bun:test';
 import { defineComponent, resolveComponent } from '@forgeax/engine-ecs';
-import type { ComponentSchema as EngineSchema } from '@forgeax/engine-ecs';
 
 // Side-effect: register real runtime components (production tokens).
 import {
@@ -51,11 +50,11 @@ import {
 /** Register only if the name is not already in the global engine registry. */
 function ensureComponent(
   name: string,
-  fields: EngineSchema,
-  options?: { transient?: boolean },
+  fields: Parameters<typeof defineComponent>[1],
+  options?: Parameters<typeof defineComponent>[2],
 ): void {
   if (resolveComponent(name)) return;
-  defineComponent(name, fields as never, options as never);
+  defineComponent(name, fields, options);
 }
 
 function ensurePhysicsAndFilterFixtures(): void {
