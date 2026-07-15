@@ -113,6 +113,10 @@ export interface RunLifecycleDeps {
    * on ■ (GC, no leak). Omitted in headless and in production (bridge is DEV-only).
    */
   readonly onPlayFrame?: (dt: number) => void;
+  /** Called only after the active-world pointer has changed to the live play world. */
+  readonly onPlayStarted?: () => void;
+  /** Called after a failed assembly has thawed the edit App and recorded its error. */
+  readonly onPlayFailed?: () => void;
 }
 
 /** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
@@ -176,6 +180,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
           ? err.message
           : String(err);
       deps.gateway.failPlayAttempt?.({ code: 'play-assemble-failed', hint });
+      deps.onPlayFailed?.();
       return;
     }
     active = res.value;
@@ -199,6 +204,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-3: switch the single active-world pointer to the play world (clears
     // selection + emits so panels re-read the play world's hierarchy).
     deps.gateway.enterPlay(active.playWorld);
+
+    // The host exposes run='play' only after activeWorld points at this same live
+    // world, so Hierarchy and viewport chrome never claim Play while still reading
+    // the frozen edit document during asynchronous assembly.
+    deps.onPlayStarted?.();
 
     // Host camera pickup (AC-12 hard cut). Omitted in headless.
     deps.onAfterPlay?.(active.playWorld);

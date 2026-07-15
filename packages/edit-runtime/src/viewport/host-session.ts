@@ -46,7 +46,7 @@
 import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
-import { entComponent, publishMeshStats } from '@forgeax/editor-core';
+import { entComponent, notifyDocChanged, publishMeshStats } from '@forgeax/editor-core';
 import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-core';
 import { createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
@@ -116,6 +116,12 @@ export interface HostSessionContext {
    */
   readonly playInput: InputBackend;
   /**
+   * Builds the play App's per-frame render projection. It returns the normal
+   * single-play-world view in play·game and the editor-camera/play-world composite
+   * in play·scene, while preserving one live frame loop.
+   */
+  readonly createPlayDrawSource: (playWorld: unknown) => () => unknown | undefined;
+  /**
    * Physics backend resolved from the game's forge.json (resolveEditPhysics), or
    * undefined for a non-physics game. Threaded through so the play assembly's
    * plugin set mirrors the edit assembly (D-7).
@@ -130,11 +136,15 @@ export interface HostSessionContext {
    * drains; undefined in headless and in production builds (bridge is DEV-only).
    */
   readonly onPlayFrame?: (dt: number) => void;
+  /** The play world is now active; host commits its matching viewport quadrant. */
+  readonly onPlayStarted: () => void;
+  /** Play assembly failed and the gateway has returned to its edit-side state. */
+  readonly onPlayFailed: () => void;
 }
 
 export interface HostSession {
-  /** ▶ Play — snapshot doc + bootstrap the game on the edit world. */
-  playSimulation(): void;
+  /** ▶ Play — assemble a transient play world and resolve when it enters Play or fails. */
+  playSimulation(): Promise<void>;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
   /**
@@ -423,7 +433,7 @@ export function createHostSession(deps: HostSessionDeps): {
     // here is to build the play-assemble dependency closures (defaultScene load /
     // bootstrap resolve / input attach) and wire them into createRunLifecycle.
     let runLifecycle: RunLifecycle | null = null;
-    const playSimulation = (): void => { void runLifecycle?.playSimulation(); };
+    const playSimulation = (): Promise<void> => runLifecycle?.playSimulation() ?? Promise.resolve();
     const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
 
     // Read forge.json once per ▶ Play so entry and default SceneAsset fallback
@@ -536,6 +546,7 @@ export function createHostSession(deps: HostSessionDeps): {
           loadDefaultScene,
           resolveBootstrap,
           attachInput: attachPlayInput,
+          createDrawSource: ctx.createPlayDrawSource,
           // ▶ Play mounts #game-ui-root inside the viewport container as ctx.uiRoot
           // and removes it on ■ Stop (play-assemble detach()). Threaded here so the
           // game HUD is clipped to the viewport and can never survive a stop.
@@ -556,11 +567,19 @@ export function createHostSession(deps: HostSessionDeps): {
         return res;
       },
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
+      onPlayStarted: ctx.onPlayStarted,
+      onPlayFailed: ctx.onPlayFailed,
       // DEV bridge follow-the-live-app: register the eval-queue drain on the play
       // App so a CLI eval submitted during play still drains while the edit App is
       // paused (undefined in production/headless — bridge is DEV-only). See
       // run-lifecycle onPlayFrame + ViewportComponent bridge block.
-      ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
+      onPlayFrame: (dt) => {
+        ctx.onPlayFrame?.(dt);
+        // The transient play world mutates through gameplay systems rather than
+        // document ops. Notify active-world panels (Hierarchy/Inspector) once per
+        // live frame without recording an authored-document mutation.
+        notifyDocChanged();
+      },
       onDirtyPlayHint: () => {
         // D-10: play re-instantiates the last-SAVED scene from disk; unsaved
         // in-memory edits are not reflected. Surface a structured hint (no auto-save

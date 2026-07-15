@@ -175,6 +175,13 @@ export interface AssemblePlayWorldDeps {
   readonly attachInput: (world: unknown) => (() => void) | undefined;
   /** Optional physics backend (forge.json physics gate) — mirrors edit assembly. */
   readonly physics?: PhysicsBackend | undefined;
+  /**
+   * Optional editor-camera composite used by the live play App. The callback is
+   * built only after the fresh play world exists, keeping its identity out of
+   * editor-world state while allowing `play·scene` to render runtime entities
+   * through the editor camera.
+   */
+  readonly createDrawSource?: (playWorld: unknown) => () => unknown | undefined;
   /** Construct the fresh play World. Default `() => new World()`. Injectable so
    *  the headless test can supply its own World ctor without a second import. */
   readonly newWorld?: () => unknown;
@@ -293,6 +300,7 @@ export async function assemblePlayWorld(
     renderer: shielded as never,
     world: playWorld as never,
     plugins: plugins as never,
+    ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
   });
   if (!appRes.ok) {
     detachInput?.();

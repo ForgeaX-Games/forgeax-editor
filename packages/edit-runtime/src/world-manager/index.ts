@@ -39,7 +39,7 @@ import {
   revalidateSelection,
 } from '@forgeax/editor-core';
 import type { World } from '@forgeax/engine-ecs';
-import { createDrawSource, type DrawSourceResult } from './createDrawSource';
+import { createDrawSource, createPlayDrawSource, type DrawSourceResult } from './createDrawSource';
 import { createEditorWorld } from './createEditorWorld';
 import {
   WorldBindingRegistry,
@@ -103,6 +103,15 @@ export class WorldManager {
    *  resourceOwner: 1 } | undefined` (undefined until the scene world is injected). */
   createDrawSource(): () => DrawSourceResult | undefined {
     return createDrawSource(this.editorWorld, this._getSceneWorld);
+  }
+
+  /**
+   * The live play App keeps driving its playWorld, but `play·scene` must render
+   * it through the persistent editor orbit camera. This factory supplies that
+   * explicit composite without moving an entity handle across worlds.
+   */
+  createPlayDrawSource(playWorld: World, isEditorView: () => boolean): () => DrawSourceResult | undefined {
+    return createPlayDrawSource(this.editorWorld, playWorld, isEditorView);
   }
 
   /** Resolve the WorldBinding for a worldRef (0=editor, 1=scene). Returns

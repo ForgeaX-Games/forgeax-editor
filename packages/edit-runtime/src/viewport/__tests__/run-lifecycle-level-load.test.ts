@@ -726,10 +726,12 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
       const gateway = makeFakeGateway();
       // assemble that always degrades (bad scene / createApp error path).
       const assemble = async () => ({ ok: false as const, error: { code: 'play-assemble-failed', hint: 'bad scene' } });
+      let failed = 0;
       const lifecycle = createRunLifecycle({
         editorApp: editorApp as never,
         gateway: gateway as never,
         assemble: assemble as never,
+        onPlayFailed: () => { failed++; },
       });
 
       await lifecycle.playSimulation();
@@ -744,6 +746,7 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
       expect(kinds).not.toContain('enterPlay');
       expect(lifecycle.currentPlayWorld()).toBeNull();
       expect(editorApp.calls).toEqual(['pause', 'resume']);
+      expect(failed).toBe(1);
     } finally {
       fakeRaf.restore();
     }
@@ -752,13 +755,30 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
   it('a successful assemble fires beginPlayAttempt then enterPlay (no failPlayAttempt)', async () => {
     const fakeRaf = installFakeRaf();
     try {
-      const t = buildRealAssembleLifecycle();
-      await t.lifecycle.playSimulation();
-      const kinds = t.gateway.events.map((e) => e.kind);
+      const fr = makeFakeRenderer();
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      const boot = makeFakeBootstrap();
+      let started = 0;
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: async () => assemblePlayWorld({
+          renderer: fr.renderer as never,
+          loadDefaultScene: async () => makeSceneAsset(),
+          resolveBootstrap: async () => boot.entry as never,
+          attachInput: () => undefined,
+          newWorld: () => new World() as never,
+        }),
+        onPlayStarted: () => { started++; },
+      });
+      await lifecycle.playSimulation();
+      const kinds = gateway.events.map((e) => e.kind);
       expect(kinds[0]).toBe('beginPlayAttempt');
       expect(kinds).toContain('enterPlay');
       expect(kinds).not.toContain('failPlayAttempt');
-      t.lifecycle.stopSimulation();
+      expect(started).toBe(1);
+      lifecycle.stopSimulation();
     } finally {
       fakeRaf.restore();
     }
