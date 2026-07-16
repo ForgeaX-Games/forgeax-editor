@@ -61,6 +61,7 @@
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
 import { createApp, inputPlugin } from '@forgeax/engine-app';
+import type { GameProjectionRegistrar } from '@forgeax/engine-app';
 import {
   World,
   createQueryState,
@@ -135,6 +136,13 @@ export interface PlayAssembly {
   readonly playApp: PlayApp;
   /** The fresh play World (drawn by the shared renderer while play is active). */
   readonly playWorld: unknown;
+  /**
+   * Install game-owned Play projections after Gateway points at this same live
+   * world. Supplied by host-session; absent for ordinary/headless assembly.
+   */
+  readonly installGameProjection?: () => void;
+  /** Clear game-owned Play projections before this world is torn down. */
+  readonly clearGameProjection?: () => void;
   /** Tear down this play run's host-owned side effects. Called on ■ Stop AFTER
    *  playApp.stop() (run-lifecycle). Three things, in order:
    *   1. detach the play-side input backends (release the shared canvas), then
@@ -195,6 +203,16 @@ export interface AssemblePlayWorldDeps {
    * absent and games fall back to `document.body`.
    */
   readonly viewportContainer?: HTMLElement;
+  /**
+   * Optional host bridge for a game-owned action/read projection. The factory
+   * creates one registry for this fresh Play world; bootstrap receives only its
+   * registrar, while run-lifecycle controls install/clear around the live gateway.
+   */
+  readonly createGameProjection?: () => {
+    readonly registrar: GameProjectionRegistrar;
+    install(): void;
+    clear(): void;
+  };
 }
 
 /**
@@ -258,6 +276,11 @@ export async function assemblePlayWorld(
   // contract). Flushed in REVERSE registration order on ■ Stop (detach() below).
   const cleanups: Array<() => void> = [];
 
+  // A game sees only this registrar while bootstrapping. The host keeps install /
+  // clear control so the closures are never discoverable before Gateway points to
+  // the same fresh Play world, and never survive that world's Stop teardown.
+  const gameProjection = deps.createGameProjection?.();
+
   // Audio backend (round-17, P8): the assemble form does NOT auto-create the
   // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle") — so
   // editor ▶ Play must pre-inject it itself, exactly as it pre-injects the input
@@ -304,6 +327,7 @@ export async function assemblePlayWorld(
   });
   if (!appRes.ok) {
     detachInput?.();
+    gameProjection?.clear();
     // createApp failed AFTER the container was appended — the only exit between
     // container creation and the success return. Remove it so ▶ Play's failure
     // path (run-lifecycle resumes edit) never leaks a #game-ui-root.
@@ -473,6 +497,7 @@ export async function assemblePlayWorld(
       // BootstrapContext.registerCleanup — the game registers non-DOM teardown
       // (listeners / AudioContext / timers); flushed reverse-order on ■ Stop.
       registerCleanup: (fn: () => void) => { cleanups.push(fn); },
+      ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
@@ -480,6 +505,9 @@ export async function assemblePlayWorld(
   }
 
   const detach = (): void => {
+    // Clear game-owned closures before any app/world teardown. This is idempotent
+    // and prevents a stale Play callback from keeping the old world reachable.
+    gameProjection?.clear();
     detachInput?.();
     // Audio backend teardown (round-17, P8): the assemble form does NOT wire
     // audioBackendDispose (create-app.ts: canvas form owns that; assemble hosts
@@ -517,5 +545,15 @@ export async function assemblePlayWorld(
     }
   };
 
-  return { ok: true, value: { playApp, playWorld, detach } };
+  return {
+    ok: true,
+    value: {
+      playApp,
+      playWorld,
+      ...(gameProjection !== undefined
+        ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear }
+        : {}),
+      detach,
+    },
+  };
 }

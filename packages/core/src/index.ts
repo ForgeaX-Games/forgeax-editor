@@ -76,6 +76,15 @@ export { createEngineFacade } from './io/engine-facade';
 // EvalChannel type is type-only: edit-runtime types its globalThis hook against it.
 export { createEvalChannel } from './io/channel';
 export type { EvalChannel, EvaluateResult } from './io/channel';
+export type {
+  GameActionDescriptor,
+  GameActionRegistration,
+  GameProjectionRegistrar,
+  GameProjectionResult,
+  GameProjectionValue,
+  GameReadDescriptor,
+  GameReadRegistration,
+} from './io/game-projection';
 
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last()
 // (D-3 / AC-09). Type-only export so an AI consumer writing typed code against the

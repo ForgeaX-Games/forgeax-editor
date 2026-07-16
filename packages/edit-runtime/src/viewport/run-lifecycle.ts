@@ -155,6 +155,9 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   }
 
   function stopAssembly(assembly: PlayAssembly, label: string): void {
+    try { assembly.clearGameProjection?.(); } catch (err) {
+      console.warn(`[editor] ${label} clearGameProjection() threw:`, err);
+    }
     try {
       const stopR = assembly.playApp.stop();
       if (!stopR.ok) console.warn(`[editor] ${label} playApp.stop() failed:`, stopR.error);
@@ -242,6 +245,9 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-3: switch the single active-world pointer to the play world (clears
     // selection + emits so panels re-read the play world's hierarchy).
     deps.gateway.enterPlay(active.playWorld);
+    // A game projection becomes visible only after activeWorld points at the same
+    // fresh world its bootstrap captured. Its teardown is coupled to assembly.detach.
+    active.installGameProjection?.();
 
     // The host exposes run='play' only after activeWorld points at this same live
     // world, so Hierarchy and viewport chrome never claim Play while still reading

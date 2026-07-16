@@ -176,6 +176,15 @@ export interface HostGateway {
   enterPlay(playWorld: unknown): void;
   /** ■ Stop — switch the active-world pointer back to the edit world. */
   exitPlay(): void;
+  /** Create the ephemeral registry a bootstrap can fill for its fresh play world. */
+  createGameProjectionRegistry(): {
+    readonly registrar: import('@forgeax/editor-core').GameProjectionRegistrar;
+    clear(): void;
+  };
+  /** Publish a bootstrapped projection only after the matching play world is live. */
+  installGameProjection(registry: ReturnType<HostGateway['createGameProjectionRegistry']>): void;
+  /** Clear all game-owned closures before Play world teardown. */
+  clearGameProjection(): void;
   // Play-attempt observability (solo round-8 #3) — mirror of RunGateway's pair, so
   // the same gateway singleton satisfies both surfaces. Optional for fake-gateway
   // compatibility; the real EditGateway implements both.
@@ -551,6 +560,16 @@ export function createHostSession(deps: HostSessionDeps): {
           // and removes it on ■ Stop (play-assemble detach()). Threaded here so the
           // game HUD is clipped to the viewport and can never survive a stop.
           viewportContainer: ctx.viewportContainer,
+          // Game code owns action/read IDs and closures. The host owns their
+          // lifetime: install only after gateway.enterPlay, clear on every teardown.
+          createGameProjection: () => {
+            const registry = gateway.createGameProjectionRegistry();
+            return {
+              registrar: registry.registrar,
+              install: () => gateway.installGameProjection(registry),
+              clear: () => gateway.clearGameProjection(),
+            };
+          },
           ...(ctx.physics ? { physics: ctx.physics } : {}),
           ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
         });
