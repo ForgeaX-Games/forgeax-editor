@@ -133,6 +133,40 @@ function readVec(fs: FieldSchema | undefined, raw: unknown): number[] {
   return out;
 }
 
+// ── Linear ⇄ sRGB color conversion (Unreal-style color/intensity split) ───────
+// Light `color` is stored linear (array<f32,3>, HDR) but a native <input
+// type="color"> only speaks 8-bit sRGB. We gamma-encode + clamp to [0,1] for the
+// swatch, and decode back to linear on edit. HDR magnitude stays in `intensity`.
+function linearToSrgbComponent(c: number): number {
+  const x = Math.min(1, Math.max(0, c));
+  return x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+}
+
+function srgbToLinearComponent(c: number): number {
+  const x = Math.min(1, Math.max(0, c));
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+
+// Linear rgb (0..1+, clamped) → "#rrggbb" for a color-input swatch.
+function linearToSrgbHex(rgb: number[]): string {
+  const hex = [0, 1, 2]
+    .map((i) => Math.round(linearToSrgbComponent(Number(rgb[i] ?? 0)) * 255))
+    .map((v) => v.toString(16).padStart(2, '0'))
+    .join('');
+  return `#${hex}`;
+}
+
+// "#rrggbb" → linear rgb triple written back to the array<f32,3> column.
+function srgbHexToLinear(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return [0, 0, 0];
+  const int = parseInt(m[1], 16);
+  const r = ((int >> 16) & 0xff) / 255;
+  const g = ((int >> 8) & 0xff) / 255;
+  const b = (int & 0xff) / 255;
+  return [srgbToLinearComponent(r), srgbToLinearComponent(g), srgbToLinearComponent(b)];
+}
+
 // Addable/resettable components + their default payloads are now derived straight
 // from the schema registry (single source of truth shared with the Capabilities
 // panel and AI bridge) via defaultComponentData().
@@ -265,8 +299,30 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
               // selected entity's WHOLE array, preserving that entity's own other
               // axes (array<f32,N> columns take the full vector, not a scalar).
               for (const f of vecFields) {
-                const labels = vecAxisLabels(f);
                 const vec = readVec(f, data[f.key]);
+                // Color vec: swatch + hex, batch-writes the WHOLE linear float[3]
+                // to every selected entity (mirrors single-selection widget).
+                if (f.widget === 'color') {
+                  const hex = linearToSrgbHex(vec);
+                  rows.push(
+                    <div className="field field-color" data-testid={`batch-field-${comp}-${f.key}`} key={`__vec_${f.key}`}>
+                      <label title={f.tooltip}>{f.key}</label>
+                      <input
+                        type="color"
+                        data-testid={`batch-${comp}-${f.key}`}
+                        value={hex}
+                        onChange={(e) => {
+                          const rgb = srgbHexToLinear(e.target.value);
+                          const commands: EditorOp[] = ids.map((id) => ({ kind: 'setComponent', entity: id, component: comp, patch: { [f.key]: rgb } }));
+                          gateway.dispatch({ kind: 'transaction', label: `batch ${comp}.${f.key} ×${ids.length}`, commands });
+                        }}
+                      />
+                      <span className="hexval" data-testid={`batch-${comp}-${f.key}-hex`}>{hex}</span>
+                    </div>,
+                  );
+                  continue;
+                }
+                const labels = vecAxisLabels(f);
                 rows.push(
                   <div className="vec3-row" data-testid={`batch-${comp}-${f.key}`} key={`__vec_${f.key}`}>
                     {vec.map((axVal, i) => (
@@ -520,6 +576,24 @@ export function InspectorPanel() {
                   if (f.type !== 'vec') continue;
                   if (comp === 'Transform' && f.key === 'quat') continue;
                   const vec = readVec(f, data[f.key]);
+                  // Color vec: render an Unreal-style swatch + hex instead of raw
+                  // x/y/z scrubbers. Editing writes the WHOLE linear float[3].
+                  if (f.widget === 'color') {
+                    const hex = linearToSrgbHex(vec);
+                    out.push(
+                      <div className={`field field-color${f.showWhen ? ' appear-in' : ''}`} data-testid={`insp-field-${comp}-${f.key}`} key={`__vec_${f.key}`}>
+                        <label title={f.tooltip}>{f.key}</label>
+                        <input
+                          type="color"
+                          data-testid={`insp-${comp}-${f.key}`}
+                          value={hex}
+                          onChange={(e) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: srgbHexToLinear(e.target.value) } })}
+                        />
+                        <span className="hexval" data-testid={`insp-${comp}-${f.key}-hex`}>{hex}</span>
+                      </div>,
+                    );
+                    continue;
+                  }
                   const labels = vecAxisLabels(f);
                   out.push(
                     <div className="vec3-row" data-testid={`insp-${comp}-${f.key}`} key={`__vec_${f.key}`}>
