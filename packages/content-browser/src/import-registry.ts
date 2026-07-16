@@ -9,14 +9,18 @@ export type ImporterKey = 'image' | 'gltf' | 'fbx' | 'audio' | 'font' | 'pack';
 export type SubAssetKind =
   | 'mesh' | 'material' | 'scene' | 'texture' | 'image'
   | 'cube-texture' | 'material-shader' | 'skeleton' | 'skin'
-  | 'animation-clip' | 'audio' | 'font';
+  | 'animation-clip' | 'audio' | 'font' | 'sampler';
 
 export interface ImportFormat {
   extensions: string[];
   label: string;
   importer: ImporterKey;
-  /** Default sub-asset kind for single-output importers. */
-  subAssetKind: SubAssetKind;
+  /**
+   * Sub-asset kinds declared in the sidecar .meta.json.  Most importers produce
+   * a single sub-asset; font produces three (texture atlas, sampler, font glyph
+   * metrics) so the fontImporter can resolve each by kind.
+   */
+  subAssetKinds: SubAssetKind[];
   defaultSettings: Record<string, unknown>;
 }
 
@@ -25,42 +29,42 @@ export const IMPORT_FORMATS: ImportFormat[] = [
     extensions: ['.png', '.jpg', '.jpeg', '.webp'],
     label: 'Image Texture',
     importer: 'image',
-    subAssetKind: 'texture',
+    subAssetKinds: ['texture'],
     defaultSettings: { colorSpace: 'srgb', mipmap: 'auto', addressMode: 'repeat', filterMode: 'linear' },
   },
   {
     extensions: ['.hdr'],
     label: 'HDR Environment',
     importer: 'image',
-    subAssetKind: 'cube-texture',
+    subAssetKinds: ['cube-texture'],
     defaultSettings: { colorSpace: 'linear', mipmap: 'none', addressMode: 'clamp-to-edge', filterMode: 'linear', kind: 'cube-texture' },
   },
   {
     extensions: ['.glb', '.gltf'],
     label: '3D Model (GLB/glTF)',
     importer: 'gltf',
-    subAssetKind: 'scene',
+    subAssetKinds: ['scene'],
     defaultSettings: {},
   },
   {
     extensions: ['.fbx'],
     label: '3D Model (FBX)',
     importer: 'fbx',
-    subAssetKind: 'scene',
+    subAssetKinds: ['scene'],
     defaultSettings: {},
   },
   {
     extensions: ['.mp3', '.wav', '.ogg', '.aac', '.m4a', '.flac', '.opus'],
     label: 'Audio',
     importer: 'audio',
-    subAssetKind: 'audio',
+    subAssetKinds: ['audio'],
     defaultSettings: {},
   },
   {
     extensions: ['.ttf', '.otf', '.woff2'],
     label: 'Font',
     importer: 'font',
-    subAssetKind: 'font',
+    subAssetKinds: ['texture', 'sampler', 'font'],
     defaultSettings: {},
   },
 ];
