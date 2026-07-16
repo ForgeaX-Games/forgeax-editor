@@ -499,9 +499,9 @@ registerApplier('document', 'createAsset', applyCreateAsset as unknown as Applie
 // basePath, so it defaults to the active game's scene.pack.json (the same target
 // disk-io.ts writes the scene to).
 export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { guid, name, baseColor, metallic, roughness, packPath, refs } = cmd as {
+  const { guid, name, baseColor, metallic, roughness, baseColorTexture, packPath, refs } = cmd as {
     guid: string; name: string; baseColor: [number, number, number, number];
-    metallic?: number; roughness?: number; packPath?: string; refs?: string[];
+    metallic?: number; roughness?: number; baseColorTexture?: string; packPath?: string; refs?: string[];
   };
   // Fail Fast (§5): reject a malformed op before it writes a broken pack entry.
   if (typeof guid !== 'string' || guid.length === 0) {
@@ -549,10 +549,21 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     ...(metallic !== undefined ? { metallic } : {}),
     ...(roughness !== undefined ? { roughness } : {}),
   }) as unknown as Record<string, unknown>;
+
+  // Texture GUID → pack refs index chain (engine disk format SSOT).
+  // In pack format, texture params are stored as refs[] indices (integers).
+  // The materialLoader resolves indices back to GUID strings at load time.
+  const assetRefs: string[] = refs ? [...refs] : [];
+  if (baseColorTexture) {
+    const texRefIndex = assetRefs.length;
+    assetRefs.push(baseColorTexture);
+    (payload.paramValues as Record<string, unknown>).baseColorTexture = texRefIndex;
+  }
+
   // Fire-and-forget async IO through the asset gate (mirrors createAsset). The
   // document-applier contract is synchronous: return the inverse immediately; IO
   // completes in background; broadcastAssetsChanged() refreshes the catalog.
-  void ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs } })
+  void ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs: assetRefs } })
     .then(() => broadcastAssetsChanged())
     .catch((e) => console.warn('[editor-core] createMaterial IO failed:', e));
   return { ok: true, inverse: { kind: 'destroyAsset', packPath: targetPack, guid } as unknown as EditorOp, created: [] };

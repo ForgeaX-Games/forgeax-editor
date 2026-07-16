@@ -67,6 +67,15 @@ function pendingMaterialGuids(cmd: EditorOp | null): string[] | null {
     : null;
 }
 
+/** Pull the pending-texture marker guid from a spawnEntity command, or null. */
+function pendingTextureGuid(cmd: EditorOp | null): string | null {
+  if (cmd === null || cmd.kind !== 'spawnEntity') return null;
+  const components = (cmd as { components?: Record<string, unknown> }).components;
+  const marker = components?.EditorPendingTextureAsset as { guid?: unknown } | undefined;
+  const guid = marker?.guid;
+  return typeof guid === 'string' && guid.length > 0 ? guid : null;
+}
+
 /**
  * Subscribe the drag-spawn resolver to the EditGateway. Two INDEPENDENT branches
  * ride the same spawnEntity command:
@@ -182,5 +191,39 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
 
     const matGuids = pendingMaterialGuids(lastCommand);
     if (matGuids !== null) void resolveMaterials(entity, matGuids);
+
+    // ── TEXTURE branch: createMaterial + bindAssetRef (reuses engine refs chain) ──
+    const texGuid = pendingTextureGuid(lastCommand);
+    if (texGuid !== null) void resolveTexture(bus, entity, texGuid);
   });
+}
+
+/**
+ * Resolve a texture dragged into the viewport: create a new MaterialAsset with the
+ * texture bound as baseColorTexture, then bind it to the spawned entity's MeshRenderer.
+ * Mirrors the mesh resolver pattern — every step goes through bus.dispatch (gateway).
+ * `createMaterial` is a document op (undoable, writes to pack); `bindAssetRef` is a
+ * session op (loadByGuid → allocSharedRef → setComponent).
+ */
+async function resolveTexture(bus: EditGateway, entity: number, textureGuid: string): Promise<void> {
+  const materialGuid = crypto.randomUUID();
+  const r1 = bus.dispatch({
+    kind: 'createMaterial',
+    guid: materialGuid,
+    name: `mat_${textureGuid.slice(0, 8)}`,
+    baseColor: [1, 1, 1, 1],
+    baseColorTexture: textureGuid,
+  }, 'ai');
+  if (!r1.ok) {
+    console.error('[drag-spawn-resolve:texture] createMaterial failed', r1);
+    return;
+  }
+  bus.dispatch({
+    kind: 'bindAssetRef',
+    entity,
+    component: 'MeshRenderer',
+    field: 'materials',
+    assetType: 'MaterialAsset',
+    guids: [materialGuid],
+  }, 'ai');
 }

@@ -36,6 +36,9 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
       payload: asset.payload,
     };
     e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
+    e.dataTransfer.setData('application/x-forgeax-asset', JSON.stringify({
+      guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.packPath,
+    }));
     e.dataTransfer.effectAllowed = 'copy';
     panelBridge.emit('dragAssetStart', ref);
   }, [asset]);

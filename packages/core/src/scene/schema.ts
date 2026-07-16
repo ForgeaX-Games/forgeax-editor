@@ -1,22 +1,30 @@
-// Component schema registry — the one place that "knows" what fields a component
-// has and their constraints. The Inspector reflects it into widgets; the AI
-// bridge reflects the SAME data into `getComponentSchema`. Add a component here
-// → inspector + AI tool both cover it with zero bespoke UI.
+// schema.ts — engine-reflected component schema registry
 //
-// feat-20260701-editor-world-container-doc-ecs-collapse M3 / AC-22:
-// REGISTRY rewritten to engine-verbatim component schemas. All field names
-// match engine defineComponent fields exactly. Old editor-authored schemas
-// (Mesh, Material, Light, Anim, MatGraph, GltfRef) deleted (M3 + M6 sweep).
+// ALL component schemas are derived AT RUNTIME from the engine's ECS introspection
+// APIs (getRegisteredComponents → Component.fields → FieldReflection).
+// Zero hand-maintained REGISTRY — the engine IS the single source of truth.
 //
-// plan-strategy S2 D-2: Transform quat SSOT (array<f32,4>), euler in Inspector only
-// plan-strategy S2 D-3: Light scheme A (three independent components)
-// research F-EngineComponents: field names verbatim from engine submodule
+// Component filtering:
+//   - transient components                    → excluded
+//   - RELATIONSHIP_COMPONENTS (ChildOf, …)    → excluded
+//   - explicit exclude list (Entity, Skin, …) → excluded
 //
-// feat-20260709 (engine array-TRS): Transform's 10 per-axis scalar columns
-// (posX/quatW/scaleZ…) collapsed to three engine `array<f32, N>` columns —
-// `pos` (3), `quat` (4), `scale` (3). The schema models them as a single
-// `'vec'` FieldType carrying `arity`; the Inspector renders one inline N-axis
-// row per vec field, keyed by array index (not sibling scalar keys).
+// Field type mapping (engine → editor):
+//   f32 / u32 / i32 → number   |  array<f32, N> → vec (arity=N)
+//   bool             → bool    |  shared<T>      → asset
+//   string           → string  |  enum            → number (labels in tooltip)
+//   entity refs      → excluded (internal handles)
+
+import type {
+  Component,
+  FieldReflection,
+  SchemaFieldType,
+} from '@forgeax/engine-ecs';
+import { getRegisteredComponents, RELATIONSHIP_COMPONENTS } from '@forgeax/engine-ecs';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Public types (unchanged API surface)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum' | 'vec';
 
@@ -28,14 +36,8 @@ export interface FieldSchema {
   step?: number;
   options?: string[];
   tooltip?: string;
-  // Sensible authoring default used when a component is freshly added / reset.
-  // Falls back to a type-derived value (see defaultFieldValue) when omitted.
   default?: unknown;
-  // Conditional visibility: only show this field when sibling `key` ∈ `in`.
   showWhen?: { key: string; in: string[] };
-  // `vec` only: number of scalar axes (3 for pos/scale, 4 for a quaternion).
-  // The Inspector renders `arity` inline number widgets; `labels` names each
-  // axis (defaults to x/y/z/w). The default value is a length-`arity` array.
   arity?: number;
   labels?: string[];
 }
@@ -43,162 +45,316 @@ export interface FieldSchema {
 export interface ComponentSchema {
   name: string;
   fields: FieldSchema[];
-  /** Marks a "bespoke" component that has its own dedicated panel. The Inspector
-   *  renders a minimal banner instead of raw field widgets; `editorId` names the
-   *  dock panel that edits it (same id as in DockManager's TITLE map). */
   bespoke?: { editorId: string; hint?: string };
 }
 
-const REGISTRY: Record<string, ComponentSchema> = {
-  // ── Transform: engine-native pos[3] + quat[4] + scale[3] (array-TRS) ──────────
-  // Engine: transform.ts defineComponent (feat-20260709 array columns).
-  // `world` (mat4) is an engine-derived transient column — excluded here (D-2).
-  // Euler (rotX/rotY/rotZ) is Inspector React state only, NOT in schema/world;
-  // it overlays the `quat` SSOT (array<f32,4>, [x,y,z,w]).
-  Transform: {
-    name: 'Transform',
-    fields: [
-      { key: 'pos', type: 'vec', arity: 3, step: 0.1, default: [0, 0, 0], tooltip: 'local position [x, y, z]' },
-      { key: 'quat', type: 'vec', arity: 4, step: 0.01, default: [0, 0, 0, 1], tooltip: 'rotation quaternion [x, y, z, w] (SSOT, euler is Inspector overlay)' },
-      { key: 'scale', type: 'vec', arity: 3, step: 0.1, default: [1, 1, 1], tooltip: 'local scale [x, y, z]' },
-    ],
-  },
-  // ── MeshFilter: engine-native assetHandle (replaces Mesh{kind}) ──────────────
-  // Engine: mesh-filter.ts:57 defineComponent { assetHandle: shared<MeshAsset> }
-  MeshFilter: {
-    name: 'MeshFilter',
-    fields: [
-      { key: 'assetHandle', type: 'asset', tooltip: 'shared mesh asset handle (built-in or imported)' },
-    ],
-  },
-  // ── MeshRenderer: engine-native materials[] (replaces Material) ───────────────
-  // Engine: mesh-renderer.ts:59 defineComponent
-  MeshRenderer: {
-    name: 'MeshRenderer',
-    fields: [
-      { key: 'materials', type: 'asset', tooltip: 'array of shared MaterialAsset handles' },
-    ],
-  },
-  // ── DirectionalLight: engine-native vec (feat-20260709 M2 direction/color collapse)
-  // Engine: directional-light.ts defineComponent (direction[3], color[3], intensity, castShadow)
-  DirectionalLight: {
-    name: 'DirectionalLight',
-    fields: [
-      { key: 'direction', type: 'vec', arity: 3, step: 0.05, default: [-0.4, -1, -0.3], tooltip: 'direction [x, y, z]' },
-      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
-      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
-      { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
-    ],
-  },
-  // ── PointLight: engine-native vec color + range ──────────────────────────────
-  // Engine: point-light.ts defineComponent (color[3], intensity, range)
-  PointLight: {
-    name: 'PointLight',
-    fields: [
-      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
-      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
-      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
-    ],
-  },
-  // ── SpotLight: engine-native cone + vec direction/color ──────────────────────
-  // Engine: spot-light.ts defineComponent (direction[3], color[3], cone, ...)
-  SpotLight: {
-    name: 'SpotLight',
-    fields: [
-      { key: 'direction', type: 'vec', arity: 3, step: 0.05, default: [-0.4, -1, -0.3], tooltip: 'direction [x, y, z]' },
-      { key: 'color', type: 'vec', arity: 3, min: 0, step: 0.1, default: [1, 1, 1], tooltip: 'color [r, g, b] (linear, HDR)' },
-      { key: 'intensity', type: 'number', min: 0, max: 50, step: 0.1, default: 1, tooltip: 'radiant intensity (HDR magnitude)' },
-      { key: 'range', type: 'number', min: 0, max: 100, step: 0.5, default: 10, tooltip: 'falloff distance (world units)' },
-      { key: 'innerConeDeg', type: 'number', min: 0, max: 90, step: 1, default: 0, tooltip: 'inner cone half-angle (degrees)' },
-      { key: 'outerConeDeg', type: 'number', min: 1, max: 90, step: 1, default: 45, tooltip: 'outer cone half-angle (degrees)' },
-      { key: 'castShadow', type: 'bool', tooltip: 'whether this light casts shadows' },
-    ],
-  },
-  // ── Camera: engine-native fields ─────────────────────────────────────────────
-  // Engine: camera.ts defineComponent (fov, aspect, near, far, projection,
-  // clearColor[4] — feat-20260709 M3 clear-color array<f32,4> collapse).
-  Camera: {
-    name: 'Camera',
-    fields: [
-      { key: 'projection', type: 'number', step: 1, min: 0, max: 1, default: 0, tooltip: '0=perspective, 1=orthographic' },
-      { key: 'fov', type: 'number', min: 10, max: 120, step: 1, default: 60, tooltip: 'vertical field of view (degrees)' },
-      { key: 'aspect', type: 'number', min: 0.1, max: 10, step: 0.01, tooltip: 'aspect ratio (auto if autoAspect=1)' },
-      { key: 'near', type: 'number', min: 0.001, max: 100, step: 0.001, default: 0.1, tooltip: 'near clip plane' },
-      { key: 'far', type: 'number', min: 1, max: 100000, step: 1, default: 1000, tooltip: 'far clip plane' },
-      { key: 'clearColor', type: 'vec', arity: 4, min: 0, step: 0.05, default: [0, 0, 0, 1], tooltip: 'clear color [r, g, b, a] (linear)' },
-    ],
-  },
-  // ── Collider: engine-native fields (halfExtents vec, feat-20260709) ──────────
-  // Engine: physics/src/components.ts defineComponent (halfExtents[3], ...)
-  Collider: {
-    name: 'Collider',
-    fields: [
-      { key: 'shape', type: 'number', min: 0, max: 2, step: 1, default: 0, tooltip: 'collision shape: 0=cuboid, 1=sphere, 2=capsule' },
-      { key: 'halfExtents', type: 'vec', arity: 3, min: 0, step: 0.1, default: [0.5, 0.5, 0.5], tooltip: 'cuboid half-extents [x, y, z]' },
-      { key: 'radius', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
-      { key: 'halfHeight', type: 'number', min: 0, max: 50, step: 0.1, default: 0.5 },
-      { key: 'friction', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5 },
-      { key: 'restitution', type: 'number', min: 0, max: 1, step: 0.01, default: 0 },
-    ],
-  },
+// ═══════════════════════════════════════════════════════════════════════════════
+// Editor-level overrides — only where engine schema alone can't infer the right
+// editor rendering hint (e.g. 'color' vs 'vec', showWhen rules, tooltips).
+// Keys: "ComponentName.fieldKey"
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EDITOR_FIELD_OVERRIDES: Record<string, Partial<FieldSchema>> = {
+  // Transform — quat SSOT, euler is Inspector overlay only
+  'Transform.quat': { tooltip: 'rotation quaternion [x, y, z, w] (SSOT, euler is Inspector overlay)' },
+  // Sphere/capsule fields surfaced as tooltips on the vec fields
+  'Collider.radius': { tooltip: 'sphere / capsule radius' },
+  'Collider.halfHeight': { tooltip: 'capsule half-height (without caps)' },
+  // Editor defaults where engine has none (engine schema omits defaults that
+  // the runtime fills via factory functions, e.g. perspective() / orthographic())
+  'MeshFilter.assetHandle': { default: 1, tooltip: 'shared mesh asset handle (built-in or imported)' }, // HANDLE_CUBE
+  'Camera.fov': { default: 60 },
+  'Camera.near': { default: 0.1 },
+  'Camera.far': { default: 1000 },
+  'DirectionalLight.direction': { default: [-0.4, -1, -0.3] },
+  'SpotLight.direction': { default: [-0.4, -1, -0.3] },
+  // Camera — ortho bounds visible only in orthographic mode
+  'Camera.left':   { showWhen: { key: 'projection', in: ['1'] } },
+  'Camera.right':  { showWhen: { key: 'projection', in: ['1'] } },
+  'Camera.bottom': { showWhen: { key: 'projection', in: ['1'] } },
+  'Camera.top':    { showWhen: { key: 'projection', in: ['1'] } },
+  // DirectionalLight shadow fields visible when castShadow=true
+  'DirectionalLight.cascadeCount':      { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.splitLambda':       { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.cascadeBlend':      { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.mapSize':           { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.depthBias':         { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.normalBias':        { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.shadowDistance':    { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.pcfKernelSize':     { showWhen: { key: 'castShadow', in: ['true'] } },
+  // SpotLight shadow fields
+  'SpotLight.mapSize':        { showWhen: { key: 'castShadow', in: ['true'] } },
+  'SpotLight.depthBias':      { showWhen: { key: 'castShadow', in: ['true'] } },
+  'SpotLight.normalBias':     { showWhen: { key: 'castShadow', in: ['true'] } },
+  'SpotLight.nearPlane':      { showWhen: { key: 'castShadow', in: ['true'] } },
+  'SpotLight.farPlane':       { showWhen: { key: 'castShadow', in: ['true'] } },
+  'SpotLight.pcfKernelSize':  { showWhen: { key: 'castShadow', in: ['true'] } },
+  // SpriteRegionOverride — custom axis labels + editor default (engine has none)
+  'SpriteRegionOverride.region': { labels: ['uMin', 'vMin', 'uW', 'vH'], default: [0, 0, 1, 1] },
 };
 
-export function getComponentSchema(name: string): ComponentSchema | undefined {
-  return REGISTRY[name];
+// ═══════════════════════════════════════════════════════════════════════════════
+// Explicit engine component exclude list
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EXCLUDED_COMPONENTS = new Set([
+  'Entity',            // essential id=0, every entity has it
+  'Name',              // Inspector renders via NameField component
+  'SceneInstance',     // transient, engine scene loading creates it
+  'CollidingEntities', // transient, physics engine writes per-frame
+  'Skin',              // GLB import workflow, not addable
+  'Tilemap',           // specialized tilemap editor workflow
+  'TileLayer',         // depends on Tilemap
+  'SpriteAnimation',   // variable-length per-frame UV regions
+  'SpriteInstances',   // variable-length batch render data (per-instance mat4)
+  'Instances',         // variable-length batch render data
+  'PostProcessParams', // programmatic shader + buffer data
+]);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Lazy cache — populated on first query from engine introspection
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _cache: Map<string, ComponentSchema> | null = null;
+
+function ensurePopulated(): Map<string, ComponentSchema> {
+  if (_cache !== null) return _cache;
+  _cache = new Map();
+  try {
+    const registry = getRegisteredComponents();
+    for (const [name, comp] of registry) {
+      if (shouldExclude(name, comp)) continue;
+      const schema = reflectComponent(comp);
+      if (schema !== null) _cache.set(name, schema);
+    }
+  } catch {
+    // Engine not loaded yet (SSR, headless, unit tests w/o engine boot) —
+    // the cache stays empty, queries return undefined.
+  }
+  return _cache;
 }
 
-export function fieldSchema(component: string, key: string): FieldSchema | undefined {
-  return REGISTRY[component]?.fields.find((f) => f.key === key);
+/** Reset the cache (test-only). Not on the public barrel. */
+export function _resetSchemaCache(): void {
+  _cache = null;
 }
 
-export function listComponentSchemas(): ComponentSchema[] {
-  return Object.values(REGISTRY);
+function shouldExclude(name: string, comp: Component): boolean {
+  if (comp.transient) return true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((RELATIONSHIP_COMPONENTS as ReadonlySet<any>).has(comp)) return true;
+  if (EXCLUDED_COMPONENTS.has(name)) return true;
+  return false;
 }
 
-/** A schema-derived default value for a field (used when adding a component). */
-export function defaultFieldValue(fs: FieldSchema): unknown {
-  if (fs.default !== undefined) return fs.default;
-  switch (fs.type) {
-    case 'number':
-      return fs.min ?? 0;
-    case 'vec':
-      // Identity-ish fallback: all-zero of the declared arity. Real vec fields
-      // (pos/quat/scale) carry explicit `default` arrays above — this only
-      // fires for a vec declared without one.
-      return new Array(fs.arity ?? 3).fill(0);
-    case 'enum':
-      return fs.options?.[0] ?? '';
-    case 'bool':
-      return false;
-    case 'color':
-      return '#cccccc';
-    default:
-      return '';
+// ═══════════════════════════════════════════════════════════════════════════════
+// Engine → Editor field type mapping
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Exact engine field types that should NOT appear in the editor schema. */
+const INTERNAL_FIELD_TYPES = new Set<SchemaFieldType>([
+  'entity',        // internal entity handle
+  'array<entity>', // internal entity array
+]);
+
+/** Prefix patterns for parametric types that are editor-internal. */
+function isInternalFieldType(engineType: SchemaFieldType): boolean {
+  if (INTERNAL_FIELD_TYPES.has(engineType)) return true;
+  // `unique<T>` is a template literal SchemaFieldType — match by prefix, not Set membership
+  if (engineType.startsWith('unique<')) return true;
+  return false;
+}
+
+function mapFieldType(engineType: SchemaFieldType): FieldType | null {
+  // shared<T> → asset
+  if (engineType.startsWith('shared<')) return 'asset';
+  if (engineType.startsWith('array<shared<')) return 'asset';
+  // array<f32, N> → vec
+  if (engineType.startsWith('array<f32,')) return 'vec';
+  // Basic scalars
+  if (engineType === 'f32' || engineType === 'u32' || engineType === 'i32') return 'number';
+  if (engineType === 'bool') return 'bool';
+  if (engineType === 'string') return 'string';
+  // enum → number (engine stores u32; labels documented in tooltip)
+  if (engineType === 'enum') return 'number';
+  // Internal types
+  if (isInternalFieldType(engineType)) return null;
+  // Unknown / variable-length array → skip
+  return null;
+}
+
+/** Extract arity from 'array<f32, N>' schema type. */
+function extractVecArity(engineType: SchemaFieldType): number | undefined {
+  const m = engineType.match(/^array<f32,\s*(\d+)>$/);
+  return m ? Number(m[1]) : undefined;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reflection: one engine Component → one editor ComponentSchema
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function reflectComponent(comp: Component): ComponentSchema | null {
+  const { name, fields, defaults } = comp;
+  const editorFields: FieldSchema[] = [];
+
+  for (const [fieldKey, reflection] of Object.entries(fields) as [string, FieldReflection][]) {
+    // Skip field-level transient fields (engine-derived, e.g. Transform.world)
+    if (reflection.transient) continue;
+
+    const editorType = mapFieldType(reflection.type);
+    if (editorType === null) continue;
+
+    // Compute arity for vec fields BEFORE building the default (needed for
+    // correct-length zero-fill when the engine supplies no explicit default).
+    const arity = editorType === 'vec' ? (extractVecArity(reflection.type) ?? 3) : undefined;
+
+    const field: FieldSchema = {
+      key: fieldKey,
+      type: editorType,
+      tooltip: buildTooltip(fieldKey, editorType, reflection),
+      default: deriveDefault(editorType, arity, reflection, defaults?.[fieldKey]),
+      ...(arity !== undefined ? { arity } : {}),
+      ...deriveConstraints(editorType, fieldKey, reflection),
+    };
+
+    // Apply editor-level overrides (showWhen, labels, tooltips, defaults, etc.)
+    const overrideKey = `${name}.${fieldKey}`;
+    const overrides = EDITOR_FIELD_OVERRIDES[overrideKey];
+    if (overrides) Object.assign(field, overrides);
+
+    editorFields.push(field);
+  }
+
+  if (editorFields.length === 0) return null;
+  return { name, fields: editorFields };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tooltip generation from engine metadata
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function buildTooltip(fieldKey: string, editorType: FieldType, r: FieldReflection): string {
+  // enum fields: document labels→value mapping
+  if (r.type === 'enum' && r.labels) {
+    const entries = Object.entries(r.labels)
+      .map(([label, value]) => `${value}=${label}`)
+      .join(', ');
+    return `${fieldKey}: ${entries}`;
+  }
+  if (editorType === 'asset') return `${fieldKey} (${r.type})`;
+  if (editorType === 'vec') return `${fieldKey} [${r.type}]`;
+  return `${fieldKey} (${r.type})`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Default value derivation (engine → editor)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function deriveDefault(
+  editorType: FieldType,
+  arity: number | undefined,
+  reflection: FieldReflection,
+  compDefault?: unknown,
+): unknown {
+  // Component-level default takes priority
+  if (compDefault !== undefined) return coerceDefault(editorType, compDefault);
+  // Field-level default
+  if (reflection.default !== undefined) return coerceDefault(editorType, reflection.default);
+  // array<shared<T>> fields default to empty array (not 0)
+  if (reflection.arrayMeta) return [];
+  // vec fields without explicit default: zero-fill to arity
+  if (editorType === 'vec') return new Array(arity ?? 3).fill(0);
+  // Type-derived fallback
+  return defaultFieldValueInternal(editorType);
+}
+
+/** Coerce engine default to editor-friendly form
+ *  (Float32Array → number[], BigInt → number, etc.) */
+function coerceDefault(editorType: FieldType, value: unknown): unknown {
+  if (value instanceof Float32Array) return Array.from(value);
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'number' && !Number.isFinite(value)) return 0;
+  return value;
+}
+
+function defaultFieldValueInternal(type: FieldType): unknown {
+  switch (type) {
+    case 'number': return 0;
+    case 'vec':    return [0, 0, 0];
+    case 'bool':   return false;
+    case 'string': return '';
+    case 'asset':  return 0;
+    default:       return 0;
   }
 }
 
-/** Build a complete default component payload straight from its schema. */
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constraint derivation (min/max/step) from type + field name heuristics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const VEC_COLOR_FIELDS = new Set(['color', 'clearColor']);
+
+function deriveConstraints(
+  editorType: FieldType,
+  fieldKey: string,
+  _reflection: FieldReflection,
+): Partial<Pick<FieldSchema, 'min' | 'max' | 'step'>> {
+  if (editorType === 'vec') {
+    if (VEC_COLOR_FIELDS.has(fieldKey)) return { min: 0, step: 0.1 };
+    return { step: 0.1 };
+  }
+  if (editorType === 'number') {
+    // Heuristic step based on field name
+    const step = fieldKey.includes('Deg') ? 1 :
+                fieldKey.includes('Bias') ? 0.001 :
+                fieldKey.includes('Intensity') || fieldKey.includes('Damping') ? 0.01 :
+                fieldKey.includes('Scale') || fieldKey.includes('Density') ? 0.1 :
+                1;
+    return { step };
+  }
+  return {};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Public API (unchanged signatures)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function getComponentSchema(name: string): ComponentSchema | undefined {
+  return ensurePopulated().get(name);
+}
+
+export function fieldSchema(component: string, key: string): FieldSchema | undefined {
+  return getComponentSchema(component)?.fields.find((f) => f.key === key);
+}
+
+export function listComponentSchemas(): ComponentSchema[] {
+  return [...ensurePopulated().values()];
+}
+
+export function defaultFieldValue(fs: FieldSchema): unknown {
+  if (fs.default !== undefined) return fs.default;
+  return defaultFieldValueInternal(fs.type);
+}
+
 export function defaultComponentData(name: string): Record<string, unknown> {
-  const cs = REGISTRY[name];
+  const cs = getComponentSchema(name);
   if (!cs) return {};
   const out: Record<string, unknown> = {};
   for (const f of cs.fields) out[f.key] = defaultFieldValue(f);
   return out;
 }
 
-/**
- * Whether a field should show given the component's current data (showWhen rule).
- * The controlling sibling may be absent on the instance (schema-completed UI), so
- * we fall back to that sibling's default (first enum option) when missing.
- */
-export function fieldVisible(component: string, fs: FieldSchema | undefined, data: Record<string, unknown>): boolean {
+export function fieldVisible(
+  component: string,
+  fs: FieldSchema | undefined,
+  data: Record<string, unknown>,
+): boolean {
   if (!fs?.showWhen) return true;
   let cur = data[fs.showWhen.key];
   if (cur === undefined || cur === null) cur = fieldSchema(component, fs.showWhen.key)?.options?.[0];
   return fs.showWhen.in.includes(String(cur));
 }
 
-/** Clamp a number to a field's [min,max] when defined (no-op otherwise). */
 export function clampToField(fs: FieldSchema | undefined, n: number): number {
   if (!fs) return n;
   let v = n;

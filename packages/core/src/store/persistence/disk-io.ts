@@ -522,6 +522,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
             if (sceneAssetEntry?.guid) {
               const ok = await loadSceneByGuid(sceneAssetEntry.guid);
               if (ok) {
+                ctx.isDirty = false;
                 deps.notifyDocChanged();
                 return true;
               }

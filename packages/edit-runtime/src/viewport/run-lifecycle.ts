@@ -123,6 +123,9 @@ export interface RunLifecycleDeps {
 export interface RunLifecycle {
   playSimulation(): Promise<void>;
   stopSimulation(): void;
+  /** Terminal teardown for viewport realm reset: cancel in-flight play assembly
+   *  and stop the live play App before the shared renderer is disposed. */
+  dispose(): void;
   /** The live play world while playing, else null. Tests read this to assert the
    *  lifecycle drops its reference on ■ Stop (AC-05 GC reachability proxy). */
   currentPlayWorld(): unknown;
@@ -140,9 +143,38 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   // it on ■ (active = null) releases the lifecycle's only reference to the play
   // world/app so they become GC-able (AC-05).
   let active: PlayAssembly | null = null;
+  let starting = false;
+  let disposed = false;
+  let generation = 0;
+  let editorPaused = false;
+
+  function resumeEditorIfLive(): void {
+    if (!editorPaused || disposed) return;
+    editorPaused = false;
+    deps.editorApp.resume();
+  }
+
+  function stopAssembly(assembly: PlayAssembly, label: string): void {
+    try {
+      const stopR = assembly.playApp.stop();
+      if (!stopR.ok) console.warn(`[editor] ${label} playApp.stop() failed:`, stopR.error);
+    } catch (err) {
+      console.warn(`[editor] ${label} playApp.stop() threw:`, err);
+    }
+
+    try {
+      assembly.detach();
+    } catch (err) {
+      console.warn(`[editor] ${label} detach() threw:`, err);
+    }
+  }
 
   async function playSimulation(): Promise<void> {
+    if (disposed) return;
+    if (starting) return;
     if (active !== null) return; // already playing — ▶ is a no-op (idempotent)
+    const token = ++generation;
+    starting = true;
 
     // solo round-8 #3: mark the async assemble in flight so the gateway's
     // playPhase reads 'starting' — a front-door poller can distinguish
@@ -158,14 +190,20 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // Do this before assembling so the edit world is already still while the play
     // world spins up.
     deps.editorApp.pause();
+    editorPaused = true;
 
     // Assemble the fresh play world + App (level-load, AC-04). On failure, thaw
     // the edit world and stay in edit mode (graceful degradation — never leave the
     // editor wedged mid-play).
     const res = await deps.assemble();
+    starting = false;
+    if (disposed || token !== generation) {
+      if (res.ok) stopAssembly(res.value, '▶ Play canceled');
+      return;
+    }
     if (!res.ok) {
       console.warn('[editor] ▶ Play assemble failed:', res.error);
-      deps.editorApp.resume();
+      resumeEditorIfLive();
       // solo round-8 #3: surface the failure through the front door so playPhase
       // reads 'failed' + lastPlayError carries why — instead of silently degrading
       // to edit while dispatch already returned {ok:true} (the round-3/5 trap).
@@ -215,6 +253,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   }
 
   function stopSimulation(): void {
+    if (starting) {
+      generation++;
+      starting = false;
+      try { deps.gateway.exitPlay(); } catch { /* best effort while canceling start */ }
+      resumeEditorIfLive();
+      deps.onPlayFailed?.();
+      return;
+    }
     if (active === null) return; // not playing — ■ is a no-op (idempotent, AC-05)
     const assembly = active;
     // Drop the slot reference FIRST so even if a teardown step throws, the
@@ -225,35 +271,39 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // renderer.onError, so nothing pins the play world (AC-05 GC). The
     // dispose-shield (play-assemble.ts) keeps the SHARED renderer alive through
     // stop()'s unconditional renderer.dispose() (R-N2).
-    try {
-      const stopR = assembly.playApp.stop();
-      if (!stopR.ok) console.warn('[editor] ■ Stop playApp.stop() failed:', stopR.error);
-    } catch (err) {
-      console.warn('[editor] ■ Stop playApp.stop() threw:', err);
-    }
-
-    // Detach play-side backends (input listeners attached to the shared canvas),
-    // releasing the canvas back to the edit session.
-    try {
-      assembly.detach();
-    } catch (err) {
-      console.warn('[editor] ■ Stop detach() threw:', err);
-    }
+    stopAssembly(assembly, '■ Stop');
 
     // D-3: pointer back to the edit world (clears selection + emits so panels
     // re-read the edit world's hierarchy).
     deps.gateway.exitPlay();
 
     // D-2 / AC-07: thaw the edit world — resume its frame loop.
-    deps.editorApp.resume();
+    resumeEditorIfLive();
 
     // assembly (and thus playWorld/playApp) is now unreferenced by the lifecycle
     // → GC-able (AC-05). No restore, no rebind, no despawn.
+  }
+
+  function dispose(): void {
+    if (disposed) return;
+    const wasStarting = starting;
+    disposed = true;
+    generation++;
+    starting = false;
+    const assembly = active;
+    active = null;
+    if (assembly !== null) {
+      stopAssembly(assembly, 'run-lifecycle dispose');
+      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+    } else if (wasStarting) {
+      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+    }
+    editorPaused = false;
   }
 
   function currentPlayWorld(): unknown {
     return active === null ? null : active.playWorld;
   }
 
-  return { playSimulation, stopSimulation, currentPlayWorld };
+  return { playSimulation, stopSimulation, dispose, currentPlayWorld };
 }
