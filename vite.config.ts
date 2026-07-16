@@ -112,6 +112,10 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR),
+    // The Vite preset derives this from the same package.json roots it passes to
+    // pluginPack. Content Browser uses the projection to classify catalog
+    // sourcePath values without knowing where @shared roots live on disk.
+    __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
   },
   resolve: {
     // dockview declares react as a peer dep; under bun's isolated node_modules

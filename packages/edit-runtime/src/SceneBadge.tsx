@@ -1,9 +1,9 @@
 // SceneBadge — read-only indicator of what THIS editor window is editing.
 //
-// One editor window ↔ one scene (UE model; binding carried by `?sceneFile=`).
-// Switching what a window edits happens by double-clicking a level / asset in
-// the Assets panel — never from a toolbar dropdown. Play settings live in the
-// standalone 启动器 panel.
+// One editor window ↔ one scene (UE model; binding lives in localStorage +
+// in-memory ctx). Switching what a window edits happens by double-clicking a
+// level / asset in the Assets panel — never from a toolbar dropdown. Play
+// settings live in the standalone 启动器 panel.
 import { getSceneId, useSceneFile, useSceneList } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 

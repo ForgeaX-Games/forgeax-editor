@@ -171,11 +171,9 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     }
     if (ctx.sceneList.length > 0) {
       // Binding priority — a window edits exactly ONE scene (UE-style):
-      //   1. `?sceneFile=<id>` in the URL — the window's own hard binding
-      //   2. per-game localStorage — what this game last had open
-      //   3. forge.json defaultScene GUID → (NOTHING) — no alphabetical fallback
-      let urlWant: string | null = null;
-      try { urlWant = new URLSearchParams(location.search).get('sceneFile'); } catch { /* non-browser */ }
+      //   1. per-game localStorage — what this game last had open
+      //   2. forge.json defaultScene GUID — the game's canonical scene
+      //   3. (NOTHING) — no alphabetical fallback
       let want: string | null = null;
       try { want = localStorage.getItem(sceneFileStorageKey()); } catch { /* unavailable */ }
       const def = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
@@ -187,25 +185,24 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         ? (ctx.sceneList.find((s) => s.pack === defPack)?.id ?? null)
         : null;
       // NO alphabetical `firstScene` fallback (#98): binding must come from an
-      // EXPLICIT, authoritative signal (URL ?sceneFile= / per-game localStorage /
-      // defaultScene GUID). `kind:"scene"` packs are discovered by kind alone —
-      // with no marker separating an authored MAIN scene from a runtime PREFAB
-      // (e.g. shoot-opt's enemy ships under assets/enemies/*.pack.json,
-      // instantiated via assets.instantiate). Auto-binding the alphabetically-first
-      // pack loaded an enemy prefab AS the editable scene, and the first
-      // dirty-flush then serialized the live world back over that prefab file,
-      // corrupting it. When nothing binds, stay null (legacy/seed path) and tell
-      // the author how to pick a scene.
+      // EXPLICIT, authoritative signal (per-game localStorage / defaultScene GUID).
+      // `kind:"scene"` packs are discovered by kind alone — with no marker
+      // separating an authored MAIN scene from a runtime PREFAB (e.g. shoot-opt's
+      // enemy ships under assets/enemies/*.pack.json, instantiated via
+      // assets.instantiate). Auto-binding the alphabetically-first pack loaded an
+      // enemy prefab AS the editable scene, and the first dirty-flush then
+      // serialized the live world back over that prefab file, corrupting it. When
+      // nothing binds, stay null (legacy/seed path) and tell the author how to
+      // pick a scene.
       ctx.currentSceneFile =
-        (urlWant && ctx.sceneList.some((s) => s.id === urlWant)) ? urlWant
-        : (want && ctx.sceneList.some((s) => s.id === want)) ? want
+        (want && ctx.sceneList.some((s) => s.id === want)) ? want
         : defId ? defId
         : null;
       if (ctx.currentSceneFile === null) {
         console.warn(
           `[editor-core] ${ctx.sceneList.length} scene pack(s) found but none bound for edit: `
-          + `set forge.json "defaultScene" to a scene GUID, or open a scene from the Assets panel `
-          + `(?sceneFile=<id>). Not auto-opening one — an unmarked pack may be a runtime prefab, `
+          + `set forge.json "defaultScene" to a scene GUID, or open a scene from the Assets panel. `
+          + `Not auto-opening one — an unmarked pack may be a runtime prefab, `
           + `and editing+saving it would overwrite the authored asset.`,
         );
       }
@@ -214,9 +211,11 @@ export function createSceneList(deps: SceneListDeps): SceneList {
   }
 
   /** Open another scene/asset pack IN THIS WINDOW: flush the outgoing scene's
-   *  pending save, persist the selection, and switch in-place (no location.reload
-   *  — reloading recreates the WebGPU device, wedging WKWebView's GPU process).
-   *  Falls back to a full reload if the in-place path throws. */
+   *  pending save, persist the selection in localStorage, and switch in-place
+   *  (no location.reload — reloading recreates the WebGPU device, wedging
+   *  WKWebView's GPU process). No URL round-trip: the binding lives in
+   *  localStorage and the in-memory ctx; on next boot, initSceneList reads
+   *  localStorage to restore it. Falls back to a clean reload if in-place fails. */
   async function doSwitchSceneFile(id: string): Promise<boolean> {
     if (id === ctx.currentSceneFile) return true;
     if (!ctx.sceneList.some((s) => s.id === id)) return false;
@@ -224,9 +223,6 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
     try {
       ctx.currentSceneFile = id;
-      const u = new URL(location.href);
-      u.searchParams.set('sceneFile', id);
-      try { history.replaceState(history.state, '', u.toString()); } catch { /* SSR/old */ }
       // Internal call → the impl, not the dispatching wrapper (no nested dispatch).
       const ok = await deps.loadDocFromDisk();
       if (!ok) deps.loadDocFromStorage();
@@ -238,9 +234,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       return true;
     } catch (e) {
       console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
-      const u = new URL(location.href);
-      u.searchParams.set('sceneFile', id);
-      location.assign(u.toString());
+      location.reload();
       return true;
     }
   }

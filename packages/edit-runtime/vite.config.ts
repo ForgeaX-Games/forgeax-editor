@@ -54,6 +54,7 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS),
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
+    __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
   },
   plugins: [
     react(),

@@ -191,6 +191,127 @@
     "title": "Bind Asset Ref (resolve GUID -> shared<T> handle)"
   },
   {
+    "id": "cameraFly",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "pos": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Camera position [x,y,z] at the end of the fly gesture."
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Yaw (radians) — engine convention: qCam = yaw·Y × pitch·X, fwd = qCam·[0,0,-1]."
+        },
+        "pitch": {
+          "type": "number",
+          "description": "Pitch (radians); clamped to ~[-1.5, 1.5]."
+        }
+      }
+    },
+    "title": "Fly camera to position"
+  },
+  {
+    "id": "cameraLookAt",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "pos": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Camera position [x,y,z]."
+        },
+        "lookAt": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "World point the camera should look at; yaw/pitch derived from (lookAt - pos)."
+        }
+      },
+      "required": [
+        "pos",
+        "lookAt"
+      ]
+    },
+    "title": "Move camera and look at target"
+  },
+  {
+    "id": "cameraOrbit",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Orbit target [x,y,z] (world). Camera orbits AROUND this point."
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Yaw (radians) around world +Y; unbounded (full rotation)."
+        },
+        "pitch": {
+          "type": "number",
+          "description": "Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near ±86°)."
+        },
+        "dist": {
+          "type": "number",
+          "description": "Distance from target to camera; clamped to [2, 300]."
+        },
+        "pos": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Optional absolute camera position [x,y,z]; if provided, target is derived as pos + fwd*dist (T6b)."
+        }
+      }
+    },
+    "title": "Orbit camera"
+  },
+  {
+    "id": "cameraTeleport",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "pos": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Absolute camera position [x,y,z]."
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Yaw (radians)."
+        },
+        "pitch": {
+          "type": "number",
+          "description": "Pitch (radians); clamped to ~[-1.5, 1.5]."
+        }
+      },
+      "required": [
+        "pos"
+      ]
+    },
+    "title": "Teleport camera to position"
+  },
+  {
     "id": "cbGoBack",
     "domain": "session",
     "source": "builtin",

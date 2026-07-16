@@ -7,8 +7,20 @@ import {
   clampDist,
   advanceOrbit,
   computeOrbitCamera,
+  clampFlySpeed,
+  applyFlyWheelSpeed,
+  advanceFly,
+  advanceFlyLook,
+  computeFlyCamera,
+  orbitToFly,
+  flyToOrbit,
+  FLY_SPEED_MIN,
+  FLY_SPEED_MAX,
+  FLY_SPEED_STEP,
   type OrbitState,
   type OrbitCameraResult,
+  type FlyState,
+  type FlyInput,
 } from '../viewport/viewport-camera';
 import type { Vec3 } from '../viewport/viewport-ray';
 
@@ -194,4 +206,201 @@ test('computeOrbitCamera: OrbitCameraResult has correct shape (incl. qCam)', () 
   expect(result.camPos).toHaveLength(3);
   expect(Array.isArray(result.qCam)).toBe(true);
   expect(result.qCam).toHaveLength(4);
+});
+
+// ── clampFlySpeed / applyFlyWheelSpeed ──────────────────────────────────────
+
+test('clampFlySpeed: within range passes through', () => {
+  expect(clampFlySpeed(8)).toBe(8);
+  expect(clampFlySpeed(1)).toBe(1);
+});
+
+test('clampFlySpeed: clamps at min/max', () => {
+  expect(clampFlySpeed(0.1)).toBe(FLY_SPEED_MIN);
+  expect(clampFlySpeed(200)).toBe(FLY_SPEED_MAX);
+});
+
+test('applyFlyWheelSpeed: positive delta scales up by FLY_SPEED_STEP', () => {
+  const speed = 8;
+  expect(applyFlyWheelSpeed(speed, 1)).toBeCloseTo(speed * FLY_SPEED_STEP, 4);
+  expect(applyFlyWheelSpeed(speed, 100)).toBeCloseTo(speed * FLY_SPEED_STEP, 4);
+});
+
+test('applyFlyWheelSpeed: negative delta scales down', () => {
+  const speed = 8;
+  expect(applyFlyWheelSpeed(speed, -1)).toBeCloseTo(speed / FLY_SPEED_STEP, 4);
+});
+
+test('applyFlyWheelSpeed: zero delta returns current speed (clamped)', () => {
+  expect(applyFlyWheelSpeed(8, 0)).toBe(8);
+  expect(applyFlyWheelSpeed(1000, 0)).toBe(FLY_SPEED_MAX);
+});
+
+// ── advanceFly (movement) ───────────────────────────────────────────────────
+
+const emptyInput: FlyInput = {
+  forward: false, backward: false, left: false, right: false, up: false, down: false,
+};
+
+test('advanceFly: no input returns same position', () => {
+  const state: FlyState = { pos: [1, 2, 3], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, emptyInput, 8, 1 / 60);
+  expect(result.pos[0]).toBeCloseTo(1, 6);
+  expect(result.pos[1]).toBeCloseTo(2, 6);
+  expect(result.pos[2]).toBeCloseTo(3, 6);
+});
+
+test('advanceFly: dt <= 0 returns same state (early return)', () => {
+  const state: FlyState = { pos: [1, 2, 3], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, forward: true }, 8, 0);
+  expect(result).toBe(state);
+});
+
+test('advanceFly: forward at yaw=0,pitch=0 moves along -Z', () => {
+  // fwd = qCam·[0,0,-1] with identity quat = [0,0,-1]
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, forward: true }, 10, 1);
+  expect(result.pos[0]).toBeCloseTo(0, 6);
+  expect(result.pos[1]).toBeCloseTo(0, 6);
+  expect(result.pos[2]).toBeCloseTo(-10, 6);
+});
+
+test('advanceFly: backward reverses forward direction', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, backward: true }, 10, 1);
+  expect(result.pos[2]).toBeCloseTo(10, 6);
+});
+
+test('advanceFly: right at yaw=0 moves along +X', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, right: true }, 10, 1);
+  expect(result.pos[0]).toBeCloseTo(10, 6);
+});
+
+test('advanceFly: up moves along world +Y (independent of pitch)', () => {
+  // UE5 convention: E raises along world up, not camera up
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: -1.0 };
+  const result = advanceFly(state, { ...emptyInput, up: true }, 10, 1);
+  expect(result.pos[0]).toBeCloseTo(0, 6);
+  expect(result.pos[1]).toBeCloseTo(10, 6);
+  expect(result.pos[2]).toBeCloseTo(0, 6);
+});
+
+test('advanceFly: down moves along world -Y', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, down: true }, 10, 1);
+  expect(result.pos[1]).toBeCloseTo(-10, 6);
+});
+
+test('advanceFly: diagonal (forward+right) is normalized (no speed boost)', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, forward: true, right: true }, 10, 1);
+  const dist = Math.hypot(result.pos[0], result.pos[1], result.pos[2]);
+  expect(dist).toBeCloseTo(10, 5);
+});
+
+test('advanceFly: opposite inputs cancel out', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, forward: true, backward: true }, 10, 1);
+  expect(result.pos[0]).toBeCloseTo(0, 6);
+  expect(result.pos[1]).toBeCloseTo(0, 6);
+  expect(result.pos[2]).toBeCloseTo(0, 6);
+});
+
+test('advanceFly: speed and dt scale movement linearly', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const r1 = advanceFly(state, { ...emptyInput, forward: true }, 10, 1);
+  const r2 = advanceFly(state, { ...emptyInput, forward: true }, 20, 0.5);
+  expect(Math.abs(r1.pos[2])).toBeCloseTo(Math.abs(r2.pos[2]), 6);
+});
+
+test('advanceFly: yaw=90deg forward moves along -X', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: Math.PI / 2, pitch: 0 };
+  const result = advanceFly(state, { ...emptyInput, forward: true }, 10, 1);
+  expect(result.pos[0]).toBeCloseTo(-10, 4);
+  expect(result.pos[2]).toBeCloseTo(0, 4);
+});
+
+// ── advanceFlyLook (view rotation) ──────────────────────────────────────────
+
+test('advanceFlyLook: accumulates yaw unbounded', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 1.0, pitch: 0 };
+  const r = advanceFlyLook(state, 0.5, 0);
+  expect(r.yaw).toBeCloseTo(1.5, 6);
+});
+
+test('advanceFlyLook: clamps pitch to same range as orbit', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 1.4 };
+  const r = advanceFlyLook(state, 0, 0.5);
+  expect(r.pitch).toBe(1.5);
+});
+
+test('advanceFlyLook: preserves position', () => {
+  const state: FlyState = { pos: [5, 6, 7], yaw: 0, pitch: 0 };
+  const r = advanceFlyLook(state, 0.1, 0.1);
+  expect(r.pos[0]).toBe(5);
+  expect(r.pos[1]).toBe(6);
+  expect(r.pos[2]).toBe(7);
+});
+
+// ── computeFlyCamera ────────────────────────────────────────────────────────
+
+test('computeFlyCamera: camPos equals state.pos', () => {
+  const state: FlyState = { pos: [3, 4, 5], yaw: 0.5, pitch: -0.3 };
+  const result = computeFlyCamera(state);
+  expect(result.camPos[0]).toBeCloseTo(3, 6);
+  expect(result.camPos[1]).toBeCloseTo(4, 6);
+  expect(result.camPos[2]).toBeCloseTo(5, 6);
+});
+
+test('computeFlyCamera: forms orthonormal basis', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0.7, pitch: -0.5 };
+  const result = computeFlyCamera(state);
+  const dot = (a: number[], b: number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+  expect(dot(result.fwd, result.rgt)).toBeCloseTo(0, 6);
+  expect(dot(result.fwd, result.upv)).toBeCloseTo(0, 6);
+  expect(dot(result.rgt, result.upv)).toBeCloseTo(0, 6);
+});
+
+// ── orbitToFly / flyToOrbit (round-trip continuity) ─────────────────────────
+
+test('orbitToFly: fly.pos equals orbit camPos (target - fwd * dist)', () => {
+  const target: import('../viewport/viewport-ray').Vec3 = [1, 2, 3];
+  const orbit = computeOrbitCamera(target, 0.4, -0.2, 12);
+  const fly = orbitToFly(target, 0.4, -0.2, 12);
+  expect(fly.pos[0]).toBeCloseTo(orbit.camPos[0], 6);
+  expect(fly.pos[1]).toBeCloseTo(orbit.camPos[1], 6);
+  expect(fly.pos[2]).toBeCloseTo(orbit.camPos[2], 6);
+  expect(fly.yaw).toBe(0.4);
+  expect(fly.pitch).toBe(-0.2);
+});
+
+test('flyToOrbit → orbit camera position matches original fly.pos', () => {
+  // 关键连续性保证：从 fly 切回 orbit 后，实际相机位置不能跳变
+  const fly: FlyState = { pos: [5, 3, -8], yaw: 0.6, pitch: -0.25 };
+  const orbit = flyToOrbit(fly, 15);
+  const back = computeOrbitCamera(orbit.target, orbit.yaw, orbit.pitch, orbit.dist);
+  expect(back.camPos[0]).toBeCloseTo(fly.pos[0], 4);
+  expect(back.camPos[1]).toBeCloseTo(fly.pos[1], 4);
+  expect(back.camPos[2]).toBeCloseTo(fly.pos[2], 4);
+});
+
+test('orbitToFly → flyToOrbit round-trip preserves yaw/pitch/dist', () => {
+  const target: import('../viewport/viewport-ray').Vec3 = [0, 1, 2];
+  const yaw0 = 0.3, pitch0 = -0.4, dist0 = 20;
+  const fly = orbitToFly(target, yaw0, pitch0, dist0);
+  const orbit2 = flyToOrbit(fly, dist0);
+  expect(orbit2.yaw).toBeCloseTo(yaw0, 6);
+  expect(orbit2.pitch).toBeCloseTo(pitch0, 6);
+  expect(orbit2.dist).toBeCloseTo(dist0, 6);
+  // target 也应恢复（fly.pos + fwd*dist = 原 target）
+  expect(orbit2.target[0]).toBeCloseTo(target[0], 4);
+  expect(orbit2.target[1]).toBeCloseTo(target[1], 4);
+  expect(orbit2.target[2]).toBeCloseTo(target[2], 4);
+});
+
+test('flyToOrbit: clamps previousDist to allowed range', () => {
+  const fly: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  expect(flyToOrbit(fly, 1).dist).toBe(2);      // clamped up to DIST_MIN
+  expect(flyToOrbit(fly, 500).dist).toBe(300);  // clamped down to DIST_MAX
 });

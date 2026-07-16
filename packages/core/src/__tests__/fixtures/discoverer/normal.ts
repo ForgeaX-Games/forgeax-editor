@@ -9,7 +9,6 @@ export const Stamina = defineComponent('Stamina', {
 export const Regen = defineSystem({
   name: 'Regen',
   queries: [],
-  labels: [],
   fn() {
     // gameplay system — no-op for fixture
   },
