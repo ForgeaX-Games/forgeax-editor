@@ -281,6 +281,15 @@ export async function assemblePlayWorld(
   // the same fresh Play world, and never survive that world's Stop teardown.
   const gameProjection = deps.createGameProjection?.();
 
+  // Resolve the module BEFORE statePlugin() builds the fresh world. A game calls
+  // defineState() at module scope, which populates the engine's token registry;
+  // statePlugin reads that registry once to install State/NextState resources. If
+  // the host imports main.ts after createApp, game-defined tokens exist but their
+  // resources do not, and setNextState returns state-not-registered in Play.
+  // This resolves only the module/export; bootstrap still runs after defaultScene
+  // instantiation below, so the asset-first game contract remains unchanged.
+  const entry = await deps.resolveBootstrap();
+
   // Audio backend (round-17, P8): the assemble form does NOT auto-create the
   // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle") — so
   // editor ▶ Play must pre-inject it itself, exactly as it pre-injects the input
@@ -472,8 +481,9 @@ export async function assemblePlayWorld(
   }
 
   // ── bootstrap: run the game entry on the fresh world (same contract as
-  // play-runtime — host instantiates defaultScene BEFORE entry runs). ──
-  const entry = await deps.resolveBootstrap();
+  // play-runtime — host instantiates defaultScene BEFORE entry runs). The module
+  // was resolved before statePlugin() so module-level state tokens are registered;
+  // invoke its bootstrap only now, after the default SceneAsset is instantiated. ──
   if (entry) {
     const rendererAssets = (deps.renderer as { assets?: unknown }).assets;
     const ctx = {

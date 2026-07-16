@@ -142,6 +142,51 @@ export interface HostSessionContext {
   readonly onPlayFailed: () => void;
 }
 
+type GameBootstrap = (world: unknown, ctx?: unknown) => void | Promise<void>;
+
+/** Dependencies for the per-host-session game bootstrap module cache. */
+export interface BootstrapResolverDeps {
+  readonly readForgeForPlay: () => Promise<{ entry?: string }>;
+  readonly resolveGameFsBase: () => Promise<string>;
+  readonly getSceneId: () => string;
+  readonly importModule: (url: string) => Promise<{ bootstrap?: unknown }>;
+}
+
+/**
+ * Resolve a game bootstrap module once for one host session.
+ *
+ * Module scope is a game registration boundary (`defineState`, plugin side effects),
+ * while the exported bootstrap executes once for each fresh Play world. Re-importing
+ * a timestamped URL on every ▶ re-runs module scope and makes a second Play collide
+ * with the engine's global state-token registry.
+ */
+export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Promise<GameBootstrap | null> {
+  let resolved = false;
+  let cached: GameBootstrap | null = null;
+  return async (): Promise<GameBootstrap | null> => {
+    if (resolved) return cached;
+    resolved = true;
+    const forge = await deps.readForgeForPlay();
+    const gameFsBase = await deps.resolveGameFsBase();
+    const candidates: string[] = [];
+    if (forge.entry) candidates.push(forge.entry);
+    for (const fallback of ['main.ts', 'src/main.ts']) {
+      if (!candidates.includes(fallback)) candidates.push(fallback);
+    }
+    for (const rel of candidates) {
+      try {
+        const mod = await deps.importModule(`${gameFsBase}/${rel}`);
+        if (typeof mod.bootstrap === 'function') {
+          cached = mod.bootstrap as GameBootstrap;
+          return cached;
+        }
+      } catch { /* try next candidate */ }
+    }
+    console.warn(`[editor] ▶ Play bootstrap module not found for ${deps.getSceneId()}`);
+    return cached;
+  };
+}
+
 export interface HostSession {
   /** ▶ Play — assemble a transient play world and resolve when it enters Play or fails. */
   playSimulation(): Promise<void>;
@@ -510,30 +555,15 @@ export function createHostSession(deps: HostSessionDeps): {
       return assetRes.value;
     };
 
-    // play-assemble dep: resolve + validate the game bootstrap module. Same entry
-    // candidates as the old original-in-place path; returns null when no module has
-    // a bootstrap export (graceful — play renders the scene with no game logic).
-    const resolveBootstrap = async (): Promise<((w: unknown, c?: unknown) => void | Promise<void>) | null> => {
-      const forge = await readForgeForPlay();
-      const gameFsBase = await resolveGameFsBase();
-      const candidates: string[] = [];
-      if (forge.entry) candidates.push(forge.entry);
-      for (const fallback of ['main.ts', 'src/main.ts']) {
-        if (!candidates.includes(fallback)) candidates.push(fallback);
-      }
-      for (const rel of candidates) {
-        const url = `${gameFsBase}/${rel}`;
-        try {
-          const mod = await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
-          const bootstrap = (mod as { bootstrap?: unknown }).bootstrap;
-          if (typeof bootstrap === 'function') {
-            return bootstrap as (w: unknown, c?: unknown) => void | Promise<void>;
-          }
-        } catch { /* try next candidate */ }
-      }
-      console.warn(`[editor] ▶ Play bootstrap module not found for ${getSceneId()}`);
-      return null;
-    };
+    // Resolve the game module once per host session: module-level registrations
+    // must run before statePlugin builds the first Play world, but must not repeat
+    // on a later Play. The exported bootstrap remains per-fresh-world.
+    const resolveBootstrap = createBootstrapResolver({
+      readForgeForPlay,
+      resolveGameFsBase,
+      getSceneId,
+      importModule: (url) => import(/* @vite-ignore */ url) as Promise<{ bootstrap?: unknown }>,
+    });
 
     // The play world receives the game view of the one canvas boundary. It never
     // owns browser listeners or detaches the host boundary on Stop.

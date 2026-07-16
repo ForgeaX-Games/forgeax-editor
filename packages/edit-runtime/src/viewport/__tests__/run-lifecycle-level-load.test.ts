@@ -34,8 +34,17 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { World } from '@forgeax/engine-ecs';
-import type { GameProjectionRegistrar } from '@forgeax/engine-app';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import type { BootstrapContext, GameProjectionRegistrar } from '@forgeax/engine-app';
+import { Name } from '@forgeax/engine-runtime';
+import {
+  addOnEnter,
+  defineState,
+  despawnOnExit,
+  getState,
+  setNextState,
+  type StateToken,
+} from '@forgeax/engine-state';
 import { EditGateway, createEditSession } from '@forgeax/editor-core';
 import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
 import { createRunLifecycle } from '../run-lifecycle';
@@ -427,6 +436,115 @@ describe('▶ Play game-owned action/read projection', () => {
       expect(gateway.listGameActions()).toEqual([]);
       await expect(gateway.readGameState('sample.level.status'))
         .resolves.toMatchObject({ ok: false, error: { code: 'game-projection-unavailable' } });
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
+// ── Game state registration must precede the Play-world state plugin ─────────
+// A game defines its StateToken at module scope. The host must resolve that module
+// before createApp runs statePlugin(), while still invoking bootstrap only after it
+// instantiated the default scene. Otherwise setNextState sees a token with no
+// State/NextState resources and fails at runtime with state-not-registered.
+describe('▶ Play module-level game state registration', () => {
+  function makeStateBootstrap() {
+    // This factory models dynamic main.ts evaluation: defineState runs while
+    // resolveBootstrap imports the module, before it returns bootstrap.
+    const state: StateToken<'RunLifecycleProjectionState', 'a' | 'b'> = defineState(
+      'RunLifecycleProjectionState',
+      ['a', 'b'] as const,
+    );
+    return (world: unknown, ctx?: { gameProjection?: GameProjectionRegistrar } & Pick<BootstrapContext, 'registerCleanup'>) => {
+      const w = world as World;
+      let scoped: EntityHandle | undefined;
+      const global = w.spawn({ component: Name, data: { value: 'global' } }).unwrap();
+      const removeOnEnter = addOnEnter(state, 'b', (enterWorld) => {
+        scoped = enterWorld.spawn({ component: Name, data: { value: 'level-b' } }).unwrap();
+        despawnOnExit(enterWorld, scoped, state, 'b');
+      });
+      ctx?.registerCleanup?.(removeOnEnter);
+      ctx?.gameProjection?.registerAction({
+        id: 'state.transition',
+        title: 'Transition state',
+        argsSchema: {
+          type: 'object',
+          properties: { target: { type: 'string', enum: ['a', 'b'] } },
+          required: ['target'],
+        },
+        run: (args) => {
+          const result = setNextState(w, state, (args as { target: 'a' | 'b' }).target);
+          if (!result.ok) throw new Error(result.error.code);
+        },
+      });
+      ctx?.gameProjection?.registerRead({
+        id: 'state.status',
+        title: 'Read state',
+        read: () => {
+          const current = getState(w, state);
+          return {
+            active: current.ok ? current.value : 'unavailable',
+            globalAlive: w.get(global, Name).ok,
+            scopedAlive: scoped !== undefined && w.get(scoped, Name).ok,
+            entityCount: w.inspect().entityCount,
+          };
+        },
+      });
+    };
+  }
+
+  it('registers a bootstrap module StateToken before statePlugin builds the fresh world', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const doc = createEditSession();
+      doc.world = new World();
+      const gateway = new EditGateway(doc);
+      const fr = makeFakeRenderer();
+      const editorApp = makeFakeEditorApp();
+      // Mirrors a resolved game module: defineState ran once at module evaluation,
+      // while the same bootstrap executes for every fresh Play world.
+      const entry = makeStateBootstrap();
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway,
+        assemble: async () => assemblePlayWorld({
+          renderer: fr.renderer as never,
+          loadDefaultScene: async () => makeSceneAsset(),
+          resolveBootstrap: async () => entry as never,
+          attachInput: () => undefined,
+          newWorld: () => new World() as never,
+          createGameProjection: () => {
+            const registry = gateway.createGameProjectionRegistry();
+            return {
+              registrar: registry.registrar,
+              install: () => gateway.installGameProjection(registry),
+              clear: () => gateway.clearGameProjection(),
+            };
+          },
+        }),
+      });
+
+      await lifecycle.playSimulation();
+      await expect(gateway.invokeGameAction('state.transition', { target: 'b' }))
+        .resolves.toEqual({ ok: true, value: undefined });
+      fakeRaf.step();
+      await expect(gateway.readGameState('state.status'))
+        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 2 } });
+
+      await expect(gateway.invokeGameAction('state.transition', { target: 'a' }))
+        .resolves.toEqual({ ok: true, value: undefined });
+      fakeRaf.step();
+      await expect(gateway.readGameState('state.status'))
+        .resolves.toEqual({ ok: true, value: { active: 'a', globalAlive: true, scopedAlive: false, entityCount: 1 } });
+      lifecycle.stopSimulation();
+
+      await lifecycle.playSimulation();
+      await expect(gateway.invokeGameAction('state.transition', { target: 'b' }))
+        .resolves.toEqual({ ok: true, value: undefined });
+      fakeRaf.step();
+      await expect(gateway.readGameState('state.status'))
+        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 2 } });
+      lifecycle.stopSimulation();
     } finally {
       fakeRaf.restore();
     }
