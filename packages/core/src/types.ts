@@ -242,7 +242,16 @@ export interface CommandError {
     // addSceneAssetToScene loads + instantiates a catalogued SceneAsset in a
     // detached session continuation. Its accepted dispatch must still expose the
     // terminal outcome through the same gateway read surface — never console-only.
-    | 'scene-mount-failed';
+    | 'scene-mount-failed'
+    // ── Play-only game projection codes ──
+    // A game owns these action/read closures. The editor Gateway exposes only
+    // discovery + invocation while a fresh play world is live; it never imports
+    // game state tokens or reaches into a game World directly.
+    | 'game-projection-unavailable'
+    | 'game-projection-id-conflict'
+    | 'unknown-game-projection'
+    | 'game-action-failed'
+    | 'game-read-failed';
   hint: string;
 }
 

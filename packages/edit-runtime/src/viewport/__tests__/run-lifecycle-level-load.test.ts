@@ -35,6 +35,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { World } from '@forgeax/engine-ecs';
+import type { GameProjectionRegistrar } from '@forgeax/engine-app';
+import { EditGateway, createEditSession } from '@forgeax/editor-core';
 import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
 import { createRunLifecycle } from '../run-lifecycle';
 
@@ -349,6 +351,82 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
       t.lifecycle.stopSimulation(); // stray
       const resumeCount2 = t.editorApp.calls.filter((c) => c === 'resume').length;
       expect(resumeCount2).toBe(resumeCount1); // no extra resume
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+});
+
+// ── Game-owned projection: bootstrap → live Gateway → Stop cleanup ──────────
+// The game names and implements the action/read behavior. The editor host only
+// passes the registrar during bootstrap, installs it after enterPlay, and clears it
+// before dropping the fresh world. This is the P9a-facing seam; it has no LevelId
+// or game-specific variants in editor source.
+describe('▶ Play game-owned action/read projection', () => {
+  it('exposes a bootstrap-owned A→B→A action/read pair only during the live Play run', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const doc = createEditSession();
+      doc.world = new World();
+      const gateway = new EditGateway(doc);
+      const fr = makeFakeRenderer();
+      const editorApp = makeFakeEditorApp();
+      let level = 'a';
+      const entry = (_world: unknown, ctx?: { gameProjection?: GameProjectionRegistrar }) => {
+        ctx?.gameProjection?.registerAction({
+          id: 'sample.level.transition',
+          title: 'Transition level',
+          argsSchema: {
+            type: 'object',
+            properties: { target: { type: 'string', enum: ['a', 'b'] } },
+            required: ['target'],
+          },
+          run: (args) => { level = (args as { target: string }).target; },
+        });
+        ctx?.gameProjection?.registerRead({
+          id: 'sample.level.status',
+          title: 'Read level status',
+          read: () => ({ activeLevel: level, rootCount: level === 'a' ? 1 : 2 }),
+        });
+      };
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway,
+        assemble: async () => assemblePlayWorld({
+          renderer: fr.renderer as never,
+          loadDefaultScene: async () => makeSceneAsset(),
+          resolveBootstrap: async () => entry as never,
+          attachInput: () => undefined,
+          newWorld: () => new World() as never,
+          createGameProjection: () => {
+            const registry = gateway.createGameProjectionRegistry();
+            return {
+              registrar: registry.registrar,
+              install: () => gateway.installGameProjection(registry),
+              clear: () => gateway.clearGameProjection(),
+            };
+          },
+        }),
+      });
+
+      expect(gateway.listGameActions()).toEqual([]);
+      await lifecycle.playSimulation();
+      expect(gateway.listGameActions().map((item) => item.id)).toEqual(['sample.level.transition']);
+      expect(gateway.listGameReads().map((item) => item.id)).toEqual(['sample.level.status']);
+      await expect(gateway.invokeGameAction('sample.level.transition', { target: 'b' }))
+        .resolves.toEqual({ ok: true, value: undefined });
+      await expect(gateway.readGameState('sample.level.status'))
+        .resolves.toEqual({ ok: true, value: { activeLevel: 'b', rootCount: 2 } });
+      await expect(gateway.invokeGameAction('sample.level.transition', { target: 'a' }))
+        .resolves.toEqual({ ok: true, value: undefined });
+      await expect(gateway.readGameState('sample.level.status'))
+        .resolves.toEqual({ ok: true, value: { activeLevel: 'a', rootCount: 1 } });
+      expect(gateway.ledger).toEqual([]);
+
+      lifecycle.stopSimulation();
+      expect(gateway.listGameActions()).toEqual([]);
+      await expect(gateway.readGameState('sample.level.status'))
+        .resolves.toMatchObject({ ok: false, error: { code: 'game-projection-unavailable' } });
     } finally {
       fakeRaf.restore();
     }

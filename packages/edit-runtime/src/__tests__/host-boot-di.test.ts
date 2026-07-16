@@ -90,6 +90,11 @@ function makeFakeGateway(): {
     engineFacade(): never { return {} as never; },
     enterPlay(_w: unknown): void {},
     exitPlay(): void {},
+    createGameProjectionRegistry() {
+      return { registrar: {} as never, clear(): void {} };
+    },
+    installGameProjection(_registry): void {},
+    clearGameProjection(): void {},
   };
   return { gateway, dispatchCalls, subscribeCount: () => subscribers };
 }

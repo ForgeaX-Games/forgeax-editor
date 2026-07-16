@@ -101,6 +101,16 @@ describe('Reflection: engine-native field assertions', () => {
     expect(keys).toContain('outerConeDeg');
   });
 
+  it('light color fields keep vec storage but request the color widget', () => {
+    for (const comp of ['DirectionalLight', 'PointLight', 'SpotLight']) {
+      const color = getComponentSchema(comp)!.fields.find((f) => f.key === 'color');
+      expect(color, `${comp}.color`).toBeDefined();
+      expect(color!.type, `${comp}.color type`).toBe('vec');
+      expect(color!.arity, `${comp}.color arity`).toBe(3);
+      expect(color!.widget, `${comp}.color widget`).toBe('color');
+    }
+  });
+
   it('Mesh schema does not exist', () => {
     expect(getComponentSchema('Mesh')).toBeUndefined();
   });

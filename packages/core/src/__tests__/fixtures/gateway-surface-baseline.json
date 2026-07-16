@@ -32,6 +32,10 @@
     "signature": "() => QuerySnapshotFn"
   },
   {
+    "name": "cancel",
+    "signature": "(handle: OpHandle) => DispatchResult"
+  },
+  {
     "name": "canRedo",
     "signature": "() => boolean"
   },
@@ -40,8 +44,8 @@
     "signature": "() => boolean"
   },
   {
-    "name": "cancel",
-    "signature": "(handle: OpHandle) => DispatchResult"
+    "name": "clearGameProjection",
+    "signature": "() => void"
   },
   {
     "name": "collectSceneAsset",
@@ -54,6 +58,10 @@
   {
     "name": "completeSceneMountAttempt",
     "signature": "() => void"
+  },
+  {
+    "name": "createGameProjectionRegistry",
+    "signature": "() => GameProjectionRegistry"
   },
   {
     "name": "defineOp",
@@ -104,6 +112,14 @@
     "signature": "() => HistoryStep[]"
   },
   {
+    "name": "installGameProjection",
+    "signature": "(registry: GameProjectionRegistry) => void"
+  },
+  {
+    "name": "invokeGameAction",
+    "signature": "(id: string, args: unknown) => Promise<GameProjectionResult<undefined>>"
+  },
+  {
     "name": "jumpTo",
     "signature": "(target: number) => void"
   },
@@ -122,6 +138,14 @@
   {
     "name": "listComponents",
     "signature": "() => readonly string[]"
+  },
+  {
+    "name": "listGameActions",
+    "signature": "() => readonly GameActionDescriptor[]"
+  },
+  {
+    "name": "listGameReads",
+    "signature": "() => readonly GameReadDescriptor[]"
   },
   {
     "name": "listOps",
@@ -154,6 +178,10 @@
   {
     "name": "playPhase",
     "signature": "\"play\" | \"edit\" | \"starting\" | \"failed\""
+  },
+  {
+    "name": "readGameState",
+    "signature": "(id: string) => Promise<GameProjectionResult<GameProjectionValue>>"
   },
   {
     "name": "redo",
