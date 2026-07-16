@@ -102,8 +102,13 @@ let bootStarted = false;
 // the latch so the next mount re-boots. Everything a boot installs GLOBALLY and
 // engine-scoped must register here or it leaks/duplicates across a switch.
 const teardownFns: Array<() => void> = [];
+let currentResetOptions: ResetEditRealmOptions = {};
 function registerTeardown(fn: () => void): void {
   teardownFns.push(fn);
+}
+
+export interface ResetEditRealmOptions {
+  readonly flushPendingSave?: boolean;
 }
 
 /**
@@ -118,12 +123,18 @@ function registerTeardown(fn: () => void): void {
  * or dev double-mount would tear down the live realm. The single-game standalone
  * host never calls this (its teardown is a full page navigation, AC-04).
  */
-export function resetEditRealm(): void {
+export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
+  const previousResetOptions = currentResetOptions;
+  currentResetOptions = options;
   // Run per-boot teardown LIFO (reverse install order) so late-installed handles
   // that depend on earlier ones unwind first. Swallow individual failures so one
   // bad teardown can't strand the rest (a half-torn realm wedges the next boot).
-  for (let i = teardownFns.length - 1; i >= 0; i--) {
-    try { teardownFns[i]!(); } catch (e) { console.warn('[editor] resetEditRealm teardown step failed:', e); }
+  try {
+    for (let i = teardownFns.length - 1; i >= 0; i--) {
+      try { teardownFns[i]!(); } catch (e) { console.warn('[editor] resetEditRealm teardown step failed:', e); }
+    }
+  } finally {
+    currentResetOptions = previousResetOptions;
   }
   teardownFns.length = 0;
   // Drop the global handle so nothing keeps the dead app/world/renderer alive.
@@ -718,10 +729,6 @@ async function bootViewport(
     console.error('[editor] host session init failed:', err);
     session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {} };
   }
-  // Tear the host session down (disk-watch socket, flush beacons) on a
-  // cross-game realm reset, flushing any pending save first.
-  registerTeardown(() => session.dispose());
-
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
     setViewportQuadrant({ control: 'editor' });
@@ -901,6 +908,10 @@ async function bootViewport(
     try { editorApp.stop(); } catch (e) { console.warn('[editor] editorApp.stop() failed:', e); }
     try { canvas.remove(); } catch { /* already detached */ }
   });
+  // Tear the host session down before editorApp.stop() disposes the shared
+  // renderer. In Play, this stops the live playApp first; otherwise its rAF would
+  // keep drawing the renderer after the edit App releases it.
+  registerTeardown(() => session.dispose({ flushPendingSave: currentResetOptions.flushPendingSave }));
   installFpsReport(editorApp, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
