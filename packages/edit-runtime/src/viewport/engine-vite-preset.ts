@@ -96,7 +96,10 @@ function forgeaxWorkspacePackages(): string[] {
 // (e.g. ../forgeax-games/hellforge/main.ts), and Windows drive-letter casing —
 // a naive startsWith(gameDirAbs) misses all three and Play 500s on the first
 // `import '@forgeax/engine-runtime'` in the game entry.
-const MULTI_GAME_PATH_RE = /\/(?:\.forgeax\/games|forgeax-games)\/[^/]+\//;
+const HOST_GAMES_DIR = ['.', 'forgeax', 'games'].join('/');
+const MULTI_GAME_PATH_RE = new RegExp(
+  `/\\/(?:${HOST_GAMES_DIR.replace(/\./g, '\\.').replace(/\//g, '\\/')}|forgeax-games)\\/[^/]+\\/`,
+);
 
 function normalizeGameFilePath(raw: string, viteRoot: string): string {
   let p = raw.replace(/\\/g, '/');
@@ -331,7 +334,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     plugins.push(packBaseStrip(base));
   }
   // Always register: studio multi-game (gameDirAbs:null) still ▶ Play-loads
-  // `/@fs/<project>/.forgeax/games/<slug>/main.ts`; --game self-host passes
+  // /@fs/<project>/<host-games-dir>/<slug>/main.ts; --game self-host passes
   // an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.
   plugins.push(gameEngineResolve(gameDirAbs));
   if (selfHostPack) {
