@@ -4,8 +4,9 @@ description: >-
   All editor operations through a single EditGateway — dispatch (immediate op), begin/update/commit/cancel
   (continuous op), listOps (self-introspect), defineOp (compose new ops), eval (AI channel), trace (read
   span trees). Three-domain model (document/session/transient) decided by applier registration table.
-  Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds, driven
-  headlessly via skills/forgeax-editor-gateway/scripts/gateway-eval.mjs or in the already-open editor via skills/forgeax-editor-gateway/scripts/gateway-live.mjs.
+  Structured errors via {ok, error}. AI entry: globalThis.__forgeaxEval in DEV builds.
+  **Prefer gateway-live.mjs (live window, instant feedback) for interactive work; gateway-eval.mjs
+  (headless) for CI / fresh page loads.**
   Use when building editor tools, AI-driven editing, extending the editor with new operations, or
   driving/inspecting a running editor's gateway from a script.
 ---
@@ -54,6 +55,50 @@ gated behind explicit `unlockRawScope()` (dev-only; production always returns `S
 (traceId/spanId/parentSpanId/name/start/end/attributes/status). Nested dispatches auto-link
 parent->child spans. Ring buffer retains the last 256 root trees; eviction increments a
 readable `droppedTraces` counter.
+
+## How to drive the gateway (pick the right tool)
+
+There are **two drivers** to run gateway code from a script. **Prefer the live bridge** —
+it's sub-millisecond, shares the in-memory world, and needs no playwright setup. The
+headless driver is only for CI / fresh-page-loads.
+
+| Driver | Script | How it works | When to use |
+|:--|:--|:--|:--|
+| **Live bridge** (preferred) | `scripts/gateway-live.mjs` | POSTs JS to the loopback relay → your open editor window's `__forgeaxEval` | **Default.** Interactive work, quick probes, continuous gestures. Same in-memory world — a spawn shows up instantly, no save+refresh. |
+| Headless browser | `scripts/gateway-eval.mjs` | Spawns a fresh headless Chromium via Playwright, navigates to the editor, waits for settle | CI / fresh page loads / verify save→reopen round-trips. Separate browser instance — shares only the disk backend. |
+
+> [!TIP]
+> **The simplest decision:** if you have an editor window open, use `gateway-live`. If you're in CI
+> or need a fresh page for a round-trip test, use `gateway-eval`.
+
+### Quick start — live bridge
+
+```bash
+# 1) Start the editor (relay on :15295 + bridge enabled by default):
+bun run dev:standalone
+#   or: bun fx start --game games/sample --bg
+
+# 2) Check the bridge is alive:
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --health
+
+# 3) Drive the open window:
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs "gateway.listOps().length"
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file snippet.js
+```
+
+### Quick start — headless (CI / fresh page)
+
+```bash
+# prereq: bun run test:e2e:install (once) + a running editor
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --settle 0
+```
+
+> [!NOTE]
+> Live bridge evals run at frame start (`app.registerUpdate`), not the instant they arrive —
+> the page enqueues each eval and drains the queue before `world.update()`. This means
+> writes are deterministic through the frame's systems. If the window is backgrounded
+> (rAF paused), the queue stalls and evals time out after 30s. Details in §Scripts below.
 
 ## Core API Quick Reference
 
@@ -682,7 +727,9 @@ gateway.dispatch({ kind: 'distributeChildren', parent: groupHandle, axis: 'x', s
 ## eval -- AI Entry Channel (DEV-only)
 
 In DEV builds, an eval channel is mounted on `globalThis.__forgeaxEval`. Access it via
-`page.evaluate` in Playwright (zero network surface — OOS-9):
+`page.evaluate` in Playwright, or — preferred — through the **live bridge** (`gateway-live.mjs`)
+which routes to the same channel in your open editor window. See §How to drive the gateway
+and §Scripts for the full decision table.
 
 ```ts
 // From Playwright test or CLI agent:
@@ -806,40 +853,14 @@ node packages/engine/packages/rhi-debug/dist/cli.mjs summary <tapePath>   # stru
 
 ## Scripts
 
-`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
-(+ scene settle), evaluate one snippet, await it if async, print `{ok,value|error}` JSON. Reuse this
-instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runtime), 0 otherwise
-(domain errors like `UNKNOWN_COMPONENT` ride in `value`/`error`, exit 0).
+Two CLI drivers for the `__forgeaxEval` channel. **Prefer `gateway-live`** — it's sub-millisecond,
+needs no playwright, and shares the in-memory world so ops appear instantly in the open editor.
 
-> [!NOTE]
-> Both drivers share `scripts/gateway-cli-common.mjs` (SSOT for arg parsing / snippet reading /
-> `{ok,value|error}` print). Flags are **strict**: an undeclared flag exits 2 with the accepted
-> list — it can NEVER leak its value into the code string. Pass **only** each script's own flags:
-> `gateway-eval.mjs` takes `--file/--raw/--url/--timeout/--settle`; `gateway-live.mjs` takes
-> `--file/--health` (no `--settle`/`--raw`/`--url` — the live page is already booted).
+Both share `scripts/gateway-cli-common.mjs` (SSOT for arg parsing / snippet reading /
+`{ok,value|error}` print). Flags are **strict**: an undeclared flag exits 2 with the accepted
+list — it can NEVER leak its value into the code string.
 
-```bash
-# prereq: a running editor with a scene open, and playwright available:
-#   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
-#     ⚠ EMPTY scene: dev:standalone passes no --game, so no game backend / no entities. For real
-#       scene or Play dogfood: `bun fx start --game games/sample --bg` (spawns :15281 platform-io
-#       backend + /api proxy so the scene loads and ▶ Play actually assembles a play world).
-#   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
-node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
-node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first
-node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --raw "typeof world"                       # unlock scope② then eval
-node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --settle 0               # snippet from file, no settle
-```
-
-| Flag / env | Effect |
-|:--|:--|
-| `--raw` | `unlockRawScope()` before eval (grants `world`/`renderer`/`assets`; dev-only) |
-| `--file <path>` | read snippet from a file instead of argv |
-| `--settle <ms>` | wait after channel-ready for the scene to finish loading (default 1500; `0` to skip) |
-| `--url <url>` / `$FORGEAX_GATEWAY_URL` | target (default `http://localhost:15290`) |
-| `$FORGEAX_PLAYWRIGHT` / `$FORGEAX_CHROMIUM` | point at a `playwright-core` index + chrome binary when the full `playwright` package is absent |
-
-### Live window bridge (DEV-only)
+### Live window bridge (preferred — `gateway-live.mjs`)
 
 `skills/forgeax-editor-gateway/scripts/gateway-live.mjs` evaluates a snippet in the **already-open editor window**. Unlike
 `gateway-eval.mjs`, it does not create a headless browser: it routes the snippet through the
@@ -885,6 +906,44 @@ so restart the edit-runtime dev server after changing them.
 > only to `127.0.0.1`, and must never be exposed through a public interface, port forward, or
 > production deployment. Use only on a trusted local development machine. The browser bridge does
 > not connect unless explicitly enabled by `dev-standalone` (or `VITE_FORGEAX_BRIDGE=1`).
+
+### Headless browser (`gateway-eval.mjs`)
+
+`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` — boot a headless browser at a running editor, wait for `__forgeaxEval`
+(+ scene settle), evaluate one snippet, await it if async, print `{ok,value|error}` JSON. Reuse this
+instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runtime), 0 otherwise
+(domain errors like `UNKNOWN_COMPONENT` ride in `value`/`error`, exit 0).
+
+> [!NOTE]
+> `gateway-eval.mjs` takes `--file/--raw/--url/--timeout/--settle`; `gateway-live.mjs` takes
+> `--file/--health` (no `--settle`/`--raw`/`--url` — the live page is already booted).
+
+```bash
+# prereq: a running editor with a scene open, and playwright available:
+#   editor standalone → `bun run dev:standalone` (:15290, no onboarding) + `bun run test:e2e:install`
+#     ⚠ EMPTY scene: dev:standalone passes no --game, so no game backend / no entities. For real
+#       scene or Play dogfood: `bun fx start --game games/sample --bg` (spawns :15281 platform-io
+#       backend + /api proxy so the scene loads and ▶ Play actually assembles a play world).
+#   studio embed       → `bun fx start` (:18920; onboarding auto-skipped; append ?scene=…&gameRoot=…)
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "gateway.listOps().length"                 # scene-independent
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs "query({with:['Transform']}).rows.length"  # settles for scene first
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --raw "typeof world"                       # unlock scope② then eval
+node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --settle 0               # snippet from file, no settle
+```
+
+| Flag / env | Effect |
+|:--|:--|
+| `--raw` | `unlockRawScope()` before eval (grants `world`/`renderer`/`assets`; dev-only) |
+| `--file <path>` | read snippet from a file instead of argv |
+| `--settle <ms>` | wait after channel-ready for the scene to finish loading (default 1500; `0` to skip) |
+| `--url <url>` / `$FORGEAX_GATEWAY_URL` | target (default `http://localhost:15290`) |
+| `$FORGEAX_PLAYWRIGHT` / `$FORGEAX_CHROMIUM` | point at a `playwright-core` index + chrome binary when the full `playwright` package is absent |
+
+> [!IMPORTANT]
+> **When to use headless over live.** The headless driver spawns a **fresh browser** — its
+> main use is verifying save→reopen round-trips (a separate eval IS already the reopen) and CI.
+> For interactive work, prefer `gateway-live.mjs`: it's faster, needs no playwright, and ops
+> appear in the open editor instantly.
 
 ## trace -- Read Span Trees
 

@@ -1,7 +1,7 @@
 // Launcher panel — UE-style play settings as a standalone dockable panel.
 //
 // Shows what THIS editor window is editing (one window ↔ one scene, bound via
-// `?sceneFile=` — see store.switchSceneFile) and configures what the Studio
+// localStorage + in-memory ctx) and configures what the Studio
 // ▶ Play tab runs: the full campaign from main, or one specific SceneAsset.
 // Writes host-owned launcher state via writePlayConfig; the play host consumes
 // its selected GUID before bootstrap, while the game owns campaign semantics.

@@ -31,7 +31,7 @@
 // bundler layer), S4 R7 (root config lacked engine serve -> in-process 404);
 // AGENTS.md "No build step" (exports point at source; no compile step added).
 
-import { dirname, resolve, join } from 'node:path';
+import { dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readdirSync, realpathSync } from 'node:fs';
 import type { PluginOption } from 'vite';
@@ -111,23 +111,46 @@ function gameEngineResolve(gameDirAbs: string): PluginOption {
 // (packages/edit-runtime) = repo root.
 const SHARED_BASE = resolve(EDIT_RUNTIME_DIR, '../../forgeax-editor-assets');
 
-// A game's pack roots — LOCAL and `@shared/<sub>` external roots alike —
+/**
+ * A resolved root plus its stable catalog-space prefix. The engine pack catalog
+ * reports source paths relative to `process.cwd()`, so the browser must classify
+ * a catalog row by that same coordinate system — never by a second knowledge of
+ * the `@shared/` disk layout.
+ *
+ * `root` is the literal package.json declaration (the Content Browser's folder
+ * identity); `catalogPrefix` is its canonical sourcePath prefix. This turns the
+ * host-resolved roots from {@link resolveGameAssetRoots} into an explicit runtime
+ * contract shared by Vite's pack scanner and the browser bundle.
+ */
+export interface CatalogAssetRoot {
+  readonly root: string;
+  readonly catalogPrefix: string;
+}
+
+function catalogPrefix(abs: string): string {
+  return relative(process.cwd(), abs).replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+// A game's pack roots — LOCAL and `@shared/<sub>` external roots alike — are
 // resolved from package.json#forgeax.assets.roots via the editor-core SSOT
-// helper (architecture-principles §1: one `roots` concept, no separate
-// hardcoded shared-roots appender). Unlike play-runtime, NO symlink farm is
-// needed here: the live standalone host runs with process.cwd() == repo root,
-// so an external abs path under repo-root yields a clean relativeUrl (no `../`
-// for withBase to clamp) that vite serves directly.
+// helper. The declaration-to-catalog projection travels alongside the pack
+// roots, so Content Browser code need not duplicate the @shared disk mapping.
 //
 // Implicit `template-game-default`: the demo-seed default template's scene
 // references the shared sky.hdr equirect GUID (81eec382) but its own assets/
-// has no sky.hdr. Rather than edit the ENGINE submodule's template
-// package.json to declare `@shared/template-game-default` (which would leak the
-// editor's `@shared/` convention into the engine, whose own apps/preview reads
-// a different assets submodule), the editor injects that scope implicitly for
-// every game — faithfully reproducing the old sharedTemplateRoots() behavior
-// that folded the template sky into every catalog. existsSync-filtered, so an
-// absent submodule (older deploy) degrades to game-only.
+// has no sky.hdr. Rather than edit the ENGINE submodule's template package.json
+// to declare `@shared/template-game-default` (which would leak the editor's
+// convention into the engine), inject it only for the runtime catalog. It is
+// deliberately absent from the user-facing roots payload because it is not a
+// game-declared Content Browser scope.
+function gameCatalogRoots(gameDirAbs: string): CatalogAssetRoot[] {
+  const declared = resolveGameAssetRoots(gameDirAbs, { sharedBase: SHARED_BASE });
+  return declared.map((resolved) => ({
+    root: resolved.shared ? `@shared/${resolved.sub}` : relative(gameDirAbs, resolved.abs).replace(/\\/g, '/'),
+    catalogPrefix: catalogPrefix(resolved.abs),
+  }));
+}
+
 function gamePackRoots(gameDirAbs: string): string[] {
   return resolveGameAssetRoots(gameDirAbs, {
     sharedBase: SHARED_BASE,
@@ -247,6 +270,8 @@ export interface EngineVitePreset {
   optimizeDeps: { exclude: string[] };
   resolve: { dedupe: string[]; preserveSymlinks: boolean };
   build: { target: 'esnext' };
+  /** Declared game roots projected into the pack catalog's sourcePath space. */
+  catalogRoots: CatalogAssetRoot[];
 }
 
 /**
@@ -269,6 +294,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   const wsPkgs = forgeaxWorkspacePackages();
   const nonRootBase = base !== '/' && base !== '';
   const selfHostPack = gameDirAbs !== null;
+  const catalogRoots = gameDirAbs ? gameCatalogRoots(gameDirAbs) : [];
 
   const plugins: PluginOption[] = [];
   if (nonRootBase) {
@@ -324,5 +350,6 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     // default build target forbids TLA. This runtime only runs in
     // WKWebView/Chrome (which support TLA) so esnext is safe.
     build: { target: 'esnext' },
+    catalogRoots,
   };
 }

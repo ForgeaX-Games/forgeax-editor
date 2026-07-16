@@ -25,6 +25,7 @@ import { CBToolbar } from './CBToolbar';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { deriveContentView } from './folder-view';
+import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
 import { useStartupScan } from './useStartupScan';
 import { ScanOverlay } from './ScanOverlay';
@@ -40,6 +41,16 @@ import './content-browser.css';
 // AssetRegistry.listCatalog() (engine refs-through-listCatalog); it powers the
 // Content Browser's "Add with Dependencies" and dependency-graph features.
 
+// Vite injects package-declared roots from the same resolution call it passes to
+// pluginPack, so the browser receives a projection instead of re-resolving disk
+// layout conventions itself.
+declare const __FORGEAX_CATALOG_ASSET_ROOTS__: readonly CatalogAssetRoot[];
+
+const catalogAssetRoots: readonly CatalogAssetRoot[] =
+  typeof __FORGEAX_CATALOG_ASSET_ROOTS__ === 'undefined'
+    ? []
+    : __FORGEAX_CATALOG_ASSET_ROOTS__;
+
 function registryEntryToCBAsset(
   e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[]; sourcePath?: string },
   index: number,
@@ -53,11 +64,17 @@ function registryEntryToCBAsset(
   // `sourcePath` (engine sourcePath-through-listCatalog, #711); derive the
   // sidecar path from it. Fallback to relativeUrl for inline/dev entries that
   // never went through pack-index (no sidecar, no CRUD).
-  const packPath = e.relativeUrl.endsWith('.pack.json')
-    ? e.relativeUrl
-    : e.sourcePath
-      ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json`
-      : e.relativeUrl;
+  const packPath = (e.relativeUrl.includes('__forgeax-ddc'))
+    // DDC artefact URL (e.g. /__forgeax-ddc/{guid}.pack.json) — has no stable
+    // mapping to the game slug. Derive the CRUD target from sourcePath (the
+    // on-disk source file's .meta.json sidecar). For shared assets this gives
+    // the workspace-relative path the scope filter expects.
+    ? (e.sourcePath ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json` : e.relativeUrl)
+    : e.relativeUrl.endsWith('.pack.json')
+      ? e.relativeUrl
+      : e.sourcePath
+        ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json`
+        : e.relativeUrl;
   return {
     type: 'asset',
     guid: e.guid,
@@ -71,22 +88,6 @@ function registryEntryToCBAsset(
   };
 }
 
-// Convert a catalog packPath — which is workspace-rooted (relative to the vite
-// process cwd, e.g. "forgeax-games/hellforge/assets/characters/x.pack.json";
-// see vite-plugin-pack build-catalog.ts `relative(process.cwd(), …)`) — to a
-// GAME-relative path ("assets/characters/x.pack.json") by locating the game's
-// `<slug>` path segment (the game dir basename === slug in the standalone
-// backend). Entries that don't sit under the loaded game (shared template roots,
-// ddk, other games) carry no `<slug>` segment → null, so they're excluded from
-// the Asset panel scope.
-function toGameRelative(packPath: string, slug: string): string | null {
-  if (!slug) return null;
-  const parts = packPath.replace(/^\/+/, '').split('/');
-  const i = parts.indexOf(slug);
-  if (i < 0) return null;
-  const rel = parts.slice(i + 1).join('/');
-  return rel || null;
-}
 
 export function ContentBrowser() {
   useDocVersion();
@@ -107,12 +108,10 @@ export function ContentBrowser() {
   const filter = useFilter(observedAssetKinds);
   const sort = useSort();
   const favorites = useFavorites();
-  // The Asset panel's folder tree is scoped to the game's DECLARED asset roots
-  // (game package.json `forgeax.assets.roots`, e.g. ["assets"]) — NOT the whole
-  // engine catalog, which also folds in scenes/ + shared template roots (needed
-  // by runtime loadByGuid, but not browsable game assets). Default to ["assets"]
-  // until the game's package.json is read.
-  const [assetRoots, setAssetRoots] = useState<string[]>(['assets']);
+  // The Asset panel is scoped to the exact roots the host gave pluginPack.
+  // `catalogAssetRoots` is derived from package.json#forgeax.assets.roots at the
+  // host boundary, rather than re-reading package.json through a second browser
+  // fetch and re-implementing the @shared alias here.
 
   // Source-panel width: draggable splitter (UE-parity — widen the tree to read
   // long folder paths). Persisted per-editor via localStorage.
@@ -170,32 +169,6 @@ export function ContentBrowser() {
 
   useEffect(() => { reload(); }, [reload]);
 
-  // Read the game's declared asset roots from its package.json
-  // (`forgeax.assets.roots`). Falls back to the ["assets"] default on any
-  // miss so the tree still scopes sanely.
-  useEffect(() => {
-    const slug = getSceneId();
-    if (!slug || slug === 'default') return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch(
-          `/api/files?path=${encodeURIComponent(resolveGamePath('package.json'))}`,
-          { cache: 'no-store' },
-        );
-        if (!r.ok) return;
-        const j = (await r.json()) as { content?: string };
-        if (!j.content) return;
-        const pkg = JSON.parse(j.content) as { forgeax?: { assets?: { roots?: unknown } } };
-        const roots = pkg.forgeax?.assets?.roots;
-        if (!cancelled && Array.isArray(roots) && roots.length > 0 && roots.every((x) => typeof x === 'string')) {
-          setAssetRoots(roots as string[]);
-        }
-      } catch { /* keep default ['assets'] */ }
-    })();
-    return () => { cancelled = true; };
-  }, [gameSlug]);
-
   useEffect(() => {
     const accept = buildAcceptString();
     logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
@@ -208,7 +181,11 @@ export function ContentBrowser() {
     if (!gameSlug || gameSlug === 'default') return;
     try {
       const dirs: string[] = [];
-      for (const root of assetRoots) {
+      // Only paths under the opened game are addressable by singleGameFileBackend.
+      // External roots are already represented from the registry's catalog rows;
+      // requesting a virtual `@shared/...` path here would be a false IO contract.
+      for (const { root } of catalogAssetRoots) {
+        if (root.startsWith('@')) continue;
         const treePath = resolveGamePath(root);
         const r = await fetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
         if (!r.ok) continue;
@@ -228,7 +205,7 @@ export function ContentBrowser() {
       }
       setDiskDirs(dirs);
     } catch { /* silent */ }
-  }, [gameSlug, assetRoots]);
+  }, [gameSlug]);
 
   useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
 
@@ -263,14 +240,12 @@ export function ContentBrowser() {
   const scopedAssets = useMemo(() => {
     const out: { asset: CBAsset; rel: string }[] = [];
     for (const a of allAssets) {
-      const rel = toGameRelative(a.packPath, gameSlug);
+      const rel = catalogPathToRoot(a.packPath, gameSlug, catalogAssetRoots);
       if (!rel) continue;
-      const top = rel.split('/')[0] ?? '';
-      if (!assetRoots.includes(top)) continue;
       out.push({ asset: a, rel });
     }
     return out;
-  }, [allAssets, gameSlug, assetRoots]);
+  }, [allAssets, gameSlug, catalogAssetRoots]);
 
   const packDirs = useMemo(() => {
     const dirs = new Set<string>();
@@ -357,13 +332,13 @@ export function ContentBrowser() {
       packPath: asset.packPath,
     } });
     if (asset.kind === 'scene') {
-      const rel = toGameRelative(asset.packPath, gameSlug);
+      const rel = catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots);
       const entry = rel ? getSceneList().find(s => s.pack === rel) : undefined;
       if (entry) {
         gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
       }
     }
-  }, [gameSlug]);
+  }, [gameSlug, catalogAssetRoots]);
 
   // Double-click: drill into a folder, or open an asset.
   const handleActivate = useCallback((item: CBViewItem) => {

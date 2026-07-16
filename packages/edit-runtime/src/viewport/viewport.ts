@@ -46,6 +46,7 @@ export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closes
 export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
+import { worldPointToParentLocal } from './viewport-transform';
 import {
   DEG2RAD, AXES, PLANES, RING_SEG, TIP_QUAT, type PlaneHandle,
   buildConeMeshData, lightGizmoPoints, cameraGizmoPoints,
@@ -66,12 +67,19 @@ import { isAuxVisible, onDisplayModeChange } from './display-bus';
 // ── M7-a (AC-15): doc.entities mirror deleted — gizmo/pick read the WORLD ──────
 // The dual-write mirror (EntityNode.components) is gone; the world is the SSOT.
 // entComponent(session, id, 'Transform') returns the engine-native POD
-// (pos[3] + quat[4] + scale[3] arrays — feat-20260709 array-TRS). The viewport
-// gizmo/drag math is written against the editor euler-degree shape (x/y/z +
-// rotX/rotY/rotZ), so read once through this adapter and convert quat→euler HERE
-// (euler-quat.ts is the SSOT for that conversion — AGENTS.md #6). Returns
-// undefined for organizational nodes (no Transform) so callers keep their
+// (pos[3] + quat[4] + scale[3] + world[16] arrays — feat-20260709 array-TRS).
+// The viewport gizmo/drag math is written against the editor euler-degree shape
+// (x/y/z + rotX/rotY/rotZ), so read once through these adapters and convert
+// quat→euler HERE (euler-quat.ts is the SSOT for that conversion — AGENTS.md #6).
+// Returns undefined for organizational nodes (no Transform) so callers keep their
 // "nothing to gizmo/pick" fast-exit.
+//
+// Two variants — LOCAL vs WORLD — because the same entity means different things
+// to different subsystems:
+//   LOCAL  (pos/quat/scale) → drag write-back (gateway.dispatch writes engine pos)
+//   WORLD  (world matrix)   → gizmo display / pick AABB / frame-selection orbit
+// For a root entity local == world; for a bone deep in a skeleton hierarchy they
+// differ by tens of units, and mixing them puts the gizmo at the wrong position.
 type EditorTransform = {
   x: number; y: number; z: number;
   rotX: number; rotY: number; rotZ: number;
@@ -83,7 +91,9 @@ function ax(arr: unknown, i: number, d: number): number {
   const v = (arr as ArrayLike<number> | undefined)?.[i];
   return typeof v === 'number' && Number.isFinite(v) ? v : d;
 }
-function readEntTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
+/** Read the entity's LOCAL Transform (pos/quat/scale as stored in the engine).
+ *  The drag system writes BACK to engine `pos`, so it needs the local shape. */
+function readLocalTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
   const r = entComponent(world, handle, 'Transform');
   if (!r.ok) return undefined;
   const t = r.value as Record<string, unknown>;
@@ -93,6 +103,40 @@ function readEntTransform(world: World, handle: EntityHandle): EditorTransform |
     rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
     scaleX: ax(t.scale, 0, 1), scaleY: ax(t.scale, 1, 1), scaleZ: ax(t.scale, 2, 1),
   };
+}
+/** Read the entity's WORLD-space Transform (translation from the computed world
+ *  matrix column-major [12..14]; rotation + scale stay local for now — extracting
+ *  world rotation from the matrix is non-trivial and the callers that use rot/scale
+ *  (param-gizmo, entityBox) operate on root entities where local == world). */
+function readWorldTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
+  const r = entComponent(world, handle, 'Transform');
+  if (!r.ok) return undefined;
+  const t = r.value as Record<string, unknown>;
+  const w = t.world as ArrayLike<number> | undefined;
+  // Fall back to local if world matrix is missing (shouldn't happen, but be safe).
+  if (!w || w.length < 16) return readLocalTransform(world, handle);
+  const e = quatToEuler(ax(t.quat, 0, 0), ax(t.quat, 1, 0), ax(t.quat, 2, 0), ax(t.quat, 3, 1));
+  return {
+    x: ax(w, 12, 0), y: ax(w, 13, 0), z: ax(w, 14, 0),
+    rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
+    scaleX: ax(t.scale, 0, 1), scaleY: ax(t.scale, 1, 1), scaleZ: ax(t.scale, 2, 1),
+  };
+}
+/** Convert an absolute world-space target to the local `Transform.pos` stored
+ *  on `handle`. Transform propagation defines `child.world = parent.world ×
+ *  child.local`, so the only correct inverse for a parented entity is
+ *  `inverse(parent.world) × target` — using the child's normalized world axes
+ *  loses inherited scale and incorrectly folds in the child's own rotation. */
+function worldPositionToLocal(world: World, handle: EntityHandle, target: Vec3): Vec3 {
+  const childOf = entComponent(world, handle, 'ChildOf');
+  if (!childOf.ok) return target;
+  const parent = childOf.value.parent as number | undefined;
+  if (parent === undefined) return target;
+  const parentTransform = entComponent(world, parent as EntityHandle, 'Transform');
+  if (!parentTransform.ok) return target;
+  const parentWorld = parentTransform.value.world as ArrayLike<number> | undefined;
+  if (!parentWorld || parentWorld.length < 16) return target;
+  return worldPointToParentLocal(parentWorld, target);
 }
 // EditorHidden is an editor-only marker; the entComponents walk surfaces it from
 // the active world.
@@ -417,11 +461,9 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     // Display gate (w23, D-5): display='game' → hide ALL auxiliary entities.
     if (!isAuxVisible()) { despawnHandles(); return; }
     const sel = getSelection();
-    // During a live drag the DOC isn't touched (we only world.set a preview), so
-    // for the entity being dragged read its LIVE transform (dragOrig + livePatch)
-    // — otherwise the gizmo lags at the pre-drag position until release.
-    const live = sel !== null && dragId === sel ? { ...dragOrig, ...livePatch } : undefined;
-    const t = live ?? (sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined);
+    // Read the world-space transform from the engine — the gateway.update / engine.set
+    // in applyLive has already recomputed the world matrix, so there is no lag.
+    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
     if (sel === null || !t) { despawnHandles(); return; }
     const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
     const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
@@ -496,7 +538,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     // POD for every component the entity carries.
     const comps = sel !== null ? entComponents(gateway.activeWorld, sel) : undefined;
     if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
-    const t = sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined;
+    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
     const light = comps.Light as Record<string, unknown> | undefined;
     const cam = comps.Camera as Record<string, unknown> | undefined;
@@ -587,7 +629,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       if (isEntHidden(activeWorld, id)) continue;
       const comps = entComponents(activeWorld, id);
       if (!('MeshFilter' in comps) || !('MeshRenderer' in comps)) continue;
-      const t = readEntTransform(activeWorld, id);
+      const t = readWorldTransform(activeWorld, id);
       if (!t) continue;
       const { center, half } = entityBox(t);
       const hit = rayAABB(origin, dir, center, half);
@@ -611,6 +653,9 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // or cancel (no net change). null = no lifecycle open.
   let dragHandle: OpHandle | null = null;
   let dragOrig: Record<string, number> = {};
+  // World-space entity center at drag start (for gizmo ray-plane math and
+  // rebuilding absolute targets before converting through the parent transform).
+  let dragWorldPos: Vec3 = [0, 0, 0];
   let grabOffset: Vec3 = [0, 0, 0];
   let dragY = 0;
   // axis-constrained drag (gizmo handle): which axis + the entity center at grab,
@@ -707,9 +752,12 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       dragId = sel;
 // M4: worldEntityFor removed — entity IDs are directly world entities.
       dragWorld = sel as unknown as EntityHandle;
-      // M7-a: read the grab-time Transform from the world (doc.entities gone).
-      dragOrig = { ...(readEntTransform(gateway.activeWorld, sel) ?? {}) };
-      axisStart = [num(dragOrig.x, 0), num(dragOrig.y, 0), num(dragOrig.z, 0)];
+      // Read both LOCAL (drag write-back) and WORLD (gizmo ray-plane math) at grab.
+      const localT = readLocalTransform(gateway.activeWorld, sel);
+      dragOrig = { ...(localT ?? {}) };
+      const worldT = readWorldTransform(gateway.activeWorld, sel);
+      dragWorldPos = [num(worldT?.x, 0), num(worldT?.y, 0), num(worldT?.z, 0)];
+      axisStart = [...dragWorldPos];
       livePatch = {};
       if (h >= 3) {
         // a plane handle: drag two axes on the plane ⊥ its normal.
@@ -731,10 +779,14 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       gateway.dispatch({ kind: 'setSelection', id: hit });
       dragId = hit;
       dragWorld = hit as unknown as EntityHandle;
-      dragOrig = { ...(readEntTransform(gateway.activeWorld, hit) ?? {}) };
-      dragY = num(dragOrig.y, 0);
+      // Read both LOCAL (for write-back) and WORLD (for ray-plane math).
+      const localT = readLocalTransform(gateway.activeWorld, hit);
+      dragOrig = { ...(localT ?? {}) };
+      const worldT = readWorldTransform(gateway.activeWorld, hit);
+      dragWorldPos = [num(worldT?.x, 0), num(worldT?.y, 0), num(worldT?.z, 0)];
+      dragY = num(worldT?.y, 0);
       const g = rayPlaneY(origin, dir, dragY);
-      grabOffset = g ? [num(dragOrig.x, 0) - g[0], 0, num(dragOrig.z, 0) - g[2]] : [0, 0, 0];
+      grabOffset = g ? [dragWorldPos[0] - g[0], 0, dragWorldPos[2] - g[2]] : [0, 0, 0];
       mode = 'pendDrag';
     } else {
       gateway.dispatch({ kind: 'setSelection', id: null });
@@ -770,12 +822,17 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
         // move two axes at once across the plane (relative to the grab point).
         const hit = rayPlane(origin, dir, axisStart, dragPlane.normal);
         if (hit) {
-          const keys = ['x', 'y', 'z'] as const;
-          const patch: Record<string, number> = {};
-          for (const axi of [dragPlane.ax, dragPlane.ay]) {
-            patch[keys[axi]!] = snap(axisStart[axi]! + (hit[axi]! - planeGrab[axi]!), 0.5, ctrl);
-          }
-          applyLive(patch);
+          const target: Vec3 = [
+            dragWorldPos[0] + hit[0] - planeGrab[0],
+            dragWorldPos[1] + hit[1] - planeGrab[1],
+            dragWorldPos[2] + hit[2] - planeGrab[2],
+          ];
+          const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
+          applyLive({
+            x: snap(local[0], 0.5, ctrl),
+            y: snap(local[1], 0.5, ctrl),
+            z: snap(local[2], 0.5, ctrl),
+          });
         }
       } else if (gm === 'rotate') {
         const a = angleOnAxis(origin, dir, axisStart, axisVec);
@@ -796,10 +853,16 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
         }
       } else {
         const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
+        const target: Vec3 = [
+          axisStart[0] + axisVec[0] * delta,
+          axisStart[1] + axisVec[1] * delta,
+          axisStart[2] + axisVec[2] * delta,
+        ];
+        const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
         applyLive({
-          x: snap(axisStart[0] + axisVec[0] * delta, 0.5, ctrl),
-          y: snap(axisStart[1] + axisVec[1] * delta, 0.5, ctrl),
-          z: snap(axisStart[2] + axisVec[2] * delta, 0.5, ctrl),
+          x: snap(local[0], 0.5, ctrl),
+          y: snap(local[1], 0.5, ctrl),
+          z: snap(local[2], 0.5, ctrl),
         });
       }
       updateGizmo(); // handles follow the entity
@@ -811,10 +874,22 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       if (e.shiftKey) {
         // vertical: screen dy → world Y (scaled by distance so it tracks roughly).
         dragY += -dy * dist * 0.0016 * Math.tan(FOV / 2) * 2;
-        applyLive({ x: num(dragOrig.x, 0), y: snap(dragY, 0.5, ctrl), z: num(dragOrig.z, 0) });
+        const local = worldPositionToLocal(gateway.activeWorld, dragId!, [
+          dragWorldPos[0],
+          snap(dragY, 0.5, ctrl),
+          dragWorldPos[2],
+        ]);
+        applyLive({ x: local[0], y: local[1], z: local[2] });
       } else {
         const g = rayPlaneY(origin, dir, dragY);
-        if (g) applyLive({ x: snap(g[0] + grabOffset[0], 0.5, ctrl), y: dragY, z: snap(g[2] + grabOffset[2], 0.5, ctrl) });
+        if (g) {
+          const local = worldPositionToLocal(gateway.activeWorld, dragId!, [
+            snap(g[0] + grabOffset[0], 0.5, ctrl),
+            dragY,
+            snap(g[2] + grabOffset[2], 0.5, ctrl),
+          ]);
+          applyLive({ x: local[0], y: local[1], z: local[2] });
+        }
       }
       updateGizmo();
     }
@@ -879,7 +954,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const sel = getSelection();
-    const t = sel !== null ? readEntTransform(gateway.activeWorld, sel) : undefined;
+    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
     if (!t) return;
     const { center, half } = entityBox(t);
     target = center;

@@ -267,11 +267,12 @@ async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise
     });
     if (!w1.ok) return false;
   } catch { return false; }
-  // Persist + navigate this window into the new scene (see switchSceneFile).
+  // Persist + navigate this window into the new scene in-place — no full
+  // page reload. Add the new pack to the sceneList so doSwitchSceneFile sees it.
+  const newPackPath = `assets/scenes/${slug}.pack.json`;
+  ctx.sceneList.push({ id: slug, name: slug, pack: newPackPath, guid: newSceneGuid });
   try { localStorage.setItem(`forgeax:editor:sceneFile:${ctx.currentSceneId}`, slug); } catch { /* unavailable */ }
-  const u = new URL(location.href);
-  u.searchParams.set('sceneFile', slug);
-  location.assign(u.toString());
+  await sceneList.doSwitchSceneFile(slug);
   return true;
 }
 // Session op (M2 D-1): createSceneFile carries id + duplicateCurrent payload.
