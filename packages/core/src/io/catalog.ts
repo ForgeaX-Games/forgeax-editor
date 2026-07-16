@@ -439,6 +439,61 @@ const builtinOps: ReadonlyArray<{
   { id: 'loadDocFromDisk', domain: 'session', argsSchema: null, title: 'Load from Disk' },
   { id: 'play', domain: 'session', argsSchema: null, title: 'Play' },
   { id: 'stop', domain: 'session', argsSchema: null, title: 'Stop' },
+  // ── camera navigation session ops (feat-2026-07-16 UE5 nav) ────────────────
+  // All four are session-domain (ledger-only, no undo). The appliers live in
+  // edit-runtime/viewport.ts (createViewport() → registerSessionApplier) because
+  // they close over the orbit/fly state + the editorEngine facade; in headless
+  // core (no edit-runtime boot) a cameraX dispatch returns UNKNOWN_OP, matching
+  // requestFrame's headless behavior. Cataloged here for AI self-introspection
+  // via gateway.listOps() (charter §8.1 P1). See TASK 4 in
+  // todos/2026-07-16-editor-camera-ue5-navigation-controls.md.
+  { id: 'cameraOrbit', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'array', items: { type: 'number' }, description: 'Orbit target [x,y,z] (world). Camera orbits AROUND this point.' },
+        yaw: { type: 'number', description: 'Yaw (radians) around world +Y; unbounded (full rotation).' },
+        pitch: { type: 'number', description: 'Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near ±86°).' },
+        dist: { type: 'number', description: 'Distance from target to camera; clamped to [2, 300].' },
+        pos: { type: 'array', items: { type: 'number' }, description: 'Optional absolute camera position [x,y,z]; if provided, target is derived as pos + fwd*dist (T6b).' },
+      },
+    },
+    title: 'Orbit camera',
+  },
+  { id: 'cameraFly', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        pos: { type: 'array', items: { type: 'number' }, description: 'Camera position [x,y,z] at the end of the fly gesture.' },
+        yaw: { type: 'number', description: 'Yaw (radians) — engine convention: qCam = yaw·Y × pitch·X, fwd = qCam·[0,0,-1].' },
+        pitch: { type: 'number', description: 'Pitch (radians); clamped to ~[-1.5, 1.5].' },
+      },
+    },
+    title: 'Fly camera to position',
+  },
+  { id: 'cameraTeleport', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        pos: { type: 'array', items: { type: 'number' }, description: 'Absolute camera position [x,y,z].' },
+        yaw: { type: 'number', description: 'Yaw (radians).' },
+        pitch: { type: 'number', description: 'Pitch (radians); clamped to ~[-1.5, 1.5].' },
+      },
+      required: ['pos'],
+    },
+    title: 'Teleport camera to position',
+  },
+  { id: 'cameraLookAt', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        pos: { type: 'array', items: { type: 'number' }, description: 'Camera position [x,y,z].' },
+        lookAt: { type: 'array', items: { type: 'number' }, description: 'World point the camera should look at; yaw/pitch derived from (lookAt - pos).' },
+      },
+      required: ['pos', 'lookAt'],
+    },
+    title: 'Move camera and look at target',
+  },
   // CB navigation (feat-20260708-cb-nav-session-op-convergence M1):
   // setCBPath/cbGoBack/cbGoForward are session-domain ops (ledger-only, no undo).
   // argsSchema enables AI self-discovery via gateway.listOps() (plan-strategy §8.1 P1).

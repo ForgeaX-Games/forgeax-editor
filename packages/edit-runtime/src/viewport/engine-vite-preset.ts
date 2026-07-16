@@ -91,15 +91,44 @@ function forgeaxWorkspacePackages(): string[] {
 // Fix at the SSOT: re-resolve game-file @forgeax imports anchored at THIS
 // package (edit-runtime), the same node_modules the dedupe/exclude lists
 // derive from. Non-game importers and non-@forgeax ids fall through (null).
-function gameEngineResolve(gameDirAbs: string): PluginOption {
-  let gameDirReal = gameDirAbs;
-  try { gameDirReal = realpathSync(gameDirAbs); } catch { /* absent dir — keep raw */ }
+//
+// Importer matching must normalize Vite's /@fs/<abs> URLs, repo-relative paths
+// (e.g. ../forgeax-games/hellforge/main.ts), and Windows drive-letter casing —
+// a naive startsWith(gameDirAbs) misses all three and Play 500s on the first
+// `import '@forgeax/engine-runtime'` in the game entry.
+const MULTI_GAME_PATH_RE = /\/(?:\.forgeax\/games|forgeax-games)\/[^/]+\//;
+
+function normalizeGameFilePath(raw: string, viteRoot: string): string {
+  let p = raw.replace(/\\/g, '/');
+  if (p.startsWith('/@fs/')) p = p.slice('/@fs/'.length);
+  else if (p.startsWith('/@fs')) p = p.slice('/@fs'.length);
+  if (!/^[A-Za-z]:\//.test(p) && !p.startsWith('/')) {
+    p = resolve(viteRoot, p).replace(/\\/g, '/');
+  }
+  try { p = realpathSync.native(p).replace(/\\/g, '/'); } catch { /* keep */ }
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+function gameEngineResolve(gameDirAbs: string | null): PluginOption {
+  let gameDirNorm: string | null = null;
+  if (gameDirAbs) {
+    try { gameDirNorm = normalizeGameFilePath(realpathSync.native(gameDirAbs), gameDirAbs); }
+    catch { gameDirNorm = normalizeGameFilePath(gameDirAbs, gameDirAbs); }
+  }
+  let viteRoot = process.cwd();
   const anchor = resolve(EDIT_RUNTIME_DIR, 'package.json');
   return {
     name: 'forgeax:game-engine-resolve',
+    configResolved(config) {
+      viteRoot = config.root;
+    },
     async resolveId(id, importer) {
       if (!importer || !id.startsWith('@forgeax/')) return null;
-      if (!importer.startsWith(gameDirAbs) && !importer.startsWith(gameDirReal)) return null;
+      const imp = normalizeGameFilePath(importer, viteRoot);
+      const isGameFile = gameDirNorm
+        ? imp.startsWith(gameDirNorm)
+        : MULTI_GAME_PATH_RE.test(imp);
+      if (!isGameFile) return null;
       const r = await this.resolve(id, anchor, { skipSelf: true });
       return r ?? null;
     },
@@ -301,8 +330,11 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     plugins.push(shaderBaseStrip(base));
     plugins.push(packBaseStrip(base));
   }
+  // Always register: studio multi-game (gameDirAbs:null) still ▶ Play-loads
+  // `/@fs/<project>/.forgeax/games/<slug>/main.ts`; --game self-host passes
+  // an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.
+  plugins.push(gameEngineResolve(gameDirAbs));
   if (selfHostPack) {
-    plugins.push(gameEngineResolve(gameDirAbs));
     plugins.push(
       pluginPack({
         roots: gamePackRoots(gameDirAbs),

@@ -333,8 +333,19 @@ export function ContentBrowser() {
     } });
     if (asset.kind === 'scene') {
       const rel = catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots);
-      const entry = rel ? getSceneList().find(s => s.pack === rel) : undefined;
+      const sceneListSnapshot = getSceneList();
+      const entry = rel ? sceneListSnapshot.find(s => s.pack === rel) : undefined;
+      console.info(
+        `[CB][diag] openAsset scene: packPath=${asset.packPath}, rel=${rel}, gameSlug=${gameSlug}, sceneList.length=${sceneListSnapshot.length}, matchedEntry=${JSON.stringify(entry ?? null)}`,
+      );
+      if (!entry) {
+        console.warn(
+          `[CB][diag] openAsset scene: NO sceneList entry matched rel=${rel}. sceneList entries:`,
+          sceneListSnapshot.map(s => ({ id: s.id, pack: s.pack })),
+        );
+      }
       if (entry) {
+        console.info(`[CB][diag] dispatching switchSceneFile id=${entry.id}`);
         gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
       }
     }

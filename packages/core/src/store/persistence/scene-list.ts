@@ -146,13 +146,16 @@ export function createSceneList(deps: SceneListDeps): SceneList {
    *  first loadDocFromDisk. Games without any `kind:'scene'` packs or defaultScene
    *  GUID fall back to legacy single-scene mode. */
   async function initSceneList(): Promise<void> {
+    console.info(`[scene-list][diag] initSceneList: starting, currentSceneId=${ctx.currentSceneId}`);
     ctx.currentSceneFile = null;
     ctx.sceneList = [];
     const fj = await readForgeJson();
+    console.info(`[scene-list][diag] initSceneList: readForgeJson done, fj=${fj != null ? 'exists' : 'null'}, fj.defaultScene=${(fj as any)?.defaultScene ?? 'N/A'}`);
     if (ctx.currentSceneId !== 'default') {
       // A2: scene discovery is kind-driven — scan all packs under the game dir and
       // filter by `kind === 'scene'`.
       const scenePacks = await findAllScenePacks(ctx.currentSceneId);
+      console.info(`[scene-list][diag] initSceneList: findAllScenePacks returned ${scenePacks.length} packs:`, scenePacks.map(s => ({ pack: s.pack, guid: s.guid })));
       for (const { pack, guid } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
         const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
         ctx.sceneList.push({ id: stem, name: stem, pack, guid });
@@ -169,6 +172,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         }
       }
     }
+    console.info(`[scene-list][diag] initSceneList: sceneList built, length=${ctx.sceneList.length}`, ctx.sceneList.map(s => ({ id: s.id, pack: s.pack, guid: s.guid })));
     if (ctx.sceneList.length > 0) {
       // Binding priority — a window edits exactly ONE scene (UE-style):
       //   1. per-game localStorage — what this game last had open
@@ -194,10 +198,12 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       // serialized the live world back over that prefab file, corrupting it. When
       // nothing binds, stay null (legacy/seed path) and tell the author how to
       // pick a scene.
+      console.info(`[scene-list][diag] initSceneList: binding priority: localStorage want=${want}, defId=${defId}`);
       ctx.currentSceneFile =
         (want && ctx.sceneList.some((s) => s.id === want)) ? want
         : defId ? defId
         : null;
+      console.info(`[scene-list][diag] initSceneList: BOUND currentSceneFile=${ctx.currentSceneFile}`);
       if (ctx.currentSceneFile === null) {
         console.warn(
           `[editor-core] ${ctx.sceneList.length} scene pack(s) found but none bound for edit: `
@@ -217,20 +223,30 @@ export function createSceneList(deps: SceneListDeps): SceneList {
    *  localStorage and the in-memory ctx; on next boot, initSceneList reads
    *  localStorage to restore it. Falls back to a clean reload if in-place fails. */
   async function doSwitchSceneFile(id: string): Promise<boolean> {
-    if (id === ctx.currentSceneFile) return true;
-    if (!ctx.sceneList.some((s) => s.id === id)) return false;
+    console.info(`[scene-list][diag] doSwitchSceneFile: id=${id}, currentSceneFile=${ctx.currentSceneFile}`);
+    if (id === ctx.currentSceneFile) {
+      console.info(`[scene-list][diag] doSwitchSceneFile: same as current → early return true`);
+      return true;
+    }
+    if (!ctx.sceneList.some((s) => s.id === id)) {
+      console.warn(`[scene-list][diag] doSwitchSceneFile: id=${id} NOT in sceneList → return false. sceneList:`, ctx.sceneList.map(s => ({ id: s.id, pack: s.pack })));
+      return false;
+    }
     deps.flushPendingSaveBeacon();
     try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
     try {
       ctx.currentSceneFile = id;
       // Internal call → the impl, not the dispatching wrapper (no nested dispatch).
+      console.info(`[scene-list][diag] doSwitchSceneFile: calling loadDocFromDisk…`);
       const ok = await deps.loadDocFromDisk();
-      if (!ok) deps.loadDocFromStorage();
-      // loadDocFromDisk/Storage set gateway.doc DIRECTLY and notify React doc
-      // listeners, but NOT the gateway.subscribe listeners the viewport uses to
-      // (re)build the RENDERED scene — fire them via replaceDoc, which also clears
-      // the previous scene's undo history (correct for a swap).
+      console.info(`[scene-list][diag] doSwitchSceneFile: loadDocFromDisk returned ${ok}`);
+      if (!ok) {
+        console.warn(`[scene-list][diag] doSwitchSceneFile: loadDocFromDisk failed → trying loadDocFromStorage`);
+        deps.loadDocFromStorage();
+      }
+      console.info(`[scene-list][diag] doSwitchSceneFile: calling replaceDoc. gateway.doc.world=${gateway.doc.world != null ? 'exists' : 'null'}`);
       deps.replaceDoc(gateway.doc);
+      console.info(`[scene-list][diag] doSwitchSceneFile: replaceDoc done. gateway.activeWorld=${(gateway as any).activeWorld != null ? 'exists' : 'null'}`);
       return true;
     } catch (e) {
       console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
