@@ -2,11 +2,13 @@
 // mode (design EDITOR-MODE P1: viewport navigation / picking / gizmo). The forgeax port shipped
 // only the data model + Hierarchy + Inspector + doc→world render, leaving the
 // canvas inert; this module adds:
-//   • orbit camera   — Blender DEFAULT: MMB = orbit · Shift+MMB = pan ·
-//                      Ctrl+MMB = zoom · wheel = zoom. Mac trackpad ("emulate
-//                      3-button mouse"): Alt+LMB orbit / Shift+Alt+LMB pan /
-//                      Ctrl+Alt+LMB zoom. Left is reserved for select/gizmo so a
-//                      large object filling the view never blocks orbiting.
+//   • camera navigation — UE5 EDITOR STYLE (feedback 2026-07-16):
+//                      RMB (hold)     = FLY MODE (free-look + WASD/QE + scroll speed)
+//                      MMB drag       = pan (no modifier needed)
+//                      Alt + LMB      = orbit (tumble around target)
+//                      Alt + RMB      = zoom / dolly
+//                      scroll wheel   = zoom (outside fly) / speed adj (inside fly)
+//                      LMB            = select / gizmo (reserved, unchanged)
 //   • click-to-pick  — left-click an entity → select it (ray vs per-entity AABB);
 //                      left-click empty = deselect
 //   • drag-to-move   — left-drag a selected entity → slide it on the ground (XZ);
@@ -43,9 +45,9 @@ import { meshFromInterleaved } from '@forgeax/engine-geometry';
 // (createViewport) + re-export barrel — the engine wiring + interaction state
 // machine stay here; all pure math is imported from the three sibling modules.
 export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
-export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type Quat } from './viewport-camera';
+export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed, applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit, FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type FlyState, type FlyInput, type Quat } from './viewport-camera';
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
-import { clampDist, advanceOrbit, computeOrbitCamera, type InputTarget } from './viewport-camera';
+import { clampDist, clampPitch, advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera, applyFlyWheelSpeed, flyToOrbit, FLY_SPEED_DEFAULT, type InputTarget, type FlyInput } from './viewport-camera';
 import { worldPointToParentLocal } from './viewport-transform';
 import {
   DEG2RAD, AXES, PLANES, RING_SEG, TIP_QUAT, type PlaneHandle,
@@ -239,6 +241,38 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     updateParamGizmo();
   }
 
+  /**
+   * Fly-mode per-frame update (Task 2c). Reads keyState, advances the camera
+   * position along the current basis, and writes the Transform through the
+   * editorEngine facade (same write channel as applyCamera, but the camera
+   * source-of-truth in fly mode is `camPos + yaw/pitch` directly — no target/dist).
+   * yaw/pitch are updated by onMove (mouse) — this tick only advances position.
+   */
+  function flyTick(): void {
+    if (mode !== 'fly') { flyRAF = 0; return; }
+    const now = performance.now();
+    const dt = Math.min((now - lastFlyTime) / 1000, 0.1); // clamp for tab-blur spikes
+    lastFlyTime = now;
+    const input = getFlyInput();
+    const nextFly = advanceFly({ pos: camPos, yaw, pitch }, input, flySpeed, dt);
+    camPos = nextFly.pos;
+    const r = computeFlyCamera(nextFly);
+    fwd = r.fwd; rgt = r.rgt; upv = r.upv;
+    editorEngine.set(camera, Transform, {
+      pos: [camPos[0], camPos[1], camPos[2]],
+      quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+      scale: [1, 1, 1],
+    });
+    editorEngine.set(camera, Camera, {
+      ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }),
+      tonemap: TONEMAP_REINHARD_EXTENDED,
+      clearColor: [0.42, 0.55, 0.78, 1],
+    });
+    updateGizmo();
+    updateParamGizmo();
+    flyRAF = requestAnimationFrame(flyTick);
+  }
+
   // ── cameraOrbit session op (D-12 path A, S13 / AC-30) ───────────────────────
   // The orbit gesture END (onUp) single-dispatches ONE cameraOrbit session op
   // carrying the gesture-end pose. Its applier recomputes the orbit camera pose
@@ -262,19 +296,135 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   const unregCameraOrbit = registerSessionApplier(
     'cameraOrbit',
     (op, _ctx): { ok: true } => {
+      // T6b: cameraOrbit payload may optionally carry `pos` — if provided,
+      // treat as the ground-truth camera position and DERIVE the orbit target
+      // from it (target = pos + fwd * dist), so a caller expressing "put camera
+      // here + look this way" doesn't need to know the target math. Legacy
+      // callers passing only {target,yaw,pitch,dist} keep working (pos absent).
       const o = op as unknown as {
         target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
+        pos?: [number, number, number];
       };
-      const tgt: Vec3 = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
-      const r = computeOrbitCamera(tgt, o.yaw ?? yaw, o.pitch ?? pitch, o.dist ?? dist);
+      const nextYaw = o.yaw ?? yaw;
+      const nextPitch = o.pitch ?? pitch;
+      const nextDist = o.dist ?? dist;
+      let tgt: Vec3;
+      if (o.pos) {
+        // Derive target from camera pos: target = pos + fwd * dist.
+        const flyR = computeFlyCamera({ pos: [o.pos[0], o.pos[1], o.pos[2]], yaw: nextYaw, pitch: nextPitch });
+        tgt = [
+          o.pos[0] + flyR.fwd[0] * nextDist,
+          o.pos[1] + flyR.fwd[1] * nextDist,
+          o.pos[2] + flyR.fwd[2] * nextDist,
+        ];
+      } else {
+        tgt = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
+      }
+      const r = computeOrbitCamera(tgt, nextYaw, nextPitch, nextDist);
       editorEngine.set(camera, Transform, {
         pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
         quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
         scale: [1, 1, 1],
       });
+      // Sync closure state so subsequent gestures build on the AI-set pose.
+      target = tgt; yaw = nextYaw; pitch = nextPitch; dist = nextDist;
+      camPos = r.camPos; fwd = r.fwd; rgt = r.rgt; upv = r.upv;
       return { ok: true };
     },
     { title: 'Orbit camera' },
+  );
+
+  // ── cameraFly session op (T4a) ──────────────────────────────────────────────
+  // The FLY gesture end (onUp) dispatches ONE cameraFly session op carrying
+  // {pos, yaw, pitch}. Applier: absolute pose write via editorEngine, and it
+  // also reconstructs a reasonable orbit target so a subsequent MMB/Alt+LMB
+  // gesture builds on the fly-end pose smoothly (T6a).
+  const unregCameraFly = registerSessionApplier(
+    'cameraFly',
+    (op, _ctx): { ok: true } => {
+      const o = op as unknown as {
+        pos?: [number, number, number]; yaw?: number; pitch?: number;
+      };
+      const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...camPos];
+      const nextYaw = o.yaw ?? yaw;
+      const nextPitch = o.pitch ?? pitch;
+      const r = computeFlyCamera({ pos: p, yaw: nextYaw, pitch: nextPitch });
+      editorEngine.set(camera, Transform, {
+        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
+        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+        scale: [1, 1, 1],
+      });
+      // Sync closure state + reconstruct orbit target for smooth orbit ← fly switch.
+      camPos = r.camPos; yaw = nextYaw; pitch = nextPitch;
+      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
+      const orb = flyToOrbit({ pos: p, yaw: nextYaw, pitch: nextPitch }, dist);
+      target = orb.target; dist = orb.dist;
+      return { ok: true };
+    },
+    { title: 'Fly camera to position' },
+  );
+
+  // ── cameraTeleport session op (T4b) ─────────────────────────────────────────
+  // AI-first absolute pose teleport. Semantically same effect as cameraFly, but
+  // named "teleport" because there is no human gesture — AI just says "camera
+  // goes here now". Same applier body; separate kind for ledger/self-introspection.
+  const unregCameraTeleport = registerSessionApplier(
+    'cameraTeleport',
+    (op, _ctx): { ok: true } => {
+      const o = op as unknown as {
+        pos?: [number, number, number]; yaw?: number; pitch?: number;
+      };
+      const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...camPos];
+      const nextYaw = o.yaw ?? yaw;
+      const nextPitch = o.pitch ?? pitch;
+      const r = computeFlyCamera({ pos: p, yaw: nextYaw, pitch: nextPitch });
+      editorEngine.set(camera, Transform, {
+        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
+        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+        scale: [1, 1, 1],
+      });
+      camPos = r.camPos; yaw = nextYaw; pitch = nextPitch;
+      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
+      const orb = flyToOrbit({ pos: p, yaw: nextYaw, pitch: nextPitch }, dist);
+      target = orb.target; dist = orb.dist;
+      return { ok: true };
+    },
+    { title: 'Teleport camera to position' },
+  );
+
+  // ── cameraLookAt session op (T4c) ───────────────────────────────────────────
+  // AI-friendly: specify {pos, lookAt} instead of {pos, yaw, pitch}. yaw/pitch
+  // are derived from the (pos → lookAt) vector using the engine convention:
+  //   forward = qCam · [0,0,-1] with qCam = yaw·Y × pitch·X
+  //   → yaw = atan2(-dx, -dz),  pitch = atan2(dy, hypot(dx,dz))
+  // (matches the plan's derivation; verified by advanceFly at yaw=0 → -Z).
+  const unregCameraLookAt = registerSessionApplier(
+    'cameraLookAt',
+    (op, _ctx): { ok: true } => {
+      const o = op as unknown as {
+        pos?: [number, number, number]; lookAt?: [number, number, number];
+      };
+      if (!o.pos || !o.lookAt) return { ok: true };
+      const dx = o.lookAt[0] - o.pos[0];
+      const dy = o.lookAt[1] - o.pos[1];
+      const dz = o.lookAt[2] - o.pos[2];
+      const horiz = Math.hypot(dx, dz);
+      const calcYaw = Math.atan2(-dx, -dz);
+      const calcPitch = clampPitch(Math.atan2(dy, horiz));
+      const p: Vec3 = [o.pos[0], o.pos[1], o.pos[2]];
+      const r = computeFlyCamera({ pos: p, yaw: calcYaw, pitch: calcPitch });
+      editorEngine.set(camera, Transform, {
+        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
+        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
+        scale: [1, 1, 1],
+      });
+      camPos = r.camPos; yaw = calcYaw; pitch = calcPitch;
+      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
+      const orb = flyToOrbit({ pos: p, yaw: calcYaw, pitch: calcPitch }, dist);
+      target = orb.target; dist = orb.dist;
+      return { ok: true };
+    },
+    { title: 'Move camera and look at target' },
   );
 
   // ── requestFrame session op (D-10 → edit-runtime migration) ─────────────────
@@ -639,9 +789,27 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   }
 
   // ── pointer interaction ──
-  type Mode = 'none' | 'orbit' | 'pan' | 'zoom' | 'pendDrag' | 'drag' | 'axisDrag';
+  // UE5 fly mode: RMB drag = free-look + WASD/QE keyboard-driven flight (rAF loop).
+  type Mode = 'none' | 'orbit' | 'pan' | 'zoom' | 'fly' | 'pendDrag' | 'drag' | 'axisDrag';
   let mode: Mode = 'none';
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
+  // ── fly-mode state (Task 2b + T5: speed persists across gestures) ──────────
+  let flySpeed = FLY_SPEED_DEFAULT;
+  let flyRAF = 0;
+  let lastFlyTime = 0;
+  /** Held-key snapshot (fly mode reads every rAF tick).
+   *  Populated by window keydown/keyup so keys pressed BEFORE RMB down still count. */
+  const keyState: Record<string, boolean> = Object.create(null);
+  function getFlyInput(): FlyInput {
+    return {
+      forward: !!keyState['w'],
+      backward: !!keyState['s'],
+      left: !!keyState['a'],
+      right: !!keyState['d'],
+      up: !!keyState['e'],
+      down: !!keyState['q'],
+    };
+  }
   let dragId: EntityHandle | null = null;
   // M4: entity IDs are directly world entities, so the drag target legacy id IS
   // the engine handle at runtime — brand it at the assignment seam (mirrors core's
@@ -732,18 +900,43 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     if (inputToGame()) return;
     canvas.focus({ preventScroll: true });
     lastX = downX = e.clientX; lastY = e.clientY;
-    // Blender DEFAULT navigation, aligned 1:1:
-    //   MMB = orbit · Shift+MMB = pan · Ctrl+MMB = zoom · wheel = zoom · LMB = select.
-    //   Left is freed entirely for selection + gizmo, so a large object filling
-    //   the view never blocks orbiting (orbit lives on the middle button).
-    const navMode = (): Mode => (e.shiftKey ? 'pan' : (e.ctrlKey || e.metaKey) ? 'zoom' : 'orbit');
-    if (e.button === 1) { mode = navMode(); e.preventDefault(); return; }
-    // RMB is Blender's context menu — the viewport has none, so just swallow it.
-    if (e.button === 2) { e.preventDefault(); return; }
+    // UE5 editor navigation (feedback 2026-07-16):
+    //   RMB (hold)  = FLY MODE (free-look + WASD/QE + scroll = speed)
+    //   Alt + RMB   = zoom / dolly
+    //   MMB drag    = pan (no modifier)
+    //   Alt + LMB   = orbit (tumble around target)
+    //   LMB         = select / gizmo (reserved, unchanged)
+    // RMB (button 2)
+    if (e.button === 2) {
+      if (e.altKey) {
+        // Alt + RMB = dolly / zoom (UE5 alt-drag zoom).
+        mode = 'zoom';
+      } else {
+        // Enter fly mode: rAF loop reads keyState + advances the camera position
+        // along the current basis; onMove handles free-look mouse deltas.
+        mode = 'fly';
+        // Attempt to capture pointer so the fly-look tracks even when the mouse
+        // leaves the canvas (fires "pointermove" via setPointerCapture semantics).
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+        lastFlyTime = performance.now();
+        if (flyRAF === 0) flyRAF = requestAnimationFrame(flyTick);
+      }
+      e.preventDefault();
+      return;
+    }
+    // MMB (button 1) = pan
+    if (e.button === 1) {
+      mode = 'pan';
+      e.preventDefault();
+      return;
+    }
     if (e.button !== 0) return;
-    // Mac trackpad — Blender "Emulate 3-Button Mouse": Alt+LMB = orbit,
-    // Shift+Alt+LMB = pan, Ctrl+Alt+LMB = zoom.
-    if (e.altKey) { mode = navMode(); e.preventDefault(); return; }
+    // Alt + LMB = orbit (UE5 tumble; also Mac trackpad "Emulate 3-Button Mouse")
+    if (e.altKey) {
+      mode = (e.ctrlKey || e.metaKey) ? 'zoom' : (e.shiftKey ? 'pan' : 'orbit');
+      e.preventDefault();
+      return;
+    }
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     // gizmo handles take priority over entity/orbit picking.
     const sel = getSelection();
@@ -799,6 +992,16 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     if (mode === 'none') return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
+    if (mode === 'fly') {
+      // UE5 free-look while RMB held: mouse dx/dy → yaw/pitch delta.
+      // Position advance happens in flyTick (rAF loop), so we only rotate here.
+      const look = advanceFlyLook({ pos: camPos, yaw, pitch }, -dx * 0.003, -dy * 0.003);
+      yaw = look.yaw; pitch = look.pitch;
+      // Note: intentionally NOT calling flyTick here — the rAF loop is the SSOT
+      // for the per-frame camera write. This handler just updates yaw/pitch;
+      // the next flyTick will pick them up and re-apply.
+      return;
+    }
     if (mode === 'orbit') {
       const r = advanceOrbit(yaw, pitch, dist, -dx * 0.005, -dy * 0.005, 0);
       yaw = r.yaw; pitch = r.pitch; dist = r.dist;
@@ -922,6 +1125,20 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
         target: [target[0], target[1], target[2]],
         yaw, pitch, dist,
       }, 'human');
+    } else if (endedMode === 'fly') {
+      // T2d + T6a: FLY gesture ended. Stop the rAF loop, reconstruct a reasonable
+      // orbit target from the fly-end pose (so a subsequent MMB/Alt+LMB gesture
+      // orbits smoothly around the point ahead of the camera), then record ONE
+      // cameraFly session op — ledger +1, no undo growth. AI can reproduce this
+      // pose via gateway.dispatch({kind:'cameraFly', pos, yaw, pitch}, 'ai').
+      if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
+      const orb = flyToOrbit({ pos: camPos, yaw, pitch }, dist);
+      target = orb.target; dist = orb.dist;
+      gateway.dispatch({
+        kind: 'cameraFly',
+        pos: [camPos[0], camPos[1], camPos[2]],
+        yaw, pitch,
+      }, 'human');
     }
     // Stop the Inspector preview (transient op); the panel now reads the committed doc.
     gateway.dispatch({ kind: 'setFieldPreview', id: null });
@@ -932,6 +1149,13 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     if (!inCanvas(e.target)) return;
     if (inputToGame()) return;
     e.preventDefault();
+    if (mode === 'fly') {
+      // T5: in-flight scroll adjusts move speed (UE5 standard).
+      //   wheel up  (deltaY < 0) → speed up
+      //   wheel dn  (deltaY > 0) → slow down
+      flySpeed = applyFlyWheelSpeed(flySpeed, e.deltaY > 0 ? -1 : 1);
+      return;
+    }
     dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
     applyCamera();
   }
@@ -969,16 +1193,35 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
   // through the one gateway door.
   function onKey(e: KeyboardEvent): void {
+    // T2b: mirror fly keys in the existing global keydown hook (G-1 allows no
+    // second window keydown listener). flyTick only runs in fly mode, so tracking
+    // here does not move the camera while typing in a field.
+    const k = e.key.toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+      keyState[k] = true;
+    }
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
     if (inputToGame()) return; // play·game: W/E/R/F gizmo shortcuts yield to the game
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const k = e.key.toLowerCase();
+    // T2 risk-1: in fly mode WASD/QE drive movement — do NOT hijack W/E/R for
+    // gizmo mode switching. Frame (F) is likewise ambiguous while flying.
+    if (mode === 'fly') return;
     if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
     else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
     else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
     else if (k === 'f') gateway.dispatch({ kind: 'requestFrame' });
+  }
+  function onKeyUp(e: KeyboardEvent): void {
+    const k = e.key.toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+      keyState[k] = false;
+    }
+  }
+  // Guard against sticky keys when tab loses focus mid-flight (release all).
+  function onBlur(): void {
+    for (const k in keyState) keyState[k] = false;
   }
 
   // double-click an entity → select + frame it.
@@ -995,6 +1238,9 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContext);
   window.addEventListener('keydown', onKey);
+  // T2b: keyup/blur release fly keys tracked by onKey above.
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
   canvas.addEventListener('dblclick', onDblClick);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
@@ -1035,11 +1281,17 @@ onDisplayModeChange(() => refreshGizmos());
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
       canvas.removeEventListener('dblclick', onDblClick);
+      if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
       unsubSel();
       unsubMode();
       unsubDoc();
       unregCameraOrbit();
+      unregCameraFly();
+      unregCameraTeleport();
+      unregCameraLookAt();
       unregRequestFrame();
       despawnHandles();
       despawnParam();

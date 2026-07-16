@@ -523,3 +523,149 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
     sessionAppliers.delete('cameraOrbit');
   });
 });
+
+// ===========================================================================
+// feat-20260716 — UE5 nav session ops: cameraFly / cameraTeleport / cameraLookAt
+// ===========================================================================
+// Same paradigm as t20c (cameraOrbit): each new session op is registered in
+// edit-runtime/viewport.ts via registerSessionApplier, closes over the
+// editorEngine facade + orbit/fly state, and moves the camera through
+// ctx.engine when driven by AI over eval (no per-frame facade write).
+//
+// These tests stand in for the real edit-runtime applier by registering a
+// faithful minimal applier here — asserting: (a) ledger +1, (b) undo
+// unchanged, (c) origin recorded, (d) camera pose actually written via
+// ctx.engine.
+describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt session ops', () => {
+  function createCamSession(): EditSession {
+    const session = createEditSession();
+    session.world = new World();
+    return session;
+  }
+  function spawnCamera(gw: EditGateway): number {
+    void Transform;
+    const r = gw.dispatch({
+      kind: 'spawnEntity', name: 'EditorCamera',
+      components: { Transform: { pos: [0, 0, 0] } },
+    } as EditorOp);
+    if (!r.ok) throw new Error('camera spawn failed');
+    return (gw.ledger.at(-1) as { _id: number })._id as unknown as number;
+  }
+
+  it('cameraFly: ledger +1, undo unchanged, camera pos written via ctx.engine', () => {
+    const gw = new EditGateway(createCamSession());
+    const camera = spawnCamera(gw);
+    sessionAppliers.delete('cameraFly');
+    registerApplier('session', 'cameraFly', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+      const o = op as unknown as { pos: number[]; yaw: number; pitch: number };
+      ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
+      return { ok: true as const };
+    }) as never);
+
+    const undoBefore = gw.appliedCount();
+    const ledgerBefore = gw.ledger.length;
+    const r = gw.dispatch({
+      kind: 'cameraFly', pos: [10, 5, -3], yaw: 0.4, pitch: -0.2,
+    } as EditorOp, 'human');
+    expect(r.ok).toBe(true);
+    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.ledger.at(-1)!.kind).toBe('cameraFly');
+    expect(gw.appliedCount()).toBe(undoBefore);
+    expect(gw.origins.at(-1)).toBe('human');
+    const t = gw.doc.world!.get(camera as unknown as EntityHandle, Transform) as { ok: boolean; value?: { pos: number[] } };
+    expect(t.ok).toBe(true);
+    expect(t.value!.pos[0]).toBe(10);
+    expect(t.value!.pos[1]).toBe(5);
+    expect(t.value!.pos[2]).toBe(-3);
+
+    sessionAppliers.delete('cameraFly');
+  });
+
+  it('cameraTeleport: ledger +1, undo unchanged, AI dispatch moves camera exactly to pos', () => {
+    const gw = new EditGateway(createCamSession());
+    const camera = spawnCamera(gw);
+    sessionAppliers.delete('cameraTeleport');
+    registerApplier('session', 'cameraTeleport', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+      const o = op as unknown as { pos: number[]; yaw?: number; pitch?: number };
+      ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
+      return { ok: true as const };
+    }) as never);
+
+    const undoBefore = gw.appliedCount();
+    const ledgerBefore = gw.ledger.length;
+    const r = gw.dispatch({
+      kind: 'cameraTeleport', pos: [100, 50, 200], yaw: 0, pitch: 0,
+    } as EditorOp, 'ai');
+    expect(r.ok).toBe(true);
+    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.ledger.at(-1)!.kind).toBe('cameraTeleport');
+    expect(gw.appliedCount()).toBe(undoBefore);
+    expect(gw.origins.at(-1)).toBe('ai');
+    const t = gw.doc.world!.get(camera as unknown as EntityHandle, Transform) as { ok: boolean; value?: { pos: number[] } };
+    expect(t.ok).toBe(true);
+    expect(t.value!.pos[0]).toBe(100);
+    expect(t.value!.pos[1]).toBe(50);
+    expect(t.value!.pos[2]).toBe(200);
+
+    sessionAppliers.delete('cameraTeleport');
+  });
+
+  it('cameraLookAt: derives yaw/pitch from (pos→lookAt) vector; camera positioned at pos', () => {
+    const gw = new EditGateway(createCamSession());
+    const camera = spawnCamera(gw);
+    sessionAppliers.delete('cameraLookAt');
+    // Minimal applier that mirrors the real edit-runtime derivation:
+    //   yaw = atan2(-dx, -dz);  pitch = atan2(dy, hypot(dx,dz))
+    // yaw/pitch captured in test-local closure vars (Transform component
+    // rejects unknown fields, so we assert on the derived scalars directly).
+    let derivedYaw = NaN, derivedPitch = NaN;
+    registerApplier('session', 'cameraLookAt', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+      const o = op as unknown as { pos: number[]; lookAt: number[] };
+      const dx = o.lookAt[0]! - o.pos[0]!;
+      const dy = o.lookAt[1]! - o.pos[1]!;
+      const dz = o.lookAt[2]! - o.pos[2]!;
+      derivedYaw = Math.atan2(-dx, -dz);
+      derivedPitch = Math.atan2(dy, Math.hypot(dx, dz));
+      ctx?.engine.set(camera, Transform, {
+        pos: [o.pos[0]!, o.pos[1]!, o.pos[2]!],
+      });
+      return { ok: true as const };
+    }) as never);
+
+    const undoBefore = gw.appliedCount();
+    const ledgerBefore = gw.ledger.length;
+    const r = gw.dispatch({
+      kind: 'cameraLookAt', pos: [0, 10, 0], lookAt: [0, 0, -10],
+    } as EditorOp, 'ai');
+    expect(r.ok).toBe(true);
+    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.ledger.at(-1)!.kind).toBe('cameraLookAt');
+    expect(gw.appliedCount()).toBe(undoBefore);
+    expect(gw.origins.at(-1)).toBe('ai');
+    // Camera moved to pos (0,10,0).
+    const t = gw.doc.world!.get(camera as unknown as EntityHandle, Transform) as { ok: boolean; value?: { pos: number[] } };
+    expect(t.ok).toBe(true);
+    expect(t.value!.pos[0]).toBe(0);
+    expect(t.value!.pos[1]).toBe(10);
+    expect(t.value!.pos[2]).toBe(0);
+    // Derivation check: looking from (0,10,0) toward (0,0,-10):
+    //   dx=0, dy=-10, dz=-10 → yaw = atan2(0, 10) = 0
+    //   → pitch = atan2(-10, 10) = -PI/4 (~-0.785)
+    expect(derivedYaw).toBeCloseTo(0, 5);
+    expect(derivedPitch).toBeCloseTo(-Math.PI / 4, 5);
+
+    sessionAppliers.delete('cameraLookAt');
+  });
+
+  it('listOps() reports cameraOrbit/Fly/Teleport/LookAt as session ops', () => {
+    // Read-only self-introspection check (charter §8.1 P1): AI must be able to
+    // discover these ops without prior knowledge. catalog.ts seeds them at eval.
+    const { listOps } = require('../io/catalog') as typeof import('../io/catalog');
+    const ids = listOps().map((o) => o.id);
+    for (const kind of ['cameraOrbit', 'cameraFly', 'cameraTeleport', 'cameraLookAt']) {
+      expect(ids).toContain(kind);
+      const desc = listOps().find((o) => o.id === kind)!;
+      expect(desc.domain).toBe('session');
+    }
+  });
+});
