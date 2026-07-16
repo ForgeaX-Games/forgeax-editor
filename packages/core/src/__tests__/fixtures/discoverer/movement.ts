@@ -4,7 +4,6 @@ import { defineSystem } from '@forgeax/engine-ecs';
 export const Movement = defineSystem({
   name: 'Movement',
   queries: [],
-  labels: [],
   fn() {
     // gameplay system — no-op for fixture
   },
