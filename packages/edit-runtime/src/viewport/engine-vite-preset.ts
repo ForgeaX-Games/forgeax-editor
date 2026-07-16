@@ -45,6 +45,7 @@ import { resolveGameAssetRoots } from '../../../core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import { fontImporter } from '@forgeax/engine-font/font-importer';
 
 // This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
@@ -342,7 +343,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       pluginPack({
         roots: gamePackRoots(gameDirAbs),
         base,
-        importers: [imageImporter, gltfImporter, fbxImporter],
+        importers: [imageImporter, gltfImporter, fbxImporter, fontImporter],
       }) as unknown as PluginOption,
     );
   }
