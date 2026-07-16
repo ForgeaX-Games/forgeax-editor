@@ -149,11 +149,11 @@ export interface HostSession {
   stopSimulation(): void;
   /**
    * Tear down the session's global side effects (disk-watch socket, flush
-   * beacons, VAG flush handler), flushing any pending save first. A multi-game
-   * host calls this on a cross-game switch before disposing the engine; a
-   * single-game host (standalone) never calls it (teardown = page navigation).
+   * beacons, VAG flush handler). A multi-game host calls this on a cross-game
+   * switch before disposing the engine; a single-game host (standalone) never
+   * calls it (teardown = page navigation).
    */
-  dispose(): void;
+  dispose(options?: { flushPendingSave?: boolean }): void;
 }
 
 /**
@@ -625,10 +625,16 @@ export function createHostSession(deps: HostSessionDeps): {
     const stopDiskWatch = initDiskWatch();
     const disposeSaveBeacons = installSaveBeaconListeners(() => flushPendingSaveBeacon());
 
-    const dispose = (): void => {
+    const dispose = (options: { flushPendingSave?: boolean } = {}): void => {
+      runLifecycle?.dispose();
       // Flush any pending save one last time before tearing the session down so a
-      // cross-game switch never drops the previous game's unsaved edits.
-      try { flushPendingSaveBeacon(); } catch { /* best effort */ }
+      // cross-game switch never drops the previous game's unsaved edits. Asset-
+      // driven reloads pass flushPendingSave:false because the disk change is the
+      // new source of truth; flushing here would write the stale edit world back
+      // over the just-changed pack.
+      if (options.flushPendingSave !== false) {
+        try { flushPendingSaveBeacon(); } catch { /* best effort */ }
+      }
       stopDiskWatch();
       disposeSaveBeacons();
     };
