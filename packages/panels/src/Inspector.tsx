@@ -158,9 +158,9 @@ function linearToSrgbHex(rgb: number[]): string {
 
 // "#rrggbb" → linear rgb triple written back to the array<f32,3> column.
 function srgbHexToLinear(hex: string): [number, number, number] {
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
-  if (!m) return [0, 0, 0];
-  const int = parseInt(m[1], 16);
+  const group = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim())?.[1];
+  if (group === undefined) return [0, 0, 0];
+  const int = parseInt(group, 16);
   const r = ((int >> 16) & 0xff) / 255;
   const g = ((int >> 8) & 0xff) / 255;
   const b = (int & 0xff) / 255;
