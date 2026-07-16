@@ -379,34 +379,22 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
-    console.info(`[disk-io][diag] loadSceneByGuid: sceneGuid=${sceneGuid}, world=${w != null ? 'exists' : 'null'}, registry=${reg != null ? 'exists' : 'null'}`);
-    if (!w || !reg) {
-      console.warn(`[disk-io][diag] loadSceneByGuid: world or registry missing → return false`);
-      return false;
-    }
+    if (!w || !reg) return false;
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(sceneGuid);
-      console.info(`[disk-io][diag] loadSceneByGuid: AssetGuid.parse ok=${parsed.ok}`);
-      if (!parsed.ok) {
-        console.warn(`[disk-io][diag] loadSceneByGuid: AssetGuid.parse failed for ${sceneGuid}`);
-        return false;
-      }
+      if (!parsed.ok) return false;
+      // Clear any previously loaded scene first so a reload doesn't double-spawn.
       teardownCurrentScene();
-      console.info(`[disk-io][diag] loadSceneByGuid: teardownCurrentScene done, calling reg.loadByGuid…`);
       const loadRes = await reg.loadByGuid(parsed.value);
-      console.info(`[disk-io][diag] loadSceneByGuid: reg.loadByGuid ok=${loadRes.ok}${!loadRes.ok ? ', error=' + JSON.stringify((loadRes as any).error) : ''}`);
       if (!loadRes.ok) return false;
       const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
-      console.info(`[disk-io][diag] loadSceneByGuid: allocSharedRef → sceneHandle=${sceneHandle}`);
       const instRes = reg.instantiateFlat(sceneHandle, w);
-      console.info(`[disk-io][diag] loadSceneByGuid: instantiateFlat ok=${instRes.ok}${instRes.ok ? ', entities=' + (instRes.value as number[]).length : ', error=' + JSON.stringify((instRes as any).error)}`);
       if (!instRes.ok) return false;
+      // Track the scene's top-level entities so a later reload can despawn them.
       ctx.currentSceneEntities = instRes.value;
-      console.info(`[disk-io][diag] loadSceneByGuid: SUCCESS, currentSceneEntities=${ctx.currentSceneEntities.length}`);
       return true;
-    } catch (err) {
-      console.error(`[disk-io][diag] loadSceneByGuid: EXCEPTION`, err);
+    } catch {
       return false;
     }
   }
@@ -485,28 +473,18 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  loadSceneByGuid (AC-09). */
   async function doLoadDocFromDisk(): Promise<boolean> {
     const p = scenePath();
-    console.info(`[disk-io][diag] doLoadDocFromDisk: scenePath=${p}, currentSceneFile=${ctx.currentSceneFile}, currentSceneId=${ctx.currentSceneId}`);
-    if (!p) {
-      console.warn(`[disk-io][diag] doLoadDocFromDisk: scenePath is null → return false`);
-      return false;
-    }
+    if (!p) return false;
     // Forget the previous scene's identity before loading a new one.
     ctx.currentSceneGuid = null;
     ctx.loadedInlineAssetFloor = null;
     ctx.loadedInlineAssets = null;
     try {
-      const fetchUrl = `/api/files?path=${encodeURIComponent(p)}`;
-      console.info(`[disk-io][diag] doLoadDocFromDisk: fetching ${fetchUrl}`);
-      const r = await deps.fetchWithTimeout(fetchUrl);
-      console.info(`[disk-io][diag] doLoadDocFromDisk: fetch status=${r.status}, ok=${r.ok}`);
+      const r = await deps.fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
       if (r.ok) {
         const j = (await r.json()) as { content?: string };
-        console.info(`[disk-io][diag] doLoadDocFromDisk: j.content length=${j.content?.length ?? 0}`);
         if (j.content) {
           const parsed = JSON.parse(j.content);
-          const packIsScene = isScenePack(parsed);
-          console.info(`[disk-io][diag] doLoadDocFromDisk: isScenePack=${packIsScene}, parsed.kind=${(parsed as any)?.kind}, assets.length=${(parsed as any)?.assets?.length}`);
-          if (packIsScene) {
+          if (isScenePack(parsed)) {
             // Capture the inline-asset floor from the pack AS LOADED, so a later
             // save that would drop materials below this is refused (see the guard
             // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk
@@ -539,13 +517,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               loadedInline.map((a, i) => `  [${i}] ${a.guid} (${a.kind})`).join('\n'),
             );
             const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
-            console.info(`[disk-io][diag] doLoadDocFromDisk: sceneAssetEntry.guid=${sceneAssetEntry?.guid ?? 'MISSING'}`);
             if (sceneAssetEntry?.guid) ctx.currentSceneGuid = sceneAssetEntry.guid;
             // Load via the engine's canonical loadByGuid -> instantiate path.
             if (sceneAssetEntry?.guid) {
-              console.info(`[disk-io][diag] doLoadDocFromDisk: calling loadSceneByGuid(${sceneAssetEntry.guid})…`);
               const ok = await loadSceneByGuid(sceneAssetEntry.guid);
-              console.info(`[disk-io][diag] doLoadDocFromDisk: loadSceneByGuid returned ${ok}, currentSceneEntities.length=${ctx.currentSceneEntities.length}`);
               if (ok) {
                 ctx.isDirty = false;
                 deps.notifyDocChanged();
@@ -678,13 +653,9 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   /** Replace the entire authored document (scene load/import). Resets selection
    *  and undo history since old inverses no longer apply to the new doc. */
   function replaceDoc(doc: EditSession): void {
-    console.info(`[disk-io][diag] replaceDoc: doc.world=${doc.world != null ? 'exists' : 'null'}, doc.registry=${doc.registry != null ? 'exists' : 'null'}`);
-    const revived = reviveSession(doc);
-    console.info(`[disk-io][diag] replaceDoc: revived.world=${revived.world != null ? 'exists' : 'null'}`);
-    gateway.replaceDoc(revived);
+    gateway.replaceDoc(reviveSession(doc));
     gateway.dispatch({ kind: 'setSelectionMany', ids: [] });
     deps.notifyDocChanged();
-    console.info(`[disk-io][diag] replaceDoc: done. notifyDocChanged fired.`);
   }
 
   // Session-op registration (loadDocFromDisk / saveDocToDisk) + the runAsyncOp

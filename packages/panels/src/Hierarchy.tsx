@@ -391,7 +391,6 @@ export function HierarchyPanel() {
   const activeWorld = gateway.activeWorld;
   const worldReady = activeWorld != null;
   const roots = worldReady ? childrenOf(activeWorld, null) : [];
-  console.info(`[Hierarchy][diag] render: worldReady=${worldReady}, roots.length=${roots.length}, gateway.mode=${gateway.mode}`);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
   const toggleCollapse = (id: EntityHandle) =>

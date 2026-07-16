@@ -1193,6 +1193,13 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
   // through the one gateway door.
   function onKey(e: KeyboardEvent): void {
+    // T2b: mirror fly keys in the existing global keydown hook (G-1 allows no
+    // second window keydown listener). flyTick only runs in fly mode, so tracking
+    // here does not move the camera while typing in a field.
+    const k = e.key.toLowerCase();
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+      keyState[k] = true;
+    }
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
@@ -1201,24 +1208,10 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     // T2 risk-1: in fly mode WASD/QE drive movement — do NOT hijack W/E/R for
     // gizmo mode switching. Frame (F) is likewise ambiguous while flying.
     if (mode === 'fly') return;
-    const k = e.key.toLowerCase();
     if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
     else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
     else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
     else if (k === 'f') gateway.dispatch({ kind: 'requestFrame' });
-  }
-
-  // T2b: keyState tracking — used by getFlyInput()/flyTick to poll WASD/QE.
-  // Runs before onKey guard so we always mirror the physical key state, even
-  // when the user is typing (typed WASD in a field doesn't move the camera
-  // because flyTick only runs when mode==='fly', not because of key gating).
-  function onKeyDown(e: KeyboardEvent): void {
-    // Only track the fly keys — cheaper than storing every key + avoids
-    // polluting the map with modifiers / letters unrelated to flight.
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
-      keyState[k] = true;
-    }
   }
   function onKeyUp(e: KeyboardEvent): void {
     const k = e.key.toLowerCase();
@@ -1245,10 +1238,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContext);
   window.addEventListener('keydown', onKey);
-  // T2b: keyState mirrors physical key presses for fly-mode rAF polling.
-  // Separate listeners from onKey so the mode-gate on shortcuts doesn't affect
-  // physical key tracking (getFlyInput reads keyState directly).
-  window.addEventListener('keydown', onKeyDown);
+  // T2b: keyup/blur release fly keys tracked by onKey above.
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
   canvas.addEventListener('dblclick', onDblClick);
@@ -1291,7 +1281,6 @@ onDisplayModeChange(() => refreshGizmos());
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       canvas.removeEventListener('dblclick', onDblClick);
