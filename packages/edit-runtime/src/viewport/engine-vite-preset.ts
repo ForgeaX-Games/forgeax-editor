@@ -33,7 +33,7 @@
 
 import { dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, realpathSync, createReadStream, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, createReadStream, statSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
@@ -45,6 +45,7 @@ import { resolveGameAssetRoots } from '../../../core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import { fontImporter } from '@forgeax/engine-font/font-importer';
 
 // This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
@@ -96,9 +97,12 @@ function forgeaxWorkspacePackages(): string[] {
 // (e.g. ../forgeax-games/hellforge/main.ts), and Windows drive-letter casing —
 // a naive startsWith(gameDirAbs) misses all three and Play 500s on the first
 // `import '@forgeax/engine-runtime'` in the game entry.
-const HOST_GAMES_DIR = ['.', 'forgeax', 'games'].join('/');
+// `realpathSync` turns Studio's host-injected game symlinks into the checked-out
+// `packages/games/<slug>` directory; accept both identity paths without baking
+// a host disk-layout literal into the editor runtime.
+const HOST_GAMES_DIR = ['.', 'forgeax', 'games'].join('/').replace('./', '.');
 const MULTI_GAME_PATH_RE = new RegExp(
-  `/\\/(?:${HOST_GAMES_DIR.replace(/\./g, '\\.').replace(/\//g, '\\/')}|forgeax-games)\\/[^/]+\\/`,
+  `/(?:${HOST_GAMES_DIR.replace(/\./g, '\\.').replace(/\//g, '\\/')}|packages\\/games|forgeax-games)/[^/]+/`,
 );
 
 function normalizeGameFilePath(raw: string, viteRoot: string): string {
@@ -124,6 +128,39 @@ function normalizeGameFilePath(raw: string, viteRoot: string): string {
   return process.platform === 'win32' ? p.toLowerCase() : p;
 }
 
+interface PackageExports {
+  readonly [subpath: string]: string | { readonly import?: string } | undefined;
+}
+
+/**
+ * Resolve a game-source engine specifier from Edit Runtime's own workspace link.
+ *
+ * Calling `this.resolve(id, editRuntimePackageJson)` looks equivalent, but Vite's
+ * host-level `resolve.dedupe` wins before that importer anchor. The Studio host
+ * intentionally does not carry every engine package directly, so a game may then
+ * resolve some imports from Studio and fail only on a newer Tier-2 package. Read
+ * the producer package's exports map instead: it is the one canonical map from a
+ * public specifier to its browser entry, and bypasses the consuming host graph.
+ */
+export function resolveGameEngineEntry(id: string): string | null {
+  const rest = id.slice('@forgeax/'.length);
+  const [packageName, ...subpath] = rest.split('/');
+  if (!packageName) return null;
+
+  const packageDir = resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax', packageName);
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+      exports?: PackageExports;
+    };
+    const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
+    const entry = manifest.exports?.[exportKey];
+    const importPath = typeof entry === 'string' ? entry : entry?.import;
+    return typeof importPath === 'string' ? resolve(packageDir, importPath) : null;
+  } catch {
+    return null;
+  }
+}
+
 function gameEngineResolve(gameDirAbs: string | null): PluginOption {
   let gameDirNorm: string | null = null;
   if (gameDirAbs) {
@@ -131,21 +168,18 @@ function gameEngineResolve(gameDirAbs: string | null): PluginOption {
     catch { gameDirNorm = normalizeGameFilePath(gameDirAbs, gameDirAbs); }
   }
   let viteRoot = process.cwd();
-  const anchor = resolve(EDIT_RUNTIME_DIR, 'package.json');
   return {
     name: 'forgeax:game-engine-resolve',
     configResolved(config) {
       viteRoot = config.root;
     },
-    async resolveId(id, importer) {
+    resolveId(id, importer) {
       if (!importer || !id.startsWith('@forgeax/')) return null;
       const imp = normalizeGameFilePath(importer, viteRoot);
       const isGameFile = gameDirNorm
         ? imp.startsWith(gameDirNorm)
         : MULTI_GAME_PATH_RE.test(imp);
-      if (!isGameFile) return null;
-      const r = await this.resolve(id, anchor, { skipSelf: true });
-      return r ?? null;
+      return isGameFile ? resolveGameEngineEntry(id) ?? null : null;
     },
   };
 }
@@ -401,7 +435,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       pluginPack({
         roots: gamePackRoots(gameDirAbs),
         base,
-        importers: [imageImporter, gltfImporter, fbxImporter],
+        importers: [imageImporter, gltfImporter, fbxImporter, fontImporter],
       }) as unknown as PluginOption,
     );
   }

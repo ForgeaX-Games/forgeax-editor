@@ -40,6 +40,11 @@ export interface FieldSchema {
   showWhen?: { key: string; in: string[] };
   arity?: number;
   labels?: string[];
+  // Override the widget the Inspector uses for this field without changing its
+  // storage `type`. `'color'` on a `vec` (arity 3, linear RGB) renders a color
+  // picker + hex swatch (Unreal-style color/intensity split) instead of the raw
+  // x/y/z scrubbers; the value is still dispatched as the whole `float[3]` array.
+  widget?: 'color';
 }
 
 export interface ComponentSchema {
@@ -68,6 +73,11 @@ const EDITOR_FIELD_OVERRIDES: Record<string, Partial<FieldSchema>> = {
   'Camera.far': { default: 1000 },
   'DirectionalLight.direction': { default: [-0.4, -1, -0.3] },
   'SpotLight.direction': { default: [-0.4, -1, -0.3] },
+  // Light color: edit as a color swatch (Unreal-style color/intensity split),
+  // not raw x/y/z. Stored linear array<f32,3>; intensity carries HDR brightness.
+  'DirectionalLight.color': { widget: 'color', tooltip: 'light color (chroma; use intensity for HDR brightness)' },
+  'PointLight.color': { widget: 'color', tooltip: 'light color (chroma; use intensity for HDR brightness)' },
+  'SpotLight.color': { widget: 'color', tooltip: 'light color (chroma; use intensity for HDR brightness)' },
   // Camera — ortho bounds visible only in orthographic mode
   'Camera.left':   { showWhen: { key: 'projection', in: ['1'] } },
   'Camera.right':  { showWhen: { key: 'projection', in: ['1'] } },

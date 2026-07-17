@@ -22,6 +22,13 @@ import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
 import type { CommandOrigin, HistoryStep } from './gateway-history';
 import { makeQueryFn } from './gateway-query';
 import {
+  GameProjectionRegistry,
+  type GameActionDescriptor,
+  type GameProjectionResult,
+  type GameProjectionValue,
+  type GameReadDescriptor,
+} from './game-projection';
+import {
   collectSceneAsset as collectLiveSceneAsset,
   type CollectSceneAssetResult,
 } from './scene-asset-collect';
@@ -231,6 +238,14 @@ export class EditGateway {
 
   private _playWorld: World | null = null;
 
+  // ── Game-owned Play projection ─────────────────────────────────────────────
+  // The registry contains closures supplied by the CURRENT game bootstrap only.
+  // It is never an editor operation registry: actions are transient gameplay
+  // behavior (no authoring ledger/undo/pack) and reads return JSON snapshots. The
+  // edit-runtime host installs it only after Play succeeds and clears it before the
+  // fresh play world is dropped, so stale game closures cannot outlive their world.
+  private _gameProjection: GameProjectionRegistry | null = null;
+
   // ── Play-attempt observability (solo round-8, friction #3) ────────────────
   // ▶ Play assembly is ASYNC and fire-and-forget: `dispatch({kind:'play'})`
   // returns {ok:true} synchronously while run-lifecycle.playSimulation() spins
@@ -376,12 +391,79 @@ export class EditGateway {
   /** Return the pointer to the edit world. Clears selection + emits notification.
    *  Also clears the pending flag + last error → playPhase back to 'edit'. */
   exitPlay(): void {
+    this.clearGameProjection();
     this._playWorld = null;
     this._playPending = false;
     this._lastPlayError = null;
     clearSelection();
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /**
+   * Create the one ephemeral registry a game bootstrap may fill for the pending
+   * Play run. Downstream host code owns when it is installed; core owns discovery
+   * and invocation so scope① stays `{ gateway, query, _import }`.
+   */
+  createGameProjectionRegistry(): GameProjectionRegistry {
+    return new GameProjectionRegistry();
+  }
+
+  /** Install a fully bootstrapped game's projection only while its play World is live. */
+  installGameProjection(registry: GameProjectionRegistry): void {
+    if (this._playWorld === null) {
+      registry.clear();
+      return;
+    }
+    this.clearGameProjection();
+    this._gameProjection = registry;
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Drop all game-owned closures before their Play world is torn down. */
+  clearGameProjection(): void {
+    if (this._gameProjection === null) return;
+    this._gameProjection.clear();
+    this._gameProjection = null;
+  }
+
+  /** List game-owned, Play-only action descriptors; empty outside live Play. */
+  listGameActions(): readonly GameActionDescriptor[] {
+    return this._gameProjection?.listActions() ?? [];
+  }
+
+  /** List game-owned, Play-only read descriptors; empty outside live Play. */
+  listGameReads(): readonly GameReadDescriptor[] {
+    return this._gameProjection?.listReads() ?? [];
+  }
+
+  /** Invoke one registered gameplay action without creating an editor command. */
+  invokeGameAction(id: string, args: unknown): Promise<GameProjectionResult<undefined>> {
+    if (this.mode !== 'play' || this._gameProjection === null) {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: 'game-projection-unavailable',
+          hint: 'game actions are available only while a game Play session is active',
+        },
+      });
+    }
+    return this._gameProjection.invokeAction(id, args);
+  }
+
+  /** Read one serializable game-owned snapshot without exposing a raw Play World. */
+  readGameState(id: string): Promise<GameProjectionResult<GameProjectionValue>> {
+    if (this.mode !== 'play' || this._gameProjection === null) {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: 'game-projection-unavailable',
+          hint: 'game reads are available only while a game Play session is active',
+        },
+      });
+    }
+    return this._gameProjection.readState(id);
   }
 
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────

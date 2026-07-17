@@ -104,6 +104,8 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .field label.scrub { cursor: ew-resize; user-select: none; border-bottom: 1px dotted var(--fg3); }
 .field input { flex: 1; background: var(--bg2); border: 1px solid var(--line); color: var(--fg); border-radius: 4px; padding: 3px 6px; }
 .field select { flex: 1 1 0; min-width: 0; background: var(--bg2); border: 1px solid var(--line); color: var(--fg); border-radius: 4px; padding: 3px 6px; }
+.field-color input[type="color"] { flex: 0 0 auto; width: 40px; height: 20px; padding: 0; cursor: pointer; background: none; }
+.field-color .hexval { flex: 1; }
 .compname { padding: 6px 10px 2px; color: var(--lime); font-family: var(--mono); font-size: 11px; }
 .muted { color: var(--fg3); }
 .sel { background: var(--bg1); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; padding: 2px 4px; }

@@ -135,13 +135,22 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
     }
 
     // 3. Other importers (image/audio/font/pack): write a simple sidecar + cook.
+    // Font is special: the engine fontImporter expects three sub-assets
+    // (texture atlas, sampler, font glyph metrics) declared in the sidecar so
+    // it can resolve each by kind. All other importers produce a single
+    // sub-asset of their declared kind.
+    const subAssets = format.subAssetKinds.map((kind) => ({
+      guid: kind === format.subAssetKinds[0] ? guid : generateAssetGuid(),
+      sourceIndex: 0,
+      kind,
+    }));
     const meta = {
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
       importer: format.importer,
       source: sourceName,
       importSettings: { ...format.defaultSettings },
-      subAssets: [{ guid, sourceIndex: 0, kind: format.subAssetKind }],
+      subAssets,
     };
     console.info('[import-diag] writing generic sidecar', { metaPath, importer: format.importer });
     const wrote = await assetIO.writeMetaSidecar(metaPath, JSON.stringify(meta, null, 2) + '\n');

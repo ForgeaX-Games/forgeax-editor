@@ -40,6 +40,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  createBootstrapResolver,
   createHostSession,
   type HostSessionDeps,
   type HostGateway,
@@ -90,6 +91,11 @@ function makeFakeGateway(): {
     engineFacade(): never { return {} as never; },
     enterPlay(_w: unknown): void {},
     exitPlay(): void {},
+    createGameProjectionRegistry() {
+      return { registrar: {} as never, clear(): void {} };
+    },
+    installGameProjection(_registry): void {},
+    clearGameProjection(): void {},
   };
   return { gateway, dispatchCalls, subscribeCount: () => subscribers };
 }
@@ -223,6 +229,41 @@ describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-0
     const { deps } = makeDeps({ fetch, getSceneId: () => 'shoot' });
     const host = createHostSession(deps);
     expect(await host.resolveEditPhysics()).toBeUndefined();
+  });
+});
+
+describe('createBootstrapResolver — one module evaluation, fresh-world bootstrap (P9a)', () => {
+  it('imports a state-registering entry once and returns its bootstrap across Play cycles', async () => {
+    let imports = 0;
+    const bootstrap = () => {};
+    const resolveBootstrap = createBootstrapResolver({
+      readForgeForPlay: async () => ({ entry: 'main.ts' }),
+      resolveGameFsBase: async () => '/@fs/games/p9a',
+      getSceneId: () => 'p9a',
+      importModule: async (url) => {
+        imports += 1;
+        expect(url).toBe('/@fs/games/p9a/main.ts');
+        return { bootstrap };
+      },
+    });
+
+    expect(await resolveBootstrap()).toBe(bootstrap);
+    expect(await resolveBootstrap()).toBe(bootstrap);
+    expect(imports).toBe(1);
+  });
+
+  it('caches a missing bootstrap after trying each documented entry candidate once', async () => {
+    const urls: string[] = [];
+    const resolveBootstrap = createBootstrapResolver({
+      readForgeForPlay: async () => ({ entry: 'main.ts' }),
+      resolveGameFsBase: async () => '/@fs/games/p9a',
+      getSceneId: () => 'p9a',
+      importModule: async (url) => { urls.push(url); return {}; },
+    });
+
+    expect(await resolveBootstrap()).toBeNull();
+    expect(await resolveBootstrap()).toBeNull();
+    expect(urls).toEqual(['/@fs/games/p9a/main.ts', '/@fs/games/p9a/src/main.ts']);
   });
 });
 
