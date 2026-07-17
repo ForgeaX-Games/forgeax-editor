@@ -82,6 +82,7 @@ import {
   setGameCameraEntity,
   deriveActiveCameraEntity,
 } from './viewport-quadrant';
+import { registerEditorVisualHost } from './visual-source';
 import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
@@ -920,6 +921,17 @@ async function bootViewport(
     // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.
     worldManager,
   };
+
+  // Generated-visual presenters obtain their host inputs through this explicit
+  // registration, never by querying #app or the DEV-only debug object above.
+  // Register immediately before starting the app so teardown unregisters the
+  // source before it stops the renderer and releases the canvas.
+  registerTeardown(registerEditorVisualHost({
+    gateway: gateway as never,
+    canvas,
+    gameRoot: gameSession.gameRoot,
+    getActiveCameraEntity: deriveActiveCameraEntity,
+  }));
 
   // start the live render loop + reporters (was :895).
   editorApp.start();
