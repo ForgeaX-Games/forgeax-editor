@@ -17,13 +17,13 @@ import {
   type VisualSourceSnapshot as ContractVisualSourceSnapshot,
   type VisualViewportInfo as ContractVisualViewportInfo,
   type VisualViewportLease as ContractVisualViewportLease,
-  VisualPriorManifestSchema,
-  VisualPresentationManifestSchema,
+  parseVisualPriorManifest,
+  parseVisualPresentationManifest,
   type VisualPriorManifest,
   type VisualResourceStore,
   type VisualWorldRun,
   type VisualWorldStamp,
-} from '@forgeax/types/visual-generation';
+} from './visual-source-contract';
 import { Camera, Transform } from '@forgeax/engine-runtime';
 
 export type VisualSource = ContractVisualSource<MediaStream, Blob>;
@@ -365,7 +365,7 @@ class EditorVisualSourceImpl implements VisualSource {
     } catch {
       throw new Error('The visual-priors manifest is not valid JSON');
     }
-    const manifest = { gameRoot, value: VisualPriorManifestSchema.parse(parsed) };
+    const manifest = { gameRoot, value: parseVisualPriorManifest(parsed) };
     this.priorManifest = manifest;
     return manifest;
   }
@@ -404,7 +404,7 @@ class EditorVisualSourceImpl implements VisualSource {
     }
     const manifest = {
       gameRoot,
-      value: VisualPresentationManifestSchema.parse(parsed),
+      value: parseVisualPresentationManifest(parsed),
     };
     this.presentationManifest = manifest;
     this.presentationManifestLoadedGameRoot = gameRoot;

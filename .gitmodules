@@ -14,7 +14,3 @@
 	path = packages/platform-io
 	url = ../forgeax-platform-io.git
 	branch = main
-[submodule "packages/contracts"]
-	path = packages/contracts
-	url = ../forgeax-contracts.git
-	branch = main

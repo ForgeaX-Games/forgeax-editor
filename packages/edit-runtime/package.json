@@ -4,7 +4,7 @@
   "private": false,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "forgeax editor Edit mode runtime — engine boot + camera + skylight + seed + sync + dock shell + zustand store + EditorApp shell + context menu service",
+  "description": "forgeax editor Edit mode runtime \u2014 engine boot + camera + skylight + seed + sync + dock shell + zustand store + EditorApp shell + context menu service",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -48,7 +48,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@forgeax/types": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
     "@forgeax/engine-app": "workspace:*",

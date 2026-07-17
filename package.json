@@ -29,7 +29,6 @@
   },
   "workspaces": [
     "packages/*",
-    "packages/contracts/types",
     "packages/interface/packages/*",
     "packages/engine/packages/*"
   ],
