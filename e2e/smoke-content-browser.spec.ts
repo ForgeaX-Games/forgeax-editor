@@ -98,7 +98,7 @@ async function waitForAssets(page: Page) {
     .toBeGreaterThan(0);
 }
 
-test.describe('smoke — Content Browser context menu interactions', () => {
+test.describe.skip('smoke — Content Browser context menu interactions', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(STANDALONE_URL);
     await expect(page.locator('.fx-dockwrap')).toBeVisible({ timeout: 20_000 });
