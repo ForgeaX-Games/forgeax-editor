@@ -24,6 +24,7 @@
     "./play": "./src/play.ts",
     "./protocol": "./src/protocol.ts",
     "./viewport": "./packages/edit-runtime/src/viewport/ViewportComponent.tsx",
+    "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
     "./package.json": "./package.json"
   },
   "workspaces": [

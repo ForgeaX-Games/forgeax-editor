@@ -22,6 +22,10 @@
       "types": "./src/viewport/viewport-quadrant.ts",
       "import": "./src/viewport/viewport-quadrant.ts"
     },
+    "./visual-source": {
+      "types": "./src/viewport/visual-source.ts",
+      "import": "./src/viewport/visual-source.ts"
+    },
     "./keyboard-router-deps": {
       "types": "./src/keyboard-router-deps.ts",
       "import": "./src/keyboard-router-deps.ts"
@@ -44,6 +48,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@forgeax/types": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
