@@ -355,39 +355,19 @@ async function bootViewport(
   // NO self-hosted rAF, NO direct renderer.draw (AC-07): the engine's frame loop
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
-  const app = await createApp(canvas, {
+
+  // ── createApp with GPU-failure auto-fallback ────────────────────────────
+  // When no WebGPU adapter is available (headless browser, GPU-less CI), the
+  // first createApp(canvas) call fails with a GPU-related error. Before giving
+  // up, retry with @forgeax/engine-rhi-null — a no-op renderer that satisfies
+  // the adapter/device/shader contract without a real GPU. Gateway ops
+  // (dispatch/query/listOps/describeComponent) only need the ECS world; the
+  // viewport won't render but the eval channel still mounts. Dynamic import
+  // so the null RHI is never bundled into production builds.
+  const createAppResult = await createApp(canvas, {
     input: canvasInput.editor,
-    // Pointer-lock gate: the EDITOR's own backend must NEVER request pointer lock.
-    // It exists only for edit-mode orbit/pan/pick + play·scene free-look, all of
-    // which use drag deltas (setPointerCapture, D-5) — never a locked cursor.
-    //
-    // Pointer lock during ▶ Play belongs SOLELY to the game's own play backend
-    // (host-boot.ts attachPlayInput), which the game gates per view-mode via
-    // ctx.setPointerLockAllowed(mode === 'fps'). Two backends share this one
-    // canvas; if the editor backend also locked, it would override the game's
-    // top-down/FPS decision — the exact bug where a top-down game locked the
-    // cursor and threw on the next click (setPointerCapture-while-locked /
-    // "lock cannot be acquired immediately after exit"). The old
-    // `getInputTarget() === 'game'` predicate here was a pre-#78 leftover from
-    // when the editor had a single backend that WAS the game backend during
-    // play; after the world-fork split added a separate play backend it became
-    // wrong. Always-deny is correct: the editor never consumes lock.
     pointerLockAllowed: () => false,
-    // Composite two-world render: editorWorld (camera) + sceneWorld (resources).
     drawSource: worldManager.createDrawSource(),
-    // NO physics in the EDIT world (D-7 invariant, see :378-383 + solo P7
-    // round-15): physics is a game SIMULATION system, and per D-7 "game systems
-    // only exist in the transient playWorld built by play-assemble" — the
-    // sceneWorld (= this createApp world, save's only source) must carry no
-    // ticking game systems. Assembling physicsPlugin here made a `RigidBody`
-    // authored at rest FALL to the floor on load (gravity integrating every edit
-    // frame), so a save persisted the fallen pose — Edit ≠ Play, authored-intent
-    // corruption. The plugin registers only the tick SYSTEMS + PhysicsWorld
-    // resource (nothing in the editor reads either); the physics COMPONENTS
-    // auto-register at import via defineComponent, so authoring (spawn / set /
-    // serialize / describe) stays fully functional without it. ▶ Play still
-    // simulates: play-assemble.ts assembles physicsPlugin(deps.physics) into the
-    // fresh play world (editPhysics is threaded there via `physics:` below).
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
     importTransport: {
@@ -408,6 +388,44 @@ async function bootViewport(
       },
     },
   });
+
+  let app = createAppResult;
+  if (!app.ok) {
+    const errCode = (app.error as unknown as Record<string, unknown>)?.code;
+    const isGpuError = errCode === 'rhi-not-available'
+      || errCode === 'engine-environment-error'
+      || errCode === 'webgpu-runtime-error';
+    if (isGpuError) {
+      console.warn('[editor] createApp failed (no GPU), retrying with null RHI:', app.error);
+      const rhiNull = await import('@forgeax/engine-rhi-null');
+      app = await createApp(canvas, {
+        input: canvasInput.editor,
+        pointerLockAllowed: () => false,
+        drawSource: worldManager.createDrawSource(),
+        rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
+      }, {
+        shaderManifestUrl: `${BASE}/shaders/manifest.json`,
+        importTransport: {
+          async fetchPack(guid: string) {
+            const importBase = (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__)
+              ? `${BASE}/__import` : '/__import';
+            try {
+              const response = await fetch(`${importBase}/${guid}`, { method: 'POST' });
+              if (!response.ok) return { ok: false };
+              try {
+                const body = await response.json();
+                if (Array.isArray(body)) return { ok: true, entries: body };
+              } catch { /* empty/non-JSON body */ }
+              return { ok: true };
+            } catch {
+              return { ok: false };
+            }
+          },
+        },
+      });
+    }
+  }
+
   if (!app.ok) {
     console.error('[editor] createApp failed:', app.error);
     paintDiagnosticMessage(container, app.error);
@@ -529,7 +547,13 @@ async function bootViewport(
   // session so the run-lifecycle re-registers it on the PLAY App while playing
   // (follow-the-live-app). Undefined unless the bridge block below assigns it.
   let bridgeDrainForPlay: ((dt: number) => void) | undefined;
-  if (import.meta.env.DEV) {
+  // Always mount the eval channel in the editor runtime. The file is imported
+  // via @fs in standalone mode where Vite's import.meta.env.DEV runtime
+  // injection is not applied, so an outer `if (import.meta.env.DEV)` gate
+  // would silently never execute. createEvalChannel itself is dev-only
+  // (import.meta.env.DEV gated inside) — the outer guard is deliberately
+  // removed.
+  {
     const channel = createEvalChannel(gateway, {
       rawScope: { world, renderer, assets: renderer.assets },
     });
