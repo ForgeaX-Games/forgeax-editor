@@ -30,11 +30,11 @@ on:
 
 jobs:
   b2-self-boot:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - run: echo "Doc-only change — B2 self-boot gate not applicable, passing."
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - run: echo "Doc-only change — typecheck gate not applicable, passing."

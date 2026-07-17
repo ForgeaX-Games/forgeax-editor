@@ -33,17 +33,14 @@ name: CI
 # below is the executable SSOT, that doc is the narrative):
 #   - `b2-self-boot` + `typecheck` are trusted, ABI-agnostic build work (Rust
 #     wgpu-wasm + bun install + tsc/lint/tests; NO apt-get, NO browser), so for
-#     TRUSTED events (same-repo PR, main push, manual run) they route to the
-#     org-level TencentOS self-hosted pool `[self-hosted, Linux, X64]`. A FORK
-#     `pull_request` runs repository code, so it is NEVER given a self-hosted
-#     runner — the selector sends fork PRs to ephemeral `ubuntu-latest`.
+#     they run on the org-level TencentOS self-hosted pool
+#     `[self-hosted, Linux, X64]`.
 #   - `smoke-play` STAYS on `ubuntu-latest` unconditionally: `playwright install
 #     --with-deps` uses Ubuntu apt/dpkg paths TencentOS does not provide, and
 #     the SwiftShader WebGPU path is only validated on the hosted image.
 #   - `CACHE_RUNNER_SCOPE` (env, below) namespaces the engine-dist cache by
 #     runner class — hosted + self-hosted Linux both report runner.os == Linux,
 #     so the SHA alone would let one class restore the other's blobs.
-#   - Do NOT use `pull_request_target` to make fork code self-hosted-eligible.
 
 # Doc-only changes are exempt: the B2 self-boot + typecheck gates below can only
 # be affected by code / config / submodule pins, never by prose. `paths-ignore`
@@ -76,14 +73,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Runner routing (mirrors forgeax-engine PR #705 — see
-  # docs/specs/2026-07-14-self-hosted-tencentos-ci-routing-editor.md). Fork PRs
-  # run on an ephemeral GitHub-hosted runner; same-repository PRs, main pushes,
-  # and manual runs use the trusted org-level TencentOS runner pool. The SAME
-  # condition namespaces the engine-dist cache below so build artifacts never
-  # cross the runner boundary — hosted + self-hosted Linux BOTH report
-  # runner.os == Linux, so runner.os alone is not a safe cache identity.
-  CACHE_RUNNER_SCOPE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'github-hosted-linux-x64' || 'self-hosted-linux-x64' }}
+  # Main CI jobs use the org-level TencentOS runner. Its namespace stays
+  # explicit because hosted browser jobs report the same runner.os value.
+  CACHE_RUNNER_SCOPE: self-hosted-linux-x64
 
 jobs:
   # ── post-merge gate: skip redundant check jobs when the merge tree was
@@ -91,7 +83,7 @@ jobs:
   # skipped on PRs (always() in dependent jobs prevents skip cascading).
   post-merge-gate:
     name: post-merge-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 2
     permissions:
@@ -99,6 +91,9 @@ jobs:
     outputs:
       skip_checks: ${{ steps.compare.outputs.skip_checks }}
     steps:
+      - name: Clear persistent self-hosted Git credentials
+        run: git config --global --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -141,9 +136,8 @@ jobs:
     needs: [post-merge-gate]
     if: always() && ! (needs.post-merge-gate.result == 'success' && needs.post-merge-gate.outputs.skip_checks == 'true')
     # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + B2
-    # selfcheck; NO apt-get, NO browser). Fork PRs → ephemeral ubuntu-latest;
-    # trusted events → the TencentOS self-hosted pool [self-hosted, Linux, X64].
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    # selfcheck; NO apt-get, NO browser).
+    runs-on: [self-hosted, Linux, X64]
     # 30-minute cold-cache allowance: a first self-hosted run must build the
     # engine wgpu-wasm (Rust) from scratch before the B2 selfcheck. Warm runs
     # (engine-dist cache hit) finish in a few minutes. Matches the typecheck
@@ -323,10 +317,8 @@ jobs:
     needs: [post-merge-gate]
     if: always() && ! (needs.post-merge-gate.result == 'success' && needs.post-merge-gate.outputs.skip_checks == 'true')
     # Trusted, ABI-agnostic build work (Rust wgpu-wasm + bun install + lint +
-    # dep-cruiser + tsc + unit tests; NO apt-get, NO browser). Same fork-safe
-    # routing as b2-self-boot: fork PRs → ubuntu-latest; trusted events → the
-    # TencentOS self-hosted pool.
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "Linux", "X64"]') }}
+    # dep-cruiser + tsc + unit tests; NO apt-get, NO browser).
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
     steps:
       # Scrub a persisted global http.extraheader Authorization before checkout —
