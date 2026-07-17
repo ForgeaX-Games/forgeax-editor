@@ -452,6 +452,47 @@ export async function assemblePlayWorld(
     });
   }
 
+  // ── Diagnostics reads (V11/C1): project play-world metrics through Gateway ──
+  // Registers on the same gameProjection.registrar the game sees, so Gateway
+  // listGameReads() / readGameState() discover them during Play. The reads are
+  // server-owned (not game-owned) — they read the renderer + frame loop, not the
+  // game world. The registrar is the same SSOT; the game sees these alongside its
+  // own reads, which is correct (both project through the same door).
+  if (gameProjection) {
+    let frameCount = 0;
+    let lastFps = 0;
+    let lastDt = 0;
+    playApp.registerUpdate((dt: number) => {
+      frameCount++;
+      lastDt = dt;
+      if (frameCount % 60 === 0) {
+        // Smoothed FPS over the last 60 frames (approximately 1s at 60fps).
+        lastFps = Math.round(60 / Math.max(dt * 60, 0.001));
+      }
+    });
+
+    gameProjection.registrar.registerRead({
+      id: 'frameStats',
+      title: 'Frame Statistics',
+      description: 'Current FPS, frame time (dt), and frame count since Play started',
+      read: () => ({
+        fps: lastFps,
+        dt: Math.round(lastDt * 1000) / 1000, // seconds → ms, rounded to µs
+        frameCount,
+      }),
+    });
+
+    gameProjection.registrar.registerRead({
+      id: 'rendererStats',
+      title: 'Renderer Statistics',
+      description: 'EngineMetrics snapshot from the shared renderer',
+      read: () => {
+        const r = deps.renderer as { metrics?: { snapshot(): Record<string, number> } };
+        return r.metrics?.snapshot() ?? {};
+      },
+    });
+  }
+
   // ── defaultScene: pure-read GUID path (research Finding 2) ──
   // loadByGuid returned the SceneAsset payload — its handle-typed fields (e.g.
   // MeshFilter.assetHandle) hold GUID STRINGS (parseScenePayload resolves the

@@ -421,7 +421,7 @@ describe('▶ Play game-owned action/read projection', () => {
       expect(gateway.listGameActions()).toEqual([]);
       await lifecycle.playSimulation();
       expect(gateway.listGameActions().map((item) => item.id)).toEqual(['sample.level.transition']);
-      expect(gateway.listGameReads().map((item) => item.id)).toEqual(['sample.level.status']);
+      expect(gateway.listGameReads().map((item) => item.id)).toEqual(['frameStats', 'rendererStats', 'sample.level.status']);
       await expect(gateway.invokeGameAction('sample.level.transition', { target: 'b' }))
         .resolves.toEqual({ ok: true, value: undefined });
       await expect(gateway.readGameState('sample.level.status'))
