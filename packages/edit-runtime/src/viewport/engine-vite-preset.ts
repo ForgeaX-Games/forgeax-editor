@@ -33,7 +33,7 @@
 
 import { dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, createReadStream, statSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
@@ -110,7 +110,19 @@ function normalizeGameFilePath(raw: string, viteRoot: string): string {
   if (p.startsWith('/@fs/')) p = p.slice('/@fs/'.length);
   else if (p.startsWith('/@fs')) p = p.slice('/@fs'.length);
   if (!/^[A-Za-z]:\//.test(p) && !p.startsWith('/')) {
-    p = resolve(viteRoot, p).replace(/\\/g, '/');
+    // Vite error overlays + some resolveId callers pass a path relative to the
+    // repo (e.g. ../forgeax-games/hellforge/main.ts). Prefer resolving against
+    // the editor package root (parent of standalone/) before viteRoot, because
+    // the host config's root is packages/editor/standalone/ and a bare `../`
+    // from there would land inside packages/, not the sibling Forgeax-games/.
+    const editorRoot = resolve(EDIT_RUNTIME_DIR, '..', '..');
+    const fromEditor = resolve(editorRoot, p).replace(/\\/g, '/');
+    const fromVite = resolve(viteRoot, p).replace(/\\/g, '/');
+    p = fromEditor;
+    try { realpathSync.native(fromEditor); }
+    catch {
+      try { realpathSync.native(fromVite); p = fromVite; } catch { /* keep editor */ }
+    }
   }
   try { p = realpathSync.native(p).replace(/\\/g, '/'); } catch { /* keep */ }
   return process.platform === 'win32' ? p.toLowerCase() : p;
@@ -300,6 +312,52 @@ function silenceShaderEmitInServe(plugin: Record<string, unknown>): PluginOption
   } as unknown as PluginOption;
 }
 
+// ── FBX WASM asset serving ──────────────────────────────────────────────────
+// @forgeax/engine-fbx dynamically imports `../pkg/fbx-wasm.mjs` (with
+// @vite-ignore) and resolves `../pkg/fbx-wasm.wasm` via `new URL(…,
+// import.meta.url)`. Because the package is excluded from pre-bundling
+// (native ESM), Vite serves its dist/index.mjs and the relative `../pkg/`
+// resolves to a path outside Vite's module graph. In the standalone editor
+// this works (the fs.allow covers the engine tree), but in Studio the
+// request is proxied through an outer Vite (:18920) where `/@fs/` paths
+// may be forbidden or the relative URL arithmetic lands in a 404 zone.
+//
+// Fix: a tiny middleware that recognizes any URL ending in `fbx-wasm.mjs`
+// or `fbx-wasm.wasm` and serves the file directly from the engine
+// submodule's build output. This mirrors how forgeaxShader's middleware
+// serves `/shaders/manifest.json` from a fixed disk location.
+const FBX_WASM_PKG_DIR = resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax/engine-fbx/pkg');
+
+function fbxWasmServe(): PluginOption {
+  return {
+    name: 'forgeax:fbx-wasm-serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url;
+        if (!url) return next();
+        const match = url.match(/\bfbx-wasm\.(mjs|wasm)(?:\?.*)?$/);
+        if (!match) return next();
+        const filename = `fbx-wasm.${match[1]}`;
+        const filePath = resolve(FBX_WASM_PKG_DIR, filename);
+        try {
+          const stat = statSync(filePath);
+          const contentType = filename.endsWith('.mjs')
+            ? 'application/javascript'
+            : 'application/wasm';
+          res.writeHead(200, {
+            'Content-Type': contentType,
+            'Content-Length': stat.size,
+            'Cache-Control': 'no-cache',
+          });
+          createReadStream(filePath).pipe(res);
+        } catch {
+          next();
+        }
+      });
+    },
+  } as PluginOption;
+}
+
 export interface EngineVitePresetOptions {
   /**
    * The vite `base` the consuming config uses. '/' for the :15290 host
@@ -367,6 +425,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     plugins.push(shaderBaseStrip(base));
     plugins.push(packBaseStrip(base));
   }
+  plugins.push(fbxWasmServe());
   // Always register: studio multi-game (gameDirAbs:null) still ▶ Play-loads
   // /@fs/<project>/<host-games-dir>/<slug>/main.ts; --game self-host passes
   // an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.

@@ -90,6 +90,54 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
   }
 }
 
+/**
+ * After a SceneInstance mount, find entities that carry Skin but lack
+ * AnimationPlayer and add a default AnimationPlayer to each. This lets
+ * the user immediately bind animation clips without needing to know which
+ * entity inside the mount subtree is the skinned mesh. The collect fold
+ * (`foldMountOverrides`) captures the runtime-added component as a
+ * MountOverride automatically on save.
+ */
+function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
+  try {
+    const w = gateway.doc.world as unknown as {
+      getSceneInstanceState(root: unknown): { ok: boolean; value?: { entityToLocalId: Map<unknown, unknown> } };
+      get(entity: unknown, token: unknown): { ok: boolean; value?: unknown };
+      addComponent(entity: unknown, data: { component: unknown; data: unknown }): { ok: boolean };
+    };
+    if (!w) return;
+
+    const skinToken = resolveComponent('Skin');
+    const animToken = resolveComponent('AnimationPlayer');
+    if (!skinToken || !animToken) return;
+
+    const stateRes = w.getSceneInstanceState(sceneInstanceRoot);
+    if (!stateRes.ok || !stateRes.value) return;
+
+    for (const member of stateRes.value.entityToLocalId.keys()) {
+      const hasSkin = w.get(member, skinToken);
+      if (!hasSkin.ok) continue;
+      const hasAnim = w.get(member, animToken);
+      if (hasAnim.ok) continue;
+
+      const r = w.addComponent(member, {
+        component: animToken,
+        data: {
+          weights: new Float32Array([1, 0, 0, 0]),
+          speeds: new Float32Array([1, 1, 1, 1]),
+          paused: false,
+          looping: true,
+        },
+      });
+      if (r.ok) {
+        console.info('[spawn-asset] auto-added AnimationPlayer to Skin entity', member);
+      }
+    }
+  } catch (e) {
+    console.warn('[spawn-asset] autoAddAnimationPlayerToSkinEntities failed:', e);
+  }
+}
+
 /** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
  *  spawn a wrapper entity via the gateway (so it is the mount ROOT →
  *  round-trips as one `mounts[]` entry), then instantiate the scene sub-asset
@@ -123,6 +171,7 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
       hint: `could not load or instantiate scene asset ${sceneGuid}; the empty wrapper remains and can be undone`,
     };
   }
+  autoAddAnimationPlayerToSkinEntities(root as unknown as number);
   notifyDocChanged();
   broadcastAssetsChanged();
   console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapper: wrapperHandle, root });
@@ -233,6 +282,37 @@ async function bindAssetRefBody(
   notifyDocChanged();
   broadcastAssetsChanged();
   console.info('[editor-core] bindAssetRef: bound', { entity, component, field, assetType, count: handles.length, slot });
+
+  if (component === 'AnimationPlayer' && field === 'clips') {
+    autoActivateWeightsForBoundClips(entity, handles, slot);
+  }
+}
+
+/**
+ * When clips are bound to AnimationPlayer, auto-activate the corresponding
+ * weight slots so the animation plays immediately. Without this, weights
+ * default to [0,0,0,0] and the engine skips every slot.
+ */
+function autoActivateWeightsForBoundClips(entity: number, handles: number[], slot: number | undefined): void {
+  try {
+    const raw = readComponentField(entity, 'AnimationPlayer', 'weights');
+    const weights = Array.isArray(raw) ? [...raw] as number[]
+      : raw instanceof Float32Array ? Array.from(raw) : [0, 0, 0, 0];
+
+    let changed = false;
+    if (slot !== undefined) {
+      if (weights[slot] === 0) { weights[slot] = 1; changed = true; }
+    } else {
+      for (let i = 0; i < handles.length; i++) {
+        if (handles[i] !== 0 && (weights[i] ?? 0) === 0) { weights[i] = 1; changed = true; }
+      }
+    }
+    if (!changed) return;
+
+    gateway.dispatch({ kind: 'setComponent', entity, component: 'AnimationPlayer', patch: { weights } }, 'ai');
+  } catch {
+    // best-effort; never block the bind
+  }
 }
 
 /** Read a component field's live value via the engine reflection primitives (the
