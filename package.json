@@ -4,7 +4,7 @@
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "forgeax editor monorepo — 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + thin subpath entry points (see exports map) for host embedding",
+  "description": "forgeax editor monorepo \u2014 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + thin subpath entry points (see exports map) for host embedding",
   "repository": {
     "type": "git",
     "url": "https://github.com/ForgeaXGame/forgeax-studio.git",
@@ -29,6 +29,7 @@
   },
   "workspaces": [
     "packages/*",
+    "packages/contracts/types",
     "packages/interface/packages/*",
     "packages/engine/packages/*"
   ],
@@ -73,7 +74,7 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@playwright/test": "^1.45.0",
-"@types/node": "^22",
+    "@types/node": "^22",
     "@vitejs/plugin-react": "^6.0.3",
     "dependency-cruiser": "^17.4.3",
     "react": "^19.0.0",
