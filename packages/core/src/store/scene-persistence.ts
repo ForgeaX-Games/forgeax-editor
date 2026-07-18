@@ -133,6 +133,11 @@ export interface ScenePersistenceContext {
    *  (orphan materials no longer attached to any entity) so a save cannot drop
    *  authored pack data the safety floor also protects. null = no scene loaded. */
   loadedInlineAssets: LoadedInlineSnapshot[] | null;
+  /** Entity count from the on-disk scene pack at load time. Used by the
+   *  entity-drop safety net to refuse saves that would overwrite a scene with
+   *  entities using an empty-entity pack (e.g. after a failed reload). null = no
+   *  scene loaded yet (first-time saves proceed). */
+  loadedEntityFloor: number | null;
   /** Cohesive dirty write — disk-watch's reverse-write seam (== deleted _setDirty). */
   setDirty(v: boolean): void;
   /** Cohesive scene-GUID write — disk-watch's reverse-write seam
@@ -161,6 +166,7 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     isDirty: false,
     loadedInlineAssetFloor: null,
     loadedInlineAssets: null,
+    loadedEntityFloor: null,
     setDirty(v: boolean): void { this.isDirty = v; },
     setCurrentSceneGuid(guid: string): void { this.currentSceneGuid = guid; },
   };
@@ -315,7 +321,7 @@ export const stripEditorHiddenMarker = diskIo.stripEditorHiddenMarker;
 export const inlineAssetCount = diskIo.inlineAssetCount;
 // Pure load-floor strip guard (#101) — no deps, so re-exported straight from
 // disk-io rather than composed onto the diskIo instance. store.ts forwards it.
-export { wouldDropInlineAssets, mergeLoadedInlineOrphans } from './persistence/disk-io';
+export { wouldDropInlineAssets, wouldDropAllEntities, mergeLoadedInlineOrphans } from './persistence/disk-io';
 
 // ── Disk load / save session ops (session-domain, ledger only, no undo) ────────
 registerAsyncSessionOp('loadDocFromDisk', diskIo.doLoadDocFromDisk);

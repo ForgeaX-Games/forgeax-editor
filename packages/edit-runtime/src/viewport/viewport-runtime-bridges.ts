@@ -180,7 +180,12 @@ export function installAssetCatalogRefresh(): () => void {
     // A newly imported asset wrote a fresh pack-index on disk, but the registry
     // cached the pre-import index at boot and only re-fetches on a per-GUID miss.
     // Refresh now so Content Browser listCatalog + later loadByGuid see it.
+    // invalidateAll() clears loaded payloads and pack-file body caches so the
+    // next loadByGuid genuinely re-fetches from disk — without it, stale scene
+    // payloads persist even after a successful refreshCatalog (the pack-index
+    // listing updates but already-loaded asset bodies stay cached).
     const reg = gateway.doc.registry;
+    if (reg?.invalidateAll) reg.invalidateAll();
     if (reg?.refreshCatalog) {
       void reg.refreshCatalog().finally(() => {
         pendingCatalogRefires += 1;

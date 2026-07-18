@@ -149,6 +149,20 @@ export function wouldDropInlineAssets(floor: number | null, newPack: unknown): b
   return inlineAssetCount(newPack) < floor;
 }
 
+/** Entity-count safety net: true when the serialized pack has zero entities but
+ *  the scene loaded from disk had a non-zero entity count. Prevents an empty world
+ *  (e.g. after a failed loadSceneByGuid teardown or a stale cache miss) from
+ *  permanently overwriting a valid scene file. `loadedEntityFloor === null` means
+ *  no scene was loaded — first-time saves proceed. Exported for unit tests. */
+export function wouldDropAllEntities(loadedEntityFloor: number | null, newPack: unknown): boolean {
+  if (loadedEntityFloor === null || loadedEntityFloor === 0) return false;
+  const scene = (newPack as { assets?: Array<{ kind?: string; payload?: { entities?: unknown[] } }> })?.assets;
+  if (!Array.isArray(scene)) return false;
+  const sceneEntry = scene.find((a) => a.kind === 'scene');
+  const entityCount = Array.isArray(sceneEntry?.payload?.entities) ? sceneEntry!.payload!.entities!.length : 0;
+  return entityCount === 0;
+}
+
 /** Re-append inline assets that lived in the pack at LOAD but are no longer
  *  reachable from live refs[] (orphans). Mutates `pack.assets` in place.
  *  Pure — no registry; payloads come from the load-time snapshot so we never
@@ -375,7 +389,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  the hierarchy is exactly the authored ChildOf. Nested prefabs inside stay as
    *  their own SceneInstance anchors (instantiateFlat keeps the mount path
    *  anchored). Returns true on success. @internal-store — disk-watch CALLS this
-   *  to reload (D-6 seam). */
+   *  to reload (D-6 seam).
+   *
+   *  SAFETY: teardown is deferred until AFTER loadByGuid + instantiateFlat both
+   *  succeed. If either step fails, the previous scene stays intact and no empty
+   *  world is exposed to save paths. On success the old entities are despawned
+   *  and replaced atomically. */
   async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
@@ -384,13 +403,15 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(sceneGuid);
       if (!parsed.ok) return false;
-      // Clear any previously loaded scene first so a reload doesn't double-spawn.
-      teardownCurrentScene();
+      // Load and instantiate BEFORE teardown so a failure leaves the old scene
+      // intact (no empty world exposed to save paths).
       const loadRes = await reg.loadByGuid(parsed.value);
       if (!loadRes.ok) return false;
       const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) return false;
+      // Load succeeded — now safe to tear down the previous scene.
+      teardownCurrentScene();
       // Track the scene's top-level entities so a later reload can despawn them.
       ctx.currentSceneEntities = instRes.value;
       return true;
@@ -478,6 +499,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     ctx.currentSceneGuid = null;
     ctx.loadedInlineAssetFloor = null;
     ctx.loadedInlineAssets = null;
+    ctx.loadedEntityFloor = null;
     try {
       const r = await deps.fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
       if (r.ok) {
@@ -490,6 +512,13 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
             // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk
             // truth, not the live world (which may fail to populate handles).
             ctx.loadedInlineAssetFloor = inlineAssetCount(parsed);
+            // Capture entity count from disk so saves cannot overwrite a
+            // non-empty scene with an empty-entity pack.
+            const sceneEntryForFloor = (parsed.assets as Array<{ kind?: string; payload?: { entities?: unknown[] } }>)
+              .find((a) => a.kind === 'scene');
+            ctx.loadedEntityFloor = Array.isArray(sceneEntryForFloor?.payload?.entities)
+              ? sceneEntryForFloor!.payload!.entities!.length
+              : 0;
             // Diagnostic: log what we loaded so we can compare against save-time
             const loadedAssets = parsed.assets as Array<{
               guid?: string;
@@ -584,6 +613,14 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       );
       return false;
     }
+    // Entity-drop guard: refuse a write that would overwrite a non-empty scene
+    // with an empty-entity pack (e.g. after a failed reload left the world empty).
+    if (wouldDropAllEntities(ctx.loadedEntityFloor, parsedNew)) {
+      console.error(
+        `[editor-core] saveDocToDisk: serialized pack has 0 entities but the scene loaded with ${ctx.loadedEntityFloor} — aborting write to protect scene data`,
+      );
+      return false;
+    }
     try {
       const r = await deps.fetch('/api/files', {
         method: 'POST',
@@ -622,6 +659,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     if (parsedBeacon !== undefined && wouldDropInlineAssets(ctx.loadedInlineAssetFloor, parsedBeacon)) {
       console.error(
         `[editor-core] flushPendingSaveBeacon: pack has ${inlineAssetCount(parsedBeacon)} inline asset(s) but the scene loaded with ${ctx.loadedInlineAssetFloor} — skipping beacon to protect materials`,
+      );
+      return; // keep ctx.isDirty; do not clobber the on-disk scene
+    }
+    if (parsedBeacon !== undefined && wouldDropAllEntities(ctx.loadedEntityFloor, parsedBeacon)) {
+      console.error(
+        `[editor-core] flushPendingSaveBeacon: pack has 0 entities but the scene loaded with ${ctx.loadedEntityFloor} — skipping beacon to protect scene data`,
       );
       return; // keep ctx.isDirty; do not clobber the on-disk scene
     }
