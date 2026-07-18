@@ -11,8 +11,5 @@ export { CBFolderItem } from './CBFolderItem';
 export { buildAssetContextMenu, buildFolderContextMenu } from './CBContextMenu';
 export { deriveContentView } from './folder-view';
 export { resolveFolderMenuItems } from './folder-menu';
-export { ScanOverlay } from './ScanOverlay';
-export { useStartupScan } from './useStartupScan';
-export { ScanDiagnosticBridge, pushScanDiagnostics } from './ScanDiagnosticBridge';
 export * from './hooks';
 export * from './types';

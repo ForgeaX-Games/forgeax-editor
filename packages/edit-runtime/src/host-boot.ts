@@ -63,7 +63,7 @@ import {
   worldEntityHandles,
   resolveGamePath,
 } from '@forgeax/editor-core';
-import { installScanHmrBridge } from '@forgeax/editor-core/scan/scan-hmr-bridge';
+import { installAssetHmrBridge } from '@forgeax/editor-core/assets/asset-hmr-bridge';
 import {
   createHostSession,
   type HostSessionContext,
@@ -128,11 +128,9 @@ export async function configureHostSession(session: HostGameSession = { slug: nu
   // load so paths/storage keys resolve to the active scene file (UE level model).
   await initSceneList();
 
-  // G6: install HMR bridge for runtime asset change events.
-  // When vite-plugin-pack detects source file changes at dev time, it emits
-  // custom WebSocket events. The HMR bridge listens and dispatches session ops
-  // so the ledger reflects live asset state changes.
-  installScanHmrBridge();
+  // The pack plugin's runtime contract is a sidecar-change notification.
+  // Asset refresh and cache invalidation stay in the editor PanelBridge path.
+  installAssetHmrBridge();
 }
 
 /**

@@ -1,8 +1,8 @@
 // scan/index.ts — asset scan module barrel export (browser-side only).
 //
 // After review (2026-07-10): scan fs/stat/hash/scan-state IO moves to Node side
-// (vite-plugin-pack + platform-io). Core keeps: types, pure functions, progress
-// UI state, session ops, WS signal consumption.
+// (vite-plugin-pack + platform-io). Core keeps browser-safe types and pure
+// helpers; runtime asset-change notifications live under assets/.
 //
 // Anchors:
 //   todo: 2026-07-09 startup-asset-scan-auto-import
@@ -51,28 +51,3 @@ export {
   validateSource,
   validateSourceQuick,
 } from './validate-source';
-
-// Scan progress (transient UI state)
-export {
-  type ScanProgressState,
-  type ScanPhase,
-  getScanProgress,
-  onScanProgress,
-  updateScanProgress,
-  resetScanProgress,
-} from './scan-progress';
-
-// Scan broadcast (session ops — dispatched from browser)
-export {
-  broadcastCatalogRefreshed,
-  broadcastAssetReimported,
-  broadcastAssetOrphanDetected,
-  broadcastAssetValidationFailed,
-} from './scan-broadcast';
-
-// HMR bridge (WS signal consumption — browser-side)
-export {
-  installScanHmrBridge,
-  registerScanDiagnosticsConsumer,
-  registerBrowserImportConsumer,
-} from './scan-hmr-bridge';

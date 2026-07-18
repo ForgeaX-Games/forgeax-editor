@@ -398,11 +398,11 @@ export type { ClipControl, ViewCmd } from './io/clip-control';
 // Dispatch mutations via gateway.dispatch({ kind: 'setCBPath'/'cbGoBack'/'cbGoForward' }).
 export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-nav';
 
-// ── Asset scan pipeline (feat-20260709-startup-asset-scan) ──
+// ── Asset scan helpers (feat-20260709-startup-asset-scan) ──
 //
 // After review (2026-07-10): scan fs/stat/hash/IO runs in Node side
-// (vite-plugin-pack + platform-io). Core keeps: types, pure functions,
-// progress state, session ops, WS signal consumption.
+// (vite-plugin-pack + platform-io). Core keeps types, pure functions, and
+// explicit session operations; runtime notifications live under assets/.
 //
 // Session appliers are registered at module eval time via scan-ops.ts.
 import './scan/scan-ops';
@@ -416,8 +416,6 @@ export type {
   ScanDiff,
   DirStat,
   FileStat,
-  ScanProgressState,
-  ScanPhase,
   ImportFormat,
   ImporterKey,
   SubAssetKind,
@@ -437,15 +435,5 @@ export {
   getAllExtensions,
   validateSource,
   validateSourceQuick,
-  getScanProgress,
-  onScanProgress,
-  updateScanProgress,
-  resetScanProgress,
-  broadcastCatalogRefreshed,
-  broadcastAssetReimported,
-  broadcastAssetOrphanDetected,
-  broadcastAssetValidationFailed,
-  installScanHmrBridge,
-  registerScanDiagnosticsConsumer,
-  registerBrowserImportConsumer,
 } from './scan/index';
+export { installAssetHmrBridge } from './assets/asset-hmr-bridge';

@@ -23,9 +23,9 @@
       "types": "./src/scan/index.ts",
       "import": "./src/scan/index.ts"
     },
-    "./scan/scan-hmr-bridge": {
-      "types": "./src/scan/scan-hmr-bridge.ts",
-      "import": "./src/scan/scan-hmr-bridge.ts"
+    "./assets/asset-hmr-bridge": {
+      "types": "./src/assets/asset-hmr-bridge.ts",
+      "import": "./src/assets/asset-hmr-bridge.ts"
     },
     "./manifest": {
       "types": "./src/manifest.ts",

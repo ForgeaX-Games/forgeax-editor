@@ -16,7 +16,7 @@
  *   3. Report progress; broadcastAssetsChanged once at the end.
  *
  * The startup scan does NOT use this file — it runs while the gateway is scan-locked
- * and calls `executeAssetImport` directly (bootstrap carve-out; see useStartupScan.ts).
+ * and calls `executeAssetImport` directly through the shared import executor.
  */
 
 import { assetIO, gateway, resolveGamePath, broadcastAssetsChanged, type ImportFileResult } from '@forgeax/editor-core';

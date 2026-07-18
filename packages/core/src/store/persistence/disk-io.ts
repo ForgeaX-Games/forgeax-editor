@@ -363,18 +363,20 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  members). A belt-and-suspenders sweep over `worldRootHandles` catches named
    *  top-level entities added between load and reload so a reload can't orphan
    *  anything. No-op when nothing loaded. */
-  function teardownCurrentScene(): void {
+  function teardownCurrentScene(preserve?: ReadonlySet<number>): void {
     const w: WorldType = gateway.doc.world;
     if (w) {
       const seen = new Set<number>();
       for (const e of ctx.currentSceneEntities) {
         if (seen.has(e as number)) continue;
+        if (preserve?.has(e as number)) continue;
         seen.add(e as number);
         try { w.despawnScene(e); } catch { /* best-effort */ }
       }
       try {
         for (const h of worldRootHandles(w)) {
           if (seen.has(h as number)) continue;
+          if (preserve?.has(h as number)) continue;
           seen.add(h as number);
           try { w.despawnScene(h); } catch { /* best-effort */ }
         }
@@ -411,7 +413,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) return false;
       // Load succeeded — now safe to tear down the previous scene.
-      teardownCurrentScene();
+      // Pass the newly-spawned handles so teardown's worldRootHandles sweep
+      // skips them (they are already in the world at this point).
+      const newHandleSet = new Set(instRes.value.map((e: unknown) => e as number));
+      teardownCurrentScene(newHandleSet);
       // Track the scene's top-level entities so a later reload can despawn them.
       ctx.currentSceneEntities = instRes.value;
       return true;

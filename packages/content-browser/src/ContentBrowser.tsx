@@ -27,8 +27,6 @@ import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { deriveContentView } from './folder-view';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
-import { useStartupScan } from './useStartupScan';
-import { ScanOverlay } from './ScanOverlay';
 import './content-browser.css';
 
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
@@ -91,8 +89,6 @@ function registryEntryToCBAsset(
 
 export function ContentBrowser() {
   useDocVersion();
-  // Startup asset scan: runs once on mount, locks gateway during scan
-  const { scanning } = useStartupScan();
   const gameSlug = getSceneId();
   const [allAssets, setAllAssets] = useState<CBAsset[]>([]);
   const [loading, setLoading] = useState(false);

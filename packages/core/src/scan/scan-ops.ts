@@ -30,9 +30,8 @@ sessionAppliers.set('assetOrphanDetected', () => {
   return { ok: true };
 });
 
-// assetValidationFailed applier: diagnostics are written to the ledger.
-// The ScanDiagnosticBridge (content-browser) bridges diagnostics from the
-// ledger to healthStore for Info Panel display.
+// assetValidationFailed applier: diagnostics are written to the ledger for
+// consumers that explicitly invoke this editor operation.
 sessionAppliers.set('assetValidationFailed', () => {
   // Diagnostics are in the op payload — consumer layers (Info Log, AI) read
   // the ledger entry. No core→interface import needed.
@@ -56,4 +55,3 @@ sessionAppliers.set('requestReimport', (op) => {
   });
   return { ok: true };
 });
-
