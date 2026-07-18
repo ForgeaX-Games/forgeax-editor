@@ -69,11 +69,11 @@ function registryEntryToCBAsset(
     // mapping to the game slug. Derive the CRUD target from sourcePath (the
     // on-disk source file's .meta.json sidecar). For shared assets this gives
     // the workspace-relative path the scope filter expects.
-    ? (e.sourcePath ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json` : e.relativeUrl)
+    ? (e.sourcePath ? `${e.sourcePath.replace(/^\//, '')}.meta.json` : e.relativeUrl)
     : e.relativeUrl.endsWith('.pack.json')
       ? e.relativeUrl
       : e.sourcePath
-        ? `${e.sourcePath.startsWith('/') ? '' : '/'}${e.sourcePath}.meta.json`
+        ? `${e.sourcePath.replace(/^\//, '')}.meta.json`
         : e.relativeUrl;
   return {
     type: 'asset',

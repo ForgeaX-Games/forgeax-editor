@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <title>Forgeax Editor — Standalone Chrome</title>
+  <!-- React Refresh preamble polyfill: in headless browsers the @vitejs/plugin-react
+       transform emits $RefreshSig$() / $RefreshReg$() calls, but the HMR runtime
+       that defines them may not have loaded yet. $RefreshSig$() returns a "signature"
+       closure for hook-order tracking; the no-op returns identity. These stubs are
+       overwritten by the real HMR runtime when it loads. -->
+  <script>
+    var $RefreshSig$ = $RefreshSig$ || function() { return function(t) { return t; }; };
+    var $RefreshReg$ = $RefreshReg$ || function() {};
+  </script>
 </head>
 <body>
   <div id="root"></div>

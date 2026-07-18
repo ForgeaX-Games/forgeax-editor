@@ -51,7 +51,7 @@ interface ExternalAssetMetaJson {
   // closed `assetType` enum with the open `importer` key (one-cut migration,
   // no shim). This replica must read `importer` to match meta.schema.json and
   // the engine's build-catalog.ts; reading `assetType` rejected every sidecar.
-  readonly importer: 'image' | 'gltf' | 'audio' | 'font';
+  readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font';
   readonly source: string;
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
@@ -206,7 +206,7 @@ async function processMetaSidecar(
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return `sidecar ${rawPath} missing required 'importer' field`;
   }
-  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'audio') {
+  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio') {
     return `sidecar ${rawPath} has unfoldable importer: ${JSON.stringify(metaObj.importer)}`;
   }
 
@@ -317,16 +317,17 @@ async function processMetaSidecar(
     }
   }
 
-  if (meta.importer === 'gltf') {
-    // gltfImporter emits up to 8+ sub-asset kinds: mesh / material / scene /
-    // texture / skeleton / skin + N animation-clip. The runtime resolves them
-    // all through the same .glb source URL — gltfImporter's transform hook
-    // re-parses the GLB and emits the right POD per (guid, sourceIndex) lookup.
-    // Without listing every kind here, loadByGuid for the missing rows would
-    // hit asset-not-imported, defeating skinned-mesh + animation playback.
-    const GLTF_KINDS = new Set(['mesh', 'material', 'scene', 'texture', 'skeleton', 'skin', 'animation-clip']);
+  if (meta.importer === 'gltf' || meta.importer === 'fbx') {
+    // gltf/fbx importers emit the same 7 sub-asset kind families: mesh /
+    // material / scene / texture / skeleton / skin + N animation-clip. The
+    // runtime resolves them all through the same source URL — the importer's
+    // transform hook re-parses the file and emits the right POD per
+    // (guid, sourceIndex) lookup. Without listing every kind here, loadByGuid
+    // for the missing rows would hit asset-not-imported, defeating
+    // skinned-mesh + animation playback.
+    const MODEL_KINDS = new Set(['mesh', 'material', 'scene', 'texture', 'skeleton', 'skin', 'animation-clip']);
     for (const sub of meta.subAssets) {
-      if (GLTF_KINDS.has(sub.kind)) {
+      if (MODEL_KINDS.has(sub.kind)) {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel, name: subName(sub) });
       }
     }
@@ -342,7 +343,7 @@ async function processMetaSidecar(
  *
  * Two-arm dispatch:
  *   - .pack.json -> legacy 4-field entry per assets[] row
- *   - .meta.json -> image/gltf/audio arm with metadata sub-structure
+ *   - .meta.json -> image/gltf/fbx/audio arm with metadata sub-structure
  *
  * Returns [] on scan error (dev-mode degrade over crash).
  *

@@ -9,6 +9,7 @@ import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { fbxImporter } from '@forgeax/engine-fbx';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -436,7 +437,7 @@ export default defineConfig({
     pluginPack({
       roots: gameAssetRoots(),
       base: '/preview/',
-      importers: [imageImporter, gltfImporter],
+      importers: [imageImporter, gltfImporter, fbxImporter],
     }) as never,
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,

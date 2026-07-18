@@ -180,7 +180,12 @@ export function installAssetCatalogRefresh(): () => void {
     // A newly imported asset wrote a fresh pack-index on disk, but the registry
     // cached the pre-import index at boot and only re-fetches on a per-GUID miss.
     // Refresh now so Content Browser listCatalog + later loadByGuid see it.
+    // invalidateAll() clears loaded payloads and pack-file body caches so the
+    // next loadByGuid genuinely re-fetches from disk — without it, stale scene
+    // payloads persist even after a successful refreshCatalog (the pack-index
+    // listing updates but already-loaded asset bodies stay cached).
     const reg = gateway.doc.registry;
+    if (reg?.invalidateAll) reg.invalidateAll();
     if (reg?.refreshCatalog) {
       void reg.refreshCatalog().finally(() => {
         pendingCatalogRefires += 1;
@@ -251,10 +256,33 @@ export function installErrorOverlay(container: HTMLElement): () => void {
   const box = document.createElement('div');
   box.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
     + 'background:rgba(140,10,10,0.94);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:10px 12px;'
-    + 'border-radius:6px;white-space:pre-wrap;display:none;pointer-events:none;box-shadow:0 2px 12px rgba(0,0,0,.5)';
+    + 'border-radius:6px;white-space:pre-wrap;display:none;pointer-events:auto;box-shadow:0 2px 12px rgba(0,0,0,.5)';
   container.appendChild(box);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Dismiss editor render error');
+  close.title = 'Dismiss editor render error';
+  close.style.cssText = [
+    'position:sticky', 'top:0', 'float:right', 'margin:-4px -4px 6px 10px',
+    'width:24px', 'height:24px', 'border:1px solid rgba(255,255,255,.35)',
+    'border-radius:4px', 'background:rgba(255,255,255,.12)', 'color:#fff',
+    'display:inline-grid', 'place-items:center', 'padding:0', 'cursor:pointer',
+  ].join(';');
+  close.innerHTML = [
+    '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"',
+    ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+    '<path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>',
+    '</svg>',
+  ].join('');
+  const body = document.createElement('div');
+  box.append(close, body);
   const seen = new Set<string>();
   let count = 0;
+  let dismissedSeenSize = 0;
+  close.addEventListener('click', () => {
+    dismissedSeenSize = seen.size;
+    box.style.display = 'none';
+  });
   const stringifyArg = (x: unknown): string => {
     if (x instanceof Error) {
       const d = (x as unknown as { detail?: unknown }).detail;
@@ -273,8 +301,8 @@ export function installErrorOverlay(container: HTMLElement): () => void {
     }
     if (seen.has(text) || seen.size > 40) return;
     seen.add(text);
-    box.style.display = 'block';
-    box.textContent = `⚠ editor render error (${++count}):\n` + [...seen].join('\n');
+    if (seen.size > dismissedSeenSize) box.style.display = 'block';
+    body.textContent = `⚠ editor render error (${++count}):\n` + [...seen].join('\n');
   };
   const origErr = console.error.bind(console);
   const wrappedErr = (...a: unknown[]): void => { origErr(...a); try { show(a.map(stringifyArg).join(' ')); } catch { /* */ } };
