@@ -14,8 +14,6 @@
 //   forgeax:scan-validation      → dispatch assetValidationFailed op (H4)
 //   complex-format paths delivered inside scan-done.needBrowserImport (H5)
 //
-// Race: Node may emit scan-done before the browser installs HMR listeners.
-// GET /__pack/scan-done replays the last payload on bridge install.
 //
 // Anchors:
 //   todo: 2026-07-09 startup-asset-scan-auto-import G4+G6
@@ -123,7 +121,7 @@ interface ViteHotContext {
   off(event: string, cb: (...args: unknown[]) => void): void;
 }
 
-/** Dedup key so WS + GET /__pack/scan-done replay do not double-import. */
+/** Dedup key so repeated scan-done WS notifications do not double-import. */
 let _handledScanDoneKey: string | null = null;
 
 function scanDoneKey(d: ScanDoneData): string {
@@ -135,10 +133,10 @@ function scanDoneKey(d: ScanDoneData): string {
 }
 
 /**
- * Apply a scan-done payload (from WS or GET /__pack/scan-done race replay).
+ * Apply a scan-done payload from the dev-server WebSocket.
  * Idempotent for identical payloads within the session.
  */
-export function applyScanDonePayload(data: unknown, source: 'ws' | 'http-replay' = 'ws'): void {
+export function applyScanDonePayload(data: unknown, source: 'ws' = 'ws'): void {
   const d = data as ScanDoneData | undefined;
   if (!d) {
     console.warn(`[scan-hmr] applyScanDonePayload(${source}): empty payload`);
@@ -181,43 +179,11 @@ export function applyScanDonePayload(data: unknown, source: 'ws' | 'http-replay'
   }
 }
 
-/** Fetch last scan-done from Node (covers WS race when browser mounts late). */
-export async function replayLastScanDone(): Promise<void> {
-  try {
-    const res = await fetch('/__pack/scan-done');
-    if (res.status === 204) {
-      console.info('[scan-hmr] GET /__pack/scan-done → 204 (not ready)');
-      return;
-    }
-    if (!res.ok) {
-      console.warn(`[scan-hmr] GET /__pack/scan-done → ${res.status}`);
-      return;
-    }
-    // Guard against a host that doesn't serve this route: when the request
-    // SPA-falls back to index.html the status is 200 but the body is HTML, and
-    // a blind res.json() throws "Unexpected token '<'". The scan-HMR producer
-    // (WS forgeax:scan-* signals + this GET route) is engine-side; a host/engine
-    // pin without it simply has no replay to offer — treat a non-JSON response
-    // as "route absent" and degrade quietly (WS remains the primary path).
-    const contentType = res.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
-      console.info('[scan-hmr] GET /__pack/scan-done: non-JSON response (route not served) — skipping replay');
-      return;
-    }
-    const data: unknown = await res.json();
-    applyScanDonePayload(data, 'http-replay');
-  } catch (err) {
-    console.warn('[scan-hmr] GET /__pack/scan-done failed:', err);
-  }
-}
-
 /** Install all scan HMR listeners. Returns a dispose function. */
 export function installScanHmrBridge(): () => void {
   const hot = (import.meta as unknown as { hot?: ViteHotContext }).hot;
   if (!hot) {
     console.warn('[scan-hmr] installScanHmrBridge: import.meta.hot missing — WS signals will NOT be received');
-    // Still try HTTP replay so startup import can proceed without HMR.
-    void replayLastScanDone();
     return () => {};
   }
   console.info('[scan-hmr] installScanHmrBridge: listening for forgeax:scan-* / asset* events');
@@ -314,9 +280,6 @@ export function installScanHmrBridge(): () => void {
   hot.on('forgeax:assetReimported', onAssetReimported);
   hot.on('forgeax:assetOrphanDetected', onAssetOrphan);
   hot.on('forgeax:asset-changed', onAssetChanged);
-
-  // Race replay: if Node already finished startup scan before we subscribed.
-  void replayLastScanDone();
 
   return () => {
     hot.off('forgeax:scan-started', onScanStarted);
