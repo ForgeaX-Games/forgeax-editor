@@ -74,6 +74,8 @@ import {
   timePlugin,
   animationPlugin,
   Transform,
+  Camera,
+  perspective,
   PROPAGATE_TRANSFORMS_SYSTEM,
 } from '@forgeax/engine-runtime';
 import { statePlugin } from '@forgeax/engine-state';
@@ -533,26 +535,35 @@ export async function assemblePlayWorld(
       assets: rendererAssets,
       app: playApp,
       registerUpdate: (fn: (dt: number) => void) => playApp.registerUpdate(fn),
-      // M5 w23 / D-3: command-set pointer-lock game gate, wired the same way as
-      // the play-runtime host. Delegates to the assemble-form App.input backend
-      // (host pre-injected via INPUT_BACKEND_KEY). This is the game gate half of
-      // the dual gate; the host gate (getInputTarget() === 'game', evaluated per
-      // click in ViewportComponent's createApp pointerLockAllowed predicate) is
-      // an independent fact and stays in place (D-3: AND-composition, not
-      // double-write).
       setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
-      // BootstrapContext.uiRoot — the controlled UI container (removed on ■ Stop).
-      // Conditionally spread so it stays ABSENT in headless (games then fall back
-      // to document.body, matching the `ctx?.uiRoot ?? document.body` game idiom).
       ...(uiRoot !== undefined ? { uiRoot } : {}),
-      // BootstrapContext.registerCleanup — the game registers non-DOM teardown
-      // (listeners / AudioContext / timers); flushed reverse-order on ■ Stop.
       registerCleanup: (fn: () => void) => { cleanups.push(fn); },
       ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
     await entry(playWorld, ctx as never);
+  } else {
+    console.warn('[editor] ▶ Play: no bootstrap entry resolved — game logic will not run');
+  }
+
+  // Fallback camera: if the play world has no Camera entity after bootstrap
+  // (or bootstrap was skipped), spawn a default one so the renderer doesn't
+  // fire render-system-no-camera every frame. Aligned with the play-runtime
+  // preview fallback (play-runtime/src/main.ts). The fallback uses a safe
+  // perspective projection; games that spawn their own camera are unaffected
+  // (their camera takes precedence via the renderer's first-hit behavior).
+  let hasCameraInPlayWorld = false;
+  const cameraQuery = createQueryState({ with: [Camera, Entity] });
+  queryRun(cameraQuery, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
+    if (bundle.Entity.self.length > 0) hasCameraInPlayWorld = true;
+  });
+  if (!hasCameraInPlayWorld) {
+    console.warn('[editor] ▶ Play: no Camera entity in play world — spawning fallback camera');
+    (playWorld as { spawn(...args: unknown[]): { unwrap(): number } }).spawn(
+      { component: Transform, data: { pos: [0, 0.6, 5] } },
+      { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: 1, far: 1000 }) },
+    );
   }
 
   const detach = (): void => {

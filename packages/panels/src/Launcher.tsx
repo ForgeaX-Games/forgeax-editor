@@ -67,8 +67,13 @@ export function LauncherPanel() {
           <input type="radio" name="play-target" checked={value === CAMPAIGN} onChange={() => pick(CAMPAIGN)} />
           <span>{t('editor.launcher.campaignOption')}</span>
         </label>
-        {levels.filter((scene) => scene.guid !== undefined).map((scene) => (
-          <label key={scene.guid} className="launcher-option">
+        {levels
+          .filter((scene) => scene.guid !== undefined)
+          // Defend against duplicate GUIDs in the scene list (path-spelling /
+          // remount races). Prefer unique pack path for React keys.
+          .filter((scene, i, arr) => arr.findIndex((s) => s.guid === scene.guid) === i)
+          .map((scene) => (
+          <label key={scene.pack ?? scene.id} className="launcher-option">
             <input
               type="radio"
               name="play-target"

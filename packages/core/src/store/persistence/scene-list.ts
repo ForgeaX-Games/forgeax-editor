@@ -153,10 +153,18 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       // A2: scene discovery is kind-driven — scan all packs under the game dir and
       // filter by `kind === 'scene'`.
       const scenePacks = await findAllScenePacks(ctx.currentSceneId);
+      // Assign atomically + dedupe by scene GUID. Concurrent init (Strict Mode /
+      // remount) or a tree walk that returns the same pack under two path spellings
+      // must not leave duplicate GUIDs — Launcher keys rows by guid.
+      const next: SceneFileEntry[] = [];
+      const seenGuid = new Set<string>();
       for (const { pack, guid } of scenePacks.sort((a, b) => a.pack.localeCompare(b.pack))) {
+        if (seenGuid.has(guid)) continue;
+        seenGuid.add(guid);
         const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-        ctx.sceneList.push({ id: stem, name: stem, pack, guid });
+        next.push({ id: stem, name: stem, pack, guid });
       }
+      ctx.sceneList = next;
       // Fallback: resolve forge.json `defaultScene` GUID when no scene packs found.
       if (ctx.sceneList.length === 0) {
         const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;

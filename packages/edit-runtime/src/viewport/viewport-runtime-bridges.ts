@@ -291,6 +291,9 @@ export function installErrorOverlay(container: HTMLElement): () => void {
     return typeof x === 'string' ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })();
   };
   const show = (text: string): void => {
+    // React duplicate-key warnings match /error/ but are not GPU/render failures.
+    // Keep them in the console; do not paint the red viewport banner.
+    if (/two children with the same key/i.test(text)) return;
     if (!/error|rhi|fail|exception|unsupported|invalid|adapter|gpu/i.test(text)) return;
     // Grace-period suppression for render-system-no-camera: if a transient boot
     // gap lets the renderer tick before camera spawn completes, skip the banner

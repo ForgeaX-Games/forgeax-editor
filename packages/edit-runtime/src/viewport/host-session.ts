@@ -180,7 +180,9 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
           cached = mod.bootstrap as GameBootstrap;
           return cached;
         }
-      } catch { /* try next candidate */ }
+      } catch (err) {
+        console.warn(`[editor] ▶ Play import failed for ${gameFsBase}/${rel}:`, err);
+      }
     }
     console.warn(`[editor] ▶ Play bootstrap module not found for ${deps.getSceneId()}`);
     return cached;

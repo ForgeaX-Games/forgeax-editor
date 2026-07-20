@@ -529,13 +529,13 @@ describe('▶ Play module-level game state registration', () => {
         .resolves.toEqual({ ok: true, value: undefined });
       fakeRaf.step();
       await expect(gateway.readGameState('state.status'))
-        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 2 } });
+        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 3 } });
 
       await expect(gateway.invokeGameAction('state.transition', { target: 'a' }))
         .resolves.toEqual({ ok: true, value: undefined });
       fakeRaf.step();
       await expect(gateway.readGameState('state.status'))
-        .resolves.toEqual({ ok: true, value: { active: 'a', globalAlive: true, scopedAlive: false, entityCount: 1 } });
+        .resolves.toEqual({ ok: true, value: { active: 'a', globalAlive: true, scopedAlive: false, entityCount: 2 } });
       lifecycle.stopSimulation();
 
       await lifecycle.playSimulation();
@@ -543,7 +543,7 @@ describe('▶ Play module-level game state registration', () => {
         .resolves.toEqual({ ok: true, value: undefined });
       fakeRaf.step();
       await expect(gateway.readGameState('state.status'))
-        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 2 } });
+        .resolves.toEqual({ ok: true, value: { active: 'b', globalAlive: true, scopedAlive: true, entityCount: 3 } });
       lifecycle.stopSimulation();
     } finally {
       fakeRaf.restore();
