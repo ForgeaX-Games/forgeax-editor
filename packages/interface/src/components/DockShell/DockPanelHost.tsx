@@ -12,17 +12,9 @@
 // empty slot.
 import type { ReactNode } from 'react';
 import { usePanelRenderers } from './panelRenderers';
+import { PanelShell } from '../PanelShell/PanelShell';
 
 export function DockPanelHost({ id }: { id: string }): ReactNode {
   const { panels } = usePanelRenderers();
-  const body = panels?.[id]?.render();
-  return (
-    <div data-fx-slot={`DockPanel:${id}`} style={{ display: 'contents' }}>
-      {body ?? (
-        <div className="surface-placeholder" data-panel={id} data-panel-unmounted="1">
-          <div className="surface-placeholder-title">Panel not mounted</div>
-        </div>
-      )}
-    </div>
-  );
+  return <PanelShell id={id} panel={panels?.[id]} />;
 }

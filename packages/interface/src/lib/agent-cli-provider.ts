@@ -1,6 +1,6 @@
 /** Map agent manifest `preferredCliProvider` → kernel id used by `/api/cli/chat`.
  *
- *  Kernel ids match `packages/cli/src/kernel/*-kernel.ts` and the Composer
+ *  Kernel ids match `packages/orchestrator/src/kernel/*-kernel.ts` and the Composer
  *  provider picker (`cursor-agent`, `claude-code`, `codex`, …). `null` means
  *  the forgeax-native EventBus path (no CLI subprocess). */
 

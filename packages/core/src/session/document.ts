@@ -1,30 +1,18 @@
-// applyCommand — world-based imperative mutation (M7: EntityNode deleted).
+// applyCommand — world-based imperative mutation.
 //
-// feat-20260707-editor-world-fork-ssot-level-load-play M3 (I1): handle IS identity.
-// The legacy id-to-handle map is deleted. Document appliers write the engine
-// world directly; the runtime entity identity is the engine EntityHandle. The op
-// payloads carry handles; a spawnEntity may carry a NEGATIVE placeholder _id used
-// only to forward-reference the not-yet-spawned entity WITHIN a single transaction
-// (e.g. groupSelected: spawn a group, then reparent children under it). That
-// forward-reference is resolved by a transaction-scoped alias map (DocAliasMap) —
-// an ephemeral map created per top-level dispatch and discarded after; it is NOT a
-// persistent second identity namespace (AC-01: legacy-map symbol grep zero hits).
-// After a spawn applier runs it rewrites cmd._id in place to the real engine
-// handle so the committed ledger op and any post-dispatch reader (spawnClipboard
-// selection) see the concrete handle.
+// Handle IS identity: document appliers write the engine world directly, and
+// op payloads carry EntityHandles. A spawnEntity may carry a NEGATIVE
+// placeholder `_id` used only to forward-reference the not-yet-spawned entity
+// WITHIN a single transaction (e.g. groupSelected: spawn a group, then reparent
+// children under it). That forward-reference is resolved by a
+// transaction-scoped alias map (DocAliasMap) — ephemeral, created per top-level
+// dispatch and discarded after. After a spawn applier runs it rewrites
+// cmd._id in place to the real engine handle so the committed ledger op and
+// any post-dispatch reader (spawnClipboard selection) see the concrete handle.
 //
 // childrenOf walks a World via the engine Children component (activeWorld read
-// face) — no legacy-map iteration. Root entities are derived from the world walk
-// (worldRootHandles) — entities with no live ChildOf parent.
-//
-// Anchors:
-//   requirements AC-01: applyCommand off the double-identity map
-//   requirements AC-09: childrenOf walks activeWorld (play->playWorld/edit->editWorld)
-//   requirements AC-11: childrenOf dedup guard removed (Half A gone; Half B kept)
-//   requirements AC-17: three independent lights (scheme A)
-//   plan-strategy §3.1: document.childrenOf is the single tree-walk primitive
-//   plan-strategy R-N3: M3 atomic migration — core signatures first
-//   research Finding 9: Half A dedup naturally gone after engine transient fix
+// face). Root entities are worldRootHandles — entities with no live ChildOf
+// parent.
 
 import type {
   ApplyResult,
@@ -52,34 +40,31 @@ import { worldRootHandles } from '../store/entity-state';
 
 export { createEditSession } from './edit-session';
 
-// ── IoC context for document appliers (plan-strategy §2 D-2, AC-01) ─────────
-// The 9 document appliers receive a `DocApplierCtx` whose ONLY world access is
-// the controlled `engine` proxy (routes through EngineFacade._recordLeaf → span
-// attributes). `ctx.world` does not exist — writing it is a tsc error (the
-// ctx-world-negative guard test proves this).
+// ── IoC context for document appliers ────────────────────────────────────────
+// Document appliers receive a `DocApplierCtx` whose ONLY world access is the
+// controlled `engine` proxy (routes every write through EngineFacade →
+// records its engine interface leaf onto the active span). `ctx.world` does
+// not exist — writing it is a tsc error (guarded by ctx-world-negative test).
 
 /** Typed engine-write proxy handed to document appliers via `ctx.engine`.
- *  Structurally it IS the EngineFacade instance, and is now typed as a `Pick<>`
- *  of the facade's own method surface (not the raw `World`) so appliers keep full
- *  type safety on reads WITHOUT ever holding a raw `world` handle (AC-01) — the
- *  proxy is exactly the facade-method subset appliers may call, and facade-only
- *  methods (e.g. `instantiateSceneAssetFlat`, which needs the registry) are
- *  reachable while a raw `world` remains inaccessible. Every write routes through
- *  EngineFacade and records its engine interface leaf onto the active span
- *  (AC-09). Reads (`get`) record nothing. */
+ *  Structurally the EngineFacade instance, typed as a `Pick<>` of the facade's
+ *  own method surface so appliers keep type safety on reads without ever
+ *  holding a raw `world` handle. Facade-only methods (e.g.
+ *  `instantiateSceneAssetFlat`, which needs the registry) are reachable while
+ *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
   'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid'
 >;
 
-/** Transaction-scoped spawn-placeholder alias (replaces the deleted legacy
- *  id-to-handle map). A spawnEntity op may carry a NEGATIVE placeholder `_id` so a
- *  later sub-op in the SAME transaction can reference the not-yet-spawned entity
- *  (groupSelected forward-reference). The spawn applier records
- *  placeholder -> real handle here; toEntity resolves a negative reference
- *  through it. Positive references ARE handles and pass through unchanged. The
- *  map is created per top-level dispatch (gateway) or per applyCommand call and
- *  discarded after — no session-lifetime identity state (AC-01). */
+/** Transaction-scoped spawn-placeholder alias.
+ *  A spawnEntity op may carry a NEGATIVE placeholder `_id` so a later sub-op in
+ *  the SAME transaction can reference the not-yet-spawned entity (e.g.
+ *  groupSelected: spawn group first, then reparent children under it). The
+ *  spawn applier records placeholder → real handle here; toEntity resolves a
+ *  negative reference through it. Positive references ARE handles and pass
+ *  through unchanged. Created per top-level dispatch and discarded after — no
+ *  session-lifetime identity state. */
 export type DocAliasMap = Map<number, EntityHandle>;
 
 /** Read-side query snapshot function shape (mirrors io/query-snapshot's

@@ -1,20 +1,19 @@
 // edit-runtime vite config — the Edit-mode iframe/dev server (:15280, base
 // '/editor/'). Independent dev + e2e webServer entry (`bun -F edit-runtime dev`).
 //
-// REPLAN D7 (SSOT regression): the engine-serve mechanism (forgeaxShader emit,
-// pluginPack pack-index / __import middleware, base-strip, preserveSymlinks,
-// optimizeDeps.exclude @forgeax family, build.target esnext) used to live inline
-// HERE. M2 hoisted it into engine-vite-preset (src/viewport/engine-vite-preset.ts)
-// so the :15290 host config can serve the engine in-process too. This config now
-// CONSUMES that preset and keeps only its edit-runtime-specific parts: root,
+// The engine-serve mechanism (forgeaxShader emit, pluginPack pack-index /
+// __import middleware, base-strip, preserveSymlinks, optimizeDeps.exclude
+// @forgeax family, build.target esnext) lives in runtime-vite-preset so the
+// :15290 host config can serve the engine in-process too. This config CONSUMES
+// that preset and keeps only its edit-runtime-specific parts: root,
 // base '/editor/', hmr.clientPort, the --game /api + /preview proxies, and the
-// fs.allow for the injected --game dir. See plan-strategy S2 D7 / S4 R7.
+// fs.allow for the injected --game dir.
 
 import { defineConfig } from 'vite';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { engineVitePreset } from './src/viewport/engine-vite-preset';
+import { engineVitePreset } from './src/viewport/runtime-vite-preset';
 
 const here = dirname(fileURLToPath(import.meta.url));
 

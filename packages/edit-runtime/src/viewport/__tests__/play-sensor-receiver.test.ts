@@ -121,8 +121,7 @@ describe('solo round-20 — editor ▶ Play injects CollidingEntities on sensors
     const w = playWorld as unknown as {
       spawn(...cd: unknown[]): { ok: boolean; value: number };
       get(e: number, c: unknown): { ok: boolean; value: { entities: ArrayLike<number> } };
-      insertResource(key: string, value: unknown): void;
-      update(): void;
+      update(deltaSeconds: number): { unwrap(): void };
     };
     // A static SENSOR box at the origin (RigidBody{static} so it enters the sim) —
     // no CollidingEntities authored (the post-save→reopen state). A dynamic body
@@ -141,12 +140,11 @@ describe('solo round-20 — editor ▶ Play injects CollidingEntities on sensors
     expect(zone.ok && body.ok).toBe(true);
     if (!zone.ok || !body.ok) return;
 
-    // Step the real rapier sim a few frames (PhysicsStepSimulation reads the Time
-    // resource's dt — insert it each frame, mirroring the physics integration tests).
+    // Step the real rapier sim a few frames. World owns and advances Time from
+    // the delta passed to update(), matching the production app loop.
     // The receiver system injects CollidingEntities, then the collision events fill it.
     for (let i = 0; i < 6; i++) {
-      w.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-      w.update();
+      w.update(1 / 60).unwrap();
     }
 
     const set = w.get(zone.value, CollidingEntities);

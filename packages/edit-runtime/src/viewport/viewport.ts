@@ -1,23 +1,24 @@
-// Viewport interaction — the "human directly manipulates the scene" half of Edit
-// mode (design EDITOR-MODE P1: viewport navigation / picking / gizmo). The forgeax port shipped
-// only the data model + Hierarchy + Inspector + doc→world render, leaving the
-// canvas inert; this module adds:
-//   • camera navigation — UE5 EDITOR STYLE (feedback 2026-07-16):
-//                      RMB (hold)     = FLY MODE (free-look + WASD/QE + scroll speed)
-//                      MMB drag       = pan (no modifier needed)
-//                      Alt + LMB      = orbit (tumble around target)
-//                      Alt + RMB      = zoom / dolly
-//                      scroll wheel   = zoom (outside fly) / speed adj (inside fly)
-//                      LMB            = select / gizmo (reserved, unchanged)
-//   • click-to-pick  — left-click an entity → select it (ray vs per-entity AABB);
-//                      left-click empty = deselect
-//   • drag-to-move   — left-drag a selected entity → slide it on the ground (XZ);
-//                      hold Shift → move vertically (Y). Live via world.set (no
-//                      doc churn), committed as ONE undoable setComponent on release.
+// Viewport interaction — the "human directly manipulates the scene" half of
+// Edit mode: camera navigation, picking, gizmo, and drag-to-move.
 //
-// Camera math reuses fps's PROVEN engine convention: qCam = yaw·[0,1,0] × pitch·
-// [1,0,0]; forward = qCam·[0,0,-1]. Pure geometry (ray/AABB/plane) is factored out
-// + unit-tested; only the wiring depends on the (untyped) engine.
+// Camera bindings (UE5 editor style):
+//   RMB (hold)     = FLY MODE (free-look + WASD/QE + scroll speed)
+//   MMB drag       = pan (no modifier needed)
+//   Alt + LMB      = orbit (tumble around target)
+//   Alt + RMB      = zoom / dolly
+//   scroll wheel   = zoom (outside fly) / speed adj (inside fly)
+//   LMB            = select / gizmo
+//
+// Click-to-pick: left-click an entity → select (ray vs per-entity AABB);
+// left-click empty = deselect.
+//
+// Drag-to-move: left-drag a selected entity → slide on the ground (XZ); hold
+// Shift → move vertically (Y). Live via world.set (no doc churn); committed
+// as ONE undoable setComponent on release.
+//
+// Camera math uses qCam = yaw·[0,1,0] × pitch·[1,0,0]; forward = qCam·[0,0,-1].
+// Pure geometry (ray/AABB/plane) is factored into sibling modules and unit-
+// tested; only the wiring depends on the (untyped) engine.
 import {
   Transform,
   ChildOf,

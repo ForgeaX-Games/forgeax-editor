@@ -93,6 +93,134 @@
         "mesh": "Mesh",
         "texture": "Texture"
       }
+    },
+    "contentBrowser": {
+      "actions": {
+        "create": "Create",
+        "createFolder": "New Folder",
+        "createAsset": "New {{label}}",
+        "import": "Import",
+        "saveAll": "Save All",
+        "favorite": "Favorites",
+        "filterByType": "Filter by Type",
+        "filterAll": "All",
+        "clearFilters": "Clear all filters",
+        "searchPlaceholder": "Search files / assets...",
+        "searchAria": "Search assets",
+        "clearSearch": "Clear search",
+        "sortDirection": "Toggle sort direction",
+        "thumbnailSize": "Thumbnail size: {{size}}px",
+        "resizePreview": "Drag to resize preview width",
+        "resizeFolderTree": "Drag to resize folder tree width",
+        "back": "Back",
+        "forward": "Forward",
+        "all": "All"
+      },
+      "sort": {
+        "name": "Name",
+        "kind": "Kind",
+        "modified": "Modified",
+        "size": "Size"
+      },
+      "fileKinds": {
+        "code": "Code",
+        "config": "Config",
+        "doc": "Document",
+        "scene": "Scene",
+        "pack": "Asset Pack",
+        "meta": "Metadata",
+        "image": "Image",
+        "audio": "Audio",
+        "model": "3D Model",
+        "font": "Font",
+        "data": "Data",
+        "other": "File"
+      },
+      "contextMenu": {
+        "open": "Open",
+        "newFolder": "New Folder",
+        "favorite": "Favorite",
+        "unfavorite": "Unfavorite",
+        "rename": "Rename",
+        "duplicate": "Duplicate",
+        "delete": "Delete",
+        "copyGuid": "Copy GUID",
+        "copyPath": "Copy Path",
+        "copyAssetPath": "Copy Asset Path",
+        "copyRelativePath": "Copy Relative Path",
+        "addToScene": "Add to Scene",
+        "assignToSelected": "Assign to Selected Entity",
+        "addToChat": "Add to AI Chat",
+        "addWithDependencies": "Add with Dependencies",
+        "addFolderToChat": "Add Folder to AI Chat",
+        "addFolderSummaryToChat": "Add Folder Summary to Chat",
+        "renderPreview": "Render Preview",
+        "openExternalIde": "Open in External IDE",
+        "renameSymbol": "Rename Symbol",
+        "play": "Play",
+        "setDefaultScene": "Set as Default Scene",
+        "setCurrentScene": "Set as Current Scene",
+        "expandSubAssets": "Expand Sub-assets",
+        "reimport": "Reimport",
+        "locateSourceFile": "Locate Source File",
+        "importAsAsset": "Import as Asset",
+        "generateMeta": "Generate .meta.json",
+        "importAsTexture": "Import as Texture",
+        "setAsIcon": "Set as Icon",
+        "importAsAudio": "Import as Audio",
+        "audition": "Audition",
+        "importAsFont": "Import as Font",
+        "visualizeInScene": "Visualize in Scene",
+        "showInFileManager": "Show in System File Manager"
+      },
+      "dialogs": {
+        "renameAssetPrompt": "Rename asset:",
+        "newFolderPrompt": "New folder name:",
+        "newAssetNameLabel": "Name",
+        "createConfirm": "Create",
+        "deleteFolderConfirm": "Delete folder \"{{name}}\" and all its contents?",
+        "deleteFileConfirm": "Delete file \"{{name}}\"?"
+      },
+      "preview": {
+        "folderMeta": "Folder · {{path}}",
+        "fileMeta": "{{kind}} · {{path}}",
+        "assetMeta": "{{kind}} · {{path}}",
+        "emptyFolder": "Empty folder",
+        "noTextPreview": "No text preview for this file type",
+        "items": "{{count}} items",
+        "assetCount": "→ {{count}} assets"
+      },
+      "empty": {
+        "noGame": "Open a game to browse assets",
+        "loading": "Loading assets...",
+        "noMatching": "No matching assets",
+        "noAssets": "No assets found",
+        "dropFiles": "Drop files to import"
+      },
+      "importProgress": {
+        "running": "Importing {{current}}/{{total}}: {{name}}",
+        "complete": "Import complete: {{done}}/{{total}} succeeded"
+      },
+      "sourceTree": {
+        "gameAssets": "Game Assets",
+        "assetCount": "{{count}} assets"
+      },
+      "tooltip": {
+        "kind": "Kind: {{kind}}",
+        "guid": "GUID: {{guid}}",
+        "pack": "Pack: {{pack}}",
+        "size": "Size: {{size}} KB"
+      },
+      "deleteGuard": {
+        "ariaLabel": "Confirm delete",
+        "title": "Delete {{count}} asset{{plural}}?",
+        "referencedBy": "referenced by {{count}}: {{names}}",
+        "warn": "Some assets are still referenced by other assets. Deleting them may break those references.",
+        "note": "This action cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete",
+        "confirmAnyway": "Delete anyway"
+      }
     }
   }
 }

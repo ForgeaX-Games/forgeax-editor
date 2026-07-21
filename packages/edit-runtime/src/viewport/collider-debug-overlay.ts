@@ -10,7 +10,7 @@
 
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { ColorLike } from '@forgeax/engine-math';
-import type { EntityHandle } from '@forgeax/engine-ecs';
+import { Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 
 import { colliderWireSegments } from './viewport-collider-geometry';
 
@@ -19,13 +19,9 @@ const SENSOR_COLOR: ColorLike = [1, 0.62, 0.18, 1];
 
 type DebugDrawSurface = Pick<DebugDraw, 'line'>;
 
-type UpdateApp = {
-  readonly debugDraw?: DebugDrawSurface;
-  registerUpdate(fn: (dt: number) => void): void;
-};
-
 export type ColliderDebugOverlayDeps = {
-  readonly app: UpdateApp;
+  readonly world: World;
+  readonly debugDraw?: DebugDrawSurface;
   readonly getSelection: () => EntityHandle | null;
   readonly getEntityComponents: (entity: EntityHandle) => Readonly<Record<string, unknown>> | undefined;
   readonly isAuxVisible: () => boolean;
@@ -34,35 +30,38 @@ export type ColliderDebugOverlayDeps = {
 };
 
 /**
- * Register the editor-only Collider overlay on the existing editor app frame
- * seam. `registerUpdate` has app lifetime, matching this overlay's single
- * boot-time registration in ViewportComponent.
+ * Register the editor-only Collider overlay as an Update system. Its lifetime
+ * matches the world created by ViewportComponent.
  */
 export function installColliderDebugOverlay({
-  app,
+  world,
+  debugDraw,
   getSelection,
   getEntityComponents,
   isAuxVisible,
   isEditMode,
 }: ColliderDebugOverlayDeps): void {
-  app.registerUpdate(() => {
-    const debugDraw = app.debugDraw;
-    if (!debugDraw || !isEditMode() || !isAuxVisible()) return;
+  world.addSystem(Update, {
+    name: 'editor-collider-debug-overlay',
+    queries: [],
+    fn: () => {
+      if (!debugDraw || !isEditMode() || !isAuxVisible()) return;
 
-    const selected = getSelection();
-    if (selected === null) return;
+      const selected = getSelection();
+      if (selected === null) return;
 
-    const components = getEntityComponents(selected);
-    const collider = components?.Collider;
-    const transform = components?.Transform;
-    if (!isRecord(collider) || !isRecord(transform)) return;
+      const components = getEntityComponents(selected);
+      const collider = components?.Collider;
+      const transform = components?.Transform;
+      if (!isRecord(collider) || !isRecord(transform)) return;
 
-    const world = transform.world;
-    const color = collider.isSensor === true ? SENSOR_COLOR : SOLID_COLOR;
-    for (const segment of colliderWireSegments(collider, world)) {
-      debugDraw.line(segment.from, segment.to, color);
-    }
-  });
+      const transformWorld = transform.world;
+      const color = collider.isSensor === true ? SENSOR_COLOR : SOLID_COLOR;
+      for (const segment of colliderWireSegments(collider, transformWorld)) {
+        debugDraw.line(segment.from, segment.to, color);
+      }
+    },
+  }).unwrap();
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

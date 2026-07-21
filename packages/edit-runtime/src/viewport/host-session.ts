@@ -1,47 +1,19 @@
 // viewport/host-session — the DI unit for the editor's APPLICATION SESSION that
-// runs ON TOP of an already-booted world: the physics gate (resolveEditPhysics),
-// the boot-timing tail (initHostSession: scene-load / run-lifecycle /
-// asset-signal / mesh-stats / preview-skin / disk-watch), and the preview-skin
-// hook.
+// runs ON TOP of an already-booted world: the physics gate
+// (resolveEditPhysics), the boot-timing tail (initHostSession: scene-load /
+// run-lifecycle / asset-signal / mesh-stats / preview-skin / disk-watch), and
+// the preview-skin hook.
 //
-// WHY THIS IS A `create<Thing>(deps)` FACTORY (M4 / AC-02 / plan-strategy §2 D-4)
-//   host-boot.ts used to hold this logic as free functions that read module-level
-//   singletons directly (gateway / fetch / getSceneId / loadDocFromDisk / ...)
-//   and touched the DOM (window / VAG listeners). That made the ~234-line boot
-//   ordering — the single highest-side-effect path in the editor — impossible to
-//   drive in a unit: no browser, no network, no engine world. M4 extracts it into
-//   `createHostSession(deps)` (the run-lifecycle `create<Thing>(deps)` pattern):
-//   every edge that reaches OUTSIDE the module arrives THROUGH `deps`, so a reader
-//   sees the whole dependency surface in the factory signature and a headless test
-//   injects a fake for every one (AC-02). host-boot.ts is now the composition
-//   root: it builds ONE createHostSession with the real singletons + a real
-//   window/VAG beacon-listener installer and re-exports the two entry points, so
-//   ViewportComponent's import surface is unchanged (consumers zero-change).
+// `createHostSession(deps)` follows the run-lifecycle create<Thing>(deps)
+// pattern: every edge that reaches outside the module arrives through `deps`
+// so a reader sees the whole dependency surface in the factory signature and
+// a headless test injects a fake for every one. host-boot.ts is the
+// composition root — it builds ONE createHostSession with the real singletons
+// and re-exports the two entry points.
 //
-// D-2 fetch-as-dep (the R-P1 seam): `fetch` was previously imported from
-// io/api-client.ts (now deleted); now it is injected via `deps.fetch`. This is a STRUCTURAL
-// by plan-strategy §2 D-2) — the transport body is the platform fetch
-// (OOS-5). The injected value is arrow-wrapped in production, so
-// every network read goes through deps.fetch, never a raw hardcoded call.
-//
-// OOS-1 (zero behavior change): every body here is the verbatim logic previously
-// in host-boot.ts initHostSession / resolveEditPhysics / installPreviewSkinHook /
-// installMeshStatsPublisher; the only edits are singleton reads
-// re-pointed at `deps` and the window/VAG beacon wiring lifted behind
-// deps.installSaveBeaconListeners (so the boot tail is DOM-free and headless).
-// The load order is preserved EXACTLY: loadDoc →
-// broadcastAssetsChanged → run-lifecycle → drag-spawn resolver → mesh-stats →
-// preview-skin → disk-watch + beacon listeners.
-//
-// Anchors:
-//   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
-//     plan-id; AC-02 (DI factory, headless-injectable, no singleton read) + AC-05
-//     (high side-effect boot path regression) + AC-07 (bidirectional anchors) +
-//     AC-08 (edit-runtime host-boot LOC drop); plan-strategy §2 D-2 (fetch via
-//     deps) + D-4 (host-boot DI) + §8 naming (create<Thing> / <Thing>Deps).
-//   (backward) extracted from host-boot.ts (REPLAN D8 split of main.tsx bootEditor
-//     into ViewportComponent + host-boot), with the ▶/■ run-lifecycle seam from
-//     historical feat feat-20260707-editor-world-fork-ssot-level-load-play-activeworld.
+// Load order is fixed: loadDoc → broadcastAssetsChanged → run-lifecycle →
+// drag-spawn resolver → mesh-stats → preview-skin → disk-watch + beacon
+// listeners.
 
 import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
@@ -64,11 +36,10 @@ type RendererLike = {
   assets: { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> };
   store: unknown;
 };
-// The editor App: registerUpdate/start (edit boot) + pause/resume (▶/■ drive the
+// The editor App: start (edit boot) + pause/resume (▶/■ drive the
 // editWorld freeze/thaw, D-2). dispose-shielded play uses stop() on the PLAY app,
 // never on this one.
 type EditorAppLike = {
-  registerUpdate(fn: (dt: number) => void): void;
   start(): void;
   pause(): { ok: boolean; error?: unknown };
   resume(): { ok: boolean; error?: unknown };
@@ -135,7 +106,7 @@ export interface HostSessionContext {
    * DEV bridge's eval-queue drain here so a CLI eval submitted during play still
    * drains; undefined in headless and in production builds (bridge is DEV-only).
    */
-  readonly onPlayFrame?: (dt: number) => void;
+  readonly onPlayFrame?: () => void;
   /** The play world is now active; host commits its matching viewport quadrant. */
   readonly onPlayStarted: () => void;
   /** Play assembly failed and the gateway has returned to its edit-side state. */
@@ -620,12 +591,12 @@ export function createHostSession(deps: HostSessionDeps): {
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
       onPlayStarted: ctx.onPlayStarted,
       onPlayFailed: ctx.onPlayFailed,
-      // DEV bridge follow-the-live-app: register the eval-queue drain on the play
-      // App so a CLI eval submitted during play still drains while the edit App is
+      // DEV bridge follow-the-live-world: register the eval-queue drain on the play
+      // world so a CLI eval submitted during play still drains while the edit App is
       // paused (undefined in production/headless — bridge is DEV-only). See
       // run-lifecycle onPlayFrame + ViewportComponent bridge block.
-      onPlayFrame: (dt) => {
-        ctx.onPlayFrame?.(dt);
+      onPlayFrame: () => {
+        ctx.onPlayFrame?.();
         // The transient play world mutates through gameplay systems rather than
         // document ops. Notify active-world panels (Hierarchy/Inspector) once per
         // live frame without recording an authored-document mutation.

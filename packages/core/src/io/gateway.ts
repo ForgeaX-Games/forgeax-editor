@@ -13,11 +13,9 @@ import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
-// M3 w10 (plan-strategy §2 D-4, AC-04): non-entry history/step + op-handle detail
-// and the querySnapshot read-side assembly are sunk into these sibling modules.
-// gateway.ts keeps ONLY the single-entry dispatch/apply/ledger narrative; the
-// helpers it imports here shape steps / mint ids / bind the reader to the world —
-// none of them route a command or decide a domain.
+// gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
+// modules host non-entry helpers (history/step/handle-id shaping, query-side
+// reader binding). None of them route a command or decide a domain.
 import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
 import type { CommandOrigin, HistoryStep } from './gateway-history';
 import { makeQueryFn } from './gateway-query';
@@ -34,19 +32,15 @@ import {
 } from './scene-asset-collect';
 import { entName, entParent } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
-// Asset read surface (Part 4): resolveAssetHandle turns a shared<T> handle
-// (what query returns as opaque-handle.raw) into its live payload — covering
-// BOTH builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets,
-// O(1). The registry side (lookup/resolveName/_guidForAsset) adds the
-// human-readable identity that only catalog assets have.
+// Asset read surface: resolveAssetHandle turns a shared<T> handle (query
+// returns it as opaque-handle.raw) into its live payload — covering both
+// builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
-// Component read surface: the same registry the query snapshot uses to resolve
-// component names (query-snapshot.ts) and the same source UNKNOWN_COMPONENT
-// enumerates its hint from — projected here so an AI can discover component
-// names + field schemas BEFORE a spawn/setComponent, instead of learning them
-// only by triggering a SPAWN_FAILED. Derive, don't duplicate: no static copy of
-// the component set lives in argsSchema. Parallel to describeAsset/assetCatalog.
+// Component read surface: same registry the query snapshot uses to resolve
+// component names, projected here so an AI can discover component names +
+// field schemas BEFORE a spawn/setComponent (instead of learning them only by
+// triggering a SPAWN_FAILED). Derive, don't duplicate.
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;

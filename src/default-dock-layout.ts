@@ -24,7 +24,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
           size: 340,
           data: {
             views: [
-              'ep:hierarchy', 'ep:assets', 'ep:inspector', 'ep:launcher',
+              'ep:hierarchy', 'ep:inspector', 'ep:launcher',
               'ep:asset-inspector',
             ],
             activeView: 'ep:hierarchy',
@@ -40,8 +40,8 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
               type: 'leaf',
               size: 200,
               data: {
-                views: ['ep:history', 'ep:capabilities', 'info'],
-                activeView: 'ep:history',
+                views: ['ep:assets', 'ep:history', 'ep:capabilities', 'info'],
+                activeView: 'ep:assets',
                 id: 'g-history',
               },
             },

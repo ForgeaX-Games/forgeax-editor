@@ -107,5 +107,8 @@ export function t(key: string, vars?: Record<string, string | number>): string {
 const getSnapshot = () => current;
 export function useTranslation(): { t: TFunction; i18n: { language: Locale; changeLanguage: (l: Locale) => void } } {
   const language = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return { t: (k, v) => t(k, v), i18n: { language, changeLanguage } };
+  // Return the module-level `t` (stable identity). It already reads `current`
+  // at call time, so a new closure per render is unnecessary and breaks any
+  // useEffect/useMemo that lists `t` as a dependency (infinite re-render loops).
+  return { t, i18n: { language, changeLanguage } };
 }

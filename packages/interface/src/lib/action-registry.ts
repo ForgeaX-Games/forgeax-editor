@@ -5,7 +5,7 @@
  *    1. 按钮 onClick —— 组件经 `dispatchAction(id, args)` 派发(与 AI 同一条路);
  *    2. 命令面板(P2,cmdk 激活时数据源即本表);
  *    3. AI 工具调用 —— `ui_snapshot` 读清单 / `ui_invoke` 派发,经 lib/ui-bridge.ts
- *       的 perception 往返接到编排层(forgeax-cli)。
+ *       的 perception 往返接到编排层(@forgeax/orchestrator)。
  *
  *  契约形态(评审 2.1):`schema` 的 SSOT 是 **JSON Schema 纯对象**(AI 侧 ToolSpec 与
  *  postMessage 结构化克隆都只吃 JSON;函数永不过 wire)。`available` / `run` 只活在

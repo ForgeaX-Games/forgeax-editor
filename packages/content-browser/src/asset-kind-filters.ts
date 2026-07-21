@@ -15,6 +15,7 @@ export const BUILTIN_ASSET_KIND_FILTERS = {
   skeleton: { label: 'Skeleton', icon: '🦴' },
   skin: { label: 'Skin', icon: '🩻' },
   'animation-clip': { label: 'Animation Clip', icon: '🎬' },
+  'animation-graph': { label: 'Animation Graph', icon: '🕸' },
   audio: { label: 'Audio', icon: '🔊' },
   font: { label: 'Font', icon: '🔤' },
   'render-pipeline': { label: 'Render Pipeline', icon: '🔧' },

@@ -18,7 +18,7 @@
 //   requirements AC-07/09/10: dual-enum hit, duplicate gate, broken state
 //   charter P3: explicit failure — structured errors with property access
 
-import { getRegisteredComponents, getRegisteredSystems } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { SystemHandle, World } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
@@ -152,7 +152,7 @@ export async function discoverModules(
     // from hanging on previously-failed modules).
     const cacheKey = `?t=${Date.now()}&i=${_importCounter++}`;
     try {
-      await import(`${script.absPath}${cacheKey}`);
+      await import(/* @vite-ignore */ `${script.absPath}${cacheKey}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(
@@ -216,7 +216,7 @@ export async function discoverModules(
     for (const sysName of allSystems) {
       const handle = getRegisteredSystems().get(sysName);
       if (handle) {
-        world.addSystem(handle);
+        world.addSystem(Update, handle).unwrap();
       }
     }
 

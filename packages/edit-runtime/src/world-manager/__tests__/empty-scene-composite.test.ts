@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { transformPlugin, timePlugin, Camera, Transform, perspective } from '@forgeax/engine-runtime';
+import { transformPlugin, Camera, Transform, perspective } from '@forgeax/engine-runtime';
 import { WorldManager } from '../index';
 
 function installFakeRaf() {
@@ -108,7 +108,7 @@ describe('w17 — E3 empty scene composite render does not crash', () => {
       const editorApp = await createApp({
         renderer: makeFakeRenderer(drawCalls) as never,
         world: wm.editorWorld as never,
-        plugins: [transformPlugin(), timePlugin()],
+        plugins: [transformPlugin()],
         drawSource: wm.createDrawSource(),
       } as never);
       if (!editorApp.ok) throw new Error('editorApp assemble failed');

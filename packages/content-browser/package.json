@@ -13,6 +13,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./delete-guard": {
+      "types": "./src/delete-guard-entry.ts",
+      "import": "./src/delete-guard-entry.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -28,9 +32,12 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/editor-ui": "workspace:*",
+    "@forgeax/interface": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",
+    "lucide-react": "^0.460.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

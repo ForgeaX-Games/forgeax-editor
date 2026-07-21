@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset, CBFolder, CBSortKey, CBViewItem } from './types';
+import type { CBAsset, CBFile, CBFolder, CBSortKey, CBViewItem } from './types';
 import type { MultiSelectAPI, SortAPI } from './hooks';
 
 interface Props {
@@ -30,6 +30,16 @@ function folderCellValue(folder: CBFolder, key: ColumnDef['key']): string {
   switch (key) {
     case 'name': return `📁 ${folder.name}`;
     case 'kind': return 'folder';
+    default: return '—';
+  }
+}
+
+function fileCellValue(file: CBFile, key: ColumnDef['key']): string {
+  switch (key) {
+    case 'name': return file.name;
+    case 'kind': return file.kindLabel;
+    case 'estimatedSize': return '—';
+    case 'packModifiedAt': return '—';
     default: return '—';
   }
 }
@@ -87,7 +97,9 @@ export function CBColumn({ items, multiSelect, sort, onDoubleClick, onContextMen
               >
                 {COLUMNS.map(col => (
                   <div key={col.key} className="cb-column-td" style={{ width: col.width }}>
-                    {isFolder ? folderCellValue(item, col.key) : col.getValue(item)}
+                    {isFolder ? folderCellValue(item, col.key)
+                      : item.type === 'file' ? fileCellValue(item, col.key)
+                      : col.getValue(item)}
                   </div>
                 ))}
               </div>

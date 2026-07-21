@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import type { CBAsset, CBFolder, CBSelection } from '../types';
+import type { CBAsset, CBFile, CBFolder, CBSelection } from '../types';
 import {
   gateway,
   useAssetSelectionList,
@@ -9,10 +9,10 @@ import {
   useFolderSelectionSet,
 } from '@forgeax/editor-core';
 
-type Selectable = CBAsset | CBFolder;
+type Selectable = CBAsset | CBFolder | CBFile;
 
 function itemKey(item: Selectable): string {
-  return item.type === 'asset' ? (item as CBAsset).guid : (item as CBFolder).path;
+  return item.type === 'asset' ? (item as CBAsset).guid : item.path;
 }
 
 /** Map a CBAsset to the store's SelectedAsset shape (single source of truth). */
@@ -71,6 +71,12 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
       anchorIndexRef.current = index;
       return;
     }
+    if (item.type === 'file') {
+      clearAssetSelection();
+      gateway.dispatch({ kind: 'setFolderSelection', paths: [] });
+      anchorIndexRef.current = index;
+      return;
+    }
     const key = itemKey(item);
     let next: Selectable[];
     if (e.shiftKey && anchorIndexRef.current >= 0) {
@@ -101,6 +107,7 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
       if (item.type === 'folder') {
         return folderPaths.has(item.path);
       }
+      if (item.type === 'file') return false;
       return selectedGuids.has(itemKey(item));
     },
     [selectedGuids, folderPaths],

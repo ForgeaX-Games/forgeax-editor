@@ -63,6 +63,8 @@ export async function bootstrapAppHost(
     log: consoleLogger,
     registerCommand: (cmd) => host.commands.register(cmd),
     contributePanels: (patch) => control.contributePanels(m.id, patch),
+    contributePanelActions: (actions) => control.contributePanelActions(m.id, actions),
+    contributePanelControls: (controls) => control.contributePanelControls(m.id, controls),
   });
 
   const loader = createExtensionLoader<AppExtensionContext, string>({
@@ -85,6 +87,12 @@ export async function bootstrapAppHost(
         const cleanups: Cleanup[] = [];
         if (m.contributes?.panels) {
           cleanups.push(control.contributePanels(m.id, m.contributes.panels));
+        }
+        if (m.contributes?.panelActions) {
+          cleanups.push(control.contributePanelActions(m.id, m.contributes.panelActions));
+        }
+        if (m.contributes?.panelControls) {
+          cleanups.push(control.contributePanelControls(m.id, m.contributes.panelControls));
         }
         const r = await m.setup?.(ctx);
         if (typeof r === 'function') cleanups.push(r);

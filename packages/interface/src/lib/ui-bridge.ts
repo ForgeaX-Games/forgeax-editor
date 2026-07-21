@@ -1,6 +1,6 @@
 /** ui-bridge —— UI 语义操作层的 interface 侧运输层:lease + manifest push + ui_* 应答。
  *
- *  对端(编排层 forgeax-cli):
+ *  对端(编排层 @forgeax/orchestrator):
  *    - POST /:sid/ui-lease       获焦 acquire / 心跳续期(displace 语义,「最后获焦 tab」持有)
  *    - POST /:sid/ui-manifest    registry 变更时 push 可序列化 manifest(**必须持 lease**——
  *                                manifest 是 trust-gate 的权限输入,声明与执行方必须同源)

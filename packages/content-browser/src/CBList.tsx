@@ -1,7 +1,8 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { CBAsset, CBViewItem } from './types';
+import type { CBAsset, CBFile, CBViewItem } from './types';
 import type { MultiSelectAPI } from './hooks';
+import { ContentBrowserIcon, iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
 
 interface Props {
   items: CBViewItem[];
@@ -9,13 +10,6 @@ interface Props {
   onDoubleClick?: (item: CBViewItem) => void;
   onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
 }
-
-const KIND_ICONS: Record<string, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
-};
 
 const ROW_HEIGHT = 28;
 
@@ -36,6 +30,16 @@ export function CBList({ items, multiSelect, onDoubleClick, onContextMenu }: Pro
           const item = items[virtualRow.index]!;
           const selected = multiSelect.isSelected(item);
           const isFolder = item.type === 'folder';
+          const isFile = item.type === 'file';
+          const iconName = isFolder ? 'folder'
+            : isFile ? iconNameForFileFamily((item as CBFile).family)
+            : iconNameForAssetKind((item as CBAsset).kind);
+          const kindLabel = isFolder ? 'folder'
+            : isFile ? (item as CBFile).kindLabel
+            : (item as CBAsset).kind;
+          const detail = isFolder ? `${item.childCount} item(s)`
+            : isFile ? (item as CBFile).path
+            : (item as CBAsset).packPath.replace(/^.*\//, '');
           return (
             <div
               key={virtualRow.key}
@@ -52,10 +56,12 @@ export function CBList({ items, multiSelect, onDoubleClick, onContextMenu }: Pro
               onDoubleClick={() => onDoubleClick?.(item)}
               onContextMenu={e => { e.preventDefault(); onContextMenu?.(e, item); }}
             >
-              <span className="cb-list-icon">{isFolder ? '📁' : (KIND_ICONS[item.kind] ?? '📦')}</span>
+              <span className="cb-list-icon">
+                <ContentBrowserIcon name={iconName} />
+              </span>
               <span className="cb-list-name">{item.name}</span>
-              <span className="cb-list-kind">{isFolder ? 'folder' : item.kind}</span>
-              <span className="cb-list-path">{isFolder ? `${item.childCount} item(s)` : item.packPath.replace(/^.*\//, '')}</span>
+              <span className="cb-list-kind">{kindLabel}</span>
+              <span className="cb-list-path">{detail}</span>
             </div>
           );
         })}

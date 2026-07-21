@@ -25,7 +25,7 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SceneAsset, AssetError } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
-import type { EntityHandle } from '@forgeax/engine-ecs';
+import { Time, Update, type EntityHandle } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
@@ -349,7 +349,6 @@ const ctx: BootstrapContext = {
   // ctx field, so it is passed separately at the entry() call below.
   assets: renderer.assets,
   app: app.value,
-  registerUpdate(fn) { app.value.registerUpdate(fn); },
   uiRoot: playUiRoot,
   // A (cleanup hook): no-op — this host reloads the whole document on ■ Stop,
   // so every side effect is discarded regardless. Present only to keep the
@@ -469,25 +468,30 @@ let frames = 0;
 let fpsAccum = 0;
 let lastFps = 0;
 let lastHeartbeat = 0;
-app.value.registerUpdate((dt) => {
-  // First frame rendered (scene was instantiated during the awaited entry() above,
-  // so frame 1 already shows it) → fade out the loading overlay.
-  hideLoadingOverlay();
-  frames++;
-  fpsAccum += dt;
-  if (fpsAccum >= 1) {
-    lastFps = Math.round(frames / fpsAccum);
-    frames = 0;
-    fpsAccum = 0;
-  }
-  const now = performance.now();
-  if (now - lastHeartbeat >= HEARTBEAT_MS) {
-    lastHeartbeat = now;
-    try {
-      sendVagMessage(window.parent, VagFpsStatsSchema, { fps: lastFps });
-    } catch { /* parent might be cross-origin */ }
-  }
-});
+world.addSystem(Update, {
+  name: 'play-runtime-fps-heartbeat',
+  queries: [],
+  fn: () => {
+    const dt = world.getResource(Time).delta;
+    // First frame rendered (scene was instantiated during the awaited entry() above,
+    // so frame 1 already shows it) → fade out the loading overlay.
+    hideLoadingOverlay();
+    frames++;
+    fpsAccum += dt;
+    if (fpsAccum >= 1) {
+      lastFps = Math.round(frames / fpsAccum);
+      frames = 0;
+      fpsAccum = 0;
+    }
+    const now = performance.now();
+    if (now - lastHeartbeat >= HEARTBEAT_MS) {
+      lastHeartbeat = now;
+      try {
+        sendVagMessage(window.parent, VagFpsStatsSchema, { fps: lastFps });
+      } catch { /* parent might be cross-origin */ }
+    }
+  },
+}).unwrap();
 
 // ── Console bridge (VAG_CONSOLE postMessage) ──
 // Render errors / AppError / RhiError / EcsError verbosely so the bridged

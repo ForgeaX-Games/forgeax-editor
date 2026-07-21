@@ -5,7 +5,7 @@
 // WHY THIS EXISTS
 // The engine already has every primitive: `defineComponent` / `defineSystem`
 // register into a process-global registry as an import side effect, and the
-// `gameEngineResolve` vite plugin (engine-vite-preset.ts) re-anchors a game
+// `gameEngineResolve` vite plugin (runtime-vite-preset.ts) re-anchors a game
 // file's bare `@forgeax/*` imports to the editor's single engine instance. What
 // was missing was the WIRING: nobody imported the game's `*.plugin.ts` files, so
 // their components/systems never reached the editor's registry. This module is
@@ -30,7 +30,7 @@
 // imports each module exactly once and memoizes the pass. Edit and play therefore
 // share the same `Rotator` token and the same `rotate` handle.
 
-import { getRegisteredComponents, getRegisteredSystems } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 
 /** One discovered plugin module's registration delta. */
@@ -188,7 +188,7 @@ export function addGamePluginSystems(world: World, load: GamePluginLoad): string
   for (const name of load.systems) {
     const handle = registry.get(name);
     if (handle) {
-      world.addSystem(handle);
+      world.addSystem(Update, handle).unwrap();
       added.push(name);
     }
   }

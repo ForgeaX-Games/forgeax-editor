@@ -29,12 +29,27 @@ interface ViewportBarProps {
   onFullscreen: () => void;
 }
 
+interface RhiCaptureResult {
+  readonly runId: string;
+  readonly tapePath: string;
+  readonly reportPath: string;
+}
+
+function isRhiCaptureResult(value: unknown): value is RhiCaptureResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const result = value as Record<string, unknown>;
+  return typeof result.runId === 'string'
+    && typeof result.tapePath === 'string'
+    && typeof result.reportPath === 'string';
+}
+
 export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: ViewportBarProps) {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live
   const gizmoMode = useGizmoMode();
   const [fps, setFpsState] = useState<number>(() => getFps());
   const [isPlay, setIsPlay] = useState<boolean>(() => getViewportQuadrant().run === 'play');
   const [isGame, setIsGame] = useState<boolean>(() => getViewportQuadrant().display === 'game');
+  const [captureState, setCaptureState] = useState<'idle' | 'capturing' | 'error'>('idle');
 
   useEffect(() => {
     const unsubFps = onFpsChange(setFpsState);
@@ -44,6 +59,35 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
     });
     return () => { unsubFps(); unsubQuad(); };
   }, []);
+
+  async function captureRhiFrame(): Promise<void> {
+    const capture = (globalThis as { __forgeax?: { captureFrame?: (frames: number) => Promise<unknown> } })
+      .__forgeax?.captureFrame;
+    if (!capture) {
+      setCaptureState('error');
+      return;
+    }
+
+    setCaptureState('capturing');
+    try {
+      const result = await capture(1);
+      if (!isRhiCaptureResult(result)) throw new Error('Capture did not return its artifact paths');
+
+      const artifact = (file: 'frame-0.tape.bin' | 'frame-0.report.json') => {
+        const url = new URL('/__forgeax-debug/artifact', window.location.origin);
+        url.searchParams.set('runId', result.runId);
+        url.searchParams.set('file', file);
+        return url.href;
+      };
+      const reviewer = new URL('http://localhost:15274/');
+      reviewer.searchParams.set('tapeUrl', artifact('frame-0.tape.bin'));
+      reviewer.searchParams.set('reportUrl', artifact('frame-0.report.json'));
+      window.open(reviewer.href, '_blank', 'noopener');
+      setCaptureState('idle');
+    } catch {
+      setCaptureState('error');
+    }
+  }
 
   // Keyboard shortcuts — same as EditorApp so muscle memory is identical.
   // Keep W/E/R for gizmo, Ctrl+Z/Y/S for undo/redo/save.
@@ -110,6 +154,14 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
       <button type="button" className="vp-btn" data-testid="vp-save"
         onClick={() => gateway.dispatch({ kind: 'saveDocToDisk' })} title="Save scene (⌘S)">
         ⤓
+      </button>
+      <span className="vp-sep" />
+      <button type="button" className={`vp-btn${captureState === 'error' ? ' error' : ''}`}
+        data-testid="vp-rhi-capture" disabled={captureState === 'capturing'} onClick={() => void captureRhiFrame()}
+        title={captureState === 'error'
+          ? 'RHI capture unavailable — start with bun fx start --rhi-debug'
+          : captureState === 'capturing' ? 'Capturing RHI frame…' : 'Capture RHI frame and open reviewer'}>
+        {captureState === 'capturing' ? '…' : '▣'}
       </button>
       <span className="vp-sep" />
       {/* Fullscreen play (w26, AC-14): standalone play-runtime in a new tab */}

@@ -4,7 +4,7 @@
  *  id/title 非空、capability ∈ 8 类、inputSchema 可序列化、timeoutMs 正数——任何
  *  builtin action 违反这些规则会在 push 时被 server 整条丢弃(fail-closed → 权限查表
  *  miss → 恒弹卡),这里在测试期就拦下。改任一侧规则时两处同步(cli 侧对应测试:
- *  packages/cli test/ui-bridge.test.ts「manifest 消毒」组)。
+ *  packages/orchestrator test/ui-bridge.test.ts「manifest 消毒」组)。
  */
 import { describe, expect, test, beforeAll } from 'bun:test';
 import { buildManifest, __resetRegistryForTest } from './action-registry';

@@ -197,6 +197,17 @@ export interface SendMessageOpts {
   attachments?: Array<Record<string, unknown>>;
 }
 
+/** User-message multimodal attachment kept for transcript display + wire send. */
+export interface ChatAttachment {
+  kind: 'image' | 'document' | 'file' | string;
+  name?: string;
+  mediaType?: string;
+  /** Base64 payload (no data: URL prefix) or a data: URL — live send only. */
+  data?: string;
+  /** Durable upload path after server materialize — used on history reload. */
+  path?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -204,6 +215,8 @@ export interface ChatMessage {
    *  有它且 server 侧存在对应 checkpoint 记录时,气泡 hover 出「回到这里」。 */
   msgId?: string;
   text: string;
+  /** role='user' — pasted / picked attachments shown in the bubble (images inline). */
+  attachments?: ChatAttachment[];
   thinking?: string;
   toolCalls: ToolCall[];
   /** role='system' visual classification — drives icon / color in ChatPanel. */
@@ -616,6 +629,12 @@ function patchTabField(
  *  会跑两次，避免对 server 发两次重复 POST。promise 完成后清回 null，下次有需要
  *  可重新初始化（手动 reset 等）。 */
 let _initSessionsPending: Promise<void> | null = null;
+const _busyMutationVersionBySid = new Map<string, number>();
+const _runningSyncGenerationBySid = new Map<string, number>();
+
+function bumpBusyMutationVersion(sid: string): void {
+  _busyMutationVersionBySid.set(sid, (_busyMutationVersionBySid.get(sid) ?? 0) + 1);
+}
 
 /** Pull active agent's running 真值并同步到 tab.isStreaming —— 解决"前端 ws 连上
  *  时后端 agent 早就在跑（错过 turnStart）→ UI 仍以为 idle"这种臆想态。
@@ -627,10 +646,32 @@ let _initSessionsPending: Promise<void> | null = null;
  *  失败 / sid null 静默 —— 网络/server 抖动时 UI 维持上一份状态，下次切换再拉。 */
 async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
   if (!sid) return;
+  const generation = (_runningSyncGenerationBySid.get(sid) ?? 0) + 1;
+  _runningSyncGenerationBySid.set(sid, generation);
+  const busyVersionAtStart = _busyMutationVersionBySid.get(sid) ?? 0;
   try {
     const { listSessionAgents } = getSessionClient();
     const agents = await listSessionAgents(sid);
-    if (agents.length === 0) return;
+    const commitBusySnapshot = (): void => {
+      // A WS turnStart/turnEnd received while this REST request was in flight is
+      // newer truth. Likewise, only the newest overlapping REST sync may commit.
+      if (_runningSyncGenerationBySid.get(sid) !== generation ||
+          (_busyMutationVersionBySid.get(sid) ?? 0) !== busyVersionAtStart) return;
+      const nextBusy = Object.fromEntries(
+        agents.filter((a) => a.running).map((a) => [a.path, true]),
+      );
+      useShellStore.setState((s) => ({
+        busyByAgentBySid: {
+          ...s.busyByAgentBySid,
+          [sid]: nextBusy,
+        },
+      }));
+      bumpBusyMutationVersion(sid);
+    };
+    if (agents.length === 0) {
+      commitBusySnapshot();
+      return;
+    }
     // tab.agentId 还没绑（cached === null）→ 用 depth=1 root 兜底。
     //
     // 已绑但 cached id 不在 list_agents 里（典型场景：用户刚点了 mochi/iro
@@ -657,6 +698,9 @@ async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
       return { tabs, agentBySid };
     });
     if (!cached) persistAgentBySid(useShellStore.getState().agentBySid);
+    // 把 blackboard.RUNNING 同步到 L1 busy —— Composer 的 useActiveStreaming 会 OR 这份
+    // 标志。缺 turnStart/snapshot 时(刷新中途加入)仍显示 Stop 而非可发送。
+    commitBusySnapshot();
   } catch (e) {
     console.warn('[syncActiveAgentRunning] failed', (e as Error).message);
   }
@@ -765,6 +809,7 @@ export const useShellStore = create<AppState>((set, get) => ({
     if (!sid || !agentId) return {};
     const perSid = s.busyByAgentBySid[sid] ?? {};
     if (Boolean(perSid[agentId]) === busy) return {};
+    bumpBusyMutationVersion(sid);
     const nextPerSid = { ...perSid };
     if (busy) nextPerSid[agentId] = true;
     else delete nextPerSid[agentId];

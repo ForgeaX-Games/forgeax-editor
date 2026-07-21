@@ -27,7 +27,7 @@ const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
 // `@shared/template-game-default` (that would leak the editor's `@shared/`
 // convention into the engine submodule's template). play-runtime injects the
 // scope for EVERY game so the template sky folds into the pack catalog, matching
-// edit-runtime's engine-vite-preset (they share this via editor-core's
+// edit-runtime's runtime-vite-preset (they share this via editor-core's
 // resolveGameAssetRoots.implicitSharedSubs — architecture-principles §1 SSOT).
 // Without it, /__import/<sky-guid> 404s `meta-not-found` and the skylight falls
 // back to a solid color. existsSync-filtered, so an absent submodule degrades to

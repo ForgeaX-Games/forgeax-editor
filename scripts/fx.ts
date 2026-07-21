@@ -31,9 +31,9 @@
 //           PLAY_RUNTIME_PORT below: studio's superrepo stack owns 15173)
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, openSync } from 'node:fs';
+import { existsSync, openSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   die,
@@ -71,9 +71,12 @@ const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // (play-runtime/vite.config.ts default — unchanged, so studio keeps working);
 // only fx orchestration pins 15273 (fed via the base `env` FORGEAX_ENGINE_PORT).
 const PLAY_RUNTIME_PORT = 15273;
+// The RHI reviewer is a separate dev-only engine app. It receives capture
+// artifacts by URL from the editor host, so opening a frame needs no file picker.
+const RHI_REVIEWER_PORT = 15274;
 // 15295 = DEV-only live gateway bridge relay (on by default; FORGEAX_BRIDGE=0
 // opts out). Listed so `stop`/startup-preflight free a stale relay too.
-const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, 15295];
+const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT, 15295];
 const GAME_API_PORT = 15281;
 // The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
 // the AI tools and their harness ship together). ROOT-relative because
@@ -360,6 +363,30 @@ function ensureFbxWasm(): void {
   ok('fbx wasm built');
 }
 
+/**
+ * Bun sees the engine's nested packages as editor workspaces and can rewrite
+ * engine/node_modules links to its own store. The engine's test helpers then
+ * import a second Vitest instance from pnpm, so property suites lose their
+ * active test context. Recreate only this generated directory before pnpm
+ * installs its authoritative dependency graph.
+ */
+function resetEngineNodeModulesIfBunLinked(): void {
+  const nodeModules = join(ENGINE_DIR, 'node_modules');
+  const vitest = join(nodeModules, 'vitest');
+  const bunStore = join(ROOT, 'node_modules', '.bun');
+
+  if (!existsSync(vitest)) return;
+
+  try {
+    if (!realpathSync(vitest).startsWith(`${bunStore}${sep}`)) return;
+  } catch {
+    // A broken generated link is equally safe to replace with pnpm's graph.
+  }
+
+  warn('Bun linked engine dependencies into the editor store; recreating engine node_modules with pnpm.');
+  rmSync(nodeModules, { force: true, recursive: true });
+}
+
 function install(): void {
   requireCmd('git', 'install git first.');
   requireCmd('bun', 'install bun: https://bun.sh');
@@ -374,6 +401,7 @@ function install(): void {
   ok('bun deps ready');
 
   step('3/6 installing engine deps (pnpm) ...');
+  resetEngineNodeModulesIfBunLinked();
   sh('pnpm', ['install'], { cwd: ENGINE_DIR });
   ok('engine deps ready');
 
@@ -443,7 +471,7 @@ async function run(argv: string[]): Promise<void> {
     ok(`reusing platform-io for game '${gameDir.split(/[/\\]/).pop()}' from ${gameDir}`);
   }
   // --rhi-debug: opt-in the engine's RHI frame capture. Setting the env for every
-  // spawned vite process makes engine-vite-preset register vite-plugin-rhi-debug
+  // spawned vite process makes runtime-vite-preset register vite-plugin-rhi-debug
   // (which injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG=1 + the dev-server
   // /__forgeax-debug endpoints), flipping createApp's guard so the browser gets
   // window.__forgeax.captureFrame(n). Unset by default → zero injection, tree-shaken.
@@ -476,7 +504,7 @@ async function run(argv: string[]): Promise<void> {
     FORGEAX_ENGINE_PORT: String(PLAY_RUNTIME_PORT),
     ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
   };
-  if (rhiDebug) ok('RHI-debug capture enabled → window.__forgeax.captureFrame(n) in the :15290 console');
+  if (rhiDebug) ok(`RHI-debug capture enabled → viewport capture button opens reviewer :${RHI_REVIEWER_PORT}`);
   if (bridge) ok(`live gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway-live.mjs). Opt out: FORGEAX_BRIDGE=0`);
 
   // preflight — point at setup if the engine build is missing.
@@ -514,6 +542,13 @@ async function run(argv: string[]): Promise<void> {
       logFd: log('edit-runtime'),
     });
     spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log('host') });
+    if (rhiDebug)
+      spawnService('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
+        cwd: ENGINE_DIR,
+        env,
+        detach: true,
+        logFd: log('rhi-debug-reviewer'),
+      });
     if (bridge)
       // Spawn with `bun`, not `node`: `ws` lives only in bun's isolated store
       // (node_modules/.bun/ws@*), unhoisted, so bare node ERR_MODULE_NOT_FOUNDs.
@@ -550,6 +585,16 @@ async function run(argv: string[]): Promise<void> {
 
   step('starting standalone host :15290 ...');
   children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env }));
+
+  if (rhiDebug) {
+    step(`starting RHI reviewer :${RHI_REVIEWER_PORT} ...`);
+    children.push(
+      spawnService('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
+        cwd: ENGINE_DIR,
+        env,
+      }),
+    );
+  }
 
   if (bridge) {
     step(`starting gateway bridge relay :${bridgePort} (live editing; FORGEAX_BRIDGE=0 to disable) ...`);
@@ -592,7 +637,7 @@ Lifecycle:
                                 [+ :15273 play-runtime with --play]); Ctrl-C stops
   start --game DIR              open a real game (DIR directly contains forge.json)
   start --bg                    start in background, returns immediately
-  start --rhi-debug            enable engine RHI frame capture (window.__forgeax.captureFrame)
+  start --rhi-debug            enable viewport RHI capture + reviewer (:15274)
   stop                          stop everything the CLI started (by port)
 
   Live gateway bridge (:15295) is ON by default so the forgeax-editor-gateway

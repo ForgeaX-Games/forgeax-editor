@@ -48,6 +48,7 @@
 //   requirements section 8 (progressive-disclosure header — proposition first)
 
 import type { PlayAssembly } from './play-assemble';
+import { Update, type World } from '@forgeax/engine-ecs';
 
 // ── loose engine handles (the ECS/App/renderer types evolve independently; keep
 // the `as never`/structural discipline used across this package) ──────────────
@@ -106,13 +107,13 @@ export interface RunLifecycleDeps {
   /**
    * Optional: a per-frame callback to register on the PLAY App's frame loop right
    * after it starts. The edit App is paused during play (editorApp.pause, AC-07),
-   * so anything bound to editorApp.registerUpdate stops ticking — most importantly
+   * so anything bound to the editor world's Update schedule stops ticking — most importantly
    * the DEV bridge's eval-queue drain, which would otherwise leave a CLI eval
    * submitted during play queued forever. Threading it here lets the drain follow
    * the live app: it is registered on the play App on ▶ and dropped with that app
    * on ■ (GC, no leak). Omitted in headless and in production (bridge is DEV-only).
    */
-  readonly onPlayFrame?: (dt: number) => void;
+  readonly onPlayFrame?: () => void;
   /** Called only after the active-world pointer has changed to the live play world. */
   readonly onPlayStarted?: () => void;
   /** Called after a failed assembly has thawed the edit App and recorded its error. */
@@ -233,13 +234,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
     }
 
-    // Follow-the-live-app: the edit App is now paused, so anything on
-    // editorApp.registerUpdate (the DEV bridge eval-queue drain) has gone quiet.
-    // Re-register that per-frame callback on the play App so a CLI eval submitted
-    // during play still drains. Registered AFTER start() so it joins the running
-    // loop; dropped with the play App on ■ Stop (assembly goes unreferenced, AC-05).
+    // Follow-the-live-world: the edit app is paused, so attach the bridge drain
+    // to the play world's Update schedule for the duration of this play assembly.
     if (deps.onPlayFrame) {
-      active.playApp.registerUpdate(deps.onPlayFrame);
+      (active.playWorld as World).addSystem(Update, {
+        name: 'editor-play-bridge-eval-drain',
+        queries: [],
+        fn: deps.onPlayFrame,
+      }).unwrap();
     }
 
     // D-3: switch the single active-world pointer to the play world (clears

@@ -40,7 +40,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   setActiveCamera,
 } from '@forgeax/engine-runtime';
-import { Entity, getRegisteredSystems } from '@forgeax/engine-ecs';
+import { Entity, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import {
   attachBrowserInputBackend,
@@ -439,7 +439,8 @@ async function bootViewport(
   // immediate-mode DebugDraw overlay. It reads the active scene-world SSOT each
   // frame and emits no authored state; debug-draw's graph pass owns its flush.
   installColliderDebugOverlay({
-    app: editorApp,
+    world,
+    debugDraw: editorApp.debugDraw,
     getSelection,
     getEntityComponents: (entity) => entComponents(gateway.doc.world, entity),
     isAuxVisible,
@@ -542,12 +543,12 @@ async function bootViewport(
   // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
   // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
   //
-  // The bridge's eval-queue drain is bound to editorApp.registerUpdate, which
+  // The bridge's eval-queue drain is bound to the editor world's Update schedule, which
   // stops ticking when ▶ Play pauses the edit App — so a CLI eval submitted during
   // play would queue forever. We hoist the drain here and hand it to the host
   // session so the run-lifecycle re-registers it on the PLAY App while playing
   // (follow-the-live-app). Undefined unless the bridge block below assigns it.
-  let bridgeDrainForPlay: ((dt: number) => void) | undefined;
+  let bridgeDrainForPlay: (() => void) | undefined;
   // Always mount the eval channel in the editor runtime. The file is imported
   // via @fs in standalone mode where Vite's import.meta.env.DEV runtime
   // injection is not applied, so an outer `if (import.meta.env.DEV)` gate
@@ -583,7 +584,7 @@ async function bootViewport(
       // fires at an arbitrary point relative to the engine's rAF tick, so running
       // channel.eval → gateway.dispatch inline would land the world write at an
       // unpredictable phase (before/after world.update() this frame). Instead we
-      // ENQUEUE each eval and drain the queue from editorApp.registerUpdate, which
+      // ENQUEUE each eval and drain the queue from the editor world's Update system, which
       // runs at frame start (between Time injection and world.update()) — so every
       // bridge write is guaranteed to pass through this frame's systems, making
       // the outcome deterministic and reproducible across runs. The reply is
@@ -625,9 +626,13 @@ async function bootViewport(
           })();
         }
       };
-      editorApp.registerUpdate(drainEvalQueue);
+      world.addSystem(Update, {
+        name: 'editor-bridge-eval-drain',
+        queries: [],
+        fn: drainEvalQueue,
+      }).unwrap();
       // Follow-the-live-app: expose the drain so the host session registers it on
-      // the PLAY App too (the edit App is paused during play → its registerUpdate
+      // the PLAY world too (the edit App is paused during play → its Update system
       // goes quiet, and a bridge eval submitted while playing would never drain).
       bridgeDrainForPlay = drainEvalQueue;
 
@@ -641,7 +646,7 @@ async function bootViewport(
           try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ''); }
           catch { return; }
           if (msg?.type !== 'eval' || typeof msg.id !== 'number' || typeof msg.code !== 'string') return;
-          // Enqueue — the drain (editorApp.registerUpdate) runs it at frame start
+          // Enqueue — the drain (the editor-world Update system) runs it at frame start
           // and replies on whatever socket is live then (see reply() above).
           evalQueue.push({ id: msg.id, code: msg.code });
         });
@@ -883,7 +888,7 @@ async function bootViewport(
     'removeSystem',
     (op) => {
       const { name } = op as { name: string };
-      world.removeSystem(name);
+      world.removeSystem(Update, name).unwrap();
       return { ok: true };
     },
     {
@@ -897,7 +902,7 @@ async function bootViewport(
       const { name } = op as { name: string };
       const handle = getRegisteredSystems().get(name);
       if (!handle) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'unknown system: ' + name } };
-      world.addSystem(handle);
+      world.addSystem(Update, handle).unwrap();
       return { ok: true };
     },
     {
@@ -948,7 +953,7 @@ async function bootViewport(
   // renderer. In Play, this stops the live playApp first; otherwise its rAF would
   // keep drawing the renderer after the edit App releases it.
   registerTeardown(() => session.dispose({ flushPendingSave: currentResetOptions.flushPendingSave }));
-  installFpsReport(editorApp, onFps);
+  installFpsReport(world, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).

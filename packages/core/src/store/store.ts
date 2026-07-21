@@ -1,34 +1,19 @@
 // store — the editor's app-level state facade.
 //
-// This file used to hold the whole store (1344 lines). It is now a PURE
-// re-export facade: the 14 concern clusters live in sibling store/ sub-modules
+// Pure re-export facade: the concern clusters live in sibling store/ sub-modules
 // (gateway / selection / gizmo-mode / frame-request / rename-request / hover /
 // field-preview / ref-request / doc-version / scene-persistence / disk-watch /
-// asset-selection / mesh-stats / assets-changed) and this facade forwards
-// exactly the 70 public symbols the barrel + intra-core consumers already
-// import, so their import paths and the barrel snapshot (AC-01) are unchanged.
+// asset-selection / mesh-stats / assets-changed). Consumers keep importing from
+// '../store/store'; grep "how does hover work" lands in hover.ts.
 //
-// Consumers keep importing from '../store/store'; grep "how does hover work"
-// now lands in hover.ts, not 1344 lines (charter F1 / P1).
-//
-// NOT forwarded here (D-6 @internal-store seams — store/ internal only, never in
+// NOT forwarded here (@internal-store seams — store/ internal only, never in
 // this facade nor the barrel): scene-persistence's worldToPack / scenePath /
-// loadSceneByGuid / the `ctx` ScenePersistenceContext handle (M1 D-2: converged
-// the 7 module-level singletons + disk-watch's reverse-writes onto one object —
-// the former _isDirty / currentSceneGuid exports + _setDirty / _setCurrentSceneGuid
-// setter pair are gone).
+// loadSceneByGuid / the `ctx` ScenePersistenceContext handle.
 //
-// The old clip-control import (F-10) had no consuming body left after the split,
-// so it is absent here — not deleted as cleanup, simply nothing to host.
+// requestFrame applier is registered by edit-runtime via registerSessionApplier;
+// headless core returns UNKNOWN_OP (same pattern as play/stop).
 //
-// Anchors:
-//   plan-strategy §2 D-2: 14-cluster split + store.ts pure facade
-//   plan-strategy §2 D-6: internal seams excluded; §2 D-7: 3 dead exports still
-//     forwarded verbatim (isSelected / buildHiddenKey / clearDocStorage).
-//     requestFrame applier migrated to edit-runtime (registerSessionApplier,
-//     D-11 pattern) — headless core returns UNKNOWN_OP (same as play/stop).
-//   requirements AC-01: barrel export-surface snapshot unchanged
-//   requirements AC-09: facade is re-export only — no logic, no dispatch-op-ing
+// Anchor: requirements AC-09 — facade is re-export only, no logic.
 
 // ── cluster 1: gateway (init root) ──
 export { gateway } from './gateway';
@@ -43,7 +28,6 @@ export { gateway } from './gateway';
 export {
   getSelection,
   getSelectionList,
-  isSelected,
   onSelectionChange,
   useSelection,
   useSelectionList,
@@ -86,7 +70,6 @@ export { notifyDocChanged, useDocVersion } from './doc-version';
 // via the gateway). switchSceneFile/createSceneFile/loadDocFromDisk stay public —
 // host-boot awaits their async result (they are not in the AC-03 sealed set).
 export {
-  buildHiddenKey,
   getSceneId,
   getLoadedSceneEntities,
   getSceneFile,
@@ -108,7 +91,6 @@ export {
   cancelPendingDiskSave,
   flushPendingSaveBeacon,
   replaceDoc,
-  clearDocStorage,
   inlineAssetCount,
   wouldDropInlineAssets,
   mergeLoadedInlineOrphans,

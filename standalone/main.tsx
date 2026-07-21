@@ -40,6 +40,7 @@ import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout'
 import { useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
+import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
@@ -127,6 +128,7 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
   EDITOR_PANELS.map((id, i) => [id, {
     title: EDITOR_PANEL_TITLES[id] ?? id,
     order: 100 + i,
+    ...(id === 'assets' ? { header: { visible: true, showTitle: false } } : {}),
     render: () => <EditorPanelBody id={id} />,
   }]),
 );
@@ -244,6 +246,19 @@ function boot(): void {
     );
   } catch (err) {
     console.error('[standalone] DeleteGuardDialog mount failed:', err);
+  }
+
+  try {
+    const overlayEl = document.createElement('div');
+    overlayEl.id = 'editor-overlay-root';
+    document.body.appendChild(overlayEl);
+    createRoot(overlayEl).render(
+      <StrictMode>
+        <EditorOverlayProvider>{null}</EditorOverlayProvider>
+      </StrictMode>,
+    );
+  } catch (err) {
+    console.error('[standalone] EditorOverlayProvider mount failed:', err);
   }
 }
 

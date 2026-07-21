@@ -159,7 +159,7 @@ function makeCtx(over?: Partial<HostSessionContext>): HostSessionContext {
   const emitCalls: string[] = [];
   const stageCalls: string[] = [];
   const ctx = {
-    app: { registerUpdate() {}, start() {}, pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
+    app: { start() {}, pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
     world: {} as never,
     renderer: { ready: Promise.resolve(), assets: { loadByGuid: async () => ({ ok: false, error: { code: 'miss' } }) }, store: {} },
     cameraEntity: 0,

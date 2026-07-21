@@ -53,7 +53,7 @@ export type RawScopeResult =
 // Capture dynamic import at module load time. When injected into new Function,
 // it resolves module specifiers relative to the calling module scope, enabling
 // eval scripts to dynamically import ESM modules.
-const _import = (specifier: string): Promise<unknown> => import(specifier);
+const _import = (specifier: string): Promise<unknown> => import(/* @vite-ignore */ specifier);
 
 // ── createEvalChannel ──────────────────────────────────────────────────────
 

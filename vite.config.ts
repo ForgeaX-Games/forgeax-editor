@@ -26,7 +26,9 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { existsSync } from 'node:fs';
-import { engineVitePreset } from './packages/edit-runtime/src/viewport/engine-vite-preset';
+import { engineVitePreset } from './packages/edit-runtime/src/viewport/runtime-vite-preset';
+import tailwindcss from 'tailwindcss';
+import autoprefixer from 'autoprefixer';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -99,6 +101,11 @@ if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 export default defineConfig({
   root: resolve(PACKAGE_DIR, 'standalone'),
   base: '/',
+  // The standalone host shares this repository with other Vite entry points
+  // (notably play-runtime). Keep its optimizer output separate so an update in
+  // one entry point cannot invalidate dependency URLs while the other is serving
+  // a page. The directory is covered by the repository-wide `.vite/` ignore.
+  cacheDir: resolve(PACKAGE_DIR, '.vite/standalone-host'),
   // react() + the D7 engine-serve plugins (shader manifest emit + optional
   // self-hosted pluginPack catalog). This is what lets the engine boot
   // in-process in this host window (no /editor proxy).
@@ -129,6 +136,17 @@ export default defineConfig({
     preserveSymlinks: enginePreset.resolve.preserveSymlinks,
     alias: {
       // Order matters — vite picks first matching prefix. Most-specific first.
+      // The standalone root has no direct engine dependencies. Without explicit
+      // anchors, imports from the host and edit-runtime resolve the token-owning
+      // ECS/runtime packages through different Bun workspace links. Component
+      // tokens are identity objects, so that split makes loaded scene entities
+      // invisible to Hierarchy and the renderer. Keep both at one real path.
+      '@forgeax/engine-runtime': resolve(PACKAGE_DIR, 'packages/engine/packages/runtime'),
+      // The root ECS alias preserves component-token identity. Its public
+      // externalization subpath is a built entry, so anchor it before the
+      // prefix alias rather than rewriting it to a nonexistent source folder.
+      '@forgeax/engine-ecs/externalization': resolve(PACKAGE_DIR, 'packages/engine/packages/ecs/dist/externalization/index.mjs'),
+      '@forgeax/engine-ecs': resolve(PACKAGE_DIR, 'packages/engine/packages/ecs'),
       '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
       // @forgeax/interface package.json's exports map covers `./*: ./src/*.ts`
       // and `./styles/*.css`, but does NOT cover the `.tsx` files we deep-
@@ -201,5 +219,46 @@ export default defineConfig({
     emptyOutDir: true,
     // esnext: the in-process engine boot entry uses top-level await (D7 preset).
     target: enginePreset.build.target,
+  },
+  css: {
+    postcss: {
+      plugins: [
+        tailwindcss({
+          config: {
+            darkMode: ['selector', '[data-theme="dark"]'],
+            theme: {
+              extend: {
+                colors: {
+                  border: 'var(--fx-border, #404040)',
+                  input: 'var(--fx-border, #404040)',
+                  ring: 'var(--fx-accent, #D4FF48)',
+                  background: 'var(--fx-bg, #0D0D0D)',
+                  foreground: 'var(--fx-fg, #FFFFFF)',
+                  muted: { DEFAULT: 'var(--fx-bg-elev2, #191919)', foreground: 'var(--fx-fg-muted, rgba(255,255,255,0.6))' },
+                  card: { DEFAULT: 'var(--fx-bg-elev1, #242424)', foreground: 'var(--fx-fg, #FFFFFF)' },
+                  popover: { DEFAULT: 'var(--fx-bg-elev1, #242424)', foreground: 'var(--fx-fg, #FFFFFF)' },
+                  accent: { DEFAULT: 'var(--fx-accent, #D4FF48)', foreground: 'var(--fx-bg, #0D0D0D)' },
+                  primary: { DEFAULT: 'var(--fx-accent, #D4FF48)', foreground: 'var(--fx-bg, #0D0D0D)' },
+                  secondary: { DEFAULT: 'var(--fx-bg-elev2, #191919)', foreground: 'var(--fx-fg, #FFFFFF)' },
+                  destructive: { DEFAULT: 'var(--fx-danger, #BE3636)', foreground: 'var(--fx-fg, #FFFFFF)' },
+                  success: { DEFAULT: 'var(--fx-success, #1B9D4B)' },
+                  danger: { DEFAULT: 'var(--fx-danger, #BE3636)' },
+                  info: { DEFAULT: 'var(--fx-info, #639CF8)' },
+                },
+                borderRadius: { lg: 'var(--radius-lg, 12px)', md: 'var(--radius-md, 8px)', sm: 'var(--radius-sm, 4px)' },
+              },
+            },
+            content: [
+              resolve(PACKAGE_DIR, 'standalone/**/*.{ts,tsx}'),
+              resolve(PACKAGE_DIR, 'packages/ui/src/components/breadcrumb.tsx'),
+              resolve(PACKAGE_DIR, 'packages/ui/src/components/button.tsx'),
+              resolve(PACKAGE_DIR, 'packages/content-browser/src/**/*.{ts,tsx}'),
+            ],
+            corePlugins: { preflight: false },
+          },
+        }),
+        autoprefixer(),
+      ],
+    },
   },
 });

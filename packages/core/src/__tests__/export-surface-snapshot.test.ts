@@ -95,6 +95,10 @@ function createProgram(): { program: ts.Program; checker: ts.TypeChecker } {
       declaration: true, // declarationMap depends on declaration being true
       declarationMap: false, // suppress .d.ts.map output
       types: options.types, // preserve explicit types (bun)
+      // Bun's isolated workspace install links package-local type dependencies;
+      // compiler-API programs start from this test file, so make that lookup
+      // explicit instead of relying on a hoisted node_modules layout.
+      typeRoots: [path.resolve(PKG_ROOT, '..', 'node_modules', '@types')],
     },
   });
 

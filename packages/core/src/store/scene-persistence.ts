@@ -60,8 +60,6 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose (store.ts
 //     1344 -> 14 files; scene-persistence.ts 1032 = the debt this loop retires;
 //     git-log-verified creation commit 1ceb6b3 / release snapshot 96364b2).
-//   plan-strategy §2 D-7: buildHiddenKey / clearDocStorage are dead exports (†)
-//     kept verbatim; stripEditorHiddenMarker is test-consumed.
 //   research F-4 / R3: gateway.subscribe kept top-level.
 //   requirements AC-09: pure structural migration — every read/write is
 //     behaviorally identical (OOS-1 zero behavior change).
@@ -292,9 +290,7 @@ export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<
 }
 
 // ── storage cluster surface (createStorage) ───────────────────────────────────
-export const buildHiddenKey = storage.buildHiddenKey;
 export const loadDocFromStorage = storage.loadDocFromStorage;
-export const clearDocStorage = storage.clearDocStorage;
 
 // ── High-side-effect surface: re-export the composed diskIo unit (D-3/D-6) ─────
 // disk-watch imports worldToPack / scenePath / loadSceneByGuid + ctx from HERE;

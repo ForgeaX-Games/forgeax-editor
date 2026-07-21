@@ -11,6 +11,7 @@
   --color-text-secondary:           rgba(255, 255, 255, 0.60);
   --color-text-tertiary:            rgba(255, 255, 255, 0.30);
   --color-text-disabled:            rgba(255, 255, 255, 0.20);
+  --color-text-danger:              var(--color-accent-error-default);
   --color-text-on-bright-primary:   var(--prim-color-neutral-1000);    /* #000000 */
   --color-text-on-bright-secondary: rgba(0, 0, 0, 0.60);
   --color-text-on-bright-tertiary:  rgba(0, 0, 0, 0.30);
@@ -109,11 +110,16 @@
   --text-mute:      var(--color-text-tertiary);   /* → --color-text-tertiary  */
   --text-dim:       var(--color-text-disabled);   /* → --color-text-disabled  */
   --text-default:   var(--color-text-primary);    /* → --color-text-primary   */
+  --text-danger:    var(--color-text-danger);     /* → --color-text-danger    */
 
   /* fg ── 迁移目标：--color-text-* */
   --fg-1: var(--color-text-primary);    /* → --color-text-primary   */
   --fg-2: var(--color-text-secondary);  /* → --color-text-secondary */
   --fg-3: var(--color-text-tertiary);   /* → --color-text-tertiary  */
+
+  /* border / divider ── 迁移目标：--color-border-* / --color-divider-* */
+  --border:      var(--color-border-default); /* → --color-border-default */
+  --border-soft: var(--color-divider-subtle); /* → --color-divider-subtle */
 
   /* brand / primary ── 迁移目标：--color-brand-* / --color-interaction-* */
   --primary:       var(--color-brand-primary);              /* → --color-brand-primary              */
@@ -140,9 +146,13 @@
   --accent-pink:        var(--prim-color-pink-400);          /* → (待补) --color-accent-pink-default */
   --accent-error:       var(--color-accent-error-default);   /* → --color-accent-error-default  */
   --accent-error-soft:  var(--color-accent-error-soft);      /* → --color-accent-error-soft     */
+  --danger:             var(--color-text-danger);             /* → --color-text-danger           */
+  --danger-soft:        var(--color-interaction-error-strong);/* → --color-interaction-error-*   */
 
   /* misc ── 迁移目标：--color-interaction-* */
-  --hover-active: var(--prim-color-green-400);  /* → (待补) --color-interaction-selected-success */
+  --hover:        var(--color-interaction-hover);            /* → --color-interaction-hover */
+  --sel-neutral:  var(--color-interaction-selected-neutral); /* → --color-interaction-selected-neutral */
+  --hover-active: var(--prim-color-green-400);               /* → (待补) --color-interaction-selected-success */
 
   /* typography ── 迁移目标：--prim-font-* (primitive 已是最终值，无需改) */
   --font-sans: var(--prim-font-sans);  /* → --prim-font-sans */

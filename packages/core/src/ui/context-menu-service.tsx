@@ -5,6 +5,10 @@
 
 export interface MenuItemDef {
   label?: string;
+  title?: string;
+  icon?: string;
+  shortcut?: string;
+  forge?: boolean;
   onClick?: () => void;
   disabled?: boolean;
   danger?: boolean;
@@ -32,7 +36,7 @@ export function showContextMenu(
   items: MenuItemDef[],
 ): void {
   e.preventDefault();
-  const usable = items.filter((it) => it.sep || it.label);
+  const usable = items.filter((it) => it.sep || it.label || it.title);
   if (usable.length === 0) return;
   renderMenu?.({ x: e.clientX, y: e.clientY, items: usable });
 }

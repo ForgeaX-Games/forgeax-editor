@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
+import { colorForAssetKind, ContentBrowserIcon } from './content-browser-icons';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -16,7 +18,8 @@ interface Props {
 const TIP_W = 260;
 const TIP_GAP = 8;
 
-export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDoubleClick, onContextMenu }: Props) {
+export function CBAssetItem({ asset, selected, onClick, onDoubleClick, onContextMenu }: Props) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
   const thumb = getThumbnailData(asset);
@@ -49,12 +52,11 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
 
   return (
     <div
-      className={`cb-grid-item${selected ? ' sel' : ''}`}
+      className={`cb-grid-item cb-fe-card${selected ? ' sel' : ''}`}
       data-testid="cb-asset-item"
       data-asset-name={asset.name}
       data-asset-kind={asset.kind}
       data-asset-guid={asset.guid}
-      style={{ width: thumbnailSize + 8, height: thumbnailSize + 28 }}
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
@@ -76,11 +78,10 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
       }}
       onMouseLeave={() => setHovered(false)}
     >
+      <span className="cb-card-fav"><ContentBrowserIcon name="star" /></span>
       <div
-        className="cb-grid-thumb"
+        className="cb-grid-thumb cb-fe-thumb"
         style={{
-          width: thumbnailSize,
-          height: thumbnailSize,
           background: thumb.type === 'gradient' ? thumb.gradient : (thumb.color ?? undefined),
         }}
       >
@@ -91,7 +92,7 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
             src={thumb.imageUrl}
             alt={asset.name}
             className="cb-thumb-img"
-            style={{ width: thumbnailSize, height: thumbnailSize, objectFit: 'contain' }}
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             loading="lazy"
           />
         ) : (
@@ -100,7 +101,8 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
         {thumb.badge && <span className="cb-thumb-badge">{thumb.badge}</span>}
         {Boolean(asset.payload?.cookError) && <span className="cb-thumb-warn" title={String(asset.payload?.cookError)}>⚠</span>}
       </div>
-      <div className="cb-grid-label" title={asset.name}>{asset.name}</div>
+      <div className="cb-grid-label cb-fe-name" title={asset.name}>{asset.name}</div>
+      <div className="cb-card-meta cb-card-kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
 
       {hovered && tipXY && createPortal(
         <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>
@@ -108,11 +110,11 @@ export function CBAssetItem({ asset, selected, thumbnailSize = 80, onClick, onDo
             <span className="cb-tooltip-icon">{thumb.icon ?? '📦'}</span>
             <span className="cb-tooltip-name">{asset.name}</span>
           </div>
-          <div className="cb-tooltip-row">Kind: {asset.kind}</div>
-          <div className="cb-tooltip-row">GUID: {asset.guid.slice(0, 18)}…</div>
-          <div className="cb-tooltip-row">Pack: {asset.packPath.replace(/^.*\//, '')}</div>
+          <div className="cb-tooltip-row">{t('editor.contentBrowser.tooltip.kind', { kind: asset.kind })}</div>
+          <div className="cb-tooltip-row">{t('editor.contentBrowser.tooltip.guid', { guid: `${asset.guid.slice(0, 18)}...` })}</div>
+          <div className="cb-tooltip-row">{t('editor.contentBrowser.tooltip.pack', { pack: asset.packPath.replace(/^.*\//, '') })}</div>
           {asset.estimatedSize != null && (
-            <div className="cb-tooltip-row">Size: {(asset.estimatedSize / 1024).toFixed(1)} KB</div>
+            <div className="cb-tooltip-row">{t('editor.contentBrowser.tooltip.size', { size: (asset.estimatedSize / 1024).toFixed(1) })}</div>
           )}
           {thumb.badge && <div className="cb-tooltip-row">{thumb.badge}</div>}
         </div>,

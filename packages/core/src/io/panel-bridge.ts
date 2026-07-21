@@ -1,18 +1,14 @@
 /**
  * Typed, synchronous event bus for host-window in-process communication.
- *
- * Renamed from editorBus → panelBridge to clarify its role: a notification
- * transport for cross-component/cross-boundary coordination — NOT the entry
+ * A notification transport for cross-component coordination — NOT the entry
  * point for state-changing operations (those go through gateway.dispatch).
  *
- * Two categories of events flow through this bridge:
+ * Two categories of events flow through here:
  *  1. Coordination signals (drag, chat ref, asset catalog): lightweight
  *     cross-component wiring that does NOT change ledger-visible state.
- *  2. Applier notifications are emitted only when a live host callback consumes
- *     them. Do not add a postMessage compatibility copy: interface receives its
+ *  2. Applier notifications, emitted only when a live host callback consumes
+ *     them. No postMessage compatibility mirror — interface receives its
  *     structural bridge injection through PanelRenderers.
- *
- * Feedback: 2026-07-07-content-browser-drag-import-overlay-and-postmessage-legacy
  */
 import type { DragAssetRef } from '../assets/drag-asset-spawn';
 import type { AssetChatRef } from './cross-panel-types';
@@ -67,13 +63,3 @@ class TypedEmitter<Events> {
 
 /** Singleton bridge for host-window panel events. */
 export const panelBridge = new TypedEmitter<PanelBridgeEvents>();
-
-// ---------------------------------------------------------------------------
-// Backward-compat re-exports (deprecated, will be removed in next PR).
-// ---------------------------------------------------------------------------
-
-/** @deprecated Use PanelBridgeEvents instead. */
-export type EditorBusEvents = PanelBridgeEvents;
-
-/** @deprecated Use panelBridge instead. */
-export const editorBus = panelBridge;

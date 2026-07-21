@@ -1,0 +1,169 @@
+{
+  "name": "@forgeax/editor-ui",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "ForgeaX editor-owned React UI primitives. Domain-free shadcn-style source components over shared design tokens.",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./button": {
+      "types": "./src/components/button.tsx",
+      "import": "./src/components/button.tsx"
+    },
+    "./badge": {
+      "types": "./src/components/badge.tsx",
+      "import": "./src/components/badge.tsx"
+    },
+    "./button-group": {
+      "types": "./src/components/button-group.tsx",
+      "import": "./src/components/button-group.tsx"
+    },
+    "./command": {
+      "types": "./src/components/command.tsx",
+      "import": "./src/components/command.tsx"
+    },
+    "./context-menu": {
+      "types": "./src/components/context-menu.tsx",
+      "import": "./src/components/context-menu.tsx"
+    },
+    "./dropdown-menu": {
+      "types": "./src/components/dropdown-menu.tsx",
+      "import": "./src/components/dropdown-menu.tsx"
+    },
+    "./empty": {
+      "types": "./src/components/empty.tsx",
+      "import": "./src/components/empty.tsx"
+    },
+    "./icon-button": {
+      "types": "./src/components/icon-button.tsx",
+      "import": "./src/components/icon-button.tsx"
+    },
+    "./input-group": {
+      "types": "./src/components/input-group.tsx",
+      "import": "./src/components/input-group.tsx"
+    },
+    "./input": {
+      "types": "./src/components/input.tsx",
+      "import": "./src/components/input.tsx"
+    },
+    "./textarea": {
+      "types": "./src/components/textarea.tsx",
+      "import": "./src/components/textarea.tsx"
+    },
+    "./label": {
+      "types": "./src/components/label.tsx",
+      "import": "./src/components/label.tsx"
+    },
+    "./checkbox": {
+      "types": "./src/components/checkbox.tsx",
+      "import": "./src/components/checkbox.tsx"
+    },
+    "./radio-group": {
+      "types": "./src/components/radio-group.tsx",
+      "import": "./src/components/radio-group.tsx"
+    },
+    "./switch": {
+      "types": "./src/components/switch.tsx",
+      "import": "./src/components/switch.tsx"
+    },
+    "./select": {
+      "types": "./src/components/select.tsx",
+      "import": "./src/components/select.tsx"
+    },
+    "./popover": {
+      "types": "./src/components/popover.tsx",
+      "import": "./src/components/popover.tsx"
+    },
+    "./separator": {
+      "types": "./src/components/separator.tsx",
+      "import": "./src/components/separator.tsx"
+    },
+    "./slider": {
+      "types": "./src/components/slider.tsx",
+      "import": "./src/components/slider.tsx"
+    },
+    "./spinner": {
+      "types": "./src/components/spinner.tsx",
+      "import": "./src/components/spinner.tsx"
+    },
+    "./tabs": {
+      "types": "./src/components/tabs.tsx",
+      "import": "./src/components/tabs.tsx"
+    },
+    "./tooltip": {
+      "types": "./src/components/tooltip.tsx",
+      "import": "./src/components/tooltip.tsx"
+    },
+    "./dialog": {
+      "types": "./src/components/dialog.tsx",
+      "import": "./src/components/dialog.tsx"
+    },
+    "./alert-dialog": {
+      "types": "./src/components/alert-dialog.tsx",
+      "import": "./src/components/alert-dialog.tsx"
+    },
+    "./toaster": {
+      "types": "./src/components/toaster.tsx",
+      "import": "./src/components/toaster.tsx"
+    },
+    "./overlays": {
+      "types": "./src/overlays/index.ts",
+      "import": "./src/overlays/index.ts"
+    },
+    "./toast": {
+      "types": "./src/lib/toast.ts",
+      "import": "./src/lib/toast.ts"
+    },
+    "./confirm": {
+      "types": "./src/lib/confirm.ts",
+      "import": "./src/lib/confirm.ts"
+    },
+    "./prompt": {
+      "types": "./src/lib/prompt.ts",
+      "import": "./src/lib/prompt.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@radix-ui/react-alert-dialog": "^1.1.20",
+    "@radix-ui/react-checkbox": "^1",
+    "@radix-ui/react-context-menu": "^2.3.4",
+    "@radix-ui/react-dialog": "^1.1.20",
+    "@radix-ui/react-dropdown-menu": "^2.1.21",
+    "@radix-ui/react-label": "^2",
+    "@radix-ui/react-popover": "^1.1.20",
+    "@radix-ui/react-select": "^2.3.4",
+    "@radix-ui/react-slot": "^1.3.0",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.13",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.0.4",
+    "lucide-react": "^0.460.0",
+    "tailwind-merge": "^3.5.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.3"
+  }
+}

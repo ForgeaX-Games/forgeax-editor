@@ -26,7 +26,7 @@
 //
 // WHY IT LIVES IN @forgeax/editor-core (exposed at ./asset-roots, NOT the barrel)
 //   Both consumers — packages/play-runtime/vite.config.ts and
-//   packages/edit-runtime/src/viewport/engine-vite-preset.ts — depend on
+//   packages/edit-runtime/src/viewport/runtime-vite-preset.ts — depend on
 //   @forgeax/editor-core, so a single helper here can't drift between the two
 //   configs. It is a DEDICATED sub-path export (like @forgeax/engine-pack/config),
 //   NOT re-exported from src/index.ts, because it imports node:fs/node:path and

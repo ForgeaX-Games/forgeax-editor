@@ -14,6 +14,11 @@
 import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
 import type { SerializedDockview } from 'dockview';
 import type { DockRegion } from './regions';
+import type {
+  PanelActionContribution,
+  PanelContentDefinition,
+  PanelHeaderDefinition,
+} from '../../core/panels';
 
 // Structural host-SDK boundary. Interface receives these factories from the
 // aggregation host but must neither import nor type-resolve @forgeax/host-sdk:
@@ -98,6 +103,8 @@ export type CreateWindowTransport = (options: WindowTransportOptions) => Extensi
  * wires the override via UI.
  */
 export interface PanelDescriptor {
+  /** Stable panel id. Optional during migration; DockPanelHost still passes the id. */
+  id?: string;
   /** Tab label shown on the dock tab. */
   title: string;
   /** Sort order within the region. Lower = earlier. Default 0. */
@@ -108,6 +115,12 @@ export interface PanelDescriptor {
   when?: () => boolean;
   /** Where this panel lives absent a user override. Default 'DockShell'. */
   defaultRegion?: DockRegion;
+  /** Optional shell-owned header metadata. */
+  header?: PanelHeaderDefinition;
+  /** Optional shell-owned content policy. */
+  content?: PanelContentDefinition;
+  /** Optional panel-scoped actions; normalized together with contributed actions. */
+  actions?: readonly PanelActionContribution[];
   /** Panel body renderer. */
   render: () => ReactNode;
 }
@@ -167,6 +180,10 @@ export interface PanelRenderers {
       y: number;
       items: Array<{
         label?: string;
+        title?: string;
+        icon?: string;
+        shortcut?: string;
+        forge?: boolean;
         onClick?: () => void;
         disabled?: boolean;
         danger?: boolean;

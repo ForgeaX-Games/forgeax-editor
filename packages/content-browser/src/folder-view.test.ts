@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { deriveContentView, type ScopedAsset } from './folder-view';
+import { deriveContentView, deriveFileView, collectProjectDirs, type ScopedAsset, type ProjectTreeNode } from './folder-view';
 import type { CBAsset } from './types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -122,5 +122,162 @@ describe('deriveContentView — UE-parity folder + direct-asset view', () => {
     });
     expect(folders).toEqual([]);
     expect(assets).toEqual([]);
+  });
+});
+
+// ── deriveFileView ──────────────────────────────────────────────────────────
+
+const PROJECT_TREE: ProjectTreeNode[] = [
+  {
+    name: 'assets', path: 'assets', type: 'dir', children: [
+      { name: 'scenes', path: 'assets/scenes', type: 'dir', children: [
+        { name: 'main.pack.json', path: 'assets/scenes/main.pack.json', type: 'file', size: 1024 },
+      ] },
+      { name: 'sky.hdr', path: 'assets/sky.hdr', type: 'file', size: 4096 },
+    ],
+  },
+  {
+    name: 'src', path: 'src', type: 'dir', children: [
+      { name: 'systems', path: 'src/systems', type: 'dir', children: [
+        { name: 'ai.ts', path: 'src/systems/ai.ts', type: 'file', size: 512 },
+      ] },
+      { name: 'main.ts', path: 'src/main.ts', type: 'file', size: 256 },
+    ],
+  },
+  {
+    name: 'scripts', path: 'scripts', type: 'dir', children: [
+      { name: 'bake.py', path: 'scripts/bake.py', type: 'file', size: 128 },
+    ],
+  },
+  { name: '.forgeax', path: '.forgeax', type: 'dir', children: [] },
+  { name: 'node_modules', path: 'node_modules', type: 'dir', children: [] },
+  { name: 'forge.json', path: 'forge.json', type: 'file', size: 200 },
+  { name: 'main.ts', path: 'main.ts', type: 'file', size: 100 },
+  { name: 'package.json', path: 'package.json', type: 'file', size: 300 },
+  { name: 'README.md', path: 'README.md', type: 'file', size: 50 },
+];
+
+describe('deriveFileView — file-browser mode', () => {
+  it('at root (""): shows visible dirs + root files, hides .forgeax and node_modules', () => {
+    const { folders, files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: '',
+      assetRootNames: ['assets'],
+    });
+
+    const folderNames = folders.map(f => f.name);
+    expect(folderNames).toContain('assets');
+    expect(folderNames).toContain('src');
+    expect(folderNames).toContain('scripts');
+    expect(folderNames).not.toContain('.forgeax');
+    expect(folderNames).not.toContain('node_modules');
+
+    const fileNames = files.map(f => f.name);
+    expect(fileNames).toContain('forge.json');
+    expect(fileNames).toContain('main.ts');
+    expect(fileNames).toContain('package.json');
+    expect(fileNames).toContain('README.md');
+  });
+
+  it('assets folder is marked with asset-root color', () => {
+    const { folders } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: '',
+      assetRootNames: ['assets'],
+    });
+
+    const assetsFolder = folders.find(f => f.name === 'assets');
+    expect(assetsFolder).toBeDefined();
+    expect(assetsFolder!.color).toBe('asset-root');
+
+    const srcFolder = folders.find(f => f.name === 'src');
+    expect(srcFolder).toBeDefined();
+    expect(srcFolder!.color).toBeUndefined();
+  });
+
+  it('at "src": shows systems subfolder + main.ts file', () => {
+    const { folders, files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: 'src',
+      assetRootNames: ['assets'],
+    });
+
+    expect(folders.map(f => f.name)).toEqual(['systems']);
+    expect(files.map(f => f.name)).toEqual(['main.ts']);
+    expect(files[0]!.family).toBe('code');
+    expect(files[0]!.kindLabel).toBe('Code');
+    expect(files[0]!.path).toBe('src/main.ts');
+  });
+
+  it('at leaf "scripts": no subfolders, only files', () => {
+    const { folders, files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: 'scripts',
+      assetRootNames: ['assets'],
+    });
+
+    expect(folders).toEqual([]);
+    expect(files.map(f => f.name)).toEqual(['bake.py']);
+    expect(files[0]!.family).toBe('code');
+  });
+
+  it('non-existent path returns empty', () => {
+    const { folders, files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: 'nonexistent/path',
+      assetRootNames: ['assets'],
+    });
+
+    expect(folders).toEqual([]);
+    expect(files).toEqual([]);
+  });
+
+  it('file family is derived from the filename', () => {
+    const { files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: '',
+      assetRootNames: ['assets'],
+    });
+
+    const forge = files.find(f => f.name === 'forge.json');
+    expect(forge!.family).toBe('config');
+
+    const readme = files.find(f => f.name === 'README.md');
+    expect(readme!.family).toBe('doc');
+  });
+
+  it('folders and files are sorted by name ascending (locale-aware)', () => {
+    const { folders, files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: '',
+      assetRootNames: ['assets'],
+    });
+
+    const folderNames = folders.map(f => f.name);
+    const sortedFolders = [...folderNames].sort((a, b) => a.localeCompare(b));
+    expect(folderNames).toEqual(sortedFolders);
+
+    const fileNames = files.map(f => f.name);
+    const sortedFiles = [...fileNames].sort((a, b) => a.localeCompare(b));
+    expect(fileNames).toEqual(sortedFiles);
+  });
+});
+
+describe('collectProjectDirs', () => {
+  it('collects all directory paths, excluding hidden ones', () => {
+    const dirs = collectProjectDirs(PROJECT_TREE);
+
+    expect(dirs).toContain('assets');
+    expect(dirs).toContain('assets/scenes');
+    expect(dirs).toContain('src');
+    expect(dirs).toContain('src/systems');
+    expect(dirs).toContain('scripts');
+
+    expect(dirs).not.toContain('.forgeax');
+    expect(dirs).not.toContain('node_modules');
+  });
+
+  it('empty tree returns empty array', () => {
+    expect(collectProjectDirs([])).toEqual([]);
   });
 });

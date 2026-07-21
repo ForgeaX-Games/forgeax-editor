@@ -24,9 +24,9 @@
 //   research Finding 3 (injectEditMode(true) does NOT stop the frame loop)
 
 import { describe, expect, it } from 'bun:test';
-import { World, Entity } from '@forgeax/engine-ecs';
+import { World, Entity, Update } from '@forgeax/engine-ecs';
 import { createApp, inputPlugin } from '@forgeax/engine-app';
-import { transformPlugin, timePlugin, Name, Transform } from '@forgeax/engine-runtime';
+import { transformPlugin, Name, Transform } from '@forgeax/engine-runtime';
 import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
 import { createRunLifecycle } from '../run-lifecycle';
 
@@ -130,16 +130,20 @@ describe('w9 — editWorld freeze + snapshot (AC-06/AC-07)', () => {
     const editAppRes = await createApp({
       renderer: editRenderer.renderer as never,
       world: editWorld as never,
-      plugins: [transformPlugin(), timePlugin(), inputPlugin()],
+      plugins: [transformPlugin(), inputPlugin()],
     });
     if (!editAppRes.ok) throw new Error('editorApp assemble failed');
     const editorApp = editAppRes.value;
 
     // Count edit frame ticks via a registered update callback.
     let editTicks = 0;
-    editorApp.registerUpdate(() => {
+    editWorld.addSystem(Update, {
+      name: 'editworld-freeze-snapshot-tick',
+      queries: [],
+      fn: () => {
       editTicks += 1;
-    });
+      },
+    }).unwrap();
 
     // Seed a couple of editWorld entities (the authored scene stand-in).
     editWorld.spawn({ component: Name, data: { value: 'EditA' } }, { component: Transform, data: { pos: [1, 2, 3], scale: [1, 1, 1] } });

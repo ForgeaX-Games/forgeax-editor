@@ -6,7 +6,19 @@ import type { CommandsRegistry, CommandDescriptor } from '../extension-foundatio
 import type { ContextKeysApi } from '../extension-foundation/context-keys';
 import type { StorageApi } from '../extension-foundation/storage';
 import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
-import type { PillPayload } from '../../lib/composer-bridge';
+import type { PanelActionContribution, PanelActionsApi, PanelControlContribution, PanelControlsApi } from '../panels';
+
+export type AppShellPillKind =
+  | 'file' | 'dir' | 'agent' | 'tool' | 'game' | 'log' | 'entity' | 'paste'
+  | 'skill' | 'command';
+
+export interface AppShellPillPayload {
+  kind: AppShellPillKind;
+  display: string;
+  icon?: string;
+  detail: string;
+  tooltip: { title: string; lines: string[] };
+}
 
 export interface AppBusEventMap extends Record<string, unknown> {
   'panel:open':          { id: string; source?: string };
@@ -15,7 +27,7 @@ export interface AppBusEventMap extends Record<string, unknown> {
   'dock:reset':          Record<string, never>;
   'dock:layout-toggle':  { workbenchId?: string; rect?: { top: number; bottom: number; left: number; right: number } };
   'anim:handoff':        { fromSurface: string; toSurface: string };
-  'chat:pill':           { pill: PillPayload };
+  'chat:pill':           { pill: AppShellPillPayload };
   'iframe:navigate':     { extensionId: string; url?: string };
   'capability:added':    { capability: string; provider: string };
   'capability:removed':  { capability: string; provider: string };
@@ -23,7 +35,7 @@ export interface AppBusEventMap extends Record<string, unknown> {
 }
 
 export type HostCapability =
-  | 'commands' | 'bus' | 'storage' | 'panels' | 'contextKeys'
+  | 'commands' | 'bus' | 'storage' | 'panels' | 'panelActions' | 'panelControls' | 'contextKeys'
   | 'session' | 'workbench' | 'observability' | 'editor'
   | (string & {});
 
@@ -40,6 +52,8 @@ export interface AppHostBase {
   readonly storage: StorageApi;
   readonly contextKeys: ContextKeysApi;
   readonly panels: PanelRenderers;
+  readonly panelActions: PanelActionsApi;
+  readonly panelControls: PanelControlsApi;
   readonly capabilities: ReadonlySet<HostCapability>;
   extend<K extends HostCapability>(capability: K, api: unknown): void;
 }
@@ -60,6 +74,8 @@ export interface AppExtensionContext {
   readonly log: AppLogger;
   registerCommand(cmd: CommandDescriptor): Cleanup;
   contributePanels(patch: Partial<PanelRenderers>): Cleanup;
+  contributePanelActions(actions: readonly PanelActionContribution[]): Cleanup;
+  contributePanelControls(controls: readonly PanelControlContribution[]): Cleanup;
 }
 
 /** ADR 0025 M2 — declarative contributions. Applied by the bootstrap glue
@@ -67,6 +83,8 @@ export interface AppExtensionContext {
  *  extension is just data (no setup at all). */
 export interface AppExtensionContributes {
   readonly panels?: Partial<PanelRenderers>;
+  readonly panelActions?: readonly PanelActionContribution[];
+  readonly panelControls?: readonly PanelControlContribution[];
 }
 
 /** An app-shell extension manifest. Unlike the domain-agnostic

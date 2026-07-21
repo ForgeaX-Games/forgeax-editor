@@ -15,21 +15,9 @@
 export { ViewportBar } from './ViewportBar';
 export { ViewportHints } from './ViewportHints';
 
-// M4: createEngineSync removed — sync.ts deleted (projection layer collapse).
 // ── Engine ──
-// setupEditorSkylight removed — skylight is now authored scene data loaded from
-// the pack; the editor no longer creates its own. See feedback
-// 2026-07-08-skylight-equirect-blocks-scene-switch-serialize.
 export { createViewport } from './viewport/viewport';
 
-// ── Hot reload (two-tier, D-8) ──
+// ── Hot reload (two-tier) ──
 export { applyScriptChange, initHotReload } from './hot-reload';
 export type { HotReloadHost, HotReloadOutcome } from './hot-reload';
-// NOTE: writeback-chain (writebackInstance) was removed — it targeted the engine's
-// old collectSceneAsset(world, root, handleToGuid) API, which the engine replaced
-// (optimal>compatible, no compat shim) with rootsToSceneAsset(registry, world,
-// roots[]). The old export did not exist in the pinned engine, so the code crashed
-// at import ("Export named 'collectSceneAsset' not found"). It had no production
-// caller and was not in the published surface. Rebuild against rootsToSceneAsset
-// (threading renderer.assets as the AssetRegistry) when the durable-writeback
-// feature is actually wired to a save path.

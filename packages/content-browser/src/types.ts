@@ -13,7 +13,7 @@
 // ── Core data models ─────────────────────────────────────────────────────────
 
 export interface CBItem {
-  type: 'asset' | 'folder';
+  type: 'asset' | 'folder' | 'file';
 }
 
 export interface CBAsset extends CBItem {
@@ -54,13 +54,42 @@ export interface CBFolder extends CBItem {
   childCount: number;
 }
 
+export type CBFileFamily =
+  | 'code'
+  | 'config'
+  | 'doc'
+  | 'scene'
+  | 'pack'
+  | 'meta'
+  | 'image'
+  | 'audio'
+  | 'model'
+  | 'font'
+  | 'data'
+  | 'other';
+
+export interface CBFile extends CBItem {
+  type: 'file';
+  /** Game-relative display path, e.g. `assets/player.glb`. */
+  path: string;
+  /** Host-resolvable path for /api/files endpoints. */
+  diskPath: string;
+  name: string;
+  family: CBFileFamily;
+  /** Assets declared by this file when the registry can map them back. */
+  assets: CBAsset[];
+  /** Short display text in the prototype's family badge position. */
+  kindLabel: string;
+  isFavorite: boolean;
+}
+
 // ── Selection ────────────────────────────────────────────────────────────────
 
 export interface CBSelection {
   /** All currently selected items (ordered by selection time). */
-  items: (CBAsset | CBFolder)[];
+  items: (CBAsset | CBFolder | CBFile)[];
   /** The last-clicked item (anchor for range select). */
-  primary: CBAsset | CBFolder | null;
+  primary: CBAsset | CBFolder | CBFile | null;
 }
 
 // ── Filter ───────────────────────────────────────────────────────────────────
@@ -86,7 +115,7 @@ export interface CBSortState {
 // ── View ─────────────────────────────────────────────────────────────────────
 
 /** Union of renderable items in the right-side content view (folders + assets). */
-export type CBViewItem = CBAsset | CBFolder;
+export type CBViewItem = CBAsset | CBFolder | CBFile;
 
 export type CBViewMode = 'grid' | 'list' | 'column';
 

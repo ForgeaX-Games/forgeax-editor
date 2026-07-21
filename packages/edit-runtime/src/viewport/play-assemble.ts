@@ -64,6 +64,8 @@ import { createApp, inputPlugin } from '@forgeax/engine-app';
 import type { GameProjectionRegistrar } from '@forgeax/engine-app';
 import {
   World,
+  Time,
+  Update,
   createQueryState,
   queryRun,
   Entity,
@@ -71,7 +73,6 @@ import {
 } from '@forgeax/engine-ecs';
 import {
   transformPlugin,
-  timePlugin,
   animationPlugin,
   Transform,
   Camera,
@@ -123,13 +124,6 @@ interface SceneInstantiator {
 export interface PlayApp {
   start(): { ok: boolean; error?: unknown };
   stop(): { ok: boolean; error?: unknown };
-  /** Register a per-frame update on the play App's own frame loop (runs at play
-   *  frame start, same contract as editorApp.registerUpdate). The run-lifecycle
-   *  uses this to attach the DEV bridge eval-queue drain to the LIVE app while
-   *  play has paused the edit app (otherwise a bridge eval submitted during play
-   *  would queue forever — the drain is bound to editorApp.registerUpdate, which
-   *  does not tick while paused). Dropped with the play App on ■ Stop (no leak). */
-  registerUpdate(fn: (dt: number) => void): void;
 }
 
 /** What assemblePlayWorld hands back for the run-lifecycle to drive + drop. */
@@ -322,7 +316,6 @@ export async function assemblePlayWorld(
   // runtime, so game systems tick without a notEditing gate.
   const plugins: unknown[] = [
     transformPlugin(),
-    timePlugin(),
     animationPlugin(),
     statePlugin(),
     inputPlugin(),
@@ -346,7 +339,6 @@ export async function assemblePlayWorld(
     return { ok: false, error: appRes.error };
   }
   const playApp = appRes.value as unknown as PlayApp & {
-    registerUpdate(fn: (dt: number) => void): void;
     readonly renderer: unknown;
     readonly world: unknown;
     // M5 w23 / D-3: the assemble form exposes the host pre-injected input backend
@@ -359,21 +351,14 @@ export async function assemblePlayWorld(
   // listener-sync to the host (create-app.ts:665 registers it ONLY on the canvas
   // form; assemble hosts "manage their own sync"). Mirror the canvas closure here
   // so spatial audio (spatialBlend>0) attenuates as the AudioListener entity moves.
-  // Runs as an ECS addSystem after propagateTransforms (NOT registerUpdate) so it
+  // Runs as an ECS Update system after propagateTransforms so it
   // reads the CURRENT frame's Transform.world mat4. backend.listener is a lazy
   // getter (builds the AudioContext on first touch) — read it ONLY when an
   // AudioListener entity actually exists so an audio-less / listener-less scene
   // never forces context creation.
   if (audioBackend instanceof WebAudioEngine) {
     const backend = audioBackend;
-    (playWorld as {
-      addSystem(sys: {
-        name: string;
-        after?: string[];
-        queries: unknown[];
-        fn: () => void;
-      }): void;
-    }).addSystem({
+    (playWorld as World).addSystem(Update, {
       name: 'audio-listener-sync',
       after: [PROPAGATE_TRANSFORMS_SYSTEM],
       queries: [],
@@ -392,7 +377,7 @@ export async function assemblePlayWorld(
           }
         });
       },
-    });
+    }).unwrap();
   }
 
   // Sensor receiver-injection (round-20, P7): CollidingEntities is the physics
@@ -418,14 +403,7 @@ export async function assemblePlayWorld(
   // first, then added AFTER the query completes (addComponent migrates archetypes,
   // which must not happen mid-iteration).
   if (deps.physics) {
-    (playWorld as {
-      addSystem(sys: {
-        name: string;
-        before?: string[];
-        queries: unknown[];
-        fn: () => void;
-      }): void;
-    }).addSystem({
+    (playWorld as World).addSystem(Update, {
       name: 'sensor-colliding-entities-receiver',
       before: ['physicsSyncBackend'],
       queries: [],
@@ -451,7 +429,7 @@ export async function assemblePlayWorld(
           w.addComponent(e, { component: CollidingEntities, data: { entities: [] } });
         }
       },
-    });
+    }).unwrap();
   }
 
   // ── Diagnostics reads (V11/C1): project play-world metrics through Gateway ──
@@ -464,14 +442,19 @@ export async function assemblePlayWorld(
     let frameCount = 0;
     let lastFps = 0;
     let lastDt = 0;
-    playApp.registerUpdate((dt: number) => {
-      frameCount++;
-      lastDt = dt;
-      if (frameCount % 60 === 0) {
-        // Smoothed FPS over the last 60 frames (approximately 1s at 60fps).
-        lastFps = Math.round(60 / Math.max(dt * 60, 0.001));
-      }
-    });
+    (playWorld as World).addSystem(Update, {
+      name: 'editor-play-frame-stats',
+      queries: [],
+      fn: () => {
+        const dt = (playWorld as World).getResource(Time).delta;
+        frameCount++;
+        lastDt = dt;
+        if (frameCount % 60 === 0) {
+          // Smoothed FPS over the last 60 frames (approximately 1s at 60fps).
+          lastFps = Math.round(60 / Math.max(dt * 60, 0.001));
+        }
+      },
+    }).unwrap();
 
     gameProjection.registrar.registerRead({
       id: 'frameStats',
@@ -534,7 +517,6 @@ export async function assemblePlayWorld(
       renderer: shielded,
       assets: rendererAssets,
       app: playApp,
-      registerUpdate: (fn: (dt: number) => void) => playApp.registerUpdate(fn),
       setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
       ...(uiRoot !== undefined ? { uiRoot } : {}),
       registerCleanup: (fn: () => void) => { cleanups.push(fn); },

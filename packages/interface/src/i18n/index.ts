@@ -204,9 +204,8 @@ export function useTranslation(): {
   i18n: { language: Locale; changeLanguage: (l: Locale) => void };
 } {
   const language = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return {
-    // bind so callers always read the live `current` at call time
-    t: (key, vars) => t(key, vars),
-    i18n: { language, changeLanguage },
-  };
+  // Return the module-level `t` (stable identity). It already reads `current`
+  // at call time, so a new closure per render is unnecessary and breaks any
+  // useEffect/useMemo that lists `t` as a dependency (infinite re-render loops).
+  return { t, i18n: { language, changeLanguage } };
 }

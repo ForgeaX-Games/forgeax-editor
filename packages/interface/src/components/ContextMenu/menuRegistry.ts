@@ -3,7 +3,8 @@ import { aiIntentsFor, intentPill, actionIntentPill } from '../../lib/ai-intents
 import { t } from '@/i18n';
 
 export type MenuItem =
-  | { kind: 'item'; label: string; onClick: () => void; danger?: boolean; disabled?: boolean }
+  | { kind: 'item'; label: string; onClick: () => void; danger?: boolean; disabled?: boolean; icon?: string; shortcut?: string; forge?: boolean }
+  | { kind: 'title'; label: string; icon?: string }
   | { kind: 'sep' };
 
 const copy = (text: string) => {

@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { broadcastAssetsChanged, resolveGamePath } from '@forgeax/editor-core';
 import { generateAssetGuid, gateway } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Input,
+} from '@forgeax/editor-ui';
+import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
@@ -12,6 +23,7 @@ interface Props {
 }
 
 export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
+  const { t } = useTranslation();
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const acceptString = buildAcceptString();
@@ -31,23 +43,31 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
   const handleCreateAsset = useCallback((spec: CreatableAssetSpec) => {
     setAddMenuOpen(false);
-    const name = window.prompt(`New ${spec.label} name:`, spec.defaultNamePrefix);
-    if (!name) return;
-    gateway.dispatch({
-      kind: 'createAsset',
-      packPath: `${basePath}/${name}.pack.json`,
-      guid: generateAssetGuid(),
-      assetKind: spec.kind,
-      name,
-    }, 'human');
-  }, [basePath]);
+    void promptDialog({
+      title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+      label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
+      defaultValue: spec.defaultNamePrefix,
+      placeholder: spec.defaultNamePrefix,
+      confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+    }).then((result) => {
+      const name = result?.trim();
+      if (!name) return;
+      gateway.dispatch({
+        kind: 'createAsset',
+        packPath: `${basePath}/${name}.pack.json`,
+        guid: generateAssetGuid(),
+        assetKind: spec.kind,
+        name,
+      }, 'human');
+    });
+  }, [basePath, t]);
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
-    const name = window.prompt('New folder name:');
+    const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
     if (!name) return;
     gateway.dispatch({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
-  }, [currentPath]);
+  }, [currentPath, t]);
 
   const handleImport = useCallback(() => {
     const input = fileInputRef.current;
@@ -104,30 +124,30 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   return (
     <div className="cb-toolbar">
       <div className="cb-toolbar-group">
-        <div className="cb-dropdown-container">
-          <button className="cb-toolbar-btn" onClick={() => setAddMenuOpen(!addMenuOpen)}>
-            + Add
-          </button>
-          {addMenuOpen && (
-            <div className="cb-dropdown-menu" onMouseLeave={() => setAddMenuOpen(false)}>
-              <button className="cb-dropdown-item" onClick={handleNewFolder}>
-                📁 New Folder
-              </button>
-              <div className="cb-dropdown-sep" />
-              {CREATABLE_ASSET_KINDS.map(spec => (
-                <button key={spec.kind} className="cb-dropdown-item" onClick={() => handleCreateAsset(spec)}>
-                  {spec.icon} {spec.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <DropdownMenu open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="subtle">+ {t('editor.contentBrowser.actions.create')}</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem size="sm" onClick={handleNewFolder}>
+              {t('editor.contentBrowser.actions.createFolder')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {CREATABLE_ASSET_KINDS.map(spec => (
+              <DropdownMenuItem key={spec.kind} size="sm" onClick={() => handleCreateAsset(spec)}>
+                {spec.icon} {spec.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        <button className="cb-toolbar-btn" onClick={handleImport}>
-          ⬇ Import
-        </button>
-        <input
+        <Button size="sm" variant="subtle" onClick={handleImport}>
+          {t('editor.contentBrowser.actions.import')}
+        </Button>
+        <Input
           ref={fileInputRef}
+          data-cb-file-input="1"
+          size="sm"
           type="file"
           multiple
           accept={acceptString}
@@ -135,9 +155,9 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
           onChange={e => void handleFileSelected(e)}
         />
 
-        <button className="cb-toolbar-btn" onClick={handleSaveAll}>
-          💾 Save All
-        </button>
+        <Button size="sm" variant="subtle" onClick={handleSaveAll}>
+          {t('editor.contentBrowser.actions.saveAll')}
+        </Button>
       </div>
     </div>
   );

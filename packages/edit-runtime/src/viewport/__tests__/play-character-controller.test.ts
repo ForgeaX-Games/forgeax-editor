@@ -71,8 +71,7 @@ interface PlayWorldLike {
   spawn(...cd: unknown[]): { ok: boolean; value: number };
   get(e: number, c: unknown): { ok: boolean; value: { grounded: boolean; pos: ArrayLike<number> } };
   getResource(key: string): PhysicsWorldLike;
-  insertResource(key: string, value: unknown): void;
-  update(): void;
+  update(deltaSeconds: number): { unwrap(): void };
 }
 
 async function assembleKccWorld(): Promise<{ world: PlayWorldLike; pw: PhysicsWorldLike }> {
@@ -92,16 +91,15 @@ async function assembleKccWorld(): Promise<{ world: PlayWorldLike; pw: PhysicsWo
   return { world, pw };
 }
 
-// Step the real rapier sim N frames (PhysicsStepSimulation reads Time.dt), issuing
+// Step the real rapier sim N frames (PhysicsStepSimulation reads World-owned Time), issuing
 // `delta` each frame via moveAndSlide — the per-frame driver a game system runs.
 // world.update() is stepped FIRST each frame so physicsSyncBackend builds the
 // Rapier body (async fire-and-forget on first tick); moveAndSlide is then guarded
 // with hasBody (the AI-user contract in physics-world.ts) — mirroring the
 // hello-character / player-move guard that no-ops until the body exists.
-function drive(world: PlayWorldLike, pw: PhysicsWorldLike, char: number, delta: number[], frames: number, startElapsed = 0): void {
+function drive(world: PlayWorldLike, pw: PhysicsWorldLike, char: number, delta: number[], frames: number): void {
   for (let i = 0; i < frames; i++) {
-    world.insertResource('Time', { dt: 1 / 60, elapsed: startElapsed + (i + 1) / 60 });
-    world.update();
+    world.update(1 / 60).unwrap();
     if (pw.hasBody(char)) pw.moveAndSlide(char, delta);
   }
 }
@@ -132,7 +130,7 @@ describe('solo round-21 — editor ▶ Play drives a kinematic CharacterControll
 
     // Walk +X on open ground; the applied delta should track the request.
     const startX = readX(world, char.value);
-    drive(world, pw, char.value, [0.05, -0.02, 0], 30, 8 / 60);
+    drive(world, pw, char.value, [0.05, -0.02, 0], 30);
     const endX = readX(world, char.value);
     expect(endX - startX).toBeGreaterThan(1.0); // moved ~1.5 across 30 frames
 
@@ -167,7 +165,7 @@ describe('solo round-21 — editor ▶ Play drives a kinematic CharacterControll
 
     drive(world, pw, char.value, [0, -0.05, 0], 8);
     // Push HARD into the wall for many frames — a naive teleport would clip through.
-    drive(world, pw, char.value, [0.1, -0.02, 0], 80, 8 / 60);
+    drive(world, pw, char.value, [0.1, -0.02, 0], 80);
 
     const finalX = readX(world, char.value);
     // The character stops short of the wall face minus its capsule radius

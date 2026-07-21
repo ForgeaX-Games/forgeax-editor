@@ -6,6 +6,7 @@ import {
   gateway, getSelection, entComponent,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
+import { t as tr } from '@forgeax/editor-core/i18n';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
  *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
@@ -60,6 +61,8 @@ export interface ContextMenuItem {
   icon?: string;
   shortcut?: string;
   disabled?: boolean;
+  danger?: boolean;
+  forge?: boolean;
   separator?: boolean;
   action: () => void;
 }
@@ -91,11 +94,11 @@ export function buildAssetContextMenu(
 
   return [
     // ── Common ──
-    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => {
+    { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => {
       if (callbacks?.onRename) {
         callbacks.onRename(asset);
       } else {
-        const newName = window.prompt('Rename asset:', asset.name);
+        const newName = window.prompt(tr('editor.contentBrowser.dialogs.renameAssetPrompt'), asset.name);
         if (newName && newName !== asset.name) {
           // D6: rename routes through the ONE gateway door (document op, undoable).
           // The applier reaches pack IO via ctx.assetIO and fires the in-process
@@ -104,17 +107,17 @@ export function buildAssetContextMenu(
         }
       }
     }},
-    { id: 'duplicate', label: 'Duplicate', shortcut: 'Ctrl+D', action: () => {
+    { id: 'duplicate', label: tr('editor.contentBrowser.contextMenu.duplicate'), shortcut: 'Ctrl+D', action: () => {
       for (const a of targets) {
         // D6: duplicate routes through the gateway (document op, undoable). The new
         // guid is allocated inside the applier's assetIO gate; no direct facade call.
         gateway.dispatch({ kind: 'duplicateAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
     }},
-    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
+    { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
       if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
       const names = targets.map(a => a.name).join(', ');
-      if (!window.confirm(`Delete ${targets.length} asset(s)?\n${names}`)) return;
+      if (!window.confirm(`${tr('editor.contentBrowser.deleteGuard.title', { count: targets.length, plural: targets.length === 1 ? '' : 's' })}\n${names}`)) return;
       for (const a of targets) {
         gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
@@ -122,21 +125,21 @@ export function buildAssetContextMenu(
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
     // ── References ──
-    { id: 'copy-guid', label: 'Copy GUID', action: () => {
+    { id: 'copy-guid', label: tr('editor.contentBrowser.contextMenu.copyGuid'), action: () => {
       void navigator.clipboard.writeText(targets.map(a => a.guid).join('\n'));
     }},
-    { id: 'copy-path', label: 'Copy Asset Path', shortcut: 'Ctrl+Shift+C', action: () => {
+    { id: 'copy-path', label: tr('editor.contentBrowser.contextMenu.copyAssetPath'), shortcut: 'Ctrl+Shift+C', action: () => {
       void navigator.clipboard.writeText(targets.map(a => a.packPath).join('\n'));
     }},
     { id: 'sep-2', label: '', separator: true, action: () => {} },
 
     // ── Scene ──
-    { id: 'add-to-scene', label: 'Add to Scene', action: () => {
+    { id: 'add-to-scene', label: tr('editor.contentBrowser.contextMenu.addToScene'), action: () => {
       const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload };
       console.info('[CB:import] Add to Scene', { kind: ref.kind, guid: ref.guid, name: ref.name, path: ref.path });
       requestAddAssetToScene(ref);
     }},
-    { id: 'assign', label: 'Assign to Selected Entity', action: () => {
+    { id: 'assign', label: tr('editor.contentBrowser.contextMenu.assignToSelected'), action: () => {
       const sel = getSelection();
       // With an entity selected AND an assignable kind → delegate to assignAssetToEntity
       // (uses bindAssetRef for material/mesh, createMaterial+bindAssetRef for texture/image).
@@ -150,7 +153,7 @@ export function buildAssetContextMenu(
     { id: 'sep-3', label: '', separator: true, action: () => {} },
 
     // ── AI ──
-    { id: 'add-to-chat', label: '🤖 Add to AI Chat', action: () => {
+    { id: 'add-to-chat', label: tr('editor.contentBrowser.contextMenu.addToChat'), forge: true, action: () => {
       const refs: AssetChatRef[] = targets.map(a => ({
         type: 'asset' as const,
         guid: a.guid,
@@ -161,7 +164,7 @@ export function buildAssetContextMenu(
       }));
       requestAddAssetsToChat(refs);
     }},
-    { id: 'add-with-deps', label: '🤖 Add with Dependencies', action: () => {
+    { id: 'add-with-deps', label: tr('editor.contentBrowser.contextMenu.addWithDependencies'), forge: true, action: () => {
       const visited = new Set<string>();
       const refs: AssetChatRef[] = [];
       for (const a of targets) {
@@ -187,28 +190,28 @@ export function buildFolderContextMenu(
 ): ContextMenuItem[] {
   return [
     // ── Folder ──
-    { id: 'open', label: 'Open', action: () => { /* handled by caller via navigate */ } },
-    { id: 'new-folder', label: 'New Folder', action: () => {
+    { id: 'open', label: tr('editor.contentBrowser.contextMenu.open'), action: () => { /* handled by caller via navigate */ } },
+    { id: 'new-folder', label: tr('editor.contentBrowser.contextMenu.newFolder'), action: () => {
       callbacks?.onNewFolder?.(folder.path);
     }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
-    { id: 'rename', label: 'Rename', shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
-    { id: 'delete', label: 'Delete', shortcut: 'Del', action: () => {
-      if (!window.confirm(`Delete folder "${folder.name}" and all its contents?`)) return;
+    { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
+    { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
+      if (!window.confirm(tr('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: folder.name }))) return;
       gateway.dispatch({ kind: 'deleteDirectory', path: folder.path }, 'human');
     }},
-    { id: 'copy-path', label: 'Copy Path', action: () => {
+    { id: 'copy-path', label: tr('editor.contentBrowser.contextMenu.copyPath'), action: () => {
       void navigator.clipboard.writeText(folder.path);
     }},
     { id: 'sep-2', label: '', separator: true, action: () => {} },
 
     // ── Favorites ──
-    { id: 'toggle-fav', label: folder.isFavorite ? 'Remove from Favorites' : 'Add to Favorites', action: () => { /* handled by caller */ } },
+    { id: 'toggle-fav', label: folder.isFavorite ? tr('editor.contentBrowser.contextMenu.unfavorite') : tr('editor.contentBrowser.contextMenu.favorite'), action: () => { /* handled by caller */ } },
     { id: 'sep-3', label: '', separator: true, action: () => {} },
 
     // ── AI ──
-    { id: 'add-folder-chat', label: '🤖 Add Folder to AI Chat', action: () => {
+    { id: 'add-folder-chat', label: tr('editor.contentBrowser.contextMenu.addFolderToChat'), forge: true, action: () => {
       const kinds: Record<string, number> = {};
       for (const a of assetsInFolder) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
       requestAddAssetsToChat([{
@@ -218,7 +221,7 @@ export function buildFolderContextMenu(
         summary: { totalAssets: assetsInFolder.length, kinds, guids: assetsInFolder.map(a => a.guid) },
       }]);
     }},
-    { id: 'add-folder-summary', label: '🤖 Add Folder Summary to Chat', action: () => {
+    { id: 'add-folder-summary', label: tr('editor.contentBrowser.contextMenu.addFolderSummaryToChat'), forge: true, action: () => {
       const kinds: Record<string, number> = {};
       for (const a of assetsInFolder) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
       requestAddAssetsToChat([{
@@ -239,7 +242,7 @@ export function buildBlankAreaContextMenu(
   return [
     {
       id: 'new-folder',
-      label: 'New Folder',
+      label: tr('editor.contentBrowser.contextMenu.newFolder'),
       action: () => onCreateDirectory(currentPath),
     },
   ];

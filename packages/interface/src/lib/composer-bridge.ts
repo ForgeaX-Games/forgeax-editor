@@ -55,7 +55,12 @@ import { t } from '@/i18n';
 // `⟦` U+27E6 and `⟧` U+27E7 are extremely rare in normal user text, so this is
 // effectively a private band the rest of the pipeline can pass through.
 
-export type PillKind = 'file' | 'dir' | 'agent' | 'tool' | 'game' | 'log' | 'entity' | 'paste';
+export type PillKind =
+  | 'file' | 'dir' | 'agent' | 'tool' | 'game' | 'log' | 'entity' | 'paste'
+  | 'skill' | 'command';
+
+/** Pill kinds kept as chips in chat history (others expand to detail text). */
+const DISPLAY_PRESERVE_KINDS = new Set<PillKind>(['skill', 'command']);
 
 export interface PillPayload {
   kind: PillKind;
@@ -123,6 +128,61 @@ export function expandPills(text: string): string {
     const p = decodePill(full);
     return p ? p.detail : full;
   });
+}
+
+/** Expand pills for transcript display — paste/file/etc. become detail text;
+ *  skill/command pills stay as sentinels so PillText renders tag chips. */
+export function expandPillsForDisplay(text: string): string {
+  return text.replace(SENTINEL_RE, (full) => {
+    const p = decodePill(full);
+    if (!p) return full;
+    if (DISPLAY_PRESERVE_KINDS.has(p.kind)) return full;
+    return p.detail;
+  });
+}
+
+export type SlashPillSource = 'skill' | 'command';
+
+/** Build a slash-trigger pill for the composer slash menu (skill or server command). */
+export function buildSlashPill(p: {
+  trigger: string;
+  source: SlashPillSource;
+  displayName?: string;
+  description?: string;
+}): PillPayload {
+  const trigger = p.trigger.startsWith('/') ? p.trigger : `/${p.trigger}`;
+  const kind: PillKind = p.source === 'skill' ? 'skill' : 'command';
+  const title = p.displayName?.trim() || trigger;
+  const desc = p.description?.trim();
+  return {
+    kind,
+    display: trigger,
+    detail: trigger,
+    tooltip: {
+      title: kind === 'skill' ? `✦ ${title}` : trigger,
+      lines: [desc, kind === 'skill' ? 'Skill' : 'Command'].filter(Boolean) as string[],
+    },
+  };
+}
+
+function buildLegacySlashPill(trigger: string): PillPayload {
+  return buildSlashPill({ trigger, source: 'command' });
+}
+
+/** Parse message text for display — pill sentinels + leading `/command` tags. */
+export function parseDisplaySegments(text: string): TextSegment[] {
+  const segs = parseSegments(text);
+  if (segs.length === 0) return segs;
+  const first = segs[0];
+  if (first.kind !== 'text') return segs;
+  const m = first.text.match(/^(\/[a-z][a-z0-9_-]*)([\s\S]*)$/i);
+  if (!m) return segs;
+  const out: TextSegment[] = [
+    { kind: 'pill', token: '', payload: buildLegacySlashPill(m[1]) },
+  ];
+  if (m[2]) out.push({ kind: 'text', text: m[2] });
+  if (segs.length > 1) out.push(...segs.slice(1));
+  return out;
 }
 
 /** Canonical visible label for the "send this into Chat" action. The ONLY

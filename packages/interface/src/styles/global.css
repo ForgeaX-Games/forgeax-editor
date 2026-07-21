@@ -117,3 +117,81 @@ input, textarea, [contenteditable="true"] {
   min-height: 0;
   height: 100%;
 }
+
+.forgeax-ctx-menu-panel {
+  min-width: 216px;
+  padding: 5px;
+  border-color: var(--color-border-default);
+  border-radius: 9px;
+  background: var(--color-background-floating);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.62);
+}
+
+.fx-ctx-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fx-ctx-menu-item {
+  gap: 9px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.forgeax-ctx-menu-panel .fx-ctx-menu-item:hover,
+.forgeax-ctx-menu-panel .fx-ctx-menu-item:focus,
+.forgeax-ctx-menu-panel .fx-ctx-menu-item[data-highlighted] {
+  background: var(--color-interaction-selected-neutral) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.fx-ctx-menu-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--color-text-tertiary);
+}
+
+.fx-ctx-menu-label {
+  min-width: 0;
+}
+
+.fx-ctx-menu-kbd {
+  margin-left: auto;
+  padding-left: 20px;
+  color: var(--color-text-disabled);
+  font-family: var(--prim-font-mono);
+  font-size: 10px;
+}
+
+.fx-ctx-menu-forge,
+.fx-ctx-menu-forge .fx-ctx-menu-icon {
+  color: var(--color-brand-primary);
+  font-weight: 600;
+}
+
+.forgeax-ctx-menu-panel .fx-ctx-menu-forge:hover,
+.forgeax-ctx-menu-panel .fx-ctx-menu-forge:focus,
+.forgeax-ctx-menu-panel .fx-ctx-menu-forge[data-highlighted] {
+  background: var(--color-interaction-selected-neutral) !important;
+  color: var(--color-brand-primary) !important;
+}
+
+.fx-ctx-menu-danger,
+.fx-ctx-menu-danger .fx-ctx-menu-icon {
+  color: var(--color-text-danger);
+}
+
+.forgeax-ctx-menu-panel .fx-ctx-menu-danger:hover,
+.forgeax-ctx-menu-panel .fx-ctx-menu-danger:focus,
+.forgeax-ctx-menu-panel .fx-ctx-menu-danger[data-highlighted] {
+  background: var(--color-interaction-selected-neutral) !important;
+  color: var(--color-text-danger) !important;
+}

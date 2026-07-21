@@ -1,36 +1,19 @@
 // @forgeax/editor/protocol — VAG_* postMessage schema SSOT.
 //
-// 8 zod schemas covering every VAG_* message type observed on a real
-// cross-realm wire (research F-6 grep evidence). Three panel-action invocation
-// schemas were retired in feat-20260708 (no on-wire consumer survived the
-// single-realm merge; registry projection now derives from gateway.listOps()).
-// The single-realm cleanup retired former asset-change, context-menu,
-// editor-control, and spawn projections: their callers now use typed in-process
-// callbacks/PanelBridge, while the spawn path is
-// core/scene/spawn-asset-ref.ts → gateway.dispatch. Naming is strictly paired:
+// 8 zod schemas covering every VAG_* message type observed on the cross-realm
+// wire. Naming is strictly paired:
 //
 //   Vag<Name>Schema  — runtime z.object validator (consumer side)
 //   Vag<Name>Message — TypeScript type derived via z.infer<typeof ...>
 //
-// Two shape families exist in the wire:
-//   1. payload-wrapped:  { type, payload: { ... } }
-//      CONSOLE, NETWORK, FPS_STATS
-//   2. type-only: { type }
-//      DEVICE_LOST, PREVIEW_DISPOSE, PREVIEW_PAUSE, PREVIEW_PLAY,
-//      PREVIEW_RELOAD
+// Two shape families:
+//   payload-wrapped { type, payload: {…} } — CONSOLE, NETWORK, FPS_STATS
+//   type-only       { type }                — DEVICE_LOST, PREVIEW_DISPOSE,
+//                                             PREVIEW_PAUSE, PREVIEW_PLAY,
+//                                             PREVIEW_RELOAD
 //
-// Schema contracts intentionally mirror the actual on-wire shape from
-// the producer call sites (see anchors per schema). Fields not present
-// on the wire today are NOT added speculatively (plan-strategy §2 D-4
-// "no try-catch silent swallow" — schemas surface real divergence).
-//
-// Anchors:
-//   requirements §AC-03 (8 cross-realm schemas; editor-iframe projections retired)
-//   requirements §AC-05 (safeParse error.issues structured failure)
-//   plan-strategy §2 D-3 (single physical location)
-//   plan-strategy §2 D-4 (no silent type assertion)
-//   plan-strategy §8.1 (Vag<Name>Schema + Vag<Name>Message naming pair)
-//   research F-6 (8 cross-realm type literals after single-realm projections retired)
+// Fields not present on the wire today are NOT added speculatively — schemas
+// surface real divergence instead of silently accepting drift.
 
 import { z } from 'zod';
 
@@ -48,7 +31,7 @@ export const VagConsoleSchema = z.object({
 });
 export type VagConsoleMessage = z.infer<typeof VagConsoleSchema>;
 
-// ── 2b. VAG_NETWORK ──────────────────────────────────────────────────────────
+// ── 2. VAG_NETWORK ───────────────────────────────────────────────────────────
 // Producer: play-runtime/main.ts + edit-runtime/main.tsx network bridge
 // (fetch / XHR / WebSocket proxy). Carries one network request summary. Consumer
 // pushes to the in-UI Network panel (asset/HTTP/WS debugging — 404s, 503s, …).
@@ -85,7 +68,7 @@ export const VagFpsStatsSchema = z.object({
 });
 export type VagFpsStatsMessage = z.infer<typeof VagFpsStatsSchema>;
 
-// ── 12. VAG_PREVIEW_DISPOSE ──────────────────────────────────────────────────
+// ── 5. VAG_PREVIEW_DISPOSE ───────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:287 / 324 / 414 (interface). Type-only command
 // asking the preview iframe to dispose its engine before src reset / unmount.
 export const VagPreviewDisposeSchema = z.object({
@@ -93,21 +76,21 @@ export const VagPreviewDisposeSchema = z.object({
 });
 export type VagPreviewDisposeMessage = z.infer<typeof VagPreviewDisposeSchema>;
 
-// ── 13. VAG_PREVIEW_PAUSE ────────────────────────────────────────────────────
+// ── 6. VAG_PREVIEW_PAUSE ─────────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:407 (sendToGame helper). Type-only.
 export const VagPreviewPauseSchema = z.object({
   type: z.literal('VAG_PREVIEW_PAUSE'),
 });
 export type VagPreviewPauseMessage = z.infer<typeof VagPreviewPauseSchema>;
 
-// ── 14. VAG_PREVIEW_PLAY ─────────────────────────────────────────────────────
+// ── 7. VAG_PREVIEW_PLAY ──────────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:407 (sendToGame helper). Type-only.
 export const VagPreviewPlaySchema = z.object({
   type: z.literal('VAG_PREVIEW_PLAY'),
 });
 export type VagPreviewPlayMessage = z.infer<typeof VagPreviewPlaySchema>;
 
-// ── 15. VAG_PREVIEW_RELOAD ───────────────────────────────────────────────────
+// ── 8. VAG_PREVIEW_RELOAD ────────────────────────────────────────────────────
 // Producer: interface preview / engine HMR path. Type-only — receiver does
 // location.reload() (editor-runtime/main.tsx:326).
 export const VagPreviewReloadSchema = z.object({

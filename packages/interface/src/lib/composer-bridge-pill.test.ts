@@ -3,7 +3,7 @@
  * that carries structured references through the otherwise-plaintext message.
  */
 import { describe, it, expect } from 'bun:test';
-import { encodePill, decodePill, parseSegments, expandPills, type PillPayload } from './composer-bridge';
+import { encodePill, decodePill, parseSegments, expandPills, expandPillsForDisplay, buildSlashPill, parseDisplaySegments, type PillPayload } from './composer-bridge';
 
 const sample: PillPayload = {
   kind: 'file',
@@ -40,5 +40,27 @@ describe('pill codec', () => {
 
   it('expandPills leaves a corrupt token untouched', () => {
     expect(expandPills('⟦pill:@@@⟧')).toBe('⟦pill:@@@⟧');
+  });
+
+  it('expandPillsForDisplay keeps skill/command pills as sentinels', () => {
+    const skill = buildSlashPill({ trigger: '/implement-feature', source: 'skill', displayName: 'Implement' });
+    const cmd = buildSlashPill({ trigger: '/compact', source: 'command' });
+    const skillTok = encodePill(skill);
+    const cmdTok = encodePill(cmd);
+    expect(expandPillsForDisplay(`${skillTok} hello`)).toBe(`${skillTok} hello`);
+    expect(expandPillsForDisplay(`${cmdTok} args`)).toBe(`${cmdTok} args`);
+    expect(expandPills(`${skillTok} hello`)).toBe('/implement-feature hello');
+  });
+
+  it('expandPillsForDisplay still expands paste/file pills', () => {
+    const token = encodePill(sample);
+    expect(expandPillsForDisplay(`see ${token}`)).toBe(`see ${sample.detail}`);
+  });
+
+  it('parseDisplaySegments tags a leading slash command in plain text', () => {
+    const segs = parseDisplaySegments('/compact do it');
+    expect(segs.map((s) => s.kind)).toEqual(['pill', 'text']);
+    expect(segs[0].kind === 'pill' && segs[0].payload.display).toBe('/compact');
+    expect(segs[1]).toEqual({ kind: 'text', text: ' do it' });
   });
 });

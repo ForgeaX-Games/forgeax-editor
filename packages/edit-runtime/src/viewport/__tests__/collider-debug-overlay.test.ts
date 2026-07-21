@@ -5,6 +5,7 @@
 // frame; all non-applicable states are genuine no-ops.
 
 import { describe, expect, it } from 'bun:test';
+import { World } from '@forgeax/engine-ecs';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { ColorLike, Vec3 } from '@forgeax/engine-math';
 
@@ -17,7 +18,7 @@ type Line = {
 };
 
 function makeHarness() {
-  let frame: ((dt: number) => void) | undefined;
+  const world = new World();
   let selection: number | null = 7;
   let visible = true;
   let editMode = true;
@@ -26,16 +27,14 @@ function makeHarness() {
     Transform: { world: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 4, 2, -3, 1] },
   };
   const lines: Line[] = [];
-  const app = {
-    debugDraw: {
+  const debugDraw = {
       line(from: Vec3, to: Vec3, color: ColorLike) {
         lines.push({ from, to, color: Array.from(color) });
       },
-    } satisfies Pick<DebugDraw, 'line'>,
-    registerUpdate(fn: (dt: number) => void) { frame = fn; },
-  };
+    } satisfies Pick<DebugDraw, 'line'>;
   installColliderDebugOverlay({
-    app,
+    world,
+    debugDraw,
     getSelection: () => selection as never,
     getEntityComponents: () => components,
     isAuxVisible: () => visible,
@@ -43,7 +42,7 @@ function makeHarness() {
   });
   return {
     lines,
-    tick: () => frame?.(1 / 60),
+    tick: () => world.update(1 / 60).unwrap(),
     setSelection: (value: number | null) => { selection = value; },
     setVisible: (value: boolean) => { visible = value; },
     setEditMode: (value: boolean) => { editMode = value; },
@@ -93,14 +92,14 @@ describe('installColliderDebugOverlay', () => {
   });
 
   it('does not require DebugDraw to exist in an editor app', () => {
-    let frame: ((dt: number) => void) | undefined;
+    const world = new World();
     expect(() => installColliderDebugOverlay({
-      app: { registerUpdate(fn) { frame = fn; } },
+      world,
       getSelection: () => 1 as never,
       getEntityComponents: () => ({ Collider: {}, Transform: {} }),
       isAuxVisible: () => true,
       isEditMode: () => true,
     })).not.toThrow();
-    expect(() => frame?.(1 / 60)).not.toThrow();
+    expect(() => world.update(1 / 60).unwrap()).not.toThrow();
   });
 });

@@ -7,7 +7,7 @@
 //   • the `defineComponent` / `defineSystem` calls below run as an import side
 //     effect and register into the ONE live engine registry the editor booted
 //     (the `gameEngineResolve` vite plugin re-anchors the bare `@forgeax/*`
-//     imports to the editor's single engine instance — engine-vite-preset.ts);
+//     imports to the editor's single engine instance — runtime-vite-preset.ts);
 //   • in ✎ Edit the loader registers the COMPONENT only, so you can attach
 //     `Rotator` to an entity (e.g. BlueBall) and it round-trips into the scene
 //     pack like any builtin component (collect-scene-asset iterates every

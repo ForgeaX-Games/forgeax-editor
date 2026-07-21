@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { Button } from '@forgeax/editor-ui';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 import type { CBAsset } from './types';
 import type { DeleteImpact } from './delete-guard';
 
@@ -27,6 +29,7 @@ export function DeleteGuardDialog({
   onConfirm,
   onCancel,
 }: DeleteGuardDialogProps) {
+  const { t } = useTranslation();
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -48,25 +51,27 @@ export function DeleteGuardDialog({
         className="cb-dialog"
         role="alertdialog"
         aria-modal="true"
-        aria-label="Confirm delete"
+        aria-label={t('editor.contentBrowser.deleteGuard.ariaLabel')}
         data-testid="cb-delete-guard-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="cb-dialog-title">
-          {danger ? '⚠ ' : ''}Delete {count} asset{count === 1 ? '' : 's'}?
+          {danger ? '⚠ ' : ''}{t('editor.contentBrowser.deleteGuard.title', { count, plural: count === 1 ? '' : 's' })}
         </div>
 
         <div className="cb-dialog-body">
           <ul className="cb-dialog-list">
-            {targets.map((t) => {
-              const external = impact.externalReferencers.get(t.guid) ?? [];
+            {targets.map((target) => {
+              const external = impact.externalReferencers.get(target.guid) ?? [];
               return (
-                <li key={t.guid} className="cb-dialog-item">
-                  <span className="cb-dialog-item-name">{t.name}</span>
+                <li key={target.guid} className="cb-dialog-item">
+                  <span className="cb-dialog-item-name">{target.name}</span>
                   {external.length > 0 && (
                     <span className="cb-dialog-item-refs">
-                      referenced by {external.length}:{' '}
-                      {external.map(nameByGuid).join(', ')}
+                      {t('editor.contentBrowser.deleteGuard.referencedBy', {
+                        count: external.length,
+                        names: external.map(nameByGuid).join(', '),
+                      })}
                     </span>
                   )}
                 </li>
@@ -75,26 +80,33 @@ export function DeleteGuardDialog({
           </ul>
           {danger ? (
             <p className="cb-dialog-warn">
-              Some assets are still referenced by other assets. Deleting them may
-              break those references.
+              {t('editor.contentBrowser.deleteGuard.warn')}
             </p>
           ) : (
-            <p className="cb-dialog-note">This action cannot be undone.</p>
+            <p className="cb-dialog-note">{t('editor.contentBrowser.deleteGuard.note')}</p>
           )}
         </div>
 
         <div className="cb-dialog-actions">
-          <button className="cb-dialog-btn" data-testid="cb-delete-guard-cancel" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
+          <Button
+            className="cb-dialog-btn"
+            data-testid="cb-delete-guard-cancel"
+            size="sm"
+            variant="subtle"
+            onClick={onCancel}
+          >
+            {t('editor.contentBrowser.deleteGuard.cancel')}
+          </Button>
+          <Button
             ref={confirmRef}
-            className={`cb-dialog-btn ${danger ? 'cb-dialog-btn-danger' : 'cb-dialog-btn-primary'}`}
+            className="cb-dialog-btn"
             data-testid="cb-delete-guard-confirm"
+            size="sm"
+            variant={danger ? 'destructive' : 'default'}
             onClick={onConfirm}
           >
-            Delete{danger ? ' anyway' : ''}
-          </button>
+            {danger ? t('editor.contentBrowser.deleteGuard.confirmAnyway') : t('editor.contentBrowser.deleteGuard.confirm')}
+          </Button>
         </div>
       </div>
     </div>

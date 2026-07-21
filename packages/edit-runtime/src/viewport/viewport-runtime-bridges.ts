@@ -41,23 +41,29 @@
 //     the in-process edit-runtime bridge set.
 
 import { gateway, panelBridge, broadcastAssetsChanged } from '@forgeax/editor-core';
+import { Time, Update, type World } from '@forgeax/engine-ecs';
 import { setFps } from '../fps-store';
 
 // ── FPS report ────────────────────────────────────────────────────────────────
 export function installFpsReport(
-  editorApp: { registerUpdate(fn: (dt: number) => void): void },
+  world: World,
   onFps: (fps: number) => void,
 ): void {
   let frames = 0, accum = 0;
-  editorApp.registerUpdate((dt: number) => {
-    frames++; accum += dt;
-    if (accum >= 1) {
-      const fps = Math.round(frames / accum);
-      setFps(fps);   // feed the shared fps-store (GameOverlay reads it too)
-      onFps(fps);    // feed this component's local state (ViewportChrome prop)
-      frames = 0; accum = 0;
-    }
-  });
+  world.addSystem(Update, {
+    name: 'editor-fps-report',
+    queries: [],
+    fn: () => {
+      const dt = world.getResource(Time).delta;
+      frames++; accum += dt;
+      if (accum >= 1) {
+        const fps = Math.round(frames / accum);
+        setFps(fps);   // feed the shared fps-store (GameOverlay reads it too)
+        onFps(fps);    // feed this component's local state (ViewportChrome prop)
+        frames = 0; accum = 0;
+      }
+    },
+  }).unwrap();
 }
 
 // These two bridges monkeypatch process-global surfaces (console methods,

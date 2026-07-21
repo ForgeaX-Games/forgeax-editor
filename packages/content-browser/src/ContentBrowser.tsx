@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-// M3 (AC-03): asset-selection is a transient op dispatched through the one
-// gateway door — gateway.dispatch({ kind: 'setAssetSelection', … }) — not the direct
-// setAssetSelection setter.
-import { gateway, getSceneId, panelBridge, resolveGamePath, showContextMenu, useDocVersion,
+import { useHost } from '@forgeax/interface/core/app-shell';
+import { useTranslation } from '@forgeax/editor-core/i18n';
+// Asset-selection is a transient op dispatched through the one gateway door
+// (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
+import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu, useDocVersion,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -11,22 +12,34 @@ import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
 import { useFavorites } from './hooks/useFavorites';
 import { useAssetGraph } from './hooks/useAssetGraph';
+import { useCBData } from './hooks/useCBData';
+import { useCBDerivedView } from './hooks/useCBDerivedView';
+import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
 import { computeDeleteImpact } from './delete-guard';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
-import { CBFilterBar } from './CBFilterBar';
 import { CBNavigationBar } from './CBNavigationBar';
 import { CBGrid } from './CBGrid';
-import { CBList } from './CBList';
-import { CBColumn } from './CBColumn';
-import { CBStatusBar } from './CBStatusBar';
-import { CBToolbar } from './CBToolbar';
+import { CBPreviewPanel } from './CBPreviewPanel';
+import { CBSourceTree } from './CBSourceTree';
+import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
-import { deriveContentView } from './folder-view';
+import type { CreatableAssetSpec } from './creatable-asset-kinds';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
-import type { CBAsset, CBFolder, CBViewItem, CBViewMode } from './types';
+import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
+import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
+import {
+  viewItemPath,
+  viewItemKey,
+  copyText,
+  resolveCopyPath,
+  orderContextMenuEntries,
+  menuIconForId,
+  fileSpecificMenuItems,
+  type CBContextMenuEntry,
+} from './content-browser-format';
 import './content-browser.css';
 
 // M3: single-realm — registry.listCatalog() replaces loadGameAssets/loadMetaAssets
@@ -49,57 +62,27 @@ const catalogAssetRoots: readonly CatalogAssetRoot[] =
     ? []
     : __FORGEAX_CATALOG_ASSET_ROOTS__;
 
-function registryEntryToCBAsset(
-  e: { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[]; sourcePath?: string },
-  index: number,
-): CBAsset {
-  // packPath is the CRUD target on disk — NOT the runtime load URL. For an
-  // internal `.pack.json` asset the two coincide (relativeUrl IS the pack). For
-  // an external import (FBX/GLB/HDR/audio/font) relativeUrl points at a DDC
-  // artefact (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no
-  // stable mapping back to the source; the CRUD target is the `.meta.json`
-  // sidecar beside the source file. The engine surfaces that source location as
-  // `sourcePath` (engine sourcePath-through-listCatalog, #711); derive the
-  // sidecar path from it. Fallback to relativeUrl for inline/dev entries that
-  // never went through pack-index (no sidecar, no CRUD).
-  const packPath = (e.relativeUrl.includes('__forgeax-ddc'))
-    // DDC artefact URL (e.g. /__forgeax-ddc/{guid}.pack.json) — has no stable
-    // mapping to the game slug. Derive the CRUD target from sourcePath (the
-    // on-disk source file's .meta.json sidecar). For shared assets this gives
-    // the workspace-relative path the scope filter expects.
-    ? (e.sourcePath ? `${e.sourcePath.replace(/^\//, '')}.meta.json` : e.relativeUrl)
-    : e.relativeUrl.endsWith('.pack.json')
-      ? e.relativeUrl
-      : e.sourcePath
-        ? `${e.sourcePath.replace(/^\//, '')}.meta.json`
-        : e.relativeUrl;
-  return {
-    type: 'asset',
-    guid: e.guid,
-    kind: e.kind,
-    name: e.name ?? e.guid.slice(0, 8),
-    payload: {},
-    packPath,
-    packIndex: index,
-    refs: e.refs ? [...e.refs] : [],
-    estimatedSize: 0,
-  };
-}
-
-
 export function ContentBrowser() {
+  const host = useHost();
+  const { t } = useTranslation();
+  useContentBrowserPanelContributions();
   useDocVersion();
   const gameSlug = getSceneId();
-  const [allAssets, setAllAssets] = useState<CBAsset[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<CBViewMode>('grid');
+  const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const observedAssetKinds = useMemo(
-    () => [...new Set(allAssets.map(asset => asset.kind))],
-    [allAssets],
-  );
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
+  const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
+  const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const acceptString = useMemo(() => buildAcceptString(), []);
+  // Kind list for the filter chips. Sourced from allAssets — after
+  // registry.refreshCatalog() (invoked on reload), listCatalog covers external
+  // asset packages too, so the same kinds surface here that the .meta.json
+  // sidecar fallback would have added.
+  const observedAssetKinds = useMemo(() => [...new Set(allAssets.map(asset => asset.kind))], [allAssets]);
   const nav = useNavHistory();
   const filter = useFilter(observedAssetKinds);
   const sort = useSort();
@@ -121,170 +104,67 @@ export function ContentBrowser() {
   // re-renders (e.g. from the pack-watcher reload churn). Zero re-render during
   // drag; CBGrid reflows on its own ResizeObserver. onDragEnd persists once.
   const [srcWidth, setSrcWidth] = useLocalSize('cb.sourceWidth', 200, 140, 640);
+  const [previewWidth, setPreviewWidth] = useLocalSize('cb.previewWidth', 280, 180, 560);
   const splitRef = useRef<HTMLDivElement>(null);
   const srcWidthRef = useRef(srcWidth);
+  const previewWidthRef = useRef(previewWidth);
   useEffect(() => { srcWidthRef.current = srcWidth; }, [srcWidth]);
+  useEffect(() => { previewWidthRef.current = previewWidth; }, [previewWidth]);
   const onSplitDrag = useCallback((dx: number) => {
     const next = Math.min(640, Math.max(140, srcWidthRef.current + dx));
     srcWidthRef.current = next;
     splitRef.current?.style.setProperty('--cb-src-w', `${next}px`);
   }, []);
   const onSplitDragEnd = useCallback(() => { setSrcWidth(srcWidthRef.current); }, [setSrcWidth]);
+  const onPreviewDrag = useCallback((dx: number) => {
+    const next = Math.min(560, Math.max(180, previewWidthRef.current - dx));
+    previewWidthRef.current = next;
+    splitRef.current?.style.setProperty('--cb-preview-w', `${next}px`);
+  }, []);
+  const onPreviewDragEnd = useCallback(() => { setPreviewWidth(previewWidthRef.current); }, [setPreviewWidth]);
 
-  const reload = useCallback(() => {
-    const slug = getSceneId();
-    if (!slug || slug === 'default') return;
-    setLoading(true);
-    // M3: registry.listCatalog() replaces parallel-disk-scan loadGameAssets/loadMetaAssets.
-    // The engine AssetRegistry is the SSOT — asset panel truth = engine truth (AC-03).
-    //
-    // refreshCatalog first: listCatalog() is a sync cache read. On single-realm boot the
-    // Assets tab is inactive, so ContentBrowser mounts AFTER host-session's one-shot
-    // broadcastAssetsChanged (and installAssetCatalogRefresh is wired even later). Without
-    // an explicit refresh here the first mount sees an empty packIndexCache forever.
-    type RegistrySurface = {
-      listCatalog?: () => readonly { guid: string; kind: string; name?: string; relativeUrl: string; refs?: readonly string[]; sourcePath?: string }[];
-      refreshCatalog?: () => Promise<boolean>;
-    };
-    const registry = gateway.doc.registry as RegistrySurface | undefined;
-    const apply = () => {
-      const entries = registry?.listCatalog?.();
-      if (!entries || entries.length === 0) {
-        setAllAssets([]);
-      } else {
-        setAllAssets(entries.map(registryEntryToCBAsset));
-      }
-      setLoading(false);
-    };
-    if (registry?.refreshCatalog) {
-      void registry.refreshCatalog().then(apply).catch(apply);
-    } else {
-      apply();
-    }
+  useEffect(() => {
+    logImport('ContentBrowser.mount', { gameSlug, accept: acceptString, hasFbx: acceptString.includes('.fbx') });
+  }, [acceptString, gameSlug]);
+
+  const {
+    scopedAssets,
+    relByAssetGuid,
+    diskFiles,
+    viewMode,
+    sourceTree,
+    foldersInPath,
+    filesInPath,
+    sortedAssets,
+    viewItems,
+  } = useCBDerivedView({
+    allAssets,
+    gameSlug,
+    diskTree,
+    catalogAssetRoots,
+    favorites,
+    favoritesOnly,
+    filter,
+    sort,
+    nav,
+    expandedPacks,
+  });
+
+  const togglePackExpansion = useCallback((filePath: string) => {
+    setExpandedPacks(prev => {
+      const next = new Set(prev);
+      if (next.has(filePath)) next.delete(filePath); else next.add(filePath);
+      return next;
+    });
   }, []);
 
-  useEffect(() => { reload(); }, [reload]);
-
-  useEffect(() => {
-    const accept = buildAcceptString();
-    logImport('ContentBrowser.mount', { gameSlug, accept, hasFbx: accept.includes('.fbx') });
-  }, [gameSlug]);
-
-  // Disk directories: fetch real directory tree from server so empty dirs
-  // (created via New Folder) are visible even without pack files inside.
-  const [diskDirs, setDiskDirs] = useState<string[]>([]);
-  const fetchDiskDirs = useCallback(async () => {
-    if (!gameSlug || gameSlug === 'default') return;
-    try {
-      const dirs: string[] = [];
-      // Only paths under the opened game are addressable by singleGameFileBackend.
-      // External roots are already represented from the registry's catalog rows;
-      // requesting a virtual `@shared/...` path here would be a false IO contract.
-      for (const { root } of catalogAssetRoots) {
-        if (root.startsWith('@')) continue;
-        const treePath = resolveGamePath(root);
-        const r = await fetch(`/api/files/tree?root=${encodeURIComponent(treePath)}&optional=1`, { cache: 'no-store' });
-        if (!r.ok) continue;
-        const j = (await r.json()) as { tree?: { children?: { name: string; path: string; type: string; children?: unknown[] }[] } | null };
-        if (!j.tree?.children) continue;
-        const walk = (nodes: { name: string; path: string; type: string; children?: unknown[] }[], prefix: string) => {
-          for (const node of nodes) {
-            if (node.type !== 'dir') continue;
-            const rel = prefix ? `${prefix}/${node.name}` : node.name;
-            dirs.push(rel);
-            if (Array.isArray(node.children)) {
-              walk(node.children as typeof nodes, rel);
-            }
-          }
-        };
-        walk(j.tree.children as { name: string; path: string; type: string; children?: unknown[] }[], root);
-      }
-      setDiskDirs(dirs);
-    } catch { /* silent */ }
-  }, [gameSlug]);
-
-  useEffect(() => { void fetchDiskDirs(); }, [fetchDiskDirs]);
-
-  useEffect(() => {
-    // D5: 200ms debounce — merge consecutive in-process assetsChanged signals
-    // into one reload + fetchDiskDirs. directory-only hint skips reload (no pack
-    // change). This is PanelBridge, not a same-window VAG postMessage copy: the
-    // editor is single realm and assetsChanged is a notification, not an op.
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const off = panelBridge.on('assetsChanged', ({ hint }) => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        // 'directory-only' means only folder CRUD — fetchDiskDirs is enough.
-        if (hint !== 'directory-only') {
-          reload();
-        }
-        void fetchDiskDirs();
-      }, 200);
-    });
-    return () => {
-      off();
-      if (timer) clearTimeout(timer);
-    };
-  }, [reload, fetchDiskDirs]);
-
-  // Scope the catalog to THIS game's declared asset roots. Each kept entry
-  // carries its game-relative path (`assets/characters/x.pack.json`), which
-  // drives both the folder tree and path navigation. Foreign entries (no
-  // `<slug>` segment) and out-of-root entries (e.g. scenes/) are dropped, so the
-  // Asset panel never exposes folders outside `forgeax-games/<slug>/<root>`.
-  const scopedAssets = useMemo(() => {
-    const out: { asset: CBAsset; rel: string }[] = [];
-    for (const a of allAssets) {
-      const rel = catalogPathToRoot(a.packPath, gameSlug, catalogAssetRoots);
-      if (!rel) continue;
-      out.push({ asset: a, rel });
-    }
-    return out;
-  }, [allAssets, gameSlug, catalogAssetRoots]);
-
-  const packDirs = useMemo(() => {
-    const dirs = new Set<string>();
-    for (const { rel } of scopedAssets) {
-      const dir = rel.replace(/\/[^/]+$/, '');
-      if (!dir || dir === rel) continue;
-      let cur = dir;
-      while (cur) {
-        dirs.add(cur);
-        const slash = cur.lastIndexOf('/');
-        cur = slash > 0 ? cur.slice(0, slash) : '';
-      }
-    }
-    for (const d of diskDirs) dirs.add(d);
-    return [...dirs].sort();
-  }, [scopedAssets, diskDirs]);
-
-  // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
-  // directly in it (non-recursive). Folders are derived from the same rels the
-  // source panel uses — no new persisted data format.
-  const { folders: foldersInPath, assets: assetsInPath } = useMemo(
-    () => deriveContentView({
-      scopedAssets,
-      packDirs,
-      currentPath: nav.currentPath,
-      favorites: favorites.favorites,
-    }),
-    [scopedAssets, packDirs, nav.currentPath, favorites.favorites],
-  );
-
-  // Filter + sort apply to assets only; folders always render first (UE-style),
-  // sorted by name (deriveContentView already sorts them).
-  const filteredAssets = useMemo(() => filter.applyFilters(assetsInPath), [filter, assetsInPath]);
-  const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
-
-  // Single ordered array shared by the view AND multi-select — handleClick
-  // resolves items by flat index, so both must see the same order.
-  const viewItems = useMemo<CBViewItem[]>(
-    () => [...foldersInPath, ...sortedAssets],
-    [foldersInPath, sortedAssets],
-  );
-
   const multiSelect = useMultiSelect(viewItems);
+  const selectItemForContextMenu = useCallback((item: CBViewItem, e: React.MouseEvent) => {
+    setPreviewItem(item);
+    if (multiSelect.isSelected(item)) return;
+    const index = viewItems.findIndex(viewItem => viewItemKey(viewItem) === viewItemKey(item));
+    if (index >= 0) multiSelect.handleClick(index, e);
+  }, [multiSelect, viewItems]);
 
   // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
   // an asset can be referenced from another root (scenes/, other packs), and the
@@ -337,16 +217,26 @@ export function ContentBrowser() {
   }, [gameSlug, catalogAssetRoots]);
 
   // Double-click: drill into a folder, or open an asset.
+  // In file mode, double-clicking a pack/meta file toggles its sub-asset expansion.
   const handleActivate = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') { nav.navigate(item.path); return; }
+    if (item.type === 'file') {
+      if (viewMode === 'file' && (item.family === 'pack' || item.family === 'meta') && item.assets.length > 0) {
+        togglePackExpansion(item.path);
+        return;
+      }
+      setPreviewItem(item);
+      if (item.assets[0]) openAsset(item.assets[0]);
+      return;
+    }
     openAsset(item);
-  }, [nav, openAsset]);
+  }, [nav, openAsset, togglePackExpansion, viewMode]);
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
     onDelete: requestDelete,
     onRename: (asset: CBAsset) => {
-      const newName = window.prompt('Rename asset:', asset.name);
+      const newName = window.prompt(t('editor.contentBrowser.dialogs.renameAssetPrompt'), asset.name);
       if (newName && newName !== asset.name) {
         // D6: rename routes through the ONE gateway door (document op, undoable).
         // The applier reaches pack IO via ctx.assetIO and fires the in-process
@@ -355,41 +245,268 @@ export function ContentBrowser() {
       }
     },
     onNewFolder: (parentPath: string) => {
-      const name = window.prompt('New folder name:');
+      const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
       if (!name) return;
       gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
     },
-  }), [reload, requestDelete]);
+  }), [reload, requestDelete, t]);
+
+  const createFolderInCurrentPath = useCallback(() => {
+    const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
+    if (!name) return;
+    gateway.dispatch({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
+  }, [nav.currentPath, t]);
+
+  const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
+    const basePath = resolveGamePath(nav.currentPath || 'assets');
+    const name = window.prompt(
+      t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+      spec.defaultNamePrefix,
+    )?.trim();
+    if (!name) return;
+    gateway.dispatch({
+      kind: 'createAsset',
+      packPath: `${basePath}/${name}.pack.json`,
+      guid: generateAssetGuid(),
+      assetKind: spec.kind,
+      name,
+    }, 'human');
+  }, [nav.currentPath, t]);
+
+  const assetFavoritePath = useCallback((asset: CBAsset) => (
+    relByAssetGuid.get(asset.guid) ?? catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots) ?? asset.packPath
+  ), [gameSlug, relByAssetGuid]);
+
+  const commonItemMenu = useCallback((item: CBViewItem) => {
+    if (item.type === 'folder') {
+      const fullPath = resolveGamePath(item.path);
+      return [
+        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', disabled: true, onClick: () => {} },
+        { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
+        { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
+        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
+          if (!window.confirm(t('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: item.name }))) return;
+          gateway.dispatch({ kind: 'deleteDirectory', path: item.path }, 'human');
+        } },
+      ];
+    }
+    if (item.type === 'file') {
+      return [
+        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', disabled: true, onClick: () => {} },
+        { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
+        { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
+        { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => {
+          void host.commands.execute('app.chat.insertPill', {
+            pill: {
+              kind: 'file',
+              display: item.name,
+              detail: `[File reference: \`${item.path}\`]`,
+              tooltip: { title: `File · ${item.name}`, lines: [`path: ${item.path}`, `disk: ${item.diskPath}`] },
+            },
+          }).catch(() => {});
+        } },
+        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
+          if (!window.confirm(t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: item.name }))) return;
+          void fetch(`/api/files?path=${encodeURIComponent(item.diskPath)}`, { method: 'DELETE' }).then(() => {
+            void fetchDiskDirs();
+            reload();
+          });
+        } },
+      ];
+    }
+    const favPath = assetFavoritePath(item);
+    const relPath = relByAssetGuid.get(item.guid) ?? catalogPathToRoot(item.packPath, gameSlug, catalogAssetRoots) ?? item.packPath;
+    const fullPath = resolveCopyPath(relPath);
+    return [
+      { label: favorites.isFavorite(favPath) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favPath) },
+      { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => crudCallbacks.onRename?.(item) },
+      { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
+      { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(relPath) },
+      { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => requestAddAssetsToChat([{
+        type: 'asset',
+        guid: item.guid,
+        kind: item.kind,
+        name: item.name,
+        path: item.packPath,
+        payload: item.payload,
+      }]) },
+      { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => requestDelete([item]) },
+    ];
+  }, [assetFavoritePath, crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, relByAssetGuid, reload, requestDelete, t]);
+
+  const handleImport = useCallback(() => {
+    const input = fileInputRef.current;
+    logImport('ContentBrowser.import.click', {
+      currentPath: nav.currentPath,
+      accept: acceptString,
+      hasFbx: acceptString.includes('.fbx'),
+      acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
+    });
+    input?.click();
+  }, [acceptString, nav.currentPath]);
+
+  const openFolderContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder) => {
+    const assetsInFolder = scopedAssets
+      .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
+      .map(s => s.asset);
+    const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
+    const resolved = resolveFolderMenuItems(menuItems, {
+      onOpen: () => nav.navigate(folder.path),
+      onToggleFavorite: () => favorites.toggleFavorite(folder.path),
+      unsupportedIds: ['rename'],
+    }).filter(item => !['toggle-fav', 'rename', 'copy-path', 'delete'].includes(item.id));
+    if (resolved.length === 0) return;
+    const items: CBContextMenuEntry[] = [
+      { title: folder.name, icon: 'folder' },
+      ...resolved.map(item => ({
+        ...item,
+        icon: item.icon ?? menuIconForId(item.id),
+        forge: item.forge,
+      })),
+      { sep: true },
+      ...commonItemMenu(folder),
+    ];
+    setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
+  }, [commonItemMenu, crudCallbacks, favorites, nav, scopedAssets]);
+
+  const openFileContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, file: CBFile) => {
+    const firstAsset = file.assets[0];
+    const items: CBContextMenuEntry[] = [
+      { title: file.name, icon: iconNameForFileFamily(file.family) },
+      ...fileSpecificMenuItems(t, file).map(item => ({
+        ...item,
+        onClick: item.id === 'expand-sub-assets'
+          ? () => togglePackExpansion(file.path)
+          : item.id === 'render-preview' || item.id === 'audition'
+          ? () => setPreviewItem(file)
+          : item.id === 'copy-guid' && firstAsset
+            ? () => { void navigator.clipboard.writeText(file.assets.map(asset => asset.guid).join('\n')); }
+            : undefined,
+        disabled: item.disabled || (item.id === 'copy-guid' && !firstAsset),
+      })),
+      { sep: true },
+      ...commonItemMenu(file),
+      { sep: true },
+      { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', disabled: true },
+      { sep: true },
+    ];
+    if (firstAsset) {
+      const assetItems = buildAssetContextMenu(firstAsset, multiSelect.selection, allAssets, crudCallbacks)
+        .filter(item => !['rename', 'duplicate', 'delete', 'add-to-chat'].includes(item.id))
+        .map((item): CBContextMenuEntry => item.separator
+          ? { sep: true }
+          : {
+              label: item.label,
+              icon: menuIconForId(item.id),
+              shortcut: item.shortcut,
+              forge: item.forge,
+              danger: item.danger,
+              onClick: item.action,
+              disabled: item.disabled,
+            });
+      items.push(...assetItems);
+      items.push({ sep: true });
+    }
+    if (file.family === 'scene' && firstAsset) {
+      items.splice(1, 0, { label: t('editor.contentBrowser.contextMenu.setCurrentScene'), icon: 'flag', onClick: () => openAsset(firstAsset) });
+    }
+    setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
+  }, [allAssets, commonItemMenu, crudCallbacks, multiSelect.selection, openAsset, togglePackExpansion, t]);
+
+  const handleFileSelected = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) {
+      logImport('ContentBrowser.import.cancel', { reason: 'no files selected' });
+      return;
+    }
+
+    logImport('ContentBrowser.import.selected', {
+      count: files.length,
+      names: Array.from(files).map(f => f.name),
+      currentPath: nav.currentPath,
+    });
+
+    setImportProgress({ total: files.length, completed: 0, current: '', results: [] });
+    const results = await importFiles(
+      Array.from(files),
+      nav.currentPath,
+      (progress) => setImportProgress(progress),
+      reload,
+    );
+
+    logImport('ContentBrowser.import.done', {
+      results: results.map(r => ({ filename: r.filename, status: r.status, error: r.error })),
+    });
+
+    const errors = results.filter(r => r.status === 'error');
+    if (errors.length > 0) {
+      console.warn('[ContentBrowser] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
+    }
+
+    setTimeout(() => setImportProgress(null), 3000);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [nav.currentPath, reload]);
+
+  const clearKindFilters = useCallback(() => {
+    filter.filters.filter(f => f.active).forEach(f => filter.toggleFilter(f.id));
+  }, [filter]);
+
+  useContentBrowserCommands({
+    host,
+    t,
+    loading,
+    viewMode,
+    filter,
+    sort,
+    nav,
+    favoritesOnly,
+    thumbnailSize,
+    reload,
+    createFolderInCurrentPath,
+    createAssetInCurrentPath,
+    handleImport,
+    clearKindFilters,
+    setFavoritesOnly,
+    setThumbnailSize,
+  });
 
   const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
     e.preventDefault();
     e.stopPropagation();
+    selectItemForContextMenu(item, e);
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     if (item.type === 'folder') {
-      const folder = item;
-      const assetsInFolder = scopedAssets
-        .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
-        .map(s => s.asset);
-      const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
-      const resolved = resolveFolderMenuItems(menuItems, {
-        onOpen: () => nav.navigate(folder.path),
-        onToggleFavorite: () => favorites.toggleFavorite(folder.path),
-        unsupportedIds: ['rename'],
-      });
-      if (resolved.length === 0) return;
-      setTimeout(() => showContextMenu(pos, resolved), 0);
+      openFolderContextMenu(pos, item);
+      return;
+    }
+    if (item.type === 'file') {
+      openFileContextMenu(pos, item);
       return;
     }
     const asset = item;
-    const menuItems = buildAssetContextMenu(asset, multiSelect.selection, allAssets, crudCallbacks);
-    const resolved = menuItems.filter(m => !m.separator).map(m => ({
+    const selectedItems = multiSelect.selection.items;
+    const contextSelection: CBSelection = selectedItems.some(selected => viewItemKey(selected) === viewItemKey(asset))
+      ? multiSelect.selection
+      : { items: [asset], primary: asset };
+    const menuItems = buildAssetContextMenu(asset, contextSelection, allAssets, crudCallbacks);
+    const resolved = menuItems.filter(m => !m.separator && !['rename', 'copy-path', 'delete', 'add-to-chat'].includes(m.id)).map(m => ({
       label: m.label,
+      icon: m.icon ?? menuIconForId(m.id),
+      shortcut: m.shortcut,
+      forge: m.forge,
+      danger: m.danger,
       onClick: m.action,
       disabled: m.disabled,
     }));
-    if (resolved.length === 0) return;
-    setTimeout(() => showContextMenu(pos, resolved), 0);
-  }, [multiSelect.selection, allAssets, crudCallbacks, scopedAssets, nav, favorites]);
+    setTimeout(() => showContextMenu(pos, orderContextMenuEntries([
+      { title: asset.name, icon: iconNameForAssetKind(asset.kind) },
+      ...commonItemMenu(asset),
+      { sep: true },
+      ...resolved,
+    ])), 0);
+  }, [multiSelect.selection, allAssets, commonItemMenu, crudCallbacks, openFileContextMenu, openFolderContextMenu, selectItemForContextMenu]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
@@ -401,23 +518,27 @@ export function ContentBrowser() {
     e.preventDefault();
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     const menuItems = buildBlankAreaContextMenu(nav.currentPath, (parentPath) => {
-      const name = window.prompt('New folder name:');
+      const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
       if (!name) return;
       gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
     });
     const resolved = menuItems.map(m => ({
       label: m.label,
+      icon: m.icon ?? menuIconForId(m.id),
+      shortcut: m.shortcut,
+      forge: m.forge,
+      danger: m.danger,
       onClick: m.action,
       disabled: m.disabled,
     }));
     setTimeout(() => showContextMenu(pos, resolved), 0);
-  }, [nav.currentPath]);
+  }, [nav.currentPath, t]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (!(e.ctrlKey || e.metaKey) || viewMode !== 'grid') return;
+    if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     setThumbnailSize(prev => Math.max(48, Math.min(200, prev - Math.sign(e.deltaY) * 8)));
-  }, [viewMode]);
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -464,85 +585,75 @@ export function ContentBrowser() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      <CBToolbar currentPath={nav.currentPath} onReload={reload} onImportProgress={setImportProgress} />
+      <input
+        ref={fileInputRef}
+        data-cb-file-input="1"
+        type="file"
+        multiple
+        accept={acceptString}
+        style={{ display: 'none' }}
+        onChange={e => void handleFileSelected(e)}
+      />
       {noGame ? (
         <div style={{ padding: 16, opacity: 0.6, textAlign: 'center', marginTop: 32 }}>
-          Open a game to browse assets
+          {t('editor.contentBrowser.empty.noGame')}
         </div>
       ) : (
-        <div className="cb-split" ref={splitRef} style={{ ['--cb-src-w' as string]: `${srcWidth}px` }}>
+        <div className="cb-split" ref={splitRef} style={{ ['--cb-src-w' as string]: `${srcWidth}px`, ['--cb-preview-w' as string]: `${previewWidth}px` }}>
           {/* Left: Source panel — width reads the --cb-src-w CSS variable on the
               parent (set by React on commit, by the drag handle imperatively). */}
-          <div className="cb-source-panel">
-            {favorites.favorites.length > 0 && (
-              <div className="cb-source-section">
-                <div className="cb-source-title">★ Favorites</div>
-                {favorites.favorites.map(path => (
-                  <button key={path} className={`cb-source-item${nav.currentPath === path ? ' sel' : ''}`}
-                    onClick={() => nav.navigate(path)} title={path}>
-                    {path.split('/').pop() || path}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="cb-source-section">
-              <div className="cb-source-title">{gameSlug}</div>
-              <button className={`cb-source-item${!nav.currentPath ? ' sel' : ''}`}
-                onClick={() => nav.navigate('')}>
-                All
-              </button>
-              {packDirs.map(dir => (
-                <button key={dir} className={`cb-source-item${nav.currentPath === dir ? ' sel' : ''}`}
-                  onClick={() => nav.navigate(dir)}
-                  title={dir}
-                  style={{ paddingLeft: `${8 + dir.split('/').length * 8}px` }}>
-                  📁 {dir.split('/').pop()}
-                </button>
-              ))}
-            </div>
-          </div>
+          <CBSourceTree
+            sourceTree={sourceTree}
+            gameSlug={gameSlug}
+            scopedAssetsCount={scopedAssets.length}
+            collapsedSourceFolders={collapsedSourceFolders}
+            setCollapsedSourceFolders={setCollapsedSourceFolders}
+            previewItem={previewItem}
+            setPreviewItem={setPreviewItem}
+            nav={nav}
+            openFolderContextMenu={openFolderContextMenu}
+            openFileContextMenu={openFileContextMenu}
+          />
 
           {/* Draggable divider (UE-parity): widen the tree to read long paths. */}
           <ResizeHandle orientation="col" onDrag={onSplitDrag} onDragEnd={onSplitDragEnd}
-            title="Drag to resize folder tree width" />
+            title={t('editor.contentBrowser.actions.resizeFolderTree')} />
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
             <CBNavigationBar nav={nav} gameSlug={gameSlug} />
-            <CBFilterBar filter={filter} sort={sort} viewMode={viewMode} onViewModeChange={setViewMode}
-              thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
             {loading ? (
-              <div style={{ padding: 16, opacity: 0.5 }}>Loading assets…</div>
+              <div style={{ padding: 16, opacity: 0.5 }}>{t('editor.contentBrowser.empty.loading')}</div>
             ) : viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>
-                {filter.activeFilterCount > 0 || filter.searchQuery ? 'No matching assets' : 'No assets found'}
+                {filter.activeFilterCount > 0 || filter.searchQuery ? t('editor.contentBrowser.empty.noMatching') : t('editor.contentBrowser.empty.noAssets')}
               </div>
-            ) : viewMode === 'grid' ? (
+            ) : (
               <CBGrid
                 items={viewItems}
                 thumbnailSize={thumbnailSize}
                 multiSelect={multiSelect}
-                onDoubleClick={handleActivate}
-                onContextMenu={handleContextMenu}
-              />
-            ) : viewMode === 'list' ? (
-              <CBList
-                items={viewItems}
-                multiSelect={multiSelect}
-                onDoubleClick={handleActivate}
-                onContextMenu={handleContextMenu}
-              />
-            ) : (
-              <CBColumn
-                items={viewItems}
-                multiSelect={multiSelect}
-                sort={sort}
+                selectedPath={viewItemPath(previewItem)}
+                viewMode={viewMode}
+                expandedPacks={expandedPacks}
+                onTogglePackExpansion={togglePackExpansion}
+                onSelect={setPreviewItem}
                 onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
               />
             )}
-            <CBStatusBar totalItems={viewItems.length} selection={multiSelect.selection} />
           </div>
+          {previewItem && (
+            <CBPreviewPanel
+              previewItem={previewItem}
+              foldersInPath={foldersInPath}
+              diskFiles={diskFiles}
+              gameSlug={gameSlug}
+              onClose={() => setPreviewItem(null)}
+              onDrag={onPreviewDrag}
+              onDragEnd={onPreviewDragEnd}
+            />
+          )}
         </div>
       )}
 
@@ -550,8 +661,15 @@ export function ContentBrowser() {
         <div className="cb-import-progress">
           <span className="cb-import-progress-text">
             {importProgress.completed < importProgress.total
-              ? `Importing ${importProgress.completed + 1}/${importProgress.total}: ${importProgress.current}`
-              : `Import complete: ${importProgress.results.filter(r => r.status === 'done').length}/${importProgress.total} succeeded`}
+              ? t('editor.contentBrowser.importProgress.running', {
+                  current: importProgress.completed + 1,
+                  total: importProgress.total,
+                  name: importProgress.current,
+                })
+              : t('editor.contentBrowser.importProgress.complete', {
+                  done: importProgress.results.filter(r => r.status === 'done').length,
+                  total: importProgress.total,
+                })}
           </span>
           <div className="cb-import-progress-bar">
             <div
@@ -564,7 +682,7 @@ export function ContentBrowser() {
 
       {dragOver && (
         <div className="cb-drag-overlay">
-          <div className="cb-drag-overlay-label">Drop files to import</div>
+          <div className="cb-drag-overlay-label">{t('editor.contentBrowser.empty.dropFiles')}</div>
         </div>
       )}
 

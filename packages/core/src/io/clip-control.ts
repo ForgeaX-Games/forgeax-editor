@@ -1,19 +1,13 @@
 // @forgeax/editor-core — viewport animation clip transport + one-shot view intents.
 //
-// Generic (scene-editor-wide) preview controls, extracted from the former socket
-// editor. Two channels, both cross-window-bridged by store.ts so a popped-out
-// panel can drive the MAIN viewport where the preview AnimationPlayer lives:
-//
-//   clip transport:  play/pause + speed + scrub-phase for the preview character's
-//                     AnimationPlayer (pose calibration; pause any frame).
+// Two channels used by the single-realm editor:
+//   clip transport:  play/pause + speed + scrub-phase for the preview
+//                    AnimationPlayer (pose calibration; pause any frame).
 //   view intents:    fire-and-forget viewport commands (reset camera / recenter).
 //
-// Flow (popout → main):
-//   UI → setClipControl → (local listeners) + (forwarder, popout only)
-//                                              → BroadcastChannel → main
-//   main mainOnMessage → setClipControl(remote) → (local listeners) → viewport
-// store.ts owns the channel and injects the forwarder + applies inbound msgs,
-// keeping this module channel-agnostic (no dep cycle into store.ts).
+// This module is channel-agnostic: consumers set/subscribe locally, and optional
+// cross-window forwarders (setClipControlForwarder / setViewRequestForwarder)
+// can be injected by hosts that need popout support.
 
 import { useSyncExternalStore } from 'react';
 

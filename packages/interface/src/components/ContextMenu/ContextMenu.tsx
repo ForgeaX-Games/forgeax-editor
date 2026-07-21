@@ -1,4 +1,44 @@
 import { useEffect, useState } from 'react';
+import {
+  AppWindow,
+  Box,
+  BoxSelect,
+  Braces,
+  Check,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Clapperboard,
+  Copy,
+  Crosshair,
+  Database,
+  ExternalLink,
+  Eye,
+  File,
+  FileCode2,
+  FileCog,
+  FilePlus,
+  FileText,
+  Flag,
+  Folder,
+  FolderPlus,
+  FolderSearch,
+  Hash,
+  Image,
+  Layers,
+  Music,
+  Pencil,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  SquareArrowOutUpRight,
+  Star,
+  TextCursorInput,
+  Trash2,
+  Type,
+  Upload,
+  type LucideIcon,
+} from 'lucide-react';
 import { buildMenu, type MenuItem } from './menuRegistry';
 import { buildAssetPill, buildComponentPill, buildEntityPill } from '../../lib/composer-bridge';
 import { pushHealth } from '../StatusBar/healthStore';
@@ -12,6 +52,55 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+
+const MENU_ICONS: Record<string, LucideIcon> = {
+  'app-window': AppWindow,
+  box: Box,
+  'box-select': BoxSelect,
+  braces: Braces,
+  check: Check,
+  'chevrons-down-up': ChevronsDownUp,
+  'chevrons-up-down': ChevronsUpDown,
+  clapperboard: Clapperboard,
+  copy: Copy,
+  crosshair: Crosshair,
+  database: Database,
+  'external-link': ExternalLink,
+  eye: Eye,
+  file: File,
+  'file-code': FileCode2,
+  'file-cog': FileCog,
+  'file-plus': FilePlus,
+  'file-text': FileText,
+  flag: Flag,
+  folder: Folder,
+  'folder-plus': FolderPlus,
+  'folder-search': FolderSearch,
+  hash: Hash,
+  image: Image,
+  layers: Layers,
+  link: ExternalLink,
+  music: Music,
+  pencil: Pencil,
+  play: Play,
+  'refresh-cw': RefreshCw,
+  'shield-check': ShieldCheck,
+  spark: Sparkles,
+  sparkles: Sparkles,
+  'square-arrow-out-up-right': SquareArrowOutUpRight,
+  star: Star,
+  'text-cursor-input': TextCursorInput,
+  trash: Trash2,
+  'trash-2': Trash2,
+  type: Type,
+  upload: Upload,
+};
+
+function MenuIcon({ name }: { name?: string }) {
+  if (!name) return <span className="fx-ctx-menu-icon" />;
+  const Icon = MENU_ICONS[name] ?? File;
+  return <Icon className="fx-ctx-menu-icon" aria-hidden="true" />;
+}
 
 interface MenuState {
   x: number;
@@ -57,11 +146,16 @@ export function ContextMenu() {
       return;
     }
     const items: MenuItem[] = menu.items.map((item) =>
-      item.sep
+      item.title
+        ? { kind: 'title' as const, label: item.title, icon: item.icon }
+        : item.sep
         ? { kind: 'sep' as const }
         : {
             kind: 'item' as const,
             label: item.label ?? '',
+            icon: item.icon,
+            shortcut: item.shortcut,
+            forge: item.forge,
             disabled: item.disabled,
             danger: item.danger,
             onClick: item.onClick ?? (() => {}),
@@ -114,7 +208,7 @@ export function ContextMenu() {
         } else if (ref.type === 'folder' && typeof ref.path === 'string') {
           const pill = buildAssetPill({
             guid: `folder:${ref.path}`,
-            name: ref.name ? `📁 ${ref.name}` : '📁 Folder',
+            name: ref.name || 'Folder',
             assetKind: 'folder',
             packPath: ref.path,
             payload: ref.summary,
@@ -155,17 +249,28 @@ export function ContextMenu() {
           {state.items.map((it, i) =>
             it.kind === 'sep' ? (
               <DropdownMenuSeparator key={`s${i}`} />
+            ) : it.kind === 'title' ? (
+              <div key={`t${i}`} className="fx-ctx-menu-title">
+                <MenuIcon name={it.icon} />
+                <span>{it.label}</span>
+              </div>
             ) : (
               <DropdownMenuItem
                 key={`i${i}`}
                 disabled={it.disabled}
-                className={it.danger ? 'text-destructive focus:text-destructive' : undefined}
+                className={[
+                  'fx-ctx-menu-item',
+                  it.danger ? 'text-destructive focus:text-destructive fx-ctx-menu-danger' : '',
+                  it.forge ? 'fx-ctx-menu-forge' : '',
+                ].filter(Boolean).join(' ')}
                 data-testid={`ctx-menu-${it.label.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()}`}
                 onSelect={() => {
                   if (!it.disabled) it.onClick();
                 }}
               >
-                {it.label}
+                <MenuIcon name={it.icon} />
+                <span className="fx-ctx-menu-label">{it.label}</span>
+                {it.shortcut && <span className="fx-ctx-menu-kbd">{it.shortcut}</span>}
               </DropdownMenuItem>
             ),
           )}

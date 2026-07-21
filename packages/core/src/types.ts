@@ -1,12 +1,8 @@
 // editor-core types — the editor's authoring working state (EditSession) and
 // the only legal way to mutate it (EditorOp).
 // Both human UI and AI produce EditorOps; the applier computes an inverse for
-// free Undo. Renamed per plan-strategy D-6 (feat-20260706-editor-op-gateway-…).
-//
-// feat-20260701-editor-world-container-doc-ecs-collapse M7 / AC-15:
-// EntityNode + all authorized component types (TransformData, MeshData, etc.)
-// deleted. EditSession is now just {world, registry}. Legacy ID → engine
-// handle mapping is internal to document.ts.
+// free Undo. EditSession is {world, registry}; entity state lives in the
+// engine World (single SSOT).
 export type {
   EntityId,
   EntitySource,
@@ -260,8 +256,6 @@ export type ApplyResult =
   // instantiate/duplicate: the new roots; transaction: all sub-ops' roots
   // flattened). Empty [] for non-creating ops (setComponent/rename/…) so
   // consumers read result.created without an undefined check. This is the ONE
-  // out-channel for post-dispatch reads (selection, AI "what did I just make?")
-  // — replaces the old in-place cmd._id / cmd._newRoots rewrite (which JSON
-  // couldn't carry back over the eval bridge).
+  // out-channel for post-dispatch reads (selection, AI "what did I just make?").
   | { ok: true; inverse: EditorOp; created: EntityHandle[] }
   | { ok: false; error: CommandError };

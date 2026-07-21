@@ -199,12 +199,10 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
     expectFieldType('SkyboxBackground', 'equirect', 'asset');
   });
 
-  it('AnimationPlayer: 6 fields, fixed 4 slots', () => {
-    expectKeys('AnimationPlayer', 'clips', 'times', 'weights', 'speeds', 'paused', 'looping');
+  it('AnimationPlayer: direct clips plus optional animation graph', () => {
+    expectKeys('AnimationPlayer', 'clips', 'graph', 'paused', 'looping');
     expectFieldType('AnimationPlayer', 'clips', 'asset');
-    for (const k of ['times', 'weights', 'speeds'] as const) {
-      expectFieldType('AnimationPlayer', k, 'vec');
-    }
+    expectFieldType('AnimationPlayer', 'graph', 'asset');
   });
 
   it('GlyphText: fontHandle (asset), text, fontSize, color', () => {

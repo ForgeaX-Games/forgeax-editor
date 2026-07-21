@@ -1,23 +1,17 @@
-// Playwright config for @forgeax/editor — AC-04/05/09 e2e gate (single realm).
+// Playwright config for @forgeax/editor — single-realm e2e gate.
 //
-// M2 single-realm webServer simplification (plan-strategy S5.5-B; requirements
-// AC-04/AC-09; OOS-4 keeps play-runtime untouched):
-//   Before M2 this needed the :15280 edit-runtime vite server too, because the
-//   dock rendered the viewport + panels as iframes to `/editor/…` (proxied from
-//   :15290). M2 collapses to a single realm — the :15290 host boots the engine
-//   in-process (D7 engine-vite-preset serves the shader manifest + pack catalog
-//   locally) and renders the viewport + panels as in-process components. No page
-//   reaches :15280 anymore, so that webServer entry is REMOVED. What stays:
-//     - :15290 — the standalone host (`bun run dev`, cwd '.'). The single
-//                document under test; boots the engine in-process.
-//     - :15173 — play-runtime preview (OOS-4: zero changes). Kept for e2e that
-//                open `/preview/?game=<slug>` (fullscreen play path).
+// The :15290 host boots the engine in-process (runtime-vite-preset serves the
+// shader manifest + pack catalog locally) and renders the viewport + panels as
+// in-process components — no /editor iframe is needed. Servers used here:
+//   - :15290 — the standalone host (`bun run dev`, cwd '.'). The single
+//              document under test; boots the engine in-process.
+//   - :15173 — play-runtime preview. Kept for e2e that open
+//              `/preview/?game=<slug>` (fullscreen play path).
 //
 // Anchors:
 //   requirements AC-04/AC-05 (single realm — no panel iframe, in-host canvas)
 //   requirements AC-09 (hideChatAndForge=true hides chat-panel + forge-entry)
 //   requirements AC-14 (bun -F editor test:e2e exit 0)
-//   plan-strategy S5.5-B (webServer array trimmed with the iframe deletion)
 //   research F-4 (webServer array + 10s expect.poll fallback)
 
 import { defineConfig } from '@playwright/test';
@@ -49,15 +43,13 @@ export default defineConfig({
     {
       // editor standalone chrome host on :15290 — renders <DockShell
       // hideChatAndForge /> and boots the engine IN-PROCESS on module load
-      // (single realm, M2). Started via `bun run dev` so the root vite.config.ts
-      // (root=standalone/, port=15290, engine-vite-preset serve) applies. This
-      // is the ONLY document the e2e specs load. The :15280 edit-runtime server
-      // is GONE — nothing on the page reaches it (D7 serves the engine here).
+      // (single realm). Started via `bun run dev` so the root vite.config.ts
+      // (root=standalone/, port=15290, runtime-vite-preset serve) applies.
+      // This is the ONLY document the e2e specs load.
       //
-      // M5 (plan-strategy D-2): inject FORGEAX_GAME_DIR=games/sample so the
-      // standalone host boots with a real game loaded — the GAME_DIR env activates
-      // vite's /api -> :15281 proxy and define __FORGEAX_GAME_SLUG__. Without this
-      // the standalone starts with GAME_DIR=null (no game, no Play path).
+      // Injects FORGEAX_GAME_DIR=games/sample so the standalone host boots with
+      // a real game loaded — the GAME_DIR env activates vite's /api -> :15281
+      // proxy and define __FORGEAX_GAME_SLUG__.
       // FORGEAX_INTERFACE_PORT=15290 prevents edit-runtime HMR from hammering the
       // non-existent studio port :18920 (AGENTS.md port map).
       command: 'bun run dev',
