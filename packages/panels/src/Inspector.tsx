@@ -18,6 +18,39 @@ import { entExists, entName, entParent, entComponent, entComponents, worldEntity
 import { getSelectionPair, getActiveReadBinding } from '@forgeax/editor-core';
 import type { EditorOp, EntityHandle, HandleCheckOpts } from '@forgeax/editor-core';
 import { useNumberDraft } from './useNumberDraft';
+import { AssetPicker } from './AssetPicker';
+
+// Derive a field's expected asset-union type (e.g. 'MeshAsset') from the engine
+// component schema's raw type keyword ('shared<MeshAsset>' / 'array<shared<
+// MaterialAsset>>'). This editor copy's FieldSchema doesn't carry assetType, so
+// we read it live from gateway.describeComponent — the SSOT the drop path trusts.
+function expectedAssetType(comp: string, field: string): string | undefined {
+  const d = gateway.describeComponent(comp);
+  if (!d.ok) return undefined;
+  const raw = d.schema[field] ?? '';
+  return /shared<([^>]+)>/.exec(raw)?.[1];
+}
+
+// Submesh count of the mesh bound to this entity's MeshFilter, or null when there
+// is no MeshFilter / the handle can't be resolved. The engine requires
+// MeshRenderer.materials.length === MeshAsset.submeshes.length (checked per-frame
+// in RenderSystem.extract), so the Inspector uses this to size the material slots
+// exactly and refuse to grow the array past the submesh count.
+function meshSubmeshCount(nodeComponents: Record<string, unknown>): number | null {
+  const mf = nodeComponents['MeshFilter'] as Record<string, unknown> | undefined;
+  if (!mf) return null;
+  const raw = mf.assetHandle as unknown;
+  const handle = typeof raw === 'number'
+    ? raw
+    : raw && typeof raw === 'object' && 'raw' in raw
+      ? Number((raw as { raw: unknown }).raw)
+      : NaN;
+  if (!Number.isFinite(handle) || handle <= 0) return null;
+  const d = gateway.describeAsset(handle);
+  if (!d.ok) return null;
+  const sm = (d.meta as Record<string, unknown> | undefined)?.submeshes;
+  return Array.isArray(sm) ? sm.length : null;
+}
 
 // DCC-style number field: the label is a horizontal drag handle ("scrub"). While
 // dragging we only track a LOCAL preview value and commit a single command on
@@ -416,6 +449,10 @@ export function InspectorPanel() {
   const fieldPrev = useFieldPreview();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
+  // Open asset-picker target: which field (and array slot) the click-to-browse
+  // modal is bound to. null = closed. Converges with the drop path on the same
+  // bindAssetRef dispatch, sourced from a click instead of a drag.
+  const [picker, setPicker] = useState<{ comp: string; field: string; assetType: string; slot?: number; currentGuid?: string | null } | null>(null);
   // euler React state — scheme B (plan-strategy §2 D-2): quat SSOT in world, euler is transient overlay
   const [euler, setEuler] = useState<{ rotX: number; rotY: number; rotZ: number }>({ rotX: 0, rotY: 0, rotZ: 0 });
   // On entity switch: read world quat → euler to reset React state (scheme B)
@@ -437,6 +474,33 @@ export function InspectorPanel() {
       else next.add(comp);
       return next;
     });
+  // Bind an asset chosen from the AssetPicker modal — same bindAssetRef path a
+  // drop uses (resolve-then-write). The picker only offers type-matched rows.
+  const bindPicked = (guid: string): void => {
+    if (!picker || sel === null) return;
+    gateway.dispatch({
+      kind: 'bindAssetRef',
+      entity: sel,
+      component: picker.comp,
+      field: picker.field,
+      assetType: picker.assetType,
+      guids: [guid],
+      ...(picker.slot !== undefined ? { slot: picker.slot } : {}),
+    });
+  };
+  // Unbind from the picker's "None" row. Scalar field → empty (matches the ×
+  // clear); array slot → zeroed in place (the × on the slot removes it entirely).
+  const clearPicked = (): void => {
+    if (!picker || sel === null) return;
+    if (picker.slot === undefined) {
+      gateway.dispatch({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: '' } });
+      return;
+    }
+    const cur = entComponent(gateway.activeWorld, sel, picker.comp);
+    const arr = cur.ok ? Array.from((((cur.value as Record<string, unknown>)[picker.field] ?? []) as ArrayLike<unknown>)) : [];
+    arr[picker.slot] = 0;
+    gateway.dispatch({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: arr } });
+  };
   if (selList.size > 1) {
     return <BatchPanel ids={[...selList]} />;
   }
@@ -647,18 +711,67 @@ export function InspectorPanel() {
                   // not plain Array. Accept both.
                   if (!Array.isArray(arrVal) && !ArrayBuffer.isView(arrVal)) continue;
                   const items = Array.from(arrVal as ArrayLike<unknown>);
+                  const arrType = expectedAssetType(comp, f.key) ?? 'MaterialAsset';
+                  // MeshRenderer.materials must stay length-equal to the bound mesh's
+                  // submeshes — RenderSystem.extract asserts this every frame, so a
+                  // longer/shorter array crashes the renderer continuously. Derive the
+                  // required slot count from the sibling MeshFilter and "lock" the array
+                  // to it: fixed rows, no free add/remove, clears zero a slot in place.
+                  const submeshCount = comp === 'MeshRenderer' && f.key === 'materials'
+                    ? meshSubmeshCount(nodeComponents)
+                    : null;
+                  const locked = submeshCount !== null;
+                  const slotCount = locked ? submeshCount! : items.length;
+                  const mismatch = locked && items.length !== slotCount;
+                  // materials resized to exactly `n` handles (pad with 0, drop extras).
+                  const resizedTo = (n: number): number[] => {
+                    const next: number[] = [];
+                    for (let k = 0; k < n; k++) next.push(typeof items[k] === 'number' ? (items[k] as number) : 0);
+                    return next;
+                  };
+                  // Open the picker on slot `i`. Locked → first normalize length so the
+                  // slot exists and the invariant holds; unlocked → append a fresh slot.
+                  const pickSlot = (i: number, currentGuid?: string) => {
+                    if (sel === null) return;
+                    if (locked) {
+                      if (items.length !== slotCount) {
+                        gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
+                      }
+                      setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
+                      return;
+                    }
+                    const at = items.length;
+                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                    setPicker({ comp, field: f.key, assetType: arrType, slot: at });
+                  };
+                  const rowCount = locked ? slotCount : Math.max(items.length, 1);
                   out.push(
                     <div className="field" key={`__arr_${f.key}`} data-testid={`insp-${comp}-${f.key}-array`}>
                       <label title={f.tooltip}>
                         {f.key}
-                        <span className="asset-dot">{items.length > 0 ? '◆' : '◇'}</span>
+                        <span className="asset-dot">{items.some((x) => typeof x === 'number' && x > 0) ? '◆' : '◇'}</span>
                       </label>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {items.length === 0 && <span style={{ color: 'var(--fg3)', fontSize: '11px' }}>empty — click + to add a slot</span>}
-                        {items.map((item, i) => {
-                          const handleNum = typeof item === 'number' ? item : 0;
+                        {mismatch && (
+                          <button
+                            type="button"
+                            data-testid={`insp-${comp}-${f.key}-fix`}
+                            onClick={() => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } })}
+                            style={{ textAlign: 'left', border: '1px solid var(--warn, #d08b2c)', borderRadius: 4, background: 'var(--bg2)', color: 'var(--warn, #d08b2c)', fontSize: '11px', padding: '3px 6px', cursor: 'pointer' }}
+                            title={`materials (${items.length}) must equal submeshes (${slotCount}) — click to fix`}
+                          >
+                            ⚠ {items.length} materials vs {slotCount} submeshes — click to fix
+                          </button>
+                        )}
+                        {Array.from({ length: rowCount }, (_unused, i) => {
+                          // "virtual" = an unlocked empty array's placeholder slot 0 that
+                          // has no backing element yet (click/drop grows the array).
+                          const virtual = !locked && i >= items.length;
+                          const rawItem = items[i];
+                          const handleNum = typeof rawItem === 'number' ? rawItem : 0;
                           const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
                           const matName = desc?.ok ? (desc.name ?? `#${handleNum}`) : '';
+                          const slotGuid = desc?.ok ? desc.guid : undefined;
                           const bc = desc?.ok
                             ? (desc.meta?.paramValues as Record<string, unknown> | undefined)?.baseColor as number[] | undefined
                             : undefined;
@@ -668,7 +781,13 @@ export function InspectorPanel() {
                           return (
                             <div
                               key={i}
-                              style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                              role="button"
+                              tabIndex={0}
+                              data-testid={`insp-${comp}-${f.key}-slot-${i}`}
+                              title={handleNum > 0 ? `${matName} — click to change` : `slot ${i}: click to browse or drop a ${arrType}`}
+                              style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                              onClick={() => pickSlot(i, slotGuid)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickSlot(i, slotGuid); } }}
                               onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
                               onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
                               onDrop={(e) => {
@@ -679,6 +798,11 @@ export function InspectorPanel() {
                                 let ref: { guid?: string; kind?: string } = {};
                                 try { ref = JSON.parse(assetJson); } catch { return; }
                                 if (!ref.guid) return;
+                                if (locked && items.length !== slotCount) {
+                                  gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
+                                } else if (virtual) {
+                                  gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                                }
                                 gateway.dispatch({
                                   kind: 'bindAssetRef',
                                   entity: sel,
@@ -686,7 +810,7 @@ export function InspectorPanel() {
                                   field: f.key,
                                   assetType: ref.kind ?? 'MaterialAsset',
                                   guids: [ref.guid],
-                                  slot: i,
+                                  slot: virtual ? items.length : i,
                                 });
                               }}
                               onDragOver={(e) => e.preventDefault()}
@@ -708,18 +832,39 @@ export function InspectorPanel() {
                                   </span>
                                 </>
                               ) : (
-                                <span style={{ flex: 1, fontSize: '11px', color: 'var(--fg3)' }}>drop material asset here</span>
+                                <>
+                                  <span style={{ display: 'inline-block', width: 16, height: 16, minWidth: 16, borderRadius: 3, border: '1px dashed var(--line)', background: 'var(--bg2)' }} />
+                                  <span style={{ flex: 1, fontSize: '11px', color: 'var(--fg3)' }}>{locked ? `slot ${i} — click to browse a ${arrType}` : 'click to browse or drop material asset'}</span>
+                                </>
                               )}
-                              <button type="button" className="asset-clear" title="remove slot" onClick={() => {
-                                const next = items.filter((_, j) => j !== i);
-                                gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
-                              }}>×</button>
+                              {locked && handleNum > 0 && (
+                                <button type="button" className="asset-clear" title="clear slot" onClick={(e) => {
+                                  e.stopPropagation();
+                                  gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount).map((h, j) => (j === i ? 0 : h)) } });
+                                }}>×</button>
+                              )}
+                              {!locked && !virtual && (
+                                <button type="button" className="asset-clear" title="remove slot" onClick={(e) => {
+                                  e.stopPropagation();
+                                  const next = items.filter((_, j) => j !== i);
+                                  gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
+                                }}>×</button>
+                              )}
                             </div>
                           );
                         })}
-                        <button type="button" className="tbtn" style={{ marginTop: 2, fontSize: '11px' }} onClick={() => {
-                          gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
-                        }}>+ slot</button>
+                        {locked ? (
+                          <div style={{ fontSize: '10px', color: 'var(--fg3)', marginTop: 1 }}>
+                            {slotCount} slot{slotCount === 1 ? '' : 's'} — matches mesh submeshes
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                            <button type="button" className="tbtn" style={{ fontSize: '11px' }} data-testid={`insp-${comp}-${f.key}-pick`} onClick={() => pickSlot(items.length)}>+ pick</button>
+                            <button type="button" className="tbtn" style={{ fontSize: '11px' }} onClick={() => {
+                              gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                            }}>+ slot</button>
+                          </div>
+                        )}
                       </div>
                     </div>,
                   );
@@ -763,43 +908,59 @@ export function InspectorPanel() {
                           ))}
                         </select>
                       ) : type === 'asset' ? (
-                        <>
-                          <input
-                            data-testid={`insp-${comp}-${k}`}
-                            placeholder="drop / paste asset uuid"
-                            value={strVal}
-                            onChange={(e) => setField(e.target.value)}
-                            onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
-                            onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              e.currentTarget.classList.remove('drop-hot');
-                              const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
-                              if (assetJson) {
-                                try {
-                                  const ref = JSON.parse(assetJson);
-                                  if (ref.guid) {
-                                    gateway.dispatch({
-                                      kind: 'bindAssetRef',
-                                      entity: sel,
-                                      component: comp,
-                                      field: k,
-                                      assetType: ref.kind ?? 'MeshAsset',
-                                      guids: [ref.guid],
-                                    });
-                                    return;
+                        (() => {
+                          const scalarType = expectedAssetType(comp, k) ?? 'MeshAsset';
+                          const curDesc = typeof v === 'number' && v > 0 ? gateway.describeAsset(v) : null;
+                          const curGuid = curDesc?.ok ? curDesc.guid : undefined;
+                          return (
+                            <>
+                              <input
+                                data-testid={`insp-${comp}-${k}`}
+                                placeholder={`drop / paste ${scalarType} uuid`}
+                                value={strVal}
+                                onChange={(e) => setField(e.target.value)}
+                                onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
+                                onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  e.currentTarget.classList.remove('drop-hot');
+                                  const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
+                                  if (assetJson) {
+                                    try {
+                                      const ref = JSON.parse(assetJson);
+                                      if (ref.guid) {
+                                        gateway.dispatch({
+                                          kind: 'bindAssetRef',
+                                          entity: sel,
+                                          component: comp,
+                                          field: k,
+                                          assetType: ref.kind ?? 'MeshAsset',
+                                          guids: [ref.guid],
+                                        });
+                                        return;
+                                      }
+                                    } catch { /* noop */ }
                                   }
-                                } catch { /* noop */ }
-                              }
-                            }}
-                            onDragOver={(e) => e.preventDefault()}
-                          />
-                          {strVal && (
-                            <button type="button" className="asset-clear" data-testid={`insp-${comp}-${k}-clear`} title="unbind this asset" onClick={() => setField('')}>
-                              ×
-                            </button>
-                          )}
-                        </>
+                                }}
+                                onDragOver={(e) => e.preventDefault()}
+                              />
+                              <button
+                                type="button"
+                                className="tbtn"
+                                data-testid={`insp-${comp}-${k}-browse`}
+                                title={`browse ${scalarType}`}
+                                onClick={() => setPicker({ comp, field: k, assetType: scalarType, currentGuid: curGuid })}
+                              >
+                                ⋯
+                              </button>
+                              {strVal && (
+                                <button type="button" className="asset-clear" data-testid={`insp-${comp}-${k}-clear`} title="unbind this asset" onClick={() => setField('')}>
+                                  ×
+                                </button>
+                              )}
+                            </>
+                          );
+                        })()
                       ) : (
                         <input
                           data-testid={`insp-${comp}-${k}`}
@@ -847,6 +1008,15 @@ export function InspectorPanel() {
             add
           </button>
         </div>
+      )}
+      {picker && (
+        <AssetPicker
+          assetType={picker.assetType}
+          currentGuid={picker.currentGuid}
+          onPick={bindPicked}
+          onClear={clearPicked}
+          onClose={() => setPicker(null)}
+        />
       )}
     </div>
   );
