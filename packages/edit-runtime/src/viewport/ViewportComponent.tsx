@@ -724,7 +724,7 @@ async function bootViewport(
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {} };
+    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {}, getPlayPauseHandle: () => null };
   }
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
@@ -893,9 +893,10 @@ async function bootViewport(
   installFpsReport(world, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
-  // container (drop → gateway spawn; visibility → editorApp.pause/resume).
+  // container (drop → gateway spawn; visibility → editorApp.pause/resume, or
+  // playApp.pause/resume during ▶ Play — D-2 mutual exclusion).
   registerTeardown(installViewportDropZone(container));
-  registerTeardown(installVisibilityPause(container, editorApp));
+  registerTeardown(installVisibilityPause(container, editorApp, () => session.getPlayPauseHandle()));
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

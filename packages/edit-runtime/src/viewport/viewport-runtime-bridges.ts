@@ -216,18 +216,34 @@ export function installAssetCatalogRefresh(): () => void {
 //   - document visibilitychange: covers tab/window backgrounding (the observer
 //     alone doesn't fire when the whole document is hidden).
 //
+// Play-mode awareness (D-2 dual-App mutual exclusion):
+//   During ▶ Play, editorApp is paused and playApp drives the sole rAF. If the
+//   viewport is hidden and then shown, this must NOT resume editorApp (that would
+//   break the D-2 invariant — two Apps driving one renderer). Instead:
+//     hide  → pause the ACTIVE app (editorApp in edit, playApp in play)
+//     show  → resume the ACTIVE app only
+//   getPlayApp returns the live playApp handle during play, null in edit mode.
+//
 // Guards against IntersectionObserver being absent (jsdom/older runtimes): the
 // visibilitychange listener still installs. Returns a disposer for cross-game
 // teardown (registered via registerTeardown at boot).
 export function installVisibilityPause(
   container: HTMLElement,
   editorApp: { pause(): void; resume(): void },
+  getPlayApp?: () => { pause(): void; resume(): void } | null,
 ): () => void {
   let hiddenByViewport = false;
   let hiddenByDocument = false;
   const apply = (): void => {
-    if (hiddenByViewport || hiddenByDocument) editorApp.pause();
-    else editorApp.resume();
+    const shouldHide = hiddenByViewport || hiddenByDocument;
+    const playApp = getPlayApp?.() ?? null;
+    if (shouldHide) {
+      if (playApp !== null) playApp.pause();
+      else editorApp.pause();
+    } else {
+      if (playApp !== null) playApp.resume();
+      else editorApp.resume();
+    }
   };
 
   let io: IntersectionObserver | null = null;
