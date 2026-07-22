@@ -144,16 +144,7 @@ async function bakeHdrEquirect(
   };
   let produced: readonly { guid: string; payload: unknown }[];
   try {
-    // Importers return a Result<ImportOutput>, not the asset array itself.
-    // Keep this catalog builder on the same contract as vite-plugin-pack's
-    // importTextureEntry: a failed HDR cook degrades to the raw-source row
-    // below instead of taking down the whole per-game pack-index request.
-    const result = await imageImporter.import(ctx as never);
-    if (!result.ok) {
-      console.warn(`[forgeax-pack] hdr bake: importer failed for ${sourceAbsPath}`);
-      return null;
-    }
-    produced = result.value.assets;
+    produced = await imageImporter.import(ctx as never);
   } catch (e) {
     console.warn(`[forgeax-pack] hdr bake: importer threw for ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
     return null;
