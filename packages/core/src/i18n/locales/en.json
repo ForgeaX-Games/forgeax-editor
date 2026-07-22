@@ -97,7 +97,21 @@
       "editSource": "Edit source",
       "refToChat": "Reference in Chat",
       "copyJson": "Copy JSON",
-      "trackChannels": "channels: {{count}} (edit keys/tracks in Timeline)"
+      "trackChannels": "channels: {{count}} (edit keys/tracks in Timeline)",
+      "noSelection": "No selection — pick something in the Hierarchy or Viewport.",
+      "searchPlaceholder": "Search properties...",
+      "noMatch": "No property matches \"{{query}}\"",
+      "components": "Components",
+      "addComponent": "Add",
+      "hierarchy": "Hierarchy",
+      "parent": "Parent",
+      "focus": "Frame this entity in the viewport (F)",
+      "lockDisabled": "Lock (not available yet)",
+      "displaySettings": "Display settings",
+      "showModifiedOnly": "Show modified only",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "resetAll": "Reset all properties"
     },
     "launcher": {
       "title": "Launcher",

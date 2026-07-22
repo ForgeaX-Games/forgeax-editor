@@ -1,0 +1,217 @@
+/* Inspector ("物体属性 / Details") panel — ported 1:1 from the forgeax-studio
+   interaction spec (forgeax-studio-demo/index.html §Details). Layout/visuals use
+   @forgeax/design semantic tokens (--color-* / --prim-*) which the studio runtime
+   injects globally (interface/styles/global.css -> tokens.css). Authored as plain
+   scoped CSS because the studio Tailwind JIT does not scan packages/editor/panels
+   (only packages/editor/ui), so utility classes here would be dropped.
+
+   Everything is scoped under .fx-inspector to avoid leaking the demo's local
+   token definitions and layout classes into the rest of the shell. */
+
+.fx-inspector {
+  /* Tokens the demo defines locally but the studio runtime does not ship. */
+  --color-brand-line: rgba(212, 255, 72, 0.38);
+  --color-brand-soft: rgba(212, 255, 72, 0.10);
+  --color-text-on-bright: var(--color-text-on-bright-primary, #000);
+  --d-type: var(--color-brand-primary);
+  --d-all: var(--secondary, #48ffcf);
+  --d-cap: var(--color-status-amber, #f5b243);
+
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-background-base);
+  color: var(--color-text-primary);
+  font: 13px/1.5 var(--prim-font-sans);
+  overflow: auto;
+}
+
+/* ════════════════ Header (dp-name) ════════════════ */
+.fx-inspector .dp-name { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--color-divider-default); }
+.fx-inspector .dp-name .tico { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--color-background-floating); border: 1px solid var(--color-border-subtle); flex: 0 0 auto; color: var(--color-text-tertiary); }
+.fx-inspector .dp-name .ninput { flex: 1; min-width: 0; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); color: var(--color-text-primary); border-radius: 7px; padding: 5px 10px; font-size: 13px; font-weight: 600; outline: none; font-family: var(--prim-font-sans); }
+.fx-inspector .dp-name .ninput:focus { border-color: var(--color-brand-line); }
+.fx-inspector .dp-name .ninput:disabled { opacity: 0.6; cursor: not-allowed; }
+.fx-inspector .dp-name .tico2 { color: var(--color-text-tertiary); cursor: pointer; padding: 4px; display: grid; place-items: center; background: none; border: none; }
+.fx-inspector .dp-name .tico2:hover { color: var(--color-text-primary); }
+.fx-inspector .dp-name .tico2.on { color: var(--color-status-amber); }
+.fx-inspector .dp-name .badge { font-family: var(--prim-font-mono); font-size: 9.5px; padding: 1px 8px; border-radius: var(--prim-radius-full); border: 1px solid var(--color-border-default); color: var(--color-text-secondary); font-weight: 400; flex: 0 0 auto; white-space: nowrap; }
+.fx-inspector .dp-name .idbadge { font-family: var(--prim-font-mono); font-size: 9.5px; color: var(--color-text-tertiary); flex: 0 0 auto; }
+
+/* ════════════════ Toolbar (dp-toolbar) ════════════════ */
+.fx-inspector .dp-toolbar { display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--color-divider-default); }
+.fx-inspector .dp-search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; height: 27px; padding: 0 10px; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 7px; }
+.fx-inspector .dp-search:focus-within { border-color: var(--color-brand-line); }
+.fx-inspector .dp-search .mag { color: var(--color-text-tertiary); display: grid; place-items: center; flex: 0 0 auto; }
+.fx-inspector .dp-search input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--color-text-primary); font-size: 12px; font-family: var(--prim-font-sans); }
+.fx-inspector .dp-search input::placeholder { color: var(--color-text-tertiary); }
+.fx-inspector .t-btn { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 7px; color: var(--color-text-tertiary); background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); cursor: pointer; flex: 0 0 auto; }
+.fx-inspector .t-btn:hover { color: var(--color-text-primary); border-color: var(--color-border-default); }
+.fx-inspector .t-btn.on,
+.fx-inspector .t-btn[data-state="open"] { color: var(--color-brand-primary); border-color: var(--color-brand-line); background: var(--color-brand-soft); }
+
+/* ════════════════ Components block (dp-comp) ════════════════ */
+.fx-inspector .dp-comp { padding: 9px 12px; border-bottom: 1px solid var(--color-divider-default); }
+.fx-inspector .dp-comp .ch { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.fx-inspector .dp-comp .ch .lbl { font-family: var(--prim-font-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-tertiary); }
+.fx-inspector .dp-comp .ch .add { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--color-brand-primary); background: var(--color-brand-soft); border: 1px solid var(--color-brand-line); border-radius: var(--prim-radius-6); padding: 2px 8px; cursor: pointer; }
+.fx-inspector .dp-comp .ch .add:hover:not(:disabled) { background: var(--color-brand-primary); color: var(--color-text-on-bright); border-color: var(--color-brand-primary); }
+.fx-inspector .dp-comp .ch .add[data-state="open"] { background: var(--color-brand-primary); color: var(--color-text-on-bright); border-color: var(--color-brand-primary); }
+.fx-inspector .dp-comp .ch .add:disabled { opacity: 0.45; cursor: not-allowed; }
+.fx-inspector .comp-row { display: flex; align-items: center; gap: 7px; padding: 3px 8px; border-radius: var(--prim-radius-6); font-size: 11.5px; color: var(--color-text-secondary); cursor: pointer; background: none; border: none; width: 100%; text-align: left; }
+.fx-inspector .comp-row:hover { background: var(--color-interaction-hover); }
+.fx-inspector .comp-row .ci { color: var(--color-text-tertiary); display: grid; place-items: center; flex: 0 0 auto; }
+.fx-inspector .comp-row .comp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-inspector .comp-row .comp-del { flex: 0 0 auto; display: grid; place-items: center; padding: 2px; border-radius: var(--prim-radius-4); color: var(--color-text-tertiary); background: none; border: none; cursor: pointer; opacity: 0; }
+.fx-inspector .comp-row:hover .comp-del { opacity: 0.7; }
+.fx-inspector .comp-row .comp-del:hover { opacity: 1; color: var(--color-accent-error, #f26a6a); background: var(--color-interaction-hover); }
+
+/* ════════════════ Body / categories ════════════════ */
+.fx-inspector .dp-body { padding: 2px 0 10px; }
+.fx-inspector .cat { border-bottom: 1px solid var(--color-divider-default); }
+.fx-inspector .cat:last-child { border-bottom: none; }
+.fx-inspector .cat-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none; border-left: 3px solid transparent; }
+.fx-inspector .cat-head:hover { background: var(--color-interaction-hover); }
+.fx-inspector .cat.dim-type .cat-head { border-left-color: var(--d-type); }
+.fx-inspector .cat.dim-all .cat-head { border-left-color: var(--d-all); }
+.fx-inspector .cat.dim-cap .cat-head { border-left-color: var(--d-cap); }
+.fx-inspector .cat-head .car { color: var(--color-text-tertiary); width: 12px; display: grid; place-items: center; flex: 0 0 auto; }
+.fx-inspector .cat-head .ct { font-size: 12.5px; font-weight: 600; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-inspector .cat-head .cacts { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.fx-inspector .cat-head .cact { color: var(--color-text-tertiary); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: var(--prim-radius-4); background: none; border: none; opacity: 0; }
+.fx-inspector .cat-head:hover .cact { opacity: 0.7; }
+.fx-inspector .cat-head .cact:hover { opacity: 1; color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.fx-inspector .cat-head .cact.danger:hover { color: var(--color-accent-error, #f26a6a); }
+.fx-inspector .cat-head .advb { font-size: 9px; color: var(--color-text-tertiary); font-family: var(--prim-font-mono); border: 1px solid var(--color-border-subtle); border-radius: var(--prim-radius-full); padding: 0 6px; }
+.fx-inspector .cat-fields { padding: 2px 0 8px; }
+.fx-inspector .cat.collapsed .cat-fields { display: none; }
+.fx-inspector .bespoke-hint { display: flex; align-items: center; gap: 7px; padding: 6px 12px 6px 26px; font-size: 11px; color: var(--color-text-tertiary); }
+.fx-inspector .bespoke-hint .bespoke-icon { color: var(--color-brand-primary); }
+
+/* ════════════════ Field rows ════════════════ */
+.fx-inspector .f-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 26px; min-height: 26px; }
+.fx-inspector .f-row:hover { background: var(--color-interaction-hover); }
+.fx-inspector .f-name { flex: 0 1 148px; min-width: 0; color: var(--color-text-secondary); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-inspector .f-val { flex: 1 1 96px; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.fx-inspector .f-val > *, .fx-inspector .asset-f .an { min-width: 0; }
+.fx-inspector .fav { display: grid; place-items: center; width: 15px; color: var(--color-text-tertiary); cursor: pointer; flex: 0 0 auto; opacity: 0; background: none; border: none; }
+.fx-inspector .f-row:hover .fav { opacity: 0.6; }
+.fx-inspector .fav.on { opacity: 1; color: var(--color-status-amber); }
+.fx-inspector .fav:hover { color: var(--color-status-amber); opacity: 1; }
+.fx-inspector .reset { width: 14px; text-align: center; color: var(--color-status-amber); cursor: pointer; flex: 0 0 auto; opacity: 0.9; display: grid; place-items: center; background: none; border: none; }
+.fx-inspector .reset.hidden { visibility: hidden; }
+
+/* value widgets */
+.fx-inspector .box-i { background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; padding: 2px 7px; font-family: var(--prim-font-mono); font-size: 11px; color: var(--color-text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; outline: none; }
+.fx-inspector .box-i:focus { border-color: var(--color-brand-line); }
+
+/* Number field = input + hover/focus stepper. UE-style: hover the input to get an
+   ew-resize scrub cursor (horizontal drag changes value); ▲▼ appear on hover/focus
+   and are absolutely positioned so they never shift the row (no jitter). */
+.fx-inspector .numfield { position: relative; display: flex; flex: 1; min-width: 0; }
+.fx-inspector .numfield .box-i { flex: 1; text-align: center; }
+.fx-inspector .numfield .scrubbable { cursor: ew-resize; }
+.fx-inspector .numfield .scrubbable:focus { cursor: text; }
+.fx-inspector .numfield .nspin { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 13px; display: none; flex-direction: column; justify-content: center; gap: 1px; background: var(--color-background-elevated); border-radius: 0 4px 4px 0; }
+.fx-inspector .numfield:hover .nspin, .fx-inspector .numfield:focus-within .nspin { display: flex; }
+.fx-inspector .numfield .nsp { flex: 1; display: grid; place-items: center; color: var(--color-text-tertiary); background: none; border: none; cursor: pointer; padding: 0; min-height: 0; }
+.fx-inspector .numfield .nsp:hover { color: var(--color-text-primary); }
+
+.fx-inspector .vec { display: flex; gap: 4px; flex: 1; }
+.fx-inspector .vec .vcell { flex: 1; display: flex; min-width: 0; }
+.fx-inspector .vec .numfield, .fx-inspector .vec .box-i { flex: 1; text-align: center; }
+.fx-inspector .vec .x .box-i, .fx-inspector .vec .box-i.x { border-bottom: 2px solid rgba(224, 108, 117, 0.6); }
+.fx-inspector .vec .y .box-i, .fx-inspector .vec .box-i.y { border-bottom: 2px solid rgba(152, 195, 121, 0.6); }
+.fx-inspector .vec .z .box-i, .fx-inspector .vec .box-i.z { border-bottom: 2px solid rgba(97, 175, 239, 0.6); }
+.fx-inspector .vec .w .box-i, .fx-inspector .vec .box-i.w { border-bottom: 2px solid rgba(190, 160, 240, 0.6); }
+.fx-inspector .num { text-align: center; }
+.fx-inspector .numfield.num { flex: 0 0 auto; width: 88px; }
+.fx-inspector .txt { flex: 1; }
+.fx-inspector input[type='range'] { flex: 1; min-width: 0; accent-color: var(--color-brand-primary); }
+.fx-inspector .ddc { flex: 1; display: flex; align-items: center; min-width: 0; }
+/* editor-ui <Select> trigger compacted to sit in a field row like a `.box-i`. */
+.fx-inspector .fx-insp-select { flex: 1; height: 24px; min-height: 24px; padding: 2px 7px; gap: 6px; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; box-shadow: none; font-family: var(--prim-font-mono); font-size: 11px; color: var(--color-text-primary); }
+.fx-inspector .fx-insp-select:hover { border-color: var(--color-border-default); }
+.fx-inspector .fx-insp-select:focus,
+.fx-inspector .fx-insp-select[data-state="open"] { border-color: var(--color-brand-line); }
+.fx-inspector .fx-insp-select > svg { width: 13px; height: 13px; opacity: 0.5; }
+.fx-inspector .seg { display: inline-flex; border: 1px solid var(--color-border-subtle); border-radius: var(--prim-radius-6); overflow: hidden; }
+.fx-inspector .seg span, .fx-inspector .seg button { padding: 2px 9px; font-size: 10.5px; color: var(--color-text-tertiary); background: var(--color-background-elevated); cursor: pointer; border: none; }
+.fx-inspector .seg span.on, .fx-inspector .seg button.on { background: var(--color-background-floating); color: var(--color-text-primary); }
+.fx-inspector .swatch { width: 26px; height: 15px; border-radius: var(--prim-radius-4); border: 1px solid var(--color-border-default); flex: 0 0 auto; padding: 0; cursor: pointer; }
+.fx-inspector .hexval { font-family: var(--prim-font-mono); font-size: 10px; color: var(--color-text-secondary); flex: 0 0 auto; }
+
+/* asset field */
+.fx-inspector .asset-f { flex: 1; display: flex; align-items: center; gap: 6px; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; padding: 2px 6px; min-width: 0; }
+.fx-inspector .asset-f.drop-hot { border-color: var(--color-brand-line); background: var(--color-brand-soft); }
+.fx-inspector .asset-f .ab { width: 14px; height: 14px; border-radius: 3px; background: var(--color-background-floating); border: 1px solid var(--color-border-default); flex: 0 0 auto; }
+.fx-inspector .asset-f .ab.empty { border-style: dashed; }
+.fx-inspector .asset-f .an { flex: 1; font-size: 11px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-inspector .asset-f .an.empty { color: var(--color-text-tertiary); }
+.fx-inspector .asset-f .abtn { color: var(--color-text-tertiary); display: inline-flex; gap: 3px; flex: 0 0 auto; }
+.fx-inspector .asset-f .abtn button { color: inherit; background: none; border: none; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.fx-inspector .asset-f .abtn button:hover { color: var(--color-text-primary); }
+.fx-inspector .asset-slots { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fx-inspector .asset-slotnote { font-size: 10px; color: var(--color-text-tertiary); }
+.fx-inspector .asset-fix { text-align: left; border: 1px solid var(--d-cap); border-radius: 4px; background: var(--color-background-elevated); color: var(--d-cap); font-size: 11px; padding: 3px 6px; cursor: pointer; }
+.fx-inspector .asset-dot { margin-left: 4px; color: var(--color-text-tertiary); }
+.fx-inspector .asset-actions { display: flex; gap: 4px; }
+
+.fx-inspector .fbtn { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--color-brand-primary); background: var(--color-brand-soft); border: 1px solid var(--color-brand-line); border-radius: var(--prim-radius-6); padding: 3px 10px; cursor: pointer; }
+.fx-inspector .fbtn:hover { background: var(--color-brand-primary); color: var(--color-text-on-bright); }
+.fx-inspector .dp-note { color: var(--color-text-tertiary); font-size: 11.5px; padding: 14px; line-height: 1.5; }
+.fx-inspector .no-match { color: var(--color-text-tertiary); font-size: 12px; padding: 16px; text-align: center; }
+.fx-inspector .dp-empty { color: var(--color-text-tertiary); font-size: 12px; padding: 24px 16px; text-align: center; }
+
+/* disabled affordances (features with no live backend yet) */
+.fx-inspector .is-disabled { opacity: 0.4; pointer-events: none; }
+
+/* ════════════════ Batch (multi-select) ════════════════ */
+.fx-inspector .batch-members { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--color-divider-default); }
+.fx-inspector .chip { font-size: 11px; padding: 2px 8px; border-radius: var(--prim-radius-full); border: 1px solid var(--color-border-subtle); background: var(--color-background-elevated); color: var(--color-text-secondary); cursor: pointer; }
+.fx-inspector .chip:hover { border-color: var(--color-border-default); color: var(--color-text-primary); }
+.fx-inspector .chip.primary { border-color: var(--color-brand-line); background: var(--color-brand-soft); color: var(--color-text-primary); }
+
+/* AssetPicker modal (reskin to tokens) */
+.fx-asset-picker-backdrop { position: fixed; inset: 0; z-index: var(--prim-z-level-3, 300); background: var(--color-overlay-modal, rgba(0,0,0,0.5)); display: flex; align-items: center; justify-content: center; }
+.fx-asset-picker { width: 340px; max-height: 70vh; display: flex; flex-direction: column; background: var(--color-background-base); border: 1px solid var(--color-border-default); border-radius: var(--prim-radius-8); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55); overflow: hidden; font: 13px/1.5 var(--prim-font-sans); color: var(--color-text-primary); }
+
+/* ════════════════ Portaled menu / listbox skin ════════════════
+   editor-ui <DropdownMenu>/<Select> content is portaled to <body> (outside
+   .fx-inspector), so these live at the top level. They give the shared menu
+   panel the same look as the Hierarchy right-click menu (mirrors
+   editor/src/hierarchy-panel.css .hierarchy-header-menu). Plain (unlayered) CSS
+   intentionally overrides the components' @layer utilities skin. */
+.fx-insp-menu { min-width: 200px; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-background-floating); padding: 6px; color: var(--color-text-secondary); box-shadow: 0 16px 44px rgba(0, 0, 0, 0.6); }
+.fx-insp-menu-title { padding: 5px 8px 6px; color: var(--color-text-tertiary); font-family: var(--prim-font-mono, ui-monospace, monospace); font-size: 9.5px; font-weight: 400; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }
+.fx-insp-menu-item,
+.fx-insp-menu [role="option"] { min-height: 27px; display: flex; align-items: center; gap: 9px; border-radius: 6px; padding: 6px 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.2; cursor: pointer; outline: none; border: none; }
+.fx-insp-menu [role="option"] { padding-right: 26px; }
+/* Single highlight source: Radix drives `data-highlighted` (follows pointer AND
+   keyboard) so ONE row is ever active. We deliberately do NOT add a CSS `:hover`
+   rule — mixing `:hover` with `data-highlighted` (and the checked-item background
+   below) is what produced the "two hovers" flicker. */
+.fx-insp-menu-item[data-highlighted],
+.fx-insp-menu [role="option"][data-highlighted] { background: var(--color-interaction-hover); color: var(--color-text-primary); }
+/* Selection is shown by the check glyph only — no persistent background, so the
+   selected row never reads as a second hover. */
+.fx-insp-menu [role="option"][data-state="checked"] { background: transparent; color: var(--color-text-primary); }
+.fx-insp-menu-item[data-disabled] { opacity: 0.4; cursor: not-allowed; }
+.fx-insp-menu-item .mi { width: 16px; height: 16px; display: grid; place-items: center; flex: 0 0 auto; color: var(--color-text-tertiary); }
+.fx-insp-menu-item .mi svg { width: 14px; height: 14px; stroke-width: 1.7; }
+.fx-insp-menu-sep { height: 1px; margin: 5px 6px; background: var(--color-divider-default); }
+
+/* ════════════════ Hover-lift escape ════════════════
+   interface/styles/motion.css lifts every .studio-shell <button>/[role=button]
+   on :hover (translate + scale + shadow) and rotates their direct-child <svg>,
+   unless the element carries `.no-motion-lift`. The Inspector's controls already
+   have their own bg/border hovers, so that extra transform read as jitter. This
+   neutralises the transform panel-wide — same intent as the .no-motion-lift
+   escape class, without tagging every control. */
+.fx-inspector button:hover,
+.fx-inspector [role="button"]:hover,
+.fx-inspector button:active,
+.fx-inspector [role="button"]:active { transform: none !important; box-shadow: none !important; }
+.fx-inspector button:hover > svg,
+.fx-inspector [role="button"]:hover > svg { transform: none !important; }

@@ -15,6 +15,8 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { gateway } from '@forgeax/editor-core';
+import { ForgeaxIcon } from '@forgeax/editor-ui';
+import './inspector.css';
 
 // kind → editor asset-union tag. Mirrors the (newer) core schema.ts
 // assetKindToType; inlined here because this editor copy's schema.ts predates
@@ -64,14 +66,14 @@ function Swatch({ guid, kind }: { guid: string; kind: string }) {
   const bc = (meta?.paramValues as Record<string, unknown> | undefined)?.baseColor as number[] | undefined;
   const color = kind === 'material' && bc && bc.length >= 3
     ? `rgb(${Math.round(bc[0]! * 255)},${Math.round(bc[1]! * 255)},${Math.round(bc[2]! * 255)})`
-    : 'var(--bg2, #2c3138)';
+    : 'var(--color-background-floating)';
   return (
     <span
       style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: 20, height: 20, minWidth: 20, borderRadius: 3,
-        border: '1px solid var(--line, #3a3f46)', background: color,
-        fontSize: 10, color: 'var(--fg3, #9aa0a6)', textTransform: 'uppercase',
+        border: '1px solid var(--color-border-default)', background: color,
+        fontSize: 10, color: 'var(--color-text-tertiary)', textTransform: 'uppercase',
       }}
     >
       {kind === 'material' ? '' : kind.slice(0, 1)}
@@ -117,23 +119,23 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
 
   return (
     <div
-      className="asset-picker-backdrop"
+      className="fx-asset-picker-backdrop"
       data-testid="asset-picker"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      style={{ position: 'fixed', inset: 0, zIndex: 4000, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
     >
       <div
-        className="asset-picker"
+        className="fx-asset-picker"
         role="dialog"
         aria-label={`Select ${assetType}`}
         onKeyDown={onKeyDown}
-        style={{ width: 340, maxHeight: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--bg1, #23262b)', border: '1px solid var(--line, #3a3f46)', borderRadius: 6, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', overflow: 'hidden' }}
       >
-        <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--line, #3a3f46)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg, #e6e6e6)' }}>Select {assetType}</span>
-          <button type="button" className="asset-clear" data-testid="asset-picker-close" title="close (Esc)" onClick={onClose}>×</button>
+        <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--color-divider-default)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>Select {assetType}</span>
+          <button type="button" data-testid="asset-picker-close" title="close (Esc)" onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 2 }}>
+            <ForgeaxIcon name="x" size={14} />
+          </button>
         </div>
-        <div style={{ padding: 8, borderBottom: '1px solid var(--line, #3a3f46)' }}>
+        <div style={{ padding: 8, borderBottom: '1px solid var(--color-divider-default)' }}>
           <input
             ref={inputRef}
             type="text"
@@ -141,18 +143,18 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
             value={query}
             placeholder={`Search ${rows.length} ${assetType}…`}
             onChange={(e) => { setQuery(e.target.value); setFocused(0); }}
-            style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '4px 6px' }}
+            style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '5px 8px', background: 'var(--color-background-elevated)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, color: 'var(--color-text-primary)', outline: 'none' }}
           />
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {onClear && (
             <button type="button" data-testid="asset-picker-none" onClick={() => { onClear(); onClose(); }} style={rowStyle(!currentGuid, false)}>
-              <span style={{ width: 20, height: 20, minWidth: 20, borderRadius: 3, border: '1px dashed var(--line, #3a3f46)' }} />
-              <span style={{ flex: 1, fontSize: 12, color: 'var(--fg3, #9aa0a6)' }}>None (unbind)</span>
+              <span style={{ width: 20, height: 20, minWidth: 20, borderRadius: 3, border: '1px dashed var(--color-border-default)' }} />
+              <span style={{ flex: 1, fontSize: 12, color: 'var(--color-text-tertiary)' }}>None (unbind)</span>
             </button>
           )}
           {filtered.length === 0 && (
-            <div data-testid="asset-picker-empty" style={{ padding: 16, textAlign: 'center', color: 'var(--fg3, #9aa0a6)', fontSize: 12 }}>
+            <div data-testid="asset-picker-empty" style={{ padding: 16, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12 }}>
               {rows.length === 0 ? `No ${assetType} in project` : `No matches for "${query}"`}
             </div>
           )}
@@ -160,7 +162,7 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
             <PickerRow key={r.guid} row={r} active={r.guid === currentGuid} focused={i === focused} onHover={() => setFocused(i)} onClick={() => commit(r.guid)} />
           ))}
         </div>
-        <div style={{ padding: '4px 10px', borderTop: '1px solid var(--line, #3a3f46)', fontSize: 10, color: 'var(--fg3, #9aa0a6)' }}>
+        <div style={{ padding: '4px 10px', borderTop: '1px solid var(--color-divider-default)', fontSize: 10, color: 'var(--color-text-tertiary)' }}>
           ↑↓ navigate · ⏎ select · Esc close
         </div>
       </div>
@@ -171,8 +173,8 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
 function rowStyle(active: boolean, focused: boolean): CSSProperties {
   return {
     display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '5px 10px',
-    border: 'none', borderLeft: active ? '2px solid var(--accent, #6ab0ff)' : '2px solid transparent',
-    background: focused ? 'var(--bg3, #2c3138)' : 'transparent', cursor: 'pointer', textAlign: 'left',
+    border: 'none', borderLeft: active ? '2px solid var(--color-brand-primary)' : '2px solid transparent',
+    background: focused ? 'var(--color-interaction-hover)' : 'transparent', cursor: 'pointer', textAlign: 'left',
   };
 }
 
@@ -187,10 +189,10 @@ function PickerRow({ row, active, focused, onHover, onClick }: { row: Row; activ
       style={rowStyle(active, focused)}
     >
       <Swatch guid={row.guid} kind={row.kind} />
-      <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--fg, #e6e6e6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.name}
       </span>
-      {active && <span style={{ fontSize: 11, color: 'var(--accent, #6ab0ff)' }}>✓</span>}
+      {active && <span style={{ display: 'grid', placeItems: 'center', color: 'var(--color-brand-primary)' }}><ForgeaxIcon name="check" size={13} /></span>}
     </button>
   );
 }

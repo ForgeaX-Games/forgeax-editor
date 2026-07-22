@@ -97,7 +97,21 @@
       "editSource": "编辑源",
       "refToChat": "引用到 Chat",
       "copyJson": "复制 JSON",
-      "trackChannels": "channels: {{count}}（keys/tracks 在 Timeline 编辑）"
+      "trackChannels": "channels: {{count}}（keys/tracks 在 Timeline 编辑）",
+      "noSelection": "未选中 — 在大纲或视口中选择一个对象。",
+      "searchPlaceholder": "搜索属性...",
+      "noMatch": "没有匹配 \"{{query}}\" 的属性",
+      "components": "组件",
+      "addComponent": "添加",
+      "hierarchy": "层级",
+      "parent": "父级",
+      "focus": "在视口中聚焦此对象（F）",
+      "lockDisabled": "锁定（暂未接入）",
+      "displaySettings": "显示设置",
+      "showModifiedOnly": "只看已修改",
+      "expandAll": "全部展开",
+      "collapseAll": "全部折叠",
+      "resetAll": "重置全部属性"
     },
     "launcher": {
       "title": "启动器",

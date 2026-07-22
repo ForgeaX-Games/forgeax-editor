@@ -43,6 +43,10 @@
       "types": "./src/components/icon-button.tsx",
       "import": "./src/components/icon-button.tsx"
     },
+    "./icon": {
+      "types": "./src/components/icon.tsx",
+      "import": "./src/components/icon.tsx"
+    },
     "./input-group": {
       "types": "./src/components/input-group.tsx",
       "import": "./src/components/input-group.tsx"

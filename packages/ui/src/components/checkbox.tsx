@@ -5,7 +5,10 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../lib/utils';
 
 const checkboxVariants = cva(
-  'no-motion-lift peer shrink-0 cursor-pointer appearance-none rounded-sm border border-input bg-[var(--color-background-base)] text-primary shadow-sm transition-colors hover:border-[var(--color-border-strong)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
+  // `border-solid` is explicit on purpose: this component renders in contexts
+  // without Tailwind preflight (e.g. editor panels), where the bare `border`
+  // utility would fall back to the browser default `outset` (3D bevel).
+  'no-motion-lift peer inline-flex shrink-0 items-center justify-center cursor-pointer appearance-none rounded-sm border border-solid border-input bg-[var(--color-background-base)] text-primary shadow-sm transition-colors hover:border-[var(--color-border-strong)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground',
   {
     variants: {
       size: {
@@ -41,8 +44,10 @@ const Checkbox = React.forwardRef<
     className={cn(checkboxVariants({ size }), className)}
     {...props}
   >
-    <CheckboxPrimitive.Indicator className={cn('flex items-center justify-center text-current')}>
-      <Check />
+    {/* inline-flex + size-full so the indicator fills the box; `shrink-0` on the
+        glyph stops the flexbox from crushing the svg's width to ~1px. */}
+    <CheckboxPrimitive.Indicator className={cn('inline-flex size-full items-center justify-center text-current')}>
+      <Check className="shrink-0" />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ));
