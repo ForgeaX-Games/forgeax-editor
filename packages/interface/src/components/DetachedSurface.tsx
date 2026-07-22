@@ -98,6 +98,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
     // visibility), so render the real surface directly via PanelRenderers — not the
     // in-shell <SurfaceAnchor> placeholder, which would leave the window empty.
     // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
+    case 'viewport':
     case 'edit': // legacy backward compat
     case 'preview': // legacy backward compat
       body = (

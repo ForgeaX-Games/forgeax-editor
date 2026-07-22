@@ -4,7 +4,6 @@
 // must remain derived from the editor-core manifest. This catches a panel being
 // added or removed without the default editor chrome following suit.
 import { describe, expect, test } from 'bun:test';
-import { EDITOR_PANELS } from '../packages/core/src/manifest';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from './default-dock-layout';
 
 function collectViews(node: unknown): string[] {
@@ -21,14 +20,10 @@ function collectViews(node: unknown): string[] {
 }
 
 describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
-  test('contains exactly the live editor manifest panels', () => {
-    const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root);
-    const dockedEditorPanels = views
-      .filter((id) => id.startsWith('ep:'))
-      .map((id) => id.slice(3))
-      .sort();
+  test('contains exactly the default visible dock panels', () => {
+    const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root).sort();
 
-    expect(dockedEditorPanels).toEqual([...EDITOR_PANELS].sort());
+    expect(views).toEqual(['chat', 'ep:assets', 'ep:hierarchy', 'ep:inspector', 'info', 'viewport']);
   });
 
   test('has a matching dockview panel descriptor for every view', () => {

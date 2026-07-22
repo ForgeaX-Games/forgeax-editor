@@ -8,7 +8,7 @@ const Tooltip = TooltipPrimitive.Root;
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
 const tooltipContentVariants = cva(
-  'z-[var(--z-toplevel)] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95',
+  'z-[var(--z-toplevel)] overflow-hidden rounded-[4px] border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95',
   {
     variants: {
       size: {
@@ -28,12 +28,14 @@ const TooltipContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content> &
     VariantProps<typeof tooltipContentVariants>
 >(({ className, sideOffset = 4, size, ...props }, ref) => (
-  <TooltipPrimitive.Content
-    ref={ref}
-    sideOffset={sideOffset}
-    className={cn(tooltipContentVariants({ size }), className)}
-    {...props}
-  />
+  <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Content
+      ref={ref}
+      sideOffset={sideOffset}
+      className={cn(tooltipContentVariants({ size }), className)}
+      {...props}
+    />
+  </TooltipPrimitive.Portal>
 ));
 TooltipContent.displayName = TooltipPrimitive.Content.displayName;
 

@@ -258,11 +258,6 @@ export function ViewportComponent({
             gateway.dispatch({ kind: 'setDisplay', display: q.display === 'game' ? 'scene' : 'game' }, 'human');
           }}
           onControlGame={() => gateway.dispatch({ kind: 'grantGameControl' }, 'human')}
-          onFullscreen={() => {
-            const slug = getSceneId();
-            const url = slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
-            window.open(url, '_blank', 'noopener');
-          }}
         />
 
         <CommandPalette

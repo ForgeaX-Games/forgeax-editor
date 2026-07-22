@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { fileURLToPath } from 'node:url';
@@ -21,8 +21,62 @@ const ENGINE = process.env.FORGEAX_ENGINE_URL ?? 'http://127.0.0.1:15173';
 const ENGINE_WS = ENGINE.replace(/^http/, 'ws');
 const EDITOR = process.env.FORGEAX_EDITOR_URL ?? 'http://127.0.0.1:15280';
 const REEL = process.env.FORGEAX_REEL_URL ?? 'http://127.0.0.1:15175';
+const STANDALONE_PROXY_ENABLED = process.env.FORGEAX_STANDALONE_PROXY === '1';
 
 const HTTPS_ENABLED = process.env.FORGEAX_INTERFACE_HTTPS === '1';
+
+function standalonePluginProxies(): Record<string, ProxyOptions> {
+  if (!STANDALONE_PROXY_ENABLED) return {};
+  const portsFile = process.env.FORGEAX_EXTENSION_DEV_PORTS_FILE
+    ?? resolve(PACKAGE_DIR, '../../.forgeax/extension-dev-ports.json');
+  if (!existsSync(portsFile)) return {};
+  let parsed: { plugins?: Record<string, { frontendPort?: unknown }> };
+  try {
+    parsed = JSON.parse(readFileSync(portsFile, 'utf-8'));
+  } catch {
+    return {};
+  }
+
+  const out: Record<string, ProxyOptions> = {};
+  for (const [id, entry] of Object.entries(parsed.plugins ?? {})) {
+    const port = entry.frontendPort;
+    if (!Number.isInteger(port) || (port as number) <= 0 || (port as number) > 65535) continue;
+    const shortId = id.replace(/^@[^/]+\//, '');
+    const prefix = `/__fx-plugin/${shortId}`;
+    const rewritePluginRequest = (path: string): string => {
+      const hmrPath = `${prefix}/__vite_hmr`;
+      if (path === hmrPath || path.startsWith(`${hmrPath}?`)) return path;
+
+      const inner = path.slice(prefix.length) || '/';
+      // Vite page/module/static requests must keep the configured base prefix;
+      // plugin-owned APIs must be stripped so their dev-server middleware sees
+      // the same paths it handles in direct-port local development.
+      const apiPrefixes = [
+        '/api',
+        '/ws',
+        '/__ce-api__',
+        '/__graph__',
+        '/__gva__',
+        '/__reel__',
+        '/__tts__',
+        '/__minimax_music__',
+        '/__img__',
+        '/uploads',
+      ];
+      if (apiPrefixes.some((p) => inner === p || inner.startsWith(`${p}/`) || inner.startsWith(`${p}?`))) {
+        return inner;
+      }
+      return path;
+    };
+    out[prefix] = {
+      target: `http://127.0.0.1:${port}`,
+      changeOrigin: true,
+      ws: true,
+      rewrite: rewritePluginRequest,
+    };
+  }
+  return out;
+}
 
 // Prefer a hand-rolled cert at `<root>/.tls/{cert,key}.pem` (covers remote IPs
 // in SAN); fall back to package-local then @vitejs/plugin-basic-ssl (localhost only).
@@ -40,6 +94,11 @@ export default defineConfig({
     react(),
     ...(HTTPS_ENABLED && !useCustomCert ? [basicSsl()] : []),
   ],
+  define: {
+    'import.meta.env.VITE_FORGEAX_STANDALONE_PROXY': JSON.stringify(
+      process.env.FORGEAX_STANDALONE_PROXY ?? '',
+    ),
+  },
   resolve: {
     // dockview declares react as a peer dep; under bun's isolated node_modules it
     // can resolve a SECOND react copy → "Invalid hook call / resolveDispatcher
@@ -153,6 +212,7 @@ export default defineConfig({
       // wb-reel API endpoints (scenarios, assets) and Play workspace Player iframe.
       // The wb-reel vite dev server hosts these routes as custom middleware.
       '/__reel__': { target: REEL, changeOrigin: true },
+      ...standalonePluginProxies(),
     },
   },
 });

@@ -186,12 +186,16 @@ export function installAssetCatalogRefresh(): () => void {
     // A newly imported asset wrote a fresh pack-index on disk, but the registry
     // cached the pre-import index at boot and only re-fetches on a per-GUID miss.
     // Refresh now so Content Browser listCatalog + later loadByGuid see it.
-    // invalidateAll() clears loaded payloads and pack-file body caches so the
-    // next loadByGuid genuinely re-fetches from disk — without it, stale scene
-    // payloads persist even after a successful refreshCatalog (the pack-index
-    // listing updates but already-loaded asset bodies stay cached).
+    //
+    // Do NOT call invalidateAll() here. `assetsChanged` is also a UI-notify
+    // signal after boot and after a SceneInstance mount; neither changes asset
+    // bytes. Clearing the payload catalogue at that point leaves existing
+    // MaterialAsset shared refs alive while their texture GUIDs no longer resolve
+    // in RenderSystem.extract, so every material silently binds 1x1 fallbacks.
+    // A real reimport must invalidate its affected GUID explicitly at the asset
+    // mutation boundary, rather than treating this broad notification as a cache
+    // eviction command.
     const reg = gateway.doc.registry;
-    if (reg?.invalidateAll) reg.invalidateAll();
     if (reg?.refreshCatalog) {
       void reg.refreshCatalog().finally(() => {
         pendingCatalogRefires += 1;
@@ -260,7 +264,11 @@ export function installErrorOverlay(container: HTMLElement): () => void {
   const GRACE_MS = 500;
 
   const box = document.createElement('div');
-  box.style.cssText = 'position:absolute;top:8px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
+  // Keep the diagnostic panel below the viewport toolbar. WebGPU init failures
+  // are intentionally visible (and the smoke suite allows the expected driver
+  // noise), but an error banner beginning at top:8px sat on top of ▶ and made
+  // Play impossible to click on SwiftShader runners.
+  box.style.cssText = 'position:absolute;top:48px;left:8px;right:8px;max-height:45%;overflow:auto;z-index:99999;'
     + 'background:rgba(140,10,10,0.94);color:#fff;font:12px/1.45 ui-monospace,monospace;padding:10px 12px;'
     + 'border-radius:6px;white-space:pre-wrap;display:none;pointer-events:auto;box-shadow:0 2px 12px rgba(0,0,0,.5)';
   container.appendChild(box);

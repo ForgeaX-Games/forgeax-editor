@@ -53,7 +53,7 @@ import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
-import { installInterfaceBridge, setContextMenuRenderer } from '@forgeax/editor-core';
+import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension } from '@forgeax/editor/bridge';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -170,6 +170,7 @@ const STANDALONE_OVERRIDES = {
       panels: standalonePanels,
       surfaces: { SceneEditor: StandaloneSceneEditor },
     }),
+    createEditorPanelContributionsExtension(),
     standaloneEditorIntegrationExtension,
   ] as readonly AppExtension[],
 } as const;

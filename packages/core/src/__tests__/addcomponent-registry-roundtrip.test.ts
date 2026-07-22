@@ -109,8 +109,8 @@ describe('addComponent roundtrip: every REGISTRY component addable with defaultC
   // Transform is excluded because spawnEntity already adds it.
 
   // Physics components belong to the external physics package. Their global
-  // registration can be replaced by another test module, so their package owns
-  // the integration coverage; this core-only registry contract stays stable.
+  // registration may be replaced by another test module, so their package owns
+  // integration coverage; this core-only registry contract stays stable.
   const SKIP = new Set(['Transform', ...EXTERNAL_PACKAGE_COMPONENTS]);
   const engineComponents = getRegisteredComponents();
 
@@ -173,6 +173,8 @@ describe('addComponent roundtrip: every REGISTRY component addable with defaultC
 // ── addComponent + removeComponent roundtrip ──────────────────────────────────
 
 describe('addComponent + removeComponent roundtrip', () => {
+  // Keep this iteration deterministic when another test module has registered
+  // external physics components into the global ECS component registry.
   const SKIP = new Set(['Transform', ...EXTERNAL_PACKAGE_COMPONENTS]);
   const engineComponents = getRegisteredComponents();
 

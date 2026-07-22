@@ -28,6 +28,7 @@ import { foundationCommandsExtension } from './core/extensions/foundation-comman
 import { foundationBusExtension } from './core/extensions/foundation-bus';
 import { foundationStorageExtension } from './core/extensions/foundation-storage';
 import { builtinCommandsExtension } from './core/extensions/builtin-commands';
+import { panelsViewportExtension } from './core/extensions/panels-viewport';
 import { panelsChatExtension } from './core/extensions/panels-chat';
 import './core/extensions/session-client.d'; // side-effect: AppHost.session type augmentation
 import { sessionClientExtension } from './core/extensions/session-client';
@@ -111,6 +112,7 @@ export async function bootstrapAppHost(
     foundationBusExtension,
     foundationStorageExtension,
     builtinCommandsExtension,
+    panelsViewportExtension,
     panelsChatExtension,
     sessionClientExtension,
     workbenchClientExtension,
@@ -118,6 +120,22 @@ export async function bootstrapAppHost(
     trajectoryExtension,
     ...(overrides.extensions ?? []),
   ].map(wrap);
+
+  // Fail-fast(架构原则 §5):loader 按 id 去重是「先声明者胜」的静默行为,
+  // override 扩展若与内置清单撞 id 会被无声跳过(2026-07-21 studio
+  // 'panels.chat' 撞 panelsChatExtension,面板 Panel not mounted 的根因)。
+  // 这里显式告警,让撞车当场现形。
+  {
+    const seen = new Set<string>();
+    for (const m of manifests) {
+      if (seen.has(m.id)) {
+        consoleLogger.warn(
+          `[appHostBootstrap] duplicate extension id "${m.id}" — later declaration is silently SKIPPED by the loader; rename one side`,
+        );
+      }
+      seen.add(m.id);
+    }
+  }
 
   await loader.load(manifests);
   await loader.flush();

@@ -1,7 +1,7 @@
 // Thin re-export shell — implementation lives in
-// @forgeax-studio/extension-platform (ADR 0026).
-export { createCommandsRegistry } from '@forgeax-studio/extension-platform';
+// @forgeax/extension-platform (ADR 0026).
+export { createCommandsRegistry } from '@forgeax/extension-platform';
 export type {
   CommandDescriptor,
   CommandsRegistry,
-} from '@forgeax-studio/extension-platform';
+} from '@forgeax/extension-platform';

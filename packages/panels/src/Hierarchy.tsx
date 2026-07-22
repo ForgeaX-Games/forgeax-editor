@@ -1,4 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useSyncExternalStore, useState } from 'react';
+import {
+  Box,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Flag,
+  Folder,
+  Layers,
+  Sun,
+  Target,
+  Unlock,
+  User,
+  Video,
+  type LucideIcon,
+} from 'lucide-react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
@@ -11,9 +27,23 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelection, useSelectionList, useLastSelectionDomain } from '@forgeax/editor-core';
+import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelectionList } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
+import {
+  clearHierarchyFilters,
+  clearHierarchySearchQuery,
+  collapseHierarchyAll,
+  getHierarchyEntityType,
+  HIERARCHY_SCENE_FOLDER_ID,
+  expandHierarchyAll,
+  getHierarchyPanelSnapshot,
+  getHierarchyVisibleMatches,
+  hasHierarchyViewFilter,
+  subscribeHierarchyPanelState,
+  toggleHierarchyCollapsed,
+  type HierarchyColumns,
+} from './hierarchy-state';
 
 interface Menu {
   id: EntityHandle;
@@ -24,6 +54,48 @@ interface Menu {
 // in-app drag source — more reliable than DataTransfer.getData, which is in
 // "protected" mode (and empty) outside a real user drag.
 let draggingId: EntityHandle | null = null;
+
+const displayOrdinals = new Map<EntityHandle, number>();
+let nextDisplayOrdinal = 0;
+
+function stableDisplayOrder(ids: readonly EntityHandle[]): EntityHandle[] {
+  for (const id of ids) {
+    if (!displayOrdinals.has(id)) displayOrdinals.set(id, nextDisplayOrdinal++);
+  }
+  return [...ids].sort((a, b) => (displayOrdinals.get(a) ?? 0) - (displayOrdinals.get(b) ?? 0));
+}
+
+function pruneDisplayOrder(liveIds: readonly EntityHandle[]): void {
+  const live = new Set(liveIds);
+  for (const id of displayOrdinals.keys()) {
+    if (!live.has(id)) displayOrdinals.delete(id);
+  }
+  if (displayOrdinals.size === 0) nextDisplayOrdinal = 0;
+}
+
+function writeDisplayOrder(ids: readonly EntityHandle[]): void {
+  ids.forEach((id, index) => displayOrdinals.set(id, index));
+  nextDisplayOrdinal = Math.max(nextDisplayOrdinal, ids.length);
+}
+
+function currentRootDisplayOrder(): EntityHandle[] {
+  const world = gateway.activeWorld;
+  return world ? stableDisplayOrder(childrenOf(world, null)) : [];
+}
+
+function moveRootDisplayOrder(movedIds: readonly EntityHandle[], target: EntityHandle | null, pos: 'before' | 'after' | 'end'): void {
+  const moving = movedIds.filter((id, index) => movedIds.indexOf(id) === index);
+  if (moving.length === 0) return;
+  const movingSet = new Set(moving);
+  const order = currentRootDisplayOrder().filter((id) => !movingSet.has(id));
+  let insertAt = order.length;
+  if (target !== null && pos !== 'end') {
+    const targetIndex = order.indexOf(target);
+    if (targetIndex >= 0) insertAt = pos === 'before' ? targetIndex : targetIndex + 1;
+  }
+  order.splice(insertAt, 0, ...moving);
+  writeDisplayOrder(order);
+}
 
 // Where within a row the pointer is → the drop intent (P0-6). top/bottom quarter
 // = insert as a SIBLING before/after; middle = drop INSIDE (become a child).
@@ -45,6 +117,21 @@ function draggedIds(): EntityHandle[] {
   return sel.has(draggingId) ? [...sel] : [draggingId];
 }
 
+function collectEntitySubtree(ids: readonly EntityHandle[]): EntityHandle[] {
+  const world = gateway.activeWorld;
+  if (!world) return [];
+  const result: EntityHandle[] = [];
+  const seen = new Set<EntityHandle>();
+  const visit = (id: EntityHandle) => {
+    if (seen.has(id) || !entExists(world, id)) return;
+    seen.add(id);
+    result.push(id);
+    for (const child of childrenOf(world, id)) visit(child);
+  };
+  for (const id of ids) visit(id);
+  return result;
+}
+
 // Apply a drop of the dragged node(s) relative to `target` at position `pos`.
 // `pos` resolves the TARGET PARENT: 'inside' → become a child of `target`;
 // 'before'/'after' → become a SIBLING of `target` (i.e. under target's parent,
@@ -55,6 +142,7 @@ function applyDrop(target: EntityHandle, pos: DropPos): void {
   const ids = draggedIds();
   if (ids.length === 0) return;
   const parent = pos === 'inside' ? target : entParent(gateway.activeWorld, target);
+  if (parent === null) moveRootDisplayOrder(ids, target, pos === 'before' ? 'before' : pos === 'after' ? 'after' : 'end');
   if (ids.length > 1) {
     reparentMany(ids, parent);
     return;
@@ -68,10 +156,11 @@ function applyDrop(target: EntityHandle, pos: DropPos): void {
 let anchorId: EntityHandle | null = null;
 
 /** Walk the tree in display order, skipping collapsed subtrees. */
-function flatVisibleOrder(collapsed: Set<EntityHandle>): EntityHandle[] {
+function flatVisibleOrder(collapsed: ReadonlySet<EntityHandle>): EntityHandle[] {
   const result: EntityHandle[] = [];
   function walk(parentId: EntityHandle | null): void {
-    for (const id of childrenOf(gateway.activeWorld, parentId)) {
+    const ids = childrenOf(gateway.activeWorld, parentId);
+    for (const id of parentId === null ? stableDisplayOrder(ids) : ids) {
       result.push(id);
       if (!collapsed.has(id)) walk(id);
     }
@@ -80,7 +169,7 @@ function flatVisibleOrder(collapsed: Set<EntityHandle>): EntityHandle[] {
   return result;
 }
 
-function handleShiftClick(id: EntityHandle, collapsed: Set<EntityHandle>): void {
+function handleShiftClick(id: EntityHandle, collapsed: ReadonlySet<EntityHandle>): void {
   const anchor = anchorId ?? getSelection();
   if (anchor === null) {
     gateway.dispatch({ kind: 'setSelection', id });
@@ -101,24 +190,6 @@ function handleShiftClick(id: EntityHandle, collapsed: Set<EntityHandle>): void 
   gateway.dispatch({ kind: 'setSelectionMany', ids: range });
 }
 
-const COLLAPSE_KEY = 'forgeax:editor:hier-collapsed';
-function loadCollapsed(): Set<EntityHandle> {
-  try {
-    const raw = localStorage.getItem(COLLAPSE_KEY);
-    if (raw) return new Set(JSON.parse(raw) as EntityHandle[]);
-  } catch {
-    /* ignore corrupt persisted state */
-  }
-  return new Set();
-}
-function saveCollapsed(set: Set<EntityHandle>): void {
-  try {
-    localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set]));
-  } catch {
-    /* storage may be unavailable */
-  }
-}
-
 function highlightName(name: string, q: string) {
   if (!q) return name;
   const i = name.toLowerCase().indexOf(q.toLowerCase());
@@ -132,6 +203,63 @@ function highlightName(name: string, q: string) {
   );
 }
 
+function hierarchyTypeToken(id: string): string {
+  switch (id) {
+    case 'camera': return 'CAM';
+    case 'light': return 'LGT';
+    case 'character': return 'CHR';
+    case 'start': return 'STA';
+    case 'spawner': return 'SPN';
+    case 'mesh': return 'MSH';
+    case 'group': return 'GRP';
+    case 'folder': return 'FLD';
+    default: return 'ENT';
+  }
+}
+
+function hierarchyTypeIcon(id: string): LucideIcon {
+  switch (id) {
+    case 'camera': return Video;
+    case 'light': return Sun;
+    case 'character': return User;
+    case 'start': return Flag;
+    case 'spawner': return Target;
+    case 'group': return Layers;
+    case 'folder': return Folder;
+    default: return Box;
+  }
+}
+
+function hierarchyTypeI18nKey(id: string): string {
+  switch (id) {
+    case 'camera': return 'camera';
+    case 'light': return 'light';
+    case 'character': return 'character';
+    case 'start': return 'playerStart';
+    case 'spawner': return 'spawner';
+    case 'mesh': return 'staticMesh';
+    case 'group': return 'group';
+    case 'folder': return 'folder';
+    default: return 'entity';
+  }
+}
+
+function hierarchyMobilityKey(components: Record<string, unknown>): 'static' | 'movable' | 'stationary' | '' {
+  const explicit = Object.values(components)
+    .map((component) => {
+      if (typeof component !== 'object' || component === null) return undefined;
+      const value = (component as { mobility?: unknown; Mobility?: unknown }).mobility
+        ?? (component as { mobility?: unknown; Mobility?: unknown }).Mobility;
+      return typeof value === 'string' ? value : undefined;
+    })
+    .find(Boolean);
+  const normalized = explicit?.toLowerCase();
+  if (normalized === 'static' || normalized === 'movable' || normalized === 'stationary') return normalized;
+  if ('RigidBody' in components || 'Rigidbody' in components) return 'movable';
+  if ('Transform' in components) return 'static';
+  return '';
+}
+
 function Row({
   id,
   depth,
@@ -141,16 +269,19 @@ function Row({
   toggleCollapse,
   highlight,
   readOnly,
+  columns,
 }: {
   id: EntityHandle;
   depth: number;
   onMenu: (m: Menu) => void;
   flat?: boolean | undefined;
-  collapsed?: Set<EntityHandle> | undefined;
+  collapsed?: ReadonlySet<EntityHandle> | undefined;
   toggleCollapse?: ((id: EntityHandle) => void) | undefined;
   highlight?: string | undefined;
   readOnly?: boolean | undefined;
+  columns: HierarchyColumns;
 }) {
+  const { t } = useTranslation();
   const selList = useSelectionList();
   const hoverId = useHoverEntity();
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
@@ -167,7 +298,14 @@ function Row({
   const nodeName = entName(world, id);
   const nodeComponents = entComponents(world, id);
   const nodeHidden = 'EditorHidden' in nodeComponents;
-  const kids = flat ? [] : childrenOf(world, id);
+  const actualKids = childrenOf(world, id);
+  const kids = flat ? [] : actualKids;
+  const entityType = getHierarchyEntityType(world, id);
+  const typeLabel = t(`editor.hierarchy.types.${hierarchyTypeI18nKey(entityType.id)}`);
+  const typeToken = hierarchyTypeToken(entityType.id);
+  const mobilityKey = hierarchyMobilityKey(nodeComponents);
+  const mobilityLabel = mobilityKey ? t(`editor.hierarchy.mobility.${mobilityKey}`) : '';
+  const TypeIcon = hierarchyTypeIcon(entityType.id);
   const isCollapsed = collapsed?.has(id) ?? false;
   function commitRename(next: string) {
     setEditing(false);
@@ -177,8 +315,7 @@ function Row({
   return (
     <>
       <div
-        className={`tn${selList.has(id) ? ' sel' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
-        style={{ paddingLeft: 10 + depth * 14 }}
+        className={`tn k-${typeToken.toLowerCase()}${selList.has(id) ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}`}
         onMouseEnter={() => gateway.dispatch({ kind: 'setHoverEntity', id })}
@@ -234,62 +371,9 @@ function Row({
         }}
       >
         <span
-          className="dot"
-          data-testid={`hier-toggle-${id}`}
-          onClick={(e) => {
-            if (!kids.length) return;
-            e.stopPropagation();
-            toggleCollapse?.(id);
-          }}
-          style={kids.length ? { cursor: 'pointer' } : undefined}
-        >
-          {kids.length ? (isCollapsed ? '▸' : '▾') : '•'}
-        </span>
-        {editing ? (
-          <input
-            className="rename-input"
-            data-testid={`hier-rename-${id}`}
-            autoFocus
-            defaultValue={nodeName}
-            onFocus={(e) => e.target.select()}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitRename((e.target as HTMLInputElement).value);
-              else if (e.key === 'Escape') setEditing(false);
-            }}
-            onBlur={(e) => commitRename(e.target.value)}
-          />
-        ) : (
-          <span
-            style={nodeHidden ? { opacity: 0.45 } : undefined}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              if (!readOnly) setEditing(true);
-            }}
-          >
-            {highlight ? highlightName(nodeName, highlight) : nodeName}
-          </span>
-        )}
-        <span className="comp-badges" data-testid={`hier-badges-${id}`}>
-          {Object.keys(nodeComponents).map((c) => (
-            <span key={c} className="comp-badge" title={c}>
-              {c[0]}
-            </span>
-          ))}
-        </span>
-        {kids.length > 0 && (
-          <span
-            className="child-count"
-            data-testid={`hier-count-${id}`}
-            title={`${kids.length} child node(s)`}
-          >
-            {kids.length}
-          </span>
-        )}
-        <span
-          className="vis"
+          className={`eye${nodeHidden ? ' off' : ''}`}
           data-testid={`hier-vis-${id}`}
-          title={nodeHidden ? 'show in viewport' : 'hide in viewport'}
+          title={nodeHidden ? t('editor.hierarchy.menu.showInViewport') : t('editor.hierarchy.menu.hideInViewport')}
           onClick={(e) => {
             e.stopPropagation();
             if (readOnly) return;
@@ -304,40 +388,77 @@ function Row({
             }
           }}
         >
-          {nodeHidden ? '⊘' : '◉'}
+          {nodeHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
         </span>
+        <span className="lock" title={t('editor.hierarchy.menu.lockUnavailable')} aria-disabled="true">
+          <Unlock size={12} aria-hidden="true" />
+        </span>
+        <span className="name-cell" style={{ paddingLeft: depth * 15 }}>
+          <span
+            className="caret"
+            data-testid={`hier-toggle-${id}`}
+            onClick={(e) => {
+              if (!kids.length) return;
+              e.stopPropagation();
+              toggleCollapse?.(id);
+            }}
+            style={kids.length ? { cursor: 'pointer' } : undefined}
+          >
+            {kids.length ? (
+              isCollapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />
+            ) : <span className="leafdot" />}
+          </span>
+          <span className="ico" aria-hidden="true">
+            <TypeIcon size={15} />
+          </span>
+          {editing ? (
+            <input
+              className="rename-input"
+              data-testid={`hier-rename-${id}`}
+              autoFocus
+              defaultValue={nodeName}
+              onFocus={(e) => e.target.select()}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename((e.target as HTMLInputElement).value);
+                else if (e.key === 'Escape') setEditing(false);
+              }}
+              onBlur={(e) => commitRename(e.target.value)}
+            />
+          ) : (
+            <span
+              className="nm"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (!readOnly) setEditing(true);
+              }}
+            >
+              {highlight ? highlightName(nodeName, highlight) : nodeName}
+            </span>
+          )}
+          {kids.length > 0 && (
+            <span
+              className="cbadge"
+              data-testid={`hier-count-${id}`}
+              title={t('editor.hierarchy.childCount', { count: kids.length })}
+            >
+              {kids.length}
+            </span>
+          )}
+        </span>
+        {columns.type && (
+          <span className="cell type col-type">
+            {entityType.id === 'group' ? <span className="kind">{typeLabel}</span> : typeLabel}
+          </span>
+        )}
+        {columns.mobility && <span className={`cell mob col-mob mob-${mobilityKey || 'none'}`}>{mobilityLabel}</span>}
+        {columns.id && <span className="cell id col-id" title={`Entity #${id}`}>{id}</span>}
       </div>
       {!isCollapsed &&
         kids.map((k) => (
-          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} />
+          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} />
         ))}
     </>
-  );
-}
-
-// T5-1 / C4-4: a small scope indicator that lights when the panel's selection
-// domain is the current Delete-jurisdiction domain. Pure visual clue — the
-// routing decision itself lives in the keyboard router (interface submodule).
-function DeleteScopeRing({ active, domain }: { active: boolean; domain: 'entity' | 'asset' }) {
-  const other = domain === 'entity' ? 'Content Browser 资产' : 'Hierarchy 实体';
-  const here = domain === 'entity' ? 'Hierarchy 实体' : 'Content Browser 资产';
-  return (
-    <span
-      data-testid="delete-scope-ring"
-      data-domain={domain}
-      data-active={active}
-      title={active ? `Delete 键当前管辖：${here}` : `Delete 键当前管辖：${other}`}
-      style={{
-        display: 'inline-block',
-        width: 9,
-        height: 9,
-        borderRadius: '50%',
-        border: `2px solid ${active ? '#4ade80' : '#555'}`,
-        background: active ? '#4ade80' : 'transparent',
-        boxShadow: active ? '0 0 6px 1px #4ade80' : 'none',
-        transition: 'all .15s ease',
-      }}
-    />
   );
 }
 
@@ -346,13 +467,14 @@ function DeleteScopeRing({ active, domain }: { active: boolean; domain: 'entity'
 // nodes — the reliable path when the tree is full and there is no reachable
 // empty area to drop into. Highlights only while a drag is in progress.
 function RootDropBar({ readOnly }: { readOnly: boolean }) {
+  const { t } = useTranslation();
   const [over, setOver] = useState(false);
   if (readOnly) return null;
   return (
     <div
       className={`hier-root-bar${over ? ' over' : ''}`}
       data-testid="hier-root-bar"
-      title="拖到这里：移动到根层"
+      title={t('editor.hierarchy.menu.moveToRoot')}
       onDragOver={(e) => {
         if (draggingId === null) return;
         e.preventDefault();
@@ -365,24 +487,142 @@ function RootDropBar({ readOnly }: { readOnly: boolean }) {
         e.stopPropagation();
         setOver(false);
         const ids = draggedIds();
+        moveRootDisplayOrder(ids, null, 'end');
         if (ids.length > 1) reparentMany(ids, null);
         else if (ids[0] !== undefined) reparent(ids[0], null);
         draggingId = null;
       }}
     >
-      — Root —
     </div>
+  );
+}
+
+function SceneFolderRow({
+  childrenIds,
+  visibilityIds,
+  filtered,
+  highlight,
+  onMenu,
+  onBlankMenu,
+  collapsed,
+  toggleCollapse,
+  readOnly,
+  columns,
+}: {
+  childrenIds: readonly EntityHandle[];
+  visibilityIds?: readonly EntityHandle[] | undefined;
+  filtered?: boolean | undefined;
+  highlight?: string | undefined;
+  onMenu: (m: Menu) => void;
+  onBlankMenu: (x: number, y: number) => void;
+  collapsed: ReadonlySet<EntityHandle>;
+  toggleCollapse: (id: EntityHandle) => void;
+  readOnly: boolean;
+  columns: HierarchyColumns;
+}) {
+  const { t } = useTranslation();
+  const [dropPos, setDropPos] = useState<DropPos | null>(null);
+  const isCollapsed = !filtered && collapsed.has(HIERARCHY_SCENE_FOLDER_ID);
+  const sceneLabel = t('editor.hierarchy.sceneRoot');
+  const folderTypeLabel = t('editor.hierarchy.types.folder');
+  const visibilityTargets = collectEntitySubtree(visibilityIds ?? childrenIds);
+  const folderHidden = visibilityTargets.length > 0
+    && visibilityTargets.every((id) => entComponent(gateway.activeWorld, id, 'EditorHidden').ok);
+  const setFolderHidden = (hidden: boolean) => {
+    if (readOnly) return;
+    for (const id of visibilityTargets) {
+      const currentlyHidden = entComponent(gateway.activeWorld, id, 'EditorHidden').ok;
+      if (currentlyHidden !== hidden) gateway.dispatch({ kind: 'setHidden', entity: id, hidden });
+    }
+  };
+  return (
+    <>
+      <div
+        className={`tn k-folder${folderHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}`}
+        data-testid="hier-row-scene-folder"
+        title={sceneLabel}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!filtered) toggleCollapse(HIERARCHY_SCENE_FOLDER_ID);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onBlankMenu(e.clientX, e.clientY);
+        }}
+        onDragOver={(e) => {
+          if (draggingId === null || readOnly) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          if (dropPos !== 'inside') setDropPos('inside');
+        }}
+        onDragLeave={() => setDropPos(null)}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDropPos(null);
+          if (draggingId !== null && !readOnly) {
+            const ids = draggedIds();
+            moveRootDisplayOrder(ids, null, 'end');
+            if (ids.length > 1) reparentMany(ids, null);
+            else if (ids[0] !== undefined) reparent(ids[0], null);
+          }
+          draggingId = null;
+        }}
+      >
+        <span
+          className={`eye${folderHidden ? ' off' : ''}`}
+          data-testid="hier-vis-scene-folder"
+          title={folderHidden ? t('editor.hierarchy.menu.showFolderContents') : t('editor.hierarchy.menu.hideFolderContents')}
+          onClick={(e) => {
+            e.stopPropagation();
+            setFolderHidden(!folderHidden);
+          }}
+        >
+          {folderHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
+        </span>
+        <span className="lock" title={t('editor.hierarchy.menu.folderDisplayOnly')}>
+          <Unlock size={12} aria-hidden="true" />
+        </span>
+        <span className="name-cell">
+          <span className="caret" data-testid="hier-toggle-scene-folder">
+            {isCollapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+          </span>
+          <span className="ico" aria-hidden="true">
+            <Folder size={15} />
+          </span>
+          <span className="nm">{sceneLabel}</span>
+        </span>
+        {columns.type && <span className="cell type col-type"><span className="kind">{folderTypeLabel}</span></span>}
+        {columns.mobility && <span className="cell mob col-mob" />}
+        {columns.id && <span className="cell id col-id" />}
+      </div>
+      {!isCollapsed && childrenIds.map((id) => (
+        <Row
+          key={id}
+          id={id}
+          depth={1}
+          onMenu={onMenu}
+          flat={filtered}
+          collapsed={collapsed}
+          toggleCollapse={toggleCollapse}
+          highlight={highlight}
+          readOnly={readOnly}
+          columns={columns}
+        />
+      ))}
+    </>
   );
 }
 
 export function HierarchyPanel() {
   const { t } = useTranslation();
   useDocVersion();
-  const sel = useSelection();
-  const selList = useSelectionList();
-  // T5-1 / C4-4: show the current Delete-jurisdiction domain as a visual
-  // clue (no implicit rule). Lights when this panel's domain (entity) is active.
-  const delDomain = useLastSelectionDomain();
+  const view = useSyncExternalStore(
+    subscribeHierarchyPanelState,
+    getHierarchyPanelSnapshot,
+    getHierarchyPanelSnapshot,
+  );
   // Play mode makes the active world a read-only simulation view: document ops
   // are rejected at the gateway (`edit-rejected-in-play`). Disable the editing
   // controls so they don't silently no-op (P0-4). enterPlay/exitPlay emit, so
@@ -390,17 +630,65 @@ export function HierarchyPanel() {
   const readOnly = gateway.mode === 'play';
   const activeWorld = gateway.activeWorld;
   const worldReady = activeWorld != null;
-  const roots = worldReady ? childrenOf(activeWorld, null) : [];
-  const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<EntityHandle>>(loadCollapsed);
-  const toggleCollapse = (id: EntityHandle) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      saveCollapsed(next);
-      return next;
+  if (worldReady) pruneDisplayOrder(worldEntityHandles(activeWorld));
+  const roots = worldReady ? stableDisplayOrder(childrenOf(activeWorld, null)) : [];
+  const collapsed = view.collapsed;
+  const toggleCollapse = (id: EntityHandle) => toggleHierarchyCollapsed(id);
+  const spawnEntity = () => {
+    if (readOnly) return;
+    gateway.dispatch({
+      kind: 'spawnEntity',
+      name: 'Entity',
+      parent: getSelection(),
+      components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
     });
+  };
+  const spawnPreset = (label: string) => {
+    if (readOnly) return;
+    const preset = getPreset(label);
+    if (!preset) return;
+    gateway.dispatch({
+      kind: 'spawnEntity',
+      name: preset.label,
+      parent: getSelection(),
+      components: buildPresetComponents(preset),
+    });
+  };
+  const selectAll = () => {
+    if (!gateway.activeWorld) return;
+    gateway.dispatch({ kind: 'setSelectionMany', ids: worldEntityHandles(gateway.activeWorld) });
+  };
+  const showAll = () => {
+    if (!gateway.activeWorld || readOnly) return;
+    for (const id of worldEntityHandles(gateway.activeWorld)) {
+      if (entComponent(gateway.activeWorld, id, 'EditorHidden').ok) {
+        gateway.dispatch({ kind: 'setHidden', entity: id, hidden: false });
+      }
+    }
+  };
+  const clearViewFilters = () => {
+    clearHierarchySearchQuery();
+    clearHierarchyFilters();
+  };
+  const focusSelectionInViewport = () => {
+    if (getSelection() !== null) gateway.dispatch({ kind: 'requestFrame' });
+  };
+  const createMenuItems = (): MenuItemDef[] => [
+    { label: t('editor.hierarchy.menu.createEntity'), icon: 'file-plus', onClick: spawnEntity, disabled: readOnly },
+    ...ENTITY_PRESETS.map((preset) => ({
+      label: t('editor.hierarchy.menu.createPreset', { label: preset.label }),
+      icon: 'box',
+      onClick: () => spawnPreset(preset.label),
+      disabled: readOnly,
+    })),
+    { label: t('editor.hierarchy.menu.newFolder'), icon: 'folder-plus', disabled: true },
+    {
+      label: t('editor.hierarchy.menu.newGroup'),
+      icon: 'layers',
+      onClick: () => groupSelected([...getSelectionList()]),
+      disabled: readOnly || getSelectionList().size < 2,
+    },
+  ];
   // Build the right-click menu items and hand them to the shared service, which
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
@@ -411,40 +699,60 @@ export function HierarchyPanel() {
     const snapshot = [...getSelectionList()];
     const multi = snapshot.length > 1;
     const items: MenuItemDef[] = [];
+    items.push({ label: t('editor.hierarchy.menu.create'), icon: 'folder-plus', children: createMenuItems() });
+    items.push({ sep: true });
     if (multi) {
-      items.push({ label: t('editor.hierarchy.menu.group', { n: snapshot.length }), onClick: () => groupSelected(snapshot) });
-      items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), onClick: () => deleteManyCascade(snapshot) });
+      items.push({ label: t('editor.hierarchy.menu.group', { n: snapshot.length }), icon: 'layers', onClick: () => groupSelected(snapshot) });
+      items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), icon: 'trash-2', onClick: () => deleteManyCascade(snapshot) });
       items.push({ sep: true });
     }
-    items.push({ label: t('editor.hierarchy.menu.duplicate'), onClick: () => duplicateEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.copyJson'), onClick: () => { if (entExists(gateway.activeWorld, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }, null, 2)); } });
-    items.push({ label: t('editor.hierarchy.menu.refToChat'), onClick: () => requestRefEntity(m.id) });
-    if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), onClick: () => ungroupEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.delete'), danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
+    items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => gateway.dispatch({ kind: 'requestRename', entity: m.id }), disabled: readOnly });
+    items.push({ label: t('editor.hierarchy.menu.duplicate'), icon: 'copy', shortcut: 'Ctrl+D', onClick: () => duplicateEntity(m.id) });
+    items.push({ label: t('editor.hierarchy.menu.copyJson'), icon: 'braces', onClick: () => { if (entExists(gateway.activeWorld, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }, null, 2)); } });
+    items.push({ label: t('editor.hierarchy.menu.refToChat'), icon: 'spark', forge: true, shortcut: 'Ctrl+K', onClick: () => requestRefEntity(m.id) });
+    if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), icon: 'layers', onClick: () => ungroupEntity(m.id) });
+    const hidden = entComponent(gateway.activeWorld, m.id, 'EditorHidden').ok;
+    items.push({ sep: true });
+    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', onClick: () => gateway.dispatch({ kind: 'setHidden', entity: m.id, hidden: !hidden }), disabled: readOnly });
+    items.push({ label: t('editor.hierarchy.menu.focusViewport'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport });
+    items.push({ label: t('editor.hierarchy.menu.lock'), icon: 'shield-check', disabled: true });
+    items.push({ label: t('editor.hierarchy.menu.moveTo'), icon: 'folder', disabled: true });
+    items.push({ sep: true });
+    items.push({ label: t('editor.hierarchy.menu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
     showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
   };
-  const q = query.trim().toLowerCase();
+  const openBlankMenu = (x: number, y: number) => {
+    const items: MenuItemDef[] = [
+      { label: t('editor.hierarchy.menu.create'), icon: 'folder-plus', children: createMenuItems() },
+      { sep: true },
+      { label: t('editor.hierarchy.menu.paste'), icon: 'copy', shortcut: 'Ctrl+V', disabled: true },
+      { label: t('editor.hierarchy.menu.selectAll'), icon: 'box-select', shortcut: 'Ctrl+A', onClick: selectAll },
+      { label: t('editor.hierarchy.menu.deselect'), icon: 'crosshair', onClick: () => gateway.dispatch({ kind: 'setSelection', id: null }) },
+      { sep: true },
+      { label: t('editor.hierarchy.menu.expandAll'), icon: 'chevrons-up-down', onClick: expandHierarchyAll },
+      { label: t('editor.hierarchy.menu.collapseAll'), icon: 'chevrons-down-up', onClick: collapseHierarchyAll },
+      { label: t('editor.hierarchy.menu.clearSearchFilters'), icon: 'folder-search', onClick: clearViewFilters, disabled: !hasHierarchyViewFilter() },
+      { sep: true },
+      { label: t('editor.hierarchy.menu.showAll'), icon: 'eye', onClick: showAll, disabled: readOnly },
+      { label: t('editor.hierarchy.menu.focusSelection'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport, disabled: getSelection() === null },
+      { label: t('editor.hierarchy.menu.refreshOutliner'), icon: 'refresh-cw', disabled: true },
+    ];
+    showContextMenu({ clientX: x, clientY: y, preventDefault: () => {} }, items);
+  };
   // When filtering, flatten to all entities whose NAME or any COMPONENT name
   // matches (tree semantics dropped so deep matches surface immediately). Matching
   // by component lets a human/AI find entities by capability, e.g. "light".
   // M7 / AC-15: entity list + name/components come from world (SSOT) via
   // entity-state; doc.order/doc.entities deleted.
-  const matches = q && worldReady
-    ? worldEntityHandles(activeWorld).filter((id) => {
-        return entName(activeWorld, id).toLowerCase().includes(q) || Object.keys(entComponents(activeWorld, id)).some((c) => c.toLowerCase().includes(q));
-      })
-    : [];
+  const filtering = hasHierarchyViewFilter();
+  const matches = filtering && worldReady ? stableDisplayOrder(getHierarchyVisibleMatches()) : [];
 
   // Cross-game switch gap: show a quiet placeholder until createApp reinjects doc.world.
   if (!worldReady) {
     return (
-      <div className="panel" data-testid="panel-hierarchy" data-world-gap="1" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <h3 style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-          Hierarchy
-          <DeleteScopeRing active={delDomain === 'entity'} domain="entity" />
-        </h3>
+      <div className="panel outliner-panel" data-testid="panel-hierarchy" data-world-gap="1" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div className="muted" data-testid="hier-world-gap" style={{ padding: '12px 10px' }}>
-          Switching game…
+          {t('editor.hierarchy.switchingGame')}
         </div>
       </div>
     );
@@ -452,7 +760,7 @@ export function HierarchyPanel() {
 
   return (
     <div
-      className="panel"
+      className="panel outliner-panel"
       data-testid="panel-hierarchy"
       style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       // Step 1 (keyboard-router convergence): wire Delete / Backspace on the panel
@@ -473,96 +781,46 @@ export function HierarchyPanel() {
         else deleteEntity(cur[0]!);
       }}
     >
-      <h3 style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-        Hierarchy
-        <DeleteScopeRing active={delDomain === 'entity'} domain="entity" />
-      </h3>
-      <div style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', flexShrink: 0 }}>
-        <button
-          type="button"
-          className="tbtn"
-          data-testid="btn-add-entity"
-          disabled={readOnly}
-          onClick={() => gateway.dispatch({ kind: 'spawnEntity', name: 'Entity', parent: sel, components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } } })}
-        >
-          + Entity
-        </button>
-        <select
-          className="sel"
-          data-testid="add-preset-select"
-          value=""
-          disabled={readOnly}
-          title="create a typed entity from a schema-default preset (Light / Camera / …)"
-          onChange={(e) => {
-            const preset = getPreset(e.target.value);
-            if (preset) gateway.dispatch({ kind: 'spawnEntity', name: preset.label, parent: sel, components: buildPresetComponents(preset) });
-            e.currentTarget.value = '';
-          }}
-        >
-          <option value="">+ preset…</option>
-          {ENTITY_PRESETS.map((p) => (
-            <option key={p.label} value={p.label} data-testid={`add-preset-opt-${p.label}`}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="tbtn" data-testid="btn-duplicate" disabled={readOnly || sel === null} onClick={() => sel !== null && duplicateEntity(sel)}>
-          Duplicate
-        </button>
-        <button type="button" className="tbtn" data-testid="btn-group" disabled={readOnly || selList.size < 2} onClick={() => groupSelected([...getSelectionList()])} title="Group selected under a new parent (Ctrl+G)">
-          Group
-        </button>
-        <button
-          type="button"
-          className="tbtn"
-          data-testid="btn-collapse-all"
-          title="collapse / expand all parent nodes"
-          onClick={() => {
-            const parents = worldEntityHandles(gateway.activeWorld).filter((id) => childrenOf(gateway.activeWorld, id).length > 0);
-            const allCollapsed = parents.length > 0 && parents.every((id) => collapsed.has(id));
-            const next = allCollapsed ? new Set<EntityHandle>() : new Set(parents);
-            setCollapsed(next);
-            saveCollapsed(next);
-          }}
-        >
-          ⊟/⊞
-        </button>
-        <button
-          type="button"
-          className="tbtn"
-          data-testid="btn-delete"
-          disabled={readOnly || sel === null}
-          onClick={() => {
-            const cur = [...getSelectionList()];
-            if (cur.length > 1) deleteManyCascade(cur);
-            else if (sel !== null) deleteEntity(sel);
-          }}
-        >
-          Delete
-        </button>
+      <div className="ol-colhead" data-testid="hier-colhead">
+        <span className="ch-eye" />
+        <span className="ch-lock" />
+        <span className="ch-name sortable">{t('editor.hierarchy.columns.name')}</span>
+        {view.columns.type && <span className="ch-type sortable col-type">{t('editor.hierarchy.columns.type')}</span>}
+        {view.columns.mobility && <span className="ch-mob sortable col-mob">{t('editor.hierarchy.columns.mobilityShort')}</span>}
+        {view.columns.id && <span className="ch-id sortable col-id">{t('editor.hierarchy.columns.id')}</span>}
       </div>
-      <div style={{ padding: '0 10px 6px', flexShrink: 0 }}>
-        <input
-          className="hier-filter"
-          data-testid="hier-filter"
-          placeholder="filter by name…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </div>
-      {q ? (
-        <div className="tree" data-testid="hier-filtered" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      {filtering ? (
+        <div
+          className="ol-body"
+          data-testid="hier-filtered"
+          style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+          onContextMenu={(e) => {
+            if ((e.target as HTMLElement).closest('.tn')) return;
+            openBlankMenu(e.clientX, e.clientY);
+          }}
+        >
           {matches.length === 0 ? (
             <div className="muted" style={{ padding: '4px 10px' }} data-testid="hier-no-match">
-              no match
+              {t('editor.hierarchy.noMatch')}
             </div>
           ) : (
-            matches.map((id) => <Row key={id} id={id} depth={0} onMenu={openMenu} flat highlight={query.trim()} readOnly={readOnly} />)
+            <SceneFolderRow
+              childrenIds={matches}
+              visibilityIds={roots}
+              filtered
+              highlight={view.searchQuery.trim()}
+              onMenu={openMenu}
+              onBlankMenu={openBlankMenu}
+              collapsed={collapsed}
+              toggleCollapse={toggleCollapse}
+              readOnly={readOnly}
+              columns={view.columns}
+            />
           )}
         </div>
       ) : (
         <div
-          className="tree"
+          className="ol-body"
           data-testid="hier-root-dropzone"
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
           onDragOver={(e) => {
@@ -573,16 +831,28 @@ export function HierarchyPanel() {
             // Empty area below the rows = move to root (parent = null).
             if (draggingId !== null && !readOnly) {
               const ids = draggedIds();
+              moveRootDisplayOrder(ids, null, 'end');
               if (ids.length > 1) reparentMany(ids, null);
               else if (ids[0] !== undefined) reparent(ids[0], null);
             }
             draggingId = null;
           }}
+          onContextMenu={(e) => {
+            if ((e.target as HTMLElement).closest('.tn')) return;
+            openBlankMenu(e.clientX, e.clientY);
+          }}
         >
           <RootDropBar readOnly={readOnly} />
-          {roots.map((id) => (
-            <Row key={id} id={id} depth={0} onMenu={openMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} />
-          ))}
+          <SceneFolderRow
+            childrenIds={roots}
+            visibilityIds={roots}
+            onMenu={openMenu}
+            onBlankMenu={openBlankMenu}
+            collapsed={collapsed}
+            toggleCollapse={toggleCollapse}
+            readOnly={readOnly}
+            columns={view.columns}
+          />
         </div>
       )}
     </div>

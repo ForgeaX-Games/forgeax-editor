@@ -10,6 +10,11 @@
   --pink: #ff6db8;
   --accent: #6cf;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --w-eye: 22px;
+  --w-lock: 22px;
+  --w-type: 80px;
+  --w-mob: 64px;
+  --w-id: 38px;
 }
 
 * { box-sizing: border-box; }
@@ -48,13 +53,34 @@
   letter-spacing: 0.06em; color: var(--fg3); border-bottom: 1px solid var(--line);
   font-family: var(--mono); position: sticky; top: 0; background: var(--bg1); z-index: 1;
 }
-.tree { padding: 4px 0; }
-.tn {
-  display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer;
-  white-space: nowrap;
+.outliner-panel { container-type: inline-size; container-name: olpanel; }
+@container olpanel (max-width: 272px) { .col-mob { display: none !important; } }
+@container olpanel (max-width: 232px) { .col-type { display: none !important; } }
+.ol-colhead {
+  display: flex; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--line);
+  font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--fg3); user-select: none; flex: 0 0 auto;
 }
-.tn:hover { background: var(--bg2); }
-.tn.sel { background: rgba(212, 255, 72, 0.16); color: var(--fg); }
+.ch-eye { width: var(--w-eye); flex: 0 0 auto; display: grid; place-items: center; }
+.ch-lock { width: var(--w-lock); flex: 0 0 auto; display: grid; place-items: center; }
+.ch-name { flex: 1 1 auto; min-width: 24px; }
+.ch-type { width: var(--w-type); flex: 0 0 auto; }
+.ch-mob { width: var(--w-mob); flex: 0 0 auto; }
+.ch-id { width: var(--w-id); flex: 0 0 auto; text-align: right; }
+.ol-colhead .sortable { cursor: default; }
+.ol-colhead .sortable:hover { color: var(--fg2); }
+.ol-body { padding: 4px 0 8px; overflow: auto; flex: 1 1 auto; min-height: 0; }
+.tn {
+  display: flex; align-items: center; padding: 3px 10px; white-space: nowrap; cursor: default;
+  user-select: none; font-size: 12.5px; border-left: 2px solid transparent;
+}
+.tn:hover { background: rgba(255, 255, 255, 0.03); }
+.tn.sel {
+  padding: 3px 10px; border-top: 0; border-right: 0; border-bottom: 0; border-left: 2px solid var(--lime);
+  border-radius: 0; background: rgba(212, 255, 72, 0.14); color: var(--fg); font-size: 12.5px;
+}
+.tn.sel .nm { color: var(--fg); }
+.tn.dim .nm, .tn.dim .ico, .tn.dim .cell { opacity: 0.42; }
 .tn.drop { box-shadow: inset 0 0 0 1px var(--lime); background: rgba(212, 255, 72, 0.08); }
 /* Sibling insertion indicators (P0-6): a lime line at the top/bottom edge shows
    the dragged node will land before/after this row rather than inside it. */
@@ -63,16 +89,43 @@
 .tn.hov { background: rgba(212, 255, 72, 0.08); }
 /* "Move to root" drop bar (P0-5) — a slim, always-present target at the tree top. */
 .hier-root-bar {
-  margin: 2px 8px 4px; padding: 2px 8px; font-family: var(--mono); font-size: 10px;
-  color: var(--fg3); text-align: center; border: 1px dashed var(--line); border-radius: 4px;
-  user-select: none;
+  height: 4px; margin: 0 8px 2px; border-radius: 2px; user-select: none;
 }
-.hier-root-bar.over { color: var(--fg); border-color: var(--lime); background: rgba(212, 255, 72, 0.1); }
-.tn .dot { color: var(--fg3); }
-.tn .vis { margin-left: auto; color: var(--fg3); font-size: 11px; padding: 0 2px; }
-.tn .vis:hover { color: var(--lime); }
-.comp-badges { display: inline-flex; gap: 2px; margin-left: 6px; }
-.comp-badge { font-size: 9px; line-height: 13px; min-width: 13px; text-align: center; color: var(--fg3); background: var(--bg2); border: 1px solid var(--line); border-radius: 2px; font-family: var(--mono); }
+.hier-root-bar.over { background: rgba(212, 255, 72, 0.24); box-shadow: inset 0 0 0 1px var(--lime); }
+.tn .eye, .tn .lock {
+  display: grid; place-items: center; cursor: pointer; flex: 0 0 auto; color: var(--fg3);
+  opacity: 0.55; transition: opacity 100ms, color 100ms; font-size: 10px; line-height: 1;
+}
+.tn .eye { width: var(--w-eye); }
+.tn .lock { width: var(--w-lock); cursor: default; }
+.tn:hover .eye, .tn:hover .lock { opacity: 0.85; }
+.tn .eye:hover { color: var(--fg); opacity: 1; }
+.tn .eye.off { opacity: 0.85; color: var(--fg2); }
+.name-cell { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.tn .caret { width: 14px; display: grid; place-items: center; color: var(--fg3); cursor: pointer; flex: 0 0 auto; }
+.tn .caret .leafdot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+.tn .ico {
+  width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 auto;
+  color: var(--fg3);
+}
+.tn .ico svg { width: 15px; height: 15px; stroke-width: 1.7; }
+.tn .nm { overflow: hidden; text-overflow: ellipsis; }
+.tn.k-folder:not(.dim) .nm,
+.tn.k-grp:not(.dim) .nm { opacity: 0.6; }
+.tn .nm mark.hl { background: rgba(212, 255, 72, 0.28); color: var(--fg); border-radius: 2px; padding: 0 1px; }
+.tn .cbadge {
+  margin-left: 6px; font-family: var(--mono); font-size: 9px; color: var(--fg3); background: var(--bg2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; flex: 0 0 auto;
+}
+.cell {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 10px; color: var(--fg3);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.cell.type { width: var(--w-type); }
+.cell.type .kind { color: var(--fg2); }
+.cell.mob { width: var(--w-mob); }
+.cell.id { width: var(--w-id); text-align: right; }
+.mob-Static, .mob-Movable, .mob-Stationary { color: var(--fg3); }
 mark.hl { background: var(--lime); color: var(--bg0); border-radius: 2px; padding: 0 1px; }
 .range-hint { margin-left: 4px; font-size: 9px; color: var(--fg3); font-family: var(--mono); }
 .asset-dot { margin-left: 4px; font-size: 10px; color: var(--fg3); }
@@ -85,7 +138,6 @@ mark.hl { background: var(--lime); color: var(--bg0); border-radius: 2px; paddin
 .vec3-row .vec3-y label { color: #98c379; }
 .vec3-row .vec3-z label { color: #61afef; }
 .vec3-row .vec3-cell input[type='number'] { max-width: none; width: 100%; min-width: 0; }
-.child-count { margin-left: 6px; font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px; text-align: center; color: var(--fg3); background: transparent; border: 1px solid var(--line); border-radius: 7px; font-family: var(--mono); }
 .hier-filter { width: 100%; box-sizing: border-box; background: var(--bg0); border: 1px solid var(--line); color: var(--fg); border-radius: 4px; padding: 3px 6px; font-size: 11px; }
 .rename-input { flex: 1; min-width: 0; background: var(--bg0); border: 1px solid var(--lime); color: var(--fg); border-radius: 3px; padding: 0 4px; font-size: 12px; font: inherit; }
 .insp-source { display: flex; gap: 8px; align-items: center; padding: 0 10px 8px; }

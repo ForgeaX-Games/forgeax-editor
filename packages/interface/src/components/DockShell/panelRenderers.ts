@@ -60,6 +60,19 @@ export interface ExtensionPort {
   close(): void;
 }
 
+export interface EditorContextMenuItem {
+  label?: string;
+  title?: string;
+  icon?: string;
+  shortcut?: string;
+  forge?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  sep?: boolean;
+  children?: EditorContextMenuItem[];
+}
+
 export interface CreateExtensionPortOptions {
   extensionId: string;
   transport: ExtensionTransport;
@@ -121,6 +134,11 @@ export interface PanelDescriptor {
   content?: PanelContentDefinition;
   /** Optional panel-scoped actions; normalized together with contributed actions. */
   actions?: readonly PanelActionContribution[];
+  /** Dockview chrome behavior hints. DockRegion owns interpretation. */
+  dockChrome?: {
+    /** How to render this panel's dock tab when it is the only tab in its group. */
+    singleTab?: 'default' | 'full' | 'hideTitle';
+  };
   /** Panel body renderer. */
   render: () => ReactNode;
 }
@@ -178,17 +196,7 @@ export interface PanelRenderers {
     setContextMenuRenderer?: (renderer: (menu: {
       x: number;
       y: number;
-      items: Array<{
-        label?: string;
-        title?: string;
-        icon?: string;
-        shortcut?: string;
-        forge?: boolean;
-        onClick?: () => void;
-        disabled?: boolean;
-        danger?: boolean;
-        sep?: boolean;
-      }>;
+      items: EditorContextMenuItem[];
     } | null) => void) => () => void;
     installBridge?: (handlers: {
       onEditorHealth(entry: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number }): void;

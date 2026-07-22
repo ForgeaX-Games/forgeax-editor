@@ -98,6 +98,16 @@
   pointer-events: none;
 }
 
+.fx-panel-tooltip-trigger {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.fx-panel-tooltip-trigger:has(.fx-panel-action:disabled) .fx-panel-action {
+  pointer-events: none;
+}
+
 .fx-panel-control-field {
   appearance: none;
   height: 26px;
@@ -237,6 +247,13 @@
   background: rgba(212, 255, 72, 0.08);
   border-color: rgba(212, 255, 72, 0.4);
   box-shadow: none;
+}
+
+.fx-panel-action[data-active="true"]:hover:not(:disabled),
+.fx-panel-action[data-highlight="true"]:hover:not(:disabled) {
+  color: var(--primary);
+  background: rgba(212, 255, 72, 0.14);
+  border-color: rgba(212, 255, 72, 0.55);
 }
 
 .fx-panel-action-label {

@@ -65,6 +65,57 @@
 .fx-dockshell .dv-default-tab { padding: 0 10px; }
 .fx-dockshell .content-container { inset: 0; }
 
+/* Declarative single-tab strategies. Dockview owns tab counting and adds
+   `.dv-single-tab`; panel descriptors only declare the preferred presentation. */
+.fx-dockshell
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="hideTitle"])
+  > .dv-tabs-and-actions-container.dv-single-tab,
+.fx-dockshell
+  .groupview:has(.fx-panel[data-dock-single-tab="hideTitle"])
+  > .dv-tabs-and-actions-container.dv-single-tab {
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0;
+  border: 0;
+  pointer-events: none;
+}
+
+.fx-dockshell
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-scrollable,
+.fx-dockshell
+  .groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-scrollable,
+.fx-dockshell
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-tabs-container,
+.fx-dockshell
+  .groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-tabs-container {
+  flex-grow: 1;
+}
+
+.fx-dockshell
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-tabs-container .dv-tab,
+.fx-dockshell
+  .groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-tabs-container .dv-tab {
+  flex-grow: 1;
+  padding: 0;
+}
+
+.fx-dockshell
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-void-container,
+.fx-dockshell
+  .groupview:has(.fx-panel[data-dock-single-tab="full"])
+  > .dv-tabs-and-actions-container.dv-single-tab .dv-void-container {
+  flex-grow: 0;
+}
+
 /* 1px separators are dockview's sashes already; just tint on hover/active. */
 .fx-dockshell .dv-sash.dv-sash-active,
 .fx-dockshell .sash.active { background: var(--lime, #7ee04a); }

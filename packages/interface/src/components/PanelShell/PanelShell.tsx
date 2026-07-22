@@ -2,27 +2,40 @@ import { useEffect, useMemo, useSyncExternalStore, useReducer, type ReactNode } 
 import {
   AlertCircle,
   Bell,
+  Box,
+  Camera,
   Check,
   Copy,
   Columns3,
+  Crosshair,
   Download,
+  Eye,
   ExternalLink,
   Filter,
   FolderPlus,
+  Globe,
   Grid2X2,
+  Gamepad2,
   List,
+  LogOut,
+  Magnet,
+  Maximize2,
+  Monitor,
+  Move,
   Pause,
   Play,
   Plus,
   ChevronDown,
+  Redo2,
   RefreshCw,
   RotateCcw,
-  ArrowUpDown,
   Save,
   Settings,
   Sparkles,
+  Square,
   Star,
   Trash2,
+  Undo2,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -34,6 +47,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '../ui/tooltip';
 import { useHost } from '../../core/app-shell';
 import {
   getContextExpressionKeys,
@@ -52,29 +71,57 @@ import './PanelShell.css';
 const ICONS: Record<string, LucideIcon> = {
   AlertCircle,
   Bell,
+  Box,
+  Camera,
   ChevronDown,
   Check,
   Columns3,
   Copy,
+  Crosshair,
   Download,
+  Eye,
   Filter,
-  ArrowUpDown,
   ExternalLink,
   FolderPlus,
+  Globe,
   Grid2X2,
+  Gamepad2,
   List,
+  LogOut,
+  Magnet,
+  Maximize2,
+  Monitor,
+  Move,
   Pause,
   Play,
   Plus,
+  Redo2,
   RefreshCw,
   RotateCcw,
   Save,
   Settings,
   Sparkles,
+  Square,
   Star,
   Trash2,
+  Undo2,
   X,
 };
+
+function ActionTooltip({ title, children }: { title: string; children: ReactNode }): ReactNode {
+  return (
+    <TooltipProvider delayDuration={350} skipDelayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="fx-panel-tooltip-trigger">{children}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" sideOffset={7}>
+          {title}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 function mergeActions(
   panelId: string,
@@ -177,21 +224,25 @@ function PanelCommandButton({
   const Icon = action.icon ? ICONS[action.icon] : undefined;
   const label = action.label ?? (!Icon ? action.title : '');
   return (
-    <button
-      type="button"
-      className="fx-panel-action no-motion-lift"
-      disabled={!state.enabled}
-      data-active={state.active ? 'true' : 'false'}
-      data-highlight={state.highlighted ? 'true' : 'false'}
-      data-has-label={label ? 'true' : 'false'}
-      data-location={location}
-      title={action.title}
-      aria-label={action.title}
-      onClick={() => executePanelCommand(host, action.command, panelId, action.id, location, action.args)}
-    >
-      {Icon && <Icon size={14} />}
-      {label && <span className="fx-panel-action-label">{label}</span>}
-    </button>
+    <ActionTooltip title={action.title}>
+      <button
+        type="button"
+        className="fx-panel-action no-motion-lift"
+        disabled={!state.enabled}
+        data-panel-id={panelId}
+        data-action-id={action.id}
+        data-testid={action.testId}
+        data-active={state.active ? 'true' : 'false'}
+        data-highlight={state.highlighted ? 'true' : 'false'}
+        data-has-label={label ? 'true' : 'false'}
+        data-location={location}
+        aria-label={action.title}
+        onClick={() => executePanelCommand(host, action.command, panelId, action.id, location, action.args)}
+      >
+        {Icon && <Icon size={14} />}
+        {label && <span className="fx-panel-action-label">{label}</span>}
+      </button>
+    </ActionTooltip>
   );
 }
 
@@ -259,20 +310,34 @@ function PanelMenuButton({
   const footerItems = items.filter((item) => item.kind !== 'separator' && item.tone === 'reset');
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        className="fx-panel-action no-motion-lift"
-        disabled={!state.enabled}
-        data-active={state.active ? 'true' : 'false'}
-        data-highlight={state.highlighted ? 'true' : 'false'}
-        data-has-label={label ? 'true' : 'false'}
-        data-location={location}
-        title={action.title}
-        aria-label={action.title}
-      >
-        {Icon && <Icon size={14} />}
-        {label && <span className="fx-panel-action-label">{label}</span>}
-        <ChevronDown size={12} />
-      </DropdownMenuTrigger>
+      <TooltipProvider delayDuration={350} skipDelayDuration={100}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="fx-panel-action no-motion-lift"
+                disabled={!state.enabled}
+                data-panel-id={panelId}
+                data-action-id={action.id}
+                data-testid={action.testId}
+                data-active={state.active ? 'true' : 'false'}
+                data-highlight={state.highlighted ? 'true' : 'false'}
+                data-has-label={label ? 'true' : 'false'}
+                data-location={location}
+                aria-label={action.title}
+              >
+                {Icon && <Icon size={14} />}
+                {label && <span className="fx-panel-action-label">{label}</span>}
+                <ChevronDown size={12} />
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="center" sideOffset={7}>
+            {action.title}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
       <DropdownMenuContent className="fx-panel-menu" align={location === 'header/right' ? 'end' : 'start'} sideOffset={6}>
         <div className="fx-panel-menu-title">{action.title}</div>
         <div className="fx-panel-menu-scroll">
@@ -410,6 +475,7 @@ export function PanelShell({
       data-fx-slot={`DockPanel:${id}`}
       data-fx-panel-id={id}
       data-panel-registered={panel ? 'true' : 'false'}
+      data-dock-single-tab={panel?.dockChrome?.singleTab ?? undefined}
     >
       {panel && <PanelHeader panelId={id} panel={panel} />}
       <div

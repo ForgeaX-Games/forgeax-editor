@@ -95,6 +95,7 @@
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/interface": "workspace:*",
     "@forgeax/platform-io": "workspace:*",
+    "lucide-react": "^0.460.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
@@ -105,6 +106,8 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@playwright/test": "^1.45.0",
     "@types/node": "^22",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "10.5.4",
     "dependency-cruiser": "^17.4.3",

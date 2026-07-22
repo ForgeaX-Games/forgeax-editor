@@ -33,6 +33,7 @@
     "@forgeax/editor-content-browser": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "lucide-react": "^0.460.0",
     "react": "^19.0.0"
   },
   "devDependencies": {

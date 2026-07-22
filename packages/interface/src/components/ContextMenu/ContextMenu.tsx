@@ -5,6 +5,7 @@ import {
   BoxSelect,
   Braces,
   Check,
+  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Clapperboard,
@@ -43,13 +44,16 @@ import { buildMenu, type MenuItem } from './menuRegistry';
 import { buildAssetPill, buildComponentPill, buildEntityPill } from '../../lib/composer-bridge';
 import { pushHealth } from '../StatusBar/healthStore';
 import { useShellStore } from '../../store';
-import { usePanelRenderers } from '../DockShell/panelRenderers';
+import { usePanelRenderers, type EditorContextMenuItem } from '../DockShell/panelRenderers';
 import { useHost } from '../../core/app-shell';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -108,6 +112,100 @@ interface MenuState {
   items: MenuItem[];
 }
 
+function menuTestId(label: string): string {
+  return `ctx-menu-${label.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()}`;
+}
+
+function menuItemClassName(it: Extract<MenuItem, { kind: 'item' }>): string {
+  return [
+    'fx-ctx-menu-item',
+    it.danger ? 'text-destructive focus:text-destructive fx-ctx-menu-danger' : '',
+    it.forge ? 'fx-ctx-menu-forge' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function menuSubTriggerClassName(it: Extract<MenuItem, { kind: 'item' }>): string {
+  return [
+    'fx-ctx-menu-item',
+    it.danger ? 'text-destructive focus:text-destructive fx-ctx-menu-danger' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function editorMenuItemToMenuItem(item: EditorContextMenuItem): MenuItem {
+  if (item.title) return { kind: 'title', label: item.title, icon: item.icon };
+  if (item.sep) return { kind: 'sep' };
+  return {
+    kind: 'item',
+    label: item.label ?? '',
+    icon: item.icon,
+    shortcut: item.shortcut,
+    forge: item.forge,
+    disabled: item.disabled,
+    danger: item.danger,
+    children: item.children?.map(editorMenuItemToMenuItem),
+    onClick: item.onClick ?? (() => {}),
+  };
+}
+
+function ContextMenuItems({ items }: { items: MenuItem[] }) {
+  return (
+    <>
+      {items.map((it, i) => {
+        if (it.kind === 'sep') return <DropdownMenuSeparator key={`s${i}`} />;
+        if (it.kind === 'title') {
+          return (
+            <div key={`t${i}`} className="fx-ctx-menu-title">
+              <MenuIcon name={it.icon} />
+              <span>{it.label}</span>
+            </div>
+          );
+        }
+
+        const children = it.children?.filter((child) => child.kind === 'sep' || child.kind === 'title' || (child.kind === 'item' && child.label));
+        if (children && children.length > 0) {
+          return (
+            <DropdownMenuSub key={`sub${i}`}>
+              <DropdownMenuSubTrigger
+                disabled={it.disabled}
+                className={menuSubTriggerClassName(it)}
+                data-testid={menuTestId(it.label)}
+              >
+                <MenuIcon name={it.icon} />
+                <span className="fx-ctx-menu-label">{it.label}</span>
+                <ChevronRight className="fx-ctx-menu-sub-arrow" aria-hidden="true" />
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent
+                className="min-w-[180px] forgeax-ctx-menu-panel fx-ctx-menu-sub-panel"
+                sideOffset={6}
+                alignOffset={-5}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <ContextMenuItems items={children} />
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        }
+
+        return (
+          <DropdownMenuItem
+            key={`i${i}`}
+            disabled={it.disabled}
+            className={menuItemClassName(it)}
+            data-testid={menuTestId(it.label)}
+            onSelect={() => {
+              if (!it.disabled) it.onClick();
+            }}
+          >
+            <MenuIcon name={it.icon} />
+            <span className="fx-ctx-menu-label">{it.label}</span>
+            {it.shortcut && <span className="fx-ctx-menu-kbd">{it.shortcut}</span>}
+          </DropdownMenuItem>
+        );
+      })}
+    </>
+  );
+}
+
 /**
  * App-wide context menu host. ONE controlled Radix DropdownMenu renders EVERY
  * context menu, fed by two in-process sources:
@@ -145,22 +243,7 @@ export function ContextMenu() {
       setState(null);
       return;
     }
-    const items: MenuItem[] = menu.items.map((item) =>
-      item.title
-        ? { kind: 'title' as const, label: item.title, icon: item.icon }
-        : item.sep
-        ? { kind: 'sep' as const }
-        : {
-            kind: 'item' as const,
-            label: item.label ?? '',
-            icon: item.icon,
-            shortcut: item.shortcut,
-            forge: item.forge,
-            disabled: item.disabled,
-            danger: item.danger,
-            onClick: item.onClick ?? (() => {}),
-          },
-    );
+    const items: MenuItem[] = menu.items.map(editorMenuItemToMenuItem);
     setState(items.length ? { x: menu.x, y: menu.y, items } : null);
   }), [renderers.editor]);
 
@@ -246,34 +329,7 @@ export function ContextMenu() {
           className="min-w-[180px] forgeax-ctx-menu-panel"
           onContextMenu={(e) => e.preventDefault()}
         >
-          {state.items.map((it, i) =>
-            it.kind === 'sep' ? (
-              <DropdownMenuSeparator key={`s${i}`} />
-            ) : it.kind === 'title' ? (
-              <div key={`t${i}`} className="fx-ctx-menu-title">
-                <MenuIcon name={it.icon} />
-                <span>{it.label}</span>
-              </div>
-            ) : (
-              <DropdownMenuItem
-                key={`i${i}`}
-                disabled={it.disabled}
-                className={[
-                  'fx-ctx-menu-item',
-                  it.danger ? 'text-destructive focus:text-destructive fx-ctx-menu-danger' : '',
-                  it.forge ? 'fx-ctx-menu-forge' : '',
-                ].filter(Boolean).join(' ')}
-                data-testid={`ctx-menu-${it.label.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()}`}
-                onSelect={() => {
-                  if (!it.disabled) it.onClick();
-                }}
-              >
-                <MenuIcon name={it.icon} />
-                <span className="fx-ctx-menu-label">{it.label}</span>
-                {it.shortcut && <span className="fx-ctx-menu-kbd">{it.shortcut}</span>}
-              </DropdownMenuItem>
-            ),
-          )}
+          <ContextMenuItems items={state.items} />
         </DropdownMenuContent>
       )}
     </DropdownMenu>

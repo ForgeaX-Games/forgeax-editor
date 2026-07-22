@@ -20,6 +20,7 @@ export interface PanelCommandActionContribution {
   readonly title: string;
   readonly label?: string;
   readonly icon?: string;
+  readonly testId?: string;
   readonly order?: number;
   readonly location?: PanelActionLocation;
   readonly group?: string;
@@ -38,6 +39,7 @@ export interface PanelMenuActionContribution {
   readonly label?: string;
   readonly labelContextKey?: string;
   readonly icon?: string;
+  readonly testId?: string;
   readonly order?: number;
   readonly location?: Exclude<PanelActionLocation, 'context'>;
   readonly group?: string;

@@ -22,130 +22,43 @@
 import {
   Transform,
   ChildOf,
-  MeshFilter,
-  MeshRenderer,
   Camera,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   quat,
-  Materials,
 } from '@forgeax/engine-runtime';
-// engine #650 (Tier-2 decomposition) moved builtin handles + AssetRegistry into
-// @forgeax/engine-assets-runtime, and pick/PickError into @forgeax/engine-picking.
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+// engine #650 (Tier-2 decomposition) moved pick/PickError into @forgeax/engine-picking.
 import { pick as enginePick, PickError } from '@forgeax/engine-picking';
-import type { World, EntityHandle, Handle } from '@forgeax/engine-ecs';
-// engine #610 (Tier-1 decomposition) moved procedural mesh builders into the
-// @forgeax/engine-geometry leaf package.
-import { meshFromInterleaved } from '@forgeax/engine-geometry';
+import type { World, EntityHandle } from '@forgeax/engine-ecs';
 
-// M2 extraction: pure geometry lives in viewport-ray.ts; orbit math in viewport-camera.ts.
-// M6 extraction (plan-strategy §2 D-5, AC-08): pure gizmo + param-gizmo geometry
-// (axis/plane/ring constants, cone mesh data, light/camera wireframe point sets)
-// lives in viewport-gizmo-geometry.ts. viewport.ts is now a DI factory
-// (createViewport) + re-export barrel — the engine wiring + interaction state
-// machine stay here; all pure math is imported from the three sibling modules.
+// Pure geometry / camera math / gizmo geometry live in sibling modules
+// (viewport-ray, viewport-camera, viewport-gizmo-geometry). The interactive
+// gizmo pools (viewport-gizmo, viewport-param-gizmo), camera session-op
+// appliers (viewport-camera-appliers), and Transform read adapters
+// (viewport-entity-read) also live outside — this file is now the DI factory
+// (createViewport) + a re-export barrel + the interaction state machine
+// (fly/orbit tick, pointer/keyboard handlers, drag lifecycle).
 export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
 export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed, applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit, FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type FlyState, type FlyInput, type Quat } from './viewport-camera';
-import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
-import { clampDist, clampPitch, advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera, applyFlyWheelSpeed, flyToOrbit, FLY_SPEED_DEFAULT, type InputTarget, type FlyInput } from './viewport-camera';
-import { worldPointToParentLocal } from './viewport-transform';
-import {
-  DEG2RAD, AXES, PLANES, RING_SEG, TIP_QUAT, type PlaneHandle,
-  buildConeMeshData, lightGizmoPoints, cameraGizmoPoints,
-} from './viewport-gizmo-geometry';
+import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, angleOnAxis, entityBox } from './viewport-ray';
+import { clampDist, advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera, applyFlyWheelSpeed, flyToOrbit, FLY_SPEED_DEFAULT, type InputTarget, type FlyInput } from './viewport-camera';
+import { registerCameraAppliers } from './viewport-camera-appliers';
+import { createGizmoPool } from './viewport-gizmo';
+import { createParamGizmo } from './viewport-param-gizmo';
+import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
+import { readLocalTransform, readWorldTransform, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
 
 import type { OpHandle, EngineFacade } from '@forgeax/editor-core';
-import { worldEntityHandles, entExists, entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange, registerSessionApplier } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
-
-// ── M7-a (AC-15): doc.entities mirror deleted — gizmo/pick read the WORLD ──────
-// The dual-write mirror (EntityNode.components) is gone; the world is the SSOT.
-// entComponent(session, id, 'Transform') returns the engine-native POD
-// (pos[3] + quat[4] + scale[3] + world[16] arrays — feat-20260709 array-TRS).
-// The viewport gizmo/drag math is written against the editor euler-degree shape
-// (x/y/z + rotX/rotY/rotZ), so read once through these adapters and convert
-// quat→euler HERE (euler-quat.ts is the SSOT for that conversion — AGENTS.md #6).
-// Returns undefined for organizational nodes (no Transform) so callers keep their
-// "nothing to gizmo/pick" fast-exit.
-//
-// Two variants — LOCAL vs WORLD — because the same entity means different things
-// to different subsystems:
-//   LOCAL  (pos/quat/scale) → drag write-back (gateway.dispatch writes engine pos)
-//   WORLD  (world matrix)   → gizmo display / pick AABB / frame-selection orbit
-// For a root entity local == world; for a bone deep in a skeleton hierarchy they
-// differ by tens of units, and mixing them puts the gizmo at the wrong position.
-type EditorTransform = {
-  x: number; y: number; z: number;
-  rotX: number; rotY: number; rotZ: number;
-  scaleX: number; scaleY: number; scaleZ: number;
-};
-// Index a stored engine array<f32,N> column value (number[] | Float32Array),
-// falling back to `d` for a missing / non-finite axis.
-function ax(arr: unknown, i: number, d: number): number {
-  const v = (arr as ArrayLike<number> | undefined)?.[i];
-  return typeof v === 'number' && Number.isFinite(v) ? v : d;
-}
-/** Read the entity's LOCAL Transform (pos/quat/scale as stored in the engine).
- *  The drag system writes BACK to engine `pos`, so it needs the local shape. */
-function readLocalTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
-  const r = entComponent(world, handle, 'Transform');
-  if (!r.ok) return undefined;
-  const t = r.value as Record<string, unknown>;
-  const e = quatToEuler(ax(t.quat, 0, 0), ax(t.quat, 1, 0), ax(t.quat, 2, 0), ax(t.quat, 3, 1));
-  return {
-    x: ax(t.pos, 0, 0), y: ax(t.pos, 1, 0), z: ax(t.pos, 2, 0),
-    rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
-    scaleX: ax(t.scale, 0, 1), scaleY: ax(t.scale, 1, 1), scaleZ: ax(t.scale, 2, 1),
-  };
-}
-/** Read the entity's WORLD-space Transform (translation from the computed world
- *  matrix column-major [12..14]; rotation + scale stay local for now — extracting
- *  world rotation from the matrix is non-trivial and the callers that use rot/scale
- *  (param-gizmo, entityBox) operate on root entities where local == world). */
-function readWorldTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
-  const r = entComponent(world, handle, 'Transform');
-  if (!r.ok) return undefined;
-  const t = r.value as Record<string, unknown>;
-  const w = t.world as ArrayLike<number> | undefined;
-  // Fall back to local if world matrix is missing (shouldn't happen, but be safe).
-  if (!w || w.length < 16) return readLocalTransform(world, handle);
-  const e = quatToEuler(ax(t.quat, 0, 0), ax(t.quat, 1, 0), ax(t.quat, 2, 0), ax(t.quat, 3, 1));
-  return {
-    x: ax(w, 12, 0), y: ax(w, 13, 0), z: ax(w, 14, 0),
-    rotX: e.rotX, rotY: e.rotY, rotZ: e.rotZ,
-    scaleX: ax(t.scale, 0, 1), scaleY: ax(t.scale, 1, 1), scaleZ: ax(t.scale, 2, 1),
-  };
-}
-/** Convert an absolute world-space target to the local `Transform.pos` stored
- *  on `handle`. Transform propagation defines `child.world = parent.world ×
- *  child.local`, so the only correct inverse for a parented entity is
- *  `inverse(parent.world) × target` — using the child's normalized world axes
- *  loses inherited scale and incorrectly folds in the child's own rotation. */
-function worldPositionToLocal(world: World, handle: EntityHandle, target: Vec3): Vec3 {
-  const childOf = entComponent(world, handle, 'ChildOf');
-  if (!childOf.ok) return target;
-  const parent = childOf.value.parent as number | undefined;
-  if (parent === undefined) return target;
-  const parentTransform = entComponent(world, parent as EntityHandle, 'Transform');
-  if (!parentTransform.ok) return target;
-  const parentWorld = parentTransform.value.world as ArrayLike<number> | undefined;
-  if (!parentWorld || parentWorld.length < 16) return target;
-  return worldPointToParentLocal(parentWorld, target);
-}
-// EditorHidden is an editor-only marker; the entComponents walk surfaces it from
-// the active world.
-function isEntHidden(world: World, handle: EntityHandle): boolean {
-  return 'EditorHidden' in entComponents(world, handle);
-}
 
 // ── runtime wiring ────────────────────────────────────────────────────────────
 
@@ -274,432 +187,56 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     flyRAF = requestAnimationFrame(flyTick);
   }
 
-  // ── cameraOrbit session op (D-12 path A, S13 / AC-30) ───────────────────────
-  // The orbit gesture END (onUp) single-dispatches ONE cameraOrbit session op
-  // carrying the gesture-end pose. Its applier recomputes the orbit camera pose
-  // and writes it through ctx.engine — the SAME move applyCamera does per frame,
-  // but now as a ledger-recorded session op so collaborators (human/AI) see "the
-  // camera turned to X". Critically, when an AI issues cameraOrbit over eval there
-  // is NO per-frame facade write, so this applier is the ONLY path that actually
-  // moves the camera — hence it must write via ctx.engine, not read viewport state.
-  //
-  // Session domain (registerSessionApplier): ledger +1, NO undo entry, does not
-  // occupy the _activeOp lifecycle slot (so orbit-while-dragging-a-gizmo cannot
-  // implicitly cancel a document begin — D-12 slot-safety). Mid-frame orbit stays
-  // on the facade direct write (applyCamera), out of the ledger (OOS-4).
-  //
-  // M4 (w19): the camera lives in the editorWorld, so this applier writes through
-  // the closure-captured `editorEngine` (editorWorld facade) — NOT ctx.engine,
-  // which binds to the sceneWorld (doc.world). ctx.engine would move a nonexistent
-  // sceneWorld entity and silently no-op the orbit. editorEngine still records
-  // trace leaves onto the active span (the facade's _recordLeaf reads the ambient
-  // active span, not a per-world binding), so ledger/trace semantics are preserved.
-  const unregCameraOrbit = registerSessionApplier(
-    'cameraOrbit',
-    (op, _ctx): { ok: true } => {
-      // T6b: cameraOrbit payload may optionally carry `pos` — if provided,
-      // treat as the ground-truth camera position and DERIVE the orbit target
-      // from it (target = pos + fwd * dist), so a caller expressing "put camera
-      // here + look this way" doesn't need to know the target math. Legacy
-      // callers passing only {target,yaw,pitch,dist} keep working (pos absent).
-      const o = op as unknown as {
-        target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
-        pos?: [number, number, number];
-      };
-      const nextYaw = o.yaw ?? yaw;
-      const nextPitch = o.pitch ?? pitch;
-      const nextDist = o.dist ?? dist;
-      let tgt: Vec3;
-      if (o.pos) {
-        // Derive target from camera pos: target = pos + fwd * dist.
-        const flyR = computeFlyCamera({ pos: [o.pos[0], o.pos[1], o.pos[2]], yaw: nextYaw, pitch: nextPitch });
-        tgt = [
-          o.pos[0] + flyR.fwd[0] * nextDist,
-          o.pos[1] + flyR.fwd[1] * nextDist,
-          o.pos[2] + flyR.fwd[2] * nextDist,
-        ];
-      } else {
-        tgt = o.target ? [o.target[0], o.target[1], o.target[2]] : [...target];
-      }
-      const r = computeOrbitCamera(tgt, nextYaw, nextPitch, nextDist);
-      editorEngine.set(camera, Transform, {
-        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
-        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
-        scale: [1, 1, 1],
-      });
-      // Sync closure state so subsequent gestures build on the AI-set pose.
-      target = tgt; yaw = nextYaw; pitch = nextPitch; dist = nextDist;
-      camPos = r.camPos; fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-      return { ok: true };
+  // ── camera session-op appliers (cameraOrbit / cameraFly / cameraTeleport /
+  //    cameraLookAt / requestFrame) — extracted to viewport-camera-appliers.ts.
+  // Mid-frame orbit/fly stays on the direct facade path (applyCamera / flyTick);
+  // gesture-END and AI-issued kinds route here so the camera pose lands as ONE
+  // ledger record (D-12 path A, session domain: no undo, no lifecycle slot).
+  const unregCameraAppliers = registerCameraAppliers({
+    editorEngine, camera,
+    getPose: () => ({ target, yaw, pitch, dist, camPos, fwd, rgt, upv }),
+    setPose: (p) => {
+      target = p.target; yaw = p.yaw; pitch = p.pitch; dist = p.dist;
+      camPos = p.camPos; fwd = p.fwd; rgt = p.rgt; upv = p.upv;
     },
-    { title: 'Orbit camera' },
-  );
+    frameSelection: () => frameSelection(),
+  });
 
-  // ── cameraFly session op (T4a) ──────────────────────────────────────────────
-  // The FLY gesture end (onUp) dispatches ONE cameraFly session op carrying
-  // {pos, yaw, pitch}. Applier: absolute pose write via editorEngine, and it
-  // also reconstructs a reasonable orbit target so a subsequent MMB/Alt+LMB
-  // gesture builds on the fly-end pose smoothly (T6a).
-  const unregCameraFly = registerSessionApplier(
-    'cameraFly',
-    (op, _ctx): { ok: true } => {
-      const o = op as unknown as {
-        pos?: [number, number, number]; yaw?: number; pitch?: number;
-      };
-      const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...camPos];
-      const nextYaw = o.yaw ?? yaw;
-      const nextPitch = o.pitch ?? pitch;
-      const r = computeFlyCamera({ pos: p, yaw: nextYaw, pitch: nextPitch });
-      editorEngine.set(camera, Transform, {
-        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
-        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
-        scale: [1, 1, 1],
-      });
-      // Sync closure state + reconstruct orbit target for smooth orbit ← fly switch.
-      camPos = r.camPos; yaw = nextYaw; pitch = nextPitch;
-      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-      const orb = flyToOrbit({ pos: p, yaw: nextYaw, pitch: nextPitch }, dist);
-      target = orb.target; dist = orb.dist;
-      return { ok: true };
-    },
-    { title: 'Fly camera to position' },
-  );
-
-  // ── cameraTeleport session op (T4b) ─────────────────────────────────────────
-  // AI-first absolute pose teleport. Semantically same effect as cameraFly, but
-  // named "teleport" because there is no human gesture — AI just says "camera
-  // goes here now". Same applier body; separate kind for ledger/self-introspection.
-  const unregCameraTeleport = registerSessionApplier(
-    'cameraTeleport',
-    (op, _ctx): { ok: true } => {
-      const o = op as unknown as {
-        pos?: [number, number, number]; yaw?: number; pitch?: number;
-      };
-      const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...camPos];
-      const nextYaw = o.yaw ?? yaw;
-      const nextPitch = o.pitch ?? pitch;
-      const r = computeFlyCamera({ pos: p, yaw: nextYaw, pitch: nextPitch });
-      editorEngine.set(camera, Transform, {
-        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
-        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
-        scale: [1, 1, 1],
-      });
-      camPos = r.camPos; yaw = nextYaw; pitch = nextPitch;
-      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-      const orb = flyToOrbit({ pos: p, yaw: nextYaw, pitch: nextPitch }, dist);
-      target = orb.target; dist = orb.dist;
-      return { ok: true };
-    },
-    { title: 'Teleport camera to position' },
-  );
-
-  // ── cameraLookAt session op (T4c) ───────────────────────────────────────────
-  // AI-friendly: specify {pos, lookAt} instead of {pos, yaw, pitch}. yaw/pitch
-  // are derived from the (pos → lookAt) vector using the engine convention:
-  //   forward = qCam · [0,0,-1] with qCam = yaw·Y × pitch·X
-  //   → yaw = atan2(-dx, -dz),  pitch = atan2(dy, hypot(dx,dz))
-  // (matches the plan's derivation; verified by advanceFly at yaw=0 → -Z).
-  const unregCameraLookAt = registerSessionApplier(
-    'cameraLookAt',
-    (op, _ctx): { ok: true } => {
-      const o = op as unknown as {
-        pos?: [number, number, number]; lookAt?: [number, number, number];
-      };
-      if (!o.pos || !o.lookAt) return { ok: true };
-      const dx = o.lookAt[0] - o.pos[0];
-      const dy = o.lookAt[1] - o.pos[1];
-      const dz = o.lookAt[2] - o.pos[2];
-      const horiz = Math.hypot(dx, dz);
-      const calcYaw = Math.atan2(-dx, -dz);
-      const calcPitch = clampPitch(Math.atan2(dy, horiz));
-      const p: Vec3 = [o.pos[0], o.pos[1], o.pos[2]];
-      const r = computeFlyCamera({ pos: p, yaw: calcYaw, pitch: calcPitch });
-      editorEngine.set(camera, Transform, {
-        pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
-        quat: [r.qCam[0], r.qCam[1], r.qCam[2], r.qCam[3]],
-        scale: [1, 1, 1],
-      });
-      camPos = r.camPos; yaw = calcYaw; pitch = calcPitch;
-      fwd = r.fwd; rgt = r.rgt; upv = r.upv;
-      const orb = flyToOrbit({ pos: p, yaw: calcYaw, pitch: calcPitch }, dist);
-      target = orb.target; dist = orb.dist;
-      return { ok: true };
-    },
-    { title: 'Move camera and look at target' },
-  );
-
-  // ── requestFrame session op (D-10 → edit-runtime migration) ─────────────────
-  // The "frame selection in viewport" pulse. Inspector Focus button and AI both
-  // dispatch { kind: 'requestFrame' } through the gateway; the applier calls the
-  // closure-local frameSelection() which re-aims the orbit camera on the selected
-  // entity. Same registerSessionApplier pattern as cameraOrbit / play / stop.
-  const unregRequestFrame = registerSessionApplier(
-    'requestFrame',
-    (_op, _ctx): { ok: true } => {
-      frameSelection();
-      return { ok: true };
-    },
-    { title: 'Frame selection in viewport' },
-  );
-
-  // ── gizmo (3 axis handles on the selection) ────────────────────────────────
-  // Shape follows the mode (design §3): translate/scale → axis BARS; rotate →
-  // axis RINGS (circles in each axis plane). Rings are built from a pool of small
-  // cube segments (a torus mesh isn't in the handle set), reused frame-to-frame so
-  // orbiting/dragging only world.set transforms — never respawns.
-  // AXES / PLANES / RING_SEG / TIP_QUAT are the shared gizmo layout constants,
-  // now imported from viewport-gizmo-geometry.ts (M6 extraction, AC-08).
-  let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
-  type Shape = 'translate' | 'scale' | 'rings';
-  let shape: Shape | null = null;
-  // bars: per-axis entity + world AABB (hit-test). planes: per-plane quad entity +
-  // AABB (translate only). rings: pooled segment entities (3·RING_SEG) + the ring
-  // center/radius for analytic plane hit-test.
-  // Gizmo entities are minted by engine.spawn().unwrap() → genuine branded
-  // EntityHandle values; type them as such so engine.set/despawn (now strict
-  // after the facade tightening) accept them without a per-call brand cast.
-  let barEnts: EntityHandle[] = [];
-  let bars: { center: Vec3; half: Vec3 }[] = [];
-  let tipEnts: EntityHandle[] = [];   // cone arrowheads on the translate bars
-  let planeEnts: EntityHandle[] = [];
-  let planes: { center: Vec3; half: Vec3 }[] = [];
-  let ringEnts: EntityHandle[] = [];
-  let ringCenter: Vec3 = [0, 0, 0];
-  let ringRadius = 0;
-
-  // A small cone mesh (apex at +Y, base ring at Y=0, closed) for the translate
-  // arrowheads. Unlit material ignores normals/uv, so those are dummy. Built
-  // once and reused for all three axes (oriented via per-axis quaternion).
-  let coneMesh: Handle<'MeshAsset', 'shared'> | null = null;
-  function ensureCone(): Handle<'MeshAsset', 'shared'> {
-    if (coneMesh) return coneMesh;
-    // Cone vertex/index geometry is pure (viewport-gizmo-geometry.ts); only the
-    // allocSharedRef upload stays here (the one side-effecting edge).
-    // M4 (w20): gizmo mesh asset is alloc'd on the editorWorld (editorEngine) —
-    // gizmo entities live there and the renderer resolves material/mesh handles
-    // per-world (D-2), so the shared ref must be minted on the same world.
-    const { vertices, indices } = buildConeMeshData();
-    coneMesh = editorEngine.allocSharedRef('MeshAsset', meshFromInterleaved(vertices, indices));
-    return coneMesh;
-  }
-
-  function ensureMats(): Handle<'MaterialAsset', 'shared'>[] {
-    if (!gizmoMats) gizmoMats = AXES.map((a) => {
-      // Always-on-top gizmo: draw in the Overlay queue (4000, drawn last) with
-      // depthCompare:'always' + no depth write, so the handles are never hidden
-      // behind the (possibly huge) object they're anchored on.
-      const base = Materials.unlit([a.color[0], a.color[1], a.color[2], 1], { castShadow: false }) as {
-        passes?: { queue?: number; renderState?: Record<string, unknown> }[];
-      };
-      const mat = {
-        ...base,
-        passes: (base.passes ?? []).map((p) => ({
-          ...p,
-          queue: 4000, // RenderQueue.Overlay — drawn after all opaque geometry
-          renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
-        })),
-      };
-      // M4 (w20): gizmo material minted on editorWorld (editorEngine). Overlay
-      // queue=4000 + depthCompare:'always' + depthWriteEnabled:false mechanism is
-      // unchanged (AC-03 topmost) — only the target world moved.
-      return editorEngine.allocSharedRef('MaterialAsset', mat);
-    });
-    return gizmoMats;
-  }
-  function spawnHandleMesh(
-    mesh: Handle<'MeshAsset', 'shared'>,
-    material: Handle<'MaterialAsset', 'shared'>,
-  ): EntityHandle {
-    // M4 (w20): gizmo entities spawn into the editorWorld (editorEngine) — the
-    // structural half of AC-01 (gizmo can never land in the sceneWorld).
-    return editorEngine.spawn(
-      { component: Transform, data: {} },
-      { component: MeshFilter, data: { assetHandle: mesh } },
-      // engine #317: MeshRenderer.material (single) -> materials[]. Passing the
-      // legacy single field leaves the gizmo unmaterialed -> default gray axes.
-      { component: MeshRenderer, data: { materials: [material] } },
-    ).unwrap();
-  }
-  const spawnHandleCube = (material: Handle<'MaterialAsset', 'shared'>): EntityHandle =>
-    spawnHandleMesh(HANDLE_CUBE, material);
-  function despawnHandles(): void {
-    // M4 (w20): gizmo entities live in editorWorld → despawn through editorEngine.
-    for (const e of barEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of tipEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of planeEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of ringEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    barEnts = []; bars = []; tipEnts = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
-  }
-  function buildShape(want: Shape): void {
-    const mats = ensureMats();
-    if (want === 'rings') {
-      ringEnts = [];
-      for (let i = 0; i < AXES.length; i++) for (let j = 0; j < RING_SEG; j++) ringEnts.push(spawnHandleCube(mats[i]!));
-    } else {
-      barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]!));
-      bars = AXES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
-      if (want === 'translate') {
-        // Cone arrowheads at each axis tip (move gizmo only).
-        const cone = ensureCone();
-        tipEnts = AXES.map((_, i) => spawnHandleMesh(cone, mats[i]!));
-        planeEnts = PLANES.map((p) => spawnHandleCube(mats[p.mat]!));
-        planes = PLANES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
-      }
-    }
-    shape = want;
-  }
-  function positionBars(center: Vec3, len: number, thick: number): void {
-    const hasTips = tipEnts.length > 0;
-    const tipLen = len * 0.34, tipRad = thick * 2.6;
-    AXES.forEach((a, i) => {
-      const hc: Vec3 = [center[0] + a.axis[0] * len / 2, center[1] + a.axis[1] * len / 2, center[2] + a.axis[2] * len / 2];
-      const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      editorEngine.set(barEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [sx, sy, sz] });
-      if (hasTips) {
-        // Cone base sits at the bar's outer end, apex pointing further out along
-        // the axis. scaleY is the cone's local height (→ length after the +Y→axis
-        // rotation); scaleX/Z are the base radius.
-        const base: Vec3 = [center[0] + a.axis[0] * len, center[1] + a.axis[1] * len, center[2] + a.axis[2] * len];
-        const q = TIP_QUAT[i]!;
-        editorEngine.set(tipEnts[i]!, Transform, {
-          pos: [base[0], base[1], base[2]],
-          scale: [tipRad, tipLen, tipRad],
-          quat: [q[0], q[1], q[2], q[3]],
-        });
-        // Extend the grab AABB to the cone apex so the whole arrow is clickable.
-        const reach = len + tipLen;
-        bars[i]!.center = [center[0] + a.axis[0] * reach / 2, center[1] + a.axis[1] * reach / 2, center[2] + a.axis[2] * reach / 2];
-        const gx = a.axis[0] ? reach : thick, gy = a.axis[1] ? reach : thick, gz = a.axis[2] ? reach : thick;
-        bars[i]!.half = [gx / 2, gy / 2, gz / 2];
-      } else {
-        bars[i]!.center = hc;
-        bars[i]!.half = [sx / 2, sy / 2, sz / 2];
-      }
-    });
-  }
-  function positionPlanes(center: Vec3, len: number, thick: number): void {
-    const off = len * 0.34, quad = len * 0.22;
-    PLANES.forEach((p, i) => {
-      const ax = AXES[p.ax]!.axis, ay = AXES[p.ay]!.axis;
-      const hc: Vec3 = [
-        center[0] + (ax[0] + ay[0]) * off, center[1] + (ax[1] + ay[1]) * off, center[2] + (ax[2] + ay[2]) * off,
-      ];
-      // flat quad: ~quad along the two in-plane axes, ~thick along the normal.
-      const s: Vec3 = [
-        p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
-      ];
-      editorEngine.set(planeEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [s[0], s[1], s[2]] });
-      planes[i]!.center = hc;
-      planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
-    });
-  }
-  function positionRings(center: Vec3, len: number, thick: number): void {
-    ringCenter = center; ringRadius = len;
-    const seg = thick * 1.3;
-    for (let i = 0; i < AXES.length; i++) {
-      const [u, v] = orthoBasis(AXES[i]!.axis);
-      for (let j = 0; j < RING_SEG; j++) {
-        const th = (j / RING_SEG) * Math.PI * 2;
-        const c = Math.cos(th) * len, s = Math.sin(th) * len;
-        const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
-        editorEngine.set(ringEnts[i * RING_SEG + j]!, Transform, { pos: [p[0], p[1], p[2]], scale: [seg, seg, seg] });
-      }
-    }
-  }
-  /** Re-place the gizmo on the current selection (or hide it). Sized by camera
-   *  distance so handles stay grabbable at any zoom; shape switches with the mode. */
-  function updateGizmo(): void {
-    // Display gate (w23, D-5): display='game' → hide ALL auxiliary entities.
-    if (!isAuxVisible()) { despawnHandles(); return; }
+  // ── gizmo pools ────────────────────────────────────────────────────────────
+  // Interactive selection gizmo (3 axis handles, shape follows mode) lives in
+  // viewport-gizmo.ts; parameter gizmos (light range/spot cone, camera frustum)
+  // in viewport-param-gizmo.ts. Both spawn on editorEngine (editorWorld — AC-01)
+  // and READ the selected entity from gateway.activeWorld (super moves values
+  // across worlds, never identity). The interactive pool's spawnHandleCube is
+  // shared with the param gizmo (both are dot-clouds of HANDLE_CUBE).
+  const gizmoSelWorldT = (): EditorTransform | undefined => {
     const sel = getSelection();
-    // Read the world-space transform from the engine — the gateway.update / engine.set
-    // in applyLive has already recomputed the world matrix, so there is no lag.
-    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
-    if (sel === null || !t) { despawnHandles(); return; }
-    const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
-    const len = dist * 0.13, thick = dist * 0.007; // thinner handles (½ of the old 0.014)
-    const gm = getGizmoMode();
-    const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';
-    if (shape !== want) { despawnHandles(); buildShape(want); }
-    if (want === 'rings') { positionRings(center, len, thick); return; }
-    positionBars(center, len, thick);
-    if (want === 'translate') positionPlanes(center, len, thick);
-  }
-  /** Which gizmo handle (if any) the ray hits — checked before entity picking.
-   *  Returns 0-2 for an axis bar/ring; 3-5 (= 3 + plane index) for a plane handle.
-   *  Bars/planes: ray vs AABB. Rings: ray hits the axis plane near the ring radius. */
-  function hitGizmo(origin: Vec3, dir: Vec3): number | null {
-    let best: number | null = null, bestT = Infinity;
-    if (shape === 'rings') {
-      const band = Math.max(ringRadius * 0.18, 1e-4);
-      for (let i = 0; i < AXES.length; i++) {
-        const hit = rayPlane(origin, dir, ringCenter, AXES[i]!.axis);
-        if (!hit) continue;
-        const r = Math.hypot(hit[0] - ringCenter[0], hit[1] - ringCenter[1], hit[2] - ringCenter[2]);
-        if (Math.abs(r - ringRadius) > band) continue;
-        const td = Math.hypot(hit[0] - origin[0], hit[1] - origin[1], hit[2] - origin[2]);
-        if (td < bestT) { bestT = td; best = i; }
-      }
-      return best;
-    }
-    // plane handles take priority over the bars they sit between (translate only).
-    for (let i = 0; i < planes.length; i++) {
-      const h = planes[i]!;
-      const t = rayAABB(origin, dir, h.center, h.half);
-      if (t !== null && t < bestT) { bestT = t; best = 3 + i; }
-    }
-    for (let i = 0; i < bars.length; i++) {
-      const h = bars[i]!;
-      const t = rayAABB(origin, dir, h.center, h.half);
-      if (t !== null && t < bestT) { bestT = t; best = i; }
-    }
-    return best;
-  }
-
-  // ── parameter gizmos (design §3): visualize a selected Light's range/spot cone
-  // and a Camera's frustum as dotted world-space wireframes (non-interactive).
-  // Built from a reused cube-dot pool; rebuilt cheaply via placeDots (only spawns
-  // when the dot count changes), so orbiting just re-sets transforms. ──
-  let paramEnts: EntityHandle[] = [];
-  let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
-  function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
-    // M4 (w20): param-gizmo material minted on editorWorld (editorEngine).
-    if (!paramMat) paramMat = editorEngine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1], { castShadow: false }));
-    return paramMat;
-  }
-  function despawnParam(): void {
-    // M4 (w20): param-gizmo entities live in editorWorld → despawn via editorEngine.
-    for (const e of paramEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    paramEnts = [];
-  }
-  function placeDots(points: Vec3[], size: number): void {
-    if (points.length === 0) { despawnParam(); return; }
-    const mat = ensureParamMat();
-    while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
-    while (paramEnts.length > points.length) { const e = paramEnts.pop()!; try { editorEngine.despawn(e); } catch { /* gone */ } }
-    points.forEach((p, i) => editorEngine.set(paramEnts[i]!, Transform, { pos: [p[0], p[1], p[2]], scale: [size, size, size] }));
-  }
-  /** Re-draw the parameter gizmo for the current selection (light/camera) or hide. */
-  function updateParamGizmo(): void {
-    // Display gate (w23): display='game' → hide param gizmos (Light range/spot, Camera frustum).
-    if (!isAuxVisible()) { despawnParam(); return; }
-    const sel = getSelection();
-    // M7-a (AC-15): read the selected entity's components from the world (SSOT),
-    // not the deleted doc.entities mirror. entComponents returns component-name →
-    // POD for every component the entity carries.
-    const comps = sel !== null ? entComponents(gateway.activeWorld, sel) : undefined;
-    if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
-    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
-    const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
-    const light = comps.Light as Record<string, unknown> | undefined;
-    const cam = comps.Camera as Record<string, unknown> | undefined;
-    // The wireframe POINT SETS are pure geometry (viewport-gizmo-geometry.ts); the
-    // engine dot-pool placement (placeDots) is the only side-effecting edge here.
-    const pts: Vec3[] = [];
-    if (light) pts.push(...lightGizmoPoints(light, center, t, dist));
-    if (cam) pts.push(...cameraGizmoPoints(cam, center, t, dist, aspect()));
-    placeDots(pts, Math.max(0.05, dist * 0.006));
-  }
+    return sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
+  };
+  const gizmoPool = createGizmoPool({
+    editorEngine,
+    getSelection,
+    getGizmoMode,
+    getSelectionWorldTransform: gizmoSelWorldT,
+    isAuxVisible,
+    getDist: () => dist,
+  });
+  const paramGizmo = createParamGizmo({
+    editorEngine,
+    spawnHandleCube: gizmoPool.spawnHandleCube,
+    getSelection,
+    getSelectionComponents: () => {
+      const sel = getSelection();
+      return sel !== null ? entComponents(gateway.activeWorld, sel) : undefined;
+    },
+    getSelectionWorldTransform: gizmoSelWorldT,
+    isAuxVisible,
+    getDist: () => dist,
+    getAspect: aspect,
+  });
+  const updateGizmo = (): void => gizmoPool.update();
+  const updateParamGizmo = (): void => paramGizmo.update();
+  const hitGizmo = (origin: Vec3, dir: Vec3): number | null => gizmoPool.hit(origin, dir);
 
   // ── animation scrub preview (Timeline) ──────────────────────────────────────
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
@@ -1289,13 +826,9 @@ onDisplayModeChange(() => refreshGizmos());
       unsubSel();
       unsubMode();
       unsubDoc();
-      unregCameraOrbit();
-      unregCameraFly();
-      unregCameraTeleport();
-      unregCameraLookAt();
-      unregRequestFrame();
-      despawnHandles();
-      despawnParam();
+      unregCameraAppliers();
+      gizmoPool.dispose();
+      paramGizmo.dispose();
     },
     refresh: applyCamera,
     resetCamera,

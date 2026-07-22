@@ -22,15 +22,14 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve, basename, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EDITOR_DIR = resolve(HERE, '..');
-const PORT = 15290;
 const GAME_API_PORT = 15281;
-const BASE = `http://127.0.0.1:${PORT}`;
 
 let pass = 0;
 let fail = 0;
@@ -39,11 +38,30 @@ function check(name, ok, detail = '') {
   else { fail++; console.error(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`); }
 }
 
+async function reserveFreePort() {
+  const server = createServer();
+  await new Promise((resolveReady, rejectReady) => {
+    server.once('error', rejectReady);
+    server.listen(0, '127.0.0.1', resolveReady);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('could not reserve an IPv4 port for B2 self-check');
+  }
+  const { port } = address;
+  await new Promise((resolveClosed, rejectClosed) => server.close((error) => error ? rejectClosed(error) : resolveClosed()));
+  return port;
+}
+
 async function waitFor(url, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const r = await fetch(url);
+      // A persistent CI worker can leave a listener that accepts connections
+      // but never replies. Bound each probe so one stale listener cannot turn a
+      // one-minute readiness budget into a five-minute opaque timeout.
+      const r = await fetch(url, { signal: AbortSignal.timeout(2_000) });
       if (r.ok || r.status === 404) return true; // server is answering
     } catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 500));
@@ -56,6 +74,8 @@ async function main() {
   const tmp = await mkdtemp(join(tmpdir(), 'fx-b2-'));
   const gameDir = resolve(tmp, 'selfcheck-game');
   const slug = basename(gameDir);
+  const port = await reserveFreePort();
+  const base = `http://127.0.0.1:${port}`;
   await mkdir(resolve(gameDir, 'scenes'), { recursive: true });
   await writeFile(resolve(gameDir, 'forge.json'), JSON.stringify({ name: slug, scenes: [] }));
   await writeFile(resolve(tmp, 'secret.txt'), 'top secret');
@@ -66,6 +86,7 @@ async function main() {
     ...process.env,
     FORGEAX_GAME_DIR: gameDir,
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
+    FORGEAX_STANDALONE_PORT: String(port),
   };
   const backend = spawn('bun', ['standalone/game-backend.ts'], {
     cwd: EDITOR_DIR, env, stdio: ['ignore', 'pipe', 'pipe'],
@@ -86,16 +107,16 @@ async function main() {
   };
 
   try {
-    const up = await waitFor(`${BASE}/api/files/tree?root=${encodeURIComponent(slug)}`);
+    const up = await waitFor(`${base}/api/files/tree?root=${encodeURIComponent(slug)}`);
     if (!up) {
-      console.error('host :15290 never came up. Recent log:\n' + log.slice(-1500));
+      console.error(`host :${port} never came up. Recent log:\n` + log.slice(-1500));
       process.exitCode = 1;
       return;
     }
 
     // (1) tree — rooted at slug, client-space paths
     {
-      const r = await fetch(`${BASE}/api/files/tree?root=${encodeURIComponent(slug)}`);
+      const r = await fetch(`${base}/api/files/tree?root=${encodeURIComponent(slug)}`);
       const body = await r.json();
       check('GET /api/files/tree → 200', r.status === 200, `status ${r.status}`);
       check('tree.path === slug (client space)', body?.tree?.path === slug, JSON.stringify(body?.tree?.path));
@@ -105,7 +126,7 @@ async function main() {
 
     // (2) read existing file
     {
-      const r = await fetch(`${BASE}/api/files?path=${encodeURIComponent(`${slug}/forge.json`)}`);
+      const r = await fetch(`${base}/api/files?path=${encodeURIComponent(`${slug}/forge.json`)}`);
       const body = await r.json();
       check('GET /api/files (read) → 200', r.status === 200, `status ${r.status}`);
       check('read content includes slug', typeof body?.content === 'string' && body.content.includes(slug));
@@ -115,7 +136,7 @@ async function main() {
     const writePath = `${slug}/scenes/selfcheck.pack.json`;
     const payload = JSON.stringify({ ok: true, ts: 'b2' });
     {
-      const r = await fetch(`${BASE}/api/files`, {
+      const r = await fetch(`${base}/api/files`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: writePath, content: payload }),
@@ -127,14 +148,14 @@ async function main() {
 
     // (4) read it back — persistence
     {
-      const r = await fetch(`${BASE}/api/files?path=${encodeURIComponent(writePath)}`);
+      const r = await fetch(`${base}/api/files?path=${encodeURIComponent(writePath)}`);
       const body = await r.json();
       check('GET written file → persisted content matches', body?.content === payload, JSON.stringify(body?.content));
     }
 
     // (5) confinement — escape the game dir → rejected
     {
-      const r = await fetch(`${BASE}/api/files`, {
+      const r = await fetch(`${base}/api/files`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: `${slug}/../secret.txt`, content: 'pwned' }),
@@ -149,14 +170,14 @@ async function main() {
     //     (workbench-api-rename: workspace-layout → workbench-layout, ids scene/ai.)
     {
       // empty workbench-layout → 200 + json null (not 404, not SPA html)
-      const rGet = await fetch(`${BASE}/api/prefs/workbench-layout/scene`);
+      const rGet = await fetch(`${base}/api/prefs/workbench-layout/scene`);
       const ct = rGet.headers.get('content-type') ?? '';
       check('GET /api/prefs/workbench-layout → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
       check('empty layout → null', (await rGet.json()) === null);
 
       // PUT a layout → ok, then GET it back (persists under <game>/.forgeax/prefs)
       const layout = { panels: { main: {} }, ts: 'b2-prefs' };
-      const rPut = await fetch(`${BASE}/api/prefs/workbench-layout/scene`, {
+      const rPut = await fetch(`${base}/api/prefs/workbench-layout/scene`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(layout),
@@ -164,7 +185,7 @@ async function main() {
       const putBody = await rPut.json();
       check('PUT /api/prefs/workbench-layout → 200 ok', rPut.status === 200 && putBody?.ok === true, `status ${rPut.status} ${JSON.stringify(putBody)}`);
 
-      const rBack = await fetch(`${BASE}/api/prefs/workbench-layout/scene`);
+      const rBack = await fetch(`${base}/api/prefs/workbench-layout/scene`);
       const back = await rBack.json();
       check('GET written layout → persisted content matches', back?.ts === 'b2-prefs', JSON.stringify(back));
     }
@@ -176,11 +197,11 @@ async function main() {
     //     hatch must not loosen genuine missing-dir errors other callers rely on).
     {
       const absent = `${slug}/no-such-dir`;
-      const rOpt = await fetch(`${BASE}/api/files/tree?root=${encodeURIComponent(absent)}&optional=1`);
+      const rOpt = await fetch(`${base}/api/files/tree?root=${encodeURIComponent(absent)}&optional=1`);
       const optBody = await rOpt.json();
       check('GET /api/files/tree absent &optional=1 → 200 {tree:null}', rOpt.status === 200 && optBody?.tree === null, `status ${rOpt.status} ${JSON.stringify(optBody)}`);
 
-      const rReq = await fetch(`${BASE}/api/files/tree?root=${encodeURIComponent(absent)}`);
+      const rReq = await fetch(`${base}/api/files/tree?root=${encodeURIComponent(absent)}`);
       check('GET /api/files/tree absent (no optional) → 404 (default held)', rReq.status === 404, `status ${rReq.status}`);
     }
   } finally {

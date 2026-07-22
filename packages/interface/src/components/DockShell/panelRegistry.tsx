@@ -12,7 +12,6 @@ import type { ReactNode } from 'react';
 import type { IDockviewPanelProps } from 'dockview';
 import { Sidebar } from '../Sidebar/Sidebar';
 import { MainArea } from '../MainArea/MainArea';
-import { ViewportPanel } from '../MainArea/SurfacePanels';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
 import { TelemetryViewer } from '../MainArea/TelemetryViewer';
@@ -63,9 +62,9 @@ export const CORE_PANELS: PanelDef[] = [
   // which was redundant with the top-level workbench tab strip). It renders MainArea.
   { id: 'main', title: 'Studio', group: 'core', canPopOut: true, render: () => <MainArea /> },
   // In flat-architecture mode 'viewport' is the combined panel (engine canvas +
-  // gizmo); the editor's React sub-panels live as ep:* panels.
-  // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
-  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, tourId: 'preview', render: () => <ViewportPanel /> },
+  // gizmo). Its body is contributed via panels.viewport, same as chat/ep:*
+  // panels; the descriptor renders the anchor tracked by SurfaceKeepAliveLayer.
+  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, tourId: 'preview', render: () => <DockPanelHost id="viewport" /> },
   // R4: chat body comes from the studio-injected panels['chat'] registry.
   { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, tourId: 'chat', render: () => <DockPanelHost id="chat" /> },
 ];

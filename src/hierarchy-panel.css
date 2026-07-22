@@ -1,0 +1,159 @@
+.fx-panel-header-zone[data-zone="left"]:has(.fx-panel-control[data-control="hierarchy.search"]) {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.fx-panel-toolbar:has(.fx-panel-control[data-control="hierarchy.search"]) {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.fx-panel-control[data-control="hierarchy.search"] {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.hierarchy-search-control {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 7px;
+  background: var(--color-background-elevated);
+}
+
+.hierarchy-search-control:focus-within {
+  border-color: var(--color-brand-line, var(--color-brand-primary));
+}
+
+.hierarchy-search-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+
+.hierarchy-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  box-shadow: none;
+  font-size: 12px;
+  line-height: 1;
+  outline: none;
+}
+
+.hierarchy-search-input:focus,
+.hierarchy-search-input:focus-visible {
+  box-shadow: none;
+  outline: none;
+}
+
+.hierarchy-search-clear {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  color: var(--color-text-tertiary);
+}
+
+.hierarchy-search-clear:disabled {
+  opacity: 0;
+}
+
+.hierarchy-header-icon {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 7px;
+  background: var(--color-background-elevated);
+  color: var(--color-text-tertiary);
+}
+
+.hierarchy-header-icon:hover,
+.hierarchy-header-icon[data-state="open"],
+.hierarchy-header-icon[data-active="true"] {
+  border-color: var(--color-border-default);
+  color: var(--color-text-primary);
+  background: var(--color-background-elevated);
+}
+
+.hierarchy-header-menu {
+  min-width: 214px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: var(--color-background-floating);
+  padding: 6px;
+  color: var(--color-text-secondary);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.6);
+  animation-duration: 120ms;
+}
+
+.hierarchy-dd-title {
+  padding: 5px 8px 6px;
+  color: var(--color-text-tertiary);
+  font-family: var(--prim-font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.hierarchy-dd-item {
+  min-height: 27px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.hierarchy-dd-item:hover,
+.hierarchy-dd-item:focus,
+.hierarchy-dd-item[data-highlighted] {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-primary);
+}
+
+.hierarchy-dd-checkbox {
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.hierarchy-dd-tico {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+
+.hierarchy-dd-tico svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.7;
+}
+
+.hierarchy-dd-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--color-divider-default);
+}

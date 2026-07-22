@@ -393,10 +393,18 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  anchored). Returns true on success. @internal-store — disk-watch CALLS this
    *  to reload (D-6 seam).
    *
-   *  SAFETY: teardown is deferred until AFTER loadByGuid + instantiateFlat both
-   *  succeed. If either step fails, the previous scene stays intact and no empty
-   *  world is exposed to save paths. On success the old entities are despawned
-   *  and replaced atomically. */
+   *  LOAD ORDER: resolve the SceneAsset bytes first, then tear down the old
+   *  authored tree, then instantiate the replacement. We must not materialise
+   *  two scene graphs in the same World and subsequently try to identify the old
+   *  one by root handles: nested SceneInstance anchors and their derived members
+   *  share ChildOf/Children teardown paths with their wrapper. The former
+   *  instantiate-then-teardown order could therefore despawn a freshly-created
+   *  mount member, leaving an anchor whose mapping only contained stale handles
+   *  (Fox / imported GLB vanished after Save -> reopen).
+   *
+   *  `loadByGuid` remains before teardown, so a missing/corrupt pack leaves the
+   *  current scene intact. Once a valid payload is available, replacement is
+   *  deliberately single-tree rather than pseudo-atomic in one World. */
   async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
@@ -405,18 +413,17 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(sceneGuid);
       if (!parsed.ok) return false;
-      // Load and instantiate BEFORE teardown so a failure leaves the old scene
-      // intact (no empty world exposed to save paths).
+      // Fetch + parse before touching the current world. A load failure leaves
+      // the current scene intact.
       const loadRes = await reg.loadByGuid(parsed.value);
       if (!loadRes.ok) return false;
       const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
+      // Do not overlap the replacement with the old scene in one World. See the
+      // load-order invariant above: teardown after instantiation can delete the
+      // new nested SceneInstance members through an old wrapper's subtree.
+      teardownCurrentScene();
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) return false;
-      // Load succeeded — now safe to tear down the previous scene.
-      // Pass the newly-spawned handles so teardown's worldRootHandles sweep
-      // skips them (they are already in the world at this point).
-      const newHandleSet = new Set(instRes.value.map((e: unknown) => e as number));
-      teardownCurrentScene(newHandleSet);
       // Track the scene's top-level entities so a later reload can despawn them.
       ctx.currentSceneEntities = instRes.value;
       return true;

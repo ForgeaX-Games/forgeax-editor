@@ -20,16 +20,20 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
       size: 812,
       data: [
         {
-          type: 'leaf',
+          type: 'branch',
           size: 340,
-          data: {
-            views: [
-              'ep:hierarchy', 'ep:inspector', 'ep:launcher',
-              'ep:asset-inspector',
-            ],
-            activeView: 'ep:hierarchy',
-            id: 'g-left-tabs',
-          },
+          data: [
+            {
+              type: 'leaf',
+              size: 430,
+              data: { views: ['ep:hierarchy'], activeView: 'ep:hierarchy', id: 'g-hierarchy' },
+            },
+            {
+              type: 'leaf',
+              size: 382,
+              data: { views: ['ep:inspector'], activeView: 'ep:inspector', id: 'g-inspector' },
+            },
+          ],
         },
         {
           type: 'branch',
@@ -40,7 +44,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
               type: 'leaf',
               size: 200,
               data: {
-                views: ['ep:assets', 'ep:history', 'ep:capabilities', 'info'],
+                views: ['ep:assets', 'info'],
                 activeView: 'ep:assets',
                 id: 'g-history',
               },
@@ -59,11 +63,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
     'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
     'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
-    'ep:launcher': { id: 'ep:launcher', contentComponent: 'ep:launcher', title: 'Launcher' },
-    'ep:asset-inspector': { id: 'ep:asset-inspector', contentComponent: 'ep:asset-inspector', title: 'Asset Inspector' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
-    'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
-    'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
     info: { id: 'info', contentComponent: 'info', title: 'Info' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
   },

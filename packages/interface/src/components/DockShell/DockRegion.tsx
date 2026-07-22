@@ -523,7 +523,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             // Drop restored panels that no longer belong to THIS region.
             closeStrayPanels(api);
             const anchor = newId === 'ai' ? 'main' : null;
-            if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
+          if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
             // anchor missing — fall through to buildDefault
           }
         } catch { /* fall through */ }
@@ -813,7 +813,6 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         className="dockview-theme-abyss fx-dockshell"
         components={components}
         onReady={onReady}
-        singleTabMode="fullwidth"
         disableFloatingGroups={false}
         // Cross-instance drag & drop (§P2/T3): dockview 6.6.1 doesn't auto-move
         // panels between DockviewComponent instances. We reconcile imperatively —

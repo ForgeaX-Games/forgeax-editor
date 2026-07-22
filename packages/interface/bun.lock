@@ -5,7 +5,7 @@
     "": {
       "name": "forgeax-interface",
       "dependencies": {
-        "@forgeax-studio/extension-platform": "0.0.1",
+        "@forgeax/extension-platform": "0.0.2",
         "@google/model-viewer": "^4.2.0",
         "@radix-ui/react-alert-dialog": "^1.1.6",
         "@radix-ui/react-checkbox": "^1",
@@ -74,7 +74,7 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.12", "", {}, "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww=="],
 
-    "@forgeax-studio/extension-platform": ["@forgeax-studio/extension-platform@0.0.1", "", {}, "sha512-7wKsVr47tLZyKjumaWlIBnkVFbtsEZDnuc0USACDrczYkKC9yXFz2/m71MKZVrbAhP8jQ0HAKeDO21767DZeSA=="],
+    "@forgeax/extension-platform": ["@forgeax/extension-platform@0.0.2", "", {}, "sha512-FvPk1d/s1x1jM4T0IAaTZrzniKzpIY/FRXQMgXsxt9MI94YH9msm0yo3GCYHEfsn2E9X0s0qmHGDqk5Kx2LSNA=="],
 
     "@google/model-viewer": ["@google/model-viewer@4.2.0", "", { "dependencies": { "@monogrid/gainmap-js": "^3.1.0", "lit": "^3.2.1" }, "peerDependencies": { "three": "^0.182.0" } }, "sha512-RjpAI5cLs9CdvPcMRsOs8Bea/lNmGTTyaPyl16o9Fv6Qn8VSpgBMmXFr/11yb0hTrsojp2dOACEcY77R8hVUVA=="],
 

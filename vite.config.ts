@@ -58,6 +58,11 @@ const GAME_DIR = process.env.FORGEAX_GAME_DIR
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
 const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
+// The normal editor host remains :15290.  B2 self-boot deliberately supplies a
+// private free port, though: its self-hosted runner is persistent and can retain
+// a prior dev-server process, so probing the fixed human-development port can
+// otherwise block on an unrelated listener before this Vite instance has bound.
+const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? 15290);
 
 // D7: the shared engine-serve fragment. base '/' (this IS the host origin —
 // shader/pack routes arrive un-prefixed, no base-strip needed); gameDirAbs =
@@ -180,7 +185,7 @@ export default defineConfig({
     include: ['react', 'react-dom', 'react-dom/client'],
   },
   server: {
-    port: 15290,
+    port: STANDALONE_PORT,
     strictPort: true,
     host: '127.0.0.1',
     fs: {

@@ -13,6 +13,7 @@ export interface MenuItemDef {
   disabled?: boolean;
   danger?: boolean;
   sep?: boolean;
+  children?: MenuItemDef[];
 }
 
 export type ContextMenuRequest = { x: number; y: number; items: MenuItemDef[] };
@@ -36,8 +37,7 @@ export function showContextMenu(
   items: MenuItemDef[],
 ): void {
   e.preventDefault();
-  const usable = items.filter((it) => it.sep || it.label || it.title);
+  const usable = items.filter((it) => it.sep || it.label || it.title || (it.children && it.children.length > 0));
   if (usable.length === 0) return;
   renderMenu?.({ x: e.clientX, y: e.clientY, items: usable });
 }
-

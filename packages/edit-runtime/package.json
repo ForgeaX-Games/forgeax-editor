@@ -22,6 +22,10 @@
       "types": "./src/viewport/viewport-quadrant.ts",
       "import": "./src/viewport/viewport-quadrant.ts"
     },
+    "./fps": {
+      "types": "./src/fps-store.ts",
+      "import": "./src/fps-store.ts"
+    },
     "./visual-source": {
       "types": "./src/viewport/visual-source.ts",
       "import": "./src/viewport/visual-source.ts"

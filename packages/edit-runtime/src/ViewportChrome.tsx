@@ -1,7 +1,8 @@
 // ViewportChrome — conditional wrapper for the editor chrome layer
 // (feat-20260630-viewport M5 / w24, requirements AC-13).
 //
-// display='scene': full ViewportBar + ViewportHints rendered (editor mode).
+// display='scene': ViewportHints rendered (editor mode). The toolbar is now the
+// host panel header, contributed through the unified panel action/control path.
 // display='game': both hidden; GameOverlay provides a minimal semi-transparent
 //   hover bar with Play/Stop + FPS so the user has a discoverable exit path.
 //
@@ -10,7 +11,6 @@
 
 import { useState, useEffect } from 'react';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
-import { ViewportBar } from './ViewportBar';
 import { ViewportHints } from './ViewportHints';
 import { GameOverlay } from './GameOverlay';
 
@@ -20,10 +20,9 @@ interface ViewportChromeProps {
   onStop: () => void;
   onToggleDisplay: () => void;
   onControlGame: () => void;
-  onFullscreen: () => void;
 }
 
-export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControlGame, onFullscreen }: ViewportChromeProps) {
+export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControlGame }: ViewportChromeProps) {
   const [isGame, setIsGame] = useState<boolean>(() => getViewportQuadrant().display === 'game');
 
   useEffect(() => {
@@ -46,9 +45,6 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControl
   }
 
   return (
-    <>
-      <ViewportBar onPlay={onPlay} onStop={onStop} onToggleDisplay={onToggleDisplay} onFullscreen={onFullscreen} />
-      <ViewportHints />
-    </>
+    <ViewportHints />
   );
 }
