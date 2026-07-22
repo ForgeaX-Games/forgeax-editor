@@ -810,6 +810,7 @@
       "dependencies": {
         "@forgeax/editor-content-browser": "workspace:*",
         "@forgeax/editor-core": "workspace:*",
+        "@forgeax/editor-ui": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "lucide-react": "^0.460.0",

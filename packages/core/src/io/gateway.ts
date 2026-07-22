@@ -42,6 +42,8 @@ import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
 // triggering a SPAWN_FAILED). Derive, don't duplicate.
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { getSourceFileDeleteStatus } from '../session/source-file-delete-status';
+import type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -1175,6 +1177,11 @@ export class EditGateway {
    */
   assetCatalog(): readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] {
     return this.doc.registry?.listCatalog() ?? [];
+  }
+
+  /** Read the terminal state of an accepted deleteSourceFile request. */
+  sourceFileDeleteStatus(requestId: string): SourceFileDeleteStatus | null {
+    return getSourceFileDeleteStatus(requestId);
   }
 
   /**

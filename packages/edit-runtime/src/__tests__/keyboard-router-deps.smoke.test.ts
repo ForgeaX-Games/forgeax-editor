@@ -29,12 +29,16 @@ const EXPECTED_KEYS = [
   'selectAllAssets',
   'getFolderSelection',
   'deleteFolders',
+  'undo',
+  'redo',
+  'save',
+  'handleViewportKeyDown',
 ] as const;
 
 describe('buildKeyboardRouterDeps — router dep shape (keyboard-router convergence)', () => {
   afterEach(() => setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' }));
 
-  it('returns exactly the 17 interface KeyboardRouterDeps callbacks', () => {
+  it('returns exactly the interface KeyboardRouterDeps callbacks', () => {
     const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true });
     const rec = deps as unknown as Record<string, unknown>;
     for (const k of EXPECTED_KEYS) {

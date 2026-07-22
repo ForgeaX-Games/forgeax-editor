@@ -107,6 +107,13 @@ export interface Viewport {
   resetCamera(): void;
 }
 
+let activeViewportKeyHandler: ((event: KeyboardEvent) => void) | null = null;
+
+/** Read-only bridge consumed by the single interface keyboard router. */
+export function getViewportKeyHandler(): ((event: KeyboardEvent) => void) | null {
+  return activeViewportKeyHandler;
+}
+
 const FOV = Math.PI / 3;
 
 export function createViewport({ canvas, engine, editorEngine, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
@@ -730,14 +737,9 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // live in the single global-shortcuts router (interface submodule). This keeps
   // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
   // through the one gateway door.
-  function onKey(e: KeyboardEvent): void {
-    // T2b: mirror fly keys in the existing global keydown hook (G-1 allows no
-    // second window keydown listener). flyTick only runs in fly mode, so tracking
-    // here does not move the camera while typing in a field.
+  function handleViewportKeyDown(e: KeyboardEvent): void {
     const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
-      keyState[k] = true;
-    }
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') keyState[k] = true;
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
@@ -775,11 +777,11 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   window.addEventListener('pointerup', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContext);
-  window.addEventListener('keydown', onKey);
-  // T2b: keyup/blur release fly keys tracked by onKey above.
+  // T2b: keyup/blur release fly keys tracked by the injected keydown bridge.
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
   canvas.addEventListener('dblclick', onDblClick);
+  activeViewportKeyHandler = handleViewportKeyDown;
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
@@ -818,10 +820,10 @@ onDisplayModeChange(() => refreshGizmos());
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
-      window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       canvas.removeEventListener('dblclick', onDblClick);
+      if (activeViewportKeyHandler === handleViewportKeyDown) activeViewportKeyHandler = null;
       if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
       unsubSel();
       unsubMode();

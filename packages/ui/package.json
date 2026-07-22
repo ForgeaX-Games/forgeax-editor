@@ -47,6 +47,10 @@
       "types": "./src/components/icon.tsx",
       "import": "./src/components/icon.tsx"
     },
+    "./asset-thumbnail": {
+      "types": "./src/components/asset-thumbnail.tsx",
+      "import": "./src/components/asset-thumbnail.tsx"
+    },
     "./input-group": {
       "types": "./src/components/input-group.tsx",
       "import": "./src/components/input-group.tsx"

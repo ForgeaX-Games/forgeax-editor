@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ChevronDown, Eye, EyeOff, Loader2, Search } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import type { ModelCatalogEntry } from '../../lib/model-config';
@@ -137,30 +137,6 @@ export function ModelPicker(props: ModelPickerProps) {
     }
   }, [open, variant]);
 
-  // Keyboard navigation: ↑↓ to move focus, ⏎ to commit. (Esc handled by Popover.)
-  useEffect(() => {
-    if (!open && variant !== 'inline') return;
-    const onKey = (e: KeyboardEvent) => {
-      const total = flat.length;
-      if (total === 0) return;
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setFocused((i) => (i < 0 ? 0 : (i + 1) % total));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setFocused((i) => (i <= 0 ? total - 1 : i - 1));
-      } else if (e.key === 'Enter') {
-        if (focused < 0 || focused >= total) return;
-        const m = flat[focused];
-        if (!m) return;
-        e.preventDefault();
-        void commit(m.id);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, variant, flat, focused]);
-
   const commit = async (modelId: string) => {
     if (disabled) return;
     if (isMulti) {
@@ -194,6 +170,23 @@ export function ModelPicker(props: ModelPickerProps) {
     }
     (props as SingleProps).onChange(modelId);
     setOpen(false);
+  };
+
+  const handlePickerKeyDown = (e: ReactKeyboardEvent) => {
+    const totalRows = flat.length;
+    if (totalRows === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocused((i) => (i < 0 ? 0 : (i + 1) % totalRows));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocused((i) => (i <= 0 ? totalRows - 1 : i - 1));
+    } else if (e.key === 'Enter') {
+      const m = flat[focused];
+      if (!m) return;
+      e.preventDefault();
+      void commit(m.id);
+    }
   };
 
   const displayLabel = !isMulti ? (props as SingleProps).displayLabel : undefined;
@@ -342,7 +335,7 @@ export function ModelPicker(props: ModelPickerProps) {
 
   if (variant === 'inline') {
     return (
-      <div ref={rootRef} className={`mp-root mp-inline${className ? ' ' + className : ''}`}>
+      <div ref={rootRef} className={`mp-root mp-inline${className ? ' ' + className : ''}`} onKeyDown={handlePickerKeyDown} tabIndex={-1}>
         {renderMenu()}
       </div>
     );
@@ -350,7 +343,7 @@ export function ModelPicker(props: ModelPickerProps) {
 
   const triggerCls = variant === 'pill' ? 'mp-trigger mp-pill' : 'mp-trigger mp-button';
   return (
-    <div ref={rootRef} className={`mp-root${className ? ' ' + className : ''}`}>
+    <div ref={rootRef} className={`mp-root${className ? ' ' + className : ''}`} onKeyDown={handlePickerKeyDown} tabIndex={-1}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button

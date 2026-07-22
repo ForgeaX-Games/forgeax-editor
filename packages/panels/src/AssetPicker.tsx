@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { gateway } from '@forgeax/editor-core';
-import { ForgeaxIcon } from '@forgeax/editor-ui';
+import { ForgeaxIcon, AssetThumbnail } from '@forgeax/editor-ui';
 import './inspector.css';
 
 // kind → editor asset-union tag. Mirrors the (newer) core schema.ts
@@ -56,29 +56,17 @@ interface Row {
   guid: string;
   kind: string;
   name: string;
+  relativeUrl: string;
 }
 
-// A tiny inline swatch: material → its baseColor square, everything else → a
-// kind-lettered box. Avoids a full thumbnail renderer (absent in this copy).
-function Swatch({ guid, kind }: { guid: string; kind: string }) {
+// Real asset preview via the shared editor-ui primitive: image thumbnail for
+// texture/image, material baseColor sphere, kind-tinted glyph otherwise. The
+// POD payload (baseColor, source, …) comes from the by-guid describe leg; the
+// catalog relativeUrl lets texture kinds resolve an image URL.
+function Swatch({ guid, kind, relativeUrl }: { guid: string; kind: string; relativeUrl?: string }) {
   const desc = gateway.describeAssetByGuid(guid);
   const meta = desc?.ok ? (desc.meta as Record<string, unknown> | undefined) : undefined;
-  const bc = (meta?.paramValues as Record<string, unknown> | undefined)?.baseColor as number[] | undefined;
-  const color = kind === 'material' && bc && bc.length >= 3
-    ? `rgb(${Math.round(bc[0]! * 255)},${Math.round(bc[1]! * 255)},${Math.round(bc[2]! * 255)})`
-    : 'var(--color-background-floating)';
-  return (
-    <span
-      style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 20, height: 20, minWidth: 20, borderRadius: 3,
-        border: '1px solid var(--color-border-default)', background: color,
-        fontSize: 10, color: 'var(--color-text-tertiary)', textTransform: 'uppercase',
-      }}
-    >
-      {kind === 'material' ? '' : kind.slice(0, 1)}
-    </span>
-  );
+  return <AssetThumbnail kind={kind} payload={meta} packPath={relativeUrl} size={20} />;
 }
 
 export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }: AssetPickerProps) {
@@ -91,7 +79,7 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
     const out: Row[] = [];
     for (const e of catalog) {
       if (assetKindToType(e.kind) !== assetType) continue;
-      out.push({ guid: e.guid, kind: e.kind, name: e.name ?? e.guid });
+      out.push({ guid: e.guid, kind: e.kind, name: e.name ?? e.guid, relativeUrl: e.relativeUrl });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
@@ -188,7 +176,7 @@ function PickerRow({ row, active, focused, onHover, onClick }: { row: Row; activ
       title={`${row.name}\n${row.kind} · ${row.guid}`}
       style={rowStyle(active, focused)}
     >
-      <Swatch guid={row.guid} kind={row.kind} />
+      <Swatch guid={row.guid} kind={row.kind} relativeUrl={row.relativeUrl} />
       <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.name}
       </span>

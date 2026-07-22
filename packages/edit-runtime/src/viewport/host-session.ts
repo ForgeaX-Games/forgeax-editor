@@ -172,6 +172,9 @@ export interface HostSession {
    * calls it (teardown = page navigation).
    */
   dispose(options?: { flushPendingSave?: boolean }): void;
+  /** Returns the live play App's pause/resume handle while playing, null in edit
+   *  mode. Used by installVisibilityPause (D-2 mutual exclusion). */
+  getPlayPauseHandle(): { pause(): void; resume(): void } | null;
 }
 
 /**
@@ -661,7 +664,10 @@ export function createHostSession(deps: HostSessionDeps): {
       disposeSaveBeacons();
     };
 
-    return { playSimulation, stopSimulation, dispose };
+    const getPlayPauseHandle = (): { pause(): void; resume(): void } | null =>
+      runLifecycle?.getPlayPauseHandle() ?? null;
+
+    return { playSimulation, stopSimulation, dispose, getPlayPauseHandle };
   }
 
   // ── mesh-stats publisher (was bootEditor :1105) ───────────────────────────────

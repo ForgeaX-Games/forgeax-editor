@@ -57,7 +57,7 @@
 //        node scripts/lint-unique-mutator.mjs --diff-file <path>  (synthetic diff)
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, lstatSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -254,7 +254,14 @@ function collectSourceFiles(baseDir) {
       const abs = join(absDir, name);
       const rel = relDir ? `${relDir}/${name}` : name;
       let st;
-      try { st = statSync(abs); } catch { continue; }
+      try {
+        // Runtime Vite farms (shared-assets/host-games) are generated symlinks
+        // to host-owned content. Never follow them into the editor source
+        // ratchet: doing so makes external game code look like a local editor
+        // mutation regression and makes the gate depend on machine state.
+        if (lstatSync(abs).isSymbolicLink()) continue;
+        st = statSync(abs);
+      } catch { continue; }
       if (st.isDirectory()) walk(abs, rel);
       else if (/\.tsx?$/.test(rel)) out.push({ abs, rel });
     }

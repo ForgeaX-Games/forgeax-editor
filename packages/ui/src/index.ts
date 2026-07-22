@@ -16,6 +16,13 @@ export { ButtonGroup, type ButtonGroupProps } from './components/button-group';
 export { IconButton, type IconButtonProps } from './components/icon-button';
 export { ForgeaxIcon, type ForgeaxIconProps } from './components/icon';
 export { FORGEAX_ICONS, type ForgeaxIconName } from './icons/registry';
+export {
+  AssetThumbnail,
+  getThumbnailData,
+  type AssetThumbnailInput,
+  type AssetThumbnailProps,
+  type ThumbnailData,
+} from './components/asset-thumbnail';
 export { Input, type InputProps } from './components/input';
 export { InputGroup, InputGroupAddon, InputGroupInput, InputGroupButton } from './components/input-group';
 export { Textarea, type TextareaProps } from './components/textarea';

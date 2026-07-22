@@ -17,6 +17,7 @@ import {
   type UiActionDef,
   type UiActionSummary,
 } from '../../lib/action-registry';
+import { setCommandPaletteOpen, useCommandPaletteOpen } from '../../lib/command-palette-store';
 import './CommandPalette.css';
 
 interface ParamSpec {
@@ -75,7 +76,7 @@ function typeHint(p: ParamSpec): string {
 type Feedback = { kind: 'ok' | 'err'; text: string } | null;
 
 export function CommandPalette() {
-  const [open, setOpen] = useState(false);
+  const open = useCommandPaletteOpen();
   const [rows, setRows] = useState<UiActionSummary[]>([]);
   const [formDef, setFormDef] = useState<UiActionDef | null>(null); // 非空 = 处于参数引导子界面
   const [values, setValues] = useState<Record<string, string>>({});
@@ -90,7 +91,7 @@ export function CommandPalette() {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
     }
-    setOpen(false);
+    setCommandPaletteOpen(false);
     setFormDef(null);
     setValues({});
     setFeedback(null);
@@ -108,31 +109,6 @@ export function CommandPalette() {
   useEffect(() => () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
-
-  // Ctrl/⌘+K 开合;Escape 分级(参数界面→返回列表,列表→关闭)。IME 组合中不触发。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.isComposing) return;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setOpen((v) => !v);
-      } else if (e.key === 'Escape' && open) {
-        e.preventDefault();
-        // 用函数式读最新 formDef:有则退回列表,无则关闭。
-        setFormDef((f) => {
-          if (f) {
-            setValues({});
-            setFeedback(null);
-            return null;
-          }
-          setOpen(false);
-          return null;
-        });
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
 
   // 打开时取一次注册表快照;available 的排前面。
   useEffect(() => {
@@ -244,7 +220,14 @@ export function CommandPalette() {
   if (formDef) {
     const params = paramsOf(formDef);
     return (
-      <div className="fx-cmdk-overlay" onClick={close}>
+      <div className="fx-cmdk-overlay" onClick={close} onKeyDown={(e) => {
+        if (e.isComposing) return;
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          if (formDef) { setFormDef(null); setValues({}); setFeedback(null); }
+          else close();
+        }
+      }} tabIndex={-1}>
         <div className="fx-cmdk-panel" onClick={(e) => e.stopPropagation()}>
           <div className="fx-cmdk-form-head">
             <button className="fx-cmdk-back" type="button" onClick={() => setFormDef(null)} title="返回命令列表">
@@ -361,7 +344,9 @@ export function CommandPalette() {
 
   // ── 命令列表 ──────────────────────────────────────────────────────────────
   return (
-    <div className="fx-cmdk-overlay" onClick={close}>
+    <div className="fx-cmdk-overlay" onClick={close} onKeyDown={(e) => {
+      if (!e.isComposing && e.key === 'Escape') { e.preventDefault(); close(); }
+    }} tabIndex={-1}>
       <div className="fx-cmdk-panel" onClick={(e) => e.stopPropagation()}>
         <Command label="命令面板">
           <Command.Input autoFocus placeholder="输入命令…(与 AI 可调用的功能同一张注册表)" />

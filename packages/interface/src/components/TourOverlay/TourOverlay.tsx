@@ -167,25 +167,6 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
     coachRef.current?.focus();
   }, [stepIndex]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(false); }
-      else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); goNext(); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev(); }
-      else if (e.key === 'Tab') {
-        // single focusable container — keep focus inside.
-        const focusables = coachRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)');
-        if (!focusables || focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [goNext, goPrev, onClose]);
-
   if (!step) return null;
   const coach = coachPosition(anchorRect);
   const ring = anchorRect ? ringBox(anchorRect) : null;
@@ -225,6 +206,19 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
         className="tour-coach"
         ref={coachRef}
         tabIndex={-1}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.preventDefault(); onClose(false); }
+          else if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); goNext(); }
+          else if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev(); }
+          else if (e.key === 'Tab') {
+            const focusables = coachRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)');
+            if (!focusables || focusables.length === 0) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+          }
+        }}
         style={{ top: coach.top, left: coach.left, width: COACH_W }}
       >
         <div className="tour-coach-head">

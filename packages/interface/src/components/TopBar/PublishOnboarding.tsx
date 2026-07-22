@@ -145,14 +145,8 @@ export function PublishOnboarding({ active, onClose, setMenuOpen, t }: PublishOn
   useEffect(() => {
     if (!active) return;
     const onResize = () => measure();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'Enter') next();
-      else if (e.key === 'ArrowLeft') prev();
-      else if (e.key === 'Escape') finish();
-    };
     window.addEventListener('resize', onResize);
-    window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey); };
+    return () => { window.removeEventListener('resize', onResize); };
   }, [active, measure, next, prev, finish]);
 
   if (!active || !geo || !step) return null;
@@ -175,7 +169,12 @@ export function PublishOnboarding({ active, onClose, setMenuOpen, t }: PublishOn
           </svg>
         </div>
       )}
-      <div className="fx-ob-tip" data-arrow={geo.arrow} style={{ top: geo.tip.top, left: geo.tip.left }}>
+      <div className="fx-ob-tip" data-arrow={geo.arrow} tabIndex={-1}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); next(); }
+          else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
+          else if (e.key === 'Escape') { e.preventDefault(); finish(); }
+        }} style={{ top: geo.tip.top, left: geo.tip.left }}>
         <span
           className="fx-ob-arrow"
           style={geo.arrow === 'up' ? { left: geo.arrowPos } : { top: geo.arrowPos }}

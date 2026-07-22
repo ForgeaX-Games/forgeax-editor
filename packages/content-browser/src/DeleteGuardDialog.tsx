@@ -34,12 +34,6 @@ export function DeleteGuardDialog({
 
   useEffect(() => {
     confirmRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
-      else if (e.key === 'Enter') { e.preventDefault(); onConfirm(); }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
   }, [onConfirm, onCancel]);
 
   const count = targets.length;
@@ -54,6 +48,11 @@ export function DeleteGuardDialog({
         aria-label={t('editor.contentBrowser.deleteGuard.ariaLabel')}
         data-testid="cb-delete-guard-modal"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+          else if (e.key === 'Enter') { e.preventDefault(); onConfirm(); }
+        }}
+        tabIndex={-1}
       >
         <div className="cb-dialog-title">
           {danger ? '⚠ ' : ''}{t('editor.contentBrowser.deleteGuard.title', { count, plural: count === 1 ? '' : 's' })}

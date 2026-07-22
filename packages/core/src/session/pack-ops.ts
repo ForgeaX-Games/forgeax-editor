@@ -7,76 +7,26 @@
 // M1: PackAssetEntry/PackFile dual definitions deleted — import from scene-pack.ts
 // SSOT (plan-strategy D-4, research Finding #9).
 
-import { fetchWithTimeout } from '../io/net';
-import { validatePackShell, type PackFile } from '../scene/scene-pack';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { type PackFile } from '../scene/scene-pack';
 import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import type { DocApplierCtx } from './document';
-import { deletedEntryCache, renamedNameCache, duplicatedGuidCache, type PackAssetEntry } from '../io/asset-io-facade';
+import { deletedEntryCache, renamedNameCache, duplicatedGuidCache } from '../io/asset-op-caches';
 import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-runtime';
+import {
+  readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
+  readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset,
+  type MetaSubAsset,
+} from '../io/asset-io-primitives';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+export { readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
+  readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset } from '../io/asset-io-primitives';
+export type { MetaSubAsset } from '../io/asset-io-primitives';
 
-// Low-level pack IO primitives — encapsulated by AssetIOFacade (the asset write
-// gate, G-5 / AC-D1). Exported so the facade is the ONLY external caller; any
-// other file invoking these directly is a lint-unique-mutator violation.
-export async function readPack(packPath: string): Promise<PackFile | null> {
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    const parsed = JSON.parse(j.content);
-    const result = validatePackShell(parsed);
-    return result.ok ? result.pack : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function writePack(packPath: string, pack: PackFile): Promise<boolean> {
-  try {
-    // M1: validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
-    // Bad packs are rejected — disk is never touched with invalid data.
-    const validation = validatePackShell(pack);
-    if (!validation.ok) {
-      console.warn('[editor-core] writePack: pack shell validation failed — rejecting write', validation.error);
-      return false;
-    }
-    const r = await fetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: packPath, content: JSON.stringify(pack, null, 2) + '\n' }),
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function deleteFile(filePath: string): Promise<boolean> {
-  try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-// ── GUID generation ──────────────────────────────────────────────────────────
-
-/** Mint a fresh, unique asset GUID via the engine's authoritative generator
- *  (dash-form string). Single minting seam — mirrors fbx-cook.ts. AGENTS.md #1
- *  / architecture-principles §2: never hand-roll a second GUID generator, the
- *  engine owns this. (Old stableGuid(timestamp+counter) seed was effectively
- *  random anyway — it gained nothing from stableGuid's determinism.) */
-export function generateAssetGuid(): string {
-  return AssetGuid.format(AssetGuid.random());
-}
+type PackAssetEntry = PackFile['assets'][number];
 
 // ── Active-scene-pack resolver seam (breaks the pack-ops <-> scene-persistence
 // import cycle) ────────────────────────────────────────────────────────────────
@@ -200,128 +150,6 @@ export async function moveAsset(
   return s1 && s2;
 }
 
-/** Delete an asset. Handles both .pack.json and .meta.json sidecars.
- *  For .meta.json: removes the sub-asset entry; if empty, deletes the sidecar
- *  AND the source file it references. For .pack.json: removes the asset entry;
- *  if empty, deletes the pack file. */
-export async function deleteAsset(packPath: string, guid: string): Promise<boolean> {
-  if (packPath.endsWith('.meta.json')) {
-    return deleteMetaAsset(packPath, guid);
-  }
-  const pack = await readPack(packPath);
-  if (!pack) return false;
-  pack.assets = pack.assets.filter(a => a.guid !== guid);
-  if (pack.assets.length === 0) {
-    return deleteFile(packPath);
-  }
-  return writePack(packPath, pack);
-}
-
-async function readJsonFile(path: string): Promise<Record<string, unknown> | null> {
-  try {
-    const r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(path)}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { content?: string };
-    if (!j.content) return null;
-    return JSON.parse(j.content) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-async function writeJsonFile(path: string, obj: Record<string, unknown>): Promise<boolean> {
-  try {
-    const r = await fetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path, content: JSON.stringify(obj, null, 2) + '\n' }),
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function deleteMetaAsset(metaPath: string, guid: string): Promise<boolean> {
-  const meta = await readJsonFile(metaPath);
-  if (!meta) return false;
-  const subs = meta.subAssets as { guid: string }[] | undefined;
-  if (!Array.isArray(subs)) return false;
-
-  meta.subAssets = subs.filter(s => s.guid !== guid);
-
-  if ((meta.subAssets as unknown[]).length === 0) {
-    const sourceFile = typeof meta.source === 'string' ? meta.source : null;
-    const dir = metaPath.replace(/\/[^/]+$/, '');
-    const results = await Promise.all([
-      deleteFile(metaPath),
-      sourceFile ? deleteFile(`${dir}/${sourceFile}`) : Promise.resolve(true),
-    ]);
-    return results[0];
-  }
-  return writeJsonFile(metaPath, meta);
-}
-
-// ── External-asset (.meta.json sidecar) entry primitives ─────────────────────
-// An imported FBX/GLB/HDR/audio/font asset is NOT a `.pack.json` (shape
-// `assets[]` of `PackAssetEntry`); its CRUD target is the `<source>.meta.json`
-// sidecar (shape `subAssets[]` of `{guid, kind, sourceIndex, name?}`, the cook
-// output). The CRUD appliers dispatch on the target path's suffix (the SAME
-// `.pack.json` vs `.meta.json` switch `deleteAsset` already owns at this
-// boundary — §2.5: the producer owns the exhaustive switch, consumers stay
-// path-agnostic). These three primitives are the meta-side mirror of
-// readPack-entry / writePack-entry / rename so the destroy→restore undo pair and
-// rename round-trip work on external assets, not just internal packs.
-
-/** One sub-asset entry inside a `.meta.json` sidecar (the cook output shape). */
-export interface MetaSubAsset {
-  guid: string;
-  kind: string;
-  sourceIndex: number;
-  name?: string;
-  [k: string]: unknown;
-}
-
-/** Read one sub-asset from a `.meta.json` sidecar (null if sidecar/entry missing). */
-export async function readMetaSubAsset(metaPath: string, guid: string): Promise<MetaSubAsset | null> {
-  const meta = await readJsonFile(metaPath);
-  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
-  if (!Array.isArray(subs)) return null;
-  return subs.find(s => s.guid === guid) ?? null;
-}
-
-/** Upsert one sub-asset into a `.meta.json` sidecar (restore-on-undo). Returns
- *  false if the sidecar is missing/malformed — a deleted LAST sub-asset also
- *  removed the sidecar + source file, which this cannot resurrect (the editor
- *  does not snapshot source bytes); that undo is a no-op by design. */
-export async function writeMetaSubAsset(metaPath: string, entry: MetaSubAsset): Promise<boolean> {
-  const meta = await readJsonFile(metaPath);
-  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
-  if (!meta || !Array.isArray(subs)) return false;
-  const idx = subs.findIndex(s => s.guid === entry.guid);
-  if (idx >= 0) subs[idx] = entry;
-  else subs.push(entry);
-  return writeJsonFile(metaPath, meta);
-}
-
-/** Rename one sub-asset (its `name`) in a `.meta.json` sidecar, returning the
- *  replaced (old) name so the inverse can restore it. */
-export async function renameMetaSubAsset(
-  metaPath: string,
-  guid: string,
-  newName: string,
-): Promise<{ ok: boolean; oldName: string | null }> {
-  const meta = await readJsonFile(metaPath);
-  const subs = meta?.subAssets as MetaSubAsset[] | undefined;
-  if (!meta || !Array.isArray(subs)) return { ok: false, oldName: null };
-  const entry = subs.find(s => s.guid === guid);
-  if (!entry) return { ok: false, oldName: null };
-  const oldName = entry.name ?? null;
-  entry.name = newName;
-  const ok = await writeJsonFile(metaPath, meta);
-  return { ok, oldName };
-}
-
 /** Create a new empty pack file. */
 export async function createPack(
   dirPath: string,
@@ -431,7 +259,7 @@ export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   const key = cacheKey ?? _cacheKey(packPath, guid);
   const entry = deletedEntryCache.get(key);
   if (entry) {
-    void ctx.assetIO.writePackEntry(packPath, entry)
+    void ctx.assetIO.writePackEntry(packPath, entry as never)
       .then(() => broadcastAssetsChanged())
       .catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
     deletedEntryCache.delete(key);

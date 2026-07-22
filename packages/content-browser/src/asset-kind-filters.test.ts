@@ -7,8 +7,8 @@ import {
 import type { CBAsset } from './types';
 
 describe('asset kind filters', () => {
-  it('covers the 15 current engine Asset kinds', () => {
-    expect(Object.keys(BUILTIN_ASSET_KIND_FILTERS)).toHaveLength(15);
+  it('covers the 16 current engine Asset kinds', () => {
+    expect(Object.keys(BUILTIN_ASSET_KIND_FILTERS)).toHaveLength(16);
     expect(Object.keys(BUILTIN_ASSET_KIND_FILTERS)).toContain('equirect');
     expect(Object.keys(BUILTIN_ASSET_KIND_FILTERS)).toContain('video');
   });

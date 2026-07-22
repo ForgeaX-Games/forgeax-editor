@@ -177,7 +177,7 @@
   },
   {
     "name": "playPhase",
-    "signature": "\"play\" | \"edit\" | \"starting\" | \"failed\""
+    "signature": "\"play\" | \"failed\" | \"edit\" | \"starting\""
   },
   {
     "name": "readGameState",
@@ -205,7 +205,11 @@
   },
   {
     "name": "sceneMountPhase",
-    "signature": "\"failed\" | \"idle\" | \"pending\" | \"mounted\""
+    "signature": "\"pending\" | \"failed\" | \"idle\" | \"mounted\""
+  },
+  {
+    "name": "sourceFileDeleteStatus",
+    "signature": "(requestId: string) => SourceFileDeleteStatus | null"
   },
   {
     "name": "static registerBuiltinOp",

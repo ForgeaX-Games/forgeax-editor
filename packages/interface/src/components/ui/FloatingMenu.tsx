@@ -65,13 +65,6 @@ export function FloatingMenu({ open, onClose, point, anchor, align = 'start', of
     }
   }, [open, point?.x, point?.y, anchor?.top, anchor?.bottom, anchor?.left, anchor?.right, align, offset]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   return createPortal(
@@ -86,6 +79,7 @@ export function FloatingMenu({ open, onClose, point, anchor, align = 'start', of
         className={className}
         style={{ position: 'fixed', left: pos.left, right: pos.right, top: pos.top, zIndex: 'var(--z-menu)' }}
         onContextMenu={(e) => e.preventDefault()}
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
         role="menu"
       >
         {children}

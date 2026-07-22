@@ -19,7 +19,10 @@ interface Props {
 }
 
 function selectedKey(item: CBViewItem): string {
-  if (item.type === 'asset') return item.packPath;
+  // Assets must key on their GUID, not packPath: every sub-asset of an imported
+  // source (main.pack.json → scene + N materials) shares one packPath, so keying
+  // on it would light up the whole pack when a single card is clicked.
+  if (item.type === 'asset') return item.guid;
   return item.path;
 }
 
@@ -51,7 +54,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMo
               key={item.path}
               file={item}
               selected={isSelected}
-              expanded={isAssetMode ? (hasExpandableAssets || undefined) : expandedPacks?.has(item.path)}
+              expanded={isAssetMode ? undefined : expandedPacks?.has(item.path)}
               onToggleExpand={!isAssetMode && hasExpandableAssets
                 ? () => onTogglePackExpansion?.(item.path)
                 : undefined}

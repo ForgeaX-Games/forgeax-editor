@@ -280,23 +280,6 @@ function cleanOrphanMetasInDir(dir: string): void {
   }
 }
 
-// forgeaxShader's configureServer middleware hardcodes `/shaders/manifest.json`;
-// under a non-root base (edit-runtime's `/editor/`) the proxied URL arrives as
-// `/editor/shaders/manifest.json`. Strip the base prefix before forgeaxShader's
-// (later-registered) middleware sees it. Only needed when base !== '/'.
-function shaderBaseStrip(base: string): PluginOption {
-  const prefix = base.replace(/\/$/, ''); // '/editor'
-  return {
-    name: 'forgeax:engine-preset-shader-base-strip',
-    configureServer(server: { middlewares: { use(fn: (req: { url?: string }, res: unknown, next: () => void) => void): unknown } }) {
-      server.middlewares.use((req, _res, next) => {
-        if (req.url === `${prefix}/shaders/manifest.json`) req.url = '/shaders/manifest.json';
-        next();
-      });
-    },
-  } as PluginOption;
-}
-
 // pluginPack's dev middleware matches its routes literally (no base awareness);
 // under a non-root base the proxied requests arrive prefixed with the base.
 // Strip that prefix for EVERY pluginPack route the self-hosted catalog serves:
@@ -466,7 +449,6 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
 
   const plugins: PluginOption[] = [];
   if (nonRootBase) {
-    plugins.push(shaderBaseStrip(base));
     plugins.push(packBaseStrip(base));
   }
   plugins.push(fbxWasmServe());

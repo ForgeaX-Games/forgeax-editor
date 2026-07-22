@@ -28,19 +28,18 @@ export function LangSwitcher({ className = '' }: { className?: string }) {
     const onClick = (e: MouseEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     window.addEventListener('click', onClick);
-    window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('click', onClick);
-      window.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
   const label = followInput ? t('lang.auto') : replyLanguage === 'zh' ? '中' : 'En';
 
   return (
-    <div className={`lang-switcher ${className}`} ref={rootRef}>
+    <div className={`lang-switcher ${className}`} ref={rootRef} onKeyDown={(e) => {
+      if (e.key === 'Escape') { e.preventDefault(); setOpen(false); }
+    }} tabIndex={-1}>
       <button
         type="button"
         className={`lang-switcher-btn ${followInput ? '' : 'is-pinned'}`}

@@ -3,11 +3,10 @@
 //
 // All the useMemo chains that used to sit inline in ContentBrowser.tsx live
 // here so the component file is short and the memo dep-DAG is inspectable in
-// one place. Also owns the .meta.json sidecar fetch that produces
-// `metaAssetMap` — placed here because it depends on `diskFiles` (a derived
-// value) and every consumer of metaAssetMap is derived.
+// one place. Asset/tree/sidecar acquisition is owned by the core read model;
+// this hook only derives the render projection and preserves UI state.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { resolveGamePath } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { deriveContentView } from '../folder-view';
@@ -51,7 +50,6 @@ export interface CBDerivedView {
   filesInPath: CBFile[];
   sortedAssets: CBAsset[];
   registryOnlyAssets: CBAsset[];
-  metaSubAssetsInPath: CBAsset[];
   viewItems: CBViewItem[];
 }
 
@@ -114,47 +112,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     walk(diskTree);
     return files.sort((a, b) => a.path.localeCompare(b.path));
   }, [assetsByRel, diskTree, favorites, gameSlug, t]);
-
-  // .meta.json sidecar fetch — a fallback to expose sub-assets when the engine
-  // registry hasn't indexed the external-asset-package entries yet.
-  const [metaAssetMap, setMetaAssetMap] = useState<Map<string, CBAsset[]>>(new Map());
-  useEffect(() => {
-    const metaFiles = diskFiles.filter(f => f.family === 'meta' && f.name.endsWith('.meta.json'));
-    if (metaFiles.length === 0) {
-      // Preserve empty Map identity to avoid pointless re-renders / filter rebuilds.
-      setMetaAssetMap(prev => (prev.size === 0 ? prev : new Map()));
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      const result = new Map<string, CBAsset[]>();
-      await Promise.all(metaFiles.map(async (mf) => {
-        try {
-          const r = await fetch(`/api/files/raw?path=${encodeURIComponent(mf.diskPath)}`, { cache: 'no-store' });
-          if (!r.ok) return;
-          const json = await r.json() as {
-            kind?: string; source?: string; subAssets?: { guid: string; kind: string; sourceIndex?: number; name?: string }[];
-          };
-          if (json.kind !== 'external-asset-package' || !json.subAssets?.length) return;
-          const sourceName = json.source ?? mf.name.replace(/\.meta\.json$/, '');
-          const assets: CBAsset[] = json.subAssets.map((sub, idx) => ({
-            type: 'asset' as const,
-            guid: sub.guid,
-            kind: sub.kind,
-            name: sub.name ?? `${sourceName} · ${sub.kind}${sub.sourceIndex != null && sub.sourceIndex > 0 ? ` #${sub.sourceIndex}` : ''}`,
-            payload: {},
-            packPath: mf.path,
-            packIndex: idx,
-            refs: [],
-            estimatedSize: 0,
-          }));
-          result.set(mf.path, assets);
-        } catch { /* skip unreadable files */ }
-      }));
-      if (!cancelled) setMetaAssetMap(result);
-    })();
-    return () => { cancelled = true; };
-  }, [diskFiles]);
 
   const diskDirs = useMemo(() => {
     if (!diskTree) return [];
@@ -330,47 +287,14 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   const filteredAssets = useMemo(() => filter.applyFilters(favoriteFilteredAssets), [filter, favoriteFilteredAssets]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
 
-  // Source filenames that have a .meta.json sidecar — hidden in asset mode
-  // (the sidecar's sub-assets replace them).
-  const metaSidecarSources = useMemo(() => {
-    const set = new Set<string>();
-    for (const [metaRel, assets] of metaAssetMap) {
-      if (assets.length > 0) {
-        const sourceRel = metaRel.replace(/\.meta\.json$/, '');
-        set.add(sourceRel);
-      }
-    }
-    return set;
-  }, [metaAssetMap]);
-
   const filesInPath = useMemo(() => {
     const q = filter.searchQuery.trim().toLowerCase();
     return diskFiles
       .filter(file => dirOfPath(file.path) === nav.currentPath)
-      .filter(file => {
-        if (viewMode === 'asset') {
-          // Hide source files that have a .meta.json sidecar
-          if (metaSidecarSources.has(file.path)) return false;
-          // Hide raw .meta.json — their sub-assets are shown as asset tiles
-          if (file.family === 'meta' && metaAssetMap.has(file.path) && (metaAssetMap.get(file.path)?.length ?? 0) > 0) return false;
-        }
-        return true;
-      })
-      .map(file => {
-        // Enrich .meta.json files with parsed subAssets when registry hasn't
-        // indexed them yet (assets array from assetsByRel is empty).
-        if (file.family === 'meta' && file.assets.length === 0) {
-          const metaAssets = metaAssetMap.get(file.path);
-          if (metaAssets && metaAssets.length > 0) {
-            return { ...file, assets: metaAssets };
-          }
-        }
-        return file;
-      })
       .filter(file => !favoritesOnly || file.isFavorite)
       .filter(file => !q || file.name.toLowerCase().includes(q) || file.assets.some(asset => asset.name.toLowerCase().includes(q)))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [diskFiles, favoritesOnly, filter.searchQuery, metaAssetMap, metaSidecarSources, nav.currentPath, viewMode]);
+  }, [diskFiles, favoritesOnly, filter.searchQuery, nav.currentPath]);
 
   const diskFilePaths = useMemo(() => new Set(diskFiles.map(file => file.path)), [diskFiles]);
   const registryOnlyAssets = useMemo(() => sortedAssets.filter(asset => {
@@ -378,28 +302,10 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     return !rel || !diskFilePaths.has(rel);
   }), [diskFilePaths, scopedAssets, sortedAssets]);
 
-  // Meta-derived sub-assets that sit in the current directory but whose
-  // .meta.json files are hidden in asset mode. Shown as standalone asset tiles
-  // (UE-style: every mesh/material/texture is a first-class entry).
-  const metaSubAssetsInPath = useMemo<CBAsset[]>(() => {
-    if (viewMode !== 'asset') return [];
-    const out: CBAsset[] = [];
-    const seenGuids = new Set(sortedAssets.map(a => a.guid));
-    for (const [metaRel, assets] of metaAssetMap) {
-      if (dirOfPath(metaRel) !== nav.currentPath) continue;
-      for (const a of assets) {
-        if (!seenGuids.has(a.guid)) out.push(a);
-      }
-    }
-    return out;
-  }, [metaAssetMap, nav.currentPath, sortedAssets, viewMode]);
-
   // Single ordered array shared by the view AND multi-select — handleClick
   // resolves items by flat index, so both must see the same order.
   //
-  // viewMode === 'asset': folders + remaining disk files (source/meta hidden)
-  // + auto-expanded pack sub-assets + meta-derived sub-assets as standalone
-  // tiles (the UE-style content browser).
+  // viewMode === 'asset': folders + disk files + auto-expanded pack sub-assets.
   //
   // viewMode === 'file': folders + raw disk files; pack/meta files with
   // sub-assets can be manually toggled open via the chevron or double-click.
@@ -413,7 +319,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           items.push(...file.assets);
         }
       }
-      items.push(...metaSubAssetsInPath);
       items.push(...registryOnlyAssets);
     } else {
       for (const file of filesInPath) {
@@ -426,7 +331,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     }
 
     return items;
-  }, [expandedPacks, filesInPath, metaSubAssetsInPath, registryOnlyAssets, viewMode, visibleFoldersInPath]);
+  }, [expandedPacks, filesInPath, registryOnlyAssets, viewMode, visibleFoldersInPath]);
 
   return {
     scopedAssets,
@@ -439,7 +344,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     filesInPath,
     sortedAssets,
     registryOnlyAssets,
-    metaSubAssetsInPath,
     viewItems,
   };
 }

@@ -21,6 +21,7 @@
 }
 
 .fx-panel-header-zone {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -29,17 +30,20 @@
 
 .fx-panel-header-zone[data-zone="left"] {
   flex: 0 1 auto;
+  z-index: 2;
 }
 
 .fx-panel-header-zone[data-zone="center"] {
   flex: 1 1 auto;
   justify-content: center;
+  z-index: 1;
 }
 
 .fx-panel-header-zone[data-zone="right"] {
   flex: 0 1 auto;
   justify-content: flex-end;
   margin-left: auto;
+  z-index: 2;
 }
 
 .fx-panel-icon {

@@ -31,7 +31,6 @@ import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
 import {
-  viewItemPath,
   viewItemKey,
   copyText,
   resolveCopyPath,
@@ -68,7 +67,7 @@ export function ContentBrowser() {
   useContentBrowserPanelContributions();
   useDocVersion();
   const gameSlug = getSceneId();
-  const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug);
+  const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug, catalogAssetRoots);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -309,10 +308,11 @@ export function ContentBrowser() {
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
           if (!window.confirm(t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: item.name }))) return;
-          void fetch(`/api/files?path=${encodeURIComponent(item.diskPath)}`, { method: 'DELETE' }).then(() => {
-            void fetchDiskDirs();
-            reload();
-          });
+          gateway.dispatch({
+            kind: 'deleteSourceFile',
+            path: item.path,
+            requestId: crypto.randomUUID(),
+          }, 'human');
         } },
       ];
     }
@@ -633,7 +633,7 @@ export function ContentBrowser() {
                 items={viewItems}
                 thumbnailSize={thumbnailSize}
                 multiSelect={multiSelect}
-                selectedPath={viewItemPath(previewItem)}
+                selectedPath={previewItem ? viewItemKey(previewItem) : null}
                 viewMode={viewMode}
                 expandedPacks={expandedPacks}
                 onTogglePackExpansion={togglePackExpansion}

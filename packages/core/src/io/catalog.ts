@@ -519,6 +519,17 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Import Asset',
   },
+  { id: 'deleteSourceFile', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Game-relative source path, e.g. assets/Fox.glb.' },
+        requestId: { type: 'string', description: 'Caller-minted correlation id used to poll sourceFileDeleteStatus().' },
+      },
+      required: ['path', 'requestId'],
+    },
+    title: 'Delete Source File',
+  },
   // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): session-
   // domain, ledger-only, fire-and-forget async. Cataloged so AI self-discovers it
   // via gateway.listOps() (registry razor — the human "Add to Scene" capability is

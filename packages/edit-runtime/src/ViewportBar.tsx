@@ -89,30 +89,6 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
     }
   }
 
-  // Keyboard shortcuts — same as EditorApp so muscle memory is identical.
-  // Keep W/E/R for gizmo, Ctrl+Z/Y/S for undo/redo/save.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod) {
-        const k = e.key.toLowerCase();
-        if (k === 'w') gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' });
-        else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
-        else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
-        return;
-      }
-      if (e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) gateway.redo(); else gateway.undo();
-        return;
-      }
-      if (e.key.toLowerCase() === 'y') { e.preventDefault(); gateway.redo(); }
-      if (e.key.toLowerCase() === 's') { e.preventDefault(); gateway.dispatch({ kind: 'saveDocToDisk' }); }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
   return (
     <div className="vp-bar" data-testid="viewport-bar">
       <SceneBadge />

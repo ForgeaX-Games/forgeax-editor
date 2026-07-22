@@ -19,6 +19,10 @@ export function catalogPathToRoot(
 ): string | null {
   const normalized = path.replace(/^\/+/, '');
   for (const { root, catalogPrefix } of roots) {
+    // AssetBrowserSnapshot may already project a registry URL into the
+    // declared-root coordinate space. Keep the adapter idempotent so both
+    // canonical catalog paths and projected paths remain usable.
+    if (normalized === root || normalized.startsWith(`${root}/`)) return normalized;
     const prefix = catalogPrefix.replace(/^\/+/, '').replace(/\/+$/, '');
     if (!prefix) continue;
     if (normalized === prefix) return root;

@@ -16,8 +16,10 @@ import type { PackFile } from '../scene/scene-pack';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
   readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset, type MetaSubAsset,
-} from '../session/pack-ops';
+} from './asset-io-primitives';
 import { recordAssetLeaf } from './trace';
+import type { CommandError } from '../types';
+import { deletedEntryCache as rawDeletedEntryCache } from './asset-op-caches';
 
 /** A single asset entry inside a pack file (derived from the zod PackFile shape). */
 export type PackAssetEntry = PackFile['assets'][number];
@@ -26,6 +28,10 @@ export type PackAssetEntry = PackFile['assets'][number];
  *  external `.meta.json` sub-asset (`subAssets[]`). The facade dispatches on the
  *  path suffix; the snapshot cache holds whichever the delete produced. */
 export type AssetEntry = PackAssetEntry | MetaSubAsset;
+
+export type SourceFileDeleteResult =
+  | { ok: true }
+  | { ok: false; error: CommandError };
 
 const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json');
 
@@ -37,7 +43,7 @@ const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json'
  * read inside the applier — instead the entry is stashed here and read back by the
  * inverse op. Entries are evicted once restoreAsset consumes them.
  */
-export const deletedEntryCache = new Map<string, AssetEntry>();
+export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>;
 
 /**
  * Snapshot of the PRE-rename name, keyed by `${packPath}#${guid}`, captured in the
@@ -49,7 +55,6 @@ export const deletedEntryCache = new Map<string, AssetEntry>();
  * `oldName` for AI-parity: an AI caller dispatching `renameAsset` need not (and may
  * not) know the current name — the applier discovers it (SSOT: the pack on disk).
  */
-export const renamedNameCache = new Map<string, string>();
 
 /**
  * Snapshot of the guid a `duplicateAsset` produced, keyed by the SOURCE
@@ -61,7 +66,6 @@ export const renamedNameCache = new Map<string, string>();
  * has to route around — the same fire-and-forget cache contract destroyAsset /
  * restoreAsset already rely on for their snapshots.
  */
-export const duplicatedGuidCache = new Map<string, string>();
 
 /**
  * The sole legal path for asset/pack writes outside of document appliers
@@ -73,6 +77,33 @@ export const duplicatedGuidCache = new Map<string, string>();
  * same-name same-shape surface (plan-strategy §4 AC-06).
  */
 export class AssetIOFacade {
+  /** Delete exactly one resolved source file. This is separate from pack-entry
+   * deletion and intentionally does not infer or cascade to sidecars/DDC. */
+  async deleteSourceFile(resolvedPath: string): Promise<SourceFileDeleteResult> {
+    recordAssetLeaf('assetIO.deleteSourceFile');
+    try {
+      const response = await fetch(`/api/files?path=${encodeURIComponent(resolvedPath)}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) return { ok: true };
+      return {
+        ok: false,
+        error: {
+          code: 'SOURCE_FILE_DELETE_FAILED',
+          hint: `source file delete failed for ${resolvedPath} (HTTP ${response.status})`,
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: 'SOURCE_FILE_DELETE_FAILED',
+          hint: `source file delete failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
+        },
+      };
+    }
+  }
+
   /** Read one asset entry (null if pack/sidecar or entry missing). Dispatches on
    *  the path suffix: `.meta.json` → external sub-asset, else `.pack.json`. */
   async readPackEntry(packPath: string, guid: string): Promise<AssetEntry | null> {

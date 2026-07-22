@@ -40,7 +40,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   setActiveCamera,
 } from '@forgeax/engine-runtime';
-import { Entity, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
+import { Entity, Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import {
   attachBrowserInputBackend,
@@ -55,7 +55,6 @@ import {
   getSelection,
   entComponents,
   switchSceneFile,
-  registerSessionApplier,
   createEvalChannel,
 } from '@forgeax/editor-core';
 import { WorldManager } from '../world-manager';
@@ -86,8 +85,8 @@ import { registerEditorVisualHost } from './visual-source';
 import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
-import { CommandPalette } from '../panels/command-palette';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
+import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
@@ -191,28 +190,6 @@ export function ViewportComponent({
   // chrome mounts immediately (usable even if WebGPU is slow); its callbacks
   // resolve through this holder so they don't close over undefined references.
   const actionsRef = useRef<BootFns>({ playSimulation: () => {}, stopSimulation: () => {} });
-  const [paletteOpen, setPaletteOpen] = useState(false);
-
-  // ── Global Cmd+K / Ctrl+K — toggle the command palette (M4, w9) ──────────────
-  // Owned by the viewport overlay layer so the palette can open from closed state
-  // (command-palette.tsx's internal hook could only close, never open — open is a
-  // parent-owned state). Same discipline as the possess-exit key handler in
-  // bootViewport: skip when an input/textarea/select/contentEditable is focused
-  // so the user can still type 'k' in panels.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
   useEffect(() => {
     if (bootStarted) return;
     bootStarted = true;
@@ -258,11 +235,6 @@ export function ViewportComponent({
             gateway.dispatch({ kind: 'setDisplay', display: q.display === 'game' ? 'scene' : 'game' }, 'human');
           }}
           onControlGame={() => gateway.dispatch({ kind: 'grantGameControl' }, 'human')}
-        />
-
-        <CommandPalette
-          open={paletteOpen}
-          onClose={() => setPaletteOpen(false)}
         />
       </div>
     </div>
@@ -752,7 +724,7 @@ async function bootViewport(
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {} };
+    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {}, getPlayPauseHandle: () => null };
   }
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
@@ -843,29 +815,24 @@ async function bootViewport(
   // point the gateway would legitimately return UNKNOWN_OP — headless form). The
   // returned unregister fns run on teardown to avoid leaking a stale applier across
   // a cross-game realm reset.
-  const unregPlay = registerSessionApplier('play', () => { actionsRef.current.playSimulation(); return { ok: true }; });
-  const unregStop = registerSessionApplier('stop', () => { actionsRef.current.stopSimulation(); return { ok: true }; });
-  registerTeardown(() => { unregPlay(); unregStop(); });
+  registerTeardown(registerViewportSessionAppliers({
+    play: () => actionsRef.current.playSimulation(),
+    stop: () => actionsRef.current.stopSimulation(),
+    setDisplay: (display) => {
+      if (display !== 'game') revokeGameControl();
+      setViewportQuadrant({ display });
+    },
+    grantGameControl,
+    releaseGameControl: revokeGameControl,
+    world,
+  }));
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
   // is ledger-visible + AI-equivalent, symmetric to play/stop. The router (and the
   // ViewportBar / GameOverlay display buttons) dispatch it; the real quadrant mutation
   // lives here in edit-runtime (DAG downstream — core stays headless, RK-11).
-  const unregSetDisplay = registerSessionApplier('setDisplay', (op) => {
-    const { display } = op as { display: 'scene' | 'game' };
-    if (display !== 'game') revokeGameControl();
-    setViewportQuadrant({ display });
-    return { ok: true };
-  });
-  const unregReleaseGameControl = registerSessionApplier('releaseGameControl', () => {
-    revokeGameControl();
-    return { ok: true };
-  });
-  const unregGrantGameControl = registerSessionApplier('grantGameControl', () => {
-    grantGameControl();
-    return { ok: true };
-  });
-  registerTeardown(() => { unregSetDisplay(); unregReleaseGameControl(); unregGrantGameControl(); });
+  // The implementation above owns display and game-control registration too;
+  // this comment keeps the historical M4 traceability anchor near the seam.
 
   // addSystem·removeSystem are SESSION-domain ops — enabling/disabling an engine
   // system is ledger-visible + AI-equivalent but NOT undoable, exactly like
@@ -879,33 +846,8 @@ async function bootViewport(
   // not import @forgeax/engine-ecs, RK-11). We use the same `world` closure
   // play/stop/setDisplay use — the live edit world (gateway.doc.world, line ~328).
   // System toggles happen only in edit mode, so this is never a stale cross-play handle.
-  const unregRemoveSystem = registerSessionApplier(
-    'removeSystem',
-    (op) => {
-      const { name } = op as { name: string };
-      world.removeSystem(Update, name).unwrap();
-      return { ok: true };
-    },
-    {
-      argsSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-      title: 'Disable system',
-    },
-  );
-  const unregAddSystem = registerSessionApplier(
-    'addSystem',
-    (op) => {
-      const { name } = op as { name: string };
-      const handle = getRegisteredSystems().get(name);
-      if (!handle) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'unknown system: ' + name } };
-      world.addSystem(Update, handle).unwrap();
-      return { ok: true };
-    },
-    {
-      argsSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-      title: 'Enable system',
-    },
-  );
-  registerTeardown(() => { unregAddSystem(); unregRemoveSystem(); });
+  // addSystem/removeSystem are registered by the same registrar so they share
+  // validation, duplicate protection, and realm teardown.
 
   // game camera discovery now that the scene is loaded (was :695).
   discoverGameCameraFromWorld();
@@ -951,9 +893,10 @@ async function bootViewport(
   installFpsReport(world, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
-  // container (drop → gateway spawn; visibility → editorApp.pause/resume).
+  // container (drop → gateway spawn; visibility → editorApp.pause/resume, or
+  // playApp.pause/resume during ▶ Play — D-2 mutual exclusion).
   registerTeardown(installViewportDropZone(container));
-  registerTeardown(installVisibilityPause(container, editorApp));
+  registerTeardown(installVisibilityPause(container, editorApp, () => session.getPlayPauseHandle()));
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

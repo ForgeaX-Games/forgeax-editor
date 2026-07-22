@@ -24,6 +24,10 @@ import type { EditorOp, EntityHandle, HandleCheckOpts } from '@forgeax/editor-co
 import {
   ForgeaxIcon,
   type ForgeaxIconName,
+  // Shared asset-preview primitive (SSOT for the kind→visual mapping); the
+  // Content Browser cards render the same deriver. Panels reference the ui
+  // primitive rather than reaching into the content-browser panel.
+  AssetThumbnail,
   // Form/menu primitives (editor-ui-primitives-plan): the Inspector consumes the
   // shared shadcn-over-tokens components instead of native <select>/<input
   // type=checkbox>/ad-hoc popovers. DropdownMenu reproduces the app-wide menu
@@ -189,7 +193,15 @@ function ScrubInput({
         onBlur={num.onBlur}
         onKeyDown={num.onKeyDown}
         onWheel={(e) => { if (document.activeElement === e.currentTarget) { e.preventDefault(); stepBy(e.deltaY < 0 ? 1 : -1, e); } }}
-        onPointerDown={(e) => { if (e.button === 0) start.current = { x: e.clientX }; }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          start.current = { x: e.clientX };
+          // Don't grab focus on press: a press-and-drag must scrub, not enter
+          // text-edit mode. preventDefault on pointerdown suppresses the focus.
+          // Focus is granted on pointerup only when the gesture was a clean
+          // click (no drag). If already editing, keep default (caret move).
+          if (document.activeElement !== e.currentTarget) e.preventDefault();
+        }}
         onPointerMove={(e) => {
           if (drag) {
             const cx = e.clientX;
@@ -203,7 +215,15 @@ function ScrubInput({
           e.currentTarget.blur();
           setDrag({ ox: e.clientX, base: value, v: value });
         }}
-        onPointerUp={() => { if (drag) onCommit(drag.v); setDrag(null); start.current = null; }}
+        onPointerUp={(e) => {
+          if (drag) { onCommit(drag.v); setDrag(null); start.current = null; return; }
+          // Clean click (no drag): now hand focus to the field for typing.
+          if (start.current && document.activeElement !== e.currentTarget) {
+            e.currentTarget.focus();
+            e.currentTarget.select();
+          }
+          start.current = null;
+        }}
         onPointerCancel={() => { setDrag(null); start.current = null; }}
       />
       <span className="nspin" aria-hidden>
@@ -216,6 +236,20 @@ function ScrubInput({
       </span>
     </span>
   );
+}
+
+// UE-style compact asset preview for the left of an asset field. Instead of a
+// raw handle badge, render a real thumbnail: image (texture/image), a material
+// baseColor sphere, or a kind-tinted glyph — reusing the Content Browser's
+// shared `getThumbnailData` deriver so both surfaces stay 1:1. `bound=false`
+// falls back to the dashed empty box.
+function AssetPreview({ bound, kind, meta, guid }: { bound: boolean; kind?: string | undefined; meta?: Record<string, unknown> | undefined; guid?: string | undefined }) {
+  if (!bound) return <span className="ab empty" />;
+  if (!kind) return <span className="ab" />;
+  // packPath lets the deriver resolve a real image URL for texture/image kinds;
+  // the catalog is the only place that carries it. Missing → glyph fallback.
+  const packPath = guid ? (gateway.assetCatalog().find((e) => e.guid === guid)?.relativeUrl ?? '') : '';
+  return <AssetThumbnail kind={kind} payload={meta} packPath={packPath} size={15} />;
 }
 
 // enum widget — editor-ui Select (Radix) styled compact to sit in a field row.
@@ -1034,14 +1068,10 @@ export function InspectorPanel() {
                                 const rawItem = items[i];
                                 const handleNum = typeof rawItem === 'number' ? rawItem : 0;
                                 const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
-                                const matName = desc?.ok ? (desc.name ?? `#${handleNum}`) : '';
+                                const matName = desc?.ok ? (desc.name ?? (desc.guid ? desc.guid.slice(0, 8) : '')) : '';
                                 const slotGuid = desc?.ok ? desc.guid : undefined;
-                                const bc = desc?.ok
-                                  ? (desc.meta?.paramValues as Record<string, unknown> | undefined)?.baseColor as number[] | undefined
-                                  : undefined;
-                                const swatchColor = bc && bc.length >= 3
-                                  ? `rgb(${Math.round(bc[0]! * 255)},${Math.round(bc[1]! * 255)},${Math.round(bc[2]! * 255)})`
-                                  : undefined;
+                                const slotKind = desc?.ok ? desc.kind : undefined;
+                                const slotMeta = desc?.ok ? desc.meta : undefined;
                                 return (
                                   <div
                                     key={i}
@@ -1079,7 +1109,7 @@ export function InspectorPanel() {
                                     }}
                                     onDragOver={(e) => e.preventDefault()}
                                   >
-                                    <span className="ab" style={handleNum > 0 && swatchColor ? { background: swatchColor } : undefined} />
+                                    <AssetPreview bound={handleNum > 0} kind={slotKind} meta={slotMeta} guid={slotGuid ?? undefined} />
                                     <span className={`an${handleNum > 0 ? '' : ' empty'}`} title={matName}>
                                       {handleNum > 0 ? matName : (locked ? `slot ${i} — browse ${arrType}` : `click / drop ${arrType}`)}
                                     </span>
@@ -1171,10 +1201,13 @@ export function InspectorPanel() {
                                 const scalarType = expectedAssetType(comp, k) ?? 'MeshAsset';
                                 const curDesc = typeof v === 'number' && v > 0 ? gateway.describeAsset(v) : null;
                                 const curGuid = curDesc?.ok ? curDesc.guid : undefined;
+                                const curKind = curDesc?.ok ? curDesc.kind : undefined;
+                                const curMeta = curDesc?.ok ? curDesc.meta : undefined;
                                 // Numeric handle → show the resolved asset name (never the
-                                // raw number); unbound (0) → empty so the placeholder shows.
-                                const assetName = curDesc?.ok ? (curDesc.name ?? curDesc.guid ?? '') : '';
-                                const display = typeof v === 'number' ? (v > 0 ? (assetName || `#${v}`) : '') : strVal;
+                                // raw #handle); fall back to a short guid, else empty so the
+                                // placeholder shows. unbound (0) → empty.
+                                const assetName = curDesc?.ok ? (curDesc.name ?? (curDesc.guid ? curDesc.guid.slice(0, 8) : '')) : '';
+                                const display = typeof v === 'number' ? (v > 0 ? assetName : '') : strVal;
                                 return (
                                   <div
                                     className="asset-f"
@@ -1194,7 +1227,7 @@ export function InspectorPanel() {
                                       } catch { /* noop */ }
                                     }}
                                   >
-                                    <span className={`ab${assetBound ? '' : ' empty'}`} />
+                                    <AssetPreview bound={assetBound} kind={curKind} meta={curMeta} guid={curGuid ?? undefined} />
                                     <input
                                       className="an"
                                       style={{ background: 'transparent', border: 'none', outline: 'none' }}

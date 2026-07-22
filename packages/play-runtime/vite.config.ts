@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync } from 'node:fs';
+import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
@@ -20,6 +20,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 // resolveGameAssetRoots). See the farm comment below for why the real path is
 // then rewritten to the in-viteRoot symlink before scanning.
 const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
+
+// Games stay a host concern: a standalone/desktop/studio host injects the
+// physical directory.  When it does not supply a public URL prefix, mount it
+// under this generated in-root name so Vite can serve it without an ambient
+// sibling-repository convention.
+const PREVIEW_GAMES_DIR = process.env.FORGEAX_PREVIEW_GAMES_DIR;
+const HOST_GAMES_FARM = 'host-games';
+const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX
+  ?? (PREVIEW_GAMES_DIR ? HOST_GAMES_FARM : '');
 
 // Implicit `template-game-default` shared scope. The demo-seed default template's
 // scene references the shared sky.hdr equirect GUID (81eec382) but its own assets/
@@ -95,6 +104,39 @@ function farmPath(r: ResolvedRoot): string {
 // root so its games resolve; run.sh symlinks it to the instance's actual dir.
 const viteRoot = here;
 
+// Vite only serves files below its root. The games directory is deliberately
+// external and host-injected, so make a generated, stable in-root junction for
+// the default URL namespace. An explicit FORGEAX_GAMES_URL_PREFIX remains an
+// advanced host-owned mount contract; do not create arbitrary paths from it.
+(function setupGamesRootFarm() {
+  if (!PREVIEW_GAMES_DIR || GAMES_URL_PREFIX !== HOST_GAMES_FARM) return;
+  const targetPath = resolve(PREVIEW_GAMES_DIR);
+  if (!existsSync(targetPath)) {
+    console.warn(`[forgeax] FORGEAX_PREVIEW_GAMES_DIR does not exist: ${targetPath}`);
+    return;
+  }
+  const linkPath = resolve(here, HOST_GAMES_FARM);
+  if (existsSync(linkPath)) {
+    const stat = lstatSync(linkPath);
+    if (!stat.isSymbolicLink()) {
+      console.warn(`[forgeax] refusing to replace non-symlink games mount: ${linkPath}`);
+      return;
+    }
+    try {
+      if (realpathSync(linkPath) === realpathSync(targetPath)) return;
+    } catch { /* replace a stale/broken generated link below */ }
+    try { unlinkSync(linkPath); } catch (e) {
+      console.warn(`[forgeax] failed to replace games junction:`, e);
+      return;
+    }
+  }
+  try {
+    symlinkSync(targetPath, linkPath, 'junction');
+  } catch (e) {
+    console.warn(`[forgeax] failed to create games junction:`, e);
+  }
+})();
+
 // ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
 // SSOT = THIS root's node_modules/@forgeax, i.e. exactly the @forgeax packages
 // Vite can resolve natively here. Excluding precisely that set is correct on both
@@ -126,26 +168,6 @@ const FORGEAX_WS_PKGS = forgeaxWorkspacePackages();
 
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
-
-// forgeaxShader's configureServer middleware hardcodes `/shaders/manifest.json`
-// as the request path, but this vite root uses `base: '/preview/'` so the
-// incoming URL is `/preview/shaders/manifest.json`. This custom plugin sits
-// before forgeaxShader in the plugin array, so its configureServer fires first.
-// The middleware strips the base prefix before the forgeaxShader middleware
-// (registered after) sees the request.
-function forgeaxShaderBaseStrip() {
-  return {
-    name: 'forgeax:shader-base-strip',
-    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url === '/preview/shaders/manifest.json') {
-          req.url = '/shaders/manifest.json';
-        }
-        next();
-      });
-    },
-  };
-}
 
 // pluginPack's dev middleware matches the pack-index route literally as
 // `/pack-index.json` (no base awareness), but this vite root uses
@@ -187,16 +209,15 @@ function isRealGameSlug(slug: string): boolean {
 // desktop build / editor standalone) points this at wherever it lays games out.
 // Unset → empty (degraded: no roots scanned), never a baked layout literal.
 function gamesDirRoot(): string {
-  const override = process.env.FORGEAX_PREVIEW_GAMES_DIR;
-  return override ? resolve(override) : '';
+  return PREVIEW_GAMES_DIR ? resolve(PREVIEW_GAMES_DIR) : '';
 }
 
 // URL-space games prefix the CLIENT (src/main.ts) prepends to build a game's
 // served URL (`<base>/<prefix>/<id>/…`). Separate from gamesDirRoot() because the
 // disk dir is symlinked UNDER the vite root, so the served URL reflects that mount
-// point, not the abs disk path. HOST-INJECTED via FORGEAX_GAMES_URL_PREFIX; unset →
-// '' (game served directly under base). No baked layout literal.
-const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX ?? '';
+// point, not the abs disk path. Hosts may inject FORGEAX_GAMES_URL_PREFIX; with
+// an injected games dir but no prefix, the generated host-games farm above is
+// used. With neither, it is '' (game served directly under base).
 
 // Scan every game's declared asset roots as pack roots. Uses the SSOT
 // (package.json#forgeax.assets.roots via resolveGameAssetRoots, which also
@@ -413,7 +434,6 @@ export default defineConfig({
   // without a baked layout literal. '' → game served directly under base.
   define: { __FORGEAX_GAMES_URL_PREFIX__: JSON.stringify(GAMES_URL_PREFIX) },
   plugins: [
-    forgeaxShaderBaseStrip() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
     // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`

@@ -29,6 +29,7 @@ import { useEffect } from 'react';
 import { t } from '@/i18n';
 import { useShellStore } from '../store';
 import { loadWorkbenchList, setActiveWorkbench } from './workbenches';
+import { toggleCommandPalette } from './command-palette-store';
 
 export interface ShortcutDef {
   /** 显示给用户的字符串,e.g. "Ctrl+Shift+F"。Mac 上 UI 会自动替换 Ctrl → ⌘/⌃。 */
@@ -127,6 +128,12 @@ export interface KeyboardRouterDeps {
   getFolderSelection?: () => { path: string }[];
   /** Folder: delete the given folders (D3b). */
   deleteFolders?: (folders: { path: string }[]) => void;
+  /** Editor history actions, injected so the interface stays editor-agnostic. */
+  undo: () => void;
+  redo: () => void;
+  save: () => void;
+  /** Viewport W/E/R/F handling, including fly-mode/input ownership policy. */
+  handleViewportKeyDown: (event: KeyboardEvent) => void;
 }
 
 let routerDeps: KeyboardRouterDeps | null = null;
@@ -200,13 +207,12 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
   };
   const routeEditorOwnedPlayKey = (e?: KeyboardEvent): boolean => {
     if (!e) return true;
-    const key = e.key.toLowerCase();
-    if (!mod(e) && !e.altKey) {
-      if (key === 'w') deps.dispatch({ kind: 'setGizmoMode', mode: 'translate' }, 'human');
-      else if (key === 'e') deps.dispatch({ kind: 'setGizmoMode', mode: 'rotate' }, 'human');
-      else if (key === 'r') deps.dispatch({ kind: 'setGizmoMode', mode: 'scale' }, 'human');
-      else if (key === 'f') deps.dispatch({ kind: 'requestFrame' }, 'human');
-    }
+    deps.handleViewportKeyDown(e);
+    return true;
+  };
+  const routeViewportInput = (e: KeyboardEvent): boolean => {
+    if (deps.getInputTarget() === 'game') return false;
+    deps.handleViewportKeyDown(e);
     return true;
   };
 
@@ -248,6 +254,42 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       match: (e) => !mod(e) && e.shiftKey && !e.altKey
         && (e.key === 'g' || e.key === 'G'),
       run: routeShiftG,
+    },
+    {
+      combo: 'Ctrl+Z',
+      group: 'edit',
+      label: 'Undo',
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyZ' || e.key.toLowerCase() === 'z'),
+      run: () => { deps.undo(); return true; },
+    },
+    {
+      combo: 'Ctrl+Shift+Z',
+      group: 'edit',
+      label: 'Redo',
+      match: (e) => mod(e) && !e.altKey && e.shiftKey && (e.code === 'KeyZ' || e.key.toLowerCase() === 'z'),
+      run: () => { deps.redo(); return true; },
+    },
+    {
+      combo: 'Ctrl+Y',
+      group: 'edit',
+      label: 'Redo',
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyY' || e.key.toLowerCase() === 'y'),
+      run: () => { deps.redo(); return true; },
+    },
+    {
+      combo: 'Ctrl+S',
+      group: 'edit',
+      label: 'Save',
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'),
+      run: () => { deps.save(); return true; },
+    },
+    {
+      combo: 'W/E/R/F + fly input',
+      group: 'edit',
+      label: 'Viewport navigation and gizmo mode',
+      match: (e) => !mod(e) && !e.altKey && deps.getInputTarget() !== 'game'
+        && ['w', 'e', 'r', 'f', 'a', 's', 'd', 'q'].includes(e.key.toLowerCase()),
+      run: routeViewportInput,
     },
     {
       combo: 'Play editor input shield',
@@ -428,6 +470,13 @@ export function buildShortcuts(): ShortcutDef[] {
   // Inject the host editor's edit-domain shortcuts (Delete / F2 / Ctrl+D /
   // Ctrl+A / Shift+G) when deps were registered at boot. Keeps this file editor-agnostic.
   if (routerDeps) shortcuts.push(...editShortcuts(routerDeps));
+  shortcuts.push({
+    combo: 'Ctrl+K',
+    group: 'general',
+    label: 'Toggle command palette',
+    match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyK' || e.key.toLowerCase() === 'k'),
+    run: () => { toggleCommandPalette(); return true; },
+  });
   return shortcuts;
 }
 

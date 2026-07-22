@@ -168,6 +168,8 @@ export type { InterfaceBridgeHandlers } from './io/interface-bridge';
 // before Content Browser first render.
 import './store/cb-nav';
 import './store/folder-selection';
+// deleteSourceFile session applier (M1).
+import './session/source-file-ops';
 
 // ── Assets ──
 export {
@@ -190,11 +192,29 @@ export type { MeshMaterialResolveDeps, MeshAssetRef } from './scene/mesh-origina
 export { cookGltfMeta } from './assets/gltf-cook';
 export { cookFbxMeta, type FbxCookResult } from './assets/fbx-cook';
 export type { GltfCookResult } from './assets/gltf-cook';
+export { createAssetBrowserReadModel } from './assets/asset-browser-read-model';
+export type {
+  AssetBrowserAsset,
+  AssetBrowserCatalogRoot,
+  AssetBrowserDiagnostic,
+  AssetBrowserDirectory,
+  AssetBrowserFile,
+  AssetBrowserReadModel,
+  AssetBrowserRegistry,
+  AssetBrowserRegistryEntry,
+  AssetBrowserSnapshot,
+  AssetBrowserTreeNode,
+  AssetSourcePhase,
+  AssetSourceState,
+  CreateAssetBrowserReadModelDeps,
+} from './assets/asset-browser-read-model';
 
 // ── Pack CRUD — applier-gated ──
 // Direct pack writes (createPack / addAssetToPack / etc.) are NOT exported;
 // go through the ctx.assetIO seam instead.
 export { assetIO, AssetIOFacade } from './io/asset-io-facade';
+export type { SourceFileDeleteResult } from './io/asset-io-facade';
+export type { SourceFileDeleteStatus } from './session/source-file-delete-status';
 export {
   generateAssetGuid,
   renameAssetInPack,

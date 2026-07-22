@@ -399,6 +399,29 @@
     "title": "Create Scene"
   },
   {
+    "id": "deleteSourceFile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Game-relative source path, e.g. assets/Fox.glb."
+        },
+        "requestId": {
+          "type": "string",
+          "description": "Caller-minted correlation id used to poll sourceFileDeleteStatus()."
+        }
+      },
+      "required": [
+        "path",
+        "requestId"
+      ]
+    },
+    "title": "Delete Source File"
+  },
+  {
     "id": "destroyAsset",
     "domain": "document",
     "source": "builtin",

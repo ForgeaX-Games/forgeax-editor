@@ -36,6 +36,7 @@ import {
   triggerAssetSelectAll,
 } from '@forgeax/editor-core';
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
+import { getViewportKeyHandler } from './viewport/viewport';
 import type { InputTarget } from './viewport/viewport-camera';
 
 /** Minimal asset shape the router hands back for delete/dup/rename. */
@@ -75,6 +76,10 @@ export interface KeyboardRouterDepsShape {
   selectAllAssets: () => void;
   getFolderSelection?: () => { path: string }[];
   deleteFolders?: (folders: { path: string }[]) => void;
+  undo: () => void;
+  redo: () => void;
+  save: () => void;
+  handleViewportKeyDown: (event: KeyboardEvent) => void;
 }
 
 export interface BuildKeyboardRouterDepsOptions {
@@ -160,5 +165,9 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
         gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
       }
     },
+    undo: () => { gateway.undo(); },
+    redo: () => { gateway.redo(); },
+    save: () => { gateway.dispatch({ kind: 'saveDocToDisk' } as never, 'human'); },
+    handleViewportKeyDown: (event) => { getViewportKeyHandler()?.(event); },
   };
 }

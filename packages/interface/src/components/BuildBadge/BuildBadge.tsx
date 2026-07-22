@@ -128,14 +128,9 @@ export function BuildBadge() {
       if (!wrapRef.current) return;
       if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
     document.addEventListener('mousedown', onDocMouseDown);
-    document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDocMouseDown);
-      document.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
@@ -308,6 +303,8 @@ export function BuildBadge() {
   return (
     <div
       ref={wrapRef}
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false); } }}
+      tabIndex={-1}
       className="forgeax-build-badge"
       data-bus-status={state.status}
       data-open={open ? 'true' : 'false'}

@@ -69,10 +69,13 @@ import { DeleteGuardDialog } from './DeleteGuardDialog';
 // global keydown listener (G-1 / AC-A1) while routing Delete/F2/Ctrl+D/Ctrl+A/G
 // through the one gateway door.
 import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
+import { registerAction } from '@forgeax/interface/lib/action-registry';
 // keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
 // standalone host produce the SAME dep object — no divergence (the old inline copy
 // here was silently missing from studio, killing its G/Esc keyboard path).
 import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
+import { projectGatewayOps } from '@forgeax/editor-edit-runtime';
+import { gateway } from '@forgeax/editor-core';
 
 // lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
 // (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
@@ -216,6 +219,13 @@ function boot(): void {
   // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks
   // them up at effect time.
   registerKeyboardRouterDeps(makeKeyboardRouterDeps());
+  // Command-palette actions are a pure projection of gateway.listOps(); the
+  // action registry owns discovery, while execution returns to gateway.dispatch.
+  const disposeGatewayActions = projectGatewayOps(gateway, registerAction);
+  // The standalone host has no component teardown boundary for this module;
+  // make the adapter's disposer the HMR/realm-reset boundary so reloading the
+  // host cannot leave stale projected commands in interface's registry.
+  import.meta.hot?.dispose(disposeGatewayActions);
 
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +

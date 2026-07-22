@@ -8,10 +8,22 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { ResizeHandle } from '@forgeax/editor-core';
+import { gateway, ResizeHandle } from '@forgeax/editor-core';
+import { AssetThumbnail } from '@forgeax/editor-ui';
 import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
-import type { CBFile, CBFolder, CBViewItem } from './types';
+import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
+
+// Registry-projected CBAssets carry an empty `payload` (registryEntryToCBAsset),
+// so a raw thumbnail could only fall back to a kind glyph. Pull the real POD
+// meta (baseColor, source, width/height, …) from the engine so materials render
+// their true colour and textures resolve an image. Sync cache read — safe in
+// render.
+function realPayload(guid: string, fallback: Record<string, unknown>): Record<string, unknown> {
+  const desc = gateway.describeAssetByGuid(guid);
+  if (desc?.ok && desc.meta && typeof desc.meta === 'object') return desc.meta as Record<string, unknown>;
+  return fallback;
+}
 
 export interface CBPreviewPanelProps {
   previewItem: CBViewItem;
@@ -88,15 +100,20 @@ export function CBPreviewPanel({
   } else if (previewItem.type === 'file') {
     const rawUrl = `/api/files/raw?path=${encodeURIComponent(previewItem.diskPath)}`;
     if (previewItem.assets.length > 0) {
+      // Sub-assets of an imported source (a.glb → mesh/material/texture) all
+      // inherit the source filename from the registry, so a plain list reads as
+      // N identical "a.glb" rows. Suffix the kind when a name repeats so each
+      // row is distinguishable (the guid column disambiguates any residual tie).
+      const nameCounts = new Map<string, number>();
+      for (const a of previewItem.assets) nameCounts.set(a.name, (nameCounts.get(a.name) ?? 0) + 1);
+      const rowName = (a: CBAsset) => ((nameCounts.get(a.name) ?? 0) > 1 ? `${a.name} · ${a.kind}` : a.name);
       body = (
         <div className="cb-preview-asset-list">
           {previewItem.assets.map(asset => (
             <div className="cb-preview-asset-row" key={asset.guid}>
-              <span className="cb-preview-list-ico" style={{ color: colorForAssetKind(asset.kind) }}>
-                <ContentBrowserIcon name={iconNameForAssetKind(asset.kind)} />
-              </span>
+              <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} packPath={asset.packPath} size={30} />
               <div>
-                <div>{asset.name}</div>
+                <div>{rowName(asset)}</div>
                 <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
               </div>
               <span className="guid">{asset.guid.slice(0, 10)}...</span>
@@ -115,18 +132,21 @@ export function CBPreviewPanel({
     }
   } else {
     body = (
-      <div className="cb-preview-asset-list">
-        <div className="cb-preview-asset-row">
-          <span className="cb-preview-list-ico" style={{ color: colorForAssetKind(previewItem.kind) }}>
-            <ContentBrowserIcon name={iconNameForAssetKind(previewItem.kind)} />
-          </span>
-          <div>
-            <div>{previewItem.name}</div>
-            <div className="kind">{previewItem.packPath}</div>
-          </div>
-          <span className="guid">{previewItem.guid.slice(0, 10)}...</span>
+      <>
+        <div className="cb-preview-media cb-preview-asset-hero">
+          <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} packPath={previewItem.packPath} size={168} fit="contain" />
         </div>
-      </div>
+        <div className="cb-preview-asset-list">
+          <div className="cb-preview-asset-row">
+            <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} packPath={previewItem.packPath} size={30} />
+            <div>
+              <div>{previewItem.name}</div>
+              <div className="kind">{previewItem.packPath}</div>
+            </div>
+            <span className="guid">{previewItem.guid.slice(0, 10)}...</span>
+          </div>
+        </div>
+      </>
     );
   }
 

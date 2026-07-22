@@ -95,6 +95,10 @@ export type BuiltinEditorOp =
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'deleteDirectory'; path: string }
+  // deleteSourceFile (editor data-operation-view convergence M1): delete one
+  // game-relative source file through the asset IO write gate. Dispatch is
+  // synchronous acceptance; callers poll the terminal status by requestId.
+  | { kind: 'deleteSourceFile'; path: string; requestId: string }
   // importAsset (Invariant 7 convergence): "the source at destPath is on disk;
   // import it" — ledger-only (no undo; cook produces derived artefacts + refs, not
   // cleanly reversible). Human callers upload bytes through the assetIO gate first
@@ -216,6 +220,8 @@ export interface CommandError {
     // Asset read surface (Part 4): resolveAsset/describeAsset given a handle that
     // resolves to no asset (slot 0 unset, stale, or not a shared<T> handle).
     | 'ASSET_NOT_FOUND'
+    // Accepted async source-file deletion failed at the filesystem boundary.
+    | 'SOURCE_FILE_DELETE_FAILED'
     // ── M5 eval channel codes (plan-strategy §2 D-4) ──
     | 'SCOPE_LOCKED'
     | 'SCRIPT_SYNTAX_ERROR'

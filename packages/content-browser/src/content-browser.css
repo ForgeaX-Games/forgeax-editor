@@ -491,8 +491,12 @@
 .cb-list-folder .cb-list-name,
 .cb-column-folder .cb-column-td:first-child { font-weight: 600; }
 .cb-thumb-sphere {
-  width: 70%;
-  height: 70%;
+  /* Height-driven with a 1:1 aspect so the "sphere" stays a circle even though
+     the thumb container is wider than it is tall (was width:70%/height:70% →
+     squashed ellipse). */
+  height: 82%;
+  aspect-ratio: 1 / 1;
+  width: auto;
   border-radius: 50%;
   box-shadow: inset -4px -4px 8px rgba(0,0,0,0.4), inset 2px 2px 6px rgba(255,255,255,0.15);
 }
@@ -556,6 +560,10 @@
   position: absolute;
   top: 6px;
   right: 6px;
+  /* Sit above the thumbnail: `.cb-grid-thumb` is position:relative and follows
+     this star in the DOM, so without an explicit z-index the (opaque) texture
+     preview paints over the favorite icon and buries it. */
+  z-index: 2;
   opacity: 0;
   color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
   line-height: 1;
@@ -700,6 +708,12 @@
   max-height: 260px;
   margin: 0 auto;
   object-fit: contain;
+}
+.cb-preview-asset-hero {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 14px 0 10px;
 }
 .cb-preview-media audio {
   width: 100%;

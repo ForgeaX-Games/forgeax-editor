@@ -61,6 +61,17 @@ function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & 
     duplicateAsset: (guid, packPath) => { calls.duplicateAsset.push([guid, packPath]); },
     renameAsset: (guid, packPath) => { calls.renameAsset.push([guid, packPath]); },
     selectAllAssets: () => { calls.selectAllAssets.push(1); },
+    undo: () => { calls.dispatch.push([{ kind: 'undo' }, 'human']); },
+    redo: () => { calls.dispatch.push([{ kind: 'redo' }, 'human']); },
+    save: () => { calls.dispatch.push([{ kind: 'saveDocToDisk' }, 'human']); },
+    handleViewportKeyDown: (e) => {
+      const key = e.key.toLowerCase();
+      const op = key === 'w' ? { kind: 'setGizmoMode', mode: 'translate' }
+        : key === 'e' ? { kind: 'setGizmoMode', mode: 'rotate' }
+          : key === 'r' ? { kind: 'setGizmoMode', mode: 'scale' }
+            : key === 'f' ? { kind: 'requestFrame' } : null;
+      if (op) calls.dispatch.push([op, 'human']);
+    },
   };
   return Object.assign(base, over, { calls });
 }
