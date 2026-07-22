@@ -24,6 +24,15 @@ import { flushBrowserPrefs } from '../lib/browser-prefs-sync';
 
 export type Locale = 'en' | 'zh';
 
+/** Same-FRAME broadcast event. Injected editor panels (@forgeax/editor-panels)
+ *  render in THIS frame but read their copy from @forgeax/editor-core/i18n — a
+ *  SEPARATE store instance. It listens for this window event to re-read the
+ *  locale, so a switch here live-updates the editor panels too. Must match
+ *  editor-core's LOCALE_CHANGED_EVENT. (`storage` never fires in the document
+ *  that wrote it, and the extension postMessage only reaches iframes, so this
+ *  window event is the only same-frame channel.) */
+const LOCALE_CHANGED_EVENT = 'forgeax:locale-changed';
+
 export interface LocaleMeta {
   /** BCP-47-ish code used as the locale id + persisted value + <html lang>. */
   code: Locale;
@@ -111,6 +120,11 @@ export function initI18n(): void {
     window.addEventListener('storage', (e) => {
       if (!e.key || e.key === STORAGE_KEYS.locale) setLocale(readPersisted(), { persist: false });
     });
+    // Symmetric same-frame sync: if the editor-core store initiates a switch it
+    // dispatches this window event; pick it up so the shell follows. persist:false
+    // + readPersisted() makes our own re-broadcast a no-op (no change → no
+    // re-emit), so there is no feedback loop.
+    window.addEventListener(LOCALE_CHANGED_EVENT, () => setLocale(readPersisted(), { persist: false }));
   }
 }
 
@@ -144,7 +158,15 @@ export function setLocale(next: Locale, opts: { persist?: boolean } = {}): void 
       /* ignore */
     }
   }
-  if (changed) emit();
+  if (changed) {
+    emit();
+    // Notify the same-frame editor-core i18n store (see LOCALE_CHANGED_EVENT).
+    // Runs AFTER the localStorage write so the listener's readPersisted() sees
+    // the new value.
+    if (typeof window !== 'undefined') {
+      try { window.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: next })); } catch { /* ignore */ }
+    }
+  }
 }
 
 /** react-i18next-compatible alias. */

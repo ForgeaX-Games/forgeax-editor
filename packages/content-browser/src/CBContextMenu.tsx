@@ -7,6 +7,9 @@ import {
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
+// Themed overlay modals (editor-ui) replace window.prompt/confirm in the
+// fallback branches below (used only when no host CRUD callback is supplied).
+import { confirm as confirmDialog, prompt as promptDialog } from '@forgeax/editor-ui';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
  *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
@@ -98,13 +101,21 @@ export function buildAssetContextMenu(
       if (callbacks?.onRename) {
         callbacks.onRename(asset);
       } else {
-        const newName = window.prompt(tr('editor.contentBrowser.dialogs.renameAssetPrompt'), asset.name);
-        if (newName && newName !== asset.name) {
-          // D6: rename routes through the ONE gateway door (document op, undoable).
-          // The applier reaches pack IO via ctx.assetIO and fires the in-process
-          // assetsChanged notification itself; Content Browser reloads from it.
-          gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
-        }
+        void (async () => {
+          const newName = await promptDialog({
+            title: tr('editor.contentBrowser.contextMenu.rename'),
+            label: tr('editor.contentBrowser.dialogs.renameAssetPrompt'),
+            defaultValue: asset.name,
+            confirmText: tr('editor.contentBrowser.dialogs.ok'),
+            cancelText: tr('editor.contentBrowser.dialogs.cancel'),
+          });
+          if (newName && newName !== asset.name) {
+            // D6: rename routes through the ONE gateway door (document op, undoable).
+            // The applier reaches pack IO via ctx.assetIO and fires the in-process
+            // assetsChanged notification itself; Content Browser reloads from it.
+            gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
+          }
+        })();
       }
     }},
     { id: 'duplicate', label: tr('editor.contentBrowser.contextMenu.duplicate'), shortcut: 'Ctrl+D', action: () => {
@@ -116,11 +127,20 @@ export function buildAssetContextMenu(
     }},
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
       if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
-      const names = targets.map(a => a.name).join(', ');
-      if (!window.confirm(`${tr('editor.contentBrowser.deleteGuard.title', { count: targets.length, plural: targets.length === 1 ? '' : 's' })}\n${names}`)) return;
-      for (const a of targets) {
-        gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
-      }
+      void (async () => {
+        const names = targets.map(a => a.name).join(', ');
+        const ok = await confirmDialog({
+          title: tr('editor.contentBrowser.deleteGuard.title', { count: targets.length, plural: targets.length === 1 ? '' : 's' }),
+          description: names,
+          confirmText: tr('editor.contentBrowser.deleteGuard.confirm'),
+          cancelText: tr('editor.contentBrowser.deleteGuard.cancel'),
+          destructive: true,
+        });
+        if (!ok) return;
+        for (const a of targets) {
+          gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
+        }
+      })();
     }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
@@ -198,8 +218,17 @@ export function buildFolderContextMenu(
 
     { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
-      if (!window.confirm(tr('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: folder.name }))) return;
-      gateway.dispatch({ kind: 'deleteDirectory', path: folder.path }, 'human');
+      void (async () => {
+        const ok = await confirmDialog({
+          title: tr('editor.contentBrowser.contextMenu.delete'),
+          description: tr('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: folder.name }),
+          confirmText: tr('editor.contentBrowser.deleteGuard.confirm'),
+          cancelText: tr('editor.contentBrowser.deleteGuard.cancel'),
+          destructive: true,
+        });
+        if (!ok) return;
+        gateway.dispatch({ kind: 'deleteDirectory', path: folder.path }, 'human');
+      })();
     }},
     { id: 'copy-path', label: tr('editor.contentBrowser.contextMenu.copyPath'), action: () => {
       void navigator.clipboard.writeText(folder.path);

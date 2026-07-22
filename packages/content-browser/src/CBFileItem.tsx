@@ -7,14 +7,17 @@ interface Props {
   file: CBFile;
   selected: boolean;
   expanded?: boolean;
+  favorite?: boolean;
+  onToggleFavorite?: () => void;
   onToggleExpand?: () => void;
   onClick: (e: MouseEvent) => void;
   onDoubleClick: () => void;
   onContextMenu: (e: MouseEvent) => void;
 }
 
-export function CBFileItem({ file, selected, expanded, onToggleExpand, onClick, onDoubleClick, onContextMenu }: Props) {
+export function CBFileItem({ file, selected, expanded, favorite, onToggleFavorite, onToggleExpand, onClick, onDoubleClick, onContextMenu }: Props) {
   const { t } = useTranslation();
+  const fav = favorite ?? file.isFavorite;
   const hasAssets = file.assets.length > 0;
   const expandable = Boolean(onToggleExpand);
   const metaLabel = hasAssets ? t('editor.contentBrowser.preview.assetCount', { count: file.assets.length }) : file.kindLabel;
@@ -30,7 +33,11 @@ export function CBFileItem({ file, selected, expanded, onToggleExpand, onClick, 
       onContextMenu={e => { e.preventDefault(); onContextMenu(e); }}
       title={file.path}
     >
-      <span className={`cb-card-fav${file.isFavorite ? ' on' : ''}`}><ContentBrowserIcon name="star" /></span>
+      <span
+        className={`cb-card-fav${fav ? ' on' : ''}`}
+        title={t(fav ? 'editor.contentBrowser.contextMenu.unfavorite' : 'editor.contentBrowser.contextMenu.favorite')}
+        onClick={e => { e.stopPropagation(); onToggleFavorite?.(); }}
+      ><ContentBrowserIcon name="star" /></span>
       {expandable && (
         <button
           type="button"

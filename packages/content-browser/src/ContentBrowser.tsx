@@ -6,6 +6,10 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
 import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu, useDocVersion,
   ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
+// Editor-ui overlay services replace window.prompt/confirm — a themed modal
+// (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
+// (standalone main.tsx / studio editorRenderers.tsx). Both are async.
+import { confirm as confirmDialog, prompt as promptDialog } from '@forgeax/editor-ui';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
@@ -235,46 +239,84 @@ export function ContentBrowser() {
     onReload: reload,
     onDelete: requestDelete,
     onRename: (asset: CBAsset) => {
-      const newName = window.prompt(t('editor.contentBrowser.dialogs.renameAssetPrompt'), asset.name);
-      if (newName && newName !== asset.name) {
-        // D6: rename routes through the ONE gateway door (document op, undoable).
-        // The applier reaches pack IO via ctx.assetIO and fires the in-process
-        // assetsChanged notification; the Content Browser listener reloads.
-        gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
-      }
+      void (async () => {
+        const newName = await promptDialog({
+          title: t('editor.contentBrowser.contextMenu.rename'),
+          label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
+          defaultValue: asset.name,
+          confirmText: t('editor.contentBrowser.dialogs.ok'),
+          cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        });
+        if (newName && newName !== asset.name) {
+          // D6: rename routes through the ONE gateway door (document op, undoable).
+          // The applier reaches pack IO via ctx.assetIO and fires the in-process
+          // assetsChanged notification; the Content Browser listener reloads.
+          gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
+        }
+      })();
     },
     onNewFolder: (parentPath: string) => {
-      const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
-      if (!name) return;
-      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+      void (async () => {
+        const name = await promptDialog({
+          title: t('editor.contentBrowser.actions.createFolder'),
+          label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
+          confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+          cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        });
+        if (!name) return;
+        gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+      })();
     },
   }), [reload, requestDelete, t]);
 
   const createFolderInCurrentPath = useCallback(() => {
-    const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
-    if (!name) return;
-    gateway.dispatch({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
+    void (async () => {
+      const name = await promptDialog({
+        title: t('editor.contentBrowser.actions.createFolder'),
+        label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
+        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+        cancelText: t('editor.contentBrowser.dialogs.cancel'),
+      });
+      if (!name) return;
+      gateway.dispatch({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
+    })();
   }, [nav.currentPath, t]);
 
   const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
-    const basePath = resolveGamePath(nav.currentPath || 'assets');
-    const name = window.prompt(
-      t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
-      spec.defaultNamePrefix,
-    )?.trim();
-    if (!name) return;
-    gateway.dispatch({
-      kind: 'createAsset',
-      packPath: `${basePath}/${name}.pack.json`,
-      guid: generateAssetGuid(),
-      assetKind: spec.kind,
-      name,
-    }, 'human');
+    void (async () => {
+      const basePath = resolveGamePath(nav.currentPath || 'assets');
+      const name = (await promptDialog({
+        title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+        label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
+        defaultValue: spec.defaultNamePrefix,
+        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+        cancelText: t('editor.contentBrowser.dialogs.cancel'),
+      }))?.trim();
+      if (!name) return;
+      gateway.dispatch({
+        kind: 'createAsset',
+        packPath: `${basePath}/${name}.pack.json`,
+        guid: generateAssetGuid(),
+        assetKind: spec.kind,
+        name,
+      }, 'human');
+    })();
   }, [nav.currentPath, t]);
 
   const assetFavoritePath = useCallback((asset: CBAsset) => (
     relByAssetGuid.get(asset.guid) ?? catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots) ?? asset.packPath
   ), [gameSlug, relByAssetGuid]);
+
+  // Per-card favorite state + toggle, threaded through CBGrid so every card's
+  // ⭐ toggles favorites directly (same path semantics as the context menu:
+  // folders/files key on their game-relative path, assets on assetFavoritePath).
+  // The header "favorites only" filter then narrows the content view to these.
+  const isItemFavorite = useCallback((item: CBViewItem): boolean => (
+    item.type === 'asset' ? favorites.isFavorite(assetFavoritePath(item)) : item.isFavorite
+  ), [assetFavoritePath, favorites]);
+  const toggleItemFavorite = useCallback((item: CBViewItem): void => {
+    favorites.toggleFavorite(item.type === 'asset' ? assetFavoritePath(item) : item.path);
+  }, [assetFavoritePath, favorites]);
 
   const commonItemMenu = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') {
@@ -285,8 +327,17 @@ export function ContentBrowser() {
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          if (!window.confirm(t('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: item.name }))) return;
-          gateway.dispatch({ kind: 'deleteDirectory', path: item.path }, 'human');
+          void (async () => {
+            const ok = await confirmDialog({
+              title: t('editor.contentBrowser.contextMenu.delete'),
+              description: t('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: item.name }),
+              confirmText: t('editor.contentBrowser.deleteGuard.confirm'),
+              cancelText: t('editor.contentBrowser.deleteGuard.cancel'),
+              destructive: true,
+            });
+            if (!ok) return;
+            gateway.dispatch({ kind: 'deleteDirectory', path: item.path }, 'human');
+          })();
         } },
       ];
     }
@@ -307,12 +358,21 @@ export function ContentBrowser() {
           }).catch(() => {});
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          if (!window.confirm(t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: item.name }))) return;
-          gateway.dispatch({
-            kind: 'deleteSourceFile',
-            path: item.path,
-            requestId: crypto.randomUUID(),
-          }, 'human');
+          void (async () => {
+            const ok = await confirmDialog({
+              title: t('editor.contentBrowser.contextMenu.delete'),
+              description: t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: item.name }),
+              confirmText: t('editor.contentBrowser.deleteGuard.confirm'),
+              cancelText: t('editor.contentBrowser.deleteGuard.cancel'),
+              destructive: true,
+            });
+            if (!ok) return;
+            gateway.dispatch({
+              kind: 'deleteSourceFile',
+              path: item.path,
+              requestId: crypto.randomUUID(),
+            }, 'human');
+          })();
         } },
       ];
     }
@@ -518,9 +578,16 @@ export function ContentBrowser() {
     e.preventDefault();
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     const menuItems = buildBlankAreaContextMenu(nav.currentPath, (parentPath) => {
-      const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
-      if (!name) return;
-      gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+      void (async () => {
+        const name = await promptDialog({
+          title: t('editor.contentBrowser.actions.createFolder'),
+          label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
+          confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+          cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        });
+        if (!name) return;
+        gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+      })();
     });
     const resolved = menuItems.map(m => ({
       label: m.label,
@@ -640,6 +707,8 @@ export function ContentBrowser() {
                 onSelect={setPreviewItem}
                 onDoubleClick={handleActivate}
                 onContextMenu={handleContextMenu}
+                isItemFavorite={isItemFavorite}
+                onToggleFavorite={toggleItemFavorite}
               />
             )}
           </div>

@@ -16,6 +16,11 @@ interface Props {
   onSelect?: (item: CBViewItem) => void;
   onDoubleClick?: (item: CBViewItem) => void;
   onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
+  /** Whether the item is in the favorites list — lights the card's ⭐. */
+  isItemFavorite?: (item: CBViewItem) => boolean;
+  /** Toggle the item's favorite state (drives both the card ⭐ and the
+   *  header "favorites only" filter's contents). */
+  onToggleFavorite?: (item: CBViewItem) => void;
 }
 
 function selectedKey(item: CBViewItem): string {
@@ -26,13 +31,15 @@ function selectedKey(item: CBViewItem): string {
   return item.path;
 }
 
-export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu }: Props) {
+export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, isItemFavorite, onToggleFavorite }: Props) {
   return (
     <div className="cb-grid-view cb-fe-grid">
       {items.map((item, index) => {
         const isSelected = selectedPath != null
           ? selectedPath === selectedKey(item)
           : multiSelect.isSelected(item);
+        const favorite = isItemFavorite?.(item) ?? false;
+        const toggleFavorite = onToggleFavorite ? () => onToggleFavorite(item) : undefined;
         if (item.type === 'folder') {
           return (
             <CBFolderItem
@@ -40,6 +47,8 @@ export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMo
               folder={item}
               selected={isSelected}
               thumbnailSize={thumbnailSize}
+              favorite={favorite}
+              onToggleFavorite={toggleFavorite}
               onClick={e => { onSelect?.(item); multiSelect.handleClick(index, e); }}
               onDoubleClick={() => onDoubleClick?.(item)}
               onContextMenu={e => onContextMenu?.(e, item)}
@@ -55,6 +64,8 @@ export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMo
               file={item}
               selected={isSelected}
               expanded={isAssetMode ? undefined : expandedPacks?.has(item.path)}
+              favorite={favorite}
+              onToggleFavorite={toggleFavorite}
               onToggleExpand={!isAssetMode && hasExpandableAssets
                 ? () => onTogglePackExpansion?.(item.path)
                 : undefined}
@@ -70,6 +81,8 @@ export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMo
             asset={item}
             selected={isSelected}
             thumbnailSize={thumbnailSize}
+            favorite={favorite}
+            onToggleFavorite={toggleFavorite}
             onClick={e => { onSelect?.(item); multiSelect.handleClick(index, e); }}
             onDoubleClick={() => onDoubleClick?.(item)}
             onContextMenu={e => onContextMenu?.(e, item)}

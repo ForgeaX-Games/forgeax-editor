@@ -21,6 +21,7 @@ import { bootAppMode } from './lib/workbenches';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { getLastModel } from './lib/model-prefs';
 import { resolveKernelForAgent } from './lib/agent-cli-provider';
+import { waitForEngineSettled } from './lib/workspace-reload';
 
 export { configureSessionClient, type SessionClient } from './store-parts/session-client';
 export {
@@ -990,6 +991,10 @@ export const useShellStore = create<AppState>((set, get) => ({
         body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
       });
     }
+    // Wait for the engine to settle after the game-rescan vite restart.
+    // Without this, the viewport remount races the engine restart and
+    // pack-index/asset fetches hit 502, leaving the viewport blank.
+    await waitForEngineSettled(slug);
     await get().refreshSessions();
     const tabs = get().tabs;
     if (tabs.length === 0) {

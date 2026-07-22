@@ -206,7 +206,7 @@ async function processMetaSidecar(
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return `sidecar ${rawPath} missing required 'importer' field`;
   }
-  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio') {
+  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio' && metaObj.importer !== 'font') {
     return `sidecar ${rawPath} has unfoldable importer: ${JSON.stringify(metaObj.importer)}`;
   }
 
@@ -329,6 +329,25 @@ async function processMetaSidecar(
     for (const sub of meta.subAssets) {
       if (MODEL_KINDS.has(sub.kind)) {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel, name: subName(sub) });
+      }
+    }
+  }
+
+  // importer === 'font': a `.ttf` font sidecar declares three sub-assets (MSDF
+  // atlas texture / sampler / glyph-metrics font). Fold the atlas (kind:'texture')
+  // and the FontAsset (kind:'font') rows so GlyphText's shared<FontAsset> field
+  // finds the asset in the Inspector AssetPicker; without this the per-game
+  // catalog carries no kind:'font' row and the picker shows "No FontAsset in
+  // project". The sampler sub-asset is intentionally NOT folded (the runtime
+  // resolves the atlas/sampler handles off the FontAsset payload). Mirrors the
+  // engine SSOT build-catalog.ts font arm.
+  if (meta.importer === 'font') {
+    const atlasMetadata = buildImageMetadata(meta);
+    for (const sub of meta.subAssets) {
+      if (sub.kind === 'texture') {
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, name: subName(sub), metadata: atlasMetadata });
+      } else if (sub.kind === 'font') {
+        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'font', sourcePath: sourceRel, name: subName(sub) });
       }
     }
   }

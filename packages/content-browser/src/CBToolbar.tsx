@@ -64,9 +64,15 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
-    const name = window.prompt(t('editor.contentBrowser.dialogs.newFolderPrompt'));
-    if (!name) return;
-    gateway.dispatch({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
+    void promptDialog({
+      title: t('editor.contentBrowser.actions.createFolder'),
+      label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
+      confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+      cancelText: t('editor.contentBrowser.dialogs.cancel'),
+    }).then((name) => {
+      if (!name) return;
+      gateway.dispatch({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
+    });
   }, [currentPath, t]);
 
   const handleImport = useCallback(() => {

@@ -8,22 +8,12 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { gateway, ResizeHandle } from '@forgeax/editor-core';
+import { ResizeHandle } from '@forgeax/editor-core';
 import { AssetThumbnail } from '@forgeax/editor-ui';
 import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
+import { realPayload } from './hooks';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
-
-// Registry-projected CBAssets carry an empty `payload` (registryEntryToCBAsset),
-// so a raw thumbnail could only fall back to a kind glyph. Pull the real POD
-// meta (baseColor, source, width/height, …) from the engine so materials render
-// their true colour and textures resolve an image. Sync cache read — safe in
-// render.
-function realPayload(guid: string, fallback: Record<string, unknown>): Record<string, unknown> {
-  const desc = gateway.describeAssetByGuid(guid);
-  if (desc?.ok && desc.meta && typeof desc.meta === 'object') return desc.meta as Record<string, unknown>;
-  return fallback;
-}
 
 export interface CBPreviewPanelProps {
   previewItem: CBViewItem;

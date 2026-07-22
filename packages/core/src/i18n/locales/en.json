@@ -252,6 +252,8 @@
         "newFolderPrompt": "New folder name:",
         "newAssetNameLabel": "Name",
         "createConfirm": "Create",
+        "ok": "OK",
+        "cancel": "Cancel",
         "deleteFolderConfirm": "Delete folder \"{{name}}\" and all its contents?",
         "deleteFileConfirm": "Delete file \"{{name}}\"?"
       },

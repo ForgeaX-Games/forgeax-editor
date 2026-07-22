@@ -252,6 +252,8 @@
         "newFolderPrompt": "新文件夹名称：",
         "newAssetNameLabel": "名称",
         "createConfirm": "创建",
+        "ok": "确定",
+        "cancel": "取消",
         "deleteFolderConfirm": "删除文件夹「{{name}}」及其所有内容？",
         "deleteFileConfirm": "删除文件「{{name}}」？"
       },

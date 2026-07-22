@@ -10,6 +10,8 @@ interface Props {
   asset: CBAsset;
   selected: boolean;
   thumbnailSize?: number;
+  favorite?: boolean;
+  onToggleFavorite?: () => void;
   onClick: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -18,7 +20,7 @@ interface Props {
 const TIP_W = 260;
 const TIP_GAP = 8;
 
-export function CBAssetItem({ asset, selected, onClick, onDoubleClick, onContextMenu }: Props) {
+export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorite, onClick, onDoubleClick, onContextMenu }: Props) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
@@ -78,7 +80,11 @@ export function CBAssetItem({ asset, selected, onClick, onDoubleClick, onContext
       }}
       onMouseLeave={() => setHovered(false)}
     >
-      <span className="cb-card-fav"><ContentBrowserIcon name="star" /></span>
+      <span
+        className={`cb-card-fav${favorite ? ' on' : ''}`}
+        title={t(favorite ? 'editor.contentBrowser.contextMenu.unfavorite' : 'editor.contentBrowser.contextMenu.favorite')}
+        onClick={e => { e.stopPropagation(); onToggleFavorite?.(); }}
+      ><ContentBrowserIcon name="star" /></span>
       <div
         className="cb-grid-thumb cb-fe-thumb"
         style={{

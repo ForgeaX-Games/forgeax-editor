@@ -93,7 +93,8 @@ export { Separator, type SeparatorProps } from './components/separator';
 export { Slider, type SliderProps } from './components/slider';
 export { Spinner, type SpinnerProps } from './components/spinner';
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './components/tabs';
-export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from './components/tooltip';
+export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider, Tip } from './components/tooltip';
+export type { TipProps } from './components/tooltip';
 export {
   Dialog,
   DialogPortal,

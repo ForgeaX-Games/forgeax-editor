@@ -220,7 +220,6 @@ export function fileSpecificMenuItems(
     case 'code':
       return [
         { id: 'open-external-ide', label: t('editor.contentBrowser.contextMenu.openExternalIde'), icon: 'square-arrow-out-up-right', disabled: true },
-        { id: 'rename-symbol', label: t('editor.contentBrowser.contextMenu.renameSymbol'), icon: 'text-cursor-input', disabled: true },
       ];
     case 'scene':
       return [

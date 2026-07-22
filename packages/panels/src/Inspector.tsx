@@ -1068,7 +1068,7 @@ export function InspectorPanel() {
                                 const rawItem = items[i];
                                 const handleNum = typeof rawItem === 'number' ? rawItem : 0;
                                 const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
-                                const matName = desc?.ok ? (desc.name ?? (desc.guid ? desc.guid.slice(0, 8) : '')) : '';
+                                const matName = desc?.ok ? ((desc.name && desc.name.trim()) || (desc.guid ? desc.guid.slice(0, 8) : '')) : '';
                                 const slotGuid = desc?.ok ? desc.guid : undefined;
                                 const slotKind = desc?.ok ? desc.kind : undefined;
                                 const slotMeta = desc?.ok ? desc.meta : undefined;
@@ -1206,7 +1206,7 @@ export function InspectorPanel() {
                                 // Numeric handle → show the resolved asset name (never the
                                 // raw #handle); fall back to a short guid, else empty so the
                                 // placeholder shows. unbound (0) → empty.
-                                const assetName = curDesc?.ok ? (curDesc.name ?? (curDesc.guid ? curDesc.guid.slice(0, 8) : '')) : '';
+                                const assetName = curDesc?.ok ? ((curDesc.name && curDesc.name.trim()) || (curDesc.guid ? curDesc.guid.slice(0, 8) : '')) : '';
                                 const display = typeof v === 'number' ? (v > 0 ? assetName : '') : strVal;
                                 return (
                                   <div

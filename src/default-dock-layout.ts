@@ -5,6 +5,12 @@
 // PanelRenderers.builtinWorkbenchLayouts. Keeping the data here makes standalone
 // and Studio consume the exact same editor layout instead of maintaining copies.
 import type { PanelRenderers } from '@forgeax/interface/components/DockShell/panelRenderers';
+// The panel `title`s below are only SEED labels for the serialized layout —
+// DockShell's `titleFor` overrides every tab title from the localized SSOT
+// (interface i18n `dockShell.panelTitles.*`) right after restore AND on every
+// language switch, so what the user sees is always locale-correct and live.
+// Keeping plain English seeds here (instead of a second i18n lookup) avoids a
+// duplicate string source. The `chat` tab keeps the "ForgeaX CLI" brand string.
 
 type SerializedDockview = NonNullable<PanelRenderers['builtinWorkbenchLayouts']>[string];
 type Orientation = SerializedDockview['grid']['orientation'];
@@ -21,7 +27,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
       data: [
         {
           type: 'branch',
-          size: 340,
+          size: 250,
           data: [
             {
               type: 'leaf',

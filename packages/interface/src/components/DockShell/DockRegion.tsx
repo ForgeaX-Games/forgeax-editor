@@ -6,7 +6,7 @@ import 'dockview/dist/styles/dockview.css';
 import { WbExtensionDockPanel } from './WbExtensionDockPanel';
 import { RecoveryBoundary } from '../ErrorBoundary';
 import { getWindowManager } from '../../lib/platform';
-import { useTranslation, getLocale } from '@/i18n';
+import { useTranslation, getLocale, subscribeLocale, t as panelT } from '@/i18n';
 import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
@@ -192,10 +192,16 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     builtinWorkbenchLayoutsRef.current = renderers.builtinWorkbenchLayouts;
   }, [renderers.builtinWorkbenchLayouts]);
   const titleFor = useCallback((id: string): string => {
-    if (id.startsWith('ep:')) {
-      const panelId = id.slice(3);
-      return panelsRef.current?.[panelId]?.title ?? panelId;
-    }
+    const panelId = id.startsWith('ep:') ? id.slice(3) : id;
+    // Locale-reactive tab title: resolve by the panel KEY at call time (module
+    // `panelT` reads the CURRENT locale), so re-titling after a language switch
+    // yields the new language — titles are NOT baked into the persisted layout.
+    // A missing key makes `t` echo the key back, so fall through to the static
+    // host-descriptor / interface-base title.
+    const key = `dockShell.panelTitles.${panelId}`;
+    const localized = panelT(key);
+    if (localized !== key) return localized;
+    if (id.startsWith('ep:')) return panelsRef.current?.[panelId]?.title ?? panelId;
     return panelsRef.current?.[id]?.title
       ?? BASE_PANEL_TITLE[id]
       ?? (id.startsWith('wb:') ? id.slice(3) : id);
@@ -543,6 +549,26 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       }
     });
   }, []);
+
+  // Re-title every live panel when the language changes. dockview stores each
+  // tab's title imperatively (set at restore/build time), so a locale switch
+  // would otherwise leave stale titles until a layout reset. titleFor resolves
+  // the CURRENT locale at call time, so re-applying it here is all that's needed
+  // — no reload, no persisted-title dependency.
+  useEffect(() => {
+    return subscribeLocale(() => {
+      const api = apiRef.current;
+      if (!api) return;
+      const titleIds = new Set([
+        ...Object.keys(BASE_PANEL_TITLE),
+        ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
+        ...Object.keys(panelsRef.current ?? {}),
+      ]);
+      for (const id of titleIds) {
+        try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
+      }
+    });
+  }, [titleFor]);
 
   // Reset-layout hook — useLayoutEffect so a tour reset emitted in useEffect
   // (after all layout effects) still finds a subscribed listener.

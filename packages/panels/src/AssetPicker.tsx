@@ -59,6 +59,23 @@ interface Row {
   relativeUrl: string;
 }
 
+// A never-empty display label. The engine's listCatalog returns `name: ''` for
+// assets with no stored name (builtin meshes, or GLB sub-meshes the importer
+// left unnamed — "genuinely no name" is a deliberate signal, not a bug), so a
+// bare `e.name ?? e.guid` renders a blank row (`?? ` doesn't catch `''`). Fall
+// back to the source file's basename (imported GLB/FBX → "Fox"), then the
+// runtime URL's basename, then a `kind + short-guid` tag, so a MeshAsset row is
+// always identifiable even without a real thumbnail.
+function baseName(path: string | undefined): string {
+  if (!path) return '';
+  const last = path.split('/').pop() ?? '';
+  return last.replace(/\.(pack\.json|meta\.json)$/i, '').replace(/\.[^.]+$/, '');
+}
+function catalogEntryName(e: { name?: string; guid: string; kind: string; relativeUrl: string; sourcePath?: string }): string {
+  if (e.name && e.name.trim()) return e.name.trim();
+  return baseName(e.sourcePath) || baseName(e.relativeUrl) || `${e.kind} ${e.guid.slice(0, 8)}`;
+}
+
 // Real asset preview via the shared editor-ui primitive: image thumbnail for
 // texture/image, material baseColor sphere, kind-tinted glyph otherwise. The
 // POD payload (baseColor, source, …) comes from the by-guid describe leg; the
@@ -79,7 +96,7 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
     const out: Row[] = [];
     for (const e of catalog) {
       if (assetKindToType(e.kind) !== assetType) continue;
-      out.push({ guid: e.guid, kind: e.kind, name: e.name ?? e.guid, relativeUrl: e.relativeUrl });
+      out.push({ guid: e.guid, kind: e.kind, name: catalogEntryName(e), relativeUrl: e.relativeUrl });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;

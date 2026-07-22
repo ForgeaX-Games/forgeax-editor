@@ -221,7 +221,7 @@ export function CommandPalette() {
     const params = paramsOf(formDef);
     return (
       <div className="fx-cmdk-overlay" onClick={close} onKeyDown={(e) => {
-        if (e.isComposing) return;
+        if (e.nativeEvent.isComposing) return;
         if (e.key === 'Escape') {
           e.preventDefault();
           if (formDef) { setFormDef(null); setValues({}); setFeedback(null); }
@@ -345,7 +345,7 @@ export function CommandPalette() {
   // ── 命令列表 ──────────────────────────────────────────────────────────────
   return (
     <div className="fx-cmdk-overlay" onClick={close} onKeyDown={(e) => {
-      if (!e.isComposing && e.key === 'Escape') { e.preventDefault(); close(); }
+      if (!e.nativeEvent.isComposing && e.key === 'Escape') { e.preventDefault(); close(); }
     }} tabIndex={-1}>
       <div className="fx-cmdk-panel" onClick={(e) => e.stopPropagation()}>
         <Command label="命令面板">

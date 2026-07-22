@@ -1212,7 +1212,14 @@
     "editorPanels": "Editor Panels",
     "mainPanels": "Main Panels",
     "morePanels": "More Panels",
-    "extensionPanels": "Extension Panels"
+    "extensionPanels": "Extension Panels",
+    "panelTitles": {
+      "hierarchy": "Hierarchy",
+      "assets": "Content Browser",
+      "inspector": "Inspector",
+      "viewport": "Viewport",
+      "info": "Info"
+    }
   },
   "firstRun": {
     "errMissingKey": "Please enter your OpenRouter API Key",

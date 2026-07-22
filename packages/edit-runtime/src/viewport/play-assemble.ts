@@ -120,14 +120,10 @@ interface SceneInstantiator {
   ): { ok: boolean; value?: unknown; error?: unknown };
 }
 
-/** The App handle assemblePlayWorld returns to the lifecycle (start/stop).
- *  pause/resume are used by the visibility-driven pause when the viewport is
- *  hidden during play (D-2 mutual exclusion: only the active App's rAF runs). */
+/** The App handle assemblePlayWorld returns to the lifecycle (start/stop). */
 export interface PlayApp {
   start(): { ok: boolean; error?: unknown };
   stop(): { ok: boolean; error?: unknown };
-  pause(): { ok: boolean; error?: unknown };
-  resume(): { ok: boolean; error?: unknown };
 }
 
 /** What assemblePlayWorld hands back for the run-lifecycle to drive + drop. */

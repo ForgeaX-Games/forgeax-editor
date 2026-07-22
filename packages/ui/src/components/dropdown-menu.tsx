@@ -61,11 +61,21 @@ DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayNam
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(({ className, sideOffset = 4, ...props }, ref) => (
+>(({ className, sideOffset = 4, onCloseAutoFocus, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
+      // On close, Radix's DropdownMenu explicitly calls `triggerRef.focus()`
+      // (react-dropdown-menu's own onCloseAutoFocus). When the trigger is also a
+      // hover Tooltip trigger — as every viewport header menu is (Tooltip >
+      // DropdownMenuTrigger > button) — that programmatic re-focus makes the
+      // tooltip pop up with NO hover and flashes a focus ring. Cancelling the
+      // auto-refocus (the event is cancelable, so preventDefault propagates
+      // through composeEventHandlers and skips the .focus()) kills both
+      // artefacts at the shared component, for every menu, without touching any
+      // call site. Callers can still opt back in via their own onCloseAutoFocus.
+      onCloseAutoFocus={onCloseAutoFocus ?? ((event) => event.preventDefault())}
       className={cn(
         'z-[var(--z-menu)] min-w-36 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1',
         className,

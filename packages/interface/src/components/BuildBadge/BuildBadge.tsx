@@ -303,8 +303,6 @@ export function BuildBadge() {
   return (
     <div
       ref={wrapRef}
-      onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false); } }}
-      tabIndex={-1}
       className="forgeax-build-badge"
       data-bus-status={state.status}
       data-open={open ? 'true' : 'false'}
@@ -315,6 +313,7 @@ export function BuildBadge() {
       tabIndex={interactive ? 0 : -1}
       onClick={onBadgeClick}
       onKeyDown={(e) => {
+        if (e.key === 'Escape') { e.preventDefault(); setOpen(false); return; }
         if (!interactive) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();

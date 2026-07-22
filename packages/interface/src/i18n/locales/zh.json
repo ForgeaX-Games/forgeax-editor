@@ -1212,7 +1212,14 @@
     "editorPanels": "编辑器面板",
     "mainPanels": "主面板",
     "morePanels": "更多面板",
-    "extensionPanels": "扩展面板"
+    "extensionPanels": "扩展面板",
+    "panelTitles": {
+      "hierarchy": "场景树",
+      "assets": "文件资源管理器",
+      "inspector": "物体属性",
+      "viewport": "视口",
+      "info": "信息"
+    }
   },
   "firstRun": {
     "errMissingKey": "请输入 OpenRouter API Key",

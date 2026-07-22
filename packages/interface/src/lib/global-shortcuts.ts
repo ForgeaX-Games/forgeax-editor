@@ -210,7 +210,8 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     deps.handleViewportKeyDown(e);
     return true;
   };
-  const routeViewportInput = (e: KeyboardEvent): boolean => {
+  const routeViewportInput = (e?: KeyboardEvent): boolean => {
+    if (!e) return false;
     if (deps.getInputTarget() === 'game') return false;
     deps.handleViewportKeyDown(e);
     return true;
