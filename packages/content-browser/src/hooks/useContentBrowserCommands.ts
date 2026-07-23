@@ -70,17 +70,15 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
           : t('editor.contentBrowser.actions.filterByType'),
     );
     host.contextKeys.set('panel.assets.filter.menuItems', [
-      ...filter.filters.map((item, index) => {
-        const kind = item.id.startsWith('kind:') ? item.id.slice('kind:'.length) : item.id;
-        return {
-          id: `contentBrowser.filter.${item.id}`,
-          command: `contentBrowser.filter.kind.${kind}`,
-          title: item.icon ? `${item.icon} ${item.label}` : item.label,
-          checkable: true,
-          activeWhen: `panel.assets.filter.${item.id}`,
-          order: index,
-        };
-      }),
+      ...filter.filters.map((item, index) => ({
+        id: `contentBrowser.filter.${item.id}`,
+        command: `contentBrowser.filter.family.${item.family}`,
+        title: item.label,
+        icon: item.icon,
+        checkable: true,
+        activeWhen: `panel.assets.filter.${item.id}`,
+        order: index,
+      })),
       { kind: 'separator' as const, id: 'contentBrowser.filter.separator', order: 10000 },
       {
         id: 'contentBrowser.filter.clear',
@@ -149,14 +147,11 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
         title: t('editor.contentBrowser.actions.clearSearch'),
         execute: () => { filter.setSearchQuery(''); return { status: 'completed' as const }; },
       }),
-      ...filter.filters.map((item) => {
-        const kind = item.id.startsWith('kind:') ? item.id.slice('kind:'.length) : item.id;
-        return host.commands.register({
-          id: `contentBrowser.filter.kind.${kind}`,
-          title: item.label,
-          execute: () => { filter.toggleFilter(item.id); return { status: 'completed' as const }; },
-        });
-      }),
+      ...filter.filters.map((item) => host.commands.register({
+        id: `contentBrowser.filter.family.${item.family}`,
+        title: item.label,
+        execute: () => { filter.toggleFilter(item.id); return { status: 'completed' as const }; },
+      })),
       host.commands.register({
         id: 'contentBrowser.sort.set',
         title: t('editor.contentBrowser.actions.sortDirection'),

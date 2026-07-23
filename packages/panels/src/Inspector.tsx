@@ -3,6 +3,9 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
+// Shared component-name localization (SSOT with the hierarchy type column/filter):
+// engine component names → per-name i18n label, raw English fallback for unmapped.
+import { componentTypeLabel } from './hierarchy-state';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
@@ -469,7 +472,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
             <div className={`cat ${compDim(comp)}`} key={comp}>
               <div className="cat-head">
                 <span className="car"><ForgeaxIcon name={compIcon(comp)} size={13} /></span>
-                <span className="ct">{comp}</span>
+                <span className="ct">{componentTypeLabel(comp, t)}</span>
               </div>
               <div className="cat-fields">
                 {(() => {
@@ -763,7 +766,7 @@ export function InspectorPanel() {
                   data-testid={`insp-add-${c}`}
                   onSelect={() => gateway.dispatch({ kind: 'addComponent', entity: sel, component: c, value: defaultComponentData(c) })}
                 >
-                  <span className="mi"><ForgeaxIcon name={compIcon(c)} size={14} /></span>{c}
+                  <span className="mi"><ForgeaxIcon name={compIcon(c)} size={14} /></span>{componentTypeLabel(c, t)}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -780,7 +783,7 @@ export function InspectorPanel() {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); revealComp(comp); } }}
           >
             <span className="ci"><ForgeaxIcon name={compIcon(comp)} size={13} /></span>
-            <span className="comp-name">{comp}</span>
+            <span className="comp-name">{componentTypeLabel(comp, t)}</span>
             <button
               type="button"
               className="comp-del"
@@ -845,7 +848,7 @@ export function InspectorPanel() {
                 ])}
               >
                 <span className="car"><ForgeaxIcon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={12} /></span>
-                <span className="ct">{comp}</span>
+                <span className="ct">{componentTypeLabel(comp, t)}</span>
                 <span className="cacts">
                   <button
                     type="button"
