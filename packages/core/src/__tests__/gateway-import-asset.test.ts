@@ -113,6 +113,21 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     const cookRequests = calls.filter((c) => c.url.includes('/__import/'));
     expect(cookRequests.length).toBe(1);
   });
+
+  it('audio import: upload → sidecar, no /__import cook', async () => {
+    const r = await executeAssetImport({
+      destPath: '/games/demo/assets/test_mp3.mp3',
+      sourceName: 'test_mp3.mp3',
+      base64: btoa('fake-mp3-bytes'),
+    });
+    expect(r.status).toBe('done');
+    expect(r.guid).toBeDefined();
+
+    const urls = calls.map((c) => c.url);
+    expect(urls.some((u) => u.includes('/api/files/upload'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
+    expect(urls.some((u) => u.includes('/__import/'))).toBe(false);
+  });
 });
 
 describe('importAsset dispatch (session applier accepted)', () => {

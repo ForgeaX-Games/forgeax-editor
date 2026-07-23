@@ -23,11 +23,17 @@ export interface InputProps
     VariantProps<typeof inputVariants> {}
 
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, size, ...props }, ref) => (
+  ({ className, type, size, style, ...props }, ref) => (
     <input
       ref={ref}
       type={type}
       className={cn(inputVariants({ size }), className)}
+      style={{
+        color: 'var(--color-text-primary, #fff)',
+        backgroundColor: 'var(--color-background-base, #2a2a2a)',
+        borderColor: 'var(--color-border-default, #444)',
+        ...style,
+      }}
       {...props}
     />
   ),

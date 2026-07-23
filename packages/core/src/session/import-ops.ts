@@ -158,15 +158,16 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       return { filename: sourceName, status: 'error', error: 'Failed to create .meta.json sidecar' };
     }
 
-    console.info('[import-diag] triggering cook', { guid, sourceName });
-    const cookError = await assetIO.triggerCook(guid);
-    console.info('[import-diag] cook trigger result', { guid, sourceName, cookError });
-    return {
-      filename: sourceName,
-      status: cookError ? 'error' : 'done',
-      guid,
-      error: cookError,
-    };
+    // Audio is pass-through — sidecar alone is sufficient for catalog fold.
+    if (format.importer !== 'audio') {
+      console.info('[import-diag] triggering cook', { guid, sourceName });
+      const cookError = await assetIO.triggerCook(guid);
+      console.info('[import-diag] cook trigger result', { guid, sourceName, cookError });
+      if (cookError) {
+        return { filename: sourceName, status: 'error', guid, error: cookError };
+      }
+    }
+    return { filename: sourceName, status: 'done', guid };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[import-diag] executeAssetImport THREW', { sourceName, destPath, error: msg });

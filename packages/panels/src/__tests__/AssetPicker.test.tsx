@@ -63,9 +63,23 @@ describe('AssetPicker', () => {
 
   it('empty state when no catalogued asset matches the type', () => {
     const html = renderToStaticMarkup(
-      <AssetPicker assetType="AudioAsset" onPick={() => {}} onClose={() => {}} />,
+      <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-empty');
-    expect(html).toContain('No AudioAsset in project');
+    expect(html).toContain('No AudioClipAsset in project');
+  });
+
+  it('AudioClipAsset field → only audio rows', () => {
+    gw.assetCatalog = () => [
+      ...fakeCatalog,
+      { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', relativeUrl: 'assets/test_mp3.mp3' },
+    ];
+    const html = renderToStaticMarkup(
+      <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('asset-picker-row-g-sfx');
+    expect(html).toContain('test_mp3');
+    expect(html).not.toContain('asset-picker-row-g-cube');
+    gw.assetCatalog = () => fakeCatalog;
   });
 });
