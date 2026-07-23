@@ -94,17 +94,11 @@ export interface CBSelection {
 
 // ── Filter ───────────────────────────────────────────────────────────────────
 
-/** Filter axis = file family (design's `FE_FILTERABLE`) plus the synthetic
- * `dir` bucket for folders. Mirrors the interaction spec's family taxonomy. */
-export type CBFilterFamily = CBFileFamily | 'dir';
-
 export interface CBFilter {
-  /** Stable id, `family:${family}`. */
   id: string;
-  family: CBFilterFamily;
   label: string;
-  /** PascalCase lucide-react icon name (resolved by the panel menu renderer). */
   icon?: string;
+  predicate: (item: CBAsset) => boolean;
   active: boolean;
 }
 

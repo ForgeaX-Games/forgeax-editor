@@ -192,51 +192,6 @@ export async function deleteDirectory(dirPath: string): Promise<boolean> {
   }
 }
 
-/** Rename/move a file or directory via the server API. */
-export async function renameOnDisk(fromPath: string, toPath: string): Promise<boolean> {
-  try {
-    const r = await fetch('/api/files/rename', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ from: fromPath, to: toPath }),
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** Rename a source file and its `.meta.json` sidecar (if it exists).
- *  Also updates the `source` field inside the sidecar to reflect the new name. */
-export async function renameSourceFileOnDisk(fromPath: string, toPath: string): Promise<boolean> {
-  const ok = await renameOnDisk(fromPath, toPath);
-  if (!ok) return false;
-  const metaFrom = `${fromPath}.meta.json`;
-  const metaTo = `${toPath}.meta.json`;
-  const metaOk = await renameOnDisk(metaFrom, metaTo);
-  if (metaOk) {
-    const newBasename = toPath.slice(toPath.lastIndexOf('/') + 1);
-    try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(metaTo)}`);
-      if (r.ok) {
-        const json = await r.json() as { content?: string };
-        if (json.content) {
-          const meta = JSON.parse(json.content) as Record<string, unknown>;
-          meta.source = newBasename;
-          await fetch('/api/files', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ path: metaTo, content: JSON.stringify(meta, null, 2) + '\n' }),
-          });
-        }
-      }
-    } catch {
-      // sidecar source field update is best-effort
-    }
-  }
-  return true;
-}
-
 // ── Session applier: createDirectory ─────────────────────────────────────────
 // Registered into sessionAppliers (D-1) so gateway.dispatch routes it as a
 // session op (ledger only, no undo). Human UI and AI are equal callers.
@@ -256,38 +211,6 @@ sessionAppliers.set('deleteDirectory', (op) => {
   void deleteDirectory(fullPath).then(ok => {
     if (ok) broadcastAssetsChanged('directory-only');
   });
-  return { ok: true };
-});
-
-sessionAppliers.set('renameDirectory', (op) => {
-  const { path, newName } = op as { path: string; newName: string };
-  const fullPath = resolveGamePath(path);
-  const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
-  const newFullPath = `${parentDir}/${newName}`;
-  void renameOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged('directory-only');
-  });
-  return { ok: true };
-});
-
-sessionAppliers.set('renameSourceFile', (op) => {
-  const { path, newName } = op as { path: string; newName: string };
-  const fullPath = resolveGamePath(path);
-  const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
-  const newFullPath = `${parentDir}/${newName}`;
-  void renameSourceFileOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged();
-  });
-  return { ok: true };
-});
-
-sessionAppliers.set('revealInFileManager', (op) => {
-  const { path } = op as { path: string };
-  void fetch('/api/files/reveal', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path }),
-  }).catch(() => {});
   return { ok: true };
 });
 

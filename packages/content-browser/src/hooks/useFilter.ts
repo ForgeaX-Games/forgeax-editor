@@ -1,8 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useTranslation } from '@forgeax/editor-core/i18n';
-import { ALL_FILTER_FAMILIES, FAMILY_FILTER_ICON } from '../family-filters';
-import { fileKindLabel } from '../content-browser-format';
-import type { CBAsset, CBFile, CBFilter, CBFilterFamily } from '../types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { buildKindFilters } from '../asset-kind-filters';
+import type { CBAsset, CBFilter } from '../types';
 
 export interface FilterAPI {
   filters: CBFilter[];
@@ -11,75 +9,68 @@ export interface FilterAPI {
   toggleFilter: (filterId: string) => void;
   clearFilters: () => void;
   activeFilterCount: number;
-  /** Search-only projection for registry-only assets (family filter never
-   * matches file-less catalog assets). */
   applyFilters: (items: CBAsset[]) => CBAsset[];
-  /** Family filter for disk files (true = keep). */
-  matchesFile: (file: CBFile) => boolean;
-  /** Family filter for folders (true = keep) — gated by the `dir` bucket. */
-  matchesFolder: () => boolean;
 }
 
-function familyLabel(family: CBFilterFamily, t: ReturnType<typeof useTranslation>['t']): string {
-  return family === 'dir' ? t('editor.contentBrowser.fileKinds.dir') : fileKindLabel(t, family);
-}
-
-export function useFilter(): FilterAPI {
-  const { t } = useTranslation();
-  const [activeFamilies, setActiveFamilies] = useState<ReadonlySet<CBFilterFamily>>(() => new Set());
+export function useFilter(observedKinds: readonly string[] = []): FilterAPI {
+  const filterDefinitions = useMemo(() => buildKindFilters(observedKinds), [observedKinds]);
+  const [activeFilterIds, setActiveFilterIds] = useState<ReadonlySet<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
 
   const toggleFilter = useCallback((filterId: string) => {
-    const family = filterId.split(':').pop() as CBFilterFamily;
-    setActiveFamilies(prev => {
+    setActiveFilterIds(prev => {
       const next = new Set(prev);
-      if (next.has(family)) next.delete(family);
-      else next.add(family);
+      if (next.has(filterId)) next.delete(filterId);
+      else next.add(filterId);
       return next;
     });
   }, []);
 
   const clearFilters = useCallback(() => {
-    setActiveFamilies(new Set());
+    setActiveFilterIds(new Set());
+    setSearchQuery('');
   }, []);
 
-  // Fixed spec-defined family chips — the type filter is static, independent of
-  // what the current folder contains.
-  const filters = useMemo<CBFilter[]>(
-    () => ALL_FILTER_FAMILIES.map(family => ({
-      id: `family:${family}`,
-      family,
-      label: familyLabel(family, t),
-      icon: FAMILY_FILTER_ICON[family],
-      active: activeFamilies.has(family),
+  // Remove hidden active state when a catalog-only kind disappears.
+  useEffect(() => {
+    const availableIds = new Set(filterDefinitions.map(filter => filter.id));
+    setActiveFilterIds(prev => {
+      const next = new Set([...prev].filter(id => availableIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filterDefinitions]);
+
+  const filters = useMemo(
+    () => filterDefinitions.map(filter => ({
+      ...filter,
+      active: activeFilterIds.has(filter.id),
     })),
-    [activeFamilies, t],
+    [filterDefinitions, activeFilterIds],
   );
 
-  const activeFilterCount = useMemo(() => activeFamilies.size, [activeFamilies]);
-
-  const matchesFile = useCallback(
-    (file: CBFile) => activeFamilies.size === 0 || activeFamilies.has(file.family),
-    [activeFamilies],
-  );
-
-  const matchesFolder = useCallback(
-    () => activeFamilies.size === 0 || activeFamilies.has('dir'),
-    [activeFamilies],
-  );
+  const activeFilterCount = useMemo(() => filters.filter(f => f.active).length, [filters]);
 
   const applyFilters = useCallback((items: CBAsset[]): CBAsset[] => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(item =>
-      item.name.toLowerCase().includes(q) ||
-      item.guid.toLowerCase().startsWith(q) ||
-      item.kind.toLowerCase().includes(q)
-    );
-  }, [searchQuery]);
+    let result = items;
 
-  return {
-    filters, searchQuery, setSearchQuery, toggleFilter, clearFilters,
-    activeFilterCount, applyFilters, matchesFile, matchesFolder,
-  };
+    const activeKindFilters = filters.filter(f => f.active);
+    if (activeKindFilters.length > 0) {
+      result = result.filter(item =>
+        activeKindFilters.some(f => f.predicate(item))
+      );
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      result = result.filter(item =>
+        item.name.toLowerCase().includes(q) ||
+        item.guid.toLowerCase().startsWith(q) ||
+        item.kind.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [filters, searchQuery]);
+
+  return { filters, searchQuery, setSearchQuery, toggleFilter, clearFilters, activeFilterCount, applyFilters };
 }

@@ -81,10 +81,13 @@ export function ContentBrowser() {
   const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const acceptString = useMemo(() => buildAcceptString(), []);
+  // Kind list for the filter chips. Sourced from allAssets — after
+  // registry.refreshCatalog() (invoked on reload), listCatalog covers external
+  // asset packages too, so the same kinds surface here that the .meta.json
+  // sidecar fallback would have added.
+  const observedAssetKinds = useMemo(() => [...new Set(allAssets.map(asset => asset.kind))], [allAssets]);
   const nav = useNavHistory();
-  // Filter menu offers a FIXED set of spec-defined file families (`FE_FILTERABLE`)
-  // — a static type filter, independent of the current folder's contents.
-  const filter = useFilter();
+  const filter = useFilter(observedAssetKinds);
   const sort = useSort();
   const favorites = useFavorites();
   // The Asset panel is scoped to the exact roots the host gave pluginPack.
@@ -320,25 +323,9 @@ export function ContentBrowser() {
       const fullPath = resolveGamePath(item.path);
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
-          void (async () => {
-            const newName = await promptDialog({
-              title: t('editor.contentBrowser.contextMenu.rename'),
-              label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-              defaultValue: item.name,
-              confirmText: t('editor.contentBrowser.dialogs.ok'),
-              cancelText: t('editor.contentBrowser.dialogs.cancel'),
-            });
-            if (newName && newName !== item.name) {
-              gateway.dispatch({ kind: 'renameDirectory', path: item.path, newName }, 'human');
-            }
-          })();
-        } },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', disabled: true, onClick: () => {} },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
-        { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
-          gateway.dispatch({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
-        } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
           void (async () => {
             const ok = await confirmDialog({
@@ -357,25 +344,9 @@ export function ContentBrowser() {
     if (item.type === 'file') {
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
-          void (async () => {
-            const newName = await promptDialog({
-              title: t('editor.contentBrowser.contextMenu.rename'),
-              label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-              defaultValue: item.name,
-              confirmText: t('editor.contentBrowser.dialogs.ok'),
-              cancelText: t('editor.contentBrowser.dialogs.cancel'),
-            });
-            if (newName && newName !== item.name) {
-              gateway.dispatch({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
-            }
-          })();
-        } },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', disabled: true, onClick: () => {} },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
-        { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
-          gateway.dispatch({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
-        } },
         { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => {
           void host.commands.execute('app.chat.insertPill', {
             pill: {
@@ -477,6 +448,8 @@ export function ContentBrowser() {
       })),
       { sep: true },
       ...commonItemMenu(file),
+      { sep: true },
+      { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', disabled: true },
       { sep: true },
     ];
     if (firstAsset) {

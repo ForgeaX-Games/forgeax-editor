@@ -1,5 +1,4 @@
-import { useCallback, type MouseEvent } from 'react';
-import { panelBridge } from '@forgeax/editor-core';
+import type { MouseEvent } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForFileFamily, ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
 import type { CBFile } from './types';
@@ -24,40 +23,11 @@ export function CBFileItem({ file, selected, expanded, favorite, onToggleFavorit
   const metaLabel = hasAssets ? t('editor.contentBrowser.preview.assetCount', { count: file.assets.length }) : file.kindLabel;
   const metaColor = hasAssets ? 'var(--accent-mint, #63eacf)' : colorForFileFamily(file.family);
 
-  const handleDragStart = useCallback((e: React.DragEvent) => {
-    e.dataTransfer.setData('text/plain', `@${file.name}`);
-    e.dataTransfer.setData('application/x-forgeax-file', JSON.stringify({
-      path: file.path, diskPath: file.diskPath, name: file.name, family: file.family,
-    }));
-    if (hasAssets) {
-      const asset = file.assets[0]!;
-      e.dataTransfer.setData('application/x-forgeax-asset', JSON.stringify({
-        guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.packPath,
-      }));
-      panelBridge.emit('dragAssetStart', {
-        type: 'asset' as const,
-        guid: asset.guid,
-        kind: asset.kind,
-        name: asset.name,
-        path: asset.packPath,
-        payload: asset.payload,
-      });
-    }
-    e.dataTransfer.effectAllowed = 'copy';
-  }, [file, hasAssets]);
-
-  const handleDragEnd = useCallback(() => {
-    if (hasAssets) panelBridge.emit('dragAssetEnd');
-  }, [hasAssets]);
-
   return (
     <div
       className={`cb-grid-item cb-fe-card cb-file-card${selected ? ' sel' : ''}${expanded ? ' cb-pack-expanded' : ''}`}
       data-testid="cb-file-item"
       data-file-path={file.path}
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e); }}

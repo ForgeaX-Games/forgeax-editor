@@ -35,9 +35,6 @@ import {
   clearHierarchySearchQuery,
   collapseHierarchyAll,
   getHierarchyEntityType,
-  hierarchyTypeCategory,
-  componentTypeLabel,
-  HIERARCHY_GROUP_TYPE_ID,
   HIERARCHY_SCENE_FOLDER_ID,
   expandHierarchyAll,
   getHierarchyPanelSnapshot,
@@ -206,31 +203,44 @@ function highlightName(name: string, q: string) {
   );
 }
 
-// Row CSS class token `k-<token>`: only k-grp / k-folder carry styling (dimmed
-// name); the rest are inert, so 'gen' for arbitrary components is harmless.
 function hierarchyTypeToken(id: string): string {
-  switch (hierarchyTypeCategory(id)) {
-    case 'camera': return 'cam';
-    case 'light': return 'lgt';
-    case 'character': return 'chr';
-    case 'start': return 'sta';
-    case 'spawner': return 'spn';
-    case 'mesh': return 'msh';
-    case 'group': return 'grp';
-    case 'entity': return 'ent';
-    default: return 'gen';
+  switch (id) {
+    case 'camera': return 'CAM';
+    case 'light': return 'LGT';
+    case 'character': return 'CHR';
+    case 'start': return 'STA';
+    case 'spawner': return 'SPN';
+    case 'mesh': return 'MSH';
+    case 'group': return 'GRP';
+    case 'folder': return 'FLD';
+    default: return 'ENT';
   }
 }
 
 function hierarchyTypeIcon(id: string): LucideIcon {
-  switch (hierarchyTypeCategory(id)) {
+  switch (id) {
     case 'camera': return Video;
     case 'light': return Sun;
     case 'character': return User;
     case 'start': return Flag;
     case 'spawner': return Target;
     case 'group': return Layers;
-    default: return Box; // mesh, generic components, and bare entities
+    case 'folder': return Folder;
+    default: return Box;
+  }
+}
+
+function hierarchyTypeI18nKey(id: string): string {
+  switch (id) {
+    case 'camera': return 'camera';
+    case 'light': return 'light';
+    case 'character': return 'character';
+    case 'start': return 'playerStart';
+    case 'spawner': return 'spawner';
+    case 'mesh': return 'staticMesh';
+    case 'group': return 'group';
+    case 'folder': return 'folder';
+    default: return 'entity';
   }
 }
 
@@ -291,7 +301,7 @@ function Row({
   const actualKids = childrenOf(world, id);
   const kids = flat ? [] : actualKids;
   const entityType = getHierarchyEntityType(world, id);
-  const typeLabel = componentTypeLabel(entityType.id, t);
+  const typeLabel = t(`editor.hierarchy.types.${hierarchyTypeI18nKey(entityType.id)}`);
   const typeToken = hierarchyTypeToken(entityType.id);
   const mobilityKey = hierarchyMobilityKey(nodeComponents);
   const mobilityLabel = mobilityKey ? t(`editor.hierarchy.mobility.${mobilityKey}`) : '';
@@ -438,7 +448,7 @@ function Row({
         </span>
         {columns.type && (
           <span className="cell type col-type">
-            {entityType.id === HIERARCHY_GROUP_TYPE_ID ? <span className="kind">{typeLabel}</span> : typeLabel}
+            {entityType.id === 'group' ? <span className="kind">{typeLabel}</span> : typeLabel}
           </span>
         )}
         {columns.mobility && <span className={`cell mob col-mob mob-${mobilityKey || 'none'}`}>{mobilityLabel}</span>}

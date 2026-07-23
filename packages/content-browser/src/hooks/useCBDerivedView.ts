@@ -102,9 +102,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           diskPath: node.path,
           name: node.name,
           family,
-          // #292: fall back to the `<rel>.meta.json` sidecar so meta-backed disk
-          // files still surface their engine asset(s).
-          assets: assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [],
+          assets: assetsByRel.get(rel) ?? [],
           kindLabel: fileKindLabel(t, family),
           isFavorite: favorites.isFavorite(rel),
         });
@@ -253,7 +251,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     () => {
       const q = filter.searchQuery.trim().toLowerCase();
       return foldersInPath
-        .filter(() => filter.matchesFolder())
         .filter(folder => !favoritesOnly || folder.isFavorite)
         .filter(folder => {
           if (!q) return true;
@@ -274,7 +271,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           );
         });
     },
-    [diskFiles, favoritesOnly, filter.matchesFolder, filter.searchQuery, foldersInPath, scopedAssets],
+    [diskFiles, favoritesOnly, filter.searchQuery, foldersInPath, scopedAssets],
   );
 
   // Filter + sort apply to assets only; folders always render first (UE-style),
@@ -294,23 +291,16 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     const q = filter.searchQuery.trim().toLowerCase();
     return diskFiles
       .filter(file => dirOfPath(file.path) === nav.currentPath)
-      .filter(file => filter.matchesFile(file))
       .filter(file => !favoritesOnly || file.isFavorite)
       .filter(file => !q || file.name.toLowerCase().includes(q) || file.assets.some(asset => asset.name.toLowerCase().includes(q)))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, nav.currentPath]);
+  }, [diskFiles, favoritesOnly, filter.searchQuery, nav.currentPath]);
 
   const diskFilePaths = useMemo(() => new Set(diskFiles.map(file => file.path)), [diskFiles]);
-  // Registry-only assets have no disk file, hence no file family — an active
-  // family filter (spec is file-family based) can never match them, so drop
-  // them whenever any filter is engaged.
-  const registryOnlyAssets = useMemo(() => {
-    if (filter.activeFilterCount > 0) return [];
-    return sortedAssets.filter(asset => {
-      const rel = scopedAssets.find(scoped => scoped.asset.guid === asset.guid)?.rel;
-      return !rel || !diskFilePaths.has(rel);
-    });
-  }, [diskFilePaths, filter.activeFilterCount, scopedAssets, sortedAssets]);
+  const registryOnlyAssets = useMemo(() => sortedAssets.filter(asset => {
+    const rel = scopedAssets.find(scoped => scoped.asset.guid === asset.guid)?.rel;
+    return !rel || !diskFilePaths.has(rel);
+  }), [diskFilePaths, scopedAssets, sortedAssets]);
 
   // Single ordered array shared by the view AND multi-select — handleClick
   // resolves items by flat index, so both must see the same order.
