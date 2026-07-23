@@ -95,6 +95,12 @@ export type BuiltinEditorOp =
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'deleteDirectory'; path: string }
+  // renameDirectory / renameSourceFile: filesystem rename through the asset IO
+  // write gate. `path` is game-relative; `newName` is the target basename only
+  // (not a full path). Session-domain, no undo.
+  | { kind: 'renameDirectory'; path: string; newName: string }
+  | { kind: 'renameSourceFile'; path: string; newName: string }
+  | { kind: 'revealInFileManager'; path: string }
   // deleteSourceFile (editor data-operation-view convergence M1): delete one
   // game-relative source file through the asset IO write gate. Dispatch is
   // synchronous acceptance; callers poll the terminal status by requestId.

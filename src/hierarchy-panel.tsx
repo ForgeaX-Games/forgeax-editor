@@ -48,6 +48,8 @@ import {
   expandHierarchyAll,
   getHierarchyFilterOptions,
   getHierarchyPanelSnapshot,
+  hierarchyTypeCategory,
+  componentTypeLabel,
   setHierarchySearchQuery,
   subscribeHierarchyPanelState,
   toggleHierarchyColumn,
@@ -262,28 +264,16 @@ function executeHierarchyCommand(host: ReturnType<typeof useHost>, command: stri
   });
 }
 
+// Filter options are component names (never structural group/folder), so the
+// category maps to one of the component icons; anything unmapped falls to Box.
 function hierarchyFilterIcon(id: string): LucideIcon {
-  switch (id) {
-    case 'character': return User;
-    case 'light': return Sun;
+  switch (hierarchyTypeCategory(id)) {
     case 'camera': return Video;
+    case 'light': return Sun;
+    case 'character': return User;
     case 'start': return Flag;
     case 'spawner': return Target;
-    default: return Box;
-  }
-}
-
-function hierarchyTypeI18nKey(id: string): string {
-  switch (id) {
-    case 'character': return 'character';
-    case 'mesh': return 'staticMesh';
-    case 'light': return 'light';
-    case 'camera': return 'camera';
-    case 'start': return 'playerStart';
-    case 'spawner': return 'spawner';
-    case 'group': return 'group';
-    case 'folder': return 'folder';
-    default: return 'entity';
+    default: return Box; // mesh + generic components
   }
 }
 
@@ -351,6 +341,7 @@ function HierarchyFilterControl(): ReactNode {
         {options.map((option) => (
           (() => {
             const Icon = hierarchyFilterIcon(option.id);
+            const label = componentTypeLabel(option.id, t);
             return (
               <DropdownMenuItem
                 key={option.id}
@@ -369,7 +360,7 @@ function HierarchyFilterControl(): ReactNode {
                   aria-hidden="true"
                 />
                 <span className="hierarchy-dd-tico"><Icon size={14} /></span>
-                <span>{t(`editor.hierarchy.types.${hierarchyTypeI18nKey(option.id)}`)}</span>
+                <span>{label}</span>
               </DropdownMenuItem>
             );
           })()

@@ -39,7 +39,7 @@
   color: var(--color-text-tertiary);
 }
 
-.hierarchy-search-input {
+.hierarchy-search-control .hierarchy-search-input {
   flex: 1 1 auto;
   min-width: 0;
   height: auto;
@@ -84,11 +84,16 @@
 }
 
 .hierarchy-header-icon:hover,
-.hierarchy-header-icon[data-state="open"],
-.hierarchy-header-icon[data-active="true"] {
+.hierarchy-header-icon[data-state="open"] {
   border-color: var(--color-border-default);
   color: var(--color-text-primary);
   background: var(--color-background-elevated);
+}
+
+.hierarchy-header-icon[data-active="true"] {
+  border-color: var(--color-brand-primary, #d4ff48);
+  color: var(--color-brand-primary, #d4ff48);
+  background: color-mix(in srgb, var(--color-brand-primary, #d4ff48) 14%, var(--color-background-elevated));
 }
 
 .hierarchy-header-menu {
