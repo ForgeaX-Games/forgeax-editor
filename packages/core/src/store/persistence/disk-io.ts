@@ -487,7 +487,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       const parsed = AssetGuid.parse(guid);
       if (!parsed.ok) { console.warn('[editor-core] resolveAssetRefToHandle: bad guid', guid); return null; }
       const loadRes = await reg.loadByGuid(parsed.value);
-      if (!loadRes.ok) { console.warn('[editor-core] resolveAssetRefToHandle: loadByGuid failed:', (loadRes.error as { code?: string })?.code); return null; }
+      if (!loadRes.ok) { console.warn('[editor-core] resolveAssetRefToHandle: loadByGuid failed:', { code: (loadRes.error as { code?: string })?.code, hint: (loadRes.error as { hint?: string })?.hint, detail: (loadRes.error as { detail?: unknown })?.detail, guid }); return null; }
       // allocSharedRef is chrome handle-casting (mirrors drag-spawn-resolve's mesh/
       // material minting); the resulting handle rides the setComponent the op then
       // dispatches (which DOES go through the ledger). Cast to the u32 the component

@@ -1102,7 +1102,7 @@ export function InspectorPanel() {
                                         entity: sel,
                                         component: comp,
                                         field: f.key,
-                                        assetType: ref.kind ?? 'MaterialAsset',
+                                        assetType: arrType,
                                         guids: [ref.guid],
                                         slot: virtual ? items.length : i,
                                       });
@@ -1222,7 +1222,7 @@ export function InspectorPanel() {
                                       try {
                                         const ref = JSON.parse(assetJson);
                                         if (ref.guid) {
-                                          gateway.dispatch({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: ref.kind ?? 'MeshAsset', guids: [ref.guid] });
+                                          gateway.dispatch({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid] });
                                         }
                                       } catch { /* noop */ }
                                     }}

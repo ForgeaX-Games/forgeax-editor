@@ -30,7 +30,7 @@ function assetKindToType(kind: string): string | null {
     case 'cube-texture': return 'CubeTextureAsset';
     case 'equirect': return 'EquirectAsset';
     case 'video': return 'VideoAsset';
-    case 'audio': return 'AudioAsset';
+    case 'audio': return 'AudioClipAsset';
     case 'animation':
     case 'clip': return 'AnimationClip';
     case 'scene': return 'SceneAsset';

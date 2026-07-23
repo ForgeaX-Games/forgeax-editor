@@ -459,6 +459,20 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   if (selfHostPack) {
     const packRoots = gamePackRoots(gameDirAbs);
     cleanOrphanMetas(packRoots);
+    // Decode percent-encoded non-ASCII URLs before pluginPack's middleware runs,
+    // so its urlToAbs Map (keyed by Unicode filenames) can match Chinese/CJK paths.
+    // Without this, `req.url` arrives as `%E6%B8%A9...` but the map key is `温...`.
+    plugins.push({
+      name: 'forgeax-decode-asset-url',
+      configureServer(server) {
+        server.middlewares.use((req, _res, next) => {
+          if (req.url && req.url.includes('%')) {
+            try { req.url = decodeURIComponent(req.url); } catch { /* malformed URI */ }
+          }
+          next();
+        });
+      },
+    } as PluginOption);
     plugins.push(
       pluginPack({
         roots: packRoots,
