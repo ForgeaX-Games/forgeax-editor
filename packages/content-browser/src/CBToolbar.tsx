@@ -15,6 +15,7 @@ import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
+import { colorForAssetKind, ContentBrowserIcon } from './content-browser-icons';
 
 interface Props {
   currentPath: string;
@@ -141,7 +142,10 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
             <DropdownMenuSeparator />
             {CREATABLE_ASSET_KINDS.map(spec => (
               <DropdownMenuItem key={spec.kind} size="sm" onClick={() => handleCreateAsset(spec)}>
-                {spec.icon} {spec.label}
+                <span className="cb-add-menu-icon" style={{ color: colorForAssetKind(spec.kind) }}>
+                  <ContentBrowserIcon name={spec.icon} />
+                </span>
+                {spec.label}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

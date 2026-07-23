@@ -645,7 +645,7 @@ export function TopBar() {
   // Workspace tabs replace the old fixed mode tabs.
   return (
     <>
-    <div className="topbar">
+    <div className="topbar" data-tour-id="topbar">
       <div className="tb-left" data-tour-id="tb-left">
         {/* Decorative macOS-style traffic dots — 2026-07-08 removed.
            Browser: the browser window itself already has real traffic lights

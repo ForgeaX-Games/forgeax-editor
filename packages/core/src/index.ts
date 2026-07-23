@@ -250,16 +250,19 @@ export {
   getSelection,
   getSelectionList,
   getGizmoMode,
+  getGizmoSpace,
   replaceDoc,
   onSelectionChange,
   onRenameRequest,
   onGizmoModeChange,
+  onGizmoSpaceChange,
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
   requestAddAssetsToChat,
   useDocVersion,
   useGizmoMode,
+  useGizmoSpace,
   useSelection,
   useSelectionList,
   useHoverEntity,
@@ -314,7 +317,7 @@ export {
 
 // AssetsChangedHint — hint type for broadcastAssetsChanged optimization.
 export type { AssetsChangedHint } from './store/assets-changed';
-export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats } from './store/store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace } from './store/store';
 
 // ── Entity operations ──
 export {

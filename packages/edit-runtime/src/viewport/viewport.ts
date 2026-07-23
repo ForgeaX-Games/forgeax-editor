@@ -46,7 +46,7 @@ import { registerCameraAppliers } from './viewport-camera-appliers';
 import { createGizmoPool } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
-import { readLocalTransform, readWorldTransform, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
+import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
 
 import type { OpHandle, EngineFacade } from '@forgeax/editor-core';
 import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-core';
@@ -56,7 +56,7 @@ import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-co
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getSelection, onGizmoModeChange, onSelectionChange } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getSelection, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -220,11 +220,17 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     const sel = getSelection();
     return sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
   };
+  const gizmoSelWorldQ = (): [number, number, number, number] | null => {
+    const sel = getSelection();
+    return sel !== null ? readWorldQuat(gateway.activeWorld, sel) : null;
+  };
   const gizmoPool = createGizmoPool({
     editorEngine,
     getSelection,
     getGizmoMode,
     getSelectionWorldTransform: gizmoSelWorldT,
+    getSelectionWorldQuat: gizmoSelWorldQ,
+    getGizmoSpace,
     isAuxVisible,
     getDist: () => dist,
   });
@@ -381,6 +387,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   let angle0 = 0;
   // plane-handle drag (translate only): which plane + the ray∩plane point at grab.
   let dragPlane: PlaneHandle | null = null;
+  let dragPlaneNormal: Vec3 = [0, 0, 0];
   let planeGrab: Vec3 = [0, 0, 0];
   // the changed Transform fields, committed as ONE command on release.
   let livePatch: Record<string, number> = {};
@@ -498,14 +505,14 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       axisStart = [...dragWorldPos];
       livePatch = {};
       if (h >= 3) {
-        // a plane handle: drag two axes on the plane ⊥ its normal.
         dragPlane = PLANES[h - 3]!;
-        const g = rayPlane(origin, dir, axisStart, dragPlane.normal);
+        dragPlaneNormal = gizmoPool.getPlaneNormal(h - 3);
+        const g = rayPlane(origin, dir, axisStart, dragPlaneNormal);
         planeGrab = g ?? [...axisStart];
       } else {
         dragPlane = null;
         axisIdx = h;
-        axisVec = AXES[h]!.axis;
+        axisVec = gizmoPool.getAxis(h);
         if (getGizmoMode() === 'rotate') angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
         else axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
       }
@@ -567,8 +574,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       const ctrl = e.ctrlKey || e.metaKey;
       const gm = getGizmoMode();
       if (dragPlane) {
-        // move two axes at once across the plane (relative to the grab point).
-        const hit = rayPlane(origin, dir, axisStart, dragPlane.normal);
+        const hit = rayPlane(origin, dir, axisStart, dragPlaneNormal);
         if (hit) {
           const target: Vec3 = [
             dragWorldPos[0] + hit[0] - planeGrab[0],
@@ -805,6 +811,7 @@ onDisplayModeChange(() => refreshGizmos());
   let lastSelSig = selSig();
   const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
   const unsubMode = onGizmoModeChange(updateGizmo);
+  const unsubSpace = onGizmoSpaceChange(updateGizmo);
   const unsubDoc = gateway.subscribe(() => {
     const sig = selSig();
     if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
@@ -827,6 +834,7 @@ onDisplayModeChange(() => refreshGizmos());
       if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
       unsubSel();
       unsubMode();
+      unsubSpace();
       unsubDoc();
       unregCameraAppliers();
       gizmoPool.dispose();

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync, readFileSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
@@ -13,6 +13,62 @@ import { fbxImporter } from '@forgeax/engine-fbx';
 import { buildPerGameCatalog } from './pack-catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+interface PackageExports {
+  readonly [subpath: string]: string | { readonly import?: string } | undefined;
+}
+
+// Game sources are mounted from a host-owned directory rather than living in a
+// workspace package. Their normal node_modules walk-up therefore misses this
+// runtime's isolated Bun workspace links. Resolve @forgeax imports from the
+// Play Runtime's own public exports map, just as Edit Runtime does for ▶ Play.
+// Keeping this in the preview host is essential: /preview/ has an independent
+// Vite server and does not inherit Edit Runtime's plugin chain.
+const HOST_GAMES_DIR = ['.', 'forgeax', 'games'].join('/').replace('./', '.');
+const MULTI_GAME_PATH_RE = new RegExp(
+  `/(?:${HOST_GAMES_DIR.replace(/\./g, '\\.').replace(/\//g, '\\/')}|packages\\/games|forgeax-games)/[^/]+/`,
+);
+
+function normalizeGameFilePath(raw: string, viteRoot: string): string {
+  let path = raw.replace(/\\/g, '/');
+  if (path.startsWith('/@fs/')) path = path.slice('/@fs/'.length);
+  if (!path.startsWith('/')) path = resolve(viteRoot, path).replace(/\\/g, '/');
+  return process.platform === 'win32' ? path.toLowerCase() : path;
+}
+
+export function resolveGameEngineEntry(id: string): string | null {
+  const rest = id.slice('@forgeax/'.length);
+  const [packageName, ...subpath] = rest.split('/');
+  if (!packageName) return null;
+  const packageDir = resolve(here, 'node_modules/@forgeax', packageName);
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+      exports?: PackageExports;
+    };
+    const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
+    const entry = manifest.exports?.[exportKey];
+    const importPath = typeof entry === 'string' ? entry : entry?.import;
+    return typeof importPath === 'string' ? resolve(packageDir, importPath) : null;
+  } catch {
+    return null;
+  }
+}
+
+function gameEngineResolve() {
+  let viteRoot = process.cwd();
+  return {
+    name: 'forgeax:game-engine-resolve',
+    configResolved(config: { root: string }) {
+      viteRoot = config.root;
+    },
+    resolveId(id: string, importer?: string) {
+      if (!importer || !id.startsWith('@forgeax/')) return null;
+      return MULTI_GAME_PATH_RE.test(normalizeGameFilePath(importer, viteRoot))
+        ? resolveGameEngineEntry(id) ?? null
+        : null;
+    },
+  };
+}
 
 // The shared/external asset submodule (forgeax-editor-assets) resolved to its
 // REAL path, two levels up from this package. `@shared/<sub>` roots declared in
@@ -434,6 +490,7 @@ export default defineConfig({
   // without a baked layout literal. '' → game served directly under base.
   define: { __FORGEAX_GAMES_URL_PREFIX__: JSON.stringify(GAMES_URL_PREFIX) },
   plugins: [
+    gameEngineResolve() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
     // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`

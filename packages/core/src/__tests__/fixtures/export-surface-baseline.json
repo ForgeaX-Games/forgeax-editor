@@ -36,6 +36,10 @@
     "signature": "() => GizmoMode"
   },
   {
+    "name": "getGizmoSpace",
+    "signature": "() => GizmoSpace"
+  },
+  {
     "name": "getLoadedSceneEntities",
     "signature": "() => number[]"
   },
@@ -62,6 +66,10 @@
   {
     "name": "getSelectionList",
     "signature": "() => Set<EntityHandle>"
+  },
+  {
+    "name": "GizmoSpace",
+    "signature": "GizmoSpace"
   },
   {
     "name": "hasPendingDiskSave",
@@ -101,6 +109,10 @@
   },
   {
     "name": "onGizmoModeChange",
+    "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "onGizmoSpaceChange",
     "signature": "(fn: () => void) => () => void"
   },
   {
@@ -186,6 +198,10 @@
   {
     "name": "useGizmoMode",
     "signature": "() => GizmoMode"
+  },
+  {
+    "name": "useGizmoSpace",
+    "signature": "() => GizmoSpace"
   },
   {
     "name": "useHoverEntity",

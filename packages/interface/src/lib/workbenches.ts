@@ -93,6 +93,13 @@ export interface WorkbenchListState { list: Workbench[]; activeId: string }
 let currentProjectId: string = 'default';
 
 let listeners: Array<() => void> = [];
+let projectListeners: Array<(projId: string) => void> = [];
+
+/** Subscribe to active project id changes (T7 project-scoped storage). */
+export function subscribeCurrentProject(fn: (projId: string) => void): () => void {
+  projectListeners.push(fn);
+  return () => { projectListeners = projectListeners.filter((l) => l !== fn); };
+}
 // Cached snapshot returned by getWorkbenchListSnapshot() — kept stable between
 // notify() calls so React's useSyncExternalStore doesn't see a new object on
 // every render. Every mutation path funnels through notify(), which clears
@@ -141,6 +148,9 @@ export function setCurrentProject(projId: string): void {
     transferDefaultToProject(projId);
   }
   notify();
+  for (const fn of projectListeners) {
+    try { fn(projId); } catch { /* noop */ }
+  }
 }
 
 /**
@@ -764,6 +774,12 @@ export function loadWorkbenchLayout(id: string): SerializedDockview | null {
   } catch { return null; }
 }
 
+export function removeWorkbenchLayout(id: string): void {
+  try {
+    localStorage.removeItem(workbenchLayoutKeyForProject(currentProjectId, id));
+  } catch { /* quota */ }
+}
+
 // ── Layout write (sync to localStorage + debounced PUT to server) ──────────
 
 const pendingSaves = new Map<string, ReturnType<typeof setTimeout>>();
@@ -787,15 +803,40 @@ export function saveWorkbenchLayout(id: string, layout: SerializedDockview): voi
   if (prev !== undefined) clearTimeout(prev);
   pendingSaves.set(id, setTimeout(() => {
     pendingSaves.delete(id);
-    // Re-check at fire time: the boot /api probe may have latched the backend
-    // off in the 1.5s since this PUT was scheduled (standalone has no server).
-    if (!serverHasPrefs) return;
-    void fetch(`/api/prefs/workbench-layout/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(layout),
-    }).catch(() => { /* non-critical */ });
+    void putWorkbenchLayoutToServer(id);
   }, 1500));
+}
+
+function putWorkbenchLayoutToServer(id: string): void {
+  if (!serverHasPrefs) return;
+  const raw = localStorage.getItem(workbenchLayoutKeyForProject(currentProjectId, id));
+  if (!raw) return;
+  void fetch(`/api/prefs/workbench-layout/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: raw,
+  }).catch(() => { /* non-critical */ });
+}
+
+/** Flush debounced workbench layout PUTs immediately (crash-safe). */
+export function flushWorkbenchLayouts(): void {
+  for (const [id, timer] of pendingSaves.entries()) {
+    clearTimeout(timer);
+    pendingSaves.delete(id);
+    putWorkbenchLayoutToServer(id);
+  }
+}
+
+let layoutFlushRegistered = false;
+
+/** Register pagehide/visibility flush so layout survives tab crash/reload. */
+export function startWorkbenchLayoutFlush(): void {
+  if (layoutFlushRegistered || typeof window === 'undefined') return;
+  layoutFlushRegistered = true;
+  window.addEventListener('pagehide', () => { flushWorkbenchLayouts(); });
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushWorkbenchLayouts();
+  });
 }
 
 // ── Startup init: load server layouts into localStorage when cache is empty ──

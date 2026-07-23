@@ -41,6 +41,14 @@ export {
 } from './gizmo-mode';
 export type { GizmoMode } from './gizmo-mode';
 
+// ── cluster 3b: gizmo-space (local / world coordinate toggle) ──
+export {
+  getGizmoSpace,
+  onGizmoSpaceChange,
+  useGizmoSpace,
+} from './gizmo-space';
+export type { GizmoSpace } from './gizmo-space';
+
 // ── cluster 4: frame-request (applier migrated to edit-runtime via registerSessionApplier — D-11 pattern) ──
 
 // ── cluster 5: rename-request (requestRename sealed — M3; onRenameRequest kept) ──

@@ -6,7 +6,7 @@ import { STORAGE_KEYS } from './storageKeys';
 const SYNC_DEBOUNCE_MS = 1500;
 const SYNC_INTERVAL_MS = 30_000;
 
-const KEY_PREFIXES = ['forgeax.', 'wb-', 'wb:'];
+const KEY_PREFIXES = ['forgeax.', 'forgeax:project:', 'wb-', 'wb:'];
 const KEY_EXACT = ['wb-agent-persona:selected-agent-id'];
 
 // First-run onboarding is a per-browser-profile gate, NOT a portable UI pref.

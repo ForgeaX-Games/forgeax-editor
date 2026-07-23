@@ -14,7 +14,7 @@ import { catalogPathToRoot, type CatalogAssetRoot } from '../catalog-root';
 import { resolveViewMode, type CBViewMode2 } from '../view-mode';
 import {
   dirOfPath,
-  fileFamilyOf,
+  fileFamilyOfWithAssets,
   fileKindLabel,
   normalizeGameRelativePath,
   type DiskTreeNode,
@@ -95,16 +95,19 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     const walk = (node: DiskTreeNode) => {
       const rel = normalizeGameRelativePath(node.path, gameRootPath, gameSlug);
       if (node.type === 'file' && rel) {
-        const family = fileFamilyOf(node.name);
+        // #292: fall back to the `<rel>.meta.json` sidecar so meta-backed disk
+        // files still surface their engine asset(s).
+        const assets = assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [];
+        // Scene family is derived from the catalog `kind`, not the filename, so
+        // it stays aligned with findAllScenePacks / getSceneList.
+        const family = fileFamilyOfWithAssets(node.name, assets);
         files.push({
           type: 'file',
           path: rel,
           diskPath: node.path,
           name: node.name,
           family,
-          // #292: fall back to the `<rel>.meta.json` sidecar so meta-backed disk
-          // files still surface their engine asset(s).
-          assets: assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [],
+          assets,
           kindLabel: fileKindLabel(t, family),
           isFavorite: favorites.isFavorite(rel),
         });
@@ -156,8 +159,8 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
         const rel = normalizeGameRelativePath(node.path, gameRootPath, gameSlug);
         if (!rel && node !== diskTree) return null;
         if (node.type === 'file') {
-          const family = fileFamilyOf(node.name);
           const assets = assetsByRel.get(rel) ?? [];
+          const family = fileFamilyOfWithAssets(node.name, assets);
           return {
             type: 'file',
             path: rel,

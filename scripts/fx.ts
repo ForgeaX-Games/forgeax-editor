@@ -7,6 +7,7 @@
 //   bun fx stop     # stop anything fx started (by port)
 //   bun fx update   # pull root + sync submodules to pins + ff .forgeax-harness
 //   bun fx clean    # restore a fully-clean git status (root + submodules)
+//   bun fx ci       # run the PR CI surface locally (including frozen install)
 //   bun fx help     # show usage
 //
 // This mirrors forgeax-studio's `bun fx` verbs (setup/start/stop/update/clean/help)
@@ -31,7 +32,7 @@
 //           PLAY_RUNTIME_PORT below: studio's superrepo stack owns 15173)
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, openSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, openSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -625,6 +626,71 @@ async function run(argv: string[]): Promise<void> {
   });
 }
 
+// ── ci ──────────────────────────────────────────────────────────────────────
+// Local projection of the required editor PR surface. Keep the command list in
+// the same order as .github/workflows/ci.yml's b2-self-boot, typecheck, and
+// smoke-play jobs. The workflow still owns runner provisioning and artifact
+// caching; a local checkout must have already completed `bun fx setup` so its
+// engine dist + wasm artefacts exist.
+function verifyFreshFrozenInstall(): void {
+  const branch = gitOut(['branch', '--show-current']);
+  const head = gitOut(['rev-parse', 'HEAD']);
+  if (!head) die('local CI could not resolve the editor commit to verify.');
+  if (gitOut(['status', '--porcelain']) !== '') {
+    die('local CI requires a clean editor worktree so the fresh clone verifies the exact PR commit. Commit changes first.');
+  }
+  const origin = gitOut(['remote', 'get-url', 'origin']);
+  if (!origin) die('local CI requires an origin remote to reproduce the PR checkout.');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-ci-'));
+  const cloneDir = join(tempRoot, 'repo');
+  try {
+    // Match actions/checkout's clean recursive checkout. A same-worktree Bun
+    // install can reuse parent workspace links and pass even when the committed
+    // lock fails on GitHub, as happened with the engine-ui upgrade.
+    sh('git', ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir]);
+    if (!branch) {
+      // Studio consumes editor as a detached gitlink. Re-check out that exact
+      // commit in the clean clone, then realign nested pins before frozen Bun
+      // validates the same source tree Studio will ship.
+      sh('git', ['checkout', '--detach', head], { cwd: cloneDir });
+      sh('git', ['submodule', 'update', '--init', '--recursive'], { cwd: cloneDir });
+    }
+    sh('npx', ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'], { cwd: cloneDir });
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function ci(argv: string[]): void {
+  if (argv.length > 0) die(`unknown ci flag(s): ${argv.join(' ')}`);
+  const requiredArtifacts = [
+    join(ENGINE_DIR, 'packages', 'vite-plugin-shader', 'dist', 'index.mjs'),
+    join(ENGINE_DIR, 'packages', 'wgpu-wasm', 'pkg', 'wgpu_wasm_bg.wasm'),
+  ];
+  if (requiredArtifacts.some((path) => !existsSync(path))) {
+    die('engine dist/wasm artefacts missing. Run `bun fx setup` before `bun fx ci`.');
+  }
+
+  const steps: readonly [string, string, string[]][] = [
+    ['platform-io unit tests', 'bun', ['-F', '@forgeax/platform-io', 'test']],
+    ['standalone B2 self-boot', 'bun', ['scripts/selfcheck-standalone-b2.mjs']],
+    ['editor lint', 'bun', ['run', 'lint']],
+    ['dependency-cycle lint', 'bun', ['run', 'lint:dep']],
+    ['editor typecheck', 'bun', ['run', 'typecheck']],
+    ['editor-core unit tests', 'bun', ['-F', '@forgeax/editor-core', 'test']],
+    ['edit-runtime unit tests', 'bun', ['-F', '@forgeax/editor-edit-runtime', 'test']],
+    ['Play boot smoke', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts']],
+    ['Content Browser smoke', 'bun', ['run', 'test:e2e', 'e2e/smoke-content-browser.spec.ts']],
+  ];
+  step('CI: fresh recursive checkout frozen Bun 1.3.14 install ...');
+  verifyFreshFrozenInstall();
+  for (const [name, command, args] of steps) {
+    step(`CI: ${name} ...`);
+    sh(command, [...args]);
+  }
+  ok('local PR CI passed');
+}
+
 function usage(): void {
   console.log(`forgeax-editor — one-stop standalone dev CLI
 
@@ -652,6 +718,8 @@ Repo maintenance:
                                 restore a fully-clean git status across root + all
                                 submodules (scrubs regenerable artefacts). --deep also
                                 wipes root node_modules/dist/wasm. Keeps .forgeax-harness.
+  ci                            run the required PR CI surface locally; requires
+                                bun fx setup and installed Playwright Chromium.
 
   help | -h | --help            show this message
 
@@ -678,6 +746,9 @@ async function main(): Promise<void> {
       break;
     case 'clean':
       clean(rest);
+      break;
+    case 'ci':
+      ci(rest);
       break;
     case '':
     case '-h':

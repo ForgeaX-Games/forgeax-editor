@@ -203,6 +203,16 @@
 .cb-toolbar-btn {
   white-space: nowrap;
 }
+.cb-add-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+.cb-add-menu-icon svg {
+  width: 14px;
+  height: 14px;
+}
 .cb-dropdown-container { position: relative; }
 .cb-dropdown-menu {
   position: absolute;

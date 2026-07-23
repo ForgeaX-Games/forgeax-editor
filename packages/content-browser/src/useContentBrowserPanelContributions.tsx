@@ -69,6 +69,10 @@ export function useContentBrowserPanelContributions(): void {
             id: 'contentBrowser.create.scene',
             command: 'contentBrowser.createAsset.scene',
             title: t('editor.contentBrowser.fileKinds.scene'),
+            // Panel-action menus resolve lucide icons by PascalCase name (a
+            // different resolver than content-browser-icons' kebab map); scene's
+            // canonical icon is the clapperboard, matching its file/asset icon.
+            icon: 'Clapperboard',
             order: 20,
           },
         ],

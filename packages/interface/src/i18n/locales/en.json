@@ -96,29 +96,25 @@
       "confirm": "Confirm"
     },
     "tour": {
-      "sidebar": {
-        "anchor": "Left · Sidebar",
-        "body": "Agent team, Workbench tool entries, and long-term memory all live here."
+      "assets": {
+        "anchor": "Content Browser",
+        "body": "Your files, scenes, and art assets are managed, searched, and imported here — it's your resource hub."
       },
       "preview": {
-        "anchor": "Center · Preview",
-        "body": "The live game canvas. Forge edits the code once and this updates in seconds."
+        "anchor": "Viewport",
+        "body": "The live game view. Every time the AI changes code, this hot-reloads in seconds so you can play and inspect the result right away."
+      },
+      "hierarchy": {
+        "anchor": "Scene Outline · Properties",
+        "body": "The upper 'Scene Outline' manages every object in the scene like a layer tree (visibility, lock, hierarchy); select one and the 'Properties' panel below lets you tweak its transform, components, and parameters."
+      },
+      "topbar": {
+        "anchor": "Top Bar & Publish",
+        "body": "Project-level actions — File, Edit, Window, Build, Select, Help — live in the top bar; the 'Publish' button on the right packages and ships your finished game in one click."
       },
       "chat": {
-        "anchor": "Right · ChatPanel",
-        "body": "Where you talk to Forge. State needs, watch the thinking, send messages."
-      },
-      "tbLeft": {
-        "anchor": "Top-left · Switchers",
-        "body": "Switch project, game, and Forge session here."
-      },
-      "tbCenter": {
-        "anchor": "Top-center · Workspace tabs",
-        "body": "Play · Edit · AI workspaces, each remembering its layout; add or remove them."
-      },
-      "tbRight": {
-        "anchor": "Top-right · Tools & publish",
-        "body": "Dashboard monitoring, layout, settings, and one-click publish."
+        "anchor": "★ Start building here",
+        "body": "This is where you collaborate with the AI team. In the input box at the bottom, describe the game you want in one sentence (e.g. 'make a top-down survivor game'), press Enter, and Forge will lead the agents to build it for you."
       },
       "prev": "Prev",
       "skip": "Skip",

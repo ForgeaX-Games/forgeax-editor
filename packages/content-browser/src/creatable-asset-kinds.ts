@@ -14,14 +14,15 @@ export interface CreatableAssetSpec {
   readonly kind: CreatableAssetKind;
   /** Add 菜单显示名 */
   readonly label: string;
-  /** Add 菜单图标 */
+  /** Add 菜单图标：lucide 图标名（经 ContentBrowserIcon 渲染），与
+   *  `content-browser-icons` 的 family/kind 图标同一套体系，禁用 emoji。 */
   readonly icon: string;
   /** 用户未输入时的默认名前缀 */
   readonly defaultNamePrefix: string;
 }
 
 export const CREATABLE_ASSET_KINDS: readonly CreatableAssetSpec[] = [
-  { kind: 'scene', label: 'Scene', icon: '🗺', defaultNamePrefix: 'NewScene' },
+  { kind: 'scene', label: 'Scene', icon: 'clapperboard', defaultNamePrefix: 'NewScene' },
 ] as const;
 
 /** 类型层守卫：`CreatableAssetKind` 字面量通过 core applier 的 exhaustive switch

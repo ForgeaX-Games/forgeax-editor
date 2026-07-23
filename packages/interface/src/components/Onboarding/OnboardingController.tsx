@@ -605,13 +605,16 @@ export function OnboardingController() {
 
   const onLang = (next: Locale) => { setLang(next); changeLanguage(next); };
 
+  // Steps trace the default Scene layout in do-a-game order: content browser →
+  // viewport → scene outline/properties → top bar → chat. Each anchorId matches
+  // a `data-tour-id` (assets/hierarchy via panelRegistry EP_TOUR_IDS, preview on
+  // the viewport panel, topbar on the TopBar root, chat on the chat panel).
   const TOUR_STEPS: TourStep[] = [
-    { anchorId: 'sidebar', anchor: t('onboarding.tour.sidebar.anchor'), body: t('onboarding.tour.sidebar.body') },
+    { anchorId: 'assets', anchor: t('onboarding.tour.assets.anchor'), body: t('onboarding.tour.assets.body') },
     { anchorId: 'preview', anchor: t('onboarding.tour.preview.anchor'), body: t('onboarding.tour.preview.body') },
+    { anchorId: 'hierarchy', anchor: t('onboarding.tour.hierarchy.anchor'), body: t('onboarding.tour.hierarchy.body') },
+    { anchorId: 'topbar', anchor: t('onboarding.tour.topbar.anchor'), body: t('onboarding.tour.topbar.body') },
     { anchorId: 'chat', anchor: t('onboarding.tour.chat.anchor'), body: t('onboarding.tour.chat.body') },
-    { anchorId: 'tb-left', anchor: t('onboarding.tour.tbLeft.anchor'), body: t('onboarding.tour.tbLeft.body') },
-    { anchorId: 'tb-center', anchor: t('onboarding.tour.tbCenter.anchor'), body: t('onboarding.tour.tbCenter.body') },
-    { anchorId: 'tb-right', anchor: t('onboarding.tour.tbRight.anchor'), body: t('onboarding.tour.tbRight.body') },
   ];
 
   // Tour is the last onboarding-owned step; the first-chat hint lives in the

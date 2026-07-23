@@ -31,6 +31,7 @@ import { subscribePermissionStream } from './lib/permission-stream';
 import { subscribePerceptionStream } from './lib/perception-stream';
 import { bootUiBridge } from './lib/ui-bridge';
 import { syncBrowserPrefsFromServer, startBrowserPrefsSync } from './lib/browser-prefs-sync';
+import { setCurrentProject, startWorkbenchLayoutFlush } from './lib/workbenches';
 import { useShellStore } from './store';
 import { decodeSurfaceFromLocation, getWindowManager, isTauri, surfaceKey } from './lib/platform';
 import { DetachedSurface } from './components/DetachedSurface';
@@ -103,15 +104,24 @@ if (detachedSurface) {
     </StrictMode>,
   );
 } else {
-  // Restore UI layout prefs from server snapshot (export/import migration path).
-  void syncBrowserPrefsFromServer().finally(() => {
-    // The server snapshot may carry a different forgeax.locale than the value
-    // present at first paint — re-apply it now that localStorage is restored.
+  // Restore UI prefs, resolve the active project id, then mount the shell so
+  // DockRegion reads the correct project-scoped workbench layout keys on first
+  // paint (ProjectSwitcher alone is too late — it mounts after DockShell).
+  void (async () => {
+    await syncBrowserPrefsFromServer();
     initI18n();
+    try {
+      const r = await fetch('/api/projects');
+      if (r.ok) {
+        const j = (await r.json()) as { current?: string };
+        setCurrentProject(j.current ?? 'default');
+      }
+    } catch { /* non-critical — ProjectSwitcher retries */ }
     startBrowserPrefsSync();
-  });
-  bootStageEntry();
-  bootFullShell(rootEl);
+    startWorkbenchLayoutFlush();
+    bootStageEntry();
+    bootFullShell(rootEl);
+  })();
 }
 
 // Shared store/stream bootstrap. NOTE (R4): chat's session-stream lives in

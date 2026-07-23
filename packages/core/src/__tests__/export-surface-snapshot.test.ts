@@ -3,7 +3,7 @@
 // AC-01 export-surface snapshot baseline + test (M1 w1).
 //
 // Extracts the TYPE SIGNATURES (from the TypeScript compiler API, NoTruncation)
-// of all 62 barrel-re-exported store symbols (58 value + 4 type) at
+// of all 66 barrel-re-exported store symbols (62 value + 4 type) at
 // packages/core/src/index.ts:164-225. The extracted signatures are compared
 // against a committed baseline fixture (__tests__/fixtures/export-surface-baseline.json).
 //
@@ -242,9 +242,12 @@ describe('AC-01 export-surface snapshot', () => {
     // tweak-20260709-hierarchy-delete-key-wire (keyboard-router convergence) then
     // PUBLISHED 5 asset-selection surface symbols the router + CB panel both read
     // (getAssetSelectionList / useAssetSelectionList / clearAssetSelection /
-    // registerAssetSelectAllHandler / triggerAssetSelectAll) → 49 + 5 = 54. This
-    // count is the machine witness that the barrel surface moved exactly as intended.
-    expect(entries.length).toBe(54);
+    // registerAssetSelectAllHandler / triggerAssetSelectAll) → 49 + 5 = 54.
+    // feat/gizmo-local-space then PUBLISHED 4 gizmo-space symbols
+    // (getGizmoSpace / onGizmoSpaceChange / useGizmoSpace / GizmoSpace type)
+    // → 54 + 4 = 58. This count is the machine witness that the barrel
+    // surface moved exactly as intended.
+    expect(entries.length).toBe(58);
 
     // Every entry must be non-empty.
     for (const e of entries) {

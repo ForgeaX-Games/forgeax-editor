@@ -21,6 +21,8 @@
 //              nested entities lag by tens of units and end up mispositioned.
 
 import type { World, EntityHandle } from '@forgeax/engine-ecs';
+import type { Quat } from '@forgeax/engine-math';
+import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
 import { entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
 import { worldPointToParentLocal } from './viewport-transform';
 import type { Vec3 } from './viewport-ray';
@@ -89,6 +91,25 @@ export function worldPositionToLocal(world: World, handle: EntityHandle, target:
   const parentWorld = parentTransform.value.world as ArrayLike<number> | undefined;
   if (!parentWorld || parentWorld.length < 16) return target;
   return worldPointToParentLocal(parentWorld, target);
+}
+
+/** Read the entity's world-space rotation quaternion from the world matrix.
+ *  Decomposes the world matrix to extract translation, rotation, and scale. */
+export function readWorldQuat(world: World, handle: EntityHandle): [number, number, number, number] | null {
+  const r = entComponent(world, handle, 'Transform');
+  if (!r.ok) return null;
+  const t = r.value as Record<string, unknown>;
+  const w = t.world as ArrayLike<number> | undefined;
+  if (!w || w.length < 16) {
+    const q = t.quat as ArrayLike<number> | undefined;
+    if (!q || q.length < 4) return null;
+    return [ax(q, 0, 0), ax(q, 1, 0), ax(q, 2, 0), ax(q, 3, 1)];
+  }
+  const pos = vec3.create();
+  const rot = quatMath.create();
+  const scl = vec3.create();
+  mat4.decompose(pos, rot, scl, w as unknown as Parameters<typeof mat4.decompose>[3]);
+  return [rot[0]!, rot[1]!, rot[2]!, rot[3]!];
 }
 
 /** EditorHidden is an editor-only marker; the entComponents walk surfaces it

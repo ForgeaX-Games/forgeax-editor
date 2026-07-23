@@ -26,12 +26,15 @@ import {
 import {
   gateway,
   getGizmoMode,
+  getGizmoSpace,
   getSceneFile,
   getSceneId,
   hasPendingDiskSave,
   onGizmoModeChange,
+  onGizmoSpaceChange,
   onSceneListChange,
   useDocVersion,
+  useGizmoSpace,
   useSceneFile,
   useSceneList,
 } from '@forgeax/editor-core';
@@ -414,6 +417,7 @@ function PopItem({
   active = false,
   disabled = false,
   command,
+  onClick,
   onClose,
 }: {
   icon: ReactNode;
@@ -423,6 +427,7 @@ function PopItem({
   active?: boolean;
   disabled?: boolean;
   command?: string;
+  onClick?: () => void;
   onClose?: () => void;
 }): ReactNode {
   const host = useHost();
@@ -434,7 +439,9 @@ function PopItem({
       disabled={disabled}
       aria-disabled={disabled ? 'true' : undefined}
       onClick={() => {
-        if (!command || disabled) return;
+        if (disabled) return;
+        if (onClick) { onClick(); onClose?.(); return; }
+        if (!command) return;
         executeViewportCommand(host, command);
         onClose?.();
       }}
@@ -599,15 +606,16 @@ function FpsStatusControl(): ReactNode {
 function CoordinateMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
+  const space = useGizmoSpace();
 
   return (
     <DropdownMenu>
       <ToolMenuTrigger title={pickText(L('坐标系', 'Coordinate space'), locale)}>
-        <Globe size={15} />
+        {space === 'local' ? <Box size={15} /> : <Globe size={15} />}
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('坐标系', 'Coordinate space'), locale)} width={180}>
-        <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active disabled />
-        <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} disabled />
+        <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active={space === 'world'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'world' } as never)} />
+        <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} active={space === 'local'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'local' } as never)} />
       </PopPanel>
     </DropdownMenu>
   );

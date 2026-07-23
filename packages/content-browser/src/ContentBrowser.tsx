@@ -496,8 +496,12 @@ export function ContentBrowser() {
       items.push(...assetItems);
       items.push({ sep: true });
     }
-    if (file.family === 'scene' && firstAsset) {
-      items.splice(1, 0, { label: t('editor.contentBrowser.contextMenu.setCurrentScene'), icon: 'flag', onClick: () => openAsset(firstAsset) });
+    // Gate on the actual scene asset (kind === 'scene'), matching openAsset's
+    // switch condition — not on family alone or assets[0], which may be a
+    // non-scene entry in a multi-asset pack.
+    const sceneAsset = file.assets.find(asset => asset.kind === 'scene');
+    if (sceneAsset) {
+      items.splice(1, 0, { label: t('editor.contentBrowser.contextMenu.setCurrentScene'), icon: 'flag', onClick: () => openAsset(sceneAsset) });
     }
     setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
   }, [allAssets, commonItemMenu, crudCallbacks, multiSelect.selection, openAsset, togglePackExpansion, t]);

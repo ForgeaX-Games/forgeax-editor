@@ -121,6 +121,22 @@ export function fileFamilyOf(name: string): CBFileFamily {
   return 'other';
 }
 
+/**
+ * Family for a disk file that may carry catalog assets. Scene identity follows
+ * the engine SSOT — a pack is a scene iff it holds an `assets[].kind === 'scene'`
+ * (same rule as `findAllScenePacks`) — not the filename heuristic. This lets any
+ * `*.pack.json` scene (e.g. `scenes/level1.pack.json`) classify as `scene`
+ * regardless of its stem, so the filter axis, context menu and icon all agree
+ * with what the engine actually treats as a scene.
+ */
+export function fileFamilyOfWithAssets(
+  name: string,
+  assets: readonly { kind: string }[],
+): CBFileFamily {
+  if (assets.some((a) => a.kind === 'scene')) return 'scene';
+  return fileFamilyOf(name);
+}
+
 const FILE_KIND_FALLBACK_LABELS: Record<CBFileFamily, string> = {
   code: 'Code',
   config: 'Config',
@@ -226,6 +242,7 @@ export function fileSpecificMenuItems(
         { id: 'play', label: t('editor.contentBrowser.contextMenu.play'), icon: 'play', disabled: true },
         { id: 'set-default-scene', label: t('editor.contentBrowser.contextMenu.setDefaultScene'), icon: 'flag', disabled: true },
         { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
+        { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'pack':
       return [

@@ -93,12 +93,14 @@ function withBoundary(scope: string, render: () => ReactNode): () => ReactNode {
   return () => <RecoveryBoundary scope={scope} fullscreen={false}>{render()}</RecoveryBoundary>;
 }
 
-// Tour anchors for editor (`ep:*`) panels. The default 'edit' workspace has no
-// workbench 'sidebar' panel — its left column is the Hierarchy panel — so the
-// first tour step ('sidebar') anchors here instead. Same id as CORE workbench
-// so whichever left panel a workspace mounts gets highlighted.
+// Tour anchors for editor (`ep:*`) panels. The default Scene workspace's left
+// column is Hierarchy (scene outline) over Inspector (object properties), and
+// its content browser is the Assets panel — the onboarding tour highlights both
+// by these ids. Keyed by bare panel id (buildEditorPanelComponents prefixes
+// `ep:`); a panel absent here simply renders without a tour marker.
 const EP_TOUR_IDS: Record<string, string | undefined> = {
-  hierarchy: 'sidebar',
+  hierarchy: 'hierarchy',
+  assets: 'assets',
 };
 
 function tourWrap(tourId: string | undefined, render: () => ReactNode): () => ReactNode {
