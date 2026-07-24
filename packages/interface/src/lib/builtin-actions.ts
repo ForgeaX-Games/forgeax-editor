@@ -10,8 +10,8 @@
  */
 import { registerAction, registerStateSlice } from './action-registry';
 import { getSessionClient } from '../store-parts/session-client';
-import { useShellStore, tabLabel, type AppMode } from '../store';
-import { setActiveWorkbench } from './workbenches';
+import { useShellStore, tabLabel } from '../store';
+import { setActiveWorkbench, appMode } from './workbenches';
 import { useHealthStore } from '../components/StatusBar/healthStore';
 import { getBrowserConsole, clearBrowserConsole } from '../components/StatusBar/healthBridge';
 import { listExtensions, pickLang } from './extension-api';
@@ -41,11 +41,10 @@ export function registerBuiltinActions(): void {
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
     surface: 'ui',
     run: (args) => {
-      const mode = args.mode as AppMode; // 'scene' | 'ai'
-      // 当前布局按活动工作区渲染;只 setMode 是历史遗留、DockShell 不认(与 workbench.open 同病根)。
+      const mode = args.mode as 'scene' | 'ai';
+      // activeId 是唯一真值源;切活动工作区即完成切换,mode 由它派生,无影子可写。
       setActiveWorkbench(mode);
-      st().setMode(mode);
-      return { status: 'completed', stateDigest: { mode: st().mode, activeWorkspace: mode } };
+      return { status: 'completed', stateDigest: { mode, activeWorkspace: mode } };
     },
   });
 
@@ -96,12 +95,12 @@ export function registerBuiltinActions(): void {
     surface: 'ui',
     run: (args) => {
       // 当前布局按「活动工作区」渲染(Edit / AI 标签,AI 的 workbench id 即 'ai');
-      // 只 setMode 是历史遗留、DockShell 不认——必须切活动工作区,和标签的 switchTo 一致。
+      // 切活动工作区即完成切换,和标签的 switchTo 一致。
       setActiveWorkbench('ai');
       st().openWorkbench({ ...(typeof args.tab === 'string' ? { tab: args.tab } : {}) });
       return {
         status: 'completed',
-        stateDigest: { mode: st().mode, activeWorkspace: 'ai', workbenchTab: st().workbenchTab },
+        stateDigest: { mode: 'ai', activeWorkspace: 'ai', workbenchTab: st().workbenchTab },
       };
     },
   });
@@ -541,7 +540,7 @@ export function registerBuiltinActions(): void {
   });
 
   // ── 状态摘要片(评审 2.5:注册式 derive,禁手写台账)────────────────────────
-  registerStateSlice('app.mode', () => st().mode);
+  registerStateSlice('app.mode', () => appMode());
   registerStateSlice('app.layout', () => ({
     fullscreen: st().fullscreen,
     sidebarCollapsed: st().sidebarCollapsed,

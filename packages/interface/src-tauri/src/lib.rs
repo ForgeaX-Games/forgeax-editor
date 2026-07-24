@@ -14,12 +14,10 @@
 // plain browser (web-server form) every native call is a no-op.
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
-#[cfg(not(debug_assertions))]
-use tauri::Emitter;
 #[cfg(not(debug_assertions))]
 use tauri_plugin_shell::ShellExt;
 
@@ -312,12 +310,137 @@ fn set_pointer_capture(window: tauri::Window, capture: bool) {
     let _ = window.set_cursor_grab(capture);
 }
 
+// ───────────────────────── Native menu bar (T5 bridge) ─────────────────────
+//
+// The webview is the SSOT for the menu bar (menu-registry.ts). The bridge
+// (native-menu-bridge.ts) calls `serializeMenusForNative(t)` there, then this
+// command turns the resulting JSON into a real native Menu and installs it via
+// `set_as_app_menu()`. Menu event dispatch happens in the webview too: a
+// global `on_menu_event` (registered in `run()` below) emits `menu:invoke` to
+// the "main" window with the clicked id; the webview looks it up in the
+// registry and calls `host.commands.execute(commandId, args)`. Rust owns no
+// business logic beyond "id → emit" — matching the tray's split, but with the
+// tray callback kept in `build_tray()` for the show/hide/quit items.
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeMenuItemJson {
+    id: String,
+    label: String,
+    #[serde(default)]
+    accelerator: Option<String>,
+    enabled: bool,
+    #[serde(default)]
+    danger: Option<bool>,
+    #[serde(rename = "separatorBefore", default)]
+    separator_before: bool,
+    #[serde(default)]
+    children: Option<Vec<NativeMenuItemJson>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NativeMenuJson {
+    /// The MenuId bucket ('brand' | 'file' | 'edit' | ...); used to
+    /// select platform-specific placement (e.g. 'brand' → app menu on macOS)
+    /// and to skip buckets the OS bar doesn't render (e.g. 'publish').
+    menu: String,
+    /// Already-translated title for the top-level submenu (e.g. "File",
+    /// "Edit"). The JS bridge fills it via `t('menubar.<menu>')`. Falls
+    /// back to `menu` id if missing (defensive; the bridge always sends it).
+    #[serde(default)]
+    title: Option<String>,
+    items: Vec<NativeMenuItemJson>,
+}
+
+/// Event payload emitted to the webview when a native menu item is clicked.
+/// The webview's `native-menu-bridge.ts` looks the id up in the menu registry
+/// (which owns `commandId` + `args`) and calls the host command bus.
+#[derive(Clone, serde::Serialize)]
+struct MenuInvokePayload {
+    id: String,
+}
+
+/// Replace the app's native menu bar with the given payload. Called by the
+/// webview once the menu registry is populated (and again whenever it changes,
+/// so runtime toggles of `when`/`enabled` predicates flow to the OS bar).
+///
+/// `publish` is intentionally skipped — it's an in-app dropdown, not an OS
+/// menu category (T5 spec).
+#[tauri::command]
+async fn set_app_menu(
+    app: tauri::AppHandle,
+    payload: Vec<NativeMenuJson>,
+) -> Result<(), String> {
+    let menu = Menu::new(&app).map_err(|e| e.to_string())?;
+    for m in payload.iter() {
+        if m.menu == "publish" {
+            continue;
+        }
+        let title = m.title.as_deref().unwrap_or(m.menu.as_str());
+        let submenu = Submenu::new(&app, title, true).map_err(|e| e.to_string())?;
+        append_items(&app, &submenu, &m.items)?;
+        menu.append(&submenu).map_err(|e| e.to_string())?;
+    }
+    menu.set_as_app_menu().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Recursive builder for a Submenu's children. Honors `separator_before`
+/// (skipped for the first item to keep the "boundary between groups" semantic
+/// clean), and turns `children` into nested Submenus.
+fn append_items(
+    app: &tauri::AppHandle,
+    parent: &Submenu<tauri::Wry>,
+    items: &[NativeMenuItemJson],
+) -> Result<(), String> {
+    for (idx, item) in items.iter().enumerate() {
+        if item.separator_before && idx != 0 {
+            let sep = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+            parent.append(&sep).map_err(|e| e.to_string())?;
+        }
+        if let Some(children) = &item.children {
+            let child = Submenu::with_id(app, &item.id, &item.label, item.enabled)
+                .map_err(|e| e.to_string())?;
+            append_items(app, &child, children)?;
+            parent.append(&child).map_err(|e| e.to_string())?;
+        } else {
+            let mi = MenuItem::with_id(
+                app,
+                &item.id,
+                &item.label,
+                item.enabled,
+                item.accelerator.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+            parent.append(&mi).map_err(|e| e.to_string())?;
+        }
+        // `danger` is UI-only in menu-registry.ts (Web highlight); the OS bar
+        // has no equivalent, so it's intentionally ignored here.
+        let _ = item.danger;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![set_pointer_capture])
+        .invoke_handler(tauri::generate_handler![set_pointer_capture, set_app_menu])
+        // Global menu event handler — fires for BOTH the tray menu and the
+        // app menu bar. The tray keeps its own callback (build_tray) for
+        // 'show'/'hide'/'quit'; here we forward everything else to the webview
+        // as `menu:invoke`, and the webview looks the id up in the registry to
+        // dispatch the associated command. Rust owns no business logic.
+        .on_menu_event(|app_handle, event| {
+            let id = event.id().as_ref().to_string();
+            // Skip tray-owned ids — the tray's `on_menu_event` handles them.
+            if matches!(id.as_str(), "show" | "hide" | "quit") {
+                return;
+            }
+            if let Some(win) = app_handle.get_webview_window("main") {
+                let _ = win.emit("menu:invoke", MenuInvokePayload { id });
+            }
+        })
         .setup(|app| {
             #[cfg(debug_assertions)]
             {

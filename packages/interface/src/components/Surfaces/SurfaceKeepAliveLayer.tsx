@@ -24,7 +24,7 @@
 // context (studio injects @forgeax/editor's SceneEditor); interface keeps ZERO
 // editor imports.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
-import { useShellStore } from '../../store';
+import { useActiveWorkbench } from '../../lib/useWorkbench';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { FatalBanner } from '../StatusBar/FatalBanner';
 import {
@@ -48,7 +48,9 @@ function kindForMode(mode: AppMode): SurfaceKind | null {
 const ALL_KINDS: SurfaceKind[] = ['edit'];
 
 export function SurfaceKeepAliveLayer(): ReactNode {
-  const mode = useShellStore((s) => s.mode) as AppMode;
+  // Derived from the active workspace (SSOT); 'scene' workspace → edit surface,
+  // every other workspace → no kept-alive surface.
+  const mode: AppMode = useActiveWorkbench()?.id === 'scene' ? 'scene' : 'ai';
   const { surfaces } = usePanelRenderers();
   const SceneEditor = surfaces?.SceneEditor;
   const activeKind = kindForMode(mode);

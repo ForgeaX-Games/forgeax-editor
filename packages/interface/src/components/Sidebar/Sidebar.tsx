@@ -1,107 +1,52 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, Files, PanelLeftClose, PanelLeftOpen, Wrench, ExternalLink, PictureInPicture2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { PanelLeftClose, PanelLeftOpen, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useShellStore } from '../../store';
 import { emitDeepLink } from '../../lib/deep-link-bus';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
-import { FilesPanel } from './FilesPanel';
 import { AgentsPanelSlot } from '../DockShell/panelRegistry';
 import { extensionManifestPathHint, listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
-import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
-import { extensionRendersInMainArea, extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensionHost';
+import { extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensionHost';
 import { KeepAliveExtensionIframes } from '../MainArea/KeepAliveExtensionIframes';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import { useTranslation } from '@/i18n';
 import './Sidebar.css';
 
-// Phase B4 — the static `PLUGIN_PANEL_LOADERS` import map is gone. Plugins
-// that want to render in the Sidebar's left pane declare
-// `workbench.panes.left` + `entry.standalone` in their manifest, and we
-// mount them through `StandaloneExtensionIframe pane="left"` — mirroring the
-// MainArea path in `WorkbenchExtensionHost.tsx`. Anything without an iframe
-// surface falls through to `ExtensionPlaceholder`.
-// Cross-references:
-//   - manifest sample: packages/marketplace/extensions/wb-character/forgeax-extension.json
-//   - host helper:     extensionRendersInSidebarLeftPane (MainArea/WorkbenchExtensionHost)
-//   - server route:    packages/server/src/main.ts → /extensions/<id>/* serveStatic
-
-// P2.6a — the WORKBENCH icons row is two segments stitched together:
-//
-//   [built-in tabs] + [bus-sourced workbench plugins]
-//
-// Built-in tabs (Agents/Files) wire real panels. Bus-sourced rows come from
-// `GET /api/extensions/list?kind=workbench` and render the manifest's emoji icon +
-// displayName.zh; clicking one shows the description.zh in the right pane as
-// a richer placeholder. When the bus call fails we fall back to a small set of
-// hardcoded labels so the UI still looks alive — this matches the v3 KPI of
-// "never let the workbench row look empty."
+// Sidebar is now the CONTENT host of the AI workbench's Tools panel: it renders
+// the active tab's body (the Agents list, or a workbench plugin's left pane /
+// info placeholder). Top-level navigation (编辑器 / Agents / plugins / platform)
+// moved to the shell-level `ActivityRail` (Approach B), so this component holds
+// no nav of its own — it just reacts to `workbenchTab`.
 //
 // Cross-references:
-//   - server: packages/server/src/api/bus.ts → createBusRouter
-//   - lib:    packages/interface/src/lib/extension-api.ts → listExtensions
-//   - spec:   forgeax-dev-diary/2026-05-15/modules/10-workbench-spec.md
+//   - nav rail:   components/ActivityRail/ActivityRail.tsx
+//   - left pane:  extensionRendersInSidebarLeftPane (MainArea/WorkbenchExtensionHost)
+//   - server:     packages/server/src/main.ts → /extensions/<id>/* serveStatic
 
-type BuiltinId = 'agents' | 'files';
+type BuiltinId = 'agents';
 
 interface BuiltinEntry {
   kind: 'builtin';
   id: BuiltinId;
   label: string;
-  Icon: typeof Bot;
 }
 
 interface BusEntry {
   kind: 'bus';
-  // wb:<workbench.id>  — namespaced so it never collides with a builtin tab id.
+  // wb:<workbench.id> — namespaced so it never collides with a builtin id.
   id: string;
   label: string;
-  emoji: string;
   manifest: ExtensionInfo;
 }
 
 type Entry = BuiltinEntry | BusEntry;
 
-const BUILTINS: BuiltinEntry[] = [
-  { kind: 'builtin', id: 'agents', label: 'Agents', Icon: Bot },
-  { kind: 'builtin', id: 'files', label: 'Files', Icon: Files },
-];
-
-// 2026-05-17 — `KIND_LABELS` 与 SidebarKindFooter 一起删除。bus-kind 计数
-// 现在仅由底栏 GlobalStatusBar.PulseFeeds 显示。
-
-// P9 dual-modality — schema 给 AI 看 (DUAL-MODALITY-UI.md §四). 这里 inline 描述,
-// 后续叠 ajv 校验时再外置 ./surfaces/sidebar.schema.json. 字段名跟 snapshot
-// 一一对应, AI 拿到这份 schema 就能学到 selectTab / setMode 的合法值域.
-const HOST_SIDEBAR_SCHEMA = {
-  type: 'object',
-  properties: {
-    workbenchTab: { type: 'string', description: 'Currently active workbench tab id (e.g. agents, files, wb:character)' },
-    mode: { type: 'string', enum: ['scene', 'ai', 'bus'] },
-    entries: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          label: { type: 'string' },
-          kind: { type: 'string', enum: ['builtin', 'bus'] },
-        },
-      },
-    },
-  },
-} as const;
-
-interface HostSidebarSnapshot {
-  workbenchTab: string;
-  mode: 'scene' | 'ai' | 'bus';
-  entries: Array<{ id: string; label: string; kind: 'builtin' | 'bus' }>;
-}
+const BUILTINS: BuiltinEntry[] = [{ kind: 'builtin', id: 'agents', label: 'Agents' }];
 
 export function Sidebar() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const { workbenchTab, setWorkbenchTab } = useShellStore();
-  const mode = useShellStore((s) => s.mode);
-  const setMode = useShellStore((s) => s.setMode);
+  const workbenchTab = useShellStore((s) => s.workbenchTab);
+  const setWorkbenchTab = useShellStore((s) => s.setWorkbenchTab);
   const sidebarCollapsed = useShellStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useShellStore((s) => s.toggleSidebar);
   const floatingSurfaces = useShellStore((s) => s.floatingSurfaces);
@@ -112,170 +57,69 @@ export function Sidebar() {
   const dockedExtensions = useShellStore((s) => s.dockedExtensions);
 
   const [busExtensions, setBusExtensions] = useState<ExtensionInfo[] | null>(null);
-
-  // Sidebar is a persistent component (it does not remount on tab switches).
-  // Retry the bus fetch a few times before giving up so a slow boot doesn't
-  // pin the sidebar to an empty state for the whole session.
+  // Persistent component: retry a few times so a slow boot doesn't pin the
+  // content to an empty state for the whole session.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
     const MAX_ATTEMPTS = 10;
     const RETRY_MS = 1500;
-
     const load = () => {
       attempts += 1;
       listExtensions('workbench')
-        .then((res) => {
-          if (cancelled) return;
-          setBusExtensions(res.items);
-        })
+        .then((res) => { if (!cancelled) setBusExtensions(res.items); })
         .catch(() => {
           if (cancelled) return;
-          if (attempts >= MAX_ATTEMPTS) {
-            setBusExtensions([]);
-            return;
-          }
+          if (attempts >= MAX_ATTEMPTS) { setBusExtensions([]); return; }
           timer = setTimeout(load, RETRY_MS);
         });
     };
     load();
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, []);
 
-  const busEntries = useMemo<BusEntry[]>(() => {
-    const source = busExtensions ?? [];
-    return source
-      .filter((m) => !m.workbench?.hidden)
-      .map<BusEntry>((m) => ({
+  // Not filtered by `hidden`: the ActivityRail's curated spec may surface a
+  // manifest-hidden plugin (e.g. wb-lowpoly-obj), and this content host must be
+  // able to resolve its active tab. (Nav lives in the rail now, so listing all
+  // is harmless here.)
+  const busEntries = useMemo<BusEntry[]>(
+    () => (busExtensions ?? [])
+      .map((m) => ({
         kind: 'bus',
         id: `wb:${m.workbench?.id ?? m.id}`,
         label: pickLang(m.displayName, locale, m.workbench?.id ?? m.id),
-        emoji: m.workbench?.icon ?? m.icon ?? '🧩',
         manifest: m,
-      }));
-  }, [busExtensions, locale]);
+      })),
+    [busExtensions, locale],
+  );
 
   const entries: Entry[] = useMemo(() => [...BUILTINS, ...busEntries], [busEntries]);
+  // Keep workbenchTab valid: if it points at a plugin no longer present (and is
+  // not the builtin 'agents' tab), fall back to the first plugin.
   useEffect(() => {
     if (!busExtensions || busExtensions.length === 0) return;
-    if (workbenchTab === 'agents' || workbenchTab === 'files') return;
+    if (workbenchTab === 'agents') return;
     if (entries.some((e) => e.id === workbenchTab)) return;
     const next = busEntries[0]?.id;
     if (next) setWorkbenchTab(next);
   }, [busEntries, busExtensions, entries, setWorkbenchTab, workbenchTab]);
 
-  const activeIdx = useMemo(() => {
-    const i = entries.findIndex((e) => e.id === workbenchTab);
-    return i >= 0 ? i : 0;
-  }, [entries, workbenchTab]);
-  const activeEntry = entries[activeIdx];
+  const activeEntry = useMemo(
+    () => entries.find((e) => e.id === workbenchTab) ?? entries[0],
+    [entries, workbenchTab],
+  );
   // The left-pane standalone plugin to show right now (or null). Fed to the
   // keep-alive overlay so switching wb tabs only flips visibility instead of
   // unmounting/reloading the iframe.
   const leftPaneActiveExtension = useMemo<ExtensionInfo | null>(
-    () =>
-      activeEntry?.kind === 'bus' && extensionRendersInSidebarLeftPane(activeEntry.manifest)
-        ? activeEntry.manifest
-        : null,
+    () => activeEntry?.kind === 'bus' && extensionRendersInSidebarLeftPane(activeEntry.manifest)
+      ? activeEntry.manifest
+      : null,
     [activeEntry],
   );
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const entriesRef = useRef(entries);
-  entriesRef.current = entries;
 
-  // Track last wb:* tab so clicking ToolCase nav returns to it
-  const lastWbTabRef = useRef<string>('');
-  useEffect(() => {
-    if (workbenchTab !== 'agents' && workbenchTab !== 'files') {
-      lastWbTabRef.current = workbenchTab;
-    }
-  }, [workbenchTab]);
-
-  // Derive top-level nav tab (agents / files / workbench)
-  const navTab: 'agents' | 'files' | 'workbench' =
-    workbenchTab === 'agents' ? 'agents'
-    : workbenchTab === 'files' ? 'files'
-    : 'workbench';
-
-  const sidebarEntriesSlim = useMemo<HostSidebarSnapshot['entries']>(
-    () => entries.map((e) => ({ id: e.id, label: e.label, kind: e.kind })),
-    [entries],
-  );
-  const sidebarSurface = useSurface<HostSidebarSnapshot, Record<string, UISurfaceActionDef>>({
-    id: 'host.sidebar',
-    layer: 'host',
-    schema: HOST_SIDEBAR_SCHEMA as unknown as Record<string, unknown>,
-    initialSnapshot: { workbenchTab, mode, entries: sidebarEntriesSlim },
-    actions: {
-      selectTab: {
-        id: 'selectTab',
-        argsSchema: { type: 'object', required: ['tab'], properties: { tab: { type: 'string' } } },
-        run: (raw) => {
-          const a = (raw ?? {}) as { tab?: unknown };
-          if (typeof a.tab !== 'string') return;
-          // Atomic open — sets tab + center together so the sidebar left pane
-          // and the center can never desync (architecture review §B3).
-          const entry = entriesRef.current.find((e) => e.id === a.tab);
-          const manifest = entry?.kind === 'bus' ? entry.manifest : null;
-          useShellStore.getState().openWorkbench({
-            tab: a.tab,
-            expandedExtensionId: manifest && extensionRendersInMainArea(manifest) ? manifest.id : null,
-          });
-        },
-      },
-      setMode: {
-        id: 'setMode',
-        argsSchema: {
-          type: 'object',
-          required: ['mode'],
-          properties: { mode: { type: 'string', enum: ['scene', 'ai', 'bus'] } },
-        },
-        run: (raw) => {
-          const a = (raw ?? {}) as { mode?: unknown };
-          if (a.mode === 'scene' || a.mode === 'ai' || a.mode === 'bus') {
-            useShellStore.getState().setMode(a.mode);
-          }
-        },
-      },
-    },
-  });
-
-  useEffect(() => {
-    sidebarSurface.setSnapshot({ workbenchTab, mode, entries: sidebarEntriesSlim });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbenchTab, mode, sidebarEntriesSlim]);
-
-  // Keyboard nav for the ws-icons-row (bus entries only, offset by BUILTINS.length)
-  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>, busIdx: number) => {
-    if (busEntries.length === 0) return;
-    let target = -1;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-      target = (busIdx + 1) % busEntries.length;
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-      target = (busIdx - 1 + busEntries.length) % busEntries.length;
-    } else if (e.key === 'Home') {
-      target = 0;
-    } else if (e.key === 'End') {
-      target = busEntries.length - 1;
-    } else {
-      return;
-    }
-    e.preventDefault();
-    void sidebarSurface.dispatch('selectTab', { tab: busEntries[target].id });
-    tabRefs.current[target + BUILTINS.length]?.focus();
-  };
-
-  const handleNavWorkbench = () => {
-    const target = lastWbTabRef.current || (busEntries[0]?.id ?? '');
-    if (target) void sidebarSurface.dispatch('selectTab', { tab: target });
-  };
-
-  // ── Collapsed state: 36px vertical icon strip ──────────────────────────
+  // ── Collapsed state: 36px strip (just the expand button) ────────────────
   if (sidebarCollapsed) {
     return (
       <aside className="sidebar sidebar-collapsed">
@@ -283,112 +127,27 @@ export function Sidebar() {
           <button className="sb-icon-btn" onClick={toggleSidebar} title={t('sidebar.expandSidebar')} aria-label={t('sidebar.expandSidebar')}>
             <PanelLeftOpen size={16} />
           </button>
-          <div className="sb-nav-divider" />
-          <div className="sb-nav-icons-v">
-            <button
-              className={`sb-icon-btn ${navTab === 'agents' ? 'active' : ''}`}
-              onClick={() => void sidebarSurface.dispatch('selectTab', { tab: 'agents' })}
-              aria-label="Agents" data-tip="Agents"
-            >
-              <Bot size={16} />
-            </button>
-            <button
-              className={`sb-icon-btn ${navTab === 'files' ? 'active' : ''}`}
-              onClick={() => void sidebarSurface.dispatch('selectTab', { tab: 'files' })}
-              aria-label="Files" data-tip="Files"
-            >
-              <Files size={16} />
-            </button>
-            <button
-              className={`sb-icon-btn ${navTab === 'workbench' ? 'active' : ''}`}
-              onClick={handleNavWorkbench}
-              aria-label="Workbench" data-tip="Workbench"
-            >
-              <Wrench size={16} />
-            </button>
-          </div>
         </div>
       </aside>
     );
   }
 
-  // ── Expanded state ──────────────────────────────────────────────────────
+  // ── Expanded state: collapse affordance + active tab content ────────────
   return (
     <aside className="sidebar thin-scrollbar">
-      {/* Top toolbar: 3 nav buttons (left) + collapse button (right) */}
-      <div className="sb-toolbar">
-        <div className="sb-nav-icons-h">
-          <button
-            className={`sb-icon-btn ${navTab === 'agents' ? 'active' : ''}`}
-            onClick={() => void sidebarSurface.dispatch('selectTab', { tab: 'agents' })}
-            aria-label="Agents" data-tip="Agents"
-          >
-            <Bot size={16} />
-          </button>
-          <button
-            className={`sb-icon-btn ${navTab === 'files' ? 'active' : ''}`}
-            onClick={() => void sidebarSurface.dispatch('selectTab', { tab: 'files' })}
-            aria-label="Files" data-tip="Files"
-          >
-            <Files size={16} />
-          </button>
-          <button
-            className={`sb-icon-btn ${navTab === 'workbench' ? 'active' : ''}`}
-            onClick={handleNavWorkbench}
-            aria-label="Workbench" data-tip="Workbench"
-          >
-            <Wrench size={16} />
-          </button>
-        </div>
+      <div className="sb-toolbar sb-toolbar--end">
         <button className="sb-icon-btn" onClick={toggleSidebar} title={t('sidebar.collapseSidebar')} aria-label={t('sidebar.collapseSidebar')}>
           <PanelLeftClose size={16} />
         </button>
       </div>
 
       <div className="ss-section workbench">
-        {/* Bus plugin sub-nav — only visible when Workbench tab is active */}
-        {navTab === 'workbench' && busEntries.length > 0 && (
-          <div
-            className="ws-icons-row"
-            aria-label="Workbench plugins"
-          >
-            <div
-              className="ws-icons-pill"
-              role="tablist"
-              aria-orientation="horizontal"
-              title={t('sidebar.workbenchExtensionsHint')}
-            >
-            {busEntries.map((e, i) => {
-              const globalIdx = i + BUILTINS.length;
-              const active = globalIdx === activeIdx;
-              return (
-                <button
-                  key={e.id}
-                  ref={(el) => { tabRefs.current[globalIdx] = el; }}
-                  className={`ws-icon-btn ${active ? 'active' : ''} bus`}
-                  onClick={() => void sidebarSurface.dispatch('selectTab', { tab: e.id })}
-                  onKeyDown={(ev) => onTabKey(ev, i)}
-                  role="tab"
-                  aria-selected={active}
-                  tabIndex={active ? 0 : -1}
-                  title={t('sidebar.tabTooltip', { label: e.label, id: e.manifest.id })}
-                  aria-label={e.label}
-                  data-extension-id={e.manifest.id}
-                >
-                  {(() => { const Icon = iconForWorkbenchModule({ workbenchId: e.id, label: e.label, extensionId: e.manifest.id }); return <Icon size={16} />; })()}
-
-                </button>
-              );
-            })}
-            </div>
-          </div>
-        )}
         <div key={activeEntry?.id ?? 'empty'} className="ws-active-content rail-panel">
-          {activeEntry?.kind === 'builtin' && (activeEntry.id === 'agents' || activeEntry.id === 'files') ? (
+          {activeEntry?.kind === 'builtin' ? (
             (() => {
-              // Built-in panels (Agents/Files) are pop-out-able too — DetachedSurface
-              // hosts them as `panel` surfaces; this adds the missing affordance so
-              // they float into their own OS window like the plugin panes do.
+              // Agents panel is pop-out-able too — DetachedSurface hosts it as a
+              // `panel` surface; this adds the affordance to float it into its own
+              // OS window like the plugin panes do.
               const desc: SurfaceDescriptor = { kind: 'panel', id: activeEntry.id };
               const floating = !!floatingSurfaces[surfaceKey(desc)];
               if (floating) {
@@ -412,25 +171,22 @@ export function Sidebar() {
                       <ExternalLink size={12} />
                     </button>
                   )}
-                  {activeEntry.id === 'agents' ? <AgentsPanelSlot /> : <FilesPanel />}
+                  <AgentsPanelSlot />
                 </>
               );
             })()
           ) : activeEntry?.kind === 'bus' ? (
-            // Doc 06 §panes — if the plugin declares both `entry.standalone`
-            // and `workbench.panes.left`, its `?pane=left` iframe is rendered
-            // by the keep-alive overlay below (so switching wb tabs doesn't
-            // reload it). Without explicit left intent we render the
+            // Doc 06 §panes — if the plugin declares both `entry.standalone` and
+            // `workbench.panes.left`, its `?pane=left` iframe is rendered by the
+            // keep-alive overlay below. Without explicit left intent we render the
             // ExtensionPlaceholder info card.
             extensionRendersInSidebarLeftPane(activeEntry.manifest) ? null : (
               <ExtensionPlaceholder entry={activeEntry} siblingCount={busEntries.length} />
             )
-          ) : (
-            <ToolPlaceholder label={activeEntry?.label ?? ''} sub="Coming soon" />
-          )}
-          {/* Keep-alive overlay for left-pane standalone plugins. Always
-              mounted (Sidebar is persistent) so visited left-pane iframes
-              survive tab switches; only visibility flips. */}
+          ) : null}
+          {/* Keep-alive overlay for left-pane standalone plugins. Always mounted
+              (Sidebar is persistent) so visited left-pane iframes survive tab
+              switches; only visibility flips. */}
           <div
             className={`ws-pane-keepalive${leftPaneActiveExtension ? ' active' : ''}`}
             style={leftPaneActiveExtension ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
@@ -492,7 +248,6 @@ function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   const description = pickLang(m.description, locale, '');
   const descriptionAlt = pickLang(m.description, locale === 'zh' ? 'en' : 'zh', '');
   const showAlt = descriptionAlt && descriptionAlt !== description;
-  const setMode = useShellStore((s) => s.setMode);
   const openSettingsStore = useShellStore((s) => s.openOverlay);
   const manifestPath = extensionManifestPathHint(m.id);
   const openInBus = () => {
@@ -636,11 +391,3 @@ function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
   );
 }
 
-function ToolPlaceholder({ label, sub }: { label: string; sub: string }) {
-  return (
-    <div className="tool-placeholder">
-      <div className="tp-title">{label}</div>
-      <div className="tp-sub">{sub}</div>
-    </div>
-  );
-}

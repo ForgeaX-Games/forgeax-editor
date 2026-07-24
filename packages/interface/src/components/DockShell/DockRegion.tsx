@@ -42,7 +42,53 @@ import { useHost } from '../../core/app-shell';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
 import { buildDefault } from './builtinWorkbenches';
 import { getDockResetEpoch } from './dockResetEpoch';
+import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
 import './DockShell.css';
+
+// Strip panels whose `contentComponent` is not in the known component set.
+// Prevents dockview's `fromJSON` from throwing when a saved layout references
+// a component that no longer exists (retired keys, unloaded wb:* plugins, etc.).
+function stripUnknownPanels(
+  layout: SerializedDockview,
+  knownKeys: ReadonlySet<string>,
+): SerializedDockview | null {
+  const panels = (layout as { panels?: Record<string, { contentComponent?: string }> }).panels;
+  if (!panels) return layout;
+  const unknownIds = new Set<string>();
+  for (const [id, spec] of Object.entries(panels)) {
+    const cc = spec?.contentComponent ?? id;
+    if (!knownKeys.has(cc)) unknownIds.add(id);
+  }
+  if (unknownIds.size === 0) return layout;
+  const cleanPanels: Record<string, unknown> = {};
+  for (const [id, spec] of Object.entries(panels)) {
+    if (!unknownIds.has(id)) cleanPanels[id] = spec;
+  }
+  if (Object.keys(cleanPanels).length === 0) return null;
+  type GridNode = { type?: string; data?: unknown; size?: number };
+  const stripGrid = (node: unknown): unknown | null => {
+    if (!node || typeof node !== 'object') return node;
+    const n = node as GridNode;
+    if (n.type === 'leaf') {
+      const d = n.data as { views?: string[]; activeView?: string; id?: string } | undefined;
+      if (!d?.views) return node;
+      const kept = d.views.filter((v) => !unknownIds.has(v));
+      if (kept.length === 0) return null;
+      const activeView = d.activeView && kept.includes(d.activeView) ? d.activeView : kept[0];
+      return { ...n, data: { ...d, views: kept, activeView } };
+    }
+    if (n.type === 'branch' && Array.isArray(n.data)) {
+      const children = (n.data as unknown[]).map(stripGrid).filter((c) => c !== null);
+      if (children.length === 0) return null;
+      return { ...n, data: children };
+    }
+    return node;
+  };
+  const grid = (layout as { grid?: { root?: unknown } }).grid;
+  const root = grid?.root ? stripGrid(grid.root) : grid?.root;
+  if (!root) return null;
+  return { ...layout, grid: { ...layout.grid, root }, panels: cleanPanels } as SerializedDockview;
+}
 
 /** Clear chrome collapse + rebuild this region's default dock layout. */
 function rebuildRegionDefault(
@@ -89,6 +135,25 @@ const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migra
 // Re-export so external consumers (WorkbenchSwitcher, tests) don't need to know
 // buildDefault lives in builtinWorkbenches.ts.
 export { buildDefault };
+
+// -----------------------------------------------------------------------------
+// Module-level panel visibility mirror. Consumers (Window menu `checked()`,
+// `app.panel.toggle` command) call `isPanelVisible(id)` without needing a
+// DockviewApi ref. Each DockRegion keeps the shared set in sync via dockview's
+// onDidAddPanel / onDidRemovePanel events — panel ids are globally unique, so
+// a single Set across all regions is sufficient.
+// -----------------------------------------------------------------------------
+const _visiblePanelIds = new Set<string>();
+
+function _setPanelVisibility(id: string, visible: boolean): void {
+  if (visible) _visiblePanelIds.add(id);
+  else _visiblePanelIds.delete(id);
+}
+
+/** Whether a panel with the given id is currently mounted in any DockRegion. */
+export function isPanelVisible(id: string): boolean {
+  return _visiblePanelIds.has(id);
+}
 
 // Pop a dock panel OUT into a REAL OS window (index.html?surface=panel&id=<id>
 // → DetachedSurface, which renders the panel's in-process React component).
@@ -155,6 +220,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // ep:* ids are host-owned: a persisted layout may not resurrect a panel
     // which is absent from this host's injected editor manifest.
     if (id.startsWith('ep:') && !editorPanelIds.includes(id.slice(3))) return false;
+    // chat now lives in the shell-level ChatColumn (fixed column right of the
+    // ActivityRail), never inside the dock — dropped from every seeded layout by
+    // filterLayoutByMembership, and closeStrayPanels evicts it from restores.
+    if (id === 'chat') return false;
     // No descriptor registered → treat non-editor panels as belonging to the
     // DockShell region (matches the pre-refactor behavior).
     const desc = panels?.[id];
@@ -287,6 +356,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       ),
     ])),
   }), [busExtensions, editorPanelIds]);
+  // Mirror the component keys into a ref so layout restore callbacks (registered
+  // once with [] deps) can validate saved layouts against the CURRENT set.
+  const componentKeysRef = useRef<ReadonlySet<string>>(new Set(Object.keys(components)));
+  useEffect(() => { componentKeysRef.current = new Set(Object.keys(components)); }, [components]);
   const preFullscreen = useRef<{ tools: boolean; chat: boolean } | null>(null);
   // Track the workspace id that is currently rendered in the dock so we can
   // save its layout before switching. Lives outside onReady so useEffect cleanup
@@ -317,6 +390,32 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       e.accept();
     });
     onReadyCleanupsRef.current.push(() => { try { overlaySub.dispose(); } catch { /* noop */ } });
+
+    // Keep the module-level visibility mirror in sync. Seed from current panels
+    // (in case restore already populated the api before this callback fired),
+    // then subscribe to add/remove for future changes. On cleanup, drop this
+    // region's own entries so HMR remounts don't leak stale "visible" ids.
+    const ownedIds = new Set<string>();
+    try {
+      api.panels.forEach((p) => {
+        ownedIds.add(p.id);
+        _setPanelVisibility(p.id, true);
+      });
+    } catch { /* noop */ }
+    const addSub = api.onDidAddPanel((p) => {
+      ownedIds.add(p.id);
+      _setPanelVisibility(p.id, true);
+    });
+    const remSub = api.onDidRemovePanel((p) => {
+      ownedIds.delete(p.id);
+      _setPanelVisibility(p.id, false);
+    });
+    onReadyCleanupsRef.current.push(() => {
+      try { addSub.dispose(); } catch { /* noop */ }
+      try { remSub.dispose(); } catch { /* noop */ }
+      for (const id of ownedIds) _setPanelVisibility(id, false);
+      ownedIds.clear();
+    });
 
     // Note: migration is triggered by setCurrentProject() (ProjectSwitcher)
     // and by loadWorkbenchList()/loadWorkbenchLayout() as belt+suspenders,
@@ -381,7 +480,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       const tryRestore = (raw: string | null, wsId: string = activeId): boolean => {
         if (!raw) return false;
         try {
-          const parsed = JSON.parse(raw) as { panels?: Record<string, unknown> };
+          let parsed = JSON.parse(raw) as SerializedDockview & { panels?: Record<string, unknown> };
           if (!isValidLayout(parsed, wsId)) {
             // Evict the bad layout so it doesn't come back on next load.
             try {
@@ -393,8 +492,15 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             } catch { /* noop */ }
             return false;
           }
+          // Rewrite retired viewport keys (edit/preview → viewport).
+          parsed = sanitizeRetiredDockLayout(parsed) as typeof parsed;
+          // Strip panels whose contentComponent is not registered — prevents
+          // dockview from throwing when a saved layout references a component
+          // that no longer exists (unloaded wb:* plugins, stale ids, etc.).
+          const cleaned = stripUnknownPanels(parsed as SerializedDockview, componentKeysRef.current);
+          if (!cleaned) return false;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          api.fromJSON(parsed as any);
+          api.fromJSON(cleaned as any);
           // Drop any restored panels that no longer belong to THIS region
           // (panelLocations overrides may have re-homed them since the save).
           closeStrayPanels(api);
@@ -499,70 +605,103 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     }
   }, [panelLocations, titleFor, region]);
 
-  // Workspace switch subscription — in a useEffect so React properly cleans it
-  // up on unmount / HMR remount (prevents stale listeners accumulating).
+  // Reconcile the dock to a target workspace id. Idempotent: no-op when the dock
+  // already renders `newId` (guarded on prevWorkspaceIdRef — the workspace the
+  // dock is ACTUALLY showing). Saves the outgoing workspace's layout, then
+  // restores the target's saved layout or builds its default. Single source of
+  // the switch logic, shared by every trigger below.
+  const applyWorkspace = useCallback((api: DockviewApi, newId: string): void => {
+    if (newId === prevWorkspaceIdRef.current) return;
+    saveWorkbenchLayout(prevWorkspaceIdRef.current, api.toJSON());
+    prevWorkspaceIdRef.current = newId;
+    // The layout is being completely replaced — reset toggle-hidden tracking so
+    // sidebar/chat collapse effects start fresh for the new workspace.
+    hiddenByToggleRef.current.clear();
+    const syncTitles = (): void => {
+      const titleIds = new Set([
+        ...Object.keys(BASE_PANEL_TITLE),
+        ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
+        ...Object.keys(panelsRef.current ?? {}),
+      ]);
+      for (const id of titleIds) {
+        try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
+      }
+    };
+    const saved = loadWorkbenchLayout(newId);
+    if (saved) {
+      try {
+        // Validate raw JSON before loading — avoids flashing the wrong layout.
+        const isCoreWs = newId === 'scene' || newId === 'ai';
+        const savedPanels = (saved as { panels?: Record<string, unknown> }).panels ?? {};
+        const savedPanelIds = Object.keys(savedPanels);
+        const hasStaleEpPanels = !isCoreWs
+          ? savedPanelIds.some((k) => k.startsWith('ep:'))
+          : savedPanelIds.some((k) => (
+            k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
+          ));
+        const missingMain = newId === 'ai' && !savedPanels['main'];
+        if (hasStaleEpPanels || missingMain) {
+          try { removeWorkbenchLayout(newId); } catch { /* noop */ }
+          // fall through to buildDefault
+        } else {
+          // Sanitize retired keys (edit/preview → viewport) and strip panels
+          // whose contentComponent is not registered in the current components map.
+          let sanitized: SerializedDockview | null = sanitizeRetiredDockLayout(saved);
+          sanitized = stripUnknownPanels(sanitized, componentKeysRef.current);
+          if (!sanitized) {
+            try { removeWorkbenchLayout(newId); } catch { /* noop */ }
+            // fall through to buildDefault
+          } else {
+            api.fromJSON(sanitized);
+            // Drop restored panels that no longer belong to THIS region.
+            closeStrayPanels(api);
+            const anchor = newId === 'ai' ? 'main' : null;
+            if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
+            // anchor missing — fall through to buildDefault
+          }
+        }
+      } catch { /* fall through */ }
+    }
+    try { api.clear(); } catch { /* noop */ }
+    buildDefault(
+      api,
+      newId,
+      isMemberRef.current,
+      builtinWorkbenchLayoutsRef.current?.[newId],
+    );
+    syncTitles();
+    // No injected chat surface — re-apply chat closure on workspace switch
+    // because buildDefault re-mounts a chat panel for several layouts.
+    if (hideChatRef.current) {
+      try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
+    }
+  }, [titleFor, closeStrayPanels]);
+
+  // Dock layout is a DERIVED view of the active workspace id (workbenches.ts is
+  // the SSOT). Reconcile whenever that id changes — including when it changes
+  // because the project id resolved AFTER the dock first mounted (onReady may
+  // build under the transient 'default' project → 'scene' seed, then the real
+  // project resolves to 'ai'). This effect is LEVEL-triggered by React
+  // (useActiveWorkbench → useSyncExternalStore), so it can never miss the edge
+  // the way the imperative subscriptions below can during a StrictMode remount.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const id = activeWorkbench?.id;
+    if (id) applyWorkspace(api, id);
+  }, [activeWorkbench?.id, applyWorkspace]);
+
+  // Workspace switch subscription — the synchronous edge trigger (fires inside
+  // notify() before React re-renders). Routes through the same applyWorkspace,
+  // which no-ops if the reactive effect already reconciled.
   useEffect(() => {
     return subscribeWorkbenchList(() => {
       const api = apiRef.current;
       if (!api) return;
-      const { activeId: newId } = loadWorkbenchList();
-      if (newId === prevWorkspaceIdRef.current) return;
-      saveWorkbenchLayout(prevWorkspaceIdRef.current, api.toJSON());
-      prevWorkspaceIdRef.current = newId;
-      // The layout is being completely replaced — reset toggle-hidden tracking so
-      // sidebar/chat collapse effects start fresh for the new workspace.
-      hiddenByToggleRef.current.clear();
-      const syncTitles = (): void => {
-        const titleIds = new Set([
-          ...Object.keys(BASE_PANEL_TITLE),
-          ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
-          ...Object.keys(panelsRef.current ?? {}),
-        ]);
-        for (const id of titleIds) {
-          try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-        }
-      };
-      const saved = loadWorkbenchLayout(newId);
-      if (saved) {
-        try {
-          // Validate raw JSON before loading — avoids flashing the wrong layout.
-          const isCoreWs = newId === 'scene' || newId === 'ai';
-          const savedPanels = (saved as { panels?: Record<string, unknown> }).panels ?? {};
-          const savedPanelIds = Object.keys(savedPanels);
-          const hasStaleEpPanels = !isCoreWs
-            ? savedPanelIds.some((k) => k.startsWith('ep:'))
-            : savedPanelIds.some((k) => (
-              k.startsWith('ep:') && !editorPanelIdsRef.current.includes(k.slice(3))
-            ));
-          const missingMain = newId === 'ai' && !savedPanels['main'];
-          if (hasStaleEpPanels || missingMain) {
-            try { removeWorkbenchLayout(newId); } catch { /* noop */ }
-            // fall through to buildDefault
-          } else {
-            api.fromJSON(saved);
-            // Drop restored panels that no longer belong to THIS region.
-            closeStrayPanels(api);
-            const anchor = newId === 'ai' ? 'main' : null;
-          if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
-            // anchor missing — fall through to buildDefault
-          }
-        } catch { /* fall through */ }
-      }
-      try { api.clear(); } catch { /* noop */ }
-      buildDefault(
-        api,
-        newId,
-        isMemberRef.current,
-        builtinWorkbenchLayoutsRef.current?.[newId],
-      );
-      syncTitles();
-      // No injected chat surface — re-apply chat closure on workspace switch
-      // because buildDefault re-mounts a chat panel for several layouts.
-      if (hideChatRef.current) {
-        try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
-      }
+      applyWorkspace(api, loadWorkbenchList().activeId);
     });
-  }, []);
+  }, [applyWorkspace]);
+
 
   // Re-title every live panel when the language changes. dockview stores each
   // tab's title imperatively (set at restore/build time), so a locale switch
@@ -635,6 +774,22 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     });
   }, [host]);
 
+  // Close a panel by id. No-op if the panel isn't currently mounted in THIS
+  // region — panel ids are globally unique, so at most one region owns it and
+  // the others fall through silently. Peer to panel:open/panel:focus; used by
+  // the `app.panel.close` / `app.panel.toggle` commands and the Window menu.
+  useEffect(() => {
+    return host.bus.on('panel:close', (payload) => {
+      const id = payload.id;
+      if (!id) return;
+      const api = apiRef.current;
+      if (!api) return;
+      const existing = api.getPanel(id);
+      if (!existing) return;
+      try { existing.api.close(); } catch { /* noop */ }
+    });
+  }, [host]);
+
   // On mount: load workspace layouts from server into localStorage (only when
   // localStorage is empty for a given workspace — e.g. after clearing browser
   // storage or on a fresh machine). Then apply the active workspace's layout if
@@ -654,15 +809,24 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       const saved = loadWorkbenchLayout(activeId);
       if (!saved) return;
       try {
-        api.fromJSON(saved);
+        const cleaned = stripUnknownPanels(
+          sanitizeRetiredDockLayout(saved),
+          componentKeysRef.current,
+        );
+        if (!cleaned) return;
+        api.fromJSON(cleaned);
         // Drop restored panels that no longer belong to THIS region.
         closeStrayPanels(api);
       } catch { /* fall through — keep current layout */ }
     });
   }, [closeStrayPanels, editorPanelIds, layoutKey, region]);
 
-  // Re-apply the active workspace layout when the project id becomes known
-  // after boot (belt+suspenders for the early-bootstrap path in main.tsx).
+  // Reconcile the dock when the project id resolves after boot. onReady may have
+  // built the layout under the transient 'default' project (→ 'scene' seed); the
+  // real project's activeId ('ai') only becomes readable once setCurrentProject
+  // fires. Route through applyWorkspace so it reliably rebuilds (with a
+  // buildDefault fallback) instead of the old fromJSON-only patch that silently
+  // no-op'd when no saved layout existed and never updated prevWorkspaceIdRef.
   const prevProjectIdRef = useRef(getCurrentProject());
   useEffect(() => {
     if (region !== 'DockShell') return;
@@ -671,15 +835,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       prevProjectIdRef.current = projId;
       const api = apiRef.current;
       if (!api) return;
-      const { activeId } = loadWorkbenchList();
-      const saved = loadWorkbenchLayout(activeId);
-      if (!saved) return;
-      try {
-        api.fromJSON(saved);
-        closeStrayPanels(api);
-      } catch { /* noop */ }
+      applyWorkspace(api, loadWorkbenchList().activeId);
     });
-  }, [closeStrayPanels, region]);
+  }, [applyWorkspace, region]);
 
   // Reopen a panel that was closed (× on its tab) so closing one is never a
   // dead end. Re-added to the right of whatever's there.

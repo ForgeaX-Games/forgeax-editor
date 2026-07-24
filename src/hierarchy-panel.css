@@ -60,6 +60,13 @@
   outline: none;
 }
 
+.hierarchy-search-input::-webkit-search-cancel-button,
+.hierarchy-search-input::-webkit-search-decoration {
+  appearance: none;
+  -webkit-appearance: none;
+  display: none;
+}
+
 .hierarchy-search-clear {
   width: 16px;
   height: 16px;

@@ -29,11 +29,13 @@ import {
   getAssetSelectionList,
   getLastSelectionDomain,
   getFolderSelectionList,
+  getPathSelectionList,
   deleteManyCascade,
   duplicateEntity,
   worldRootHandles,
   childrenOf,
   triggerAssetSelectAll,
+  type PathSelectionItem,
 } from '@forgeax/editor-core';
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
 import { getViewportKeyHandler } from './viewport/viewport';
@@ -75,7 +77,9 @@ export interface KeyboardRouterDepsShape {
   renameAsset: (guid: string, packPath: string) => void;
   selectAllAssets: () => void;
   getFolderSelection?: () => { path: string }[];
+  getPathSelection?: () => PathSelectionItem[];
   deleteFolders?: (folders: { path: string }[]) => void;
+  deletePathItems?: (items: PathSelectionItem[]) => void;
   undo: () => void;
   redo: () => void;
   save: () => void;
@@ -164,12 +168,32 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     },
     selectAllAssets: () => triggerAssetSelectAll(),
     getFolderSelection: () => getFolderSelectionList().map((p) => ({ path: p })),
+    getPathSelection: () => getPathSelectionList(),
     deleteFolders: (folders) => {
       void (async () => {
         for (const f of folders) {
           const ok = await opts.confirmDeleteFolder(f.path);
           if (!ok) return;
           gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
+        }
+      })();
+    },
+    deletePathItems: (items) => {
+      const dirs = items.filter((i) => i.kind === 'dir');
+      const files = items.filter((i) => i.kind === 'file');
+      void (async () => {
+        for (const d of dirs) {
+          const ok = await opts.confirmDeleteFolder(d.path);
+          if (!ok) return;
+          gateway.dispatch({ kind: 'deleteDirectory', path: d.path } as never, 'human');
+        }
+        if (files.length > 0) {
+          const names = files.map((f) => f.path).join(', ');
+          const ok = await opts.confirmDeleteFolder(names);
+          if (!ok) return;
+          for (const f of files) {
+            gateway.dispatch({ kind: 'deleteSourceFile', path: f.path, requestId: crypto.randomUUID() } as never, 'human');
+          }
         }
       })();
     },

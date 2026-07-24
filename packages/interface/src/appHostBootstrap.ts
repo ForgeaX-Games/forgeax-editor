@@ -28,6 +28,8 @@ import { foundationCommandsExtension } from './core/extensions/foundation-comman
 import { foundationBusExtension } from './core/extensions/foundation-bus';
 import { foundationStorageExtension } from './core/extensions/foundation-storage';
 import { builtinCommandsExtension } from './core/extensions/builtin-commands';
+import { builtinMenusExtension } from './core/extensions/builtin-menus';
+import { editorCommandsExtension } from './core/extensions/editor-commands';
 import { panelsViewportExtension } from './core/extensions/panels-viewport';
 import { panelsChatExtension } from './core/extensions/panels-chat';
 import './core/extensions/session-client.d'; // side-effect: AppHost.session type augmentation
@@ -112,6 +114,8 @@ export async function bootstrapAppHost(
     foundationBusExtension,
     foundationStorageExtension,
     builtinCommandsExtension,
+    builtinMenusExtension,
+    editorCommandsExtension,
     panelsViewportExtension,
     panelsChatExtension,
     sessionClientExtension,

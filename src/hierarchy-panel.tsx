@@ -140,11 +140,6 @@ function copySelectionJson(): void {
 function registerHierarchyCommands(host: AppHost): Array<() => void> {
   return [
     host.commands.register({
-      id: 'hierarchy.disabled',
-      title: 'Hierarchy: Unavailable prototype action',
-      execute: () => commandResult(),
-    }),
-    host.commands.register({
       id: 'hierarchy.create.entity',
       title: 'Hierarchy: Create entity',
       execute: () => { spawnEntity(); return commandResult(); },
@@ -482,16 +477,6 @@ export function createHierarchyPanelContributionsExtension(): AppExtension {
             location: 'header/left',
             order: 20,
             enablement: 'panel.hierarchy.mounted',
-          },
-          {
-            id: 'hierarchy.newFolder.action',
-            panelId: 'hierarchy',
-            command: 'hierarchy.disabled',
-            title: 'New Folder',
-            icon: 'FolderPlus',
-            location: 'header/left',
-            order: 30,
-            enablement: 'false',
           },
           {
             kind: 'control',

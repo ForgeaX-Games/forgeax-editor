@@ -612,7 +612,7 @@ export function OnboardingController() {
   const TOUR_STEPS: TourStep[] = [
     { anchorId: 'assets', anchor: t('onboarding.tour.assets.anchor'), body: t('onboarding.tour.assets.body') },
     { anchorId: 'preview', anchor: t('onboarding.tour.preview.anchor'), body: t('onboarding.tour.preview.body') },
-    { anchorId: 'hierarchy', anchor: t('onboarding.tour.hierarchy.anchor'), body: t('onboarding.tour.hierarchy.body') },
+    { anchorId: ['hierarchy', 'inspector'], anchor: t('onboarding.tour.hierarchy.anchor'), body: t('onboarding.tour.hierarchy.body') },
     { anchorId: 'topbar', anchor: t('onboarding.tour.topbar.anchor'), body: t('onboarding.tour.topbar.body') },
     { anchorId: 'chat', anchor: t('onboarding.tour.chat.anchor'), body: t('onboarding.tour.chat.body') },
   ];

@@ -20,8 +20,8 @@
 //     Derive only; keep it out of the op surface.
 import { useSyncExternalStore } from 'react';
 import { onSelectionChange } from './selection';
-import { onAssetSelectionChange } from './asset-selection';
-import { onFolderSelectionChange } from './folder-selection';
+import { onAssetSelectionChange, getAssetSelectionList } from './asset-selection';
+import { onFolderSelectionChange, getPathSelectionList } from './folder-selection';
 
 export type SelectionDomain = 'entity' | 'asset' | 'folder' | null;
 
@@ -44,14 +44,18 @@ export function subscribeLastSelectionDomain(fn: () => void): () => void {
 }
 
 // Derive: forward selects advance the domain; clear* (lifecycle) does not.
+// Plan-E guard: a selection-change event only advances domain when the NEW
+// selection is non-empty. Dispatching an empty clear (e.g. setFolderSelection
+// with paths:[] when clicking an asset) must NOT hijack the domain — that was
+// the root cause of the "asset Delete broken" bug (domain pollution).
 onSelectionChange(() => {
   if (domain !== 'entity') { domain = 'entity'; emit(); }
 });
 onAssetSelectionChange(() => {
-  if (domain !== 'asset') { domain = 'asset'; emit(); }
+  if (getAssetSelectionList().length > 0 && domain !== 'asset') { domain = 'asset'; emit(); }
 });
 onFolderSelectionChange(() => {
-  if (domain !== 'folder') { domain = 'folder'; emit(); }
+  if (getPathSelectionList().length > 0 && domain !== 'folder') { domain = 'folder'; emit(); }
 });
 
 /** Reactive read for UI panels — lights the header scope ring. */

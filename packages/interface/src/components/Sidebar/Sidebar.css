@@ -17,6 +17,11 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--color-border-default);
 }
+/* Nav moved to the shell-level ActivityRail; the Tools panel toolbar now holds
+   only the collapse button, right-aligned. */
+.sb-toolbar--end {
+  justify-content: flex-end;
+}
 .sb-nav-icons-h {
   display: flex;
   align-items: center;
@@ -335,74 +340,6 @@ button.bus-chip.is-link:hover .bus-chip-ring { opacity: 0.78; }
 .bus-chip-warn .bus-chip-listeners { color: var(--accent-orange); }
 button.bus-chip.is-link:hover .bus-chip-listeners { opacity: 0.78; }
 .ss-body { display: flex; flex-direction: column; gap: 1px; }
-
-/* === Workbench 顶部水平图标行 (Figma 116:669 Tool Switcher) === */
-.ws-icons-row {
-  display: flex;
-  align-items: flex-start;
-  min-height: 48px;
-  padding: 8px;
-  flex-shrink: 0;
-}
-.ws-icons-pill {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  flex: 1;
-  padding: 6px;
-  background: var(--color-background-floating);
-  border-radius: 8px;
-  min-width: 0;
-}
-.ws-icon-btn {
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--color-icon-secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: background 0.12s ease, color 0.12s ease;
-  position: relative;
-  flex-shrink: 0;
-}
-.ws-icon-btn:hover {
-  background: rgba(255,255,255,0.08);
-  color: var(--color-text-primary);
-}
-.ws-icon-btn:active {
-  background: rgba(255,255,255,0.12);
-}
-.ws-icon-btn.active {
-  background: rgba(255,255,255,0.15);
-  color: var(--color-text-primary);
-}
-.ws-icon-btn.active svg {
-  stroke-width: 2.2;
-}
-.ws-icon-btn.bus svg {
-  display: block;
-  flex-shrink: 0;
-  opacity: 0.65;
-  transition: opacity 0.12s ease;
-}
-.ws-icon-btn.bus:hover svg { opacity: 1; }
-.ws-icon-btn.bus.active svg { opacity: 1; }
-/* P3.51 — keyboard focus ring on workbench tab buttons. Previously there was no
- * focus-visible style, so the new ←→/↑↓/Home/End nav (P3.51) produced no
- * pixel signal when Tab walked into the row. 2px white outline matches the
- * Sidebar BUS KINDS footer chip focus style (P3.37) so the same family of
- * keyboard cues applies to both rows. */
-.ws-icon-btn:focus-visible {
-  outline: 2px solid rgba(255,255,255,0.55);
-  outline-offset: -1px;
-  border-radius: 4px;
-}
 
 .ws-active-content {
   /* AgentsPanel / Workbench plugin placeholder live here; keep a real box so

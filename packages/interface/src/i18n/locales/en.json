@@ -589,6 +589,7 @@
     "deleteConfirm": "Delete games/{{slug}}/ ? This action cannot be undone.",
     "deleteFailedTitle": "Delete failed",
     "switchTooltip": "Switch game (each game = one game)",
+    "listTitle": "Open game",
     "newGameTooltip": "Create a new .forgeax/games/<slug>/ under the current workspace (Iori/Suzu design + Forge writes code)",
     "newGame": "New game",
     "empty": "No games yet · click + above to create",
@@ -651,7 +652,10 @@
     "providesNoSkills": "This extension declares no skills",
     "familyTooltip": "{{count}} workbench extensions on the bus — click to filter Bus detail by kind=workbench →",
     "openInBusTooltip": "Switch to the Bus tab (⌘3) and auto-expand the {{id}} detail row",
-    "openInBusDetail": "View in Bus detail →"
+    "openInBusDetail": "View in Bus detail →",
+    "pluginAuthor": "Plugin Author",
+    "pluginStore": "Plugin Store",
+    "editor": "Editor"
   },
   "trust": {
     "import": {
@@ -1152,6 +1156,8 @@
   "centerExtension": {
     "backToTileGridTitle": "Back to the 12-tile workbench grid",
     "backToWorkbench": "Back to workbench",
+    "pluginMainWindow": "Plugin · Main window",
+    "close": "Close",
     "redockTitle": "Redock the standalone window into the main window",
     "redock": "Redock",
     "detachTitle": "Pop out as a standalone window",
@@ -1464,5 +1470,91 @@
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · click to view in Bus details →"
+  },
+  "menubar": {
+    "brand": "ForgeaX Studio",
+    "file": "File",
+    "edit": "Edit",
+    "window": "Window",
+    "build": "Build",
+    "select": "Select",
+    "help": "Help"
+  },
+  "menu": {
+    "brand": {
+      "settings": "Settings…",
+      "about": "About ForgeaX",
+      "checkUpdate": "Check for Updates"
+    },
+    "file": {
+      "newProject": "New Project…",
+      "openProject": "Open Project…",
+      "openRecent": "Open Recent",
+      "closeProject": "Close Project",
+      "save": "Save",
+      "saveAll": "Save All",
+      "reveal": "Show in System",
+      "import": "Import Asset…",
+      "export": "Export as Standalone Site…",
+      "package": "Package and Preview"
+    },
+    "edit": {
+      "undo": "Undo",
+      "redo": "Redo",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "delete": "Delete",
+      "copyPath": "Copy Path",
+      "copyGuid": "Copy GUID",
+      "find": "Find…",
+      "rollback": "Rollback to Checkpoint…"
+    },
+    "window": {
+      "outline": "Outline",
+      "inspector": "Inspector",
+      "files": "Files",
+      "timeline": "Timeline",
+      "runtime": "Runtime",
+      "viewport": "Viewport",
+      "chat": "Chat",
+      "resetLayout": "Reset Layout",
+      "fullscreen": "Enter Fullscreen"
+    },
+    "build": {
+      "play": "▶ Play",
+      "stop": "■ Stop",
+      "editScene": "✎ Edit Scene",
+      "reload": "Reload Preview",
+      "export": "Export as Standalone Site…",
+      "settings": "Build Settings…"
+    },
+    "select": {
+      "all": "Select All",
+      "none": "Deselect",
+      "invert": "Invert Selection",
+      "byType": "Select by Type",
+      "byType.mesh": "Meshes",
+      "byType.light": "Lights",
+      "byType.camera": "Cameras",
+      "byType.collider": "Colliders",
+      "marquee": "Marquee Mode",
+      "frame": "Frame Selected"
+    },
+    "help": {
+      "docs": "Documentation",
+      "tutorials": "Tutorials",
+      "examples": "Examples",
+      "blog": "Blog",
+      "games": "Game Demos",
+      "marketplace": "Marketplace",
+      "changelog": "Changelog",
+      "shortcuts": "Keyboard Shortcuts",
+      "askAi": "Ask AI",
+      "github": "GitHub Repository",
+      "report": "Report an Issue",
+      "about": "About ForgeaX",
+      "license": "License"
+    }
   }
 }

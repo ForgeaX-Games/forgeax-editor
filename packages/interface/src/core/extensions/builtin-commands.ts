@@ -12,9 +12,11 @@
 // static imports keep the concept count lower.
 
 import type { AppExtension } from '../app-shell/types';
-import { useShellStore, type AppMode } from '../../store';
+import { useShellStore } from '../../store';
 import { setActiveWorkbench } from '../../lib/workbenches';
 import { bumpDockResetEpoch } from '../../components/DockShell/dockResetEpoch';
+import { isPanelVisible } from '../../components/DockShell/DockRegion';
+import { isTauri } from '../../lib/platform/runtime';
 
 const getState = () => useShellStore.getState();
 
@@ -30,10 +32,9 @@ export const builtinCommandsExtension: AppExtension = {
       id: 'app.set_mode',
       title: '切换主模式 (scene / ai)',
       execute: (args) => {
-        const mode = (args as { mode?: AppMode })?.mode;
+        const mode = (args as { mode?: 'scene' | 'ai' })?.mode;
         if (mode !== 'scene' && mode !== 'ai') throw new Error('app.set_mode: mode must be scene | ai');
         setActiveWorkbench(mode);
-        getState().setMode(mode);
         return { status: 'completed' as const, mode };
       },
     }));
@@ -56,6 +57,57 @@ export const builtinCommandsExtension: AppExtension = {
         const id = (args as { id?: string })?.id;
         if (!id) throw new Error('app.panel.focus: missing { id }');
         ctx.bus.emit('panel:focus', { id });
+        return { status: 'completed' as const };
+      },
+    }));
+
+    cleanups.push(registerCommand({
+      id: 'app.panel.close',
+      title: 'Close a dock panel by id (no-op if not open)',
+      execute: (args) => {
+        const id = (args as { id?: string })?.id;
+        if (!id) throw new Error('app.panel.close: missing { id }');
+        ctx.bus.emit('panel:close', { id });
+        return { status: 'completed' as const };
+      },
+    }));
+
+    cleanups.push(registerCommand({
+      id: 'app.panel.toggle',
+      title: 'Toggle a dock panel by id (open if hidden, close if visible)',
+      execute: (args) => {
+        const id = (args as { id?: string })?.id;
+        if (!id) throw new Error('app.panel.toggle: missing { id }');
+        // Visibility comes from DockRegion's module-level mirror (kept in sync
+        // via onDidAddPanel/onDidRemovePanel). Command stays thin: it only picks
+        // which existing event to emit; DockRegion owns the open/close logic.
+        if (isPanelVisible(id)) ctx.bus.emit('panel:close', { id });
+        else ctx.bus.emit('panel:open', { id });
+        return { status: 'completed' as const };
+      },
+    }));
+
+    cleanups.push(registerCommand({
+      id: 'app.open_url',
+      title: 'Open an external http(s) URL in the OS default browser',
+      execute: async (args) => {
+        const url = (args as { url?: string })?.url;
+        if (typeof url !== 'string' || !url) throw new Error('app.open_url: missing { url }');
+        const trimmed = url.trim();
+        if (!/^https?:\/\//i.test(trimmed)) {
+          throw new Error(`app.open_url: only http(s) URLs are allowed, got: ${trimmed}`);
+        }
+        if (isTauri()) {
+          // Prefer the plugin-shell opener so the URL goes to the OS default
+          // browser, not the tauri webview. If the capability isn't granted the
+          // call rejects — fall through to window.open in that case.
+          try {
+            const shell = await import('@tauri-apps/plugin-shell');
+            await shell.open(trimmed);
+            return { status: 'completed' as const };
+          } catch { /* fall through */ }
+        }
+        try { window.open(trimmed, '_blank', 'noopener'); } catch { /* noop */ }
         return { status: 'completed' as const };
       },
     }));
@@ -129,6 +181,37 @@ export const builtinCommandsExtension: AppExtension = {
       id: 'overlay.close',
       title: '关闭浮层',
       execute: () => { getState().closeOverlay(); return { status: 'completed' as const }; },
+    }));
+
+    // Workspace new/open — the ProjectSwitcher dropdown was removed from the
+    // TopBar; the File menu drives its modal (hosted by ProjectModalHost).
+    cleanups.push(registerCommand({
+      id: 'project.new',
+      title: '新建项目',
+      execute: () => { getState().openProjectModal('new'); return { status: 'completed' as const }; },
+    }));
+
+    cleanups.push(registerCommand({
+      id: 'project.open',
+      title: '打开项目',
+      execute: () => { getState().openProjectModal('open'); return { status: 'completed' as const }; },
+    }));
+
+    // Game flows — a "project" is a game here, so the File menu's 新建/打开 drive
+    // the GameSwitcher: game.new opens its new-game dialog, game.open expands its
+    // dropdown (the game list). project.new/open above stay registered but are
+    // no longer menu-referenced (kept per request — the modal host still runs the
+    // project-id sync).
+    cleanups.push(registerCommand({
+      id: 'game.new',
+      title: '新建游戏',
+      execute: () => { getState().openGameModal(); return { status: 'completed' as const }; },
+    }));
+
+    cleanups.push(registerCommand({
+      id: 'game.open',
+      title: '打开游戏（游戏列表）',
+      execute: () => { getState().setGameSwitcherOpen(true); return { status: 'completed' as const }; },
     }));
 
     // Remaining actions (workbench.list_plugins / workbench.open_plugin /

@@ -11,13 +11,11 @@
 import type { AppHost } from '../../core/app-shell';
 import { setActiveWorkbench } from '../../lib/workbenches';
 import { resetActivePanelLocations } from '../../lib/useWorkbench';
-import { useShellStore } from '../../store';
 import { bumpDockResetEpoch } from '../DockShell/dockResetEpoch';
 
 /** Sync prep before Dock mounts (e.g. enterHomeWith → setPhase('home')). */
 export function latchTourShellDefaults(): void {
   setActiveWorkbench('scene');
-  useShellStore.getState().setMode('scene');
   resetActivePanelLocations();
   bumpDockResetEpoch();
 }
@@ -25,7 +23,6 @@ export function latchTourShellDefaults(): void {
 /** Full prep once the shell exists: Scene tab + default dock layout. */
 export function prepareTourShell(host: AppHost): void {
   setActiveWorkbench('scene');
-  useShellStore.getState().setMode('scene');
   resetActivePanelLocations();
   void host.commands.execute('app.dock.reset');
 }

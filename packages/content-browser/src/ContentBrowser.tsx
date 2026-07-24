@@ -213,7 +213,7 @@ export function ContentBrowser() {
     } else {
       setPreviewItem({ ...previewItem, path: pending.newPath, name: pending.newName });
     }
-    if (previewItem.type === 'folder') gateway.dispatch({ kind: 'setFolderSelection', paths: [pending.newPath] });
+    if (previewItem.type === 'folder') gateway.dispatch({ kind: 'setFolderSelection', items: [{ path: pending.newPath, kind: 'dir' }] });
   }, [viewItems, previewItem]);
 
   // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
@@ -486,9 +486,15 @@ export function ContentBrowser() {
         path: item.packPath,
         payload: item.payload,
       }]) },
-      { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => requestDelete([item]) },
+      { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
+        const selected = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
+        const targets = selected.length > 1 && selected.some(s => s.guid === item.guid)
+          ? selected
+          : [item];
+        requestDelete(targets);
+      } },
     ];
-  }, [assetFavoritePath, crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, relByAssetGuid, reload, requestDelete, t]);
+  }, [assetFavoritePath, crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, multiSelect.selection, relByAssetGuid, reload, requestDelete, t]);
 
   const handleImport = useCallback(() => {
     const input = fileInputRef.current;

@@ -636,25 +636,17 @@ export function setActiveWorkbench(id: string): void {
 }
 
 /**
- * Boot-time AppMode derived from the persisted active workspace.
+ * The app "mode" ('scene' | 'ai') DERIVED from the persisted active workspace.
  *
- * Bug (2026-06-19): the store hard-coded `mode: 'preview'` while the active
- * workspace tab was restored separately from localStorage. On refresh the tab
- * highlight showed the last workspace (e.g. AI / Scene) but the main area
- * rendered the Play preview — a mismatch the user hit while editing the story
- * tree. Deriving the initial `mode` from the restored workspace keeps the
- * highlighted tab and the rendered surface in sync after a refresh, with no
- * tab-then-content flash. Mirrors `modeForWorkbench()` in WorkbenchSwitcher.tsx
- * (kept standalone here to avoid a store ↔ component import cycle).
- *
- * 2026-07-07 (T3): AI workbench mode id renamed 'workbench' → 'ai'.
- * 2026-07-08 (v9): Scene workbench mode id renamed 'edit' → 'scene'.
+ * `activeId` (this module) is the single source of truth for which workspace is
+ * active; "mode" is a lossless projection of it — scene workspace → 'scene',
+ * every other id (the AI workspace, any user-created custom workbench, and
+ * retired 'preview'/'play' still lingering in stale localStorage) → 'ai'. There
+ * is no separately-stored mode field: consumers derive it here (or, in React,
+ * via useActiveWorkbench().id) so the two can never drift.
  */
-export function bootAppMode(): 'scene' | 'ai' {
+export function appMode(): 'scene' | 'ai' {
   const { activeId } = loadWorkbenchList();
-  // Only 'scene' pins to scene mode; every other id (including retired
-  // 'preview'/'play' still lingering in stale localStorage, and any
-  // user-created custom workbench) falls through to 'ai'.
   if (activeId === 'scene') return 'scene';
   return 'ai';
 }

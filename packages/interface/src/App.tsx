@@ -13,6 +13,10 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { TopBar } from './components/TopBar/TopBar';
+import { ProjectModalHost } from './components/TopBar/ProjectSwitcher';
+import { GameModalHost } from './components/TopBar/GameSwitcher';
+import { ActivityRail } from './components/ActivityRail/ActivityRail';
+import { ChatColumn } from './components/ChatColumn/ChatColumn';
 import { DockRegion } from './components/DockShell/DockRegion';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
@@ -29,6 +33,9 @@ import { useGlobalShortcuts } from './lib/global-shortcuts';
 import { useShellStore } from './store';
 import { bootstrapAppHost, type AppHostBootstrapOverrides, type AppHostBootstrapResult } from './appHostBootstrap';
 import { HostProvider } from './core/app-shell';
+import { useTranslation } from '@/i18n';
+import { initNativeMenuBridge } from './lib/native-menu-bridge';
+import { isTauri } from './lib/platform/runtime';
 import './App.css';
 
 export interface AppProps {
@@ -40,6 +47,7 @@ export interface AppProps {
 
 export function App({ overrides }: AppProps = {}): React.ReactElement | null {
   useGlobalShortcuts();
+  const { t } = useTranslation();
   const fullscreen         = useShellStore((s) => s.fullscreen);
   const sidebarCollapsed   = useShellStore((s) => s.sidebarCollapsed);
   const chatpanelCollapsed = useShellStore((s) => s.chatpanelCollapsed);
@@ -62,6 +70,18 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
     });
     return () => { disposed = true; void dispose?.(); };
   }, [overrides]);
+
+  // T5: install the Tauri native menu bar once the host is available. The
+  // bridge is idempotent (its own `installed` guard) and no-ops in the browser
+  // form, so we can fire-and-forget without worrying about StrictMode double-
+  // effect or web-mode overhead. Kept minimal — bridge owns the details.
+  useEffect(() => {
+    if (!boot || !isTauri()) return;
+    void initNativeMenuBridge({
+      execute: (id, args) => boot.host.commands.execute(id, args),
+      translate: t,
+    });
+  }, [boot, t]);
 
   // ADR 0025 M2: host.panels is a version-memoized DERIVED snapshot of the
   // contribution registry. Subscribing here means post-boot contributions and
@@ -115,6 +135,11 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
             <DockRegion region="DockShell" />
             <DockRegion region="AuxBar" />
             <SurfaceKeepAliveLayer />
+            {/* ActivityRail + chat are fixed shell columns on the right, so the
+                rail sits immediately left of the (drag-resizable) chat column
+                regardless of dock layout. */}
+            <ActivityRail />
+            <ChatColumn />
           </div>
           {StatusFeeds && <div data-fx-slot="StatusFeeds" style={{ display: 'contents' }}><StatusFeeds /></div>}
           <HealthIndicator />
@@ -123,6 +148,8 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
           {Settings && <div data-fx-slot="Settings" style={{ display: 'contents' }}><Settings /></div>}
           <ContextMenu />
           <CommandPalette />
+          <ProjectModalHost />
+          <GameModalHost />
           <DialogHost />
           {isSlotDebugEnabled() && <SlotDebugOverlay />}
         </div>

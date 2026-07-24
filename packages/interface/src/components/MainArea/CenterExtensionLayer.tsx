@@ -1,11 +1,12 @@
 import { useRef } from 'react';
 import type { ReactElement } from 'react';
-import { MoveLeft, ExternalLink, PictureInPicture2 } from 'lucide-react';
+import { X, ExternalLink, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../store';
 import { useExtensionManifest, manifestMatchesId } from '../../lib/use-extension-manifest';
 import { pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../../lib/platform';
+import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import { KeepAliveExtensionIframes } from './KeepAliveExtensionIframes';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 
@@ -27,8 +28,8 @@ import { usePanelRenderers } from '../DockShell/panelRenderers';
 export function CenterExtensionLayer(): ReactElement {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const CornerAgentPicker = usePanelRenderers().slots?.CornerAgentPicker;
-  const mode = useShellStore((s) => s.mode);
+  const { slots, workbenchPanels } = usePanelRenderers();
+  const CornerAgentPicker = slots?.CornerAgentPicker;
   const expandedExtensionId = useShellStore((s) => s.workbenchExpandedExtensionId);
   const setExpandedExtensionId = useShellStore((s) => s.setWorkbenchExpandedExtensionId);
   const floatingSurfaces = useShellStore((s) => s.floatingSurfaces);
@@ -60,17 +61,24 @@ export function CenterExtensionLayer(): ReactElement {
   // matching manifest on the genuine first open.
   const resolved = cached ?? liveForThis;
   const isStandalone = !!resolved?.entry?.standalone;
-  const activeExtension = mode === 'ai' && expandedExtensionId && isStandalone ? resolved : null;
+  // This layer is only ever mounted inside the AI workbench's 'main' panel, so
+  // its visibility depends on the expanded plugin alone — NOT on store `mode`
+  // (which can transiently desync from the active workbench on boot).
+  const activeExtension = expandedExtensionId && isStandalone ? resolved : null;
 
   // Only show loading when we have NOTHING resolved yet (genuine first open),
   // never on a cached re-visit.
-  const showLoading = mode === 'ai' && !!expandedExtensionId && live === 'loading' && !resolved;
+  // Inline-panel plugins (host-registered in workbenchPanels, keyed by manifest
+  // id — e.g. wb-plugin-author) are rendered by WorkbenchMode → WorkbenchExtensionHost,
+  // not by this standalone-iframe overlay. Stay fully dormant for them so the
+  // "missing entry.standalone" status never covers the live inline panel.
+  const hasInlinePanel = !!(expandedExtensionId && workbenchPanels?.[expandedExtensionId]);
+  const showLoading = !!expandedExtensionId && live === 'loading' && !resolved && !hasInlinePanel;
   const showError =
-    mode === 'ai' && !!expandedExtensionId && live !== 'loading' && !isStandalone
-    // wb-plugin-author renders inline via WorkbenchExtensionHost, not here.
-    && resolved !== null;
+    !!expandedExtensionId && live !== 'loading' && !isStandalone
+    && resolved !== null && !hasInlinePanel;
   const showUnavailable =
-    mode === 'ai' && !!expandedExtensionId && live === null && !resolved;
+    !!expandedExtensionId && live === null && !resolved && !hasInlinePanel;
 
   const layerActive = !!activeExtension || showLoading || showError || showUnavailable;
 
@@ -83,15 +91,16 @@ export function CenterExtensionLayer(): ReactElement {
     ? !!floatingSurfaces[surfaceKey(centerDescriptor)]
     : false;
 
-  const back = (
-    <button
-      className="wb-plugin-back"
-      onClick={() => setExpandedExtensionId(null)}
-      title={t('centerExtension.backToTileGridTitle')}
-    >
-      <MoveLeft size={12} /><span>{t('centerExtension.backToWorkbench')}</span>
-    </button>
-  );
+  // Plugin header (product prototype `pl-head`): icon + name + description +
+  // 「插件 · 主窗口」tag + a ✕ that closes back to the workbench (临时关闭).
+  const headManifest = resolved;
+  const headTitle = headManifest ? pickLang(headManifest.displayName, locale, expandedExtensionId ?? '') : (expandedExtensionId ?? '');
+  const headSub = headManifest ? pickLang(headManifest.description, locale, '') : '';
+  const HeadIcon = iconForWorkbenchModule({
+    workbenchId: headManifest?.workbench?.id ?? expandedExtensionId ?? '',
+    label: headTitle,
+    extensionId: headManifest?.id ?? expandedExtensionId ?? '',
+  });
 
   // 弹出 / 收回 — only meaningful inside the Tauri shell (canDetach). In the
   // browser form the button is hidden entirely.
@@ -130,14 +139,27 @@ export function CenterExtensionLayer(): ReactElement {
       aria-hidden={layerActive ? undefined : true}
     >
       {layerActive && (
-        <div className="wb-plugin-host-bar">
-          {back}
+        <div className="wb-plugin-host-bar fx-plugin-head">
+          <span className="fx-plugin-head-ico" aria-hidden><HeadIcon size={16} /></span>
+          <div className="fx-plugin-head-meta">
+            <div className="fx-plugin-head-title" title={headTitle}>{headTitle}</div>
+            {headSub ? <div className="fx-plugin-head-sub" title={headSub}>{headSub}</div> : null}
+          </div>
+          <span className="fx-plugin-head-tag">{t('centerExtension.pluginMainWindow')}</span>
           {CornerAgentPicker
             ? <div data-fx-slot="CornerAgentPicker" style={{ display: 'contents' }}>
                 <CornerAgentPicker preferredAgentExtensionId={activeExtension?.workbench?.preferredAgent} />
               </div>
             : null}
           {windowToggle}
+          <button
+            className="fx-plugin-head-close"
+            onClick={() => setExpandedExtensionId(null)}
+            title={t('centerExtension.close')}
+            aria-label={t('centerExtension.close')}
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
       <div className="fx-center-plugin-body">

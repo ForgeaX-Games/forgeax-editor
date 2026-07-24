@@ -1,0 +1,165 @@
+/* MenuBar (T2) — Web menu bar rendered inside TopBar's `.tb-left`.
+   Sits before ProjectSwitcher, uses the same 12px font-size / secondary text
+   color idiom as the rest of TopBar. Under Tauri, only the brand row renders
+   (or nothing) — the OS draws the real menu bar. */
+
+.fx-menubar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 100%;
+}
+
+.fx-menubar-btn {
+  /* Geometry mirrors the product prototype's `.ed-menubar .mb`: a padding-sized
+     rounded pill (3px 9px / radius 5px), not a fixed-height full-bar cell — so
+     the hover highlight reads as a snug inset chip. */
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition:
+    background var(--motion-duration-instant) var(--motion-ease-standard),
+    color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+.fx-menubar-btn:hover,
+.fx-menubar-btn[data-state="open"] {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-primary);
+}
+
+/* Brand entry — mirrors the prototype `.mb-brand`: a glowing rounded mark plus
+   the product name in brand colour. Web only (desktop uses the native menu).
+   Placed after the base rule so its resting colour wins; :hover still lifts the
+   name to primary (like the prototype), while the mark keeps its own fill. */
+.fx-menubar-btn--brand {
+  gap: 5px;
+  color: var(--color-brand-primary);
+  font-weight: 600;
+}
+.fx-menubar-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--color-brand-primary);
+  color: var(--color-text-on-bright-primary);
+  font-weight: 800;
+  font-size: 11px;
+  box-shadow: 0 0 12px rgba(212, 255, 72, 0.35);
+  flex-shrink: 0;
+}
+
+/* Dropdown content — mirrors the prototype's `.fe-ctx` floating panel
+   (5px padding, 9px radius). Rows lay out check / icon / label / keybinding. */
+.fx-menubar-content {
+  min-width: 200px;
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.fx-menubar-content .fx-menubar-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  color: var(--color-text-primary);
+}
+.fx-menubar-content .fx-menubar-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  /* No margin — the row's flex `gap` spaces the glyph from the label.
+     Prototype `.fe-ctx-item svg`: dim at rest, lifts to secondary on hover. */
+  color: var(--color-text-tertiary, rgba(255, 255, 255, 0.3));
+  flex-shrink: 0;
+}
+.fx-menubar-content .fx-menubar-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.fx-menubar-content .fx-menubar-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-menubar-content .fx-menubar-item-kbd {
+  margin-left: 24px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--color-text-tertiary, rgba(255, 255, 255, 0.2));
+  flex-shrink: 0;
+}
+
+.fx-menubar-item--danger {
+  color: var(--destructive, #e05260);
+}
+
+/* Disabled rows (unsatisfied capabilities) show a not-allowed cursor. The shared
+   dropdown primitive sets `data-[disabled]:pointer-events-none`, which would
+   suppress the cursor entirely — so re-enable pointer events in the menubar
+   scope. Radix still blocks onSelect for disabled items, so no action fires.
+   Selector specificity (0,3,0) beats the primitive utility (0,2,0). */
+.fx-menubar-content .fx-menubar-item[data-disabled] {
+  pointer-events: auto;
+  cursor: not-allowed;
+}
+
+/* Dropdown rows aligned to the prototype's `.fe-ctx-item`: 6px/9px padding,
+   5px radius, 12px text. Scoped to `.fx-menubar-content` so the shared dropdown
+   primitive used elsewhere is untouched. Colour is split by kind so danger and
+   disabled rows keep their own treatment (see below). */
+.fx-menubar-content .fx-menubar-item {
+  gap: 9px;
+  /* Left padding trimmed vs right so the leading icon sits closer to the edge. */
+  padding: 6px 9px 6px 7px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger) {
+  color: var(--color-text-secondary);
+}
+
+/* Hover / keyboard-highlight (Radix moves focus to the pointed row). Normal rows
+   paint the neutral-selected surface with primary text; danger rows keep red on
+   a red tint (prototype `.fe-ctx-item.danger:hover`). `:not([data-disabled])`
+   leaves disabled rows greyed with no hover paint. */
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):hover,
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):focus,
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted] {
+  background: var(--color-interaction-selected-neutral, var(--color-interaction-hover));
+  color: var(--color-text-primary);
+}
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):hover .fx-menubar-item-icon,
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):focus .fx-menubar-item-icon,
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted] .fx-menubar-item-icon {
+  color: var(--color-text-secondary);
+}
+.fx-menubar-content .fx-menubar-item--danger:not([data-disabled]):hover,
+.fx-menubar-content .fx-menubar-item--danger:not([data-disabled]):focus,
+.fx-menubar-content .fx-menubar-item--danger:not([data-disabled])[data-highlighted] {
+  background: rgba(242, 106, 106, 0.14);
+  color: var(--color-accent-error, var(--destructive, #e05260));
+}
+
+/* Group-boundary separator — prototype `.fe-ctx-sep`. */
+.fx-menubar-content [role="separator"] {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-divider-subtle, var(--color-border-subtle));
+}

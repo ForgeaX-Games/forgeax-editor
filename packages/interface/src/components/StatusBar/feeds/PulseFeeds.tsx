@@ -92,7 +92,6 @@ function ResourcePulseFeed() {
 
 function ModelBindingPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useShellStore((s) => s.setMode);
   const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
@@ -145,7 +144,6 @@ function ModelBindingPulseFeed() {
 
 function SkillPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useShellStore((s) => s.setMode);
   const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
@@ -197,7 +195,6 @@ function SkillPulseFeed() {
 
 function ToolPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useShellStore((s) => s.setMode);
   const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);
@@ -249,7 +246,6 @@ function ToolPulseFeed() {
 
 function AgentPulseFeed() {
   const { t } = useTranslation();
-  const setMode = useShellStore((s) => s.setMode);
   const openOverlay = useShellStore((s) => s.openOverlay);
   const [state, setState] = useState<ChipState>('loading');
   const [count, setCount] = useState<number>(0);

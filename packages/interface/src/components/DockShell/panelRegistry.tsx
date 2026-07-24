@@ -57,10 +57,22 @@ export interface PanelDef {
 // ── core + optional panels ───────────────────────────────────────────────────
 // Order within each array is the order the layout menu lists them.
 export const CORE_PANELS: PanelDef[] = [
-  { id: 'tools', title: 'Tools', group: 'core', canPopOut: true, tourId: 'sidebar', render: () => <Sidebar /> },
+  // Tools is a single-panel group (nav moved to the shell ActivityRail), so its
+  // dockview tab bar is redundant — the `hideTitle` single-tab marker collapses it.
+  { id: 'tools', title: 'Tools', group: 'core', canPopOut: true, tourId: 'sidebar', render: () => (
+    <div className="fx-panel" data-dock-single-tab="hideTitle">
+      <Sidebar />
+    </div>
+  ) },
   // 'main' is the plugin-launcher / catalog panel (formerly titled 'Workbench',
   // which was redundant with the top-level workbench tab strip). It renders MainArea.
-  { id: 'main', title: 'Studio', group: 'core', canPopOut: true, render: () => <MainArea /> },
+  // Single-panel group → hide its dockview tab bar (like tools) so the in-panel
+  // plugin header (CenterExtensionLayer) sits at the very top of the column.
+  { id: 'main', title: 'Studio', group: 'core', canPopOut: true, render: () => (
+    <div className="fx-panel" data-dock-single-tab="hideTitle">
+      <MainArea />
+    </div>
+  ) },
   // In flat-architecture mode 'viewport' is the combined panel (engine canvas +
   // gizmo). Its body is contributed via panels.viewport, same as chat/ep:*
   // panels; the descriptor renders the anchor tracked by SurfaceKeepAliveLayer.
@@ -100,6 +112,7 @@ function withBoundary(scope: string, render: () => ReactNode): () => ReactNode {
 // `ep:`); a panel absent here simply renders without a tour marker.
 const EP_TOUR_IDS: Record<string, string | undefined> = {
   hierarchy: 'hierarchy',
+  inspector: 'inspector',
   assets: 'assets',
 };
 

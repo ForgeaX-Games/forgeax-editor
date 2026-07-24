@@ -1,0 +1,82 @@
+/* Shell-level persistent activity rail (Approach B). Vertical icon+label nav,
+ * curated into product-spec groups (dividers only, no category text). Platform
+ * group (插件制作 / 插件商店) pinned to the bottom. Fixed left column that survives
+ * Scene/AI dock-layout switches (lives in `.studio-body` outside dockview).
+ *
+ * Styling is aligned 1:1 with the product prototype `.plugin-switcher` / `.ps-*`
+ * (index 2.html): 52px item, 22px stroke icon, 8.5px label, accent-dim active. */
+.activity-rail {
+  flex: 0 0 64px;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 0 12px;
+  position: relative;
+  background: var(--color-background-base);
+  border-left: 1px solid var(--color-border-subtle);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.activity-rail::-webkit-scrollbar { width: 0; }
+.activity-rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 0;
+}
+.activity-rail-group + .activity-rail-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.activity-rail-group--platform {
+  margin-top: auto;
+}
+.activity-rail-item {
+  width: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 2px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.34);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.activity-rail-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+}
+.activity-rail-item.active {
+  background: rgba(212, 255, 72, 0.12);
+  border-color: rgba(212, 255, 72, 0.34);
+  color: var(--color-brand-primary); /* #D4FF48 荧光黄绿, matches prototype --accent */
+}
+.activity-rail-item-ic {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.activity-rail-item-lb {
+  max-width: 50px;
+  font-size: 8.5px;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-rail-item:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: -1px;
+}

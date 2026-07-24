@@ -589,6 +589,7 @@
     "deleteConfirm": "确认删除 games/{{slug}}/ ？此操作不可撤销。",
     "deleteFailedTitle": "删除失败",
     "switchTooltip": "切换游戏（每个游戏 = 一个 game）",
+    "listTitle": "打开游戏",
     "newGameTooltip": "在当前 workspace 下新建一个 .forgeax/games/<slug>/（Iori/Suzu 设计 + Forge 写代码）",
     "newGame": "新建 game",
     "empty": "暂无 game · 点上方 + 新建",
@@ -651,7 +652,10 @@
     "providesNoSkills": "此扩展未声明 skills",
     "familyTooltip": "Bus 上共 {{count}} 个 workbench 扩展 — 单击在 Bus 详情按 kind=workbench 过滤 →",
     "openInBusTooltip": "切换到 Bus tab (⌘3) 并自动展开 {{id}} 详情行",
-    "openInBusDetail": "在 Bus 详情查看 →"
+    "openInBusDetail": "在 Bus 详情查看 →",
+    "pluginAuthor": "插件制作",
+    "pluginStore": "插件商店",
+    "editor": "编辑器"
   },
   "trust": {
     "import": {
@@ -1152,6 +1156,8 @@
   "centerExtension": {
     "backToTileGridTitle": "返回 12 个工作台 tile 网格",
     "backToWorkbench": "返回工作台",
+    "pluginMainWindow": "插件 · 主窗口",
+    "close": "关闭",
     "redockTitle": "把独立窗口收回主窗",
     "redock": "收回主窗",
     "detachTitle": "弹出为独立窗口",
@@ -1464,5 +1470,91 @@
   },
   "providerBadge": {
     "clickToBusDetail": "{{title}} · 单击在 Bus 详情查看 →"
+  },
+  "menubar": {
+    "brand": "ForgeaX Studio",
+    "file": "文件",
+    "edit": "编辑",
+    "window": "窗口",
+    "build": "构建",
+    "select": "选择",
+    "help": "帮助"
+  },
+  "menu": {
+    "brand": {
+      "settings": "设置…",
+      "about": "关于 ForgeaX",
+      "checkUpdate": "检查更新"
+    },
+    "file": {
+      "newProject": "新建项目…",
+      "openProject": "打开项目…",
+      "openRecent": "打开最近",
+      "closeProject": "关闭项目",
+      "save": "保存",
+      "saveAll": "全部保存",
+      "reveal": "在系统中显示",
+      "import": "导入资产…",
+      "export": "导出为独立站点…",
+      "package": "打包并预览"
+    },
+    "edit": {
+      "undo": "撤销",
+      "redo": "重做",
+      "cut": "剪切",
+      "copy": "复制",
+      "paste": "粘贴",
+      "delete": "删除",
+      "copyPath": "复制路径",
+      "copyGuid": "复制 GUID",
+      "find": "查找…",
+      "rollback": "回滚到检查点…"
+    },
+    "window": {
+      "outline": "大纲",
+      "inspector": "检查器",
+      "files": "文件",
+      "timeline": "时间线",
+      "runtime": "运行时",
+      "viewport": "视口",
+      "chat": "聊天",
+      "resetLayout": "重置布局",
+      "fullscreen": "进入全屏"
+    },
+    "build": {
+      "play": "▶ Play",
+      "stop": "■ Stop",
+      "editScene": "✎ Edit 场景",
+      "reload": "重新加载预览",
+      "export": "导出为独立站点…",
+      "settings": "构建设置…"
+    },
+    "select": {
+      "all": "全选",
+      "none": "取消选择",
+      "invert": "反选",
+      "byType": "按类型选择",
+      "byType.mesh": "网格",
+      "byType.light": "灯光",
+      "byType.camera": "相机",
+      "byType.collider": "碰撞体",
+      "marquee": "框选模式",
+      "frame": "聚焦选中（Frame）"
+    },
+    "help": {
+      "docs": "文档",
+      "tutorials": "教程",
+      "examples": "示例",
+      "blog": "博客",
+      "games": "游戏演示",
+      "marketplace": "素材市场",
+      "changelog": "更新日志",
+      "shortcuts": "快捷键",
+      "askAi": "问 AI",
+      "github": "GitHub 仓库",
+      "report": "报告问题",
+      "about": "关于 ForgeaX",
+      "license": "许可协议"
+    }
   }
 }

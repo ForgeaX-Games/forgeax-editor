@@ -17,7 +17,6 @@ import {
   saveProviderOverride,
 } from './store-parts/persistence';
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/platform';
-import { bootAppMode } from './lib/workbenches';
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { getLastModel } from './lib/model-prefs';
 import { resolveKernelForAgent } from './lib/agent-cli-provider';
@@ -38,14 +37,6 @@ export {
   type HistoryRecord,
   type CleanPackageResult,
 } from './store-parts/workbench-client';
-
-// P2.6d — 'bus' joins as a top-level mode for the Bus admin panel.
-// Mirrors the Viewport / Workbench switch in the TopBar; rendered by MainArea.
-// 2026-06-30: 'preview'/'play' removed; 'edit' retained as the 2x2 viewport workspace (OOS-5).
-// 2026-07-07 (T3): AI workbench mode id renamed 'workbench' → 'ai'.
-// 2026-07-07 (T4): AI workbench tools-rail panel id renamed 'workbench' → 'tools'.
-// 2026-07-08 (v9): Scene workbench mode id renamed 'edit' → 'scene' (id/name align).
-export type AppMode = 'scene' | 'ai' | 'bus';
 
 // ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（L1 不再持有文件预览态）。
 
@@ -300,10 +291,6 @@ export function tabLabel(tab: Pick<ChatTab, 'sid' | 'displayName'>): string {
 }
 
 export interface AppState {
-  // ── UI mode ──
-  mode: AppMode;
-  setMode: (m: AppMode) => void;
-
   // P2.6a — widened from a closed union to `string` because the Sidebar TOOLS
   // row now mixes built-in tabs (`agents`/`files`) with bus-sourced workbench
   // plugin ids (e.g. `wb:character`, `wb:skill`). The set is open and grows
@@ -510,6 +497,25 @@ export interface AppState {
   /** 改当前 overlay 的参数（如 settings 面板里切换 nav section）。 */
   setOverlayParam: (param: string | null) => void;
   closeOverlay: () => void;
+
+  // ── New/Open-project modal (workspace) ──
+  //  The ProjectSwitcher dropdown was removed from the TopBar; 新建/打开 now
+  //  live in the File menu. This drives the hosted <NewProjectModal>.
+  //  null = closed; 'new' | 'open' = which tab.
+  projectModalTab: 'new' | 'open' | null;
+  openProjectModal: (tab: 'new' | 'open') => void;
+  closeProjectModal: () => void;
+
+  // ── Game switcher / new-game modal (driven from the File menu) ──
+  //  The File menu's 新建项目 / 打开项目 / 打开最近 now open GAME flows (a project
+  //  is a game here). `openGameModal` → the new-game dialog; `gameSwitcherOpen`
+  //  → the "open game" list modal (its body is the game list). Driven by menu
+  //  commands (game.new / game.open); rendered by GameModalHost in App.tsx.
+  gameSwitcherOpen: boolean;
+  setGameSwitcherOpen: (v: boolean) => void;
+  gameModalOpen: boolean;
+  openGameModal: () => void;
+  closeGameModal: () => void;
 
   // ── Fullscreen ("immersive" mode) ──
   //
@@ -978,23 +984,20 @@ export const useShellStore = create<AppState>((set, get) => ({
   },
 
   switchGame: async (slug) => {
-    // 一条机制,GameSwitcher.onPick 与新建 game 共用:pin → 设 server active game(使
-    // 后续新建 session 绑到该 game)→ 按 game 收口刷新列表 → 落最近活跃一条/空则新建。
-    get().setPinnedSlug(slug);
+    // Activate the game on the server FIRST (triggers engine Vite restart),
+    // then wait for the engine to settle BEFORE updating pinnedSlug. This
+    // prevents EditRealm from remounting ViewportComponent while the engine
+    // is still mid-restart (which causes 502 on pack-index / asset fetches).
     try {
       await getWorkbenchClient().activateGame(slug);
     } catch (e) {
-      // pin 已切了 preview/agents,但 server 没记下 active game —— 显式报出而非默默
-      // 让 session scope 错位。仍继续刷新(server 端 fallback 会按旧 active game 收口)。
       void alertDialog({
         title: t('gameSwitcher.activateFailedTitle'),
         body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
       });
     }
-    // Wait for the engine to settle after the game-rescan vite restart.
-    // Without this, the viewport remount races the engine restart and
-    // pack-index/asset fetches hit 502, leaving the viewport blank.
     await waitForEngineSettled(slug);
+    get().setPinnedSlug(slug);
     await get().refreshSessions();
     const tabs = get().tabs;
     if (tabs.length === 0) {

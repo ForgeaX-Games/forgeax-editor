@@ -218,7 +218,10 @@ export function expandHierarchyAll(): void {
 }
 
 export function collapseHierarchyAll(): void {
-  const collapsed = new Set([HIERARCHY_SCENE_FOLDER_ID, ...getHierarchyParentEntities()]);
+  // Collapse every group entity but keep the Scene root folder expanded, so the
+  // top-level entities under Scene stay visible (e.g. Scene → Player collapsed),
+  // instead of hiding everything behind a single collapsed "Scene" row.
+  const collapsed = new Set(getHierarchyParentEntities());
   saveCollapsed(collapsed);
   nextSnapshot({ ...snapshot, collapsed });
 }

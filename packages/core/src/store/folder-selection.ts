@@ -1,24 +1,43 @@
-// store/folder-selection — session-domain folder selection state and applier.
+// store/folder-selection — session-domain path selection state and applier.
 //
-// Parallel to asset-selection and entity-selection: folder clicks dispatch a
+// Tracks the currently-selected filesystem paths (folders AND source files) in
+// the Content Browser. Each item carries its `kind` ('dir' | 'file') so the
+// keyboard router's Delete path can dispatch the correct op per type:
+//   - 'dir'  → deleteDirectory
+//   - 'file' → deleteSourceFile
+//
+// Parallel to asset-selection and entity-selection: clicks dispatch a
 // `setFolderSelection` session op through the one gateway door, keeping AI
 // parity (北极星合规). The applier writes module-level state and emits an
 // event that `last-selection-domain` listens to for triple-domain routing.
 //
 // Anchors:
-//   D3a: folder delete todo — setFolderSelection session op + lastSelectionDomain 三值化
-//   G-2: AI can dispatch setFolderSelection to select a folder programmatically.
+//   D3a: folder/file delete — setFolderSelection session op + lastSelectionDomain
+//   G-2: AI can dispatch setFolderSelection to select paths programmatically.
+//   Plan-E: typed items + dedup guard (empty→empty no-op, prevents domain pollution).
 
 import { useSyncExternalStore } from 'react';
 import { sessionAppliers } from '../io/appliers';
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface PathSelectionItem {
+  path: string;
+  kind: 'dir' | 'file';
+}
+
 // ── Module-level state ────────────────────────────────────────────────────────
 
-let selectedFolders: string[] = [];
+let selectedItems: PathSelectionItem[] = [];
 
-/** Plain read of the current folder selection (relative paths). */
+/** Plain read of the current path selection (typed items). */
+export function getPathSelectionList(): PathSelectionItem[] {
+  return selectedItems;
+}
+
+/** Legacy plain-path read (backward compat with existing callers). */
 export function getFolderSelectionList(): string[] {
-  return selectedFolders;
+  return selectedItems.map((i) => i.path);
 }
 
 // ── Change notification ───────────────────────────────────────────────────────
@@ -26,7 +45,7 @@ export function getFolderSelectionList(): string[] {
 type FolderSelectionListener = () => void;
 const folderListeners = new Set<FolderSelectionListener>();
 
-/** Subscribe to folder selection changes. */
+/** Subscribe to folder/file selection changes. */
 export function onFolderSelectionChange(fn: FolderSelectionListener): () => void {
   folderListeners.add(fn);
   return () => { folderListeners.delete(fn); };
@@ -38,27 +57,46 @@ function emit(): void {
 
 // ── React hooks ───────────────────────────────────────────────────────────────
 
-let _cachedArr: string[] = selectedFolders;
+let _cachedRef: PathSelectionItem[] = selectedItems;
 let _cachedSet: Set<string> = new Set();
 
 function getSnapshot(): Set<string> {
-  if (selectedFolders !== _cachedArr) {
-    _cachedArr = selectedFolders;
-    _cachedSet = new Set(selectedFolders);
+  if (selectedItems !== _cachedRef) {
+    _cachedRef = selectedItems;
+    _cachedSet = new Set(selectedItems.map((i) => i.path));
   }
   return _cachedSet;
 }
 
-/** Reactively read the current folder selection as a Set for O(1) lookup. */
+/** Reactively read the current path selection as a path-Set for O(1) lookup. */
 export function useFolderSelectionSet(): Set<string> {
   return useSyncExternalStore(onFolderSelectionChange, getSnapshot);
+}
+
+// ── Dedup helper ──────────────────────────────────────────────────────────────
+
+function sameItems(a: PathSelectionItem[], b: PathSelectionItem[]): boolean {
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  const bSet = new Set(b.map((x) => `${x.kind}:${x.path}`));
+  return a.every((x) => bSet.has(`${x.kind}:${x.path}`));
 }
 
 // ── Session applier ───────────────────────────────────────────────────────────
 
 sessionAppliers.set('setFolderSelection', (op) => {
-  const { paths } = op as { paths: string[] };
-  selectedFolders = paths ?? [];
+  const raw = op as { paths?: string[]; items?: PathSelectionItem[] };
+  // Support both shapes: new typed `items` OR legacy `paths` (backward compat).
+  let next: PathSelectionItem[];
+  if (raw.items && Array.isArray(raw.items)) {
+    next = raw.items;
+  } else {
+    // Legacy: plain paths default to 'dir' kind.
+    next = (raw.paths ?? []).map((p) => ({ path: p, kind: 'dir' as const }));
+  }
+  // Dedup: don't emit when nothing changed (prevents domain pollution on empty→empty).
+  if (sameItems(selectedItems, next)) return { ok: true };
+  selectedItems = next;
   emit();
   return { ok: true };
 });

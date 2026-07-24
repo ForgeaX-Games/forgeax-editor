@@ -12,8 +12,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import './TourOverlay.css';
 
 export interface TourStep {
-  /** Matches a `data-tour-id="<id>"` attribute somewhere in the shell. */
-  anchorId: string;
+  /** Matches a `data-tour-id="<id>"` attribute somewhere in the shell. An array
+   *  highlights the UNION of several anchors' rects — e.g. a multi-panel region
+   *  like the left column (hierarchy + inspector) reads as one box. */
+  anchorId: string | string[];
   /** Bold heading of the coach card. */
   anchor: string;
   /** Body copy. */
@@ -44,7 +46,7 @@ const COACH_W = 260;
 const COACH_H_EST = 150;
 const VIEWPORT_PAD = 12;
 
-function readAnchorRect(anchorId: string): Rect | null {
+function readOneRect(anchorId: string): Rect | null {
   const el = document.querySelector<HTMLElement>(`[data-tour-id="${CSS.escape(anchorId)}"]`);
   if (!el) return null;
   // Panel anchors are out-of-flow zero-size markers (see panelRegistry.tourWrap):
@@ -56,6 +58,29 @@ function readAnchorRect(anchorId: string): Rect | null {
   const r = target.getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return null;
   return { top: r.top, left: r.left, width: r.width, height: r.height };
+}
+
+/** Bounding union of one or more anchors' rects. Missing / zero-size anchors are
+ *  skipped, so a region spans whatever anchors are present (the left column =
+ *  hierarchy + inspector highlights as a single box even if one is momentarily
+ *  unlaid-out). Returns null only when NONE resolve — the coach then centers. */
+function readAnchorRect(anchorIds: string[]): Rect | null {
+  let top = Infinity;
+  let left = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  let found = false;
+  for (const id of anchorIds) {
+    const r = readOneRect(id);
+    if (!r) continue;
+    found = true;
+    top = Math.min(top, r.top);
+    left = Math.min(left, r.left);
+    right = Math.max(right, r.left + r.width);
+    bottom = Math.max(bottom, r.top + r.height);
+  }
+  if (!found) return null;
+  return { top, left, width: right - left, height: bottom - top };
 }
 
 /** Ring box = anchor grown by RING_PAD, then clamped inside the viewport. The
@@ -110,16 +135,21 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
   // (new object refs) on every parent render because their copy comes from the
   // i18n `t()` closure. Keying effects on the object would re-run them every
   // render and reset the retry timer before it can fire — so key on this string.
-  const anchorId = step?.anchorId;
+  // Stable string identity for effects: `steps`/`step` get new object refs on
+  // every parent render (i18n t() closure), and an array anchorId would be a new
+  // ref too — so key on the joined id string and rebuild the id list from it.
+  const anchorKey = Array.isArray(step?.anchorId)
+    ? step.anchorId.join('|')
+    : (step?.anchorId ?? '');
   const [anchorRect, setAnchorRect] = useState<Rect | null>(null);
   const coachRef = useRef<HTMLDivElement>(null);
   const isLast = stepIndex >= steps.length - 1;
   const isFirst = stepIndex <= 0;
 
   const recompute = useCallback(() => {
-    if (!anchorId) return;
-    setAnchorRect(readAnchorRect(anchorId));
-  }, [anchorId]);
+    if (!anchorKey) return;
+    setAnchorRect(readAnchorRect(anchorKey.split('|')));
+  }, [anchorKey]);
 
   // Measure the current step's anchor, RETRYING until it has a real rect. The
   // dockview panels (sidebar/preview/chat) lay out asynchronously after mount,
@@ -128,11 +158,11 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
   // a non-zero rect appears, then stop; give up after ~1.2s (anchor genuinely
   // absent → coach just centers).
   useLayoutEffect(() => {
-    if (!anchorId) return;
+    if (!anchorKey) return;
     let timer: ReturnType<typeof setTimeout>;
     let attempts = 0;
     const tick = () => {
-      const rect = readAnchorRect(anchorId);
+      const rect = readAnchorRect(anchorKey.split('|'));
       setAnchorRect(rect);
       attempts += 1;
       if (rect || attempts >= 20) return;
@@ -140,7 +170,7 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
     };
     tick();
     return () => clearTimeout(timer);
-  }, [anchorId]);
+  }, [anchorKey]);
 
   useEffect(() => {
     const onWin = () => recompute();

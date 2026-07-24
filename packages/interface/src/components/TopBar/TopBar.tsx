@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useLayoutEffect, useMemo, useReducer } from 'react';
-import { WorkbenchSwitcher } from './WorkbenchSwitcher';
 import { SessionSwitcher } from './SessionSwitcher';
-import { ProjectSwitcher } from './ProjectSwitcher';
-import { GameSwitcher } from './GameSwitcher';
+import { MenuBar } from '../MenuBar';
 import { AndroidPackageDialog, type AndroidPackageConfig } from './AndroidPackageDialog';
 import { IosPackageDialog, type IosPackageConfig } from './IosPackageDialog';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -309,7 +307,6 @@ interface EngineRootCandidate {
 export function TopBar() {
   const { t } = useTranslation();
   const hasChatSurface = Boolean(usePanelRenderers().panels?.chat);
-  const { mode, setMode } = useShellStore();
   const openOverlay = useShellStore((s) => s.openOverlay);
   const pinnedSlug = useShellStore((s) => s.pinnedSlug);
   // Route the LayoutGrid button through the command bus so keyboard / palette /
@@ -656,19 +653,16 @@ export function TopBar() {
             "新建 session" duplicated the per-selector create actions. Each
             selector now owns its own pinned "新建 X": workspace → ProjectSwitcher,
             game → GameSwitcher, session → SessionSwitcher. */}
-        <ProjectSwitcher />
-        <TbDivider />
-        <GameSwitcher />
-        {/* Forge agent entry region appears only when the host injects chat. */}
+        <MenuBar />
+        {/* Forge agent entry region appears only when the host injects chat.
+            MenuBar already renders its own trailing divider (web), so the
+            SessionSwitcher follows it directly — no extra divider here. */}
         {hasChatSurface && (
           <span data-testid="forge-entry" style={{ display: 'contents' }}>
-            <TbDivider />
             <SessionSwitcher />
           </span>
         )}
       </div>
-
-      <WorkbenchSwitcher setMode={setMode} />
 
       <div className="tb-right" data-tour-id="tb-right">
         <DashboardToggle />

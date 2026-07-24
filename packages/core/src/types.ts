@@ -142,7 +142,7 @@ export type BuiltinEditorOp =
   // shared<T> field on `component`; `slot` targets one element of an array field
   // (omit to write the whole array from `guids`).
   | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number }
-  | { kind: 'setFolderSelection'; paths: string[] }
+  | { kind: 'setFolderSelection'; paths?: string[]; items?: { path: string; kind: 'dir' | 'file' }[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
   | { kind: 'cbGoForward' }

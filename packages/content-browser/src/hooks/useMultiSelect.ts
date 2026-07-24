@@ -7,6 +7,7 @@ import {
   clearAssetSelection,
   registerAssetSelectAllHandler,
   useFolderSelectionSet,
+  type PathSelectionItem,
 } from '@forgeax/editor-core';
 
 type Selectable = CBAsset | CBFolder | CBFile;
@@ -20,6 +21,11 @@ function toSelectedAsset(a: CBAsset) {
   return { guid: a.guid, kind: a.kind, name: a.name, payload: a.payload, packPath: a.packPath };
 }
 
+/** Map a folder/file item to the typed PathSelectionItem for the store. */
+function toPathItem(item: CBFolder | CBFile): PathSelectionItem {
+  return { path: item.path, kind: item.type === 'folder' ? 'dir' : 'file' };
+}
+
 export interface MultiSelectAPI {
   selection: CBSelection;
   handleClick: (index: number, e: React.MouseEvent) => void;
@@ -29,17 +35,19 @@ export interface MultiSelectAPI {
 }
 
 /**
- * Multi-select hook — M3 T3-1 thin-shell over the asset-selection store.
+ * Multi-select hook — unified selection for ALL content browser item types.
  *
- * Selection is now a SESSION-domain op (setAssetSelection): the store is the SSOT
- * and `useAssetSelectionList` is the reactive read. This hook no longer holds its
- * own selection state; every mutation batches the FINAL selection set and
- * dispatches one `setAssetSelection` op (batching — T0-6), so the global keyboard
- * router (which dispatches the same op) and the mouse here share one source of
- * truth and stay in sync (no dual-state drift, AC-B3).
+ * Plan-E: Ctrl+Click / Shift+Click work uniformly across assets, folders, and
+ * files. Each click batches the FINAL selection set and dispatches BOTH
+ * `setAssetSelection` (for engine assets) and `setFolderSelection` (for
+ * folder/file paths, carrying item kind for correct Delete routing).
  *
- * `anchorIndexRef` stays a purely local UI concept (shift-range anchor); it is NOT
- * part of the op payload (C2-3).
+ * Domain invariant: the folder-selection store has a dedup guard (empty→empty
+ * is a no-op) and last-selection-domain only advances when the new selection is
+ * non-empty. This prevents "clicking an asset" from polluting domain to 'folder'.
+ *
+ * `anchorIndexRef` stays a purely local UI concept (shift-range anchor); it is
+ * NOT part of the op payload (C2-3).
  */
 export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   const selectedList = useAssetSelectionList();
@@ -47,7 +55,7 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   const selectedGuids = useMemo(() => new Set(selectedList.map((a) => a.guid)), [selectedList]);
   const anchorIndexRef = useRef<number>(-1);
 
-  // D3a: folder selection paths (reactive, driven by setFolderSelection session op).
+  // D3a: folder/file selection paths (reactive, driven by setFolderSelection session op).
   const folderPaths = useFolderSelectionSet();
 
   const isItemSelected = useCallback((item: Selectable): boolean => {
@@ -55,18 +63,20 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
     return selectedGuids.has(itemKey(item));
   }, [selectedGuids, folderPaths]);
 
+  /** Dispatch both selection ops from the unified batch. The stores' dedup
+   *  guards ensure empty dispatches don't pollute lastSelectionDomain. */
   const dispatchSet = useCallback((next: Selectable[], primaryItem: Selectable | null) => {
     const assets = next
       .filter((i): i is CBAsset => i.type === 'asset')
       .map(toSelectedAsset);
-    const paths = next
-      .filter((i) => i.type === 'folder' || i.type === 'file')
-      .map((i) => i.path);
+    const pathItems: PathSelectionItem[] = next
+      .filter((i): i is CBFolder | CBFile => i.type === 'folder' || i.type === 'file')
+      .map(toPathItem);
     const p = primaryItem && primaryItem.type === 'asset'
       ? toSelectedAsset(primaryItem as CBAsset)
       : (assets[0] ?? null);
     gateway.dispatch({ kind: 'setAssetSelection', assets, primary: p });
-    gateway.dispatch({ kind: 'setFolderSelection', paths });
+    gateway.dispatch({ kind: 'setFolderSelection', items: pathItems });
   }, []);
 
   const handleClick = useCallback((index: number, e: React.MouseEvent) => {
@@ -95,7 +105,7 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
 
   const clearSelection = useCallback(() => {
     clearAssetSelection();
-    gateway.dispatch({ kind: 'setFolderSelection', paths: [] });
+    gateway.dispatch({ kind: 'setFolderSelection', items: [] });
   }, []);
 
   const isSelected = isItemSelected;
@@ -107,7 +117,7 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
     return () => registerAssetSelectAllHandler(null);
   }, [selectAll]);
 
-  // selection mirrors the store (so the router's dispatch is reflected here too).
+  // selection mirrors both stores (so the router's dispatch is reflected here too).
   const selection: CBSelection = {
     items: items.filter(isItemSelected),
     primary: (primary

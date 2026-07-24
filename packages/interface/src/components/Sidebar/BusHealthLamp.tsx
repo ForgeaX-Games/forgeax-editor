@@ -37,9 +37,7 @@ function classify(bus: NonNullable<Awaited<ReturnType<typeof dashApi.health>>['b
 export function BusHealthLamp() {
   const { t } = useTranslation();
   const [state, setState] = useState<BusState>({ kind: 'loading' });
-  const setMode = useShellStore((s) => s.setMode);
   const openOverlay = useShellStore((s) => s.openOverlay);
-  const mode = useShellStore((s) => s.mode);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +91,6 @@ export function BusHealthLamp() {
         : 'down';
 
   const isLink = state.kind === 'ok';
-  const isOnBus = mode === 'bus';
   const title = isLink ? t('busHealthLamp.linkTitle', { base: baseTitle }) : baseTitle;
 
   // P4.48 — Σ glyph rendered only in 'ok' state. In loading/down branches
@@ -113,7 +110,7 @@ export function BusHealthLamp() {
   return (
     <button
       type="button"
-      className={`bus-chip bus-chip-${tone} is-link${isOnBus ? ' is-active' : ''}`}
+      className={`bus-chip bus-chip-${tone} is-link`}
       title={title}
       aria-label={title}
       onClick={() => openOverlay('settings', 'plugins')}

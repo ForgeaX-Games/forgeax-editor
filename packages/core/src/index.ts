@@ -334,12 +334,14 @@ export {
 } from './store/last-selection-domain';
 export type { SelectionDomain } from './store/last-selection-domain';
 
-// Folder selection (session domain): setFolderSelection op + reactive read.
+// Folder/file selection (session domain): setFolderSelection op + reactive read.
 export {
   getFolderSelectionList,
+  getPathSelectionList,
   onFolderSelectionChange,
   useFolderSelectionSet,
 } from './store/folder-selection';
+export type { PathSelectionItem } from './store/folder-selection';
 
 // AssetsChangedHint — hint type for broadcastAssetsChanged optimization.
 export type { AssetsChangedHint } from './store/assets-changed';

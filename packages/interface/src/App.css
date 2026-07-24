@@ -30,6 +30,53 @@
   min-height: 0;
 }
 
+/* Fixed chat column — chat was pulled out of the dockview so the ActivityRail
+   (its own 64px column) can sit immediately to its left. Width is drag-resizable
+   (inline style from useChatWidth), so flex is fixed-basis:auto. */
+.studio-chat-col {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--color-border-default);
+}
+.studio-chat-col > .fx-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+}
+/* Left-edge resize handle (6px). During drag, a full-viewport ::after catcher +
+   iframe pointer-events:none keep the engine/plugin iframes from stealing the
+   pointer mid-drag — same technique as .fx-auxbar-resizer. */
+.fx-chat-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.fx-chat-resizer:hover,
+body.fx-chat-resizing .fx-chat-resizer {
+  background: rgba(120, 200, 255, 0.35);
+}
+body.fx-chat-resizing::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  cursor: col-resize;
+}
+body.fx-chat-resizing iframe {
+  pointer-events: none;
+}
+
 .studio-pane {
   flex-shrink: 0;
   display: flex;

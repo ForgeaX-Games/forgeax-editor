@@ -1,5 +1,4 @@
 import { getWindowManager, surfaceKey, type SurfaceDescriptor } from '../lib/platform';
-import { bootAppMode } from '../lib/workbenches';
 import type { AppState } from '../store';
 import { loadSettingsSection, saveSettingsSection } from './persistence';
 
@@ -13,8 +12,6 @@ export function createShellState(
   get: GetAppState,
 ): Pick<
   AppState,
-  | 'mode'
-  | 'setMode'
   | 'workbenchTab'
   | 'setWorkbenchTab'
   | 'workbenchExpandedExtensionId'
@@ -34,6 +31,14 @@ export function createShellState(
   | 'openOverlay'
   | 'setOverlayParam'
   | 'closeOverlay'
+  | 'projectModalTab'
+  | 'openProjectModal'
+  | 'closeProjectModal'
+  | 'gameSwitcherOpen'
+  | 'setGameSwitcherOpen'
+  | 'gameModalOpen'
+  | 'openGameModal'
+  | 'closeGameModal'
   | 'fullscreen'
   | 'setFullscreen'
   | 'toggleFullscreen'
@@ -43,14 +48,11 @@ export function createShellState(
   | 'toggleChatpanel'
 > {
   return {
-    mode: bootAppMode(),
-    setMode: (m) => set({ mode: m }),
     workbenchTab: 'agents',
     setWorkbenchTab: (t) => set({ workbenchTab: t }),
     workbenchExpandedExtensionId: null,
     setWorkbenchExpandedExtensionId: (id) => set({ workbenchExpandedExtensionId: id }),
     openWorkbench: ({ tab, expandedExtensionId }) => set((s) => ({
-      mode: 'ai',
       workbenchTab: tab ?? s.workbenchTab,
       workbenchExpandedExtensionId: expandedExtensionId !== undefined
         ? expandedExtensionId
@@ -107,6 +109,16 @@ export function createShellState(
       set({ overlayParam: param });
     },
     closeOverlay: () => set({ activeOverlay: null }),
+
+    projectModalTab: null,
+    openProjectModal: (tab) => set({ projectModalTab: tab }),
+    closeProjectModal: () => set({ projectModalTab: null }),
+
+    gameSwitcherOpen: false,
+    setGameSwitcherOpen: (v) => set({ gameSwitcherOpen: v }),
+    gameModalOpen: false,
+    openGameModal: () => set({ gameModalOpen: true }),
+    closeGameModal: () => set({ gameModalOpen: false }),
 
     fullscreen: false,
     setFullscreen: (v) => set({ fullscreen: v }),
